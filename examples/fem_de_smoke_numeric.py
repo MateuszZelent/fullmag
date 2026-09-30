@@ -59,6 +59,10 @@ _MESH_SIZES_M = {"L0": 10e-9, "L1": 7.5e-9, "L2": 5e-9, "L3": 3.75e-9}
 if MESH_LEVEL not in _MESH_SIZES_M:
     raise ValueError(f"Unsupported FULLMAG_DE_SMOKE_MESH_LEVEL: {MESH_LEVEL}")
 MAGNETIC_ELEMENT_SIZE_M = _MESH_SIZES_M[MESH_LEVEL]
+_THICKNESS_LAYERS_TEXT = os.environ.get("FULLMAG_DE_SMOKE_THICKNESS_LAYERS", "3")
+if _THICKNESS_LAYERS_TEXT not in ("3", "6", "9"):
+    raise ValueError("Unsupported FULLMAG_DE_SMOKE_THICKNESS_LAYERS")
+THICKNESS_LAYERS = int(_THICKNESS_LAYERS_TEXT)
 
 
 study = fm.study("de-smoke-10nm-numeric")
@@ -82,7 +86,7 @@ body.mesh.thin_film(
     minimum_element_size=MAGNETIC_ELEMENT_SIZE_M, maximum_element_size=MAGNETIC_ELEMENT_SIZE_M,
     interface_maximum_element_size=MAGNETIC_ELEMENT_SIZE_M, interface_thickness=20e-9,
     transition_distance=20e-9, edge_thickness=10e-9, corner_extent=10e-9,
-    layers=3, topology="tetrahedral", order=1,
+    layers=THICKNESS_LAYERS, topology="tetrahedral", order=1,
 )
 study.b_ext(B_EXT_T, 0.0, 0.0)
 study.exchange()
@@ -107,6 +111,7 @@ study.runtime_metadata("de_smoke", {
     "film_thickness_m": FILM_THICKNESS_M,
     "mesh_level": MESH_LEVEL,
     "magnetic_element_size_m": MAGNETIC_ELEMENT_SIZE_M,
+    "through_thickness_elements": THICKNESS_LAYERS,
     "cell_period_m": CELL_PERIOD_M,
     "air_padding_each_side_m": AIR_PADDING_EACH_SIDE_M,
     "saturation_magnetization_a_per_m": MS_A_PER_M,

@@ -1269,3 +1269,33 @@ nowym wykonaniem solvera ani dowodem zbieżności.
 | Source map ID | Źródło | Symbol |
 |---|---|---|
 | source-archived-run-parameters | `scripts/compare_de_bv_mode_profiles.py` | `validate_record_parameters` |
+
+
+## Niezależna zbieżność przez grubość filmu DE/BV
+
+Poziomy L0–L3 przykładu DE-SMOKE sterują rozmiarem elementów w metrach,
+lecz same nie dowodzą zbieżności przez grubość: domyślne `layers=3`
+pozostaje stałe. Kontrolowany parametr `FULLMAG_DE_SMOKE_THICKNESS_LAYERS`
+przyjmuje wyłącznie tekst `3`, `6` lub `9`; domyślnie `3`. Jest bezwymiarową
+liczbą elementów, nie zmianą fizycznej grubości filmu (10 nm).
+Python `body.mesh.thin_film(layers=...)` obniża żądanie do
+`problem_meta.runtime_metadata.mesh_workflow.per_geometry[0].through_thickness_elements`.
+Wrapper wymaga wersjonowanego samodzielnego wejścia i zgodności tej wartości
+z `de_smoke.through_thickness_elements` oraz żądaniem runu. Ignorowanie
+ustawienia oznacza błąd, a nie wykonany pomiar zbieżności.
+
+Ta kontrola jest receptą walidacyjną FEM CPU, double, strict. Nie dodaje
+realizacji FDM CPU/GPU ani nie dowodzi FEM GPU. Zachowuje pole bias, Ms,
+A, gamma0, grubość, wektor k, dynamiczny demag i końcowy próg 1e-8.
+Przesunięcie częstotliwości po zmianie warstw wymaga niezależnej kontroli
+pól i źródeł oraz odrębnej zbieżności airboxu i kompletności widma.
+Źródła: `examples/fem_de_smoke_numeric.py::THICKNESS_LAYERS`,
+`scripts/run_de_100nm_pilot.py::validate_thickness_layers_metadata` oraz
+`scripts/test_de_bv_25_model.py::test_thickness_convergence_preserves_physics`.
+
+
+| Source ID | Path | Symbol |
+|---|---|---|
+| source-de-thickness-model | `examples/fem_de_smoke_numeric.py` | `THICKNESS_LAYERS` |
+| source-de-thickness-wrapper | `scripts/run_de_100nm_pilot.py` | `validate_thickness_layers_metadata` |
+| source-de-thickness-regression | `scripts/test_de_bv_25_model.py` | `test_thickness_convergence_preserves_physics` |

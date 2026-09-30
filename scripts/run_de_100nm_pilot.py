@@ -45,6 +45,7 @@ EPS_PREFILTER_CHOICES = ("1e-8", "1e-9", "1e-10", "1e-11")
 SHIFTED_KSP_RTOL_CHOICES = ("1e-8", "1e-9", "1e-10", "1e-11", "1e-12")
 GMRES_RESTART_CHOICES = ("8", "10", "12", "16", "30")
 MESH_LEVEL_CHOICES = ("L0", "L1", "L2", "L3")
+THICKNESS_LAYERS_CHOICES = ("3", "6", "9")
 MESH_LEVEL_ELEMENT_SIZES_M = {"L0": 10e-9, "L1": 7.5e-9, "L2": 5e-9, "L3": 3.75e-9}
 
 
@@ -67,8 +68,11 @@ def validate_model(context, pilot="de100"):
     return digest
 
 
-def compose_command(context, output, timeout_seconds=managed.DEFAULT_TIMEOUT_SECONDS, *, pilot="de100", external_model=False, dense_oracle=False, solver_rtol=None, eps_prefilter=None, shifted_ksp_rtol=None, gmres_restart=None, mesh_level=None):
+def compose_command(context, output, timeout_seconds=managed.DEFAULT_TIMEOUT_SECONDS, *, pilot="de100", external_model=False, dense_oracle=False, solver_rtol=None, eps_prefilter=None, shifted_ksp_rtol=None, gmres_restart=None, mesh_level=None, thickness_layers=None):
     model = pilot_model(pilot)
+    if thickness_layers is not None and (
+            not pilot.startswith("de-smoke-") or thickness_layers not in THICKNESS_LAYERS_CHOICES):
+        raise managed.BenchmarkError("thickness layers require a supported DE-SMOKE value")
     if mesh_level is not None and (not pilot.startswith("de-smoke-") or mesh_level not in MESH_LEVEL_CHOICES):
         raise managed.BenchmarkError("mesh level requires a supported DE-SMOKE level")
     if external_model and pilot == "de100":
@@ -107,6 +111,7 @@ def compose_command(context, output, timeout_seconds=managed.DEFAULT_TIMEOUT_SEC
         *(["export FULLMAG_FLOQUET_SHIFTED_KSP_RTOL=" + shifted_ksp_rtol] if shifted_ksp_rtol else []),
         *(["export FULLMAG_FLOQUET_GMRES_RESTART=" + gmres_restart] if gmres_restart else []),
         *(["export FULLMAG_DE_SMOKE_MESH_LEVEL=" + mesh_level] if mesh_level else []),
+        *(["export FULLMAG_DE_SMOKE_THICKNESS_LAYERS=" + thickness_layers] if thickness_layers else []),
         'test -x "$runtime_bin"',
         'test -f "$source_script"',
         "case_dir=/workspace/benchmark-output/" + pilot,
@@ -169,7 +174,27 @@ def validate_mesh_level_metadata(case_dir, requested):
             "qualification": "NOT VERIFIED"}
 
 
-def execute(context, output, command, model_sha, timeout_seconds=managed.DEFAULT_TIMEOUT_SECONDS, *, pilot="de100", model_identity=None, dense_oracle=False, solver_rtol=None, eps_prefilter=None, shifted_ksp_rtol=None, gmres_restart=None, mesh_level=None):
+
+def validate_thickness_layers_metadata(case, requested):
+    """Reject a model that ignored an explicit through-thickness request."""
+    if requested not in THICKNESS_LAYERS_CHOICES:
+        raise managed.BenchmarkError("unsupported thickness layers")
+    try:
+        runtime = json.loads((case / "metadata.json").read_text(encoding="utf-8"))["problem_meta"]["runtime_metadata"]
+        declared = runtime["de_smoke"]["through_thickness_elements"]
+        geometries = runtime["mesh_workflow"]["per_geometry"]
+        actual = geometries[0]["through_thickness_elements"] if len(geometries) == 1 else None
+        matches = (type(declared) is int and type(actual) is int
+                   and declared == actual == int(requested))
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
+        raise managed.BenchmarkError("missing or malformed thickness mesh metadata") from error
+    if not matches:
+        raise managed.BenchmarkError("model ignored or changed the requested thickness layers")
+    return {"requested_layers": int(requested), "resolved_layers": actual,
+            "scope": "requested_through_thickness_mesh_settings", "qualification": "NOT VERIFIED"}
+
+
+def execute(context, output, command, model_sha, timeout_seconds=managed.DEFAULT_TIMEOUT_SECONDS, *, pilot="de100", model_identity=None, dense_oracle=False, solver_rtol=None, eps_prefilter=None, shifted_ksp_rtol=None, gmres_restart=None, mesh_level=None, thickness_layers=None):
     model = pilot_model(pilot)
     schema_name = "de100-pilot" if pilot == "de100" else "de-smoke"
     request = managed._run_request(context, output, (), command, timeout_seconds=timeout_seconds)
@@ -182,6 +207,7 @@ def execute(context, output, command, model_sha, timeout_seconds=managed.DEFAULT
     request["shifted_ksp_rtol_diagnostic_requested"] = shifted_ksp_rtol
     request["gmres_restart_diagnostic_requested"] = gmres_restart
     request["mesh_level_requested"] = mesh_level
+    request["thickness_layers_requested"] = thickness_layers
     request["source"]["public_model_files"] = [*managed.PUBLIC_MODEL_FILES] if model_identity else [model, *managed.PUBLIC_MODEL_FILES]
     if model_identity:
         request["model_source"] = model_identity
@@ -220,6 +246,8 @@ def execute(context, output, command, model_sha, timeout_seconds=managed.DEFAULT
                     output / pilot, artifacts["row_preflight"]["sample_count"])
             if mesh_level is not None:
                 artifacts["mesh_level_resolution"] = validate_mesh_level_metadata(output / pilot, mesh_level)
+            if thickness_layers is not None:
+                artifacts["thickness_layers_resolution"] = validate_thickness_layers_metadata(output / pilot, thickness_layers)
             result.update(status="completed_unqualified", artifacts=artifacts)
     except subprocess.TimeoutExpired:
         result["error"] = "host Compose watchdog expired after the container deadline and grace period"
@@ -254,6 +282,8 @@ def main(argv=None):
     parser.add_argument("--pilot", choices=tuple(PILOTS), default="de100")
     parser.add_argument("--mesh-level", choices=MESH_LEVEL_CHOICES,
                         help="explicit magnetic/interface mesh level for a standalone DE-SMOKE input")
+    parser.add_argument("--thickness-layers", choices=THICKNESS_LAYERS_CHOICES,
+                        help="explicit number of elements through the film thickness")
     parser.add_argument("--model-ref", help="full commit of standalone DE-SMOKE input; runtime remains build-bound")
     parser.add_argument("--dense-oracle", action="store_true", help="run the bounded diagnostic dense Schur oracle for DE-SMOKE k2")
     parser.add_argument("--solver-rtol", choices=SOLVER_RTOL_CHOICES,
@@ -269,8 +299,8 @@ def main(argv=None):
         layout = managed.fullmag_storage.resolve_layout(args.repo_root, "windows-native")
         input_data = None
         input_identity = None
-        if args.mesh_level and not args.model_ref:
-            raise ValueError("--mesh-level requires a versioned standalone --model-ref")
+        if (args.mesh_level or args.thickness_layers) and not args.model_ref:
+            raise ValueError("mesh controls require a versioned standalone --model-ref")
         if args.model_ref:
             if args.pilot == "de100":
                 raise ValueError("--model-ref requires a DE-SMOKE pilot")
@@ -283,7 +313,7 @@ def main(argv=None):
             output = Path(layout["storage_root"]) / "runs" / layout["worktree_id"] / args.job_id / (args.pilot + "-preview")
             print(json.dumps({"status": "dry_run", "qualification": "NOT VERIFIED",
                               "model_sha256": model_sha, "model_source": input_identity,
-                              "command": compose_command(context, output, pilot=args.pilot, external_model=input_identity is not None, dense_oracle=args.dense_oracle, solver_rtol=args.solver_rtol, eps_prefilter=args.eps_prefilter, shifted_ksp_rtol=args.shifted_ksp_rtol, gmres_restart=args.gmres_restart, mesh_level=args.mesh_level)}, indent=2))
+                              "command": compose_command(context, output, pilot=args.pilot, external_model=input_identity is not None, dense_oracle=args.dense_oracle, solver_rtol=args.solver_rtol, eps_prefilter=args.eps_prefilter, shifted_ksp_rtol=args.shifted_ksp_rtol, gmres_restart=args.gmres_restart, mesh_level=args.mesh_level, thickness_layers=args.thickness_layers)}, indent=2))
             return 0
         with managed.fullmag_storage.build_lock(layout):
             context = managed._validate_build_context(layout, managed._read_job(layout, args.job_id))
@@ -293,7 +323,7 @@ def main(argv=None):
             output.mkdir(parents=True, exist_ok=False)
             if input_data is not None:
                 model_input.stage_model(output, input_data)
-            return execute(context, output, compose_command(context, output, pilot=args.pilot, external_model=input_identity is not None, dense_oracle=args.dense_oracle, solver_rtol=args.solver_rtol, eps_prefilter=args.eps_prefilter, shifted_ksp_rtol=args.shifted_ksp_rtol, gmres_restart=args.gmres_restart, mesh_level=args.mesh_level), model_sha, pilot=args.pilot, model_identity=input_identity, dense_oracle=args.dense_oracle, solver_rtol=args.solver_rtol, eps_prefilter=args.eps_prefilter, shifted_ksp_rtol=args.shifted_ksp_rtol, gmres_restart=args.gmres_restart, mesh_level=args.mesh_level)
+            return execute(context, output, compose_command(context, output, pilot=args.pilot, external_model=input_identity is not None, dense_oracle=args.dense_oracle, solver_rtol=args.solver_rtol, eps_prefilter=args.eps_prefilter, shifted_ksp_rtol=args.shifted_ksp_rtol, gmres_restart=args.gmres_restart, mesh_level=args.mesh_level, thickness_layers=args.thickness_layers), model_sha, pilot=args.pilot, model_identity=input_identity, dense_oracle=args.dense_oracle, solver_rtol=args.solver_rtol, eps_prefilter=args.eps_prefilter, shifted_ksp_rtol=args.shifted_ksp_rtol, gmres_restart=args.gmres_restart, mesh_level=args.mesh_level, thickness_layers=args.thickness_layers)
     except (managed.BenchmarkError, managed.fullmag_storage.StorageError, OSError, ValueError, sqlite3.Error, subprocess.SubprocessError, SyntaxError) as error:
         print(f"de100-pilot: {error}", file=sys.stderr)
         return 2

@@ -275,6 +275,24 @@
       "path": "scripts/test_compare_de_bv_mode_profiles.py",
       "symbol": "test_exact_p1_basis_mass_differs_from_lumping",
       "responsibility": "Independent analytical P1 basis mass check distinguishes consistent from lumped mass"
+    },
+    {
+      "id": "source-de-thickness-model",
+      "path": "examples/fem_de_smoke_numeric.py",
+      "symbol": "THICKNESS_LAYERS",
+      "responsibility": "Controlled independent through-thickness convergence input and request verification"
+    },
+    {
+      "id": "source-de-thickness-wrapper",
+      "path": "scripts/run_de_100nm_pilot.py",
+      "symbol": "validate_thickness_layers_metadata",
+      "responsibility": "Controlled independent through-thickness convergence input and request verification"
+    },
+    {
+      "id": "source-de-thickness-regression",
+      "path": "scripts/test_de_bv_25_model.py",
+      "symbol": "test_thickness_convergence_preserves_physics",
+      "responsibility": "Controlled independent through-thickness convergence input and request verification"
     }
   ],
   "public_api": {

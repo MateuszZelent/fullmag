@@ -278,5 +278,36 @@ class PilotTests(unittest.TestCase):
         self.assertIn("case_dir=/workspace/benchmark-output/de-smoke-k2", single)
 
 
+
+    def test_thickness_request_is_explicit_and_checked_against_mesh_authoring(self):
+        context = SimpleNamespace(source_tree=Path("/capsule"), runtime_root=Path("/runtime"),
+                                  image_digest="sha256:test",
+                                  job={"job_id": "a" * 32, "profile": "fem-cpu-slepc-runtime-v1"})
+        shell = pilot.compose_command(context, Path("/outputs"), pilot="de-smoke-k25",
+                                      external_model=True, thickness_layers="6")[-1]
+        self.assertIn("export FULLMAG_DE_SMOKE_THICKNESS_LAYERS=6", shell)
+        self.assertNotIn("FULLMAG_DE_SMOKE_SOLVER_RTOL", shell)
+        for value in ("4", "6.0", "6;echo BAD", 6, True):
+            with self.subTest(value=value), self.assertRaises(pilot.managed.BenchmarkError):
+                pilot.compose_command(context, Path("/outputs"), pilot="de-smoke-k25", thickness_layers=value)
+        with self.assertRaises(pilot.managed.BenchmarkError):
+            pilot.compose_command(context, Path("/outputs"), pilot="de100", thickness_layers="6")
+        with TemporaryDirectory() as temporary:
+            case = Path(temporary)
+            metadata = {"problem_meta": {"runtime_metadata": {
+                "de_smoke": {"through_thickness_elements": 6},
+                "mesh_workflow": {"per_geometry": [{"through_thickness_elements": 6}]}}}}
+            path = case / "metadata.json"
+            path.write_text(json.dumps(metadata))
+            self.assertEqual(pilot.validate_thickness_layers_metadata(case, "6")["resolved_layers"], 6)
+            for value in (3, 6.0, True):
+                metadata["problem_meta"]["runtime_metadata"]["mesh_workflow"]["per_geometry"][0]["through_thickness_elements"] = value
+                path.write_text(json.dumps(metadata))
+                with self.subTest(value=value), self.assertRaises(pilot.managed.BenchmarkError):
+                    pilot.validate_thickness_layers_metadata(case, "6")
+            path.write_text("{}")
+            with self.assertRaises(pilot.managed.BenchmarkError):
+                pilot.validate_thickness_layers_metadata(case, "6")
+
 if __name__ == "__main__":
     unittest.main()

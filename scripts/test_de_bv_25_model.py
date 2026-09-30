@@ -88,3 +88,39 @@ def test_mesh_convergence_preserves_physics(monkeypatch,sampling,level,hmax):
     assert meta["de_smoke"]["air_padding_each_side_m"]==2e-6
     assert ir["geometry"]["entries"][0]["size"]==pytest.approx([40e-9,40e-9,10e-9])
     assert next(t for t in ir["energy_terms"] if t["kind"]=="zeeman")["B"]==[0.1,0,0]
+
+
+@pytest.mark.parametrize("sampling", ["k25", "bv-k25"])
+@pytest.mark.parametrize("layers", ["3", "6", "9"])
+def test_thickness_convergence_preserves_physics(monkeypatch, sampling, layers):
+    monkeypatch.setenv("FULLMAG_DE_SMOKE_SAMPLING", sampling)
+    monkeypatch.setenv("FULLMAG_DE_SMOKE_THICKNESS_LAYERS", layers)
+    monkeypatch.setenv("FULLMAG_DE_SMOKE_MESH_LEVEL", "L2")
+    fm.reset()
+    try:
+        loaded = fm.load_problem_from_script(ROOT / "examples/fem_de_smoke_numeric.py", lightweight_assets=True)
+        ir = loaded.stages[-1].problem.to_ir(requested_backend="fem", execution_mode="strict",
+                                          execution_precision="double", include_geometry_assets=False)
+    finally:
+        fm.reset()
+    meta = ir["problem_meta"]["runtime_metadata"]
+    assert meta["de_smoke"]["through_thickness_elements"] == int(layers)
+    assert meta["mesh_workflow"]["per_geometry"][0]["through_thickness_elements"] == int(layers)
+    assert meta["de_smoke"]["magnetic_element_size_m"] == 5e-9
+    assert meta["de_smoke"]["film_thickness_m"] == 10e-9
+    assert meta["de_smoke"]["eigen_solver_rtol"] == 1e-8
+    assert ir["study"]["operator"] == {"kind": "full_2x2", "include_demag": True}
+    assert ir["materials"][0]["saturation_magnetisation"] == 800000
+    assert ir["materials"][0]["exchange_stiffness"] == 13e-12
+    assert next(t for t in ir["energy_terms"] if t["kind"] == "zeeman")["B"] == [0.1, 0, 0]
+
+
+@pytest.mark.parametrize("layers", ["0", "4", "6.0", "true", "6;touch /tmp/unwanted"])
+def test_invalid_thickness_request_fails_before_authoring(monkeypatch, layers):
+    monkeypatch.setenv("FULLMAG_DE_SMOKE_THICKNESS_LAYERS", layers)
+    fm.reset()
+    try:
+        with pytest.raises(Exception, match="Unsupported FULLMAG_DE_SMOKE_THICKNESS_LAYERS"):
+            fm.load_problem_from_script(ROOT / "examples/fem_de_smoke_numeric.py", lightweight_assets=True)
+    finally:
+        fm.reset()
