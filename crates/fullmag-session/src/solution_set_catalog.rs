@@ -538,6 +538,11 @@ fn validate_member_successor(previous: &SolutionMember, next: &SolutionMember) -
         bail!("solution-set member execution identity changed across revisions");
     }
     validate_execution_transition(previous.execution_status, next.execution_status)?;
+    if previous.execution_status != SolutionExecutionStatus::Running
+        && previous.artifacts.len() != next.artifacts.len()
+    {
+        bail!("terminal solution-set member cannot gain or lose artifacts");
+    }
     let next_artifacts = next
         .artifacts
         .iter()
@@ -654,6 +659,55 @@ mod tests {
             }],
         });
         solution
+    }
+
+    #[test]
+    fn terminal_member_cannot_gain_artifacts_in_an_open_solution_set() {
+        let directory = tempfile::tempdir().expect("temporary catalog");
+        let catalog = SolutionSetCatalog::open(directory.path()).expect("open catalog");
+        let first = solution_with_artifact("a".repeat(64), 1);
+        catalog.publish(&first).expect("publish running member");
+        let mut terminal = first.clone();
+        terminal.revision = 2;
+        terminal.members[0].execution_status = SolutionExecutionStatus::Succeeded;
+        catalog
+            .publish(&terminal)
+            .expect("finish member while set remains open");
+        let mut changed = terminal.clone();
+        changed.revision = 3;
+        let mut extra = changed.members[0].artifacts[0].clone();
+        extra.artifact_id = "artifact:migration".into();
+        extra.object_ref = "b".repeat(64);
+        changed.members[0].artifacts.push(extra);
+        assert!(catalog.publish(&changed).is_err());
+        assert_eq!(
+            catalog.read(&first.solution_set_id).unwrap(),
+            Some(terminal)
+        );
+        assert!(
+            catalog
+                .read_revision(&first.solution_set_id, 3)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn running_member_can_publish_an_additional_immutable_artifact() {
+        let directory = tempfile::tempdir().expect("temporary catalog");
+        let catalog = SolutionSetCatalog::open(directory.path()).expect("open catalog");
+        let first = solution_with_artifact("a".repeat(64), 1);
+        catalog.publish(&first).expect("publish running member");
+        let mut next = first.clone();
+        next.revision = 2;
+        let mut extra = next.members[0].artifacts[0].clone();
+        extra.artifact_id = "artifact:second".into();
+        extra.object_ref = "b".repeat(64);
+        next.members[0].artifacts.push(extra);
+        catalog
+            .publish(&next)
+            .expect("running member may extend its artifacts");
+        assert_eq!(catalog.read(&first.solution_set_id).unwrap(), Some(next));
     }
 
     #[test]
