@@ -1,5 +1,30 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
+## #178 blocked, aktualizacja runnera i przejęcie przez #179 — 2026-09-30 16:06 UTC
+
+Ta sekcja zastępuje wcześniejsze informacje o running #178 i żywych sesjach
+45879/48887/83846 oraz o niewdrożonej poprawce inwentaryzacji.
+
+- #178 blocked: brak 8 GiB po weryfikacji źródeł; zapisany CoordinatorError.
+  Stare kontrolery terminalne exit 1; brak prób i nowych częstotliwości.
+- Przy pustym aktywnym slocie wykonano drain i wcześniej autoryzowaną wymianę
+  koordynatora na 7fa7a4a8...; pełny SHA i dowody w audycie inwentaryzacji.
+  Siedem profili i oczekujące tożsamości źródeł zachowane; kolejka wznowiona.
+  Wdrożone pliki mają zgodne hashe. Rzeczywisty UI pokazuje #179/#180 w FIFO.
+- Kod poprawki i remote: 92c7facc3f8400e7409c22d583919aa3741aefc2.
+  37 testów Python, zestaw JS i fixture browser PASS; wydajność dużego skanu
+  pozostaje osobną bramką. Nie przypisywać resetu starych żądań samemu cache.
+- #179 1d5451d2fee5443591a9c7f468569c43 queued, oczekiwanie na storage;
+  digest e6d33f2ab37f1d529db133f12d0d45813fd2d89721121f740e7de3402e62d0fc.
+  Podpięto istniejący build zamiast zlecać nowy. Model Box nadal 11155c55e.
+- Nowe sesje żywe: 66068 (DE/BV 3/6/9), 28993 (kolektor/Poisson/plot),
+  2072 (Γ L2, 3 warstwy, pełne okno). Control poza namespace managed joba.
+- Ostatnie wolne miejsce 6547595264 B (~6.10 GiB) przy minimum 8 GiB.
+  Poproszono o zgodę wyłącznie na sześć execution #173/#171/#170/#169/#167/#165
+  (~2.49 GiB). Niczego nie usunięto. Ponowna ocena po odpowiedzi obowiązkowa.
+- S00–S12 nadal w toku: runtime i nauka, airbox/mody/k-path, A1/COMSOL,
+  tracking/API/UI/GPU, review i pełna integracja/cleanup; cel nieukończony.
+
 ## Runner — ograniczenie powtarzanych skanów 2026-09-30 15:45 UTC
 
 - Poprzedni turn: postęp, commit e31b7522da61e3dee42c76031ab44d3a65423227
