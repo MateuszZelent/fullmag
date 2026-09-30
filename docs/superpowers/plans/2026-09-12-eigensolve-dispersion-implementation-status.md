@@ -1,5 +1,30 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
+## Piloci DE/BV i odbior wykresu — 2026-09-30 14:36 UTC
+
+- #177 zakonczony managed succeeded/exit 0; #178 running, #179 queued.
+  Nie restartowano jobow. Wczesniejszy stan queued #178 jest nieaktualny.
+- #178: d3584c72f1d74300834aaca396902df6; obserwator pilotow sesja 45879
+  zyje i czeka na terminalny receipt/ABI/hash. Po nim szesc DE/BV k25 L2
+  dla 3/6/9 warstw. Jeszcze brak nowych czestotliwosci.
+- Kolektor zapisany na remote: 045812272c6fbe9057e120b069b00571f24c5161.
+  Wykres zapisany na remote: 467634149554900bdc59147833baca29ef179658.
+  46 testow +38 podtestow PASS; staged mapa naukowa PASS.
+- Wykres pokazuje f(n_z) i roznice od n=0, osobno DE i BV. To kontrola
+  grubosci przy stalym k, nie krzywa f(k); nie ma ekstrapolacji.
+  Rzeczywisty PNG/PDF i ich QA dopiero po zweryfikowanych wynikach solvera.
+- Odbior jednorazowy: sesja 48887, waiting_for_pilots, potwierdzona zywa.
+  Helper SHA e2289d958dd4ccdf4379939fedf47364fe80150733ba3485e39fcda0f9c22ec1.
+  Nie zmieniono zywego obserwatora 45879. Control i wyniki odbioru sa w
+  runs/<worktree-id>/scientific-batches/thickness-l2-<job178>/postprocessing,
+  poza managed namespace. Pinned zaleznosci, receipt hash i tozsamosc batchu.
+- Po sukcesie wszystkich szesciu wrapperow: collector -> niezalezny Poisson
+  -> plot PNG/PDF. Bledy i zmiana zrodel daja requires_attention; nie sa
+  zamieniane na dane analityczne. Finalne NOT VERIFIED wymaga oceny naukowej.
+- Pelny cel S00-S12 pozostaje otwarty: Gamma/BV, airbox/mody, sciezka k,
+  A1/COMSOL, tracking/API/UI/GPU oraz review/integracja/cleanup.
+- Audyt: docs/audits/2026-09-30-de-bv-thickness-collector.md.
+
 ## A1 — poprawki realizacji powietrza i rozdzielczosci 2026-09-30
 
 - Naprawiono rzeczywiste stopniowanie zewnętrznego powietrza ring/A1:
