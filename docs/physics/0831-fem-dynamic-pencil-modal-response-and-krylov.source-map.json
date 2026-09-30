@@ -122,6 +122,60 @@
         "source-profile-overlap",
         "source-profile-mass-regression"
       ]
+    },
+    {
+      "id": "eq-thickness-oracle-kernels",
+      "symbols": [
+        "thickness_a",
+        "thickness_u",
+        "thickness_v",
+        "thickness_basis",
+        "thickness_R",
+        "thickness_S",
+        "thickness_n",
+        "thickness_m"
+      ],
+      "sources": [
+        "source-thickness-oracle-matrices"
+      ]
+    },
+    {
+      "id": "eq-thickness-oracle-demag",
+      "symbols": [
+        "thickness_N",
+        "thickness_R",
+        "thickness_S",
+        "thickness_I",
+        "thickness_k"
+      ],
+      "sources": [
+        "source-thickness-oracle-matrices"
+      ]
+    },
+    {
+      "id": "eq-thickness-oracle-discrete",
+      "symbols": [
+        "thickness_D",
+        "thickness_B0",
+        "thickness_A",
+        "thickness_Ms",
+        "thickness_k",
+        "thickness_n",
+        "thickness_t",
+        "thickness_K",
+        "thickness_mu0",
+        "thickness_N",
+        "thickness_L",
+        "thickness_gamma",
+        "thickness_I",
+        "thickness_lambda",
+        "thickness_omega",
+        "thickness_f"
+      ],
+      "sources": [
+        "source-thickness-oracle-matrices",
+        "source-thickness-oracle-solve"
+      ]
     }
   ],
   "symbols": [
@@ -212,6 +266,144 @@
       "latex": "$\\langle u,v\\rangle_M$",
       "meaning": "Iloczyn skalarny FE ograniczony do filmu magnetycznego.",
       "si_unit": "$\\mathrm{m^3}$"
+    },
+    {
+      "id": "thickness_t",
+      "latex": "$t$",
+      "meaning": "grubość filmu",
+      "si_unit": "$\\mathrm m$"
+    },
+    {
+      "id": "thickness_k",
+      "latex": "$k$",
+      "meaning": "podpisana składowa wektora falowego",
+      "si_unit": "$\\mathrm{rad\\,m^{-1}}$"
+    },
+    {
+      "id": "thickness_u",
+      "latex": "$u$",
+      "meaning": "współrzędna grubości",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "thickness_v",
+      "latex": "$v$",
+      "meaning": "współrzędna całkowania",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "thickness_a",
+      "latex": "$a$",
+      "meaning": "iloczyn modułu k i grubości",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "thickness_basis",
+      "latex": "$c_n$",
+      "meaning": "ortonormalny profil cosinusowy",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "thickness_R",
+      "latex": "$R$",
+      "meaning": "podłużny blok dipolowy",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "thickness_S",
+      "latex": "$S$",
+      "meaning": "antysymetryczny blok mieszany",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "thickness_N",
+      "latex": "$\\mathcal N$",
+      "meaning": "tensor demag w bazie profili",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "thickness_I",
+      "latex": "$I$",
+      "meaning": "macierz jednostkowa",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "thickness_n",
+      "latex": "$n$",
+      "meaning": "indeks wiersza bazy",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "thickness_m",
+      "latex": "$m$",
+      "meaning": "indeks kolumny bazy",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "thickness_A",
+      "latex": "$A$",
+      "meaning": "stała wymiany",
+      "si_unit": "$\\mathrm{J\\,m^{-1}}$"
+    },
+    {
+      "id": "thickness_Ms",
+      "latex": "$M_s$",
+      "meaning": "magnetyzacja nasycenia",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "thickness_B0",
+      "latex": "$B_0$",
+      "meaning": "pole równowagi",
+      "si_unit": "$\\mathrm T$"
+    },
+    {
+      "id": "thickness_D",
+      "latex": "$D$",
+      "meaning": "diagonalny blok wymiany i pola",
+      "si_unit": "$\\mathrm T$"
+    },
+    {
+      "id": "thickness_K",
+      "latex": "$K$",
+      "meaning": "macierz energii liniowej",
+      "si_unit": "$\\mathrm T$"
+    },
+    {
+      "id": "thickness_mu0",
+      "latex": "$\\mu_0$",
+      "meaning": "przenikalność próżni",
+      "si_unit": "$\\mathrm{T\\,m\\,A^{-1}}$"
+    },
+    {
+      "id": "thickness_gamma",
+      "latex": "$\\gamma_0$",
+      "meaning": "dodatnie gamma dla pól H",
+      "si_unit": "$\\mathrm{m\\,A^{-1}\\,s^{-1}}$"
+    },
+    {
+      "id": "thickness_L",
+      "latex": "$L$",
+      "meaning": "operator czasowy",
+      "si_unit": "$\\mathrm{s^{-1}}$"
+    },
+    {
+      "id": "thickness_lambda",
+      "latex": "$\\lambda$",
+      "meaning": "wartość własna",
+      "si_unit": "$\\mathrm{s^{-1}}$"
+    },
+    {
+      "id": "thickness_omega",
+      "latex": "$\\omega$",
+      "meaning": "częstotliwość kątowa",
+      "si_unit": "$\\mathrm{s^{-1}}$"
+    },
+    {
+      "id": "thickness_f",
+      "latex": "$f$",
+      "meaning": "częstotliwość dodatniej gałęzi",
+      "si_unit": "$\\mathrm{Hz}$"
     }
   ],
   "sources": [
@@ -365,6 +557,18 @@
       "path": "scripts/test_compare_de_100nm_pilot.py",
       "symbol": "test_csv_cannot_omit_a_mode_present_in_native_spectrum",
       "responsibility": "Reject modes omitted from CSV while present in the native spectrum"
+    },
+    {
+      "id": "source-thickness-oracle-matrices",
+      "path": "scripts/thin_film_thickness_oracle.py",
+      "symbol": "modal_matrices",
+      "responsibility": "Cosine-Galerkin open-film demag and exchange matrices"
+    },
+    {
+      "id": "source-thickness-oracle-solve",
+      "path": "scripts/thin_film_thickness_oracle.py",
+      "symbol": "solve_thickness_modes",
+      "responsibility": "Independent small diagnostic LL spectrum and oracle-only residual"
     }
   ],
   "public_api": {

@@ -1,5 +1,22 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
+## #179 succeeded; oracle grubości i nowa blokada certyfikatu siatki
+
+- Managed #179 succeeded/exit0; etap native-build exit0, receipt/hash gate
+  domknięta przez koordynatora. Wcześniejszy snapshot/digest zachowany.
+- Sesja 66068 rozpoczęła serię. DE t3 wrapper_exit1: certyfikat v6 ścian
+  periodycznych odrzuca bijekcję/orientację; brak częstotliwości. Dalsze przypadki
+  uruchamia istniejący kontroler. Nie uruchomiono duplikatu ani nie wyłączono bramki.
+- Niezależny mały oracle grubości: N=1 odtwarza P00, uwzględnienie profili
+  daje DE k25 około 13.641746349 GHz zamiast 13.673868177 GHz. BV zmienia
+  się zaledwie o około 1.4 kHz. To referencja otwartego jednorodnego filmu.
+- Pięć testów PASS, niezależna kwadratura tensora, N i kwadratura convergence;
+  working i exact-staged scientific docs validator PASS. PNG/PDF/JSON w
+  scientific-batches/analytic-thickness-oracle-20260930; PNG obejrzany.
+- Audyt: docs/audits/2026-09-30-thickness-oracle-reference-budget.md.
+  Referencja częściowo wyjaśnia błąd modelu P00, nie zamyka zbieżności FEM.
+  S00–S12, nowe wyniki, A1/COMSOL, browser i integracja nadal otwarte.
+
 ## S12 — prawdziwe zdarzenie przejęcia i żywy worker #179
 
 - Poprzedni turn był postępem: źródłowe dopracowanie selektora S07, checkpoint

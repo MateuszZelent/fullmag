@@ -1534,3 +1534,134 @@ układu. Próg akceptacji solvera i równania nie zostały zmienione.
 |---|---|---|
 | source-de-csv-native-coverage | `scripts/compare_de_100nm_pilot.py::read_modes` | Dokładna zgodność indeksów CSV/widma i zachowanie scope; postprocessing FEM CPU |
 | source-de-csv-native-coverage-test | `scripts/test_compare_de_100nm_pilot.py::test_csv_cannot_omit_a_mode_present_in_native_spectrum` | Odrzucenie niepełnego eksportu, regression check |
+
+## Niezależny oracle profilu przez grubość filmu — kontrakt diagnostyczny
+
+Ten mały solver spektralny kontroluje przybliżenie jednorodnego profilu n=0.
+Nie jest realizacją FEM ani zamiennikiem produkcyjnego demag-k. Rozpatruje
+jednorodny film nieskończony w płaszczyźnie, równowagę +x, brak tłumienia,
+anizotropii i DMI oraz swobodne warunki wymiany na obu powierzchniach.
+Pole magnetostatyczne jest otwarte, bez skończonego airboxu. DE oznacza k_y,
+BV oznacza k_x. Kierunek z jest normalny do filmu. Rozwinięcie w cosinusach
+zachowuje oddziaływania między profilami; N=1 odtwarza istniejące P00.
+Zbieżność N oraz kwadratury jest niezależna od zbieżności FEM.
+
+### Równania i jednostki
+
+Niech u=z/t w przedziale [0,1], a=|k|t oraz
+c_n(u)=sqrt(2-delta_n0) cos(n*pi*u), z normą całki c_n c_m równą delta_nm.
+Z rozwiązania otwartego równania Poissona wynikają macierze R i S:
+
+```{math}
+:label: eq-thickness-oracle-kernels
+R_{nm}=\frac{a}{2}\int_0^1\!\int_0^1 c_n(u)c_m(v)e^{-a|u-v|}\,dv\,du,
+\qquad
+S_{nm}=\frac{a}{2}\int_0^1\!\int_0^1 c_n(u)c_m(v)\operatorname{sgn}(u-v)e^{-a|u-v|}\,dv\,du.
+```
+
+Całka wewnętrzna jest obliczana analitycznie; zewnętrzna kwadraturą Gaussa.
+R jest symetryczna, S antysymetryczna. Dla a=0 przyjmuje się R=S=0.
+W polach poprzecznych (m_y,m_z) operator demag ma postać:
+
+```{math}
+:label: eq-thickness-oracle-demag
+\mathcal N_{\rm DE}=\begin{pmatrix}R&i\operatorname{sgn}(k)S\i\operatorname{sgn}(k)S&I-R\end{pmatrix},
+\qquad
+\mathcal N_{\rm BV}=\begin{pmatrix}0&0\0&I-R\end{pmatrix}.
+```
+
+Macierz energii w jednostkach indukcji i liniowy operator LL:
+
+```{math}
+:label: eq-thickness-oracle-discrete
+D_{nn}=B_0+\frac{2A}{M_s}\left[k^2+\left(\frac{n\pi}{t}\right)^2\right],
+\quad
+K=\operatorname{diag}(D,D)+\mu_0M_s\mathcal N,
+\quad
+L=\frac{\gamma_0}{\mu_0}\begin{pmatrix}0&-I\I&0\end{pmatrix}K,
+\quad
+\lambda=i\omega,\quad f=\frac{\operatorname{Im}\lambda}{2\pi}.
+```
+
+| Symbol | Znaczenie | Jednostka SI |
+|---|---|---|
+| $t$ | grubość filmu | $\mathrm m$ |
+| $k$ | podpisana składowa wektora falowego | $\mathrm{rad\,m^{-1}}$ |
+| $u$ | współrzędna grubości | $1$ |
+| $v$ | współrzędna całkowania | $1$ |
+| $a$ | iloczyn modułu k i grubości | $1$ |
+| $c_n$ | ortonormalny profil cosinusowy | $1$ |
+| $R$ | podłużny blok dipolowy | $1$ |
+| $S$ | antysymetryczny blok mieszany | $1$ |
+| $\mathcal N$ | tensor demag w bazie profili | $1$ |
+| $I$ | macierz jednostkowa | $1$ |
+| $N$ | liczba profili | $1$ |
+| $n$ | indeks wiersza bazy | $1$ |
+| $m$ | indeks kolumny bazy | $1$ |
+| $\delta_{nm}$ | delta Kroneckera | $1$ |
+| $\pi$ | stała pi | $1$ |
+| $A$ | stała wymiany | $\mathrm{J\,m^{-1}}$ |
+| $M_s$ | magnetyzacja nasycenia | $\mathrm{A\,m^{-1}}$ |
+| $B_0$ | pole równowagi | $\mathrm T$ |
+| $D$ | diagonalny blok wymiany i pola | $\mathrm T$ |
+| $K$ | macierz energii liniowej | $\mathrm T$ |
+| $\mu_0$ | przenikalność próżni | $\mathrm{T\,m\,A^{-1}}$ |
+| $\gamma_0$ | dodatnie gamma dla pól H | $\mathrm{m\,A^{-1}\,s^{-1}}$ |
+| $L$ | operator czasowy | $\mathrm{s^{-1}}$ |
+| $\lambda$ | wartość własna | $\mathrm{s^{-1}}$ |
+| $\omega$ | częstotliwość kątowa | $\mathrm{s^{-1}}$ |
+| $f$ | częstotliwość dodatniej gałęzi | $\mathrm{Hz}$ |
+
+W N=1 otrzymuje się R00=1-(1-exp(-a))/a oraz S00=0. Jest to bramka
+zgodności z dotychczasowym P00, nie dowód dokładności P00 przy dowolnym kt.
+Niezależne przedstawienie warunków brzegowych i ograniczeń przybliżenia
+diagonalnego opisują Harms i Duine, arXiv:2109.10597; niniejsze całkowe
+wyprowadzenie i implementacja są własnym oracle, nie kopią ich solvera.
+
+### Parametry, granice i realizacje
+
+Publiczne funkcje pomocniczego skryptu wymagają jawnych Ms, A, B0, t, gamma0,
+k, konfiguracji DE/BV i N; brak domyślnych materiałów lub rozmiaru próbki.
+Ms, B0, t, gamma0 muszą być skończone i dodatnie, A skończone i nieujemne,
+k skończone. N jest dodatnią liczbą całkowitą do 64. Kwadratura ma jawny
+parametr, domyślnie 128 punktów; dopuszczalny zakres 16–512 i co najmniej 2N.
+Nieprawidłowe dane kończą się ValueError. Wartości bool nie są liczbami fizycznymi.
+Obliczanie pełnego małego widma jest diagnostyką, nie produkcyjnym dense default.
+
+Nie zmieniono Python DSL, ProblemIR, planera, capability, API ani workspace.
+
+| Parametr helpera | Typ / domyślnie | SI / domena | Znaczenie |
+|---|---|---|---|
+| ms_a_m | float / wymagany | $\mathrm{A\,m^{-1}}$, dodatni finite | Ms |
+| exchange_j_m | float / wymagany | $\mathrm{J\,m^{-1}}$, nieujemny finite | A |
+| bias_t | float / wymagany | $\mathrm T$, dodatni finite | B0 |
+| thickness_m | float / wymagany | $\mathrm m$, dodatni finite | t |
+| gamma0_m_a_s | float / wymagany dla solve | $\mathrm{m\,A^{-1}\,s^{-1}}$, dodatni finite | gamma0 |
+| k_rad_m | float / wymagany | $\mathrm{rad\,m^{-1}}$, finite | podpisane k |
+| geometry | str / wymagany | DE lub BV | kierunek propagacji |
+| basis_size | int / wymagany | 1..64, bez bool | N |
+| quadrature_points | int / 128 | max(16,2N)..512, bez bool | kwadratura |
+
+Skrypt nie przyjmuje authoringu zamiast kanonicznego study i nie obiecuje
+obsługi nowych interakcji. Parametry porównania muszą pochodzić z rzeczywistego
+metadata wejściowego; wynik oracle zapisuje je wraz z N i kwadraturą.
+FDM CPU/GPU i FEM GPU: nie dotyczy, bez promocji ich wsparcia.
+FEM CPU: oracle pomocniczy host NumPy, nie managed MFEM i nie dowód parytetu.
+Nie dotyczy antidotu A1, materiałów niejednorodnych ani powierzchni z pinningiem.
+Finite-airbox FEM przy k=0 ma odrębny model; nie wolno utożsamiać go z otwartym oracle.
+
+### Bramki i źródła
+
+Wymagane: N=1 vs P00 dla DE/BV i k=0, Hermitowskość demag, odwrócenie
+k przy symetrycznym filmie, stabilność dodatniego widma, zbieżność N i kwadratury,
+residual własnego operatora oracle. Residual oracle nie jest residualem FEM.
+Porównanie do aktualnego #179 i zbieżność FEM nadal NOT VERIFIED.
+
+- Harms, J. S.; Duine, R. A., *Theory of the dipole-exchange spin wave spectrum
+  in ferromagnetic films with in-plane magnetization revisited*, 2021:
+  https://arxiv.org/abs/2109.10597 (model LL/Maxwell i swobodne exchange BC).
+
+| Source ID | Ścieżka | Symbol | Odpowiedzialność |
+|---|---|---|---|
+| source-thickness-oracle-matrices | `scripts/thin_film_thickness_oracle.py` | `modal_matrices` | całkowy demag i baza wymiany |
+| source-thickness-oracle-solve | `scripts/thin_film_thickness_oracle.py` | `solve_thickness_modes` | mały oracle LL, częstotliwości i residual własnego operatora |
