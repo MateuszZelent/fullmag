@@ -52,6 +52,7 @@ use anyhow::{bail, Context, Result};
 use zip::write::SimpleFileOptions;
 use zip::CompressionMethod;
 
+use crate::archive_document::{ArchiveFileSnapshot, MAX_CONTROL_DOCUMENT_BYTES};
 use crate::reachability::{self, ReachabilityMode, ReachabilityReport};
 use crate::store::SessionStore;
 use crate::types::*;
@@ -88,7 +89,32 @@ struct ZipDirectoryScan {
 
 struct PackEntry {
     archive_path: String,
-    data: Vec<u8>,
+    snapshot: ArchiveFileSnapshot,
+}
+
+impl PackEntry {
+    fn from_bytes(archive_path: String, data: Vec<u8>) -> Self {
+        Self { archive_path, snapshot: ArchiveFileSnapshot::from_bytes(&data) }
+    }
+
+    fn from_file(
+        archive_path: String, store_root: &Path, canonical_root: &Path, source: &Path,
+    ) -> Result<Self> {
+        validate_store_source(store_root, canonical_root, source, false)?;
+        Ok(Self { archive_path, snapshot: ArchiveFileSnapshot::capture(source)? })
+    }
+}
+
+trait PackEntryInventory {
+    fn push_entry(&mut self, entry: PackEntry) -> Result<()>;
+}
+
+impl PackEntryInventory for Vec<PackEntry> {
+    fn push_entry(&mut self, entry: PackEntry) -> Result<()> {
+        ArchiveLimitAccounting::validate_declared_entry_count(self.len() as u64 + 1)?;
+        self.push(entry);
+        Ok(())
+    }
 }
 
 struct CasPackEntry {
@@ -212,13 +238,21 @@ pub fn pack_fms<W: Write + Seek>(
     // ── runs/ ──────────────────────────────────────────────────────────
     for entry in run_entries {
         zip.start_file(&entry.archive_path, fopts)?;
-        zip.write_all(&entry.data)?;
+        let source = store.root().join(&entry.archive_path);
+        validate_store_source(store.root(), &canonical_root, &source, false)?;
+        crate::cas::copy_verified_file(
+            &source, &entry.snapshot.content_sha256, entry.snapshot.byte_count, &mut zip,
+        )?;
     }
 
     // ── solutions/ ─────────────────────────────────────────────────────
     for entry in solution_entries {
         zip.start_file(&entry.archive_path, fopts)?;
-        zip.write_all(&entry.data)?;
+        let source = store.root().join(&entry.archive_path);
+        validate_store_source(store.root(), &canonical_root, &source, false)?;
+        crate::cas::copy_verified_file(
+            &source, &entry.snapshot.content_sha256, entry.snapshot.byte_count, &mut zip,
+        )?;
     }
 
     // ── objects/ ───────────────────────────────────────────────────────
@@ -320,7 +354,7 @@ fn plan_cas_entries(
 ) -> Result<Vec<CasPackEntry>> {
     let mut documents = HashMap::new();
     for entry in run_entries.iter().chain(solution_entries) {
-        documents.insert(entry.archive_path.clone(), entry.data.clone());
+        documents.insert(entry.archive_path.clone(), entry.snapshot.clone());
     }
 
     // Validate the namespace without reading unrelated CAS contents.
@@ -337,7 +371,7 @@ fn plan_cas_entries(
             validate_store_source(store_root, canonical_root, &entry.path(), false)?;
         }
     }
-    let report = reachability::walk_export_documents(&documents, canonical_root)?;
+    let report = reachability::walk_export_file_documents(&documents, canonical_root)?;
     report.require_complete()?;
 
     let mut entries = Vec::new();
@@ -398,42 +432,27 @@ fn plan_run_entries(
         let run_dir = store_root.join("runs").join(run_id);
         let run_manifest = run_dir.join("run_manifest.json");
         if let Some(data) = read_store_file_if_exists(store_root, canonical_root, &run_manifest)? {
-            entries.push(PackEntry {
-                archive_path: run_ref.clone(),
-                data,
-            });
+            entries.push_entry(PackEntry::from_bytes(run_ref.clone(), data))?;
         }
         let run_intent = run_dir.join("run_intent.json");
         if let Some(data) = read_store_file_if_exists(store_root, canonical_root, &run_intent)? {
-            entries.push(PackEntry {
-                archive_path: format!("runs/{run_id}/run_intent.json"),
-                data,
-            });
+            entries.push_entry(PackEntry::from_bytes(format!("runs/{run_id}/run_intent.json"), data))?;
         }
         let run_catalog = run_dir.join("run_catalog.json");
         if let Some(data) = read_store_file_if_exists(store_root, canonical_root, &run_catalog)? {
-            entries.push(PackEntry {
-                archive_path: format!("runs/{run_id}/run_catalog.json"),
-                data,
-            });
+            entries.push_entry(PackEntry::from_bytes(format!("runs/{run_id}/run_catalog.json"), data))?;
         }
         let artifact_catalog = run_dir.join("artifact_catalog.json");
         if let Some(data) =
             read_store_file_if_exists(store_root, canonical_root, &artifact_catalog)?
         {
-            entries.push(PackEntry {
-                archive_path: format!("runs/{run_id}/artifact_catalog.json"),
-                data,
-            });
+            entries.push_entry(PackEntry::from_bytes(format!("runs/{run_id}/artifact_catalog.json"), data))?;
         }
         let preparation_receipt = run_dir.join("preparation_receipt.json");
         if let Some(data) =
             read_store_file_if_exists(store_root, canonical_root, &preparation_receipt)?
         {
-            entries.push(PackEntry {
-                archive_path: format!("runs/{run_id}/preparation_receipt.json"),
-                data,
-            });
+            entries.push_entry(PackEntry::from_bytes(format!("runs/{run_id}/preparation_receipt.json"), data))?;
         }
         let task_receipt_dir = run_dir.join("task_preparation_receipts");
         if store_source_exists(&task_receipt_dir)? {
@@ -480,7 +499,7 @@ fn plan_run_entries(
                     }
                     receipt.validate_for_catalog(&catalog)?;
                     receipt.validate_for_run_intent(&intent)?;
-                    entries.push(PackEntry { archive_path, data });
+                    entries.push_entry(PackEntry::from_bytes(archive_path, data))?;
                 }
             }
         }
@@ -538,7 +557,7 @@ fn plan_run_entries(
                     if record.relative_path()? != archive_path {
                         bail!("worker inbox path identity mismatch");
                     }
-                    entries.push(PackEntry { archive_path, data });
+                    entries.push_entry(PackEntry::from_bytes(archive_path, data))?;
                 }
             }
         }
@@ -592,7 +611,7 @@ fn plan_resource_lease_entries(
             if let Some(data) =
                 read_store_file_if_exists(store_root, canonical_root, &lease_entry.path())?
             {
-                entries.push(PackEntry { archive_path, data });
+                entries.push_entry(PackEntry::from_bytes(archive_path, data))?;
             }
         }
     }
@@ -631,7 +650,7 @@ fn plan_retry_decision_entries(
         if let Some(data) =
             read_store_file_if_exists(store_root, canonical_root, &decision_entry.path())?
         {
-            entries.push(PackEntry { archive_path, data });
+            entries.push_entry(PackEntry::from_bytes(archive_path, data))?;
         }
     }
     Ok(())
@@ -686,7 +705,7 @@ fn plan_preparation_resource_lease_entries(
                 if lease.relative_path()? != archive_path {
                     bail!("preparation resource lease path identity mismatch");
                 }
-                entries.push(PackEntry { archive_path, data });
+                entries.push_entry(PackEntry::from_bytes(archive_path, data))?;
             }
         }
     }
@@ -735,7 +754,7 @@ fn plan_preparation_retry_decision_entries(
             if decision.relative_path()? != archive_path {
                 bail!("preparation retry decision path identity mismatch");
             }
-            entries.push(PackEntry { archive_path, data });
+            entries.push_entry(PackEntry::from_bytes(archive_path, data))?;
         }
     }
     Ok(())
@@ -782,7 +801,7 @@ fn plan_worker_process_exit_receipt_entries(
             if receipt.relative_path()? != archive_path {
                 bail!("worker process exit receipt path identity mismatch");
             }
-            entries.push(PackEntry { archive_path, data });
+            entries.push_entry(PackEntry::from_bytes(archive_path, data))?;
         }
     }
     Ok(())
@@ -829,7 +848,7 @@ fn plan_preparation_process_exit_receipt_entries(
             if receipt.relative_path()? != archive_path {
                 bail!("preparation process exit receipt path identity mismatch");
             }
-            entries.push(PackEntry { archive_path, data });
+            entries.push_entry(PackEntry::from_bytes(archive_path, data))?;
         }
     }
     Ok(())
@@ -875,7 +894,7 @@ fn plan_preparation_process_launch_entries(
             if launch.relative_path()? != archive_path {
                 bail!("preparation process launch path identity mismatch");
             }
-            entries.push(PackEntry { archive_path, data });
+            entries.push_entry(PackEntry::from_bytes(archive_path, data))?;
         }
     }
     Ok(())
@@ -932,7 +951,7 @@ fn plan_task_admission_entries(
                 {
                     bail!("task admission identity does not match its path");
                 }
-                entries.push(PackEntry { archive_path, data });
+                entries.push_entry(PackEntry::from_bytes(archive_path, data))?;
             }
         }
     }
@@ -985,7 +1004,7 @@ fn plan_coordinator_journal_entries(
             if let Some(data) =
                 read_store_file_if_exists(store_root, canonical_root, &journal_entry.path())?
             {
-                entries.push(PackEntry { archive_path, data });
+                entries.push_entry(PackEntry::from_bytes(archive_path, data))?;
             }
         }
     }
@@ -1053,10 +1072,7 @@ fn plan_checkpoint_entries(
             let name = portable_file_name(&file)?;
             let archive_path = format!("{checkpoint_prefix}/{name}");
             validate_portable_namespace_path(&archive_path)?;
-            entries.push(PackEntry {
-                archive_path,
-                data: read_store_file(store_root, canonical_root, &file.path())?,
-            });
+            entries.push_entry(PackEntry::from_file(archive_path, store_root, canonical_root, &file.path())?)?;
         }
     }
     Ok(())
@@ -1111,10 +1127,7 @@ fn plan_artifact_directory(
                 entries,
             )?;
         } else if file_type.is_file() {
-            entries.push(PackEntry {
-                archive_path,
-                data: read_store_file(store_root, canonical_root, &entry.path())?,
-            });
+            entries.push_entry(PackEntry::from_file(archive_path, store_root, canonical_root, &entry.path())?)?;
         } else {
             anyhow::bail!("unsupported artifact source: {}", entry.path().display());
         }
@@ -1153,7 +1166,16 @@ fn store_source_exists(source: &Path) -> Result<bool> {
 
 fn read_store_file(store_root: &Path, canonical_root: &Path, source: &Path) -> Result<Vec<u8>> {
     validate_store_source(store_root, canonical_root, source, false)?;
-    std::fs::read(source).with_context(|| format!("reading store source {}", source.display()))
+    let file = File::open(source)?;
+    if file.metadata()?.len() > MAX_CONTROL_DOCUMENT_BYTES {
+        bail!("structural export document exceeds metadata budget: {}", source.display());
+    }
+    let mut data = Vec::new();
+    file.take(MAX_CONTROL_DOCUMENT_BYTES + 1).read_to_end(&mut data)?;
+    if data.len() as u64 > MAX_CONTROL_DOCUMENT_BYTES {
+        bail!("structural export document exceeds metadata budget: {}", source.display());
+    }
+    Ok(data)
 }
 
 fn validate_store_source(
@@ -1269,13 +1291,13 @@ fn validate_export_plan(
     entries.extend(
         run_entries
             .iter()
-            .map(|entry| Ok((entry.archive_path.clone(), archive_entry_size(&entry.data)?)))
+            .map(|entry| Ok((entry.archive_path.clone(), entry.snapshot.byte_count)))
             .collect::<Result<Vec<_>>>()?,
     );
     entries.extend(
         solution_entries
             .iter()
-            .map(|entry| Ok((entry.archive_path.clone(), archive_entry_size(&entry.data)?)))
+            .map(|entry| Ok((entry.archive_path.clone(), entry.snapshot.byte_count)))
             .collect::<Result<Vec<_>>>()?,
     );
     entries.extend(
@@ -2135,11 +2157,14 @@ mod tests {
         .unwrap();
         let canonical_root = canonical_store_root(store.root()).unwrap();
         let entries = plan_solution_entries(store.root(), &canonical_root, &profile).unwrap();
-        let mut documents = entries
-            .iter()
-            .map(|entry| (entry.archive_path.clone(), entry.data.clone()))
+        let snapshots = entries.iter()
+            .map(|entry| (entry.archive_path.clone(), entry.snapshot.clone()))
             .collect::<HashMap<_, _>>();
-        let disk = reachability::walk_export_documents(&documents, &canonical_root).unwrap();
+        let disk = reachability::walk_export_file_documents(&snapshots, &canonical_root).unwrap();
+        let mut documents = entries.iter().map(|entry| (
+            entry.archive_path.clone(),
+            entry.snapshot.read_control(&canonical_root, &entry.archive_path).unwrap(),
+        )).collect::<HashMap<_, _>>();
         disk.require_complete().unwrap();
         documents.insert(format!("objects/sha256/{object_ref}"), payload.clone());
         let memory =
@@ -2153,6 +2178,41 @@ mod tests {
         assert_eq!(plan[0].byte_count, payload.len() as u64);
         fs::write(&plan[0].source, vec![24_u8; payload.len()]).unwrap();
         assert!(plan_cas_entries(store.root(), &canonical_root, &[], &entries).is_err());
+    }
+
+    #[test]
+    fn opaque_json_named_artifact_is_streamed_above_control_budget() {
+        let (_directory, store, _session, _workspace, _profile, _documents) =
+            pack_fixture(SaveProfile::Solved);
+        let relative = "runs/run-opaque/artifacts/large.json";
+        let source = store.root().join(relative);
+        fs::create_dir_all(source.parent().unwrap()).unwrap();
+        let file = File::create(&source).unwrap();
+        file.set_len(MAX_CONTROL_DOCUMENT_BYTES + 1).unwrap();
+        let root = canonical_store_root(store.root()).unwrap();
+        let mut entries = Vec::new();
+        plan_artifact_directory(store.root(), &root, source.parent().unwrap(),
+            "runs/run-opaque/artifacts", &mut entries).unwrap();
+        assert_eq!(entries.len(), 1);
+        let snapshots = entries.iter().map(|entry|
+            (entry.archive_path.clone(), entry.snapshot.clone())).collect();
+        reachability::walk_export_file_documents(&snapshots, &root)
+            .unwrap().require_complete().unwrap();
+        let entry = &entries[0];
+        assert_eq!(entry.snapshot.byte_count, MAX_CONTROL_DOCUMENT_BYTES + 1);
+        crate::cas::copy_verified_file(&source, &entry.snapshot.content_sha256,
+            entry.snapshot.byte_count, &mut std::io::sink()).unwrap();
+        assert!(entry.snapshot.read_control(&root, relative).is_err());
+    }
+
+    #[test]
+    fn document_inventory_rejects_entry_count_before_growth() {
+        let mut entries = (0..MAX_ZIP_ENTRIES).map(|index|
+            PackEntry::from_bytes(format!("runs/r/artifacts/{index}"), Vec::new()))
+            .collect::<Vec<_>>();
+        assert!(entries.push_entry(PackEntry::from_bytes(
+            "runs/r/artifacts/overflow".to_string(), Vec::new())).is_err());
+        assert_eq!(entries.len(), MAX_ZIP_ENTRIES);
     }
 
     fn assert_pack_rejected_without_output(

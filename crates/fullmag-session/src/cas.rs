@@ -297,7 +297,13 @@ impl CasStore {
 }
 
 pub(crate) fn verified_file_length(path: &Path, hash: &str) -> Result<u64> {
-    stream_verified_file(path, hash, None, &mut std::io::sink())
+    stream_file_identity(path, Some(hash), None, &mut std::io::sink())
+        .map(|(_, length)| length)
+}
+
+/// Fingerprint a non-CAS export source with the same bounded streaming reader.
+pub(crate) fn file_content_identity(path: &Path) -> Result<(String, u64)> {
+    stream_file_identity(path, None, None, &mut std::io::sink())
 }
 
 /// Copy the planned immutable object without allocating its full contents.
@@ -308,17 +314,20 @@ pub(crate) fn copy_verified_file(
     expected_length: u64,
     writer: &mut impl Write,
 ) -> Result<()> {
-    stream_verified_file(path, hash, Some(expected_length), writer)?;
+    stream_file_identity(path, Some(hash), Some(expected_length), writer)?;
     Ok(())
 }
 
-fn stream_verified_file(
+fn stream_file_identity(
     path: &Path,
-    hash: &str,
+    expected_hash: Option<&str>,
     expected_length: Option<u64>,
     writer: &mut impl Write,
-) -> Result<u64> {
-    validate_hash(hash)?;
+) -> Result<(String, u64)> {
+    if let Some(hash) = expected_hash {
+        validate_hash(hash)?;
+    }
+    let hash = expected_hash.unwrap_or("export source");
     let file = fs::File::open(path).with_context(|| format!("opening CAS object {hash}"))?;
     let metadata = file
         .metadata()
@@ -350,13 +359,13 @@ fn stream_verified_file(
         writer.write_all(&buffer[..count])?;
     }
     let actual = hex_encode(&hasher.finalize());
-    if actual != hash {
+    if expected_hash.is_some_and(|expected| actual != expected) {
         anyhow::bail!("CAS integrity error: expected {hash}, got {actual}");
     }
     if object_length != metadata.len() {
         anyhow::bail!("CAS object {hash} changed length while reading");
     }
-    Ok(object_length)
+    Ok((actual, object_length))
 }
 
 pub(crate) fn validate_hash(hash: &str) -> Result<()> {

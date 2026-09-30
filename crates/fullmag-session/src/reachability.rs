@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 use fullmag_quantities::SolutionSet;
 
+use crate::archive_document::{ArchiveDocuments, ArchiveFileSnapshot};
 use crate::types::{
     ArtifactIndex, BackendStatePayload, CommonSolverState, FieldRole, FmsArtifactCatalog,
     FmsCheckpoint, FmsCoordinatorJournalDirection, FmsExportProfile, FmsPreparationReceipt,
@@ -173,7 +174,7 @@ pub fn walk_archive_documents(
     mode: ReachabilityMode,
 ) -> Result<ReachabilityReport> {
     let mut walker = ArchiveWalker {
-        documents,
+        documents: ArchiveDocuments::Memory(documents),
         cas_root: None,
         mode,
         report: ReachabilityReport::new(),
@@ -182,10 +183,9 @@ pub fn walk_archive_documents(
     walker.walk_archive()
 }
 
-/// Traverse exactly the documents selected for export, resolving CAS lazily.
-/// Binary objects are hashed with a fixed buffer; only structural JSON is read.
-pub(crate) fn walk_export_documents(
-    documents: &HashMap<String, Vec<u8>>,
+/// Traverse a metadata-only export inventory with lazy typed document reads.
+pub(crate) fn walk_export_file_documents(
+    documents: &HashMap<String, ArchiveFileSnapshot>,
     root: &Path,
 ) -> Result<ReachabilityReport> {
     if documents.keys().any(|name| name.starts_with("objects/")) {
@@ -193,7 +193,7 @@ pub(crate) fn walk_export_documents(
     }
     let root = fs::canonicalize(root)?;
     let mut walker = ArchiveWalker {
-        documents,
+        documents: ArchiveDocuments::Files { snapshots: documents, root: &root },
         cas_root: Some(&root),
         mode: ReachabilityMode::Export,
         report: ReachabilityReport::new(),
@@ -1830,7 +1830,7 @@ enum ReferenceKind {
 }
 
 struct ArchiveWalker<'a> {
-    documents: &'a HashMap<String, Vec<u8>>,
+    documents: ArchiveDocuments<'a>,
     cas_root: Option<&'a Path>,
     mode: ReachabilityMode,
     report: ReachabilityReport,
@@ -1854,10 +1854,10 @@ impl<'a> ArchiveWalker<'a> {
                 Err(error) => return Err(error.into()),
             }
         }
-        let Some(data) = self.documents.get(&relative) else {
+        let Some(data) = self.documents.read(&relative)? else {
             return Ok(None);
         };
-        if crate::cas::hex_sha256(data) != object_ref {
+        if crate::cas::hex_sha256(&data) != object_ref {
             bail!("CAS SHA-256 mismatch for `{relative}`");
         }
         Ok(Some(u64::try_from(data.len())?))
@@ -1881,14 +1881,14 @@ impl<'a> ArchiveWalker<'a> {
             }
             return Ok(data);
         }
-        self.documents.get(&relative).cloned().context("validated archive object disappeared")
+        self.documents.read(&relative)?.map(|data| data.into_owned()).context("validated archive object disappeared")
     }
 
     fn walk_archive(&mut self) -> Result<ReachabilityReport> {
         self.validate_archive_namespace()?;
         self.walk_archive_solutions()?;
-        if let Some(data) = self.documents.get("manifest/session.json") {
-            let session: FmsSessionManifest = parse_json(data, "manifest/session.json")?;
+        if let Some(data) = self.documents.read("manifest/session.json")? {
+            let session: FmsSessionManifest = parse_json(&data, "manifest/session.json")?;
             validate_session(&session, "manifest/session.json")?;
             for run_ref in &session.run_refs {
                 validate_file_ref(run_ref)?;
@@ -2151,9 +2151,9 @@ impl<'a> ArchiveWalker<'a> {
             let current_path = format!("solutions/{directory}/manifest.json");
             let current = self
                 .documents
-                .get(&current_path)
+                .read(&current_path)?
                 .map(|data| -> Result<SolutionSet> {
-                    let solution = parse_json(data, &current_path)?;
+                    let solution = parse_json(&data, &current_path)?;
                     self.validate_archive_solution_identity(
                         &solution,
                         &directory,
@@ -2168,16 +2168,17 @@ impl<'a> ArchiveWalker<'a> {
 
             let revision_prefix = format!("solutions/{directory}/revisions/");
             let mut revisions = BTreeMap::new();
-            for name in self.documents.keys() {
+            let names = self.documents.keys().cloned().collect::<Vec<_>>();
+            for name in &names {
                 let Some(file_name) = name.strip_prefix(&revision_prefix) else {
                     continue;
                 };
                 let revision = parse_solution_revision_filename(file_name)?;
                 let data = self
                     .documents
-                    .get(name)
+                    .read(name)?
                     .context("solution-set revision disappeared during archive walk")?;
-                let solution: SolutionSet = parse_json(data, name)?;
+                let solution: SolutionSet = parse_json(&data, name)?;
                 self.validate_archive_solution_identity(
                     &solution,
                     &directory,
@@ -2279,12 +2280,12 @@ impl<'a> ArchiveWalker<'a> {
     }
 
     fn walk_run(&mut self, run_ref: &str, expected_run_id: &str) -> Result<()> {
-        let Some(data) = self.documents.get(run_ref) else {
+        let Some(data) = self.documents.read(run_ref)? else {
             return self.report.missing(format!(
                 "archive references missing run manifest `{run_ref}`"
             ));
         };
-        let run: FmsRunManifest = parse_json(data, run_ref)?;
+        let run: FmsRunManifest = parse_json(&data, run_ref)?;
         if run.run_id != expected_run_id {
             bail!(
                 "run manifest `{run_ref}` contains mismatched run_id `{}`",
@@ -2384,12 +2385,9 @@ impl<'a> ArchiveWalker<'a> {
         }
         validate_journal_streams(&journal_entries)?;
         let inbox_prefix = format!("runs/{expected_run_id}/worker_inbox/");
-        for (name, data) in self
-            .documents
-            .iter()
-            .filter(|(name, _)| name.starts_with(&inbox_prefix))
-        {
-            let record: crate::FmsWorkerInboxRecord = parse_json(data, name)?;
+        for name in self.documents.keys().filter(|name| name.starts_with(&inbox_prefix)) {
+            let data = self.documents.read(name)?.context("worker inbox disappeared during archive walk")?;
+            let record: crate::FmsWorkerInboxRecord = parse_json(&data, name)?;
             if record.relative_path()? != *name {
                 bail!("worker inbox path identity mismatch");
             }
@@ -2410,12 +2408,12 @@ impl<'a> ArchiveWalker<'a> {
     }
 
     fn walk_run_intent(&mut self, relative: &str, expected_run_id: &str) -> Result<()> {
-        let Some(data) = self.documents.get(relative) else {
+        let Some(data) = self.documents.read(relative)? else {
             return self.report.missing(format!(
                 "archive references missing run intent `{relative}`"
             ));
         };
-        let intent: FmsRunIntent = parse_json(data, relative)?;
+        let intent: FmsRunIntent = parse_json(&data, relative)?;
         intent.validate()?;
         if intent.run_id != expected_run_id {
             bail!(
@@ -2440,12 +2438,12 @@ impl<'a> ArchiveWalker<'a> {
     }
 
     fn walk_run_catalog(&mut self, relative: &str, expected_run_id: &str) -> Result<()> {
-        let Some(data) = self.documents.get(relative) else {
+        let Some(data) = self.documents.read(relative)? else {
             return self.report.missing(format!(
                 "archive references missing run catalog `{relative}`"
             ));
         };
-        let catalog: FmsRunCatalog = parse_json(data, relative)?;
+        let catalog: FmsRunCatalog = parse_json(&data, relative)?;
         catalog.validate()?;
         if catalog.run_id != expected_run_id {
             bail!(
@@ -2458,12 +2456,12 @@ impl<'a> ArchiveWalker<'a> {
     }
 
     fn walk_artifact_catalog(&mut self, relative: &str, expected_run_id: &str) -> Result<()> {
-        let Some(data) = self.documents.get(relative) else {
+        let Some(data) = self.documents.read(relative)? else {
             return self.report.missing(format!(
                 "archive references missing artifact catalog `{relative}`"
             ));
         };
-        let catalog: FmsArtifactCatalog = parse_json(data, relative)?;
+        let catalog: FmsArtifactCatalog = parse_json(&data, relative)?;
         catalog.validate()?;
         if catalog.run_id != expected_run_id {
             bail!(
@@ -2481,12 +2479,12 @@ impl<'a> ArchiveWalker<'a> {
     }
 
     fn walk_preparation_receipt(&mut self, relative: &str, expected_run_id: &str) -> Result<()> {
-        let Some(data) = self.documents.get(relative) else {
+        let Some(data) = self.documents.read(relative)? else {
             return self.report.missing(format!(
                 "archive references missing preparation receipt `{relative}`"
             ));
         };
-        let receipt: FmsPreparationReceipt = parse_json(data, relative)?;
+        let receipt: FmsPreparationReceipt = parse_json(&data, relative)?;
         receipt.validate()?;
         if receipt.run_id != expected_run_id {
             bail!(
@@ -2511,19 +2509,19 @@ impl<'a> ArchiveWalker<'a> {
         }
         names.sort();
         let catalog_ref = format!("runs/{expected_run_id}/run_catalog.json");
-        let catalog_data = self.documents.get(&catalog_ref).with_context(|| {
+        let catalog_data = self.documents.read(&catalog_ref)?.with_context(|| {
             format!("archive task preparation receipts require run catalog `{catalog_ref}`")
         })?;
-        let catalog: FmsRunCatalog = parse_json(catalog_data, &catalog_ref)?;
+        let catalog: FmsRunCatalog = parse_json(&catalog_data, &catalog_ref)?;
         catalog.validate()?;
         if catalog.run_id != expected_run_id {
             bail!("archive task preparation receipt catalog identity does not match run path");
         }
         let intent_ref = format!("runs/{expected_run_id}/run_intent.json");
-        let intent_data = self.documents.get(&intent_ref).with_context(|| {
+        let intent_data = self.documents.read(&intent_ref)?.with_context(|| {
             format!("archive task preparation receipts require run intent `{intent_ref}`")
         })?;
-        let intent: FmsRunIntent = parse_json(intent_data, &intent_ref)?;
+        let intent: FmsRunIntent = parse_json(&intent_data, &intent_ref)?;
         intent.validate()?;
         for relative in names {
             let rest = relative
@@ -2534,9 +2532,9 @@ impl<'a> ArchiveWalker<'a> {
             }
             let data = self
                 .documents
-                .get(&relative)
+                .read(&relative)?
                 .context("archive task preparation receipt disappeared")?;
-            let receipt: FmsTaskPreparationReceipt = parse_json(data, &relative)?;
+            let receipt: FmsTaskPreparationReceipt = parse_json(&data, &relative)?;
             if receipt.relative_path()? != relative {
                 bail!("task preparation receipt path identity mismatch");
             }
@@ -2560,10 +2558,10 @@ impl<'a> ArchiveWalker<'a> {
         }
         names.sort();
         let catalog_ref = format!("runs/{expected_run_id}/run_catalog.json");
-        let catalog_data = self.documents.get(&catalog_ref).with_context(|| {
+        let catalog_data = self.documents.read(&catalog_ref)?.with_context(|| {
             format!("archive task admissions require run catalog `{catalog_ref}`")
         })?;
-        let catalog: FmsRunCatalog = parse_json(catalog_data, &catalog_ref)?;
+        let catalog: FmsRunCatalog = parse_json(&catalog_data, &catalog_ref)?;
         catalog.validate()?;
         if catalog.run_id != expected_run_id {
             bail!("archive task admission catalog identity does not match run path");
@@ -2589,9 +2587,9 @@ impl<'a> ArchiveWalker<'a> {
             validate_component(attempt_id)?;
             let data = self
                 .documents
-                .get(&relative)
+                .read(&relative)?
                 .context("archive task admission disappeared")?;
-            let record: FmsTaskAdmissionRecord = parse_json(data, &relative)?;
+            let record: FmsTaskAdmissionRecord = parse_json(&data, &relative)?;
             record.validate()?;
             if record.lease.run_id != expected_run_id
                 || record.task.task_id != task_id
@@ -2613,7 +2611,7 @@ impl<'a> ArchiveWalker<'a> {
     }
 
     fn walk_resource_lease(&mut self, relative: &str, expected_run_id: &str) -> Result<()> {
-        let Some(data) = self.documents.get(relative) else {
+        let Some(data) = self.documents.read(relative)? else {
             return self.report.missing(format!(
                 "archive references missing resource lease `{relative}`"
             ));
@@ -2636,7 +2634,7 @@ impl<'a> ArchiveWalker<'a> {
         }
         validate_component(resource_id)?;
         validate_component(lease_token)?;
-        let lease: FmsResourceLease = parse_json(data, relative)?;
+        let lease: FmsResourceLease = parse_json(&data, relative)?;
         lease.validate()?;
         if lease.run_id != expected_run_id
             || lease.resource_id != resource_id
@@ -2649,7 +2647,7 @@ impl<'a> ArchiveWalker<'a> {
     }
 
     fn walk_retry_decision(&mut self, relative: &str, expected_run_id: &str) -> Result<()> {
-        let Some(data) = self.documents.get(relative) else {
+        let Some(data) = self.documents.read(relative)? else {
             return self.report.missing(format!(
                 "archive references missing retry decision `{relative}`"
             ));
@@ -2665,7 +2663,7 @@ impl<'a> ArchiveWalker<'a> {
             bail!("invalid retry decision path `{relative}`")
         }
         validate_component(decision_id)?;
-        let decision: FmsRetryDecision = parse_json(data, relative)?;
+        let decision: FmsRetryDecision = parse_json(&data, relative)?;
         decision.validate()?;
         if decision.run_id != expected_run_id || decision.decision_id != decision_id {
             bail!("retry decision `{relative}` contains mismatched path identity")
@@ -2679,7 +2677,7 @@ impl<'a> ArchiveWalker<'a> {
         relative: &str,
         expected_run_id: &str,
     ) -> Result<()> {
-        let Some(data) = self.documents.get(relative) else {
+        let Some(data) = self.documents.read(relative)? else {
             return self.report.missing(format!(
                 "archive references missing preparation retry decision `{relative}`"
             ));
@@ -2695,7 +2693,7 @@ impl<'a> ArchiveWalker<'a> {
             bail!("invalid preparation retry decision path `{relative}`")
         }
         validate_component(decision_id)?;
-        let decision: FmsPreparationRetryDecision = parse_json(data, relative)?;
+        let decision: FmsPreparationRetryDecision = parse_json(&data, relative)?;
         if decision.run_id != expected_run_id
             || decision.decision_id != decision_id
             || decision.relative_path()? != relative
@@ -2713,7 +2711,7 @@ impl<'a> ArchiveWalker<'a> {
         relative: &str,
         expected_run_id: &str,
     ) -> Result<()> {
-        let Some(data) = self.documents.get(relative) else {
+        let Some(data) = self.documents.read(relative)? else {
             return self.report.missing(format!(
                 "archive references missing preparation resource lease `{relative}`"
             ));
@@ -2740,7 +2738,7 @@ impl<'a> ArchiveWalker<'a> {
         }
         validate_component(resource_id)?;
         validate_component(lease_token)?;
-        let lease: FmsPreparationResourceLease = parse_json(data, relative)?;
+        let lease: FmsPreparationResourceLease = parse_json(&data, relative)?;
         lease.validate()?;
         if lease.run_id != expected_run_id
             || lease.resource_id != resource_id
@@ -2760,7 +2758,7 @@ impl<'a> ArchiveWalker<'a> {
         relative: &str,
         expected_run_id: &str,
     ) -> Result<()> {
-        let Some(data) = self.documents.get(relative) else {
+        let Some(data) = self.documents.read(relative)? else {
             return self.report.missing(format!(
                 "archive references missing worker process exit receipt `{relative}`"
             ));
@@ -2776,7 +2774,7 @@ impl<'a> ArchiveWalker<'a> {
             bail!("invalid worker process exit receipt path `{relative}`")
         }
         validate_component(receipt_id)?;
-        let receipt: FmsWorkerProcessExitReceipt = parse_json(data, relative)?;
+        let receipt: FmsWorkerProcessExitReceipt = parse_json(&data, relative)?;
         if receipt.run_id != expected_run_id || receipt.receipt_id != receipt_id {
             bail!(
                 "worker process exit receipt `{relative}` contains mismatched path identity"
@@ -2792,7 +2790,7 @@ impl<'a> ArchiveWalker<'a> {
         relative: &str,
         expected_run_id: &str,
     ) -> Result<()> {
-        let Some(data) = self.documents.get(relative) else {
+        let Some(data) = self.documents.read(relative)? else {
             return self.report.missing(format!(
                 "archive references missing preparation process exit receipt `{relative}`"
             ));
@@ -2808,7 +2806,7 @@ impl<'a> ArchiveWalker<'a> {
             bail!("invalid preparation process exit receipt path `{relative}`")
         }
         validate_component(receipt_id)?;
-        let receipt: FmsPreparationProcessExitReceipt = parse_json(data, relative)?;
+        let receipt: FmsPreparationProcessExitReceipt = parse_json(&data, relative)?;
         if receipt.run_id != expected_run_id || receipt.receipt_id != receipt_id {
             bail!(
                 "preparation process exit receipt `{relative}` contains mismatched path identity"
@@ -2824,7 +2822,7 @@ impl<'a> ArchiveWalker<'a> {
         relative: &str,
         expected_run_id: &str,
     ) -> Result<()> {
-        let Some(data) = self.documents.get(relative) else {
+        let Some(data) = self.documents.read(relative)? else {
             return self.report.missing(format!(
                 "archive references missing preparation process launch `{relative}`"
             ));
@@ -2840,7 +2838,7 @@ impl<'a> ArchiveWalker<'a> {
             bail!("invalid preparation process launch path `{relative}`")
         }
         validate_component(launch_id)?;
-        let launch: FmsPreparationProcessLaunch = parse_json(data, relative)?;
+        let launch: FmsPreparationProcessLaunch = parse_json(&data, relative)?;
         if launch.run_id != expected_run_id || launch.launch_id != launch_id {
             bail!("preparation process launch `{relative}` contains mismatched path identity")
         }
@@ -2854,7 +2852,7 @@ impl<'a> ArchiveWalker<'a> {
         relative: &str,
         expected_run_id: &str,
     ) -> Result<crate::types::FmsCoordinatorJournalEntry> {
-        let Some(data) = self.documents.get(relative) else {
+        let Some(data) = self.documents.read(relative)? else {
             bail!("archive references missing coordinator journal entry `{relative}`");
         };
         let prefix = format!("runs/{expected_run_id}/coordinator_journal/");
@@ -2873,7 +2871,7 @@ impl<'a> ArchiveWalker<'a> {
             bail!("coordinator journal path must end in .json: `{relative}`")
         };
         validate_component(entry_id)?;
-        let journal: crate::types::FmsCoordinatorJournalEntry = parse_json(data, relative)?;
+        let journal: crate::types::FmsCoordinatorJournalEntry = parse_json(&data, relative)?;
         journal.validate()?;
         if journal.run_id != expected_run_id
             || journal.direction != direction
@@ -2894,12 +2892,12 @@ impl<'a> ArchiveWalker<'a> {
         if !self.seen_checkpoints.insert(relative.to_string()) {
             return Ok(());
         }
-        let Some(data) = self.documents.get(relative) else {
+        let Some(data) = self.documents.read(relative)? else {
             return self.report.missing(format!(
                 "archive references missing checkpoint `{relative}`"
             ));
         };
-        let checkpoint: FmsCheckpoint = parse_json(data, relative)?;
+        let checkpoint: FmsCheckpoint = parse_json(&data, relative)?;
         validate_checkpoint(
             &checkpoint,
             expected_run_id,
@@ -2986,7 +2984,11 @@ impl<'a> ArchiveWalker<'a> {
         }
         validate_file_ref(reference)
             .with_context(|| format!("invalid reference `{reference}` in `{source}`"))?;
-        let Some(data) = self.documents.get(reference).cloned() else {
+        if matches!(kind, ReferenceKind::Unknown) && self.documents.contains_key(reference) {
+            self.report.file_refs.insert(reference.to_string());
+            return self.follow_archive_payload(&[], reference, kind);
+        }
+        let Some(data) = self.documents.read(reference)? else {
             return self.report.missing(format!(
                 "`{source}` references missing archive file `{reference}`"
             ));
@@ -3003,13 +3005,13 @@ impl<'a> ArchiveWalker<'a> {
     ) -> Result<()> {
         match kind {
             ReferenceKind::CommonState => {
-                let state: CommonSolverState = parse_json(data, source)?;
+                let state: CommonSolverState = parse_json(&data, source)?;
                 if let Some(object_ref) = state.magnetization_ref {
                     self.add_archive_payload(&object_ref, source, None)?;
                 }
             }
             ReferenceKind::ArtifactIndex => {
-                let index: ArtifactIndex = parse_json(data, source)?;
+                let index: ArtifactIndex = parse_json(&data, source)?;
                 for entry in index.entries {
                     if let Some(object_ref) = entry.object_ref {
                         self.add_archive_payload(&object_ref, source, None)?;
@@ -3037,10 +3039,10 @@ impl<'a> ArchiveWalker<'a> {
         checkpoint: &FmsCheckpoint,
         source: &str,
     ) -> Result<()> {
-        let Some(data) = self.documents.get(&checkpoint.common_state_ref) else {
+        let Some(data) = self.documents.read(&checkpoint.common_state_ref)? else {
             return Ok(());
         };
-        let state: CommonSolverState = parse_json(data, &checkpoint.common_state_ref)?;
+        let state: CommonSolverState = parse_json(&data, &checkpoint.common_state_ref)?;
         validate_common_state_identity(checkpoint, &state, source)
     }
 

@@ -14,6 +14,7 @@
 //! - **`capture`** — Checkpoint capture logic bridging the runner's live state
 //!   to the serializable session format.
 
+mod archive_document;
 pub mod capture;
 pub mod cas;
 pub mod communication_policy;
