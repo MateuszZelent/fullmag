@@ -28,6 +28,7 @@
 #include "cpu/mfem/runtime/stage_completion.hpp"
 #include "cpu/mfem/runtime/state_io.hpp"
 #include "frequency_domain/driven_response_solver.hpp"
+#include "frequency_domain/artifact_identity.hpp"
 #include "frequency_domain/frequency_domain_contract.hpp"
 #include "frequency_domain/linearization_state.hpp"
 #include "frequency_domain/modal_gpu_krylov.hpp"
@@ -2204,6 +2205,18 @@ int fullmag_fem_get_mesh_abi_layout(fullmag_fem_mesh_abi_layout *out_layout)
     return FULLMAG_FEM_OK;
 }
 
+int fullmag_fem_frequency_domain_validate_artifact_identity_v1(
+    const FullmagFemFrequencyDomainArtifactIdentityV1 *identity)
+{
+    char error_message[128]{};
+    if (!fullmag::fem::frequency_domain::validate_artifact_identity_v1(identity, error_message)) {
+        fullmag_fem_set_global_error(error_message);
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    fullmag_fem_clear_global_error();
+    return FULLMAG_FEM_OK;
+}
+
 int fullmag_fem_frequency_domain_initial_sweep_progress(
     uint64_t total_frequency_points,
     fullmag_fem_frequency_domain_sweep_progress *out_progress
@@ -2302,7 +2315,8 @@ int fullmag_fem_frequency_domain_completed_sweep_progress(
 static int fullmag_fem_frequency_domain_solve_driven_response_from_c_abi(
     const fullmag_fem_frequency_domain_driven_response_request *request,
     fullmag_fem_frequency_domain_apply_with_potential_callback mfem_apply_demag_tangent_with_potential,
-    fullmag_fem_frequency_domain_solve_result *out_result
+    fullmag_fem_frequency_domain_solve_result *out_result,
+    const FullmagFemFrequencyDomainArtifactIdentityV1 *artifact_identity = nullptr
 ) {
     if (request == nullptr || out_result == nullptr) {
         fullmag_fem_set_global_error(
@@ -2374,6 +2388,7 @@ static int fullmag_fem_frequency_domain_solve_driven_response_from_c_abi(
         return FULLMAG_FEM_OK;
     }
     fd::DrivenFrequencyResponseSolveRequest native_request{};
+    native_request.artifact_identity = artifact_identity;
     std::vector<fd::TangentFrameNode> frequency_domain_tangent_nodes;
     std::vector<fd::TangentOperatorEdgeBlock> frequency_domain_exchange_edges;
     std::vector<fd::MfemDmiElementTangentData> frequency_domain_dmi_elements;
@@ -2391,6 +2406,10 @@ static int fullmag_fem_frequency_domain_solve_driven_response_from_c_abi(
     native_request.struct_size = request->struct_size == 0
         ? 0
         : sizeof(fd::DrivenFrequencyResponseSolveRequest);
+    if (artifact_identity != nullptr) {
+        native_request.abi_version = fd::kDrivenFrequencyResponseSolveRequestAbiVersion;
+        native_request.struct_size = sizeof(fd::DrivenFrequencyResponseSolveRequest);
+    }
     native_request.solver_options.relative_tolerance =
         request->solver_relative_tolerance;
     native_request.solver_options.absolute_tolerance =
@@ -2816,6 +2835,19 @@ static int fullmag_fem_frequency_domain_solve_driven_response_from_c_abi(
     fd::release_driven_frequency_response_result(&native_result);
     fullmag_fem_clear_global_error();
     return FULLMAG_FEM_OK;
+}
+
+int fullmag_fem_frequency_domain_solve_driven_response_with_identity_v1(
+    const fullmag_fem_frequency_domain_driven_response_request *request,
+    const FullmagFemFrequencyDomainArtifactIdentityV1 *identity,
+    fullmag_fem_frequency_domain_apply_with_potential_callback mfem_apply_demag_tangent_with_potential,
+    fullmag_fem_frequency_domain_solve_result *out_result)
+{
+    if (fullmag_fem_frequency_domain_validate_artifact_identity_v1(identity) != FULLMAG_FEM_OK) {
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    return fullmag_fem_frequency_domain_solve_driven_response_from_c_abi(
+        request, mfem_apply_demag_tangent_with_potential, out_result, identity);
 }
 
 int fullmag_fem_frequency_domain_solve_driven_response(

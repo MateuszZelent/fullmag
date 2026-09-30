@@ -14,9 +14,11 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <exception>
 #include <limits>
 #include <new>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 #include <sys/stat.h>
@@ -1014,19 +1016,40 @@ bool validate_exactly_one_operator_source(
     return true;
 }
 
-bool validate_driven_response_solve_contract(
+// Check the fixed header before reading or copying a versioned request.
+// Legacy native callers own only the prefix preceding artifact_identity.
+bool validate_driven_response_request_header(
     const DrivenFrequencyResponseSolveRequest &request,
     char error_message[128]) noexcept
 {
     if (request.abi_version != 0 &&
         request.abi_version != 9u &&
+        request.abi_version != 12u &&
         request.abi_version != kDrivenFrequencyResponseSolveRequestAbiVersion) {
         std::snprintf(error_message, 128, "unsupported driven response request ABI version");
         return false;
     }
+    const auto legacy_size = offsetof(DrivenFrequencyResponseSolveRequest, artifact_identity);
     if (request.struct_size != 0 &&
-        request.struct_size != sizeof(DrivenFrequencyResponseSolveRequest)) {
+        request.struct_size != sizeof(DrivenFrequencyResponseSolveRequest) &&
+        !(request.abi_version != kDrivenFrequencyResponseSolveRequestAbiVersion &&
+          request.struct_size == legacy_size)) {
         std::snprintf(error_message, 128, "unsupported driven response request struct_size");
+        return false;
+    }
+    return true;
+}
+
+bool validate_driven_response_solve_contract(
+    const DrivenFrequencyResponseSolveRequest &request,
+    char error_message[128]) noexcept
+{
+    if (!validate_driven_response_request_header(request, error_message)) {
+        return false;
+    }
+    if (request.abi_version == kDrivenFrequencyResponseSolveRequestAbiVersion &&
+        request.artifact_identity != nullptr &&
+        !validate_artifact_identity_v1(request.artifact_identity, error_message)) {
         return false;
     }
     if (request.phase_convention != request.solve_request.phase_convention) {
@@ -6722,6 +6745,82 @@ FrequencyDomainStatus write_text_artifact(
     return FrequencyDomainStatus::ok;
 }
 
+
+bool replace_manifest_identity_field(
+    std::string &json, const char *name, const char *value)
+{
+    const std::string key = std::string("\"") + name + "\":\"";
+    const auto at = json.find(key);
+    if (at == std::string::npos) return false;
+    const auto start = at + key.size();
+    auto end = start;
+    for (; end < json.size(); ++end) {
+        if (json[end] == '\\') { ++end; continue; }
+        if (json[end] == '"') break;
+    }
+    if (end >= json.size()) return false;
+    json.replace(start, end - start, escape_json_string(value));
+    return true;
+}
+
+FrequencyDomainStatus write_owned_response_manifest(
+    const DrivenFrequencyResponseSolveRequest &request,
+    const char *path, const std::string &source_json, char error_message[128]) noexcept
+{
+    try {
+        // Old native ABI prefixes must never read the appended context pointer.
+        const auto *identity = request.abi_version == kDrivenFrequencyResponseSolveRequestAbiVersion
+            ? request.artifact_identity : nullptr;
+        if (identity == nullptr) return write_text_artifact(path, source_json.c_str(), error_message);
+        std::string json = source_json;
+        if (identity != nullptr) {
+            if (!validate_artifact_identity_v1(identity, error_message))
+                return FrequencyDomainStatus::validation_error;
+            if (!replace_manifest_identity_field(json, "session_id", identity->session_id) ||
+                !replace_manifest_identity_field(json, "run_id", identity->run_id) ||
+                !replace_manifest_identity_field(json, "stage_id", identity->stage_id)) {
+                std::snprintf(error_message, 128, "frequency-domain manifest ownership fields are missing");
+                return FrequencyDomainStatus::artifact_error;
+            }
+            // Native manifests have no runtime_id yet; add it to the top-level envelope.
+            if (json.empty() || json.front() != '{') return FrequencyDomainStatus::artifact_error;
+            json.insert(1, "\"runtime_id\":\"" + escape_json_string(identity->runtime_id) + "\",");
+            // Persisted transport links cannot select a different run after session switching.
+            const auto resources_start = json.find("\"resources\":{");
+            if (resources_start != std::string::npos) {
+                auto end = resources_start + std::strlen("\"resources\":");
+                unsigned depth = 0;
+                bool in_string = false, escaped = false;
+                for (; end < json.size(); ++end) {
+                    const char c = json[end];
+                    if (in_string) {
+                        if (escaped) escaped = false;
+                        else if (c == '\\') escaped = true;
+                        else if (c == '"') in_string = false;
+                    } else if (c == '"') in_string = true;
+                    else if (c == '{') ++depth;
+                    else if (c == '}' && --depth == 0) { ++end; break; }
+                }
+                if (depth != 0 || in_string) return FrequencyDomainStatus::artifact_error;
+                std::string resources = json.substr(resources_start, end - resources_start);
+                const std::string prefix = "\"/v2/sessions/current/";
+                std::size_t at = 0;
+                while ((at = resources.find(prefix, at)) != std::string::npos) {
+                    const auto close = resources.find('"', at + 1);
+                    if (close == std::string::npos) return FrequencyDomainStatus::artifact_error;
+                    resources.replace(at, close - at + 1, "null");
+                    at += 4;
+                }
+                json.replace(resources_start, end - resources_start, resources);
+            }
+        }
+        return write_text_artifact(path, json.c_str(), error_message);
+    } catch (const std::exception &) {
+        std::snprintf(error_message, 128, "failed to prepare owned frequency-domain manifest");
+        return FrequencyDomainStatus::artifact_error;
+    }
+}
+
 FrequencyDomainStatus write_binary_artifact(
     const char *path,
     const void *content,
@@ -8828,7 +8927,7 @@ FrequencyDomainStatus write_mfem_validation_artifacts(
             }
         }
     }
-    status = write_text_artifact(manifest, manifest_json.c_str(), error_message);
+    status = write_owned_response_manifest(request, manifest, manifest_json, error_message);
     if (status != FrequencyDomainStatus::ok) {
         return status;
     }
@@ -9336,7 +9435,7 @@ FrequencyDomainStatus write_unavailable_response_artifacts(
     if (status != FrequencyDomainStatus::ok) {
         return status;
     }
-    status = write_text_artifact(manifest, manifest_json.c_str(), error_message);
+    status = write_owned_response_manifest(request, manifest, manifest_json, error_message);
     if (status != FrequencyDomainStatus::ok) {
         return status;
     }
@@ -10658,7 +10757,7 @@ FrequencyDomainStatus write_periodic_airbox_coupled_block_artifacts(
     if (status != FrequencyDomainStatus::ok) {
         return status;
     }
-    status = write_text_artifact(manifest, manifest_json.c_str(), error_message);
+    status = write_owned_response_manifest(request, manifest, manifest_json, error_message);
     if (status != FrequencyDomainStatus::ok) {
         return status;
     }
@@ -15259,7 +15358,7 @@ FrequencyDomainStatus solve_periodic_airbox_validation_error(
         if (status != FrequencyDomainStatus::ok) {
             return status;
         }
-        status = write_text_artifact(manifest, manifest_json.c_str(), error_message);
+        status = write_owned_response_manifest(request, manifest, manifest_json, error_message);
         if (status != FrequencyDomainStatus::ok) {
             return status;
         }
@@ -16182,7 +16281,7 @@ FrequencyDomainStatus solve_floquet_phase_constraint_validation_error(
         if (status != FrequencyDomainStatus::ok) {
             return status;
         }
-        status = write_text_artifact(manifest, manifest_json.c_str(), error_message);
+        status = write_owned_response_manifest(request, manifest, manifest_json, error_message);
         if (status != FrequencyDomainStatus::ok) {
             return status;
         }
@@ -16686,7 +16785,7 @@ FrequencyDomainStatus solve_floquet_nonzero_k_unavailable(
         if (status != FrequencyDomainStatus::ok) {
             return status;
         }
-        status = write_text_artifact(manifest, manifest_json.c_str(), error_message);
+        status = write_owned_response_manifest(request, manifest, manifest_json, error_message);
         if (status != FrequencyDomainStatus::ok) {
             return status;
         }
@@ -16800,7 +16899,7 @@ FrequencyDomainStatus solve_floquet_nonzero_k_unavailable(
 } // namespace
 
 FrequencyDomainStatus solve_driven_frequency_response(
-    const DrivenFrequencyResponseSolveRequest &request,
+    const DrivenFrequencyResponseSolveRequest &incoming_request,
     DrivenFrequencyResponseSolveResult *out_result) noexcept
 {
     if (out_result == nullptr) {
@@ -16808,6 +16907,29 @@ FrequencyDomainStatus solve_driven_frequency_response(
     }
 
     *out_result = DrivenFrequencyResponseSolveResult{};
+    char header_error[128]{};
+    if (!validate_driven_response_request_header(incoming_request, header_error)) {
+        out_result->status = FrequencyDomainStatus::validation_error;
+        assign_result_strings(
+            *out_result, header_error,
+            status_diagnostics_json(out_result->status),
+            status_result_json(out_result->status), "");
+        return out_result->status;
+    }
+    static_assert(std::is_trivially_copyable<DrivenFrequencyResponseSolveRequest>::value,
+                  "versioned native request must be trivially copyable");
+    static_assert(std::is_standard_layout<DrivenFrequencyResponseSolveRequest>::value,
+                  "versioned native request must have a stable prefix");
+    DrivenFrequencyResponseSolveRequest request{};
+    const std::size_t copy_size =
+        incoming_request.abi_version == kDrivenFrequencyResponseSolveRequestAbiVersion
+        ? sizeof(request)
+        : offsetof(DrivenFrequencyResponseSolveRequest, artifact_identity);
+    std::memcpy(&request, &incoming_request, copy_size);
+    // A legacy prefix never carries ownership, even when supplied in a new buffer.
+    if (incoming_request.abi_version != kDrivenFrequencyResponseSolveRequestAbiVersion) {
+        request.artifact_identity = nullptr;
+    }
     out_result->total_frequency_count = request.solve_request.frequency_count;
 
     DrivenFrequencyResponseRequest validation_request = request.solve_request;

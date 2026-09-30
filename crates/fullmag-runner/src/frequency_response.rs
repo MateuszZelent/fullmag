@@ -300,13 +300,16 @@ pub(crate) fn validate_frequency_response_artifact_identity(
     identity.validate().map_err(|error| RunError {
         message: format!("invalid frequency-domain artifact identity: {error}"),
     })?;
+    #[cfg(not(feature = "fem-gpu"))]
     if plan.solver_policy.as_ref().and_then(|policy| policy.method)
         != Some(fullmag_ir::FrequencyResponseSolverMethodIR::DenseReference)
     {
         return Err(RunError {
-            message: "exact FMR artifact identity currently requires explicit dense_reference; native writer identity is not implemented and fallback is disabled".into(),
+            message: "exact FMR artifact identity for production requires native FEM; dense fallback is disabled".into(),
         });
     }
+    #[cfg(feature = "fem-gpu")]
+    let _ = plan;
     Ok(())
 }
 
@@ -347,12 +350,21 @@ pub(crate) fn execute_fem_frequency_response_validation_with_artifact_context(
     #[cfg(feature = "fem-gpu")]
     if let Some(executed) = try_execute_fem_frequency_response_native_production_cpu(
         plan,
+        artifact_identity,
         output_dir,
         interrupt_requested,
         &mut on_step,
         &fem_mesh_generation_id,
     )? {
         return Ok(executed);
+    }
+    if artifact_identity.is_some()
+        && plan.solver_policy.as_ref().and_then(|policy| policy.method)
+            != Some(fullmag_ir::FrequencyResponseSolverMethodIR::DenseReference)
+    {
+        return Err(RunError {
+            message: "native FMR could not execute the exact artifact context; dense fallback is disabled".into(),
+        });
     }
     #[cfg(not(feature = "fem-gpu"))]
     if plan.magnetostatic_bc == fullmag_ir::MagnetostaticBoundaryConditionIR::PeriodicAirboxK0 {
@@ -1803,6 +1815,7 @@ fn patch_delta_phi_flux_fields(
 #[cfg(feature = "fem-gpu")]
 fn try_execute_fem_frequency_response_native_production_cpu(
     plan: &fullmag_ir::FemFrequencyResponsePlanIR,
+    artifact_identity: Option<&FrequencyDomainArtifactIdentity>,
     output_dir: &Path,
     interrupt_requested: Option<&AtomicBool>,
     on_step: &mut Option<&mut dyn FnMut(StepUpdate) -> StepAction>,
@@ -1988,6 +2001,7 @@ fn try_execute_fem_frequency_response_native_production_cpu(
     })?;
     let native_result =
         solve_native_driven_frequency_response(NativeDrivenFrequencyResponseRequest {
+            artifact_identity,
             node_count,
             tangent_dof_count,
             alpha: payload.alpha_uniform,
@@ -6122,8 +6136,9 @@ mod tests {
         }
     }
 
+    #[cfg(not(feature = "fem-gpu"))]
     #[test]
-    fn exact_identity_fmr_rejects_alias_and_native_writer_before_output() {
+    fn exact_identity_fmr_rejects_alias_and_unavailable_native_lane_before_output() {
         let mut plan = minimal_frequency_response_plan();
         let mut identity = FrequencyDomainArtifactIdentity::try_new(
             "session:fixture",
@@ -6151,7 +6166,7 @@ mod tests {
         assert!(
             error
                 .message
-                .contains("native writer identity is not implemented")
+                .contains("requires native FEM")
         );
         assert!(!output_dir.exists());
         plan.solver_policy = Some(fullmag_ir::FrequencyResponseSolverPolicyIR {

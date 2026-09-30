@@ -4152,7 +4152,7 @@ void driven_response_solver_boundary_rejects_stale_abi_version()
 {
     const double frequencies_hz[] = {1.0e9};
     fd::DrivenFrequencyResponseSolveRequest request{};
-    request.abi_version = fd::kDrivenFrequencyResponseSolveRequestAbiVersion - 1u;
+    request.abi_version = 11u;
     request.struct_size = sizeof(fd::DrivenFrequencyResponseSolveRequest);
     request.solve_request.operator_request.node_count = 1;
     request.solve_request.operator_request.tangent_dof_count = 2;
@@ -4172,6 +4172,29 @@ void driven_response_solver_boundary_rejects_stale_abi_version()
         contains(result.error_message, "ABI version"),
         "driven response stale ABI rejection names ABI version");
     fd::release_driven_frequency_response_result(&result);
+}
+
+void driven_response_solver_boundary_ignores_identity_for_legacy_prefix()
+{
+    const double frequencies_hz[] = {1.0e9};
+    for (const std::uint32_t version : {0u, 9u, 12u}) {
+        fd::DrivenFrequencyResponseSolveRequest request{};
+        request.abi_version = version;
+        request.struct_size = offsetof(fd::DrivenFrequencyResponseSolveRequest, artifact_identity);
+        request.solve_request.operator_request.node_count = 1;
+        request.solve_request.operator_request.tangent_dof_count = 2;
+        request.solve_request.operator_request.alpha = 0.01;
+        request.solve_request.operator_request.gamma0 = 2.211e5;
+        request.solve_request.frequencies_hz = frequencies_hz;
+        request.solve_request.frequency_count = 1;
+        request.artifact_identity = reinterpret_cast<const FullmagFemFrequencyDomainArtifactIdentityV1 *>(1);
+        fd::DrivenFrequencyResponseSolveResult result{};
+        const auto status = fd::solve_driven_frequency_response(request, &result);
+        check(status == fd::FrequencyDomainStatus::unavailable,
+              "legacy prefix preserves unavailable solve without reading appended identity");
+        check(result.total_frequency_count == 1, "legacy prefix preserves frequency count");
+        fd::release_driven_frequency_response_result(&result);
+    }
 }
 
 void driven_response_solver_boundary_rejects_mismatched_phase_conventions()
@@ -18384,6 +18407,7 @@ int main()
     driven_response_solver_boundary_returns_structured_unavailable_result();
     driven_response_solver_boundary_rejects_unsupported_struct_size();
     driven_response_solver_boundary_rejects_stale_abi_version();
+    driven_response_solver_boundary_ignores_identity_for_legacy_prefix();
     driven_response_solver_boundary_rejects_mismatched_phase_conventions();
     driven_response_solver_boundary_rejects_ambiguous_tiny_operator_source();
     driven_response_solver_boundary_rejects_nonzero_length_without_buffer();

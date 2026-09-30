@@ -3125,6 +3125,30 @@ int fullmag_fem_frequency_domain_completed_sweep_progress(
     const char *latest_artifact_manifest_path,
     fullmag_fem_frequency_domain_sweep_progress *out_progress
 );
+#define FULLMAG_FEM_FREQUENCY_DOMAIN_ARTIFACT_IDENTITY_V1 1u
+/* Separate metadata ABI: existing driven-response request layouts stay intact.
+ * Strings are borrowed NUL-terminated UTF-8 and must remain valid during calls.
+ * Set abi_version to V1 and struct_size to sizeof(this structure).
+ */
+typedef struct FullmagFemFrequencyDomainArtifactIdentityV1 {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    const char *session_id;
+    const char *run_id;
+    const char *stage_id;
+    const char *runtime_id;
+} FullmagFemFrequencyDomainArtifactIdentityV1;
+
+int fullmag_fem_frequency_domain_validate_artifact_identity_v1(
+    const FullmagFemFrequencyDomainArtifactIdentityV1 *identity
+);
+int fullmag_fem_frequency_domain_solve_driven_response_with_identity_v1(
+    const fullmag_fem_frequency_domain_driven_response_request *request,
+    const FullmagFemFrequencyDomainArtifactIdentityV1 *identity,
+    fullmag_fem_frequency_domain_apply_with_potential_callback mfem_apply_demag_tangent_with_potential,
+    fullmag_fem_frequency_domain_solve_result *out_result
+);
+
 int fullmag_fem_frequency_domain_solve_driven_response(
     const fullmag_fem_frequency_domain_driven_response_request *request,
     fullmag_fem_frequency_domain_solve_result *out_result

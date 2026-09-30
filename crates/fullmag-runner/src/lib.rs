@@ -2614,7 +2614,8 @@ pub fn run_planned_problem(
     run_planned_problem_with_artifact_context(problem, plan, until_seconds, output_dir, None)
 }
 
-/// Execute an explicit dense-reference FMR plan with exact artifact ownership.
+/// Execute an FMR plan with exact artifact ownership.
+/// Native execution requires the FEM feature; dense execution must be explicit.
 /// Identity is runner-owned and does not change the canonical ProblemIR.
 pub fn run_planned_problem_with_artifact_identity(
     problem: &ProblemIR,
@@ -3023,7 +3024,8 @@ pub fn run_planned_problem_with_callback_and_fem_mesh_identity_and_relax_handoff
     )
 }
 
-/// Execute an explicit dense-reference FMR plan with exact artifact ownership.
+/// Execute an FMR plan with exact artifact ownership.
+/// Native execution requires the FEM feature; dense execution must be explicit.
 /// Identity is runner-owned and does not change the canonical ProblemIR.
 pub fn run_planned_problem_with_callback_and_artifact_identity(
     problem: &ProblemIR,
@@ -3545,7 +3547,8 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
     )
 }
 
-/// Execute an explicit dense-reference FMR plan with exact artifact ownership.
+/// Execute an FMR plan with exact artifact ownership.
+/// Native execution requires the FEM feature; dense execution must be explicit.
 /// Identity is runner-owned and does not change the canonical ProblemIR.
 pub fn run_planned_problem_with_live_preview_and_artifact_identity(
     problem: &ProblemIR,

@@ -1698,6 +1698,30 @@ pub struct fullmag_fem_frequency_domain_dmi_element {
     pub normal: [f64; 3],
 }
 
+pub const FULLMAG_FEM_FREQUENCY_DOMAIN_ARTIFACT_IDENTITY_V1: u32 = 1;
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct FullmagFemFrequencyDomainArtifactIdentityV1 {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub session_id: *const c_char,
+    pub run_id: *const c_char,
+    pub stage_id: *const c_char,
+    pub runtime_id: *const c_char,
+}
+
+const _: () = {
+    assert!(std::mem::size_of::<FullmagFemFrequencyDomainArtifactIdentityV1>() == 40);
+    assert!(std::mem::align_of::<FullmagFemFrequencyDomainArtifactIdentityV1>() == 8);
+    assert!(std::mem::offset_of!(FullmagFemFrequencyDomainArtifactIdentityV1, abi_version) == 0);
+    assert!(std::mem::offset_of!(FullmagFemFrequencyDomainArtifactIdentityV1, struct_size) == 4);
+    assert!(std::mem::offset_of!(FullmagFemFrequencyDomainArtifactIdentityV1, session_id) == 8);
+    assert!(std::mem::offset_of!(FullmagFemFrequencyDomainArtifactIdentityV1, run_id) == 16);
+    assert!(std::mem::offset_of!(FullmagFemFrequencyDomainArtifactIdentityV1, stage_id) == 24);
+    assert!(std::mem::offset_of!(FullmagFemFrequencyDomainArtifactIdentityV1, runtime_id) == 32);
+};
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct fullmag_fem_frequency_domain_driven_response_request {
@@ -2885,6 +2909,17 @@ extern "C" {
             fullmag_fem_frequency_domain_apply_with_potential_callback,
         out_result: *mut fullmag_fem_frequency_domain_solve_result,
     ) -> i32;
+    pub fn fullmag_fem_frequency_domain_solve_driven_response_with_identity_v1(
+        request: *const fullmag_fem_frequency_domain_driven_response_request,
+        identity: *const FullmagFemFrequencyDomainArtifactIdentityV1,
+        mfem_apply_demag_tangent_with_potential: fullmag_fem_frequency_domain_apply_with_potential_callback,
+        out_result: *mut fullmag_fem_frequency_domain_solve_result,
+    ) -> i32;
+
+    pub fn fullmag_fem_frequency_domain_validate_artifact_identity_v1(
+        identity: *const FullmagFemFrequencyDomainArtifactIdentityV1,
+    ) -> i32;
+
     pub fn fullmag_fem_frequency_domain_solve_driven_response_v10(
         request: *const fullmag_fem_frequency_domain_driven_response_request,
         mfem_apply_demag_tangent_with_potential:
@@ -3183,6 +3218,42 @@ extern "C" {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "build-native")]
+    #[test]
+    fn artifact_identity_v1_native_boundary_rejects_aliases_and_bad_layout() {
+        use std::ffi::CString;
+        let owner = CString::new("owner:exact").unwrap();
+        let mut identity = super::FullmagFemFrequencyDomainArtifactIdentityV1 {
+            abi_version: super::FULLMAG_FEM_FREQUENCY_DOMAIN_ARTIFACT_IDENTITY_V1,
+            struct_size: std::mem::size_of::<super::FullmagFemFrequencyDomainArtifactIdentityV1>() as u32,
+            session_id: owner.as_ptr(),
+            run_id: owner.as_ptr(),
+            stage_id: owner.as_ptr(),
+            runtime_id: owner.as_ptr(),
+        };
+        let validate = |value: &super::FullmagFemFrequencyDomainArtifactIdentityV1| unsafe {
+            super::fullmag_fem_frequency_domain_validate_artifact_identity_v1(value)
+        };
+        assert_eq!(validate(&identity), super::FULLMAG_FEM_OK);
+        for invalid in ["", "current", "Run:CURRENT", "scope:Current", "runtime:not_provided", "\u{a0}CURRENT\u{a0}", "run:\u{85}"] {
+            let candidate = CString::new(invalid).unwrap();
+            identity.run_id = candidate.as_ptr();
+            assert_eq!(validate(&identity), super::FULLMAG_FEM_ERR_INVALID, "{invalid:?}");
+        }
+        let malformed_utf8 = CString::new(vec![0xc0, 0xaf]).unwrap();
+        identity.run_id = malformed_utf8.as_ptr();
+        assert_eq!(validate(&identity), super::FULLMAG_FEM_ERR_INVALID);
+        identity.run_id = owner.as_ptr();
+        identity.abi_version = 99;
+        assert_eq!(validate(&identity), super::FULLMAG_FEM_ERR_INVALID);
+        identity.abi_version = super::FULLMAG_FEM_FREQUENCY_DOMAIN_ARTIFACT_IDENTITY_V1;
+        identity.struct_size = 0;
+        assert_eq!(validate(&identity), super::FULLMAG_FEM_ERR_INVALID);
+        assert_eq!(unsafe {
+            super::fullmag_fem_frequency_domain_validate_artifact_identity_v1(std::ptr::null())
+        }, super::FULLMAG_FEM_ERR_INVALID);
+    }
+
     use super::*;
 
     #[test]

@@ -90,6 +90,10 @@ bounded data plane oraz jeden frontend analityczny oparty o pinned source.
     aktywnej sesji odnośniki transportowe; managed build i commit/push PASS,
     testy NOT RUN, runtime pozostaje otwarty.
 
+27. [Natywna granica tożsamości FMR](27-native-fmr-artifact-identity-boundary.md)
+    — osobny kontekst ABI C/Rust, walidacja i przekazanie do solve oraz sześć
+    punktów publikacji; managed build PASS, testy NOT RUN, runtime NOT VERIFIED.
+
 Pozostałe resource keys w `runner/eigen/artifacts`, przeprowadzenie identity z
 głównego runner context, FEM artifact writers i migracja legacy copy-on-write,
 materializator/evaluator
