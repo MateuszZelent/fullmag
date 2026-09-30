@@ -200,7 +200,7 @@ bool import_modal_shared_domain_mesh(
  * not materialize A_qq and pass a synthetic CSR into the shared-domain path.
  *
  * The current producer covers the certified exchange + static h_eff0 scope.
- * Its static-field Hessian is diagonal in the accepted tangent frame and is
+ * Its static-field Hessian projects between both accepted nodal tangent frames and is
  * available only when h_eff0 is parallel to m0 within the declared tolerance.
  * Dynamic demagnetization is deliberately not an A_qq term: the native
  * shared-domain A_qphi P^{-1} A_phiq coupling owns that response.  A DEMAG

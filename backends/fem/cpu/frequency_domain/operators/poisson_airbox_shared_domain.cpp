@@ -2135,10 +2135,6 @@ FrequencyDomainStatus assemble_native_magnetic_a_qq(
                         m0[axis] /= m_norm;
                     }
                     const double h_parallel = dot3(m0, h_eff0);
-                    const double field_block[2][2] = {
-                        {h_parallel, 0.0},
-                        {0.0, h_parallel},
-                    };
                     for (int local_row = 0; local_row < dofs.Size(); ++local_row) {
                         const std::uint64_t row_node = static_cast<std::uint64_t>(
                             dofs[local_row] >= 0 ? dofs[local_row] : -1 - dofs[local_row]);
@@ -2147,15 +2143,22 @@ FrequencyDomainStatus assemble_native_magnetic_a_qq(
                             const std::uint64_t column_node = static_cast<std::uint64_t>(
                                 dofs[local_column] >= 0 ? dofs[local_column] : -1 - dofs[local_column]);
                             const double column_sign = dofs[local_column] >= 0 ? 1.0 : -1.0;
+                            const TangentFrameNode &row_frame =
+                                tangent_frames[static_cast<std::size_t>(row_node)];
+                            const TangentFrameNode &column_frame =
+                                tangent_frames[static_cast<std::size_t>(column_node)];
+                            const double *row_tangent[2] = {row_frame.e1, row_frame.e2};
+                            const double *column_tangent[2] = {column_frame.e1, column_frame.e2};
                             const double coefficient = row_sign * column_sign * weight *
-                                shape[local_row] * shape[local_column] * mu0 * ms;
+                                shape[local_row] * shape[local_column] * mu0 * ms * h_parallel;
                             for (std::uint32_t row_component = 0; row_component < 2u; ++row_component) {
                                 for (std::uint32_t column_component = 0; column_component < 2u;
                                      ++column_component) {
                                     assembled.add(
                                         2u * row_node + row_component,
                                         2u * column_node + column_component,
-                                        coefficient * field_block[row_component][column_component]);
+                                        coefficient * dot3(row_tangent[row_component],
+                                                           column_tangent[column_component]));
                                 }
                             }
                         }

@@ -391,6 +391,28 @@ phi_dst = phase phi_src
 Q = I for a pure translation
 ```
 
+The static longitudinal-field contribution uses the same nodal Cartesian
+trial field as exchange and the gyrotropic block. With dimensionless nodal
+tangents and shape functions, its element entries are
+
+```{math}
+:label: eq-fem-modal-static-field-frame-transport
+A^{H}_{(i,a),(j,b)} = \int_{\Omega_m} \mu_0 M_s
+(\mathbf m_0\cdot\mathbf H_{\mathrm{eff},0}) N_i N_j
+(\mathbf e_{a,i}\cdot\mathbf e_{b,j})\,\mathrm dV.
+```
+
+The field is in A/m, magnetisation in A/m, and this energy Hessian is in J.
+The physical field remains parallel to the accepted equilibrium within the
+existing tolerance. A local identity for every node pair is valid only for a
+common tangent basis; arbitrary nodal coordinate rotations require both nodal
+projections. This correction changes no Python, ProblemIR, planner legality,
+artifact schema or GPU/FDM implementation. Dynamic demagnetisation remains
+owned by the coupled potential, not this local term. Native CPU covariance,
+common-frame parity and managed runtime validation are required; source
+regression coverage alone does not certify execution. It does not explain
+uniform-film DE/BV discrepancies when all tangent frames coincide.
+
 Constraint construction operates on complete corner/edge equivalence classes
 and checks cycle consistency. A phase-only tangent constraint is invalid for
 varying frames.
@@ -982,6 +1004,7 @@ visibility into runtime qualification.
 
 | Equation/claim | Lane | Repository path + stable symbol | Responsibility | Tests/evidence | Evidence status | Immutable link |
 |---|---|---|---|---|---|---|
+| {eq}`eq-fem-modal-static-field-frame-transport` (source-static-field-frame-transport) | FEM CPU | `backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp` + `FrequencyDomainStatus assemble_native_magnetic_a_qq` | Cross-node static-field tangent projection | Native covariance regression prepared, not compiled | source-visible / runtime NOT VERIFIED | working tree |
 | Stage-first modal capture | common | `packages/fullmag-py/src/fullmag/world.py` + `eigenmodes_stage` | Build the public modal stage specification. | Python API round-trip tests | source tested | [blob](https://github.com/MateuszZelent/fullmag/blob/70636fa61fcdf32b6f61b7544f347172ef36a219/packages/fullmag-py/src/fullmag/world.py) |
 | Stage-first driven capture | common | `packages/fullmag-py/src/fullmag/world.py` + `frequency_response_stage` | Build the public driven stage and normalized solver policy. | Python API round-trip tests | source tested | [blob](https://github.com/MateuszZelent/fullmag/blob/70636fa61fcdf32b6f61b7544f347172ef36a219/packages/fullmag-py/src/fullmag/world.py) |
 | Modal validation and lowering | common | `packages/fullmag-py/src/fullmag/model/study.py` + `class Eigenmodes` | Validate and serialize the modal request. | `test_study_stage_builder_eigenmodes_operator_roundtrips` | source tested | [blob](https://github.com/MateuszZelent/fullmag/blob/70636fa61fcdf32b6f61b7544f347172ef36a219/packages/fullmag-py/src/fullmag/model/study.py) |

@@ -28,6 +28,17 @@
   ],
   "equations": [
     {
+      "id": "eq-fem-modal-static-field-frame-transport",
+      "symbols": [
+        "mu0",
+        "magnetization",
+        "tangent_maps"
+      ],
+      "sources": [
+        "source-static-field-frame-transport"
+      ]
+    },
+    {
       "id": "eq-fem-dynamic-ansatz",
       "symbols": ["position", "time", "magnetization", "tangent_maps", "q", "omega", "gamma", "mu0", "complex_operators"],
       "sources": ["source-dynamic-pencil", "source-contract-regression"]
@@ -408,6 +419,12 @@
     }
   ],
   "sources": [
+    {
+      "id": "source-static-field-frame-transport",
+      "path": "backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp",
+      "symbol": "FrequencyDomainStatus assemble_native_magnetic_a_qq",
+      "responsibility": "Cartesian nodal tangent projection of longitudinal static-field energy Hessian"
+    },
     {"id": "source-archived-run-parameters", "path": "scripts/compare_de_bv_mode_profiles.py", "symbol": "validate_record_parameters", "responsibility": "Bind diagnostic material SI parameters and DE/BV geometry to actual hash-bound run metadata"},
     {"id": "source-archived-poisson-weak", "path": "scripts/audit_de_bv_poisson_weak.py", "symbol": "weak_poisson_residual", "responsibility": "Independent P1 weak Poisson assembly with adjoint Floquet reduction and benchmark Dirichlet classes"},
     {"id": "source-archived-poisson-inspection", "path": "scripts/audit_de_bv_poisson_weak.py", "symbol": "inspect", "responsibility": "Archive hash binding and diagnostic source scale fit without data correction"},

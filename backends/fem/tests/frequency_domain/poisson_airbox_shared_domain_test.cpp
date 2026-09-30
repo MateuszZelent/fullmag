@@ -658,6 +658,64 @@ int main()
               "native A_qq exchange coupling must use reciprocal frame transport");
     }
 
+    // Static-field energy must be invariant under independent nodal basis changes.
+    // Compare native assembly to a common-frame matrix transported in Cartesian space.
+    std::vector<double> static_h_eff = descriptor_h_eff;
+    std::vector<double> common_frame_values = descriptor_frames;
+    std::vector<fd::TangentFrameNode> common_frames = producer_frames;
+    for (std::uint64_t node = 0; node < node_count; ++node) {
+        static_h_eff[3u * node + 2u] = 7.0;
+        for (int axis = 0; axis < 3; ++axis) {
+            common_frames[node].e1[axis] = axis == 0 ? 1.0 : 0.0;
+            common_frames[node].e2[axis] = axis == 1 ? 1.0 : 0.0;
+            common_frame_values[6u * node + axis] = common_frames[node].e1[axis];
+            common_frame_values[6u * node + 3u + axis] = common_frames[node].e2[axis];
+        }
+    }
+    FullmagFemModalLinearizationDescriptor static_descriptor = producer_descriptor;
+    static_descriptor.term_presence_mask = FULLMAG_FEM_MODAL_LINEARIZATION_TERM_FIELD;
+    static_descriptor.field_term_digest = producer_descriptor.linearization_state_digest;
+    static_descriptor.exchange_term_digest = nullptr;
+    static_descriptor.exchange_edges = nullptr;
+    static_descriptor.exchange_edge_count = 0;
+    static_descriptor.effective_field_h_eff0_xyz = static_h_eff.data();
+    fd::PoissonAirboxSharedDomainCsrMatrix rotated_static{}, common_static{};
+    check(fd::assemble_native_magnetic_a_qq(
+              static_descriptor, &scalar_space, magnetic_elements.data(),
+              magnetic_elements.size(), &rotated_static, producer_error, nullptr,
+              producer_frames.data(), producer_frames.size()) == fd::FrequencyDomainStatus::ok,
+          producer_error);
+    static_descriptor.tangent_frame_xyz = common_frame_values.data();
+    check(fd::assemble_native_magnetic_a_qq(
+              static_descriptor, &scalar_space, magnetic_elements.data(),
+              magnetic_elements.size(), &common_static, producer_error, nullptr,
+              common_frames.data(), common_frames.size()) == fd::FrequencyDomainStatus::ok,
+          producer_error);
+    double covariance_error = 0.0, covariance_scale = 0.0;
+    bool exercised_cross_frame_coupling = false;
+    for (std::uint64_t i = 0; i < node_count; ++i) {
+        for (std::uint64_t j = 0; j < node_count; ++j) {
+            const double scalar_entry = matrix_value(common_static, 2u * i, 2u * j);
+            for (std::uint64_t a = 0; a < 2; ++a) {
+                for (std::uint64_t b = 0; b < 2; ++b) {
+                    const double *left = a == 0 ? producer_frames[i].e1 : producer_frames[i].e2;
+                    const double *right = b == 0 ? producer_frames[j].e1 : producer_frames[j].e2;
+                    double projection = 0.0;
+                    for (int axis = 0; axis < 3; ++axis) projection += left[axis] * right[axis];
+                    const double expected = scalar_entry * projection;
+                    exercised_cross_frame_coupling |= i != j && a != b && expected != 0.0;
+                    covariance_error = std::max(covariance_error, std::abs(
+                        matrix_value(rotated_static, 2u * i + a, 2u * j + b) - expected));
+                    covariance_scale = std::max(covariance_scale, std::abs(expected));
+                }
+            }
+        }
+    }
+    check(exercised_cross_frame_coupling,
+          "static-field covariance fixture must couple nodes with different tangent frames");
+    check(covariance_scale > 0.0 && covariance_error <= 1.0e-12 * covariance_scale,
+          "static field Hessian must transform between independent nodal tangent bases");
+
     // The independent affine P1 oracle uses only the native MFEM gradients,
     // quadrature weight and the declared material scalar.  Every entry must
     // match 2 A_ex (e_c(i).e_d(j)) (grad N_i.grad N_j) w; no runner graph

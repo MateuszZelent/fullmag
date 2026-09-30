@@ -1,5 +1,20 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
+## #186 — nowy snapshot z transportem pola statycznego
+
+- Job eb75817e0ad74168a26fcf11627b5e68, profil fem-cpu-slepc-runtime-v2, source digest 753ada8e017bd50bf741fc16898155560b17350b38196ca0a35bf290ad483450. Snapshot HEAD e3bc8ec448f3b02088c1ff4d8b45a0e4aa5a359d + tracked WIP i jawny tracking_mass.rs; kapsuła 6e783cba58c044e8b84b8485acef23c5/source.
+- Zgłoszenie 4643 terminalne exit0, status koordynatora running. Kontroler 48901 potwierdzony żywy; konfiguracja tylko scientific-batches/nonzero-k-validation/eb75817e0ad74168a26fcf11627b5e68. Brak jeszcze dowodu kompilacji i nowych częstotliwości.
+- #185 i kontroler 3576 terminalne failed/exit1. #186 jest osobnym buildem zmienionego źródła po diagnostycznym PASS toolchain list, nie restartem obserwacji. Przyczyna wcześniejszego opóźnienia nadal niepotwierdzona.
+- Audyt: docs/audits/2026-09-30-static-field-tangent-covariance.md. Regresja natywna przygotowana, nie skompilowana. Nota i mapa źródeł PASS; niezależny przykład algebraiczny potwierdza defekt starego składania, ale nie dowodzi runtime FEM.
+- Następnie ten sam #186 -> Γ + sześć DE/BV -> odbiór wszystkich pól, residuali i provenance -> N32/P00, zbieżność i nowy wykres. Pełny S00–S12 pozostaje otwarty.
+
+## S10 — transport baz w polu statycznym; #185 terminalny
+
+- Potwierdzono błąd: pole statyczne stosowało identyczność komponentów również między różnymi ramkami węzłów; wymiana i blok żyromagnetyczny używają projekcji kartezjańskich. Poprawka składa h_parallel razy iloczyn obu baz. Dla wspólnej bazy zachowuje poprzednie zachowanie; nie jest wyjaśnieniem rozbieżności jednorodnego filmu.
+- Nota 0831 i mapa źródeł zawierają właściwą postać słabą. Weryfikacja natywna i nowy runtime pozostają NOT VERIFIED; zakaz kompilacji testów jednostkowych zachowany.
+- #185 failed/exit2: rustup toolchain list przekroczył limit 30 s, przed kompilacją. Nie ma nowych częstotliwości. Dane i kapsuła zachowane; nie ponowiono zadania bez diagnozy.
+- Wykres DE/BV odświeżony w de-bv-updated-job185 w katalogu visualizations tego wątku: 27 archiwalnych rekordów i porównanie P00/N32, bez nowych punktów. Pełny plan S00–S12 pozostaje otwarty.
+
 ## S12 — zgodność odbioru siedmiu przypadków kontrolera
 
 - Kolektor obsługuje rzeczywisty raport kontrolera Γ+DE/BV, nie tylko wcześniejszy format sześciu przypadków. Wymaga pełnej serii exit0, tożsamości job/digest/config/model i wyjść w tym samym batch; częściowy raport pozostaje błędem.
