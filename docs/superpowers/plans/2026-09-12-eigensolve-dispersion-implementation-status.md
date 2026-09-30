@@ -1,5 +1,21 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
+## S12 — prawdziwe zdarzenie przejęcia i żywy worker #179
+
+- Poprzedni turn był postępem: źródłowe dopracowanie selektora S07, checkpoint
+  7e8e2d5d1e6f8ead0852807fdac8a376c6c2958d na remote; job179 przejęty.
+- Kontener fullmag-worker-1d5451d2fee5443591a9c7f468569c43 potwierdzony przez
+  Docker ps/top; aktywny proces python3. Wszystkie trzy kontrolery żywe.
+  Log workera przy obserwacji nadal pusty, bez wyniku kompilacji ani solvera.
+- Naprawiono job_claimed emitowane przed admission. Callback następuje po
+  rzeczywistym claim; komunikat mówi o przygotowaniu. Przy waiting_for_disk
+  nie ma fałszywego startu. expected_job_id zachowuje identyczność wyboru.
+- RED dwie regresje koordynatora; GREEN 25+17 lekkich testów Python.
+  Scoped diff check PASS. Audyt: docs/audits/2026-09-30-runner-claim-event-admission.md.
+- Kod nie wdrożony do aktywnego koordynatora; wymagany późniejszy pusty slot
+  i runtime proof. S07 Rust nadal WIP bez uruchomionych regresji.
+  Pełny S00–S12, zbieżność, A1/COMSOL, browser i integracja nadal otwarte.
+
 ## #179 przejęty po zwolnieniu miejsca; dalsza poprawka S07 — 2026-09-30
 
 - Użytkownik zwolnił miejsce. Live health pokazał 14703403008 B wolnego,

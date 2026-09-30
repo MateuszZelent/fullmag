@@ -719,7 +719,7 @@ def finish_build(layout, queue, job, journal, run_root, inspected, call):
     return queue.get(job['job_id'])
 
 
-def execute_build(layout, *, owner, call=docker, sleep=time.sleep, timeout_seconds=8 * 3600, expected_job_id=None):
+def execute_build(layout, *, owner, call=docker, sleep=time.sleep, timeout_seconds=8 * 3600, expected_job_id=None, on_claim=None):
     if not layout.get('container_coordinator'):
         initialize(layout)
     storage = Path(layout['storage_root'])
@@ -742,6 +742,8 @@ def execute_build(layout, *, owner, call=docker, sleep=time.sleep, timeout_secon
         if job is None:
             return None
         try:
+            if on_claim is not None:
+                on_claim({'job_id': job['job_id'], 'profile': job['profile']})
             if job['operation'] != 'build':
                 raise ValueError('Expected a build job')
             config = configured_build(layout, owner, job['profile'])

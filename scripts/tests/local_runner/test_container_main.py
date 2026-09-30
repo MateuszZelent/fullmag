@@ -51,6 +51,31 @@ class LiveThread:
 
 
 class ContainerMainTests(unittest.TestCase):
+    def test_waiting_admission_does_not_emit_claim_or_compilation_start(self):
+        queued = {"job_id": "job-waiting", "operation": "build", "profile": "fem-cpu-release"}
+        app = self.app(FakeQueue(queued=queued))
+        app.layout = {}
+        with patch.object(container_main, "execute_build", return_value={"state": "waiting_for_disk"}), \
+                patch.object(app.hub, "record_event") as event:
+            self.assertEqual({"state": "waiting_for_disk"}, app._execute_next())
+        event.assert_not_called()
+
+    def test_claim_event_identifies_actual_lease_without_claiming_compilation(self):
+        queued = {"job_id": "job-queued", "operation": "build", "profile": "fem-cpu-release"}
+        claimed = {**queued, "job_id": "job-actual-lease"}
+        app = self.app(FakeQueue(queued=queued))
+        app.layout = {}
+        def execute(layout, **kwargs):
+            kwargs["on_claim"](claimed)
+            return {"state": "running"}
+        with patch.object(container_main, "execute_build", side_effect=execute), \
+                patch.object(app.hub, "record_event") as event:
+            app._execute_next()
+        event.assert_called_once()
+        self.assertEqual("job_claimed", event.call_args.args[1])
+        self.assertEqual(claimed["job_id"], event.call_args.kwargs["job_id"])
+        self.assertNotIn("Rozpoczęto kompilację", event.call_args.args[2])
+
     def test_health_reports_only_operator_enabled_profiles(self):
         app = self.app()
         app.allowed_profiles = frozenset({"fem-cpu-release"})

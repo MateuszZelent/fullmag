@@ -996,15 +996,19 @@ class Application:
         queued = self.queue.next_queued(self.owner)
         if queued is not None and queued.get('operation') != 'build':
             raise APIUnavailable('Legacy queued job requires manual recovery')
-        if queued is not None:
+        def record_claim(claimed):
             self.hub.record_event(
                 "INFO",
                 "job_claimed",
-                f"Rozpoczęto kompilację zadania {queued['job_id']} (profil: {queued.get('profile')})",
-                job_id=queued["job_id"],
-                profile=queued.get("profile"),
+                f"Przejęto zadanie {claimed['job_id']} do przygotowania (profil: {claimed.get('profile')})",
+                job_id=claimed["job_id"],
+                profile=claimed.get("profile"),
             )
-        result = execute_build(self.layout, owner=self.owner, call=docker)
+        result = execute_build(
+            self.layout, owner=self.owner, call=docker,
+            expected_job_id=queued["job_id"] if queued is not None else None,
+            on_claim=record_claim,
+        )
         if queued is not None and isinstance(result, dict):
             state = result.get('state')
             if state in ('succeeded', 'failed', 'cancelled', 'blocked'):

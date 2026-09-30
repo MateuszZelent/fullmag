@@ -80,12 +80,39 @@ class BuildExecutorTests(unittest.TestCase):
             queue = Mock()
             queue.active.return_value = []
             queue.next_queued.return_value = {'job_id': 'a' * 32}
+            on_claim = Mock()
             with patch.object(executor, 'JobQueue', return_value=queue), \
                  patch.object(executor, 'file_lock', return_value=nullcontext()), \
                  patch.object(executor.shutil, 'disk_usage', return_value=Mock(free=1024)):
-                result = executor.execute_build({'storage_root': str(root), 'container_coordinator': True}, owner='test')
+                result = executor.execute_build({'storage_root': str(root), 'container_coordinator': True}, owner='test', on_claim=on_claim)
             self.assertEqual('waiting_for_disk', result['state'])
             queue.claim.assert_not_called()
+            on_claim.assert_not_called()
+
+    def test_claim_notification_follows_actual_lease_and_omits_private_payload(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            queue = Mock()
+            queue.active.return_value = []
+            queue.next_queued.return_value = {'job_id': 'a' * 32}
+            claimed = {'job_id': 'a' * 32, 'profile': 'fem-cpu-release',
+                       'operation': 'verify-source', 'lease_token': 'private'}
+            queue.claim.return_value = claimed
+            notifications = []
+            def on_claim(record):
+                queue.claim.assert_called_once()
+                notifications.append(record)
+            with patch.object(executor, 'JobQueue', return_value=queue), \
+                 patch.object(executor, 'file_lock', return_value=nullcontext()), \
+                 patch.object(executor.shutil, 'disk_usage', return_value=Mock(free=16 * 1024**3)):
+                with self.assertRaisesRegex(executor.CoordinatorError, 'Expected a build job'):
+                    executor.execute_build(
+                        {'storage_root': str(root), 'container_coordinator': True},
+                        owner='test', call=Mock(return_value=''), on_claim=on_claim,
+                        expected_job_id=claimed['job_id'],
+                    )
+            self.assertEqual([{'job_id': claimed['job_id'], 'profile': claimed['profile']}], notifications)
+            queue.finish.assert_called_once_with(claimed['job_id'], 'private', 'blocked', None)
 
     def test_profiles_are_closed(self):
         with self.assertRaises(ValueError):
