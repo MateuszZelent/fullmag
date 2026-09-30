@@ -654,6 +654,36 @@ class ContainerMainTests(unittest.TestCase):
         self.assertEqual(4096, ov["last_cleanup"]["estimated_reclaimed_bytes"])
         self.assertEqual(0, ov["last_cleanup"]["reclaimed_bytes"])
 
+    def test_queue_summary_excludes_large_capsules_and_filters_before_paging(self):
+        from local_runner.container_api import _json_bytes
+        db = JobQueue(self.root / "index" / "queue.db")
+        payload = {"native_source_identity": {"files": "x" * 70000}}
+        with db.connection() as connection:
+            for i in range(205):
+                connection.execute(
+                    "INSERT INTO jobs (job_id, owner, request_key, request_hash, worktree_id, source_digest, profile, operation, payload, state, created_at, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (f"job-{i:04d}", "alice", f"request-{i}", "a" * 64, "wt", "b" * 64,
+                     "fem-cpu-release", "build", json.dumps(payload),
+                     "running" if i == 0 else "queued" if i < 3 else "succeeded", i, i))
+        app = self.app(db)
+        result = app.paginated_jobs({"status": "queue", "sort": "oldest", "limit": 2})
+        self.assertEqual(3, result["total"])
+        self.assertEqual(["job-0000", "job-0001"], [j["job_id"] for j in result["items"]])
+        page2 = app.paginated_jobs({"status": "queue", "sort": "oldest", "limit": 2, "page": 2})
+        self.assertEqual(["job-0002"], [j["job_id"] for j in page2["items"]])
+        for status in ("all", "queue"):
+            page = app.paginated_jobs({"status": status, "limit": 200})
+            self.assertLess(len(_json_bytes(page)), 200000)
+            self.assertTrue(all("payload" not in j for j in page["items"]))
+        # Full provenance is retained in the single-job resource.
+        self.assertEqual(payload, db.get("job-0000")["payload"])
+        fallback = self.app(FakeQueue(jobs=[db.get(f"job-{i:04d}") for i in range(205)]))
+        result = fallback.paginated_jobs({"status": "queue", "sort": "oldest", "limit": 2})
+        self.assertEqual(3, result["total"])
+        self.assertEqual(["job-0000", "job-0001"], [j["job_id"] for j in result["items"]])
+        self.assertTrue(all("payload" not in j for j in result["items"]))
+
     def test_paginated_jobs_sqlite_full_pagination_over_1000_items(self):
         db_path = self.root / "index" / "queue.db"
         jq = JobQueue(db_path)

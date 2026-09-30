@@ -524,3 +524,30 @@ await assert.rejects(
 console.log('✓ api.js error honesty verified (no synthetic fallback on 500)');
 
 console.log('[test] All Runner Console unit and smoke tests passed successfully!');
+
+// Queue pagination must retrieve active jobs in FIFO order without history.
+const { renderQueueView } = await import('./src/views/QueueView.js');
+const originalGetJobs = api.getJobs;
+const queueRequests = [];
+api.getJobs = async (params) => {
+  queueRequests.push(params);
+  return { items: [{job_id: `queue-page-${params.page}`, state: 'queued', created_at: 10}],
+    page: params.page, pages: 2, is_truncated: false };
+};
+const queueContainer = new MockElement('div');
+renderQueueView(queueContainer);
+await new Promise(resolve => setTimeout(resolve, 0));
+assert.deepEqual(queueRequests, [
+  {status: 'queue', sort: 'oldest', limit: 200, page: 1},
+  {status: 'queue', sort: 'oldest', limit: 200, page: 2},
+]);
+const queueHtml = queueContainer.querySelector('#queue-table-card').innerHTML;
+assert(queueHtml.includes('queue-page-1') && queueHtml.includes('queue-page-2'));
+assert(queueHtml.indexOf('queue-page-1') < queueHtml.indexOf('queue-page-2'));
+api.getJobs = async () => ({items: [], page: 1, pages: 1, is_truncated: true});
+const truncatedQueue = new MockElement('div');
+renderQueueView(truncatedQueue);
+await new Promise(resolve => setTimeout(resolve, 0));
+assert(truncatedQueue.querySelector('#queue-table-card').innerHTML.includes('niekompletna'));
+api.getJobs = originalGetJobs;
+console.log('✓ Queue active-only FIFO pagination and incomplete response verified');

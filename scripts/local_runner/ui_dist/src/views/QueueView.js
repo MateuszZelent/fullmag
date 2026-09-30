@@ -66,10 +66,19 @@ export function renderQueueView(container) {
     const card = container.querySelector('#queue-table-card');
     if (!card) return;
     try {
-      const res = await api.getJobs({ limit: 200 });
-      const allJobs = Array.isArray(res) ? res : (res.items || []);
-      // Filter only active and queued
-      const queueJobs = allJobs.filter(j => j.state === 'running' || j.state === 'queued' || j.state === 'cancel_requested');
+      const queueJobs = [];
+      let page = 1;
+      let pages = 1;
+      do {
+        const res = await api.getJobs({ status: 'queue', sort: 'oldest', limit: 200, page });
+        if (!Array.isArray(res?.items) || !Number.isInteger(res.pages) || res.pages < 0 || res.page !== page) {
+          throw new Error('Nieprawidłowa odpowiedź kolejki');
+        }
+        if (res.is_truncated) throw new Error('Lista kolejki jest niekompletna');
+        queueJobs.push(...res.items);
+        pages = res.pages;
+        page += 1;
+      } while (page <= pages);
 
       if (queueJobs.length === 0) {
         card.innerHTML = `

@@ -34,6 +34,18 @@ from local_runner.observability import (
 
 
 _RETENTION_QUEUE_LIMIT = 1000
+_JOB_SUMMARY_FIELDS = (
+    'sequence', 'job_id', 'owner', 'request_key', 'worktree_id',
+    'source_digest', 'profile', 'operation', 'state', 'created_at',
+    'updated_at', 'coordinator', 'exit_code',
+)
+_QUEUE_STATES = ('running', 'queued', 'cancel_requested')
+
+
+def _job_summary(job):
+    # Source capsules belong to the detail resource, not paginated tables.
+    return {key: job[key] for key in _JOB_SUMMARY_FIELDS if key in job}
+
 
 
 def _timestamp() -> str:
@@ -519,7 +531,9 @@ class Application:
             params = [self.owner, self.owner]
 
             if status and status != 'all':
-                if status in ('history', 'terminal'):
+                if status == 'queue':
+                    where_clauses.append("state IN ('running', 'queued', 'cancel_requested')")
+                elif status in ('history', 'terminal'):
                     where_clauses.append("state IN ('succeeded', 'failed', 'cancelled')")
                 else:
                     where_clauses.append("state = ?")
@@ -555,8 +569,9 @@ class Application:
 
                 offset = (page - 1) * limit
                 query_params = list(params) + [limit, offset]
-                rows = db.execute(f"SELECT * FROM jobs{where_sql} {order_sql} LIMIT ? OFFSET ?", query_params).fetchall()
-                items = [self.queue.record(r) for r in rows]
+                columns = ", ".join(_JOB_SUMMARY_FIELDS)
+                rows = db.execute(f"SELECT {columns} FROM jobs{where_sql} {order_sql} LIMIT ? OFFSET ?", query_params).fetchall()
+                items = [dict(r) for r in rows]
 
             return {
                 'items': items,
@@ -578,7 +593,10 @@ class Application:
             filtered = []
             for j in all_jobs:
                 if status and status != 'all':
-                    if status in ('history', 'terminal'):
+                    if status == 'queue':
+                        if j.get('state') not in _QUEUE_STATES:
+                            continue
+                    elif status in ('history', 'terminal'):
                         if j.get('state') not in ('succeeded', 'failed', 'cancelled'):
                             continue
                     elif j.get('state') != status:
@@ -604,7 +622,7 @@ class Application:
 
             total = len(filtered)
             start = (page - 1) * limit
-            items = filtered[start : start + limit]
+            items = [_job_summary(job) for job in filtered[start : start + limit]]
             return {
                 'items': items,
                 'total': total,
