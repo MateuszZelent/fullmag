@@ -89,3 +89,68 @@ bez usuwania cache. Walidowane są 64 małe cyfry hex.
 Rustfmt i diff check PASS; kompilacja i test odtworzenia cache NOT VERIFIED.
 Następny runtime musi wykazać nowe pola i właściwą bibliotekę,
 a nie tylko nowy stamp Rust. #171 nie ma tej poprawki invalidacji w snapshotcie.
+
+## Kontrola bindingu biblioteki - kolejny checkpoint 2026-09-30
+
+Query dependency C ABI publikuje `native_source_snapshot_sha256` w istniejacym
+JSON diagnostycznym; rozmiar struktury ABI pozostaje bez zmian. Brak stampu
+w buildzie unmanaged daje pusty hash, ktory nie przechodzi managed attestation.
+Runtime-only i skrypt modal-contract odrzucaja brak, niepoprawny format i
+niezgodnosc hasha biblioteki z kapsula. Modal-contract przekazuje snapshot
+rowniez do bezposredniego configure CMake. Walidator nowych benchmarkow
+modal-contract odrzuca historyczne attestations bez tego dowodu; historyczne
+artefakty pozostaja zachowane, bez zmiany ich danych i statusow.
+
+Regresja Python obejmuje poprawny Rust startup stamp i byte-matched CMake
+cache przy stalej bibliotece natywnej. Dwa zestawy Python: 47 testow PASS;
+wszystkie 5 blokow Python w skrypcie shell przechodza parser AST.
+Nie kompilowano nowych testow jednostkowych. Binding C++/Cargo/CMake i cache
+preconditionera pozostaja NOT VERIFIED w managed native runtime.
+Job #171: status running i Docker State.Running=true w biezacym odczycie;
+snapshot poprzedza nowy binding, wiec nie zamknie tej bramki.
+
+Nastepny krok: nowy build z aktualnego snapshotu po rozstrzygnieciu juz
+zadanego pytania o profil runtime-only / wyjatek dla 9 kontraktow. Nie
+zmieniono konfiguracji runnera, nie anulowano aktywnego joba.
+
+### Niezalezna walidacja receipt i obie trasy runtime-only
+
+Uzupełniono także `build_executor.validate_build_receipt`: profile
+modal-contract oraz runtime-only v1/v2 odrzucają brak lub niezgodność
+native snapshot. Walidator benchmarku runtime-only sprawdza dependency
+attestation z dokładnie tego buildu, a nie tylko znacznik Rust. Regresja
+ponownie hashuje cały poprawny receipt i dowodzi, że stara biblioteka nadal
+jest odrzucana; osobny test obejmuje brak i niezgodność dla runtime v1/v2.
+
+Trzy zestawy interpretowanych testów Python: 64 PASS. Nie oznacza to
+kompilacji ani kwalifikacji biblioteki natywnej. Stare receipty nie są
+modyfikowane; nie mogą posłużyć do uruchomienia nowego kwalifikowanego
+benchmarku przy obecnym walidatorze bez dowodu bindingu.
+
+Bieżący odczyt #171: running, State.Running=true. Log native-build
+potwierdza zakończenie kompilacji Rust; dalszy etap kontraktów pozostaje
+aktywny. Kapsuła poprzedza mechanizm bindingu i nie zamknie tej bramki.
+
+## Terminalny #171 oraz anulowanie cache
+
+Kolejka #171: succeeded, exit 0; kontener exited, exit 0, kontrakty 9/9 PASS.
+Hash dostarczonej biblioteki nadal
+`1f559a6ca62d42d2765312ccb77c7bba5fdccf46451f762ac582520bc3a670d3`,
+identyczny z #169 i #170. Brak markerow native binding i signed guards.
+Nie jest to dowod wykonania nowych poprawek C++ ani cache preconditionera.
+Weryfikacja wszystkich artefaktow receipt: brak bledow wielkosci/hash;
+wynik zapisano w `94d7d8e4d8444d8fa839cc77a120080a/audit/native-library-provenance-171.json`.
+Integralnosc plikow nie zastępuje aktualnosci kodu natywnego.
+
+Przeglad cache potwierdzil, ze macierz kazdego przesuniecia ma niezalezna
+wlasnosc, a cache przechowuje operator bez przesuniecia; EPS nadal uzywa
+oryginalnego MatShell. Znaleziono blad klasyfikacji anulowania podczas
+materializacji: moglo trafic do operator_error albo uruchomic fallback
+preconditionera w single-shift. Dodano polling przed kazda kolumna oraz
+powrot interrupted/cancel_requested przed fallbackiem. Dopisano regresje
+FrequencyWindowCancellationDuringCachedPreconditionerPreservesStopReason.
+
+Walidator source-map: exit 0. Testy dokumentacji matematycznej: 10 PASS.
+Pierwsze wywolanie unittest wykrylo 0 testow i nie stanowi dowodu; wlasciwy
+pytest wykonal wszystkie 10. Nowa regresja C++ i skutecznosc cache dla FEM
+pozostaja NOT VERIFIED z powodu braku nowego managed buildu.
