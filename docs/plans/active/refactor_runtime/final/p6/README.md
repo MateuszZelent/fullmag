@@ -137,3 +137,7 @@ pamięci i wszystkich lane'ów pozostają otwarte. P6 wynosi **52%**.
 36. [Seekable preflight ZIP](36-seekable-zip-preflight.md)
     — brak kopii compressed archive, bounded metadata scan i actual length;
     review i kontrola źródeł PASS, decoded staging i RAM nadal otwarte.
+
+37. [Plikowy preflight i import archiwów](37-file-backed-archive-import.md)
+    — API/CLI dekodują raz do prywatnych plików, streamują publikację i blokują
+    GC przy niepokrytym grafie; source checks/review PASS, runtime/RAM otwarte.
