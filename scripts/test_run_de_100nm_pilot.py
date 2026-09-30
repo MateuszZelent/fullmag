@@ -187,6 +187,32 @@ class PilotTests(unittest.TestCase):
                 with self.assertRaises(pilot.managed.BenchmarkError):
                     pilot.validate_smoke_potential_fields(root, 2)
 
+    def test_potential_reconstruction_rejects_missing_mode_in_same_sample(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "metadata.json").write_text("{}")
+            field = root / "eigen/mode_fields/sample_0000/mode_0000"
+            field.mkdir(parents=True)
+            (field / "vector.bin").write_bytes(b"mode")
+            (field / "physical_potential.v1.json").write_text("{}")
+            published = root / "eigen/modes/sample_0000"
+            published.mkdir(parents=True)
+            for index in (0, 1):
+                (published / f"mode_{index:04}.json").write_text("{}")
+            with patch.object(pilot, "validate_physical_potential", return_value={
+                "status": "consistent", "reconstruction_agreement": True,
+                "identity_binding": {"status": "consistent"},
+                "source_mesh_binding": {"status": "consistent"}}):
+                with self.assertRaisesRegex(pilot.managed.BenchmarkError, "published mode.*field"):
+                    pilot.validate_smoke_potential_fields(root, 1)
+                # Conversely, a field may not silently introduce an unpublished mode.
+                (published / "mode_0001.json").unlink()
+                extra = root / "eigen/mode_fields/sample_0000/mode_0001"
+                extra.mkdir()
+                (extra / "vector.bin").write_bytes(b"unpublished mode")
+                with self.assertRaisesRegex(pilot.managed.BenchmarkError, "unpublished fields"):
+                    pilot.validate_smoke_potential_fields(root, 1)
+
     def test_smoke_rejects_correct_gradient_with_wrong_mode_phase_identity(self):
         from test_de_physical_potential import PhysicalPotentialFixture
         with TemporaryDirectory() as tmp:

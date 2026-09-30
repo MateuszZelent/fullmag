@@ -137,6 +137,23 @@ def validate_smoke_potential_fields(case_dir, expected_sample_count):
     if samples != set(range(expected_sample_count)):
         raise managed.BenchmarkError(
             f"DE-SMOKE mode fields cover samples {sorted(samples)}, expected {expected_sample_count}")
+    published_modes = set()
+    for mode_metadata in case_dir.glob("eigen/modes/sample_*/mode_*.json"):
+        if (re.fullmatch(r"sample_[0-9]{4}", mode_metadata.parent.name) is None
+                or re.fullmatch(r"mode_[0-9]{4}\.json", mode_metadata.name) is None):
+            raise managed.BenchmarkError("DE-SMOKE published mode has invalid identity path")
+        managed._regular_file(mode_metadata, "DE-SMOKE published mode metadata")
+        published_modes.add((mode_metadata.parent.name, mode_metadata.stem))
+    field_modes = set()
+    for vector in vectors:
+        if re.fullmatch(r"mode_[0-9]{4}", vector.parent.name) is None:
+            raise managed.BenchmarkError("DE-SMOKE mode field has invalid mode directory")
+        field_modes.add((vector.parent.parent.name, vector.parent.name))
+    if published_modes != field_modes:
+        raise managed.BenchmarkError(
+            "DE-SMOKE published mode identities do not match mode field identities: "
+            f"missing fields {sorted(published_modes - field_modes)}, "
+            f"unpublished fields {sorted(field_modes - published_modes)}")
     metadata = case_dir / "metadata.json"
     managed._regular_file(metadata, "DE-SMOKE mesh metadata")
     reports = []

@@ -1,5 +1,11 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
+## S04/S07 — kompletność publikacji pól modów
+
+- Usunięto lukę odbioru: znalezione pola nie dowodziły obecności pól wszystkich opublikowanych modów w tej samej próbce. Obecnie wymagane identyczne zbiory sample/raw mode; brakujące i nieopublikowane pola są odrzucane przed rekonstrukcją.
+- RED brakujący drugi mod; GREEN 19 testów pilota i 19 potencjału PASS. Osiem historycznych przypadków #173 consistent, raport w scientific-batches/published-mode-completeness-20260930/historical-job-173.json. Audyt: docs/audits/2026-09-30-published-mode-field-completeness.md.
+- #184 nie zmieniano ani nie restartowano. Po jego wynikach obowiązuje dodatkowy odbiór aktualnym walidatorem. To spójność artefaktów, nie kwalifikacja fizyki/widma; pełny plan pozostaje otwarty.
+
 ## Aktualny checkpoint #184 i wykres DE/BV — 2026-09-30
 
 - #184 / 5718d8d81e25496b966dd77c4d0ae1b0: live running; kontener fullmag-worker-5718d8d81e25496b966dd77c4d0ae1b0 i proces build_entrypoint potwierdzone. Katalog joba utworzył koordynator. Brak jeszcze dowodu kompilacji i nowych częstotliwości.
