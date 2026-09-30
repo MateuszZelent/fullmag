@@ -1084,6 +1084,33 @@ pola preprojected. Nie sprawdza jeszcze węzłów niemagnetycznych na siatce
 mieszanej, okresowych ograniczeń, pełnego pipeline ani GPU. Punkt o ochronie
 frozen spins i maski magnetycznej pozostaje zatem otwarty.
 
+**Mieszana siatka magnetyk–airbox w polu anteny FEM CPU 2026-09-30:**
+`just verify-fem-antenna-mixed-cpu` zakończyła się kodem 0. Dwa konforemne
+tetraedry mają wspólną ścianę, markery elementów $1$ (magnetyk) i $0$
+(airbox) oraz piąty węzeł należący wyłącznie do powietrza. Preprojected
+basis w osi $z$ jest pełnodomenowa. Dla sinusoidy $1\,\mathrm{GHz}$,
+biasu $10^4\,\mathrm{A/m}$ i kroku $0.5\,\mathrm{ps}$ wykonano po 2000
+kroków Heun/RK4/RK23/RK45; zapisano po 21 próbek na integrator.
+
+Raport `.fullmag/reports/fem-antenna-mixed/qualification.json` ma schemat
+`fem_antenna_mixed.v1`, status `recorded_unvalidated` i snapshot źródeł
+`ae80b1598b99f195e82d31b4ea54735686fccd2e545fe5ea47836316df5f1300`.
+Tożsamość źródeł przed/po wykonaniu zgodna. Niezależny
+`scripts/validate_fem_antenna_mixed.py::validate` wykazał, że `H_drive` w
+airboxie i w magnetyku odpowiada waveformowi w czasie próbki do
+$10^{-7}\,\mathrm{A/m}$, ale magnetyzacja węzła airboxu nie zmienia się.
+Swobodne węzły magnetyku odpowiadają analitycznej trajektorii macrospinu
+(maksymalny błąd $1.293\times10^{-6}$ przy progu $5\times10^{-6}$).
+Metryka `max_torque_Apm` pomija węzeł airboxu mimo jego niezerowego pola.
+Walidator odrzucił cztery celowe mutacje: stanu airboxu, pola w airboxie,
+magnetyzacji magnetyku i torque.
+
+Ten dowód obejmuje natywne CPU, dwa tet4, lokalny węzeł airboxu oraz stały
+krok. Nie obejmuje PBC, bardziej złożonej wspólnej siatki, projekcji z
+rzeczywistego solve anteny, publicznych snapshotów ani GPU. Zatem oba
+podpunkty T13 o mixed-mesh i ochronie maski pozostają otwarte w szerszym
+zakresie.
+
 ## T14. Domknąć OpenAPI, zasoby i realtime
 
 Uzupełnienie implementacyjne 2026-09-21: `SolvedAntennaDriveResource` ma

@@ -222,6 +222,24 @@
       "path": "justfile",
       "symbol": "verify-fem-antenna-frozen-cpu",
       "responsibility": "Kontenerowe wykonanie bramki frozen-spin z tożsamością źródeł"
+    },
+    {
+      "id": "source32",
+      "path": "backends/fem/tests/llg_time_domain_qualification.cpp",
+      "symbol": "main",
+      "responsibility": "Cztery natywne trajektorie anteny CPU na mieszanej siatce magnetyk-airbox"
+    },
+    {
+      "id": "source33",
+      "path": "scripts/validate_fem_antenna_mixed.py",
+      "symbol": "validate",
+      "responsibility": "Niezależna kontrola pola w airboxie i magnetyku, nieruchomego węzła airboxu oraz torque"
+    },
+    {
+      "id": "source34",
+      "path": "justfile",
+      "symbol": "verify-fem-antenna-mixed-cpu",
+      "responsibility": "Kontenerowa bramka antenowej mieszanej siatki CPU z tożsamością źródeł"
     }
   ],
   "public_api": {

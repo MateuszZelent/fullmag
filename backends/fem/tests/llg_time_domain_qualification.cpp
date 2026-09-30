@@ -1641,19 +1641,165 @@ void write_antenna_frozen_cpu(const std::filesystem::path &output)
     std::puts("FEM antenna frozen-spin trajectories recorded; independent validation required");
 }
 
+void write_antenna_mixed_cpu(const std::filesystem::path &output)
+{
+    const auto digest = qualification_source_snapshot_sha256();
+    constexpr std::array<double, 15> nodes{{
+        0, 0, 0, kEdge, 0, 0, 0, kEdge, 0, 0, 0, kEdge, 0, 0, -kEdge,
+    }};
+    constexpr std::array<uint32_t, 2> cell_types{{FULLMAG_FEM_CELL_TET4, FULLMAG_FEM_CELL_TET4}};
+    constexpr std::array<uint32_t, 3> cell_offsets{{0, 4, 8}};
+    constexpr std::array<uint32_t, 8> cell_nodes{{0, 1, 2, 3, 0, 2, 1, 4}};
+    constexpr std::array<uint64_t, 2> cell_ordinals{{0, 1}};
+    constexpr std::array<uint32_t, 2> cell_markers{{1, 0}};
+    constexpr std::array<uint32_t, 6> facet_types{{
+        FULLMAG_FEM_FACET_TRI3, FULLMAG_FEM_FACET_TRI3, FULLMAG_FEM_FACET_TRI3,
+        FULLMAG_FEM_FACET_TRI3, FULLMAG_FEM_FACET_TRI3, FULLMAG_FEM_FACET_TRI3,
+    }};
+    constexpr std::array<uint32_t, 6> facet_roles{{
+        FULLMAG_FEM_FACET_ROLE_EXTERIOR, FULLMAG_FEM_FACET_ROLE_EXTERIOR,
+        FULLMAG_FEM_FACET_ROLE_EXTERIOR, FULLMAG_FEM_FACET_ROLE_EXTERIOR,
+        FULLMAG_FEM_FACET_ROLE_EXTERIOR, FULLMAG_FEM_FACET_ROLE_EXTERIOR,
+    }};
+    constexpr std::array<uint32_t, 7> facet_offsets{{0, 3, 6, 9, 12, 15, 18}};
+    constexpr std::array<uint32_t, 18> facet_nodes{{
+        0, 1, 3, 0, 3, 2, 1, 2, 3, 0, 2, 4, 0, 4, 1, 2, 1, 4,
+    }};
+    constexpr std::array<uint64_t, 6> facet_ordinals{{0, 1, 2, 3, 4, 5}};
+    constexpr std::array<uint32_t, 6> facet_markers{{1, 1, 1, 1, 1, 1}};
+    std::ofstream file(output);
+    require(static_cast<bool>(file), "open mixed antenna output");
+    file << std::setprecision(17)
+         << "{\"schema_version\":\"fem_antenna_mixed.v1\","
+         << "\"status\":\"recorded_unvalidated\",\"device\":\"cpu\","
+         << "\"precision\":\"fp64\",\"source_snapshot_sha256\":\""
+         << digest << "\",\"cases\":[";
+    const std::array<std::pair<fullmag_fem_integrator, const char *>, 4> integrators{{
+        {FULLMAG_FEM_INTEGRATOR_HEUN, "heun"},
+        {FULLMAG_FEM_INTEGRATOR_RK4, "rk4"},
+        {FULLMAG_FEM_INTEGRATOR_RK23_BS, "rk23"},
+        {FULLMAG_FEM_INTEGRATOR_RK45_DP54, "rk45"},
+    }};
+    bool first_case = true;
+    for (const auto &[integrator, name] : integrators) {
+        auto initial = uniform_magnetization(0.6, 0.0, 0.8);
+        initial.insert(initial.end(), {1.0, 0.0, 0.0});
+        std::vector<double> basis(15, 0.0);
+        for (size_t node = 0; node < 5; ++node) basis[3 * node + 2] = 2e4;
+        fullmag_fem_regional_field_drive_desc drive{};
+        drive.abi_version = FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION;
+        drive.struct_size = sizeof(drive);
+        drive.stable_id_hash = 1;
+        drive.target.abi_version = FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION;
+        drive.target.struct_size = sizeof(drive.target);
+        drive.target.kind = FULLMAG_FEM_FIELD_TARGET_GLOBAL;
+        drive.spatial_profile.abi_version = FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION;
+        drive.spatial_profile.struct_size = sizeof(drive.spatial_profile);
+        drive.spatial_profile.kind = FULLMAG_FEM_SPATIAL_PROFILE_PREPROJECTED_NODAL;
+        drive.spatial_profile.preprojected_h_xyz_a_per_m = basis.data();
+        drive.spatial_profile.preprojected_h_value_count = basis.size();
+        drive.waveform.abi_version = FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION;
+        drive.waveform.struct_size = sizeof(drive.waveform);
+        drive.waveform.kind = FULLMAG_FEM_TIME_SINUSOIDAL;
+        drive.waveform.parameters.sinusoidal = {1e9, 0.7, 0.2};
+        drive.time_origin = FULLMAG_FEM_TIME_ABSOLUTE;
+        auto plan = base_plan(initial, 0.1, integrator, 5e-13);
+        plan.mesh.nodes_xyz = nodes.data();
+        plan.mesh.nodes_xyz_len = nodes.size();
+        plan.mesh.cell_types = cell_types.data();
+        plan.mesh.cell_types_len = cell_types.size();
+        plan.mesh.cell_offsets = cell_offsets.data();
+        plan.mesh.cell_offsets_len = cell_offsets.size();
+        plan.mesh.cell_nodes = cell_nodes.data();
+        plan.mesh.cell_nodes_len = cell_nodes.size();
+        plan.mesh.cell_global_ordinals = cell_ordinals.data();
+        plan.mesh.cell_global_ordinals_len = cell_ordinals.size();
+        plan.mesh.cell_markers = cell_markers.data();
+        plan.mesh.cell_markers_len = cell_markers.size();
+        plan.mesh.facet_types = facet_types.data();
+        plan.mesh.facet_types_len = facet_types.size();
+        plan.mesh.facet_roles = facet_roles.data();
+        plan.mesh.facet_roles_len = facet_roles.size();
+        plan.mesh.facet_offsets = facet_offsets.data();
+        plan.mesh.facet_offsets_len = facet_offsets.size();
+        plan.mesh.facet_nodes = facet_nodes.data();
+        plan.mesh.facet_nodes_len = facet_nodes.size();
+        plan.mesh.facet_global_ordinals = facet_ordinals.data();
+        plan.mesh.facet_global_ordinals_len = facet_ordinals.size();
+        plan.mesh.facet_markers = facet_markers.data();
+        plan.mesh.facet_markers_len = facet_markers.size();
+        plan.enable_exchange = 0;
+        plan.material.exchange_stiffness = 0.0;
+        plan.external_field_am[2] = 1e4;
+        plan.regional_field_drives = &drive;
+        plan.regional_field_drive_count = 1;
+        auto *backend = fullmag_fem_backend_create(&plan);
+        require(backend != nullptr, "create mixed antenna CPU backend");
+        require_requested_execution_lane(backend);
+        if (!first_case) file << ',';
+        first_case = false;
+        file << "{\"integrator\":\"" << name << "\",\"samples\":[";
+        auto record = [&](double time_s, double max_torque) {
+            std::vector<double> m(15), h(15);
+            require(fullmag_fem_backend_copy_field_f64(
+                backend, FULLMAG_FEM_OBSERVABLE_M, m.data(), m.size()) == FULLMAG_FEM_OK,
+                "copy mixed antenna magnetization");
+            require(fullmag_fem_backend_copy_field_f64(
+                backend, FULLMAG_FEM_OBSERVABLE_H_DRIVE, h.data(), h.size()) == FULLMAG_FEM_OK,
+                "copy mixed antenna drive");
+            require(m[12] == 1.0 && m[13] == 0.0 && m[14] == 0.0,
+                "antenna moved airbox-only node");
+            for (size_t i = 3; i < 12; ++i) {
+                require(std::abs(m[i] - m[i % 3]) < 5e-13,
+                    "mixed antenna magnetic nodes lost uniformity");
+            }
+            for (size_t i = 3; i < 15; ++i) {
+                require(std::abs(h[i] - h[i % 3]) < 1e-8,
+                    "mixed antenna drive lost full-domain uniformity");
+            }
+            if (time_s > 0.0) file << ',';
+            file << "{\"time_s\":" << time_s
+                 << ",\"m_magnetic\":[" << m[0] << ',' << m[1] << ',' << m[2] << ']'
+                 << ",\"m_air\":[" << m[12] << ',' << m[13] << ',' << m[14] << ']'
+                 << ",\"h_drive_magnetic_a_per_m\":[" << h[0] << ',' << h[1] << ',' << h[2] << ']'
+                 << ",\"h_drive_air_a_per_m\":[" << h[12] << ',' << h[13] << ',' << h[14] << ']'
+                 << ",\"max_torque_a_per_m\":" << max_torque << '}';
+        };
+        record(0.0, 0.0);
+        uint64_t accepted = 0;
+        for (size_t step = 1; step <= 2000; ++step) {
+            fullmag_fem_step_stats stats{};
+            require(fullmag_fem_backend_step(backend, 5e-13, &stats) == FULLMAG_FEM_OK,
+                std::string("mixed antenna CPU step: ") + last_error(backend));
+            ++accepted;
+            if (step % 100 == 0) record(stats.time_seconds, stats.max_torque_Apm);
+        }
+        fullmag_fem_backend_destroy(backend);
+        file << "],\"accepted_steps\":" << accepted << '}';
+    }
+    file << "]}\n";
+    file.close();
+    require(static_cast<bool>(file), "write mixed antenna output");
+    std::puts("FEM antenna mixed-mesh trajectories recorded; independent validation required");
+}
+
 } // namespace
 
 int main(int argc, char **argv)
 {
     require(
         argc == 2 || argc == 3,
-        "usage: fem_llg_time_domain_qualification OUTPUT_JSON [cpu|gpu|antenna-cpu|antenna-frozen-cpu]");
+        "usage: fem_llg_time_domain_qualification OUTPUT_JSON [cpu|gpu|antenna-cpu|antenna-frozen-cpu|antenna-mixed-cpu]");
     if (argc == 3 && std::string(argv[2]) == "antenna-cpu") {
         write_antenna_cpu_trajectories(argv[1]);
         return 0;
     }
     if (argc == 3 && std::string(argv[2]) == "antenna-frozen-cpu") {
         write_antenna_frozen_cpu(argv[1]);
+        return 0;
+    }
+    if (argc == 3 && std::string(argv[2]) == "antenna-mixed-cpu") {
+        write_antenna_mixed_cpu(argv[1]);
         return 0;
     }
     if (argc == 3) {

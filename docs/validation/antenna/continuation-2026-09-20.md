@@ -5,7 +5,19 @@ Data bazowego przekazania: 2026-09-20; aktualizacja: 2026-09-30. Status całośc
 
 ## 1. Punkt wznowienia i zakres tego dokumentu
 
-### Najnowszy checkpoint — frozen spin pod anteną FEM CPU, 2026-09-30
+### Najnowszy checkpoint — wspólna siatka magnetyk–airbox, 2026-09-30
+
+`just verify-fem-antenna-mixed-cpu` przeszła z kodem 0: cztery integratory
+FEM CPU FP64, po 2000 kroków na konforemnej parze tet4 z markerami $1/0$.
+Raport `.fullmag/reports/fem-antenna-mixed/qualification.json` ma snapshot
+`ae80b1598b99f195e82d31b4ea54735686fccd2e545fe5ea47836316df5f1300`.
+Niezależny wzorzec potwierdził pełnodomenowe `H_drive` w magnetyku i
+airboxie, nieruchomy węzeł wyłącznie powietrzny, poprawną trajektorię
+magnetycznych węzłów i metrykę torque bez wkładu powietrza. Szczegóły
+oraz ograniczenia są w T13 planu T00–T18. Pozostają PBC, projekcja
+rzeczywiście rozwiązanej anteny, publiczny pipeline i GPU.
+
+### Wcześniejszy checkpoint — frozen spin pod anteną FEM CPU, 2026-09-30
 
 `just verify-fem-antenna-frozen-cpu` przeszła z kodem 0: sześć natywnych
 trajektorii CPU FP64, 126 próbek, integratory Heun/RK4/RK23/RK45 przy
