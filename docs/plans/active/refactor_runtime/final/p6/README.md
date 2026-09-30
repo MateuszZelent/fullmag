@@ -161,3 +161,7 @@ pamięci i wszystkich lane'ów pozostają otwarte. P6 wynosi **52%**.
 42. [Właściciel przypiętego tensora w FMS](42-fms-pinned-tensor-owner-closure.md)
     — exact intent i owner CAS closure, fail-closed export/import;
     source check/review PASS, round-trip NOT RUN, lokalna publication owner barrier otwarta.
+
+43. [Lokalna bramka właściciela typed tensorów](43-local-pinned-tensor-owner-barrier.md)
+    — owner przed publication/replay/recovery/GC, wspólny bounded reader;
+    source check/review PASS, regresje NOT RUN, materializer/API/UI nadal otwarte.

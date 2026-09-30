@@ -35,6 +35,10 @@ Opaque SolutionSet zachowuje dotychczasową kompatybilność.
 Receipt:
 `C:/git/fullmag/storage/builds/fullmag-0950f4dca4ffe38f/windows-api-source-check/api-source-check/78995751c9924680befd32ed1deb0d97/receipt.json`.
 
+Aktualizacja: lokalną publication owner barrier wdrożono źródłowo
+w [przyroście 43](43-local-pinned-tensor-owner-barrier.md). Poniższy opis
+pozostaje historycznym stanem granicy przyrostu 42.
+
 ## Otwarte granice
 
 Lokalny `publish_solution_set` nadal może zapisać typed SolutionSet bez
