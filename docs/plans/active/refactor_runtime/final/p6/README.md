@@ -149,3 +149,7 @@ pamięci i wszystkich lane'ów pozostają otwarte. P6 wynosi **52%**.
 39. [Trwałe zasoby wyników historycznych](39-durable-solution-resources.md)
     — project/run/revision API, bounded strony, generated client i hooki;
     źródła i higiena API PASS, pełny lint FAILED, testy/runtime NOT VERIFIED.
+
+40. [Evaluator różnicy przypiętych wycinków](40-pinned-dataset-difference-evaluator.md)
+    — rzeczywiste signed difference, CAS read adapter i jawna semantyka outputu;
+    source review/check PASS, regresje Rust NOT RUN, materializer/API/UI otwarte.

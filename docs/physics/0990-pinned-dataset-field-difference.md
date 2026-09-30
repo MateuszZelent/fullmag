@@ -172,4 +172,12 @@ Arithmetic*, ACM Computing Surveys 23(1), 1991, DOI `10.1145/103162.103163`;
 | decode | `crates/fullmag-quantities/src/dataset_slice.rs` + `decode_part_bytes` | Checksum i finite decode | F32/F64, regresje NOT RUN |
 | cas | `crates/fullmag-session/src/dataset_slice_adapter.rs` + `compare_tensor_dataset_slices` | Rzeczywisty odczyt tensorów | CPU analysis, runtime NOT VERIFIED |
 
-Immutable link zostanie określony pełnym SHA checkpointu implementacji.
+Źródła przypięto do commita `1cd01d25f34c689219b084c91c965e7c48d06efb`:
+
+- [difference](https://github.com/MateuszZelent/fullmag/blob/1cd01d25f34c689219b084c91c965e7c48d06efb/crates/fullmag-quantities/src/dataset_difference.rs#L184) — `compare_dataset_field_slices`.
+- [budget](https://github.com/MateuszZelent/fullmag/blob/1cd01d25f34c689219b084c91c965e7c48d06efb/crates/fullmag-quantities/src/dataset_difference.rs#L29) — `DatasetDifferenceRequest`.
+- [compatibility](https://github.com/MateuszZelent/fullmag/blob/1cd01d25f34c689219b084c91c965e7c48d06efb/crates/fullmag-quantities/src/dataset.rs#L790) — `validate_field_compatibility`.
+- [decode](https://github.com/MateuszZelent/fullmag/blob/1cd01d25f34c689219b084c91c965e7c48d06efb/crates/fullmag-quantities/src/dataset_slice.rs#L270) — `decode_part_bytes`.
+- [cas](https://github.com/MateuszZelent/fullmag/blob/1cd01d25f34c689219b084c91c965e7c48d06efb/crates/fullmag-session/src/dataset_slice_adapter.rs#L57) — `compare_tensor_dataset_slices`.
+- [source-status](https://github.com/MateuszZelent/fullmag/blob/1cd01d25f34c689219b084c91c965e7c48d06efb/crates/fullmag-quantities/src/dataset_difference.rs#L262) — `validate_dataset_difference_sources`.
+- [metadata-digest](https://github.com/MateuszZelent/fullmag/blob/1cd01d25f34c689219b084c91c965e7c48d06efb/crates/fullmag-quantities/src/dataset_difference.rs#L144) — `dataset_comparison_digest`.
