@@ -834,6 +834,21 @@ export type ProjectRunTaskCancellationRequest =
   components["schemas"]["ProjectRunTaskCancellationRequest"];
 export type ProjectRunTaskCancellationResource =
   components["schemas"]["ProjectRunTaskCancellationResource"];
+export type SolutionSetResource =
+  components["schemas"]["SolutionSetResource"];
+export type SolutionSetMemberResource =
+  components["schemas"]["SolutionSetMemberResource"];
+export type SolutionSetArtifactResource =
+  components["schemas"]["SolutionSetArtifactResource"];
+export type SolutionSetMemberPageResource =
+  components["schemas"]["SolutionSetMemberPageResource"];
+export type SolutionSetArtifactPageResource =
+  components["schemas"]["SolutionSetArtifactPageResource"];
+export type SolutionSetMemberPageQuery =
+  components["schemas"]["SolutionSetMemberPageQuery"];
+export type SolutionSetArtifactPageQuery =
+  components["schemas"]["SolutionSetArtifactPageQuery"];
+export type SolutionSetRevision = Extract<SolutionSetResource["revision"], string>;
 export type ObservationFrameListQuery =
   components["schemas"]["ObservationFrameListQuery"];
 export type ObservationFrameListResource =

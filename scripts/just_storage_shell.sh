@@ -87,6 +87,16 @@ esac
 # paths/lock inside the dedicated helper. Do not run the generic compatibility-
 # link or heavy-build wrapper for them.
 case "${recipe}" in
+  *"scripts/verify_control_room_sources.py"*)
+    # Never execute the recipe text: accept only the fixed argument shape and
+    # invoke the trusted helper from this checkout with the selected route.
+    source_recipe_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_control_room_sources.py" --route (generate-client|production-source|api-hygiene|lint) --repo-root "[^"]+"$'
+    if [[ ! "${recipe}" =~ ${source_recipe_pattern} ]]; then
+      echo "[fullmag just] invalid lightweight frontend recipe" >&2
+      exit 2
+    fi
+    exec "${python_cmd}" "${script_dir}/verify_control_room_sources.py" --route "${BASH_REMATCH[1]}" --repo-root "${repo_root}"
+    ;;
   *"scripts/verify_project_entrypoint_runtime.py"*)
     exec "${python_cmd}" "${script_dir}/verify_project_entrypoint_runtime.py" --repo-root "${repo_root}"
     ;;

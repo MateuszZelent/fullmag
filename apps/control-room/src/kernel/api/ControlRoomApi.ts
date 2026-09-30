@@ -186,6 +186,9 @@ import {
   PERSISTENCE_IMPORTS_PATH,
   PERSISTENCE_PROJECT_OPEN_PATH,
   PERSISTENCE_PROJECTS_PATH,
+  PROJECT_SOLUTION_SET_ARTIFACTS_PATH,
+  PROJECT_SOLUTION_SET_MEMBERS_PATH,
+  PROJECT_SOLUTION_SET_PATH,
   PROJECT_RUN_SUBMIT_PATH,
   PROJECT_RUN_MATERIALIZATION_PATH,
   PROJECT_RUN_PATH,
@@ -222,6 +225,7 @@ import {
 import {
   canonicalFieldVectorQuery,
   canonicalFieldVectorQueryParams,
+  isCanonicalU64Decimal,
 } from "./fieldQueryIdentity";
 import {
   fieldDisplayScale,
@@ -456,6 +460,12 @@ import type {
   ProjectRunListResource,
   ProjectRunTaskCancellationRequest,
   ProjectRunTaskCancellationResource,
+  SolutionSetArtifactPageQuery,
+  SolutionSetArtifactPageResource,
+  SolutionSetMemberPageQuery,
+  SolutionSetMemberPageResource,
+  SolutionSetResource,
+  SolutionSetRevision,
   ObservationFrameListQuery,
   ObservationFrameListResource,
   ObservationFrameResource,
@@ -741,6 +751,113 @@ export const MAX_TOPOLOGY_BYTES = 512 * 1024 * 1024;
 const FIELD_MATERIALIZATION_TIMEOUT_MS = 5_000;
 const FIELD_MATERIALIZATION_RETRY_MS = 250;
 const FIELD_MATERIALIZATION_REQUEST_KEY = "current-field-cache";
+
+const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f-\u009f]/;
+const PROJECT_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
+const PROJECT_ID_MAX_BYTES = 200;
+const RUN_ID_MAX_BYTES = 256;
+const SOLUTION_SET_ID_MAX_BYTES = 1024;
+
+function utf8ByteLength(value: string): number {
+  return new TextEncoder().encode(value).byteLength;
+}
+
+function assertNonEmptyId(label: string, value: string): string {
+  if (
+    typeof value !== "string" ||
+    value.trim().length === 0 ||
+    CONTROL_CHARACTERS.test(value)
+  ) {
+    throw new Error(`Invalid ${label}.`);
+  }
+  return value;
+}
+
+export function assertSolutionSetProjectId(value: string): string {
+  assertNonEmptyId("project id", value);
+  if (
+    utf8ByteLength(value) > PROJECT_ID_MAX_BYTES ||
+    value !== value.trim() ||
+    value === "." ||
+    value === ".." ||
+    value.endsWith(".") ||
+    !PROJECT_ID_PATTERN.test(value)
+  ) {
+    throw new Error("Invalid project id.");
+  }
+  const stem = (value.split(".")[0] ?? "").toUpperCase();
+  if (
+    new Set(["CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"]).has(stem) ||
+    ((stem.startsWith("COM") || stem.startsWith("LPT")) &&
+      stem.length === 4 &&
+      /^[1-9]$/.test(stem.slice(3)))
+  ) {
+    throw new Error("Invalid project id.");
+  }
+  return value;
+}
+
+export function assertSolutionSetRunId(value: string): string {
+  assertNonEmptyId("run id", value);
+  if (
+    utf8ByteLength(value) > RUN_ID_MAX_BYTES ||
+    /[\\/]/.test(value)
+  ) {
+    throw new Error("Invalid run id.");
+  }
+  return value;
+}
+
+export function assertSolutionSetLogicalId(value: string): string {
+  assertNonEmptyId("solution set id", value);
+  if (utf8ByteLength(value) > SOLUTION_SET_ID_MAX_BYTES) {
+    throw new Error("Invalid solution set id.");
+  }
+  return value;
+}
+
+export function assertSolutionSetMemberId(
+  label: string,
+  value: string,
+): string {
+  return assertNonEmptyId(label, value);
+}
+
+export function assertSolutionSetRevision(
+  revision: SolutionSetRevision,
+): SolutionSetRevision {
+  if (revision === "0" || !isCanonicalU64Decimal(revision)) {
+    throw new Error("SolutionSet revision must be a positive canonical u64 string.");
+  }
+  return revision;
+}
+
+function normalizeSolutionSetPageQuery<
+  T extends {
+    after_artifact_id?: string | null;
+    after_member_id?: string | null;
+    limit?: number | null;
+  },
+>(
+  query: T,
+): T {
+  const limit = query.limit ?? 50;
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
+    throw new Error("SolutionSet page limit must be an integer between 1 and 100.");
+  }
+  if (query.after_member_id != null) {
+    assertSolutionSetMemberId("member cursor", query.after_member_id);
+  }
+  if (query.after_artifact_id != null) {
+    assertSolutionSetMemberId("artifact cursor", query.after_artifact_id);
+  }
+  return {
+    ...query,
+    after_artifact_id: query.after_artifact_id ?? undefined,
+    after_member_id: query.after_member_id ?? undefined,
+    limit,
+  };
+}
 
 function sessionScopeHeaders(options: RequestOptions): Record<string, string> {
   return options.sessionScopeKey
@@ -2671,6 +2788,69 @@ export class ControlRoomApi {
           PROJECT_RUN_PATH,
           options,
           { path: { project_id: projectId, run_id: runId } },
+        ),
+      solutionSet: (
+        projectId: string,
+        runId: string,
+        solutionSetId: string,
+        revision: SolutionSetRevision,
+        options?: RequestOptions,
+      ) =>
+        this.requestJson<SolutionSetResource>(
+          PROJECT_SOLUTION_SET_PATH,
+          options,
+          {
+            path: {
+              project_id: assertSolutionSetProjectId(projectId),
+              revision: assertSolutionSetRevision(revision),
+              run_id: assertSolutionSetRunId(runId),
+              solution_set_id: assertSolutionSetLogicalId(solutionSetId),
+            },
+          },
+        ),
+      solutionSetMembers: (
+        projectId: string,
+        runId: string,
+        solutionSetId: string,
+        revision: SolutionSetRevision,
+        query: SolutionSetMemberPageQuery = {},
+        options?: RequestOptions,
+      ) =>
+        this.requestJson<SolutionSetMemberPageResource>(
+          PROJECT_SOLUTION_SET_MEMBERS_PATH,
+          options,
+          {
+            path: {
+              project_id: assertSolutionSetProjectId(projectId),
+              revision: assertSolutionSetRevision(revision),
+              run_id: assertSolutionSetRunId(runId),
+              solution_set_id: assertSolutionSetLogicalId(solutionSetId),
+            },
+            query: normalizeSolutionSetPageQuery(query),
+          },
+        ),
+      solutionSetArtifacts: (
+        projectId: string,
+        runId: string,
+        solutionSetId: string,
+        revision: SolutionSetRevision,
+        memberId: string,
+        query: SolutionSetArtifactPageQuery = {},
+        options?: RequestOptions,
+      ) =>
+        this.requestJson<SolutionSetArtifactPageResource>(
+          PROJECT_SOLUTION_SET_ARTIFACTS_PATH,
+          options,
+          {
+            path: {
+              member_id: assertSolutionSetMemberId("member id", memberId),
+              project_id: assertSolutionSetProjectId(projectId),
+              revision: assertSolutionSetRevision(revision),
+              run_id: assertSolutionSetRunId(runId),
+              solution_set_id: assertSolutionSetLogicalId(solutionSetId),
+            },
+            query: normalizeSolutionSetPageQuery(query),
+          },
         ),
       create: (request: ProjectCreateRequest, options?: RequestOptions) =>
         this.postJson<ProjectDocumentResource, ProjectCreateRequest>(

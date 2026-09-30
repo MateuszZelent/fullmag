@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import type { ObservationFrameResource } from "../api/apiTypes";
+import {
+  DATA_OBSERVATION_FRAMES_PATH,
+  DATA_OBSERVATION_FRAME_PATH,
+  DATA_OBSERVATION_FRAME_MAGNETIZATION_PATH,
+} from "../api/apiPaths";
 
 import {
   observationFrameListQuery,
@@ -30,7 +35,7 @@ const frame: ObservationFrameResource = {
   frame_id: "frame-a/b",
   grid_cells: [4, 2, 1],
   magnetization_href:
-    "/v2/sessions/current/data/observation-frames/frame-a%2Fb/magnetization",
+    DATA_OBSERVATION_FRAME_MAGNETIZATION_PATH.replace("{frame_id}", "frame-a%2Fb"),
   ownership_epoch: 3,
   quantity_ids: ["m"],
   run_id: "run-a",
@@ -58,16 +63,16 @@ describe("observation frame resource identity", () => {
       stage_id: "stage-a",
     });
     expect(observationFrameListResourceKey(query)).toBe(
-      "/v2/sessions/current/data/observation-frames?run_id=run-a&stage_id=stage-a&cursor=frame-1&limit=25",
+      `${DATA_OBSERVATION_FRAMES_PATH}?run_id=run-a&stage_id=stage-a&cursor=frame-1&limit=25`,
     );
   });
 
   it("encodes frame identity in descriptor and heavy-field keys", () => {
     expect(observationFrameResourceKey(frame.frame_id)).toBe(
-      "/v2/sessions/current/data/observation-frames/frame-a%2Fb",
+      DATA_OBSERVATION_FRAME_PATH.replace("{frame_id}", "frame-a%2Fb"),
     );
     expect(observationFrameMagnetizationResourceKey(frame.frame_id)).toBe(
-      "/v2/sessions/current/data/observation-frames/frame-a%2Fb/magnetization",
+      DATA_OBSERVATION_FRAME_MAGNETIZATION_PATH.replace("{frame_id}", "frame-a%2Fb"),
     );
   });
 

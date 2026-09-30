@@ -329,6 +329,20 @@ verify-authoring-scene-adapter:
 generate-api-openapi:
     {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --route api-openapi-codegen --repo-root "{{repo_root}}"
 
+# Lightweight generated client and production source checks; no unit builds.
+generate-control-room-client:
+    {{storage_python}} "{{repo_root}}/scripts/verify_control_room_sources.py" --route generate-client --repo-root "{{repo_root}}"
+
+check-control-room-production-source:
+    {{storage_python}} "{{repo_root}}/scripts/verify_control_room_sources.py" --route production-source --repo-root "{{repo_root}}"
+
+check-control-room-api-hygiene:
+    {{storage_python}} "{{repo_root}}/scripts/verify_control_room_sources.py" --route api-hygiene --repo-root "{{repo_root}}"
+
+lint-control-room-source:
+    {{storage_python}} "{{repo_root}}/scripts/verify_control_room_sources.py" --route lint --repo-root "{{repo_root}}"
+
+
 # Run only after the operator has allowed compilation of these regression tests.
 verify-session-persistence:
     {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --repo-root "{{repo_root}}"

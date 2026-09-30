@@ -1068,6 +1068,18 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             get(handlers::persistence::projects::get_run),
         )
         .route(
+            "/v2/persistence/projects/:project_id/runs/:run_id/solution-sets/:solution_set_id/revisions/:revision",
+            get(handlers::persistence::solutions::get_solution_revision),
+        )
+        .route(
+            "/v2/persistence/projects/:project_id/runs/:run_id/solution-sets/:solution_set_id/revisions/:revision/members",
+            get(handlers::persistence::solutions::get_solution_members),
+        )
+        .route(
+            "/v2/persistence/projects/:project_id/runs/:run_id/solution-sets/:solution_set_id/revisions/:revision/members/:member_id/artifacts",
+            get(handlers::persistence::solutions::get_solution_artifacts),
+        )
+        .route(
             "/v2/persistence/projects/:project_id/runs/:run_id/materialization",
             post(handlers::persistence::projects::materialize_run),
         )

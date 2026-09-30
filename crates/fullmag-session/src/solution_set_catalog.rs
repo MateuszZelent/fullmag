@@ -10,8 +10,12 @@ use fullmag_quantities::{
 };
 use std::collections::BTreeMap;
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+
+// This control-plane manifest must not grow into an unbounded data plane.
+const MAX_SOLUTION_MANIFEST_BYTES: u64 = 16 * 1024 * 1024;
 
 pub struct SolutionSetCatalog {
     root: PathBuf,
@@ -142,6 +146,9 @@ impl SolutionSetCatalog {
         }
 
         let bytes = serde_json::to_vec_pretty(solution)?;
+        if bytes.len() as u64 > MAX_SOLUTION_MANIFEST_BYTES {
+            bail!("solution-set manifest exceeds the 16 MiB control-plane budget");
+        }
         let revision_path = create_parent(
             &self.root,
             &self.revision_relative_path(&solution.solution_set_id, solution.revision),
@@ -460,7 +467,14 @@ fn parse_revision_entry(entry: &fs::DirEntry, file_name: &str) -> Result<u64> {
 }
 
 fn read_solution_set(path: &Path) -> Result<SolutionSet> {
-    let bytes = fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+    let file = fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
+    let mut bytes = Vec::new();
+    file.take(MAX_SOLUTION_MANIFEST_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .with_context(|| format!("reading {}", path.display()))?;
+    if bytes.len() as u64 > MAX_SOLUTION_MANIFEST_BYTES {
+        bail!("solution-set manifest exceeds the 16 MiB control-plane budget");
+    }
     let solution: SolutionSet =
         serde_json::from_slice(&bytes).with_context(|| format!("parsing {}", path.display()))?;
     solution
@@ -659,6 +673,25 @@ mod tests {
             }],
         });
         solution
+    }
+
+    #[test]
+    fn oversized_manifest_is_rejected_before_publishing_a_revision() {
+        let directory = tempfile::tempdir().unwrap();
+        let catalog = SolutionSetCatalog::open(directory.path()).unwrap();
+        let mut value = solution(1, SolutionSetManifestState::Open);
+        value.scientific_assessment.reason = Some("x".repeat(MAX_SOLUTION_MANIFEST_BYTES as usize));
+        assert!(catalog.publish(&value).unwrap_err().to_string().contains("16 MiB"));
+        assert!(catalog.read(&value.solution_set_id).unwrap().is_none());
+        assert!(catalog.read_revision(&value.solution_set_id, 1).unwrap().is_none());
+    }
+
+    #[test]
+    fn oversized_control_file_is_rejected_before_json_parsing() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("oversized.json");
+        fs::write(&path, vec![b'x'; MAX_SOLUTION_MANIFEST_BYTES as usize + 1]).unwrap();
+        assert!(read_solution_set(&path).unwrap_err().to_string().contains("16 MiB"));
     }
 
     #[test]

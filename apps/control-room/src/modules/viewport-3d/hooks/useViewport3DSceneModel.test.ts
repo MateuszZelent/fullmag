@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 import { installSimulationPreparationTestDom } from "@/kernel/layout/simulationPreparationTestDom.test-support";
 
 import { DEFAULT_CAMERA_REGISTRY_STATE } from "@/kernel/visualization/CameraRegistryController";
-import { DATA_FIELD_VECTOR_PATH } from "@/kernel/api/apiPaths";
+import { DATA_FIELD_VECTOR_PATH, DATA_OBSERVATION_FRAME_MAGNETIZATION_PATH } from "@/kernel/api/apiPaths";
 import {
   DEFAULT_OBJECT_VISUALIZATION,
   ObjectVisualizationController,
@@ -1653,7 +1653,7 @@ describe("useViewport3DSceneModel", () => {
         values: new Float64Array([1, 0, 0]),
       },
       etag: '"live-1"',
-      resourceKey: "/v2/sessions/current/data/fields/m/vector",
+      resourceKey: DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "m"),
       responseMetadata: null,
     };
     const request = {
@@ -1675,7 +1675,7 @@ describe("useViewport3DSceneModel", () => {
       request,
       retained: live.nextRetained,
       sourceResourceKey:
-        "/v2/sessions/current/data/observation-frames/frame-7/magnetization",
+        DATA_OBSERVATION_FRAME_MAGNETIZATION_PATH.replace("{frame_id}", "frame-7"),
       status: "loading",
     });
 

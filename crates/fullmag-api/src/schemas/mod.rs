@@ -27,6 +27,7 @@ pub mod scalars;
 #[allow(dead_code)]
 pub mod sessions;
 pub mod status;
+pub mod solutions;
 pub mod tables;
 pub mod visualization_state;
 pub mod workspace;

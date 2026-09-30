@@ -28059,6 +28059,16 @@
         ],
         "type": "string"
       },
+      "ScientificAssessmentStatusResource": {
+        "enum": [
+          "converged",
+          "tolerance_not_met",
+          "limit_reached",
+          "invalid",
+          "unassessed"
+        ],
+        "type": "string"
+      },
       "ScratchSceneDocumentResource": {
         "properties": {
           "objects": {
@@ -30076,6 +30086,476 @@
           "slonczewski_thin_layer_homogenized.v1"
         ],
         "type": "string"
+      },
+      "SolutionAcceptedStateIdResource": {
+        "properties": {
+          "accepted_step": {
+            "type": "string"
+          },
+          "clock_digest": {
+            "type": "string"
+          },
+          "domain_digest": {
+            "type": "string"
+          },
+          "plan_digest": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "stage_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state_digest": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "accepted_step",
+          "clock_digest",
+          "state_digest",
+          "domain_digest",
+          "plan_digest"
+        ],
+        "type": "object"
+      },
+      "SolutionArtifactIntegrityStatusResource": {
+        "enum": [
+          "not_verified"
+        ],
+        "type": "string"
+      },
+      "SolutionArtifactKindResource": {
+        "enum": [
+          "state",
+          "trajectory",
+          "modal",
+          "frequency_response",
+          "table",
+          "diagnostic",
+          "quality_report",
+          "other"
+        ],
+        "type": "string"
+      },
+      "SolutionCoverageStateResource": {
+        "enum": [
+          "complete",
+          "partial",
+          "unknown"
+        ],
+        "type": "string"
+      },
+      "SolutionCoverageSummaryResource": {
+        "properties": {
+          "committed_samples": {
+            "type": "string"
+          },
+          "expected_samples": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "segment_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "state": {
+            "$ref": "#/components/schemas/SolutionCoverageStateResource"
+          }
+        },
+        "required": [
+          "state",
+          "committed_samples",
+          "segment_count"
+        ],
+        "type": "object"
+      },
+      "SolutionExecutionStatusResource": {
+        "enum": [
+          "running",
+          "succeeded",
+          "failed",
+          "cancelled",
+          "interrupted"
+        ],
+        "type": "string"
+      },
+      "SolutionProvenanceResource": {
+        "properties": {
+          "acquisition_digest": {
+            "type": "string"
+          },
+          "discretization_digest": {
+            "type": "string"
+          },
+          "model_digest": {
+            "type": "string"
+          },
+          "physics_digest": {
+            "type": "string"
+          },
+          "resolved_plan_digest": {
+            "type": "string"
+          },
+          "run_spec_digest": {
+            "type": "string"
+          },
+          "seed_digest": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "run_spec_digest",
+          "model_digest",
+          "physics_digest",
+          "discretization_digest",
+          "resolved_plan_digest",
+          "acquisition_digest"
+        ],
+        "type": "object"
+      },
+      "SolutionScientificAssessmentResource": {
+        "properties": {
+          "evidence_artifact_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "$ref": "#/components/schemas/ScientificAssessmentStatusResource"
+          }
+        },
+        "required": [
+          "status",
+          "evidence_artifact_count"
+        ],
+        "type": "object"
+      },
+      "SolutionSetArtifactPageQuery": {
+        "additionalProperties": false,
+        "properties": {
+          "after_artifact_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "limit": {
+            "description": "Default 50, maximum 100.",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "SolutionSetArtifactPageResource": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SolutionSetArtifactResource"
+            },
+            "type": "array"
+          },
+          "manifest_digest": {
+            "type": "string"
+          },
+          "member_id": {
+            "type": "string"
+          },
+          "next_after_artifact_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "solution_set_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "project_id",
+          "run_id",
+          "solution_set_id",
+          "revision",
+          "manifest_digest",
+          "member_id",
+          "items"
+        ],
+        "type": "object"
+      },
+      "SolutionSetArtifactResource": {
+        "properties": {
+          "accepted_state": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SolutionAcceptedStateIdResource"
+              }
+            ]
+          },
+          "artifact_id": {
+            "type": "string"
+          },
+          "byte_length": {
+            "description": "Canonical decimal u64, preserved without rounding.",
+            "type": "string"
+          },
+          "coverage": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SolutionCoverageSummaryResource"
+              }
+            ]
+          },
+          "integrity": {
+            "$ref": "#/components/schemas/SolutionArtifactIntegrityStatusResource"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/SolutionArtifactKindResource"
+          },
+          "object_ref": {
+            "type": "string"
+          },
+          "schema_id": {
+            "type": "string"
+          },
+          "scientific_evidence": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "artifact_id",
+          "kind",
+          "schema_id",
+          "object_ref",
+          "byte_length",
+          "integrity",
+          "scientific_evidence"
+        ],
+        "type": "object"
+      },
+      "SolutionSetManifestStateResource": {
+        "enum": [
+          "open",
+          "closed"
+        ],
+        "type": "string"
+      },
+      "SolutionSetMemberPageQuery": {
+        "additionalProperties": false,
+        "properties": {
+          "after_member_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "limit": {
+            "description": "Default 50, maximum 100.",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "SolutionSetMemberPageResource": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SolutionSetMemberResource"
+            },
+            "type": "array"
+          },
+          "manifest_digest": {
+            "type": "string"
+          },
+          "next_after_member_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "solution_set_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "project_id",
+          "run_id",
+          "solution_set_id",
+          "revision",
+          "manifest_digest",
+          "items"
+        ],
+        "type": "object"
+      },
+      "SolutionSetMemberResource": {
+        "properties": {
+          "artifact_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "attempt_id": {
+            "type": "string"
+          },
+          "case_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "execution_status": {
+            "$ref": "#/components/schemas/SolutionExecutionStatusResource"
+          },
+          "member_id": {
+            "type": "string"
+          },
+          "ownership_epoch": {
+            "description": "Canonical decimal u64, preserved without rounding.",
+            "type": "string"
+          },
+          "scientific_assessment": {
+            "$ref": "#/components/schemas/SolutionScientificAssessmentResource"
+          },
+          "stage_id": {
+            "type": "string"
+          },
+          "task_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "member_id",
+          "task_id",
+          "attempt_id",
+          "ownership_epoch",
+          "stage_id",
+          "execution_status",
+          "scientific_assessment",
+          "artifact_count"
+        ],
+        "type": "object"
+      },
+      "SolutionSetResource": {
+        "properties": {
+          "artifact_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "coverage_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "execution_status": {
+            "$ref": "#/components/schemas/SolutionExecutionStatusResource"
+          },
+          "manifest_digest": {
+            "type": "string"
+          },
+          "manifest_state": {
+            "$ref": "#/components/schemas/SolutionSetManifestStateResource"
+          },
+          "member_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "provenance": {
+            "$ref": "#/components/schemas/SolutionProvenanceResource"
+          },
+          "revision": {
+            "description": "Canonical positive decimal u64; a string prevents browser precision loss.",
+            "type": "string"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "scientific_assessment": {
+            "$ref": "#/components/schemas/SolutionScientificAssessmentResource"
+          },
+          "solution_set_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "project_id",
+          "run_id",
+          "solution_set_id",
+          "revision",
+          "manifest_digest",
+          "manifest_state",
+          "execution_status",
+          "scientific_assessment",
+          "provenance",
+          "member_count",
+          "artifact_count",
+          "coverage_count"
+        ],
+        "type": "object"
       },
       "SolverEnergyCurrentResource": {
         "properties": {
@@ -36867,6 +37347,240 @@
           },
           "409": {
             "description": "Run belongs to another project"
+          }
+        },
+        "tags": [
+          "persistence"
+        ]
+      }
+    },
+    "/v2/persistence/projects/{project_id}/runs/{run_id}/solution-sets/{solution_set_id}/revisions/{revision}": {
+      "get": {
+        "operationId": "persistence_get_persistence_projects_project_id_runs_run_id_solution_sets_solution_set_id_revisions_revision",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "solution_set_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Canonical positive decimal u64",
+            "in": "path",
+            "name": "revision",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SolutionSetResource"
+                }
+              }
+            },
+            "description": "Pinned historical metadata; no runtime or CAS payload read"
+          },
+          "400": {
+            "description": "Invalid identity or revision"
+          },
+          "404": {
+            "description": "Missing run or solution revision"
+          },
+          "409": {
+            "description": "Project/run ownership mismatch"
+          }
+        },
+        "tags": [
+          "persistence"
+        ]
+      }
+    },
+    "/v2/persistence/projects/{project_id}/runs/{run_id}/solution-sets/{solution_set_id}/revisions/{revision}/members": {
+      "get": {
+        "operationId": "persistence_get_persistence_projects_project_id_runs_run_id_solution_sets_solution_set_id_revisions_revision_members",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "solution_set_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "revision",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "after_member_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Default 50, maximum 100.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SolutionSetMemberPageResource"
+                }
+              }
+            },
+            "description": "Bounded members of an immutable revision"
+          },
+          "400": {
+            "description": "Invalid page boundary"
+          },
+          "404": {
+            "description": "Missing run or solution revision"
+          },
+          "409": {
+            "description": "Ownership mismatch"
+          }
+        },
+        "tags": [
+          "persistence"
+        ]
+      }
+    },
+    "/v2/persistence/projects/{project_id}/runs/{run_id}/solution-sets/{solution_set_id}/revisions/{revision}/members/{member_id}/artifacts": {
+      "get": {
+        "operationId": "persistence_get_persistence_projects_project_id_runs_run_id_solution_sets_solution_set_id_revisions_revision_members_member_id_artifacts",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "solution_set_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "revision",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "member_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "after_artifact_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Default 50, maximum 100.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SolutionSetArtifactPageResource"
+                }
+              }
+            },
+            "description": "Bounded immutable CAS references; integrity is not_verified"
+          },
+          "400": {
+            "description": "Invalid page boundary"
+          },
+          "404": {
+            "description": "Missing revision or member"
+          },
+          "409": {
+            "description": "Ownership mismatch"
           }
         },
         "tags": [

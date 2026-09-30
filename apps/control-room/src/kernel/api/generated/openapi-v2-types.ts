@@ -116,6 +116,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/persistence/projects/{project_id}/runs/{run_id}/solution-sets/{solution_set_id}/revisions/{revision}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["persistence_get_persistence_projects_project_id_runs_run_id_solution_sets_solution_set_id_revisions_revision"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/persistence/projects/{project_id}/runs/{run_id}/solution-sets/{solution_set_id}/revisions/{revision}/members": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["persistence_get_persistence_projects_project_id_runs_run_id_solution_sets_solution_set_id_revisions_revision_members"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/persistence/projects/{project_id}/runs/{run_id}/solution-sets/{solution_set_id}/revisions/{revision}/members/{member_id}/artifacts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["persistence_get_persistence_projects_project_id_runs_run_id_solution_sets_solution_set_id_revisions_revision_members_member_id_artifacts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/persistence/projects/{project_id}/runs/{run_id}/tasks/{task_id}/cancellation": {
         parameters: {
             query?: never;
@@ -11023,6 +11071,8 @@ export interface components {
         SceneTransportExecutionMode: "strict" | "extended";
         /** @enum {string} */
         SceneTransportPrecision: "single" | "double";
+        /** @enum {string} */
+        ScientificAssessmentStatusResource: "converged" | "tolerance_not_met" | "limit_reached" | "invalid" | "unassessed";
         ScratchSceneDocumentResource: {
             objects: components["schemas"]["SceneObjectResource"][];
             /** Format: int64 */
@@ -11502,6 +11552,122 @@ export interface components {
         SlonczewskiRealizationKind: "thin_layer_homogenized";
         /** @enum {string} */
         SlonczewskiRealizationVersion: "slonczewski_thin_layer_homogenized.v1";
+        SolutionAcceptedStateIdResource: {
+            accepted_step: string;
+            clock_digest: string;
+            domain_digest: string;
+            plan_digest: string;
+            run_id: string;
+            stage_id?: string | null;
+            state_digest: string;
+        };
+        /** @enum {string} */
+        SolutionArtifactIntegrityStatusResource: "not_verified";
+        /** @enum {string} */
+        SolutionArtifactKindResource: "state" | "trajectory" | "modal" | "frequency_response" | "table" | "diagnostic" | "quality_report" | "other";
+        /** @enum {string} */
+        SolutionCoverageStateResource: "complete" | "partial" | "unknown";
+        SolutionCoverageSummaryResource: {
+            committed_samples: string;
+            expected_samples?: string | null;
+            /** Format: int64 */
+            segment_count: number;
+            state: components["schemas"]["SolutionCoverageStateResource"];
+        };
+        /** @enum {string} */
+        SolutionExecutionStatusResource: "running" | "succeeded" | "failed" | "cancelled" | "interrupted";
+        SolutionProvenanceResource: {
+            acquisition_digest: string;
+            discretization_digest: string;
+            model_digest: string;
+            physics_digest: string;
+            resolved_plan_digest: string;
+            run_spec_digest: string;
+            seed_digest?: string | null;
+        };
+        SolutionScientificAssessmentResource: {
+            /** Format: int64 */
+            evidence_artifact_count: number;
+            reason?: string | null;
+            status: components["schemas"]["ScientificAssessmentStatusResource"];
+        };
+        SolutionSetArtifactPageQuery: {
+            after_artifact_id?: string | null;
+            /** @description Default 50, maximum 100. */
+            limit?: number | null;
+        };
+        SolutionSetArtifactPageResource: {
+            items: components["schemas"]["SolutionSetArtifactResource"][];
+            manifest_digest: string;
+            member_id: string;
+            next_after_artifact_id?: string | null;
+            project_id: string;
+            revision: string;
+            run_id: string;
+            schema_version: string;
+            solution_set_id: string;
+        };
+        SolutionSetArtifactResource: {
+            accepted_state?: null | components["schemas"]["SolutionAcceptedStateIdResource"];
+            artifact_id: string;
+            /** @description Canonical decimal u64, preserved without rounding. */
+            byte_length: string;
+            coverage?: null | components["schemas"]["SolutionCoverageSummaryResource"];
+            integrity: components["schemas"]["SolutionArtifactIntegrityStatusResource"];
+            kind: components["schemas"]["SolutionArtifactKindResource"];
+            object_ref: string;
+            schema_id: string;
+            scientific_evidence: boolean;
+        };
+        /** @enum {string} */
+        SolutionSetManifestStateResource: "open" | "closed";
+        SolutionSetMemberPageQuery: {
+            after_member_id?: string | null;
+            /** @description Default 50, maximum 100. */
+            limit?: number | null;
+        };
+        SolutionSetMemberPageResource: {
+            items: components["schemas"]["SolutionSetMemberResource"][];
+            manifest_digest: string;
+            next_after_member_id?: string | null;
+            project_id: string;
+            revision: string;
+            run_id: string;
+            schema_version: string;
+            solution_set_id: string;
+        };
+        SolutionSetMemberResource: {
+            /** Format: int64 */
+            artifact_count: number;
+            attempt_id: string;
+            case_id?: string | null;
+            execution_status: components["schemas"]["SolutionExecutionStatusResource"];
+            member_id: string;
+            /** @description Canonical decimal u64, preserved without rounding. */
+            ownership_epoch: string;
+            scientific_assessment: components["schemas"]["SolutionScientificAssessmentResource"];
+            stage_id: string;
+            task_id: string;
+        };
+        SolutionSetResource: {
+            /** Format: int64 */
+            artifact_count: number;
+            /** Format: int64 */
+            coverage_count: number;
+            execution_status: components["schemas"]["SolutionExecutionStatusResource"];
+            manifest_digest: string;
+            manifest_state: components["schemas"]["SolutionSetManifestStateResource"];
+            /** Format: int64 */
+            member_count: number;
+            project_id: string;
+            provenance: components["schemas"]["SolutionProvenanceResource"];
+            /** @description Canonical positive decimal u64; a string prevents browser precision loss. */
+            revision: string;
+            run_id: string;
+            schema_version: string;
+            scientific_assessment: components["schemas"]["SolutionScientificAssessmentResource"];
+            solution_set_id: string;
+        };
         SolverEnergyCurrentResource: {
             /** Format: double */
             anisotropy: number;
@@ -13419,6 +13585,154 @@ export interface operations {
                 content?: never;
             };
             /** @description Run belongs to another project */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    persistence_get_persistence_projects_project_id_runs_run_id_solution_sets_solution_set_id_revisions_revision: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                run_id: string;
+                solution_set_id: string;
+                /** @description Canonical positive decimal u64 */
+                revision: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Pinned historical metadata; no runtime or CAS payload read */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SolutionSetResource"];
+                };
+            };
+            /** @description Invalid identity or revision */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing run or solution revision */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Project/run ownership mismatch */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    persistence_get_persistence_projects_project_id_runs_run_id_solution_sets_solution_set_id_revisions_revision_members: {
+        parameters: {
+            query?: {
+                after_member_id?: string;
+                /** @description Default 50, maximum 100. */
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+                run_id: string;
+                solution_set_id: string;
+                revision: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Bounded members of an immutable revision */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SolutionSetMemberPageResource"];
+                };
+            };
+            /** @description Invalid page boundary */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing run or solution revision */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Ownership mismatch */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    persistence_get_persistence_projects_project_id_runs_run_id_solution_sets_solution_set_id_revisions_revision_members_member_id_artifacts: {
+        parameters: {
+            query?: {
+                after_artifact_id?: string;
+                /** @description Default 50, maximum 100. */
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+                run_id: string;
+                solution_set_id: string;
+                revision: string;
+                member_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Bounded immutable CAS references; integrity is not_verified */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SolutionSetArtifactPageResource"];
+                };
+            };
+            /** @description Invalid page boundary */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing revision or member */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Ownership mismatch */
             409: {
                 headers: {
                     [name: string]: unknown;
