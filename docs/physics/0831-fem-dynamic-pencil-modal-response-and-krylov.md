@@ -1717,3 +1717,44 @@ FDM CPU/GPU: nie dotyczy artefaktu Tet4. Kwalifikacja nadal NOT VERIFIED.
 |---|---|---|
 | scripts/validate_de_physical_potential.py | _validate_source_mesh_binding | Fingerprint kanonicznej topologii z metadata |
 | packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py | topology_fingerprint_v3 | Istniejący kontrakt v3; bez kopii algorytmu |
+
+(oracle-exchange-free-de-limit)=
+## Kontrola dokładnej granicy magnetostatycznej DE
+
+Dla jednorodnego, symetrycznego filmu otoczonego próżnią, magnetyzacji
+w płaszczyźnie, $\mathbf{k}\perp\mathbf{m}_0$, zerowej wymiany $A=0$,
+bez anizotropii i tłumienia, magnetostatyczna gałąź powierzchniowa spełnia:
+
+```{math}
+:label: eq-oracle-exchange-free-de-limit
+f^2=\left(\frac{\gamma_0}{2\pi\mu_0}\right)^2
+\left[B_0(B_0+\mu_0 M_s)+\frac{(\mu_0 M_s)^2}{4}
+\left(1-e^{-2|k|t}\right)\right].
+```
+
+Symbole i jednostki $f$, $\gamma_0$, $\mu_0$, $B_0$, $M_s$, $k$, $t$
+zdefiniowano w tabeli oracle powyżej. Wzór wynika z liniowego LL i
+magnetostatycznych warunków otwartej powierzchni; źródło pierwotne:
+Damon i Eshbach (1961), https://doi.org/10.1016/0022-3697(61)90041-5.
+Dla $k=0$ redukuje się do Kittela, a dla dużego $|k|t$ do częstotliwości
+pola $B_0+\mu_0M_s/2$. Obliczenie małego argumentu używa expm1.
+
+Regresja porównuje najwyższą dodatnią częstotliwość oracle przy $A=0$
+z tym niezależnym wzorem dla $|k|t=0.25,1,2$ i N=8/16/32.
+W granicy bez wymiany jest to wydzielona gałąź powierzchniowa; nie wolno
+wybierać tu najniższego modu ani przenosić tego wyboru na $A>0$.
+Największy względny błąd przy N=32 wyniósł 1.5513451168125414e-7;
+liczba funkcji i błąd truncation pozostają jawne. Osobny test Γ sprawdza
+brak sztucznego rozszczepienia przy $A=0$.
+
+Siedem lekkich testów oracle PASS. Raport, PNG i PDF:
+scientific-batches/exchange-free-de-oracle-20260930. Nie zmienia to
+solvera, kryterium residualu, DSL ani ProblemIR. FDM CPU/GPU i FEM GPU:
+bez nowego dowodu wykonania; FEM CPU: referencja pomocnicza, nie managed FEM.
+Kontrola nie kwalifikuje skończonego airboxu, Poissona ani produkcyjnego
+benchmarku z niezerową wymianą. Status pozostaje diagnostic_oracle_only_not_FEM.
+
+| Źródło | Owner | Kontrakt |
+|---|---|---|
+| scripts/test_thin_film_thickness_oracle.py | test_exchange_free_surface_branch_converges_to_exact_damon_eshbach | Niezależny wzór DE dla A=0 i zbieżność N |
+| scripts/test_thin_film_thickness_oracle.py | test_exchange_free_gamma_limit_has_no_artificial_basis_splitting | Kittel w Γ, wszystkie mody bez wymiany |

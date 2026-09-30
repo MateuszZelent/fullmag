@@ -67,6 +67,34 @@ class ThicknessOracleTests(unittest.TestCase):
             f32q256 = self.solve(geometry,25e6,32,q=256)['modes'][0]['frequency_hz']
             self.assertLess(abs(f32/f32q256-1),1e-10)
 
+    def test_exchange_free_surface_branch_converges_to_exact_damon_eshbach(self):
+        # Magnetostatic open-film DE branch, not the lowest dipole-exchange band.
+        field, magnetization = PARAMETERS["bias_t"], MU0 * PARAMETERS["ms_a_m"]
+        conversion = PARAMETERS["gamma0_m_a_s"] / (2 * math.pi * MU0)
+        for kt in (0.25, 1.0, 2.0):
+            exact = conversion * math.sqrt(field * (field + magnetization)
+                + magnetization**2 / 4 * (-math.expm1(-2 * kt)))
+            errors = []
+            for n in (8, 16, 32):
+                report = self.solve("DE", kt / PARAMETERS["thickness_m"], n=n, q=256,
+                                    exchange_j_m=0.)
+                # At A=0 the isolated surface branch is the highest positive mode.
+                surface = report["modes"][-1]
+                errors.append(abs(surface["frequency_hz"] / exact - 1))
+                self.assertLess(surface["oracle_residual_relative_l2"], 1e-12)
+            with self.subTest(kt=kt):
+                self.assertLess(errors[1], errors[0])
+                self.assertLess(errors[2], errors[1])
+                self.assertLess(errors[2], 2e-7)
+
+    def test_exchange_free_gamma_limit_has_no_artificial_basis_splitting(self):
+        expected = PARAMETERS["gamma0_m_a_s"] / (2 * math.pi * MU0) * math.sqrt(
+            PARAMETERS["bias_t"] * (PARAMETERS["bias_t"] + MU0 * PARAMETERS["ms_a_m"]))
+        for geometry in ("DE", "BV"):
+            report = self.solve(geometry, 0., n=8, exchange_j_m=0.)
+            for mode in report["modes"]:
+                self.assertLess(abs(mode["frequency_hz"] / expected - 1), 2e-12)
+
     def test_rejects_invalid_parameters_without_silent_defaults(self):
         for key in PARAMETERS:
             for bad in (True,float('nan'),float('inf')):

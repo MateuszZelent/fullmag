@@ -176,7 +176,8 @@
         "source-thickness-oracle-matrices",
         "source-thickness-oracle-solve"
       ]
-    }
+    },
+    {"id": "eq-oracle-exchange-free-de-limit", "symbols": ["thickness_f", "thickness_gamma", "thickness_mu0", "thickness_B0", "thickness_Ms", "thickness_k", "thickness_t"], "sources": ["source-oracle-exact-de-limit", "source-thickness-oracle-solve"]}
   ],
   "symbols": [
     {"id": "position", "latex": "$\\mathbf r$", "meaning": "spatial position", "si_unit": "$\\mathrm{m}$"},
@@ -574,7 +575,9 @@
     {"id": "source-physical-potential-bound-pilot", "path": "scripts/run_de_100nm_pilot.py", "symbol": "validate_smoke_potential_fields", "responsibility": "Requires mode metadata and a consistent declared binding for each published potential.", "evidence_status": "python_regression_verified"},
     {"id": "source-physical-potential-binding-regression", "path": "scripts/test_de_physical_potential.py", "symbol": "class PhysicalPotentialValidatorTests", "responsibility": "Tests mismatched indices/hashes, sidecar paths, malformed identities and duplicate JSON.", "evidence_status": "python_regression_verified"},
     {"id": "source-potential-source-mesh-binding", "path": "scripts/validate_de_physical_potential.py", "symbol": "_validate_source_mesh_binding", "responsibility": "Recomputes canonical source topology v3 from metadata without coercing connectivity."},
-    {"id": "source-potential-canonical-topology-v3", "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py", "symbol": "topology_fingerprint_v3", "responsibility": "Existing canonical topology hash implementation reused by artifact validation."}
+    {"id": "source-potential-canonical-topology-v3", "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py", "symbol": "topology_fingerprint_v3", "responsibility": "Existing canonical topology hash implementation reused by artifact validation."},
+    {"id": "source-oracle-exact-de-limit", "path": "scripts/test_thin_film_thickness_oracle.py", "symbol": "test_exchange_free_surface_branch_converges_to_exact_damon_eshbach", "responsibility": "Tests exchange-free DE surface branch against the independent exact dispersion and basis convergence."},
+    {"id": "source-oracle-gamma-exchange-free-limit", "path": "scripts/test_thin_film_thickness_oracle.py", "symbol": "test_exchange_free_gamma_limit_has_no_artificial_basis_splitting", "responsibility": "Tests Kittel degeneracy at Gamma with zero exchange."}
   ],
   "public_api": {
     "parameters": [
