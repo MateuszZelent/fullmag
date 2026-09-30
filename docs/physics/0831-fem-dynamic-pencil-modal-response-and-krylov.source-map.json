@@ -86,6 +86,42 @@
       "id": "eq-fem-waveguide-envelope-demag",
       "symbols": ["shifted_gradient", "wave_number", "propagation_axis", "potential", "dynamic_magnetization_transverse", "demag_field", "gradient", "complex_operators"],
       "sources": ["source-waveguide-envelope-contract", "source-tetrax-boundary", "source-floquet-waveguide-demag-k"]
+    },
+    {
+      "id": "eq-de-bv-profile-consistent-mass",
+      "symbols": [
+        "profile_vectors",
+        "profile_wavevector",
+        "profile_positions",
+        "profile_tetra",
+        "profile_mass",
+        "profile_overlap",
+        "profile_inner_product"
+      ],
+      "sources": [
+        "source-profile-packing",
+        "source-profile-mass",
+        "source-profile-overlap",
+        "source-profile-mass-regression"
+      ]
+    },
+    {
+      "id": "eq-de-bv-profile-overlap",
+      "symbols": [
+        "profile_vectors",
+        "profile_wavevector",
+        "profile_positions",
+        "profile_tetra",
+        "profile_mass",
+        "profile_overlap",
+        "profile_inner_product"
+      ],
+      "sources": [
+        "source-profile-packing",
+        "source-profile-mass",
+        "source-profile-overlap",
+        "source-profile-mass-regression"
+      ]
     }
   ],
   "symbols": [
@@ -134,7 +170,49 @@
     {"id": "test_function", "latex": "$v$", "meaning": "scalar-potential test function", "si_unit": "$1$"},
     {"id": "lattice_vector", "latex": "$\\mathbf R$", "meaning": "lattice translation of the periodic envelope", "si_unit": "$\\mathrm{m}$"},
     {"id": "volume_measure", "latex": "$\\mathrm dV$", "meaning": "volume integration measure", "si_unit": "$\\mathrm{m^3}$"},
-    {"id": "dynamic_magnetization_transverse", "latex": "$\\delta\\mathbf M_\\perp$, $\\delta M_z$", "meaning": "transverse and longitudinal components of the dynamic magnetization in a waveguide section", "si_unit": "$\\mathrm{A\\,m^{-1}}$"}
+    {"id": "dynamic_magnetization_transverse", "latex": "$\\delta\\mathbf M_\\perp$, $\\delta M_z$", "meaning": "transverse and longitudinal components of the dynamic magnetization in a waveguide section", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {
+      "id": "profile_vectors",
+      "latex": "$u_i,v_i,m_i$",
+      "meaning": "Zespolone wektory węzłowe; $m_i$ jest polem Blocha, $u_i,v_i$ jego odfazowanymi profilami. Normalizacja amplitudy jest dowolna i znosi się w $C$.",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "profile_wavevector",
+      "latex": "$\\mathbf{k}$",
+      "meaning": "Wektor falowy.",
+      "si_unit": "$\\mathrm{rad\\,m^{-1}}$"
+    },
+    {
+      "id": "profile_positions",
+      "latex": "$\\mathbf{r}_i$",
+      "meaning": "Pozycja węzła w końcowej kolejności solvera.",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "profile_tetra",
+      "latex": "$T,a,b,V_T$",
+      "meaning": "Tetraedr magnetyczny, lokalne indeksy węzłów i jego dodatnia objętość.",
+      "si_unit": "$1,1,1,\\mathrm{m^3}$"
+    },
+    {
+      "id": "profile_mass",
+      "latex": "$M_T$",
+      "meaning": "Dokładna lokalna macierz masy liniowego tetraedru dla iloczynu wektorów.",
+      "si_unit": "$\\mathrm{m^3}$"
+    },
+    {
+      "id": "profile_overlap",
+      "latex": "$\\delta_{ab},\\mathrm{i},C$",
+      "meaning": "Delta Kroneckera, jednostka urojona i kwadrat znormalizowanego nakładania.",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "profile_inner_product",
+      "latex": "$\\langle u,v\\rangle_M$",
+      "meaning": "Iloczyn skalarny FE ograniczony do filmu magnetycznego.",
+      "si_unit": "$\\mathrm{m^3}$"
+    }
   ],
   "sources": [
     {"id": "source-python-eigen-stage", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "eigenmodes_stage", "responsibility": "Capture the public stage-first modal request."},
@@ -160,7 +238,31 @@
     {"id": "source-floquet-native-prolongation", "path": "backends/fem/cpu/frequency_domain/operators/floquet_magnetic_operator.hpp", "symbol": "class FloquetTangentProlongation", "responsibility": "Provide the newly added foundational tangent-space Floquet prolongation contract; it is uncompiled, unvalidated and not connected to the solver ABI."},
     {"id": "source-floquet-native-reduced-operator", "path": "backends/fem/cpu/frequency_domain/operators/floquet_magnetic_operator.hpp", "symbol": "class FloquetReducedMagneticOperator", "responsibility": "Provide the newly added foundational C^H A C operator boundary; it is uncompiled, unvalidated and not connected to the solver ABI."},
     {"id": "source-floquet-dynamic-demag-k", "path": "backends/fem/include/frequency_domain/floquet_dynamic_demag_k.hpp", "symbol": "build_floquet_dynamic_demag_k_real_split", "responsibility": "Provide the bounded dense Schur oracle for complex nonzero-k dynamic demagnetization; mesh assembly and production qualification remain separate.", "evidence_status": "source_visible / unvalidated"},
-    {"id": "source-floquet-waveguide-demag-k", "path": "backends/fem/include/frequency_domain/floquet_waveguide_demag_k.hpp", "symbol": "build_floquet_waveguide_demag_k_real_split", "responsibility": "Provide the bounded 2.5D modified-Helmholtz and Schur oracle; transverse MFEM assembly and open-boundary convergence remain separate.", "evidence_status": "source_visible / unvalidated"}
+    {"id": "source-floquet-waveguide-demag-k", "path": "backends/fem/include/frequency_domain/floquet_waveguide_demag_k.hpp", "symbol": "build_floquet_waveguide_demag_k_real_split", "responsibility": "Provide the bounded 2.5D modified-Helmholtz and Schur oracle; transverse MFEM assembly and open-boundary convergence remain separate.", "evidence_status": "source_visible / unvalidated"},
+    {
+      "id": "source-profile-packing",
+      "path": "scripts/compare_de_bv_mode_profiles.py",
+      "symbol": "pack_single_film_mesh",
+      "responsibility": "Recover single-film final ordered topology before comparing fields"
+    },
+    {
+      "id": "source-profile-mass",
+      "path": "scripts/compare_de_bv_mode_profiles.py",
+      "symbol": "consistent_inner_product",
+      "responsibility": "Exact consistent P1 tetrahedral mass inner product"
+    },
+    {
+      "id": "source-profile-overlap",
+      "path": "scripts/compare_de_bv_mode_profiles.py",
+      "symbol": "normalized_overlap",
+      "responsibility": "Phase- and scale-invariant squared overlap"
+    },
+    {
+      "id": "source-profile-mass-regression",
+      "path": "scripts/test_compare_de_bv_mode_profiles.py",
+      "symbol": "test_exact_p1_basis_mass_differs_from_lumping",
+      "responsibility": "Independent analytical P1 basis mass check distinguishes consistent from lumped mass"
+    }
   ],
   "public_api": {
     "parameters": [

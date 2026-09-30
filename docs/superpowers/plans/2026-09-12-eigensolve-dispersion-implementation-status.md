@@ -1,5 +1,37 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
+## Najnowszy checkpoint — 2026-09-30: dopuszczanie runtime i profile DE/BV
+
+Ta sekcja ma pierwszeństwo przed starszymi checkpointami poniżej.
+
+- Kontrola source snapshot z query biblioteki działa przy publikacji runtime,
+  walidacji receipt i starcie benchmarku. 64 testy Python PASS; etap zapisany
+  na remote w 58252aa7d6c0aa3f1f8e15c6e5469fb6b0201a32.
+- S06: odtworzono końcową kolejność siatki przez pack_mesh_by_analysis;
+  fingerprint v3 zgadza się bitowo dla wszystkich 19 zapisanych modów.
+  17 sąsiednich par consistent-mass: minimum DE 0.9990210150751552,
+  BV 0.9999361809765960. 7 regresji Python PASS; source-map exit 0;
+  10 kontroli dokumentacji matematycznej PASS. Nie zmieniono trackera.
+- Jest to diagnostyczny dowód podobieństwa profili po odfazowaniu Blocha,
+  nie dowód kompletności widma ani pełnej kwalifikacji gałęzi.
+- Nadal 19 zaakceptowanych historycznych punktów FEM (9 DE, 10 BV),
+  bez zaakceptowanego Gamma i DE k12. Nowe punkty nie zostały policzone.
+  Kolejne próbkowanie: docelowo po 26 punktów od 0 do 25 rad/µm co 1.
+- Nowy managed runtime poprawek native nadal NOT VERIFIED. #171 jest
+  terminalnie succeeded/exit 0, ale jego biblioteka nie dowodzi tych poprawek.
+  Ostatni odczyt: 4 931 870 720 B wolnego, próg 8 GiB; runtime-only v1/v2
+  poza allow-list. Zakaz kompilacji unit tests pozostaje w mocy.
+  Oczekujemy wcześniej zadanych decyzji operatora o cleanupie i profilu.
+- C0/C1 Gamma/nonzero-k, A1/COMSOL, zbieżność siatki/airboxu/liczby modów,
+  pełny tracking, artefakty/API/UI, 2.5D, interakcje lokalne, GPU i integracja
+  pozostają odrębnymi wymaganiami całego S00–S12; cel nie jest zakończony.
+
+Dowody: [dopuszczanie runtime](../../audits/2026-09-30-managed-fem-runtime-admission.md)
+i [tożsamość siatki oraz profile](../../audits/2026-09-30-de-bv-mode-mesh-preflight.md).
+Wynik odtwarzalny skryptem scripts/compare_de_bv_mode_profiles.py:
+consistent-mass-mode-profiles-final.json w katalogu wizualizacji de-bv-ten-20260930.
+
+
 ## Managed DE-SMOKE: diagnostyka faktoryzacji — 2026-09-23
 
 Build `9024007447fe4ec1b7fe9a4b1c76b61e` ze źródła

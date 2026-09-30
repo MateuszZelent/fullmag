@@ -1006,3 +1006,63 @@ visibility into runtime qualification.
 | MFEM Floquet airbox bridge | FEM CPU planned | `backends/fem/cpu/frequency_domain/floquet_airbox_operator.hpp` + `assemble_floquet_airbox_dynamic_demag_k` | Materialize bounded `C(k)^H P_full(k) C(k)` and `C(k)^H A_{phi q}` blocks, then delegate Schur elimination to the dynamic demag-k provider; production mesh assembly and capability promotion remain separate. | `fem_floquet_airbox_operator_contract` source is present; compile/runtime unvalidated | source visible; uncompiled/unvalidated | repository source |
 | Waveguide nonzero-k demagnetization oracle | FEM CPU planned | `backends/fem/include/frequency_domain/floquet_waveguide_demag_k.hpp` + `build_floquet_waveguide_demag_k_real_split` | Provide the bounded 2.5D modified-Helmholtz and Schur oracle; transverse MFEM assembly and open-boundary convergence remain separate. | `fem_floquet_waveguide_demag_k_contract` source is present; compile/runtime unvalidated | source visible; uncompiled/unvalidated | repository source |
 | Existing shared-domain Poisson owner | FEM CPU | `backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.hpp` + `assemble_poisson_airbox_shared_domain` | Preserve the existing K0/shared-domain assembly boundary while nonzero-k demag remains gated. | existing source contract tests | source visible; nonzero-k physics unvalidated | repository source |
+
+
+## Diagnostyka consistent-mass zapisanych modów DE/BV
+
+<!-- DOC-ANCHOR:de-bv-consistent-mass-profile -->
+
+Ta diagnostyka offline nie zmienia solvera, Python DSL ani ProblemIR.
+Dotyczy wyłącznie zaakceptowanych modów FEM CPU, P1 tet4, jednego filmu
+z jednorodnym materiałem i konwencją przestrzenną exp_minus_i_k_dot_delta_r.
+FEM GPU i FDM CPU/GPU nie są przez ten skrypt walidowane.
+Przed użyciem pola odtwarza się pakowanie filmu/powietrza z
+`crates/fullmag-plan/src/mesh.rs` + `pack_mesh_by_analysis` i wymaga
+bitowo zgodnego fingerprintu v3 końcowej topologii oraz hashy payloadów.
+Nie wystarcza zgodna liczba węzłów. Inne markery lub topologie są odrzucane.
+
+```{math}
+:label: eq-de-bv-profile-consistent-mass
+u_i=\exp(+\mathrm{i}\mathbf{k}\cdot\mathbf{r}_i)m_i,\qquad
+(M_T)_{ab}=\frac{V_T}{20}(1+\delta_{ab}),\qquad
+\langle u,v\rangle_M=\sum_T\sum_{a,b=1}^4 (M_T)_{ab}u_a^\mathsf{H}v_b.
+```
+
+```{math}
+:label: eq-de-bv-profile-overlap
+C(u,v)=\frac{|\langle u,v\rangle_M|^2}
+{\langle u,u\rangle_M\langle v,v\rangle_M}.
+```
+
+| Token | Znaczenie | Jednostka SI |
+|---|---|---|
+| $u_i,v_i,m_i$ | Zespolone wektory węzłowe; $m_i$ jest polem Blocha, $u_i,v_i$ jego odfazowanymi profilami. Normalizacja amplitudy jest dowolna i znosi się w $C$. | $1$ |
+| $\mathbf{k}$ | Wektor falowy. | $\mathrm{rad\,m^{-1}}$ |
+| $\mathbf{r}_i$ | Pozycja węzła w końcowej kolejności solvera. | $\mathrm{m}$ |
+| $T,a,b,V_T$ | Tetraedr magnetyczny, lokalne indeksy węzłów i jego dodatnia objętość. | $1,1,1,\mathrm{m^3}$ |
+| $M_T$ | Dokładna lokalna macierz masy liniowego tetraedru dla iloczynu wektorów. | $\mathrm{m^3}$ |
+| $\delta_{ab},\mathrm{i},C$ | Delta Kroneckera, jednostka urojona i kwadrat znormalizowanego nakładania. | $1$ |
+| $\langle u,v\rangle_M$ | Iloczyn skalarny FE ograniczony do filmu magnetycznego. | $\mathrm{m^3}$ |
+
+Macierz masy jest consistent, nie lumped. Jednorodny czynnik materiałowy
+znosi się w normalizacji; materiał niejednorodny wymaga odrębnej metryki.
+Odfazowanie wartości węzłowych i ich interpolacja P1 jest diagnostycznym
+przybliżeniem profilu ciągłego, nie dokładnym mnożeniem funkcji FE przez
+wykładniczą funkcję w całym tetraedrze. Wynik jest niezmienniczy na globalną
+fazę i skalę. Porównujemy sąsiednie zapisane mody i projekcję na stały wektor.
+Wysokie $C$ wspiera ciągłość profilu, ale nie dowodzi najniższej gałęzi,
+kompletności widma, braku degeneracji ani zbieżności siatki/airboxu.
+
+Źródła implementacji: `scripts/compare_de_bv_mode_profiles.py` +
+`pack_single_film_mesh`, `consistent_inner_product`, `normalized_overlap`.
+Regresje: `scripts/test_compare_de_bv_mode_profiles.py`.
+To zapisany postprocessing zaakceptowanych historycznych runów, nie wykonanie
+nowego native runtime i nie kwalifikacja A1/COMSOL ani GPU.
+
+
+| Id | Źródło | Symbol | Odpowiedzialność |
+|---|---|---|---|
+| `source-profile-packing` | `scripts/compare_de_bv_mode_profiles.py` | `pack_single_film_mesh` | Recover single-film final ordered topology before comparing fields |
+| `source-profile-mass` | `scripts/compare_de_bv_mode_profiles.py` | `consistent_inner_product` | Exact consistent P1 tetrahedral mass inner product |
+| `source-profile-overlap` | `scripts/compare_de_bv_mode_profiles.py` | `normalized_overlap` | Phase- and scale-invariant squared overlap |
+| `source-profile-mass-regression` | `scripts/test_compare_de_bv_mode_profiles.py` | `test_exact_p1_basis_mass_differs_from_lumping` | Independent analytical P1 basis mass check distinguishes consistent from lumped mass |

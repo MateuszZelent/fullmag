@@ -40,3 +40,45 @@ w katalogu wizualizacji de-bv-ten-20260930 tego wątku. Zawiera ścieżki,
 hashe metadanych i pola każdego modu oraz cache siatki.
 Nie zmieniono wyników, frequency/residual ani historycznych receipt.
 Kwalifikacja naukowa i ciągłość gałęzi: NOT VERIFIED.
+
+
+## Rozwiązanie tożsamości i wynik — kolejny checkpoint 2026-09-30
+
+Powyższy brak bezpośredniej zgodności manifestów został wyjaśniony.
+Planner pack_mesh_by_analysis umieszcza najpierw węzły magnetyczne,
+a następnie węzły powietrza; przemapowuje komórki, facety i pary okresowe.
+Odtworzenie tej transformacji dla pojedynczego filmu daje dokładnie
+modalny fingerprint v3 we wszystkich 19 runach. Nie zmieniono cache ani pól.
+W L0 przestawionych jest 668 z 1980 węzłów; film ma 76 węzłów i 191 tetraedrów.
+Objętość filmu z elementów wynosi 1.599999999999999e-23 m³.
+
+Dodano scripts/compare_de_bv_mode_profiles.py. Skrypt sprawdza hashe
+artefaktów comparison.json, certyfikat full_descriptor, oryginalną bramkę
+residualu 1e-8, częstotliwość i wektor k, format i hash payloadu oraz
+fingerprint końcowej uporządkowanej topologii. Obsługuje tylko pojedynczy
+jednorodny film, tet4/tri3 z markerami 1/0. Inne przypadki odrzuca.
+
+Zastosowano consistent mass P1, nie masę lumped. Wartości węzłowe
+odfazowano exp(+i k.r), a następnie porównano ich interpolanty P1.
+Definicja i ograniczenia: docs/physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md,
+DOC-ANCHOR:de-bv-consistent-mass-profile. Nie zmienia to produkcyjnego trackera.
+
+| Konfiguracja | Liczba modów / par | Minimalny kwadrat nakładania sąsiednich profili | Zakres projekcji na stały wektor |
+|---|---:|---:|---:|
+| DE | 9 / 8 | 0.9990210150751552 | 0.9999098186640367–0.9999996102692768 |
+| BV | 10 / 9 | 0.9999361809765960 | 0.9999752707481893–0.9999998865149904 |
+
+Wynik wspiera podobną, niemal jednorodną rodzinę profili. Nie dowodzi
+najniższej gałęzi, kompletności widma, braku degeneracji, pokrycia DE k12
+ani zbieżności. S06 nadal wymaga produkcyjnego trackingu i jego bramek.
+Dotychczasowych diagnostyk lumped nie należy utożsamiać z tym wynikiem.
+
+7 regresji Python PASS: analityczna macierz masy baz P1, stały profil,
+niezmienniczość fazy/skali, hermitowskość, ortogonalne komponenty,
+odrzucenie zerowej normy/nonfinite/degenerate, przemapowanie indeksów
+i immutable ordinals, niewłaściwa topologia/markery oraz containment.
+Source-map noty: exit 0; kontrakty dokumentacji matematycznej: 10 PASS.
+Nie kompilowano testów natywnych i nie uruchamiano nowych solve.
+
+Pełne wyniki i hashe: consistent-mass-mode-profiles-final.json obok comparison.json
+w katalogu wizualizacji de-bv-ten-20260930. Kwalifikacja pozostaje NOT VERIFIED.
