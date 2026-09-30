@@ -9,6 +9,8 @@ import fullmag as fm
 @pytest.mark.parametrize("sampling,vector,window", [
     ("k25", [0,25e6,0], (12e9,16e9)),
     ("bv-k25", [25e6,0,0], (8.5e9,12e9)),
+    *[(f"k{k}", [0,k*1e6,0], (8.5e9,16e9 if k >= 15 else 12e9)) for k in (5,10,15,20)],
+    *[(f"bv-k{k}", [k*1e6,0,0], (8.5e9,12e9)) for k in (2,5,10,15,20)],
 ])
 def test_same_physics_and_explicit_propagation(monkeypatch,sampling,vector,window):
     monkeypatch.setenv("FULLMAG_DE_SMOKE_SAMPLING",sampling)

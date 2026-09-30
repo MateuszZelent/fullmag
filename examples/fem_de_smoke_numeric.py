@@ -13,21 +13,21 @@ import os
 import fullmag as fm
 
 SAMPLING = os.environ.get("FULLMAG_DE_SMOKE_SAMPLING", "two")
-if SAMPLING not in ("two", "five", "k0", "k2", "k25", "bv-k25", "positive-six", "bv-positive-six", "signed-eleven"):
-    raise ValueError("FULLMAG_DE_SMOKE_SAMPLING must be two, five, k0, k2, k25, bv-k25, positive-six, bv-positive-six or signed-eleven")
-KY = ((0.0,) if SAMPLING == "k0" else
-      (2e6,) if SAMPLING == "k2" else
-      (25e6,) if SAMPLING in ("k25", "bv-k25") else
+if SAMPLING not in ("two", "five", "k0", "k2", "k25", "bv-k25", "k5", "k10", "k15", "k20", "bv-k2", "bv-k5", "bv-k10", "bv-k15", "bv-k20", "positive-six", "bv-positive-six", "signed-eleven"):
+    raise ValueError(f"Unsupported FULLMAG_DE_SMOKE_SAMPLING: {SAMPLING}")
+_single_k_name = SAMPLING.removeprefix("bv-")
+IS_SINGLE = _single_k_name in ("k0", "k2", "k5", "k10", "k15", "k20", "k25")
+KY = ((float(_single_k_name[1:]) * 1e6,) if IS_SINGLE else
       (2e6, 5e6, 10e6, 15e6, 20e6, 25e6) if SAMPLING in ("positive-six", "bv-positive-six") else
       (0.0, 2e6) if SAMPLING == "two" else
       (0.0, 1e6, 2e6, 3e6, 5e6) if SAMPLING == "five" else
       (-3e6, -2e6, -1.5e6, -1e6, -0.5e6, 0.0,
        0.5e6, 1e6, 1.5e6, 2e6, 3e6))
-REQUESTED_MODE_COUNT = 1 if SAMPLING in ("k0", "k2", "k25", "bv-k25", "positive-six", "bv-positive-six", "signed-eleven") else 4
+REQUESTED_MODE_COUNT = 1 if IS_SINGLE or SAMPLING in ("positive-six", "bv-positive-six", "signed-eleven") else 4
 IS_BV = SAMPLING.startswith("bv-")
 K_VECTORS = [(k, 0.0, 0.0) if IS_BV else (0.0, k, 0.0) for k in KY]
 FREQUENCY_MIN_HZ = 12e9 if SAMPLING == "k25" else 8.5e9
-FREQUENCY_MAX_HZ = 16e9 if SAMPLING in ("k25", "positive-six") else 12e9
+FREQUENCY_MAX_HZ = 16e9 if (SAMPLING in ("k25", "positive-six") or (IS_SINGLE and not IS_BV and KY[0] >= 15e6)) else 12e9
 RELAX_DT_S = 5e-15
 RELAX_MAX_STEPS = 50000
 RELAX_MAX_TIME_S = RELAX_DT_S * RELAX_MAX_STEPS
@@ -124,7 +124,7 @@ study.stages.add_eigenmodes(
     solver_rtol=EIGEN_SOLVER_RTOL,
     solver_max_outer_iterations=EIGEN_SOLVER_MAX_OUTER_ITERATIONS,
     equilibrium_source="relax", normalization="unit_l2", damping_policy="ignore",
-    **({"k_vector": K_VECTORS[0]} if SAMPLING in ("k0", "k2", "k25", "bv-k25") else
+    **({"k_vector": K_VECTORS[0]} if IS_SINGLE else
        {"k_sampling": fm.KPath(
            points=[fm.KPoint("Gamma" if k == 0 else f"{'BV' if IS_BV else 'DE'}-{k:g}", vector)
                    for k, vector in zip(KY, K_VECTORS)],
