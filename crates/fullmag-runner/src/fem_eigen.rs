@@ -53,11 +53,30 @@ pub fn validate_recomputed_fem_linearization_certificate(
     let reject = |reason: &str| crate::types::RunError {
         message: format!("recomputed_linearization_certificate_invalid: {reason}"),
     };
-    if certificate.schema_version != "RecomputedFemLinearizationCertificate.v1"
+    let has_uniaxial = plan.material.uniaxial_anisotropy.is_some();
+    let (schema, provider, field_schema) = if has_uniaxial {
+        ("RecomputedFemLinearizationCertificate.v2", "native_fem_final_state_refresh.v2",
+         "CertifiedFemEquilibriumFields.v2")
+    } else {
+        ("RecomputedFemLinearizationCertificate.v1", "native_fem_final_state_refresh.v1",
+         "CertifiedFemEquilibriumFields.v1")
+    };
+    if certificate.schema_version != schema
         || certificate.status != "matched"
-        || certificate.recompute_provider != "native_fem_final_state_refresh.v1"
+        || certificate.recompute_provider != provider
+        || certified_fields.schema_version != field_schema
+        || certified_fields.h_anisotropy_a_per_m.is_some() != has_uniaxial
+        || certificate.max_h_anisotropy_difference_a_per_m.is_some() != has_uniaxial
     {
-        return Err(reject("schema, status, or provider mismatch"));
+        return Err(reject("schema, status, provider, or material field mismatch"));
+    }
+    crate::fem::eigen_equilibrium_contract::validate_certified_equilibrium_fields(
+        certified_fields, source_mesh.nodes.len(),
+    )?;
+    if certificate.max_h_anisotropy_difference_a_per_m
+        .is_some_and(|value| !value.is_finite() || value < 0.0)
+    {
+        return Err(reject("anisotropy comparison evidence is non-finite or negative"));
     }
     if certificate.node_count != source_mesh.nodes.len()
         || certificate.node_count != equilibrium_magnetization.len()
@@ -93,11 +112,11 @@ pub fn validate_recomputed_fem_linearization_certificate(
     {
         return Err(reject("material, physics, or boundary signature mismatch"));
     }
-    if certificate.accepted_fields_content_sha256.trim().is_empty()
-        || certificate
-            .accepted_fields_content_sha256
-            .strip_prefix("sha256:")
-            .is_none_or(|digest| digest.len() != 64)
+    // The accepted payload is producer evidence; only the recomputed payload is supplied here.
+    // Verify the accepted digest's syntax without claiming independent accepted-field replay.
+    if certificate.accepted_fields_content_sha256.strip_prefix("sha256:")
+        .is_none_or(|digest| digest.len() != 64
+            || !digest.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)))
         || [
             certificate.max_h_ex_difference_a_per_m,
             certificate.max_h_demag_difference_a_per_m,

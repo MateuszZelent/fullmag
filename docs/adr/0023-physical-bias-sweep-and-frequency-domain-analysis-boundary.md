@@ -147,3 +147,24 @@ producer/consumer equality, legacy v1 bytes and unsupported material views.
 Native unit compilation remains prohibited by the current repository rule;
 source checks do not replace managed build/runtime evidence. Rollback may
 keep Ku planner-gated but must not reuse a Ku-free handoff for Ku.
+
+### Ku-aware static field certificates
+
+Keep the Ku-free CertifiedFemEquilibriumFields.v1 serialization and digest.
+Ku requests publish v2 with a mandatory separate h_anisotropy_a_per_m view,
+a separate digest namespace and exact native CPU decomposition order.
+Unknown schemas or schema/view/material mismatches fail closed. The measured
+H_eff is verified, never replaced by a synthesized sum. The v2 refresh
+certificate binds the anisotropy comparison and both field digests; filenames
+match their actual versions. Existing v1 refresh bytes remain unchanged.
+The shared Rust envelope supports these versioned records and validators
+require coherent schema/optional-field pairs. This is an internal compatibility
+reader, owned by runner types and equilibrium validation; no public Ku
+capability or GPU readiness is promoted by it.
+
+Required owners: runner types, native state_io linearization copy, relaxation
+finalize/refresh producer, eigen handoff and field consumers, and the runtime
+artifact validator. Required regressions cover legacy bytes, independent v2
+binary digest, missing/forged anisotropy, shape/nonfinite errors and measured
+field decomposition. Native unit compilation remains prohibited; runtime
+qualification is still required before promotion.

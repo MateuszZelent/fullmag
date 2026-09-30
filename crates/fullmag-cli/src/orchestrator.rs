@@ -9314,6 +9314,12 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         aggregated_steps.extend(offset_steps);
         let next_continuation_magnetization = stage_result.final_magnetization.clone();
         let next_continuation_completion = stage_result.completion.clone();
+        let native_equilibrium_artifact_paths = match &execution_plan.backend_plan {
+            BackendPlanIR::Fem(plan) => Some(
+                fullmag_runner::CertifiedFemEquilibriumFields::artifact_paths_for_material(&plan.material),
+            ),
+            _ => None,
+        };
         let next_continuation_certified_fields =
             if matches!(&stage.ir.study, fullmag_ir::StudyIR::Relaxation { .. })
                 && matches!(&execution_plan.backend_plan, BackendPlanIR::Fem(_))
@@ -9321,8 +9327,9 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     completion.status == "completed" && completion.converged
                 })
             {
-                let path = current_stage_artifact_dir
-                    .join("equilibrium/certified_fem_equilibrium_fields.v1.json");
+                let path = current_stage_artifact_dir.join(
+                    native_equilibrium_artifact_paths.expect("FEM relaxation plan was checked").0,
+                );
                 let bytes = fs::read(&path).with_context(|| {
                     format!(
                         "accepted native FEM relaxation did not publish {}",
@@ -9343,8 +9350,9 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     completion.status == "completed" && completion.converged
                 })
             {
-                let path = current_stage_artifact_dir
-                    .join("equilibrium/recomputed_fem_linearization_certificate.v1.json");
+                let path = current_stage_artifact_dir.join(
+                    native_equilibrium_artifact_paths.expect("FEM relaxation plan was checked").1,
+                );
                 let bytes = fs::read(&path).with_context(|| {
                     format!(
                         "accepted native FEM relaxation did not publish {}",

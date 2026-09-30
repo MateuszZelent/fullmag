@@ -480,6 +480,25 @@ pub(super) fn materialize_equilibrium(
             &handoff.certified_fields.h_ex_a_per_m,
             &observables.exchange_field,
         )?;
+        let uniaxial = constant_uniaxial_descriptor(&plan.material)?;
+        if handoff.certified_fields.h_anisotropy_a_per_m.is_some() != uniaxial.is_some() {
+            return Err(RunError {
+                message: "relax_stage_handoff_anisotropy_schema_material_mismatch".to_string(),
+            });
+        }
+        if let (Some(accepted), Some((ku, axis))) =
+            (&handoff.certified_fields.h_anisotropy_a_per_m, uniaxial)
+        {
+            let amplitude = 2.0 * ku / (fullmag_engine::MU0 * plan.material.saturation_magnetisation);
+            let recomputed: Vec<Vector3> = state.magnetization().iter()
+                .zip(&magnetic_node_volumes)
+                .map(|(m, volume)| {
+                    if *volume <= 0.0 { return [0.0; 3]; }
+                    let projection = m[0] * axis[0] + m[1] * axis[1] + m[2] * axis[2];
+                    axis.map(|component| amplitude * projection * component)
+                }).collect();
+            require_recomputed_match("h_anisotropy0", accepted, &recomputed)?;
+        }
         let h_ext_difference = max_vector_field_difference_on_magnetic_nodes(
             &handoff.certified_fields.h_ext_a_per_m,
             &observables.external_field,

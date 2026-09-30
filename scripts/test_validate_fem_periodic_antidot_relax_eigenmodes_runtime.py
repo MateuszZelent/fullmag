@@ -404,6 +404,14 @@ def test_validator_accepts_current_v3_relax_to_eigen_handoff(tmp_path: Path) -> 
             },
         }
     )
+    import hashlib
+    import struct
+    preimage = b"CertifiedFemEquilibriumFields.v1\0"
+    preimage += (struct.pack("<Q", 2) + struct.pack("<6d", *([0.0] * 6))) * 4
+    preimage += struct.pack("<Q", 2) + struct.pack("<2d", 0.0, 0.0)
+    field_digest = "sha256:" + hashlib.sha256(preimage).hexdigest()
+    handoff["certified_fields"]["content_sha256"] = field_digest
+    handoff["certified_fields_content_sha256"] = field_digest
     write_json(summary_path, summary)
 
     result = run_validator(report_root, "cpu")

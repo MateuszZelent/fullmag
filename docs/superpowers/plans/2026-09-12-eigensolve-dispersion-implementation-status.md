@@ -1,5 +1,17 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
+## S10 — certyfikaty pól Ku v2, checkpoint 2026-10-01
+
+- Dodano jawne pole anizotropii do wersjonowanego certyfikatu, kopię natywną H_ani, producenta i certyfikat ponownego przeliczenia v2. Modele bez Ku zachowują ścieżkę v1; deklarowane Ku=0 używa v2.
+- Konsumenci wymagają zgodności wersji z materiałem; niezależny observer porównuje pole Ku oddzielnie od pola zewnętrznego. Digest wiąże faktyczne bajty pól, a walidator kontroluje natywną kolejność ich sumowania.
+- 42 lekkie testy Python PASS (18 nowych regresji + 24 istniejące). Pięć zmienionych plików Rust przeszło parser rustfmt bez kompilacji; to nie dowodzi poprawności typów ani wykonania FEM. Testów jednostkowych natywnych nie budowano.
+- #187 terminalny succeeded/exit0; 14 artefaktów receipt size/SHA PASS. Snapshot nie zawiera późniejszych identity/observer/v2. Kontroler28980 terminalny exit1: gamma-t3 odrzucony przed modami przez producer_reduction_map_not_canonical. Relaksacja6138 nodes/30012 tets/3steps przeszła. DE/BV nie rozpoczęto. Bez nowych częstotliwości.
+- Review potwierdziło potrzebę nowego equilibrium_artifact.v8 / LinearizationState.v7: canonical material signature do zgodności fizycznej i material_snapshot_id, osobny raw hash do provenance. Historyczne v7/v6 pozostają niezmienione. Migracja i regresje są następnym krokiem, przed odblokowaniem Ku.
+- Review v2: poprawiono hardkodowane v1 w bias sweepie i orchestratorze, wspólny selector plików, early scope guard, null oraz strict digest; source-only frozen refresh-v1 i ścieżki Ku=0 przygotowane. Końcowy review CPU bez nowego P1; GPU copy dostaje accepted-cache guard. Import DeError zachowany jako wymagany trait dla D::Error::custom.
+- Następny runtime blocker: kanoniczne numerowanie map producenta; trzeba wyjaśnić i naprawić producer_reduction_map_not_canonical, następnie ponowić Γ i pełną serię DE/BV na nowym źródle.
+- Przyrost v2 pozostaje WIP: regresje Rust przygotowane (niekompilowane), review CPU bez nowego P1, exact staged nauka56plików i Rust8plików parser PASS. Pozostaje commit/push oraz nowy managed runtime. Pełny zakres S00–S12, zbieżność, COMSOL A1, interakcje, waveguide, GPU, UI i integracja pozostaje otwarty.
+
+
 ## S10/S12 — Ku w źródłach; ten sam job #187
 
 - Wdrożony koordynator 7753401fbbf748625b8ec2fda0fc244b07e8ef492426102102dd88bd22c6f901, zachowane siedem profili i dane. Worker wznowiony; nowy snapshot #187 c52c7fd053e745d9b113ffeb0268a472, digest 15733ecfc2d145cc04340f0284c50122dca3fe92f8e223d4a7440afc8fdf691a, HEAD b62bfe9025dd93914b8e13468d8320d9af4ac2a2 + jawny WIP. Kapsuła 2272f012edb6422ba50877a2c9dbe62f/source: verify_source PASS, 7491 plików. Bieżący status running; potwierdzony worker 98cb548305f4e1f07e03bf2681988eff40e09999d6e1c74e00bd02db41e2dd70. Log: stage native-build start make install-cli-dev; docker top potwierdza cargo/rustc. Poprawiony preflight przeszedł. Bez nowych częstotliwości; nie restartowano zadania.

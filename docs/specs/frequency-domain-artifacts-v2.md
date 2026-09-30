@@ -2439,3 +2439,28 @@ nieujemnych residuali q, phi, gauge i eigenpaira nie większych niż 1e-8.
 `certified` oraz `full_descriptor_certified` pozostają false, dopóki nie ma
 oddzielnego dowodu więzów i pełnej rekonstrukcji. Sam fizyczny eksport phi
 nie podnosi tej kwalifikacji.
+
+## Certyfikowane pola stanu równowagi z Ku
+
+`CertifiedFemEquilibriumFields.v1` zachowuje istniejące bytes i namespace
+SHA-256 dla modeli bez Ku. `v2` wymaga `h_anisotropy_a_per_m`, osobnego
+namespace i sumy `((H_ex + H_demag) + H_anisotropy) + H_ext` zgodnej z
+producentem FEM CPU. Pole anizotropii dotyczy pierwszego przyrostu stałego
+jednoosiowego Ku; nie implikuje obsługi pozostałych interakcji.
+V1 nie może nieść widoku anizotropii; v2 nie może go pomijać. Obie wersje
+wymagają kompletnych skończonych pól, pomierzonego H_eff, potencjału i
+zgodnego digestu. Wersja i obecność Ku w materiale muszą się zgadzać.
+Kolejność danych digestu v2: H_ex, H_demag, H_anisotropy, H_ext, H_eff, phi;
+liczniki u64 little-endian, wartości f64 IEEE754 little-endian. V1 nie zmienia
+kolejności ani kodowania. Certyfikat refresh v2 dodaje porównanie H_anisotropy
+oraz wiąże digest pól przyjętych i ponownie obliczonych.
+Pliki `equilibrium/certified_fem_equilibrium_fields.v2.json` oraz
+`equilibrium/recomputed_fem_linearization_certificate.v2.json` są publikowane
+wyłącznie z payloadem v2; ścieżki v1 pozostają dla danych bez Ku.
+Wersjonowanie nie zmienia publicznej legalności ani kwalifikacji CPU/GPU.
+
+Wspólny selector material-version jest używany przez finalizację, bias sweep
+oraz orchestrator etapów. Jawne null w opcjonalnym widoku jest odrzucane;
+brak klucza v1 zachowuje None. Zakres źródła sprawdzany jest przed capture
+certyfikatu. Digest accepted-fields jest ścisłym opaque dowodem producenta;
+nie zastępuje niezależnego sprawdzenia dostarczonego payloadu recomputed.

@@ -151,6 +151,9 @@ impl AcceptedFemRelaxStageHandoff {
             });
         }
         validate_certified_equilibrium_fields(&certified_fields, source_mesh.nodes.len())?;
+        if certified_fields.h_anisotropy_a_per_m.is_some() != source_plan.material.uniaxial_anisotropy.is_some() {
+            return Err(RunError { message: "relax_stage_handoff_anisotropy_schema_material_mismatch".to_string() });
+        }
         let source_plan_mesh = crate::types::FemMeshPayload::from(source_plan);
         if crate::types::fem_mesh_topology_fingerprint(&source_plan_mesh)
             != crate::types::fem_mesh_topology_fingerprint(source_mesh)
@@ -334,6 +337,9 @@ impl AcceptedFemRelaxStageHandoff {
             });
         }
         validate_certified_equilibrium_fields(&self.certified_fields, self.node_count)?;
+        if self.certified_fields.h_anisotropy_a_per_m.is_some() != plan.material.uniaxial_anisotropy.is_some() {
+            return Err(RunError { message: "relax_stage_handoff_anisotropy_schema_material_mismatch".to_string() });
+        }
         let target_signatures =
             crate::fem::equilibrium_identity::EquilibriumIdentitySignaturesV1::from_eigen_plan(
                 plan,
@@ -695,12 +701,16 @@ pub(super) fn relax_stage_handoff_v3_content_sha256(
     Ok(format!("sha256:{:x}", hash.finalize()))
 }
 
-pub(super) fn validate_certified_equilibrium_fields(
+pub(crate) fn validate_certified_equilibrium_fields(
     fields: &crate::types::CertifiedFemEquilibriumFields,
     expected_node_count: usize,
 ) -> Result<(), RunError> {
     let valid_shape = expected_node_count > 0
-        && fields.schema_version == "CertifiedFemEquilibriumFields.v1"
+        && match fields.schema_version.as_str() {
+            "CertifiedFemEquilibriumFields.v1" => fields.h_anisotropy_a_per_m.is_none(),
+            "CertifiedFemEquilibriumFields.v2" => fields.h_anisotropy_a_per_m.as_ref().is_some_and(|view| view.len() == expected_node_count),
+            _ => false,
+        }
         && fields.h_ex_a_per_m.len() == expected_node_count
         && fields.h_demag_a_per_m.len() == expected_node_count
         && fields.h_ext_a_per_m.len() == expected_node_count
@@ -716,7 +726,8 @@ pub(super) fn validate_certified_equilibrium_fields(
     .flat_map(|values| values.iter())
     .flat_map(|value| value.iter())
     .all(|value| value.is_finite())
-        && fields.phi_a.iter().all(|value| value.is_finite());
+        && fields.phi_a.iter().all(|value| value.is_finite())
+        && fields.h_anisotropy_a_per_m.iter().flatten().flatten().all(|value| value.is_finite());
     let digest = crate::types::certified_equilibrium_fields_sha256(fields);
     if !valid_shape || !finite || fields.content_sha256 != digest {
         return Err(RunError {
@@ -730,14 +741,18 @@ pub(super) fn validate_certified_equilibrium_fields(
         .zip(&fields.h_demag_a_per_m)
         .zip(&fields.h_ext_a_per_m)
         .zip(&fields.h_eff_a_per_m)
-        .all(|(((h_ex, h_demag), h_ext), h_eff)| {
+        .enumerate()
+        .all(|(node, (((h_ex, h_demag), h_ext), h_eff))| {
             (0..3).all(|component| {
-                h_eff[component] == (h_ex[component] + h_demag[component]) + h_ext[component]
+                let exchange_demag = h_ex[component] + h_demag[component];
+                let before_external = fields.h_anisotropy_a_per_m.as_ref()
+                    .map_or(exchange_demag, |anisotropy| exchange_demag + anisotropy[node][component]);
+                h_eff[component] == before_external + h_ext[component]
             })
         });
     if !decomposes_exactly {
         return Err(RunError {
-            message: "relax_stage_handoff_certified_fields_decomposition_mismatch: H_eff must equal H_ex + H_demag + H_ext exactly"
+            message: "relax_stage_handoff_certified_fields_decomposition_mismatch: H_eff must equal the schema-defined native field sum exactly"
                 .to_string(),
         });
     }

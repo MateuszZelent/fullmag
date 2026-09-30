@@ -249,7 +249,7 @@ impl ModalIdentitySignaturesV1 {
     }
 }
 
-fn validate_supported_relax_source(plan: &FemPlanIR) -> Result<(), RunError> {
+pub(crate) fn validate_supported_relax_source(plan: &FemPlanIR) -> Result<(), RunError> {
     validate_supported_material(&plan.material, "source relaxation plan")?;
     if plan.anisotropy_axis_field.is_some()
         || plan.ms_element_field.is_some()
@@ -260,9 +260,33 @@ fn validate_supported_relax_source(plan: &FemPlanIR) -> Result<(), RunError> {
         || plan.dind_field.is_some()
         || plan.dbulk_field.is_some()
         || plan.rotated_interfacial_dmi.is_some()
+        || !plan.antenna_zeeman_masks.is_empty()
+        || !plan.field_drives.is_empty()
+        || !plan.field_drive_geometry_masks.is_empty()
+        || !plan.current_modules.is_empty()
+        || !plan.spin_transport_plans.is_empty()
+        || plan.current_density.is_some()
+        || plan.spin_torque_contract.is_some()
+        || plan.stt_degree.is_some()
+        || plan.stt_beta.is_some()
+        || plan.stt_spin_polarization.is_some()
+        || plan.stt_lambda.is_some()
+        || plan.stt_epsilon_prime.is_some()
+        || plan.stt_thickness.is_some()
+        || plan.stt_fixed_layer_position.is_some()
+        || plan.has_oersted_cylinder
+        || plan.oersted_current.is_some()
+        || plan.oersted_radius.is_some()
+        || plan.oersted_center.is_some()
+        || plan.oersted_axis.is_some()
+        || plan.oersted_field_xyz.is_some()
+        || plan.oersted_realization.is_some()
+        || plan.temperature.is_some()
+        || plan.thermal_seed_config.is_some()
+        || plan.mechanics.is_some()
     {
         return Err(unsupported_source_identity(
-            "source relaxation plan contains regional, anisotropy-axis, element-field, or DMI data that the current eigen source identity cannot reproduce",
+            "source relaxation plan contains spatial, higher-order, driven, current, stochastic, mechanical, or DMI physics outside the certified exchange/demag/Zeeman/constant-Ku scope",
         ));
     }
     Ok(())
@@ -317,6 +341,28 @@ fn signature_digest<T: Serialize>(namespace: &str, value: &T) -> Result<String, 
 #[cfg(test)]
 mod material_identity_tests {
     use super::*;
+
+    #[test]
+    fn field_certificate_scope_rejects_unrepresented_contributions() {
+        let baseline = fullmag_ir::FemPlanIR::default();
+        validate_supported_relax_source(&baseline).unwrap();
+        let mut ku = baseline.clone();
+        ku.material.uniaxial_anisotropy = Some(0.0);
+        validate_supported_relax_source(&ku).unwrap();
+        ku.material.ms_field = Some(vec![800_000.0]);
+        assert!(validate_supported_relax_source(&ku).is_err());
+        for mutation in 0..5 {
+            let mut plan = baseline.clone();
+            match mutation {
+                0 => plan.temperature = Some(300.0),
+                1 => plan.has_oersted_cylinder = true,
+                2 => plan.current_density = Some([1.0, 0.0, 0.0]),
+                3 => plan.interfacial_dmi = Some(1.0e-3),
+                _ => plan.material.cubic_anisotropy_kc1 = Some(1.0),
+            }
+            assert!(validate_supported_relax_source(&plan).is_err());
+        }
+    }
 
     #[test]
     fn ku_free_material_preserves_legacy_v1_bytes_and_digest() {

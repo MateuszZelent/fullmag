@@ -145,6 +145,7 @@ algebraic realization of this complex contract, not another convention.
 | $K_u$ | first-order uniaxial anisotropy energy density | $\mathrm{J\,m^{-3}}$ |
 | $\mathbf u$ | normalized uniaxial easy axis | $1$ |
 | $H_a$ | signed uniaxial field coefficient | $\mathrm{A\,m^{-1}}$ |
+| $\mathbf H_{\mathrm{ex},0},\mathbf H_{\mathrm{demag},0},\mathbf H_{K,0},\mathbf H_{\mathrm{ext},0}$ | certified static exchange, demagnetizing, uniaxial and external fields | $\mathrm{A\,m^{-1}}$ |
 | $\mu_0$ | vacuum permeability | $\mathrm{N\,A^{-2}}$ |
 | $\gamma$, $\gamma_0$ | gyromagnetic ratio and $\mu_0|\gamma|$ in the A/m convention | $\mathrm{rad\,s^{-1}\,T^{-1}}$, $\mathrm{rad\,s^{-1}\,(A\,m^{-1})^{-1}}$ |
 | $\omega$, $\omega_r$, $\Gamma$, $\omega_{\mathrm{target}}$, $\tau$ | complex angular frequency, oscillation part, decay rate, requested angular target and rotated target | $\mathrm{rad\,s^{-1}}$ |
@@ -458,6 +459,52 @@ This source increment does not remove public planner guards or certify runtime.
 Required evidence includes easy-axis curvature, transverse-axis derivative,
 signed coefficient, nodal-basis covariance, invalid/unsupported view rejection,
 then full payload binding, K0 and reciprocal nonzero-k runtime checks.
+
+The static field certificate for the Ku increment uses a separate explicit
+anisotropy channel. Legacy `CertifiedFemEquilibriumFields.v1` keeps four vector
+views (exchange, demag, external and effective) and its exact digest bytes.
+`CertifiedFemEquilibriumFields.v2` adds `h_anisotropy_a_per_m`, representing
+first-order uniaxial bulk anisotropy in this increment, and a distinct namespace.
+For the certified CPU realization the decomposition is
+
+```{math}
+:label: eq-fem-certified-static-fields-ku
+\mathbf H_{\mathrm{eff},0}
+=\mathbf H_{\mathrm{ex},0}+\mathbf H_{\mathrm{demag},0}
++\mathbf H_{K,0}+\mathbf H_{\mathrm{ext},0}.
+```
+
+The verifier uses the CPU producer's addition order
+`((H_ex + H_demag) + H_K) + H_ext`, without replacing the measured H_eff.
+The views contain one finite vector per node, with the native dynamical mask
+rather than a visual airbox field. The v2 binary digest binds exchange, demag,
+anisotropy, external, effective and potential in that order, with u64 little-
+endian counts and IEEE754 f64 little-endian values. V1 keeps its existing
+exchange/demag/external/effective/potential order. A v1 record carrying Ku
+views, a v2 record missing Ku views, unknown versions, invalid cardinalities,
+non-finite values or a failed decomposition are rejected. The material's
+advertised Ku term must agree with the field certificate version, even for
+an explicitly authored zero Ku. Ku cannot be hidden inside H_ext.
+
+The native final-state refresh certificate likewise writes v2 for Ku,
+including its anisotropy comparison and both field digests. V1 without Ku
+keeps its serialization and namespace. Published artifact filenames follow
+the actual version. This extends a certificate, not solver readiness; public
+Ku legality and all managed CPU/GPU scientific gates remain separate.
+
+All producer and consumer artifact paths use the same material-version selector,
+including stage orchestration and each independently relaxed bias-sweep sample.
+There is no v2-to-v1 fallback. A missing optional legacy view is distinct from
+an explicitly present null, which both readers reject. Before field capture
+and certificate publication the source scope rejects unrepresented drives,
+current/Oersted, stochastic/thermal, mechanical, spatial Ku/axis or sharp element material, higher-order and DMI
+contributions. The bounded Ku realization requires uniform positive Ms; legacy nodal A remains
+digest-bound in material identity. GPU linearization field export also requires
+a valid accepted-endpoint observable cache, but GPU physics remains unqualified.
+The accepted-fields hash in the refresh certificate is digest-bound trusted
+producer evidence: the consumer receives and independently hashes the refreshed
+field payload, not the historical accepted payload. Its accepted digest is
+checked as strict lowercase SHA-256 without claiming independent replay.
 
 Constraint construction operates on complete corner/edge equivalence classes
 and checks cycle consistency. A phase-only tangent constraint is invalid for
@@ -1050,6 +1097,16 @@ visibility into runtime qualification.
 
 | Equation/claim | Lane | Repository path + stable symbol | Responsibility | Tests/evidence | Evidence status | Immutable link |
 |---|---|---|---|---|---|---|
+| Certified static fields (source-certified-field-path-selector) | FEM CPU | `crates/fullmag-runner/src/types.rs` + `artifact_paths_for_material` | Select matching v1/v2 producer and consumer artifact paths | Source-only regressions prepared; native runtime pending | NOT VERIFIED | working tree |
+| Certified static fields (source-certified-field-bias-consumer) | FEM CPU | `crates/fullmag-runner/src/fem/eigen_execution.rs` + `execute_bias_field_sample_with_relaxation` | Consume the correct version in each independently relaxed bias-field sample | Source-only regressions prepared; native runtime pending | NOT VERIFIED | working tree |
+| Certified static fields (source-certified-field-stage-consumer) | FEM CPU | `crates/fullmag-cli/src/orchestrator.rs` + `run_script_mode` | Read material-matched field and refresh files in relax-to-eigen stage continuation | Source-only regressions prepared; native runtime pending | NOT VERIFIED | working tree |
+| Certified static fields (source-certified-field-scope-guard) | FEM CPU | `crates/fullmag-runner/src/fem/equilibrium_identity.rs` + `validate_supported_relax_source` | Reject unrepresented source physics before field certificate publication | Source-only regressions prepared; native runtime pending | NOT VERIFIED | working tree |
+| Certified static fields (source-certified-field-digest) | FEM CPU | `crates/fullmag-runner/src/types.rs` + `certified_equilibrium_fields_sha256` | Bind versioned field arrays to exact little-endian binary bytes | 42 Python checks; native runtime pending | NOT VERIFIED | working tree |
+| Certified static fields (source-certified-field-copy) | FEM CPU | `backends/fem/cpu/mfem/runtime/state_io.cpp` + `int context_copy_linearization_field_f64` | Export masked dynamical fields including native uniaxial field | 42 Python checks; native runtime pending | NOT VERIFIED | working tree |
+| Certified static fields (source-certified-field-producer) | FEM CPU | `crates/fullmag-runner/src/fem/relax/finalize.rs` + `copy_native_equilibrium_evaluation` | Capture measured native fields without replacing H_eff | 42 Python checks; native runtime pending | NOT VERIFIED | working tree |
+| Certified static fields (source-certified-field-consumer) | FEM CPU | `crates/fullmag-runner/src/fem/eigen_equilibrium_contract.rs` + `validate_certified_equilibrium_fields` | Validate schema, field counts, digest and native addition order | 42 Python checks; native runtime pending | NOT VERIFIED | working tree |
+| Certified static fields (source-certified-field-refresh-consumer) | FEM CPU | `crates/fullmag-runner/src/fem_eigen.rs` + `validate_recomputed_fem_linearization_certificate` | Bind v2 refresh comparison to Ku material and anisotropy evidence | 42 Python checks; native runtime pending | NOT VERIFIED | working tree |
+| Certified static fields (source-certified-field-python-validation) | FEM CPU | `scripts/validate_fem_periodic_antidot_relax_eigenmodes_runtime.py` + `validate_certified_equilibrium_fields` | Independently verify schema-defined field digest and decomposition | 42 Python checks; native runtime pending | NOT VERIFIED | working tree |
 | {eq}`eq-fem-modal-uniaxial-energy-hessian` (source-native-uniaxial-weak-form) | FEM CPU | `backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp` + `FrequencyDomainStatus assemble_native_magnetic_a_qq` | Constrained uniaxial weak form and total-field curvature | Native regression pending; public bridge pending | source-visible / NOT VERIFIED | working tree |
 | Independent constrained energy (source-uniaxial-energy-finite-difference) | reference | `scripts/test_uniaxial_constrained_energy_hessian.py` + `sphere_energy` | Energy finite differences including equilibrium-balancing bias | 3 Python tests PASS; no native execution | reference check only | working tree |
 | Uniaxial descriptor transport (source-uniaxial-descriptor-builder) | FEM CPU runner | `crates/fullmag-runner/src/fem/eigen_shared_domain.rs` + `build_native_shared_domain_modal_problem` | Own normalized axes, signed H_a and term/operator digests | Rust compilation pending; public guard retained | NOT VERIFIED | working tree |

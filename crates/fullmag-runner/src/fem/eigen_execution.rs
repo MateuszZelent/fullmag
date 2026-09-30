@@ -210,17 +210,20 @@ fn execute_bias_field_sample_with_relaxation(
             ),
         })?;
     let final_magnetization = relax_run.result.final_magnetization.clone();
+    let (fields_path, refresh_path) = crate::types::CertifiedFemEquilibriumFields::artifact_paths_for_material(
+        &sample_plan.material,
+    );
     let certified_fields =
         decode_bias_field_relaxation_artifact::<crate::types::CertifiedFemEquilibriumFields>(
             &relax_run,
-            "equilibrium/certified_fem_equilibrium_fields.v1.json",
+            fields_path,
             sample_position,
         )?;
     let recomputed_certificate = decode_bias_field_relaxation_artifact::<
         crate::types::RecomputedFemLinearizationCertificateV1,
     >(
         &relax_run,
-        "equilibrium/recomputed_fem_linearization_certificate.v1.json",
+        refresh_path,
         sample_position,
     )?;
     let source_mesh = crate::types::FemMeshPayload::from(&relax_plan);

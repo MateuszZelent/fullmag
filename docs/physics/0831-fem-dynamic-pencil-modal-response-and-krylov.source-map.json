@@ -27,6 +27,7 @@
     }
   ],
   "equations": [
+    {"id": "eq-fem-certified-static-fields-ku", "symbols": ["certified_static_fields"], "sources": ["source-certified-field-digest", "source-certified-field-copy", "source-certified-field-producer", "source-certified-field-consumer", "source-certified-field-refresh-consumer", "source-certified-field-python-validation", "source-certified-field-path-selector", "source-certified-field-bias-consumer", "source-certified-field-stage-consumer", "source-certified-field-scope-guard"]},
     {"id": "eq-fem-modal-uniaxial-energy-hessian", "symbols": ["uniaxial_ku", "uniaxial_axis", "uniaxial_field", "mu0", "magnetization", "tangent_maps"], "sources": ["source-native-uniaxial-weak-form", "source-uniaxial-energy-finite-difference", "source-uniaxial-descriptor-builder", "source-uniaxial-ffi-envelope", "source-uniaxial-equilibrium-material-identity", "source-uniaxial-equilibrium-field-owner"]},
     {
       "id": "eq-fem-modal-static-field-frame-transport",
@@ -192,6 +193,7 @@
     {"id": "eq-oracle-exchange-free-de-limit", "symbols": ["thickness_f", "thickness_gamma", "thickness_mu0", "thickness_B0", "thickness_Ms", "thickness_k", "thickness_t"], "sources": ["source-oracle-exact-de-limit", "source-thickness-oracle-solve"]}
   ],
   "symbols": [
+    {"id": "certified_static_fields", "latex": "$\\mathbf H_{\\mathrm{ex},0},\\mathbf H_{\\mathrm{demag},0},\\mathbf H_{K,0},\\mathbf H_{\\mathrm{ext},0}$", "meaning": "certified static exchange, demagnetizing, uniaxial and external fields", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
     {"id": "uniaxial_ku", "latex": "$K_u$", "meaning": "first-order uniaxial anisotropy energy density", "si_unit": "$\\mathrm{J\\,m^{-3}}$"},
     {"id": "uniaxial_axis", "latex": "$\\mathbf u$", "meaning": "normalized uniaxial easy axis", "si_unit": "$1$"},
     {"id": "uniaxial_field", "latex": "$H_a$", "meaning": "signed uniaxial field coefficient", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
@@ -423,6 +425,16 @@
     }
   ],
   "sources": [
+    {"id": "source-certified-field-digest", "path": "crates/fullmag-runner/src/types.rs", "symbol": "certified_equilibrium_fields_sha256", "responsibility": "Bind versioned field arrays to exact little-endian binary bytes"},
+    {"id": "source-certified-field-copy", "path": "backends/fem/cpu/mfem/runtime/state_io.cpp", "symbol": "int context_copy_linearization_field_f64", "responsibility": "Export masked dynamical fields including native uniaxial field"},
+    {"id": "source-certified-field-producer", "path": "crates/fullmag-runner/src/fem/relax/finalize.rs", "symbol": "copy_native_equilibrium_evaluation", "responsibility": "Capture measured native fields without replacing H_eff"},
+    {"id": "source-certified-field-consumer", "path": "crates/fullmag-runner/src/fem/eigen_equilibrium_contract.rs", "symbol": "validate_certified_equilibrium_fields", "responsibility": "Validate schema, field counts, digest and native addition order"},
+    {"id": "source-certified-field-refresh-consumer", "path": "crates/fullmag-runner/src/fem_eigen.rs", "symbol": "validate_recomputed_fem_linearization_certificate", "responsibility": "Bind v2 refresh comparison to Ku material and anisotropy evidence"},
+    {"id": "source-certified-field-python-validation", "path": "scripts/validate_fem_periodic_antidot_relax_eigenmodes_runtime.py", "symbol": "validate_certified_equilibrium_fields", "responsibility": "Independently verify schema-defined field digest and decomposition"},
+    {"id": "source-certified-field-path-selector", "path": "crates/fullmag-runner/src/types.rs", "symbol": "artifact_paths_for_material", "responsibility": "Select matching v1/v2 producer and consumer artifact paths"},
+    {"id": "source-certified-field-bias-consumer", "path": "crates/fullmag-runner/src/fem/eigen_execution.rs", "symbol": "execute_bias_field_sample_with_relaxation", "responsibility": "Consume the correct version in each independently relaxed bias-field sample"},
+    {"id": "source-certified-field-stage-consumer", "path": "crates/fullmag-cli/src/orchestrator.rs", "symbol": "run_script_mode", "responsibility": "Read material-matched field and refresh files in relax-to-eigen stage continuation"},
+    {"id": "source-certified-field-scope-guard", "path": "crates/fullmag-runner/src/fem/equilibrium_identity.rs", "symbol": "validate_supported_relax_source", "responsibility": "Reject unrepresented source physics before field certificate publication"},
     {"id": "source-native-uniaxial-weak-form", "path": "backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp", "symbol": "FrequencyDomainStatus assemble_native_magnetic_a_qq", "responsibility": "Negative uniaxial field derivative with both nodal tangent projections and total-field curvature"},
     {"id": "source-uniaxial-energy-finite-difference", "path": "scripts/test_uniaxial_constrained_energy_hessian.py", "symbol": "sphere_energy", "responsibility": "Independent constrained energy with a transverse-equilibrium-balancing external field; finite differences are not native FEM execution"},
     {"id": "source-uniaxial-descriptor-builder", "path": "crates/fullmag-runner/src/fem/eigen_shared_domain.rs", "symbol": "build_native_shared_domain_modal_problem", "responsibility": "Own repeated global easy axis, signed field coefficient and content digests; planner legality remains gated"},

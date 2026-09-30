@@ -82,36 +82,46 @@ def validate_certified_equilibrium_fields(
     value: Any, node_count: int, label: str
 ) -> None:
     fields = require_object(value, label)
-    require(
-        fields.get("schema_version") == "CertifiedFemEquilibriumFields.v1",
-        f"{label}.schema_version drifted",
-    )
-    for field in (
-        "h_ex_a_per_m",
-        "h_demag_a_per_m",
-        "h_ext_a_per_m",
-        "h_eff_a_per_m",
-    ):
-        vectors = fields.get(field)
-        require(
-            isinstance(vectors, list) and len(vectors) == node_count,
-            f"{label}.{field} must contain {node_count} vectors",
-        )
+    schema = fields.get("schema_version")
+    require(schema in ("CertifiedFemEquilibriumFields.v1", "CertifiedFemEquilibriumFields.v2"),
+            f"{label}.schema_version drifted")
+    require(isinstance(node_count, int) and not isinstance(node_count, bool) and node_count > 0,
+            f"{label} requires a positive node count")
+    views = ["h_ex_a_per_m", "h_demag_a_per_m"]
+    if schema == "CertifiedFemEquilibriumFields.v2":
+        views.append("h_anisotropy_a_per_m")
+    views += ["h_ext_a_per_m", "h_eff_a_per_m"]
+    require(set(fields) == set(views) | {"schema_version", "phi_a", "content_sha256"},
+            f"{label} contains missing or unadvertised fields")
+    digest = hashlib.sha256(schema.encode("utf-8") + b"\0")
+    for field in views:
+        vectors = fields[field]
+        require(isinstance(vectors, list) and len(vectors) == node_count,
+                f"{label}.{field} must contain {node_count} vectors")
+        digest.update(struct.pack("<Q", len(vectors)))
         for index, vector in enumerate(vectors):
-            require(
-                isinstance(vector, list) and len(vector) == 3,
-                f"{label}.{field}[{index}] must be a vector3",
-            )
+            require(isinstance(vector, list) and len(vector) == 3,
+                    f"{label}.{field}[{index}] must be a vector3")
             for component in vector:
-                require_finite_number(component, f"{label}.{field}[{index}]")
-    phi = fields.get("phi_a")
-    require(
-        isinstance(phi, list) and len(phi) == node_count,
-        f"{label}.phi_a must contain {node_count} values",
-    )
-    for index, value in enumerate(phi):
-        require_finite_number(value, f"{label}.phi_a[{index}]")
-    require_sha256(fields.get("content_sha256"), f"{label}.content_sha256")
+                digest.update(struct.pack("<d", require_finite_number(component,
+                                          f"{label}.{field}[{index}]")))
+    phi = fields["phi_a"]
+    require(isinstance(phi, list) and len(phi) == node_count,
+            f"{label}.phi_a must contain {node_count} values")
+    digest.update(struct.pack("<Q", len(phi)))
+    for index, component in enumerate(phi):
+        digest.update(struct.pack("<d", require_finite_number(component, f"{label}.phi_a[{index}]")))
+    require(require_sha256(fields["content_sha256"], f"{label}.content_sha256")
+            == "sha256:" + digest.hexdigest(), f"{label} field content digest mismatch")
+    for node in range(node_count):
+        for component in range(3):
+            # Match the native evaluation order; do not replace measured H_eff.
+            total = float(fields["h_ex_a_per_m"][node][component]) + float(fields["h_demag_a_per_m"][node][component])
+            if schema == "CertifiedFemEquilibriumFields.v2":
+                total += float(fields["h_anisotropy_a_per_m"][node][component])
+            total += float(fields["h_ext_a_per_m"][node][component])
+            require(fields["h_eff_a_per_m"][node][component] == total,
+                    f"{label} H_eff must equal the schema-defined native field sum exactly")
 
 
 def validate_requested_execution(
