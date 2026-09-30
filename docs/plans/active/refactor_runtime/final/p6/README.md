@@ -153,3 +153,7 @@ pamięci i wszystkich lane'ów pozostają otwarte. P6 wynosi **52%**.
 40. [Evaluator różnicy przypiętych wycinków](40-pinned-dataset-difference-evaluator.md)
     — rzeczywiste signed difference, CAS read adapter i jawna semantyka outputu;
     source review/check PASS, regresje Rust NOT RUN, materializer/API/UI otwarte.
+
+41. [Przypięty tensor i trwały graf chunków](41-pinned-solution-tensor-graph.md)
+    — owner fences, typed root i transitive publication/recovery/GC/export/import;
+    source check/review PASS, regresje NOT RUN, FMS owner closure otwarte.
