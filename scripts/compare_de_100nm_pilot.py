@@ -7,6 +7,7 @@ import json
 import math
 from pathlib import Path
 from verify_fem_frequency_domain_eigen_artifacts import kalinikos_slab_n0_frequency_hz
+from de_pilot_receipts import validate_de_pilot_receipts
 
 PARAMETERS = dict(geometry="damon_eshbach", bias_field_a_per_m=0.1/(4e-7*math.pi),
                   film_thickness_m=100e-9, exchange_stiffness_j_per_m=13e-12,
@@ -72,10 +73,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     request = json.loads((args.run/"run-request.json").read_text())
     result = json.loads((args.run/"run-result.json").read_text())
-    if request.get("schema") != "fullmag.de100-pilot.request.v1" or result.get("status") != "completed_unqualified":
-        raise ValueError("Expected a completed managed numerical DE pilot")
-    if request.get("model_sha256") != result.get("model_sha256") or request["job"] != result["job"]:
-        raise ValueError("Run identity mismatch")
+    validate_de_pilot_receipts(request, result, "de100")
     source = args.run/"de100/eigen/dispersion.csv"
     rows = read_modes(source)
     comparison = compare_branch(rows, args.branch_id) if args.branch_id is not None else None

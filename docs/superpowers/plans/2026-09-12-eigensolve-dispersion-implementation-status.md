@@ -1,5 +1,28 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
+## Odbiór Γ i kontrola porównania — 2026-09-30 15:25 UTC
+
+- Poprzedni turn był zweryfikowanym oczekiwaniem: ponownie potwierdzono żywe
+  sesje 45879, 48887 i 83846 oraz aktywny job #178; #179 nadal queued.
+- #178 d3584c72f1d74300834aaca396902df6: running, brak terminalnego exit code.
+  Na pomiarze 15:19 UTC brak run_root; koordynator działa, około 100% CPU.
+  Nie utożsamiać statusu running z właściwą kompilacją. Nie restartowano joba.
+- Γ k=0: sesja 83846 czeka na zakończenie batchu sześciu prób warstw.
+  L2, 3 warstwy, EPS prefilter 1e-10, shifted KSP 1e-12; pełne okno
+  i końcowy residual 1e-8 zachowane. To ten sam runtime #178/model 11155c55e.
+  Helper SHA 8f0e9c394b40e65a81c8ab8cb95a91164d339c05ee5a7330ae3236214807f318.
+  Control poza namespace joba: scientific-batches/gamma-l2-t3-<job178>.
+- A1: krok relaksacji 5 fs poniżej odtworzonego oszacowania plannera 194.31 fs
+  na rzeczywistej siatce (h_min 3.3333 nm); commit 06d4cfef7b1321dc99da62e60f273e6812d897cb.
+  Jest to odtworzenie wzoru plannera, nie dowód stabilności ani relaksacji.
+- Naprawiono kontrolę receiptów porównania DE: ścisły kod procesu, model_source,
+  pilot/cases/operation; 15 testów +19 podtestów PASS. Nie zmieniono żywych
+  kontrolerów ani ich przypiętych zależności. Audyt:
+  docs/audits/2026-09-30-de-comparison-receipt-identity.md.
+- Nadal brak nowych częstotliwości z poprawionej siatki. Pozostają wszystkie
+  bramki S00–S12: Γ/BV, grubość/airbox/mody, ścieżka k, A1/COMSOL,
+  tracking/API/UI/GPU oraz review/integracja/cleanup.
+
 ## Piloci DE/BV i odbior wykresu — 2026-09-30 14:36 UTC
 
 - #177 zakonczony managed succeeded/exit 0; #178 running, #179 queued.
