@@ -236,3 +236,88 @@ def test_ring_lateral_resolution_is_independent_of_film_layers():
     refined_xy = positions(5e-9, 3)
     assert coarse == refined_z
     assert len(refined_xy) > len(refined_z)
+
+
+@pytest.mark.parametrize("antidot,layers", [(False, 3), (False, 6), (False, 9),
+                                               (True, 1), (True, 2), (True, 3)])
+def test_layered_periodic_triangles_are_conforming(layers, antidot):
+    from collections import Counter
+    from itertools import combinations
+    from fullmag.model.geometry import Cylinder
+    from fullmag.meshing._gmsh_swept import generate_swept_box_cylinder_ring_mesh
+    from fullmag.meshing._gmsh_extraction import certify_extracted_periodic_mesh
+    box = Box(size=(40e-9, 40e-9, 10e-9))
+    geometry = box - Cylinder(radius=8e-9, height=10e-9) if antidot else box
+    generate = generate_swept_box_cylinder_ring_mesh if antidot else generate_swept_tetrahedral_box_airbox_mesh
+    mesh = generate(
+        geometry, 10e-9, layers, order=1, distribution="fixed", recombine=False,
+        airbox=AirboxOptions(size=(40e-9, 40e-9, 410e-9), maximum_element_size=50e-9),
+        options=MeshOptions(mesh_strategy="thin_film_tetrahedral", through_thickness_elements=layers,
+                            periodic_pair_ids=["x_faces", "y_faces"]))
+    certificate = certify_extracted_periodic_mesh(
+        mesh.nodes, mesh.boundary_faces, mesh.boundary_markers,
+        mesh.periodic_boundary_pairs, mesh.periodic_node_pairs)
+    assert certificate["certificate_status"] == "accepted"
+    nodes = np.asarray(mesh.nodes)
+    cells = np.asarray(mesh.elements)
+    incidence = Counter(tuple(sorted(face)) for cell in cells for face in combinations(cell, 3))
+    assert max(incidence.values()) == 2
+    facet_keys = [tuple(sorted(face)) for face in mesh.boundary_faces]
+    assert len(set(facet_keys)) == len(facet_keys)
+    assert {face for face, count in incidence.items() if count == 1} == {
+        key for key, role in zip(facet_keys, mesh.facet_roles) if role != "material_interface"}
+    for face, role in zip(mesh.boundary_faces, mesh.facet_roles):
+        count = incidence[tuple(sorted(face))]
+        assert count == (2 if role == "material_interface" else 1)
+    xyz = nodes[cells]
+    volumes = np.linalg.det(xyz[:, 1:] - xyz[:, :1]) / 6
+    assert np.all(volumes > 0)
+    assert np.isclose(np.sum(volumes), 40e-9 * 40e-9 * 410e-9, rtol=1e-12, atol=0)
+    body = cells[np.asarray(mesh.element_markers) == 1]
+    assert len(np.unique(np.round(nodes[body, 2], 17))) == layers + 1
+
+
+@pytest.mark.parametrize("permutation", [(0, 1, 2, 3, 4, 5), (2, 0, 1, 5, 3, 4)])
+@pytest.mark.parametrize("scale,translation", [(1e-9, (0., 0., 0.)),
+                                              (1., (11., -17., 5.))])
+def test_prism_subdivision_ignores_local_order_and_translation(permutation, scale, translation):
+    gmsh = pytest.importorskip("gmsh")
+    from fullmag.meshing._gmsh_layered_tetrahedra import subdivide_layered_prisms
+    xyz = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0],
+                    [0, 0, .2], [1, 0, .2], [0, 1, .2]]) * scale + translation
+    gmsh.initialize()
+    gmsh.option.setNumber("General.Terminal", 0)
+    try:
+        gmsh.model.addDiscreteEntity(3, 1)
+        gmsh.model.mesh.addNodes(3, 1, list(range(1, 7)), xyz.reshape(-1))
+        gmsh.model.mesh.addElementsByType(1, 6, [1], [i + 1 for i in permutation])
+        subdivide_layered_prisms(gmsh)
+        kinds, _, raw = gmsh.model.mesh.getElements(3, 1)
+        assert list(kinds) == [4]
+        children = np.asarray(raw[0]).reshape(-1, 4)
+        # One common, conforming split independent of Gmsh element numbering.
+        assert {tuple(sorted(cell)) for cell in children} == {
+            (1, 2, 3, 5), (1, 3, 5, 6), (1, 4, 5, 6)}
+        points = xyz[children - 1]
+        volumes = np.linalg.det(points[:, 1:] - points[:, :1]) / 6
+        assert np.all(volumes > 0)
+        assert np.isclose(sum(volumes), .1 * scale ** 3, rtol=1e-12, atol=0)
+    finally:
+        gmsh.finalize()
+
+
+def test_prism_subdivision_rejects_skew_before_mutation():
+    gmsh = pytest.importorskip("gmsh")
+    from fullmag.meshing._gmsh_layered_tetrahedra import subdivide_layered_prisms
+    gmsh.initialize()
+    gmsh.option.setNumber("General.Terminal", 0)
+    try:
+        gmsh.model.addDiscreteEntity(3, 1)
+        gmsh.model.mesh.addNodes(3, 1, list(range(1, 7)),
+                                 [0,0,0, 1,0,0, 0,1,0, .1,0,1, 1.1,0,1, .1,1,1])
+        gmsh.model.mesh.addElementsByType(1, 6, [1], list(range(1, 7)))
+        with pytest.raises(ValueError, match="matching vertical columns"):
+            subdivide_layered_prisms(gmsh)
+        assert list(gmsh.model.mesh.getElements(3, 1)[0]) == [6]
+    finally:
+        gmsh.finalize()

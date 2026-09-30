@@ -2013,7 +2013,7 @@ def _generate_coincident_ring_airbox_mesh(
                 step,
                 numElements=[1],
                 heights=[1.0],
-                recombine=False,
+                recombine=True,
             )
             gmsh.model.geo.synchronize()
             volumes = [int(tag) for dim, tag in extruded if int(dim) == 3]
@@ -2072,18 +2072,9 @@ def _generate_coincident_ring_airbox_mesh(
         if interface_surfaces:
             gmsh.model.addPhysicalGroup(2, interface_surfaces, tag=10)
             gmsh.model.setPhysicalName(2, 10, "mag_air_interface")
-        outer_surfaces = sorted(
-            surface
-            for surface in body_boundary | air_boundary
-            if (
-                abs(float(gmsh.model.getBoundingBox(2, surface)[2]) - zmin) <= 1.0e-8
-                or abs(float(gmsh.model.getBoundingBox(2, surface)[5]) - zmax) <= 1.0e-8
-                or abs(float(gmsh.model.getBoundingBox(2, surface)[0]) - xmin) <= 1.0e-8
-                or abs(float(gmsh.model.getBoundingBox(2, surface)[3]) - xmax) <= 1.0e-8
-                or abs(float(gmsh.model.getBoundingBox(2, surface)[1]) - ymin) <= 1.0e-8
-                or abs(float(gmsh.model.getBoundingBox(2, surface)[4]) - ymax) <= 1.0e-8
-            )
-        )
+        # The boundary of the combined volumes excludes magnetic-air interfaces.
+        # Bounding-box extrema alone also select horizontal internal interfaces.
+        outer_surfaces = sorted(boundary_surfaces(body_volumes + air_volumes))
         from ._gmsh_occ import (
             _add_periodic_boundary_physical_groups,
             _configure_axis_periodic_surfaces,
@@ -2175,6 +2166,8 @@ def _generate_coincident_ring_airbox_mesh(
             gmsh.model.mesh.generate(3)
         _apply_post_mesh_options(gmsh, options)
         _reapply_periodic_surface_mappings(gmsh, periodic_specs)
+        from ._gmsh_layered_tetrahedra import subdivide_layered_prisms
+        subdivide_layered_prisms(gmsh)
         quality, _per_domain_quality = (
             _extract_quality_metrics(gmsh, options)
             if options.compute_quality

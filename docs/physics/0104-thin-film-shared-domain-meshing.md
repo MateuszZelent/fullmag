@@ -188,3 +188,42 @@ nie kwalifikuje operatora ani managed runtime.
 | Sweep | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `generate_swept_box_mesh` | ograniczona mixed-P1 realizacja box |
 | Tetra fields | `packages/fullmag-py/src/fullmag/meshing/_size_field_plan.py` | `_build_field_stack` | strefy surface/edge/corner/air |
 | Quality | `packages/fullmag-py/src/fullmag/meshing/_gmsh_extraction.py` | `_extract_quality_metrics` | bieżące metryki Gmsh |
+
+
+(thin-film-periodic-tetrahedral-layer-realization)=
+## Warstwowa triangulacja periodyczna — korekta realizacji
+
+Dla ograniczonego przypadku Box lub Box minus współosiowy Cylinder, z airboxem
+współbieżnym bocznie, GEO generuje pomocnicze pryzmaty z zadaną liczbą warstw.
+Jedna reguła podziału obejmuje wszystkie magnetic i air volumes oraz ich ściany:
+trzy wierzchołki dolnej podstawy porządkuje się leksykograficznie po współrzędnych
+w płaszczyźnie filmu, a górne odpowiadają im po przesunięciu wzdłuż z.
+Pryzmat o podstawie a,b,c i górze A,B,C dzieli się na tetraedry
+(a,b,c,C), (a,b,B,C), (a,A,B,C). Wspólna pionowa ściana między a i b ma
+przekątną a–B. Ten sam wybór stosuje się do powierzchni zapisanej w Gmsh.
+Kolejność lokalna komórki nie steruje wyborem przekątnej. Orientacja tetraedrów
+jest dodatnia; zerowy wyznacznik jest błędem.
+
+Reguła nie dodaje węzłów i zachowuje płaszczyzny warstw oraz regiony.
+Współrzędne bliskie w granicach błędu maszynowego klasyfikuje się do wspólnych
+rang osi; tolerancja służy wyłącznie deterministycznemu porządkowaniu geometrii,
+nie akceptacji błędnego certyfikatu. Dla par osiowych translacja nie zmienia
+kolejności końców krawędzi, więc nie zmienia przekątnej. Inne rodziny komórek,
+podstawy niepoziome i sweep inny niż z nie należą do tej realizacji.
+
+Owner: `packages/fullmag-py/src/fullmag/meshing/_gmsh_layered_tetrahedra.py::
+subdivide_layered_prisms`; caller `_generate_coincident_ring_airbox_mesh`.
+Publiczne Python/ProblemIR nie zmieniają semantyki: końcowy mesh nadal jest
+tet4/tri3 z exact layers. FEM CPU i FEM GPU konsumują tę samą topologię;
+nie jest to dowód wykonania GPU. FDM CPU/GPU: nie dotyczy.
+
+Regresja `test_layered_periodic_triangles_are_conforming` wymaga certyfikatu
+par obu osi, zgodności facet–cell, objętości, dodatnich wyznaczników i dokładnych
+płaszczyzn dla 3/6/9 warstw Box oraz 1/2/3 warstw filmu z otworem (obecny limit ring). Status przed poprawką: RED,
+niepełna bijekcja x_faces. Po poprawce: 31 lekkich testów PASS (26 integracyjnych i 5 podziału); nie jest to
+kwalifikacja runtime. Granicę zewnętrzną wybiera się z brzegu połączonych volumes,
+co usuwa interfejsy magnetic–air z Gamma_out. Każdy facet interfejsu musi mieć
+incydencję dwóch komórek, a każdy facet exterior/periodic jedną. Jednowłaścicielskie
+ściany komórek muszą dokładnie pokrywać exterior/periodic facets; brak takiej
+równości oznacza szczelinę lub błędną klasyfikację. Status managed runtime i Rust v6: NOT VERIFIED;
+nie wolno utożsamiać lekkiej kontroli Gmsh z wynikiem eigensolve.

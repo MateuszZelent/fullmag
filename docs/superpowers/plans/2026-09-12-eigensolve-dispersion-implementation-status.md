@@ -1,5 +1,21 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
+## S04 — naprawa periodycznych przekątnych i granicy airboxu
+
+- Seria #179 jest terminalna: sześć DE/BV 3/6/9 zakończyło się przed solverem
+  na certyfikacie siatki. Nie ma nowego zaakceptowanego punktu f(k).
+- RED real-Gmsh: wszystkie trójkąty x/y miały błędne przekątne mimo zgodnych węzłów.
+- Pomocnicze prism6 dzielone są wspólną regułą na tet4; pionowe quad4 na tri3.
+  Bez nowych węzłów, z zachowaniem regionów, exact layers i dodatnich wyznaczników.
+- Poprawiono też magnetic–air interface zaliczany przez bbox do Gamma_out:
+  exterior wyprowadzany jest z combined domain boundary.
+- Lekka regresja: 26 + 5 PASS (31 różnych przypadków). Pary x/y, pełna incydencja ścian, objętość i płaszczyzny;
+  Box 3/6/9 oraz ring 1/2/3 (nie rozszerzano ograniczeń ring).
+- Rust v6 i managed solve poprawionej siatki: NOT VERIFIED. Nie wyłączono bramek.
+  Ostatni live storage około 1.86 GB, admission 8 GiB; niczego nie usunięto.
+- Następnie: managed snapshot runtime-v2 → Γ/DE/BV → residual/provenance →
+  zbieżność grubości/airbox/lateral mesh i wykres; pełne S00–S12 nadal otwarte.
+
 ## #179 succeeded; oracle grubości i nowa blokada certyfikatu siatki
 
 - Managed #179 succeeded/exit0; etap native-build exit0, receipt/hash gate
