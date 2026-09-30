@@ -341,7 +341,19 @@
     {"id": "source-thickness-collector", "path": "scripts/collect_de_bv_thickness_comparison.py", "symbol": "collect_record", "responsibility": "Collect original certified modes and actual SI metadata for the six thickness pilots."},
     {"id": "source-thickness-collector-regression", "path": "scripts/test_collect_de_bv_thickness_comparison.py", "symbol": "test_rejects_wrong_receipt_before_field_loading", "responsibility": "Reject failed, mismatched source identity and incorrect thickness receipts."},
     {"id": "source-thickness-plot", "path": "scripts/plot_de_bv_thickness_comparison.py", "symbol": "validate_comparison", "responsibility": "Revalidate each certified run before rendering fixed-k thickness data without extrapolation."},
-    {"id": "source-thickness-plot-regression", "path": "scripts/test_plot_de_bv_thickness_comparison.py", "symbol": "test_modified_record_is_rejected_before_plotting", "responsibility": "Reject modified analytical or numerical records before rendering."}
+    {"id": "source-thickness-plot-regression", "path": "scripts/test_plot_de_bv_thickness_comparison.py", "symbol": "test_modified_record_is_rejected_before_plotting", "responsibility": "Reject modified analytical or numerical records before rendering."},
+    {
+      "id": "source-de-pilot-metadata-comparison",
+      "path": "scripts/compare_de_100nm_pilot.py",
+      "symbol": "load_comparison_input",
+      "responsibility": "Bind DE analytic comparison to actual SI metadata, supported sampling and matching successful receipts"
+    },
+    {
+      "id": "source-de-pilot-comparison-tests",
+      "path": "scripts/test_compare_de_100nm_pilot.py",
+      "symbol": "test_supported_de_sampling_includes_k25_and_rejects_bv",
+      "responsibility": "Regression evidence for metadata routing, explicit branch selection and unqualified plotting"
+    }
   ],
   "public_api": {
     "parameters": [

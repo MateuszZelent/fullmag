@@ -1481,3 +1481,39 @@ Test renderowania jest syntetyczna kontrola prezentacji, nie wynikiem FEM.
 |---|---|---|
 | source-thickness-plot | `scripts/plot_de_bv_thickness_comparison.py` | `validate_comparison` |
 | source-thickness-plot-regression | `scripts/test_plot_de_bv_thickness_comparison.py` | `test_modified_record_is_rejected_before_plotting` |
+
+## Porównanie pilota DE z parametrami rzeczywistego modelu
+
+<!-- DOC-ANCHOR: de-pilot-metadata-analytic-comparison -->
+
+Postprocessor `scripts/compare_de_100nm_pilot.py::load_comparison_input` nie
+wyprowadza grubości filmu z nazwy pliku. Czyta grubość, parametry materiałowe,
+pole zewnętrzne, przenikalność próżni i padding airboxu z metadanych danej próby.
+Dodatnie, skończone parametry SI i jawna orientacja DE są obowiązkowe.
+Zadeklarowane próbki wektora falowego muszą zgadzać się z indeksami CSV
+oraz samplingiem requestu. Obsługiwane klucze DE pochodzą z kanonicznego
+`validate_de_smoke_rows.py::SAMPLING`; klucze BV są odrzucane.
+
+Referencja pozostaje istniejącym przybliżeniem jednorodnego modu n=0
+`verify_fem_frequency_domain_eigen_artifacts.py::kalinikos_slab_n0_frequency_hz`.
+Nie uwzględnia pełnego sprzężenia modów przez grubość filmu. Osobny kontrolny
+punkt Gamma uwzględnia skończone granice Dirichleta airboxu; nie stanowi
+rozwiązania całej dyspersji przy skończonym airboxie. Ta poprawka nie zmienia
+Python DSL ani ProblemIR, równań solvera ani tolerancji akceptacji modów.
+
+Receipt request/result musi wskazywać ten sam model, źródła i job oraz sukces
+wrappera. Względny residual jest odczytywany z `spectrum.v3.json`, jeśli jest
+dostępny, z zachowaniem jego scope; bez tego artefaktu nie jest wyprowadzany
+z bezwzględnego pola CSV. Gałąź do tabeli porównania wybiera się jawnie.
+Sam wykres wszystkich modów nie identyfikuje fizycznej gałęzi.
+
+Narzędzie służy analizie artefaktów FEM CPU; nie implementuje realizacji
+FEM GPU ani FDM CPU/GPU. Raport zawsze pozostaje `NOT VERIFIED`: wymagane są
+osobne dowody profilu modu, pokrycia widma oraz zbieżności siatki i airboxu.
+Testy `scripts/test_compare_de_100nm_pilot.py::ComparisonTests` sprawdzają
+routing, metadane, mapowanie CSV, referencję i render; nie kwalifikują FEM.
+
+| Source ID | Path + symbol | Odpowiedzialność i dowód |
+|---|---|---|
+| source-de-pilot-metadata-comparison | `scripts/compare_de_100nm_pilot.py::load_comparison_input` | Metadane SI i receipt; FEM CPU postprocessing, NOT VERIFIED |
+| source-de-pilot-comparison-tests | `scripts/test_compare_de_100nm_pilot.py::test_supported_de_sampling_includes_k25_and_rejects_bv` | Regresja routingu DE, test źródeł |
