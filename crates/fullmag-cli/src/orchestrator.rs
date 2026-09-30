@@ -3235,8 +3235,23 @@ fn attach_solved_antenna_drive_bases(
         }
     };
 
-    let referenced_projection_ids = problem
+    let time_stage = match &execution_plan.backend_plan {
+        BackendPlanIR::Fem(plan) => &plan.time_stage,
+        BackendPlanIR::Fdm(plan) => &plan.time_stage,
+        _ => unreachable!("backend lane was validated before antenna activation"),
+    };
+    let active_drives = problem
         .solved_antenna_drives
+        .iter()
+        .filter(|drive| {
+            drive.activation.is_active_for(
+                time_stage.study_kind,
+                time_stage.active_stage_id.as_deref(),
+            )
+        })
+        .collect::<Vec<_>>();
+
+    let referenced_projection_ids = active_drives
         .iter()
         .map(|drive| drive.projection_ref.as_str())
         .collect::<std::collections::BTreeSet<_>>();
@@ -3268,7 +3283,7 @@ fn attach_solved_antenna_drive_bases(
         }
     }
 
-    for drive in &problem.solved_antenna_drives {
+    for drive in active_drives {
         let projection = problem
             .antenna_target_projections
             .iter()
@@ -12885,6 +12900,10 @@ mod tests {
             },
             provenance: fullmag_ir::ProvenancePlanIR::default(),
         };
+
+        if let BackendPlanIR::Fdm(fdm) = &mut plan.backend_plan {
+            fdm.time_stage.study_kind = fullmag_ir::StudyKindIR::TimeEvolution;
+        }
 
         let error = attach_solved_antenna_drive_bases(
             &problem,

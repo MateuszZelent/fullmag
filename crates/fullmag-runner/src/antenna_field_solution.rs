@@ -1076,6 +1076,7 @@ pub fn materialize_fem_solved_antenna_drives(
 
     let materialized = materialize_solved_antenna_drive_parts(
         &problem.solved_antenna_drives,
+        &plan.time_stage,
         &problem.antenna_target_projections,
         &problem.antenna_field_solve_stages,
         plan.mesh.nodes.len(),
@@ -1108,6 +1109,7 @@ pub fn materialize_fem_solved_antenna_drives_v03(
 
     let materialized = materialize_solved_antenna_drive_parts(
         &problem.solved_antenna_drives,
+        &plan.time_stage,
         &problem.antenna_target_projections,
         &problem.antenna_field_solve_stages,
         plan.mesh.nodes.len(),
@@ -1174,7 +1176,12 @@ fn materialize_fdm_solved_antenna_drive_parts(
     plan: &mut FdmPlanIR,
     assets: &BTreeMap<String, AntennaFieldSolutionAsset>,
 ) -> Result<(), RunError> {
-    if drives.is_empty() {
+    if !drives.iter().any(|drive| {
+        drive.activation.is_active_for(
+            plan.time_stage.study_kind,
+            plan.time_stage.active_stage_id.as_deref(),
+        )
+    }) {
         plan.solved_antenna_drive_bases.clear();
         return Ok(());
     }
@@ -1182,6 +1189,7 @@ fn materialize_fdm_solved_antenna_drive_parts(
     let active_mask = fdm_active_mask(plan, target_positions.len())?;
     let materialized = materialize_solved_antenna_drive_parts(
         drives,
+        &plan.time_stage,
         projections,
         stages,
         target_positions.len(),
@@ -1195,6 +1203,7 @@ fn materialize_fdm_solved_antenna_drive_parts(
 
 fn materialize_solved_antenna_drive_parts<F>(
     drives: &[SolvedAntennaDriveIR],
+    time_stage: &fullmag_ir::TimeStageContextIR,
     projections: &[AntennaTargetProjectionRefIR],
     stages: &[AntennaFieldSolveStageIR],
     expected_sample_count: usize,
@@ -1212,6 +1221,12 @@ where
             return Err(RunError {
                 message: format!("duplicate solved antenna drive '{}'", drive.id),
             });
+        }
+        if !drive.activation.is_active_for(
+            time_stage.study_kind,
+            time_stage.active_stage_id.as_deref(),
+        ) {
+            continue;
         }
         let projection = projections
             .iter()
@@ -1834,6 +1849,7 @@ mod tests {
         AntennaFieldSolveStageIR,
     ) {
         let mut plan = FdmPlanIR::default();
+        plan.time_stage.study_kind = fullmag_ir::StudyKindIR::TimeEvolution;
         plan.origin_m = [0.0, 0.0, 0.0];
         plan.grid.cells = [2, 1, 1];
         plan.cell_size = [2.0, 2.0, 2.0];
@@ -1983,6 +1999,21 @@ mod tests {
             plan.solved_antenna_drive_bases[0].field_xyz_apm_per_a,
             vec![[4.0, 5.0, 6.0], [0.0, 0.0, 0.0]]
         );
+    }
+
+    #[test]
+    fn inactive_fdm_antenna_drive_does_not_require_a_future_asset() {
+        let (mut plan, projection, stage) = fdm_projection_fixture();
+        plan.time_stage.study_kind = fullmag_ir::StudyKindIR::Relaxation;
+        materialize_fdm_solved_antenna_drive_parts(
+            &[drive()],
+            &[projection],
+            &[stage],
+            &mut plan,
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        assert!(plan.solved_antenna_drive_bases.is_empty());
     }
 
     #[test]
