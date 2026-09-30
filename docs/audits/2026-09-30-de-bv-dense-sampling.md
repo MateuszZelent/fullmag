@@ -65,3 +65,49 @@ Wyjaśnić brak certyfikatu dla DE k12; następnie powtórzyć zagęszczoną
 krzywą na L2/L3 i kontrolować airbox. Samo dodanie punktów nie zamyka
 bramki naukowej. Przy L2/L3 pozostaje także otwarta kontrola znaku k
 opisana w 2026-09-30-de-bv-mesh-convergence.md.
+
+## Aktualizacja: siatka 52 punktów — przygotowanie wejść
+
+Cel użytkownika: zwiększyć liczbę policzonych punktów, aby ocenić kształt dyspersji.
+
+## Przygotowane wejścia
+
+- Dwie ścieżki: `positive-26` (DE) i `bv-positive-26` (BV).
+- Każda: 26 punktów od 0 do 25 rad/µm, krok 1 rad/µm; łącznie 52.
+- Jedna relaksacja źródłowa na ścieżkę; jeden żądany mod na próbkę.
+- Osobne selektory `k0`…`k25` oraz `bv-k0`…`bv-k25` do diagnostyki.
+- Gamma pojedynczy używa PeriodicBC oraz periodic_airbox_k0.
+- Demag, exchange, Zeeman i parametry materiałowe zachowane.
+- Okno poszukiwania: DE 8.5–16 GHz, BV 8.5–12 GHz.
+
+## Dowody i stan wykonania
+
+54 interpretowane kontrole wejść Python→IR obejmują obie ścieżki i wszystkie
+samodzielne punkty. Nie kompilują ani nie wykonują solvera FEM.
+Kontrole pełnych syntetycznych artefaktów i wcześniejsze regresje w roboczym
+checkoutcie: 139 testów oraz 7 subtestów przeszło. Szerszy walidator i jego
+poprawka Gamma dla BV pozostają częścią niezakończonego przyrostu roboczego.
+
+Nie powstały nowe częstotliwości ani zagęszczony wykres. Zachowane wyniki:
+19 zaakceptowanych punktów niezależnych, 9 DE i 10 BV; nie jest to kompletna
+ścieżka ani dowód identyfikacji najniższej gałęzi. Docelowo brakuje 33 punktów.
+
+## Aktualna blokada
+
+Odczyt runnera 2026-09-30: worker_alive=true, accepting_jobs=true,
+brak aktywnych jobów; wolne 4 705 071 104 B, poniżej progu 8 GiB.
+Profile runtime-only nie są dopuszczone. Zakaz kompilacji testów jednostkowych
+pozostaje aktywny. Nie zmieniono runnera i nie usunięto danych; wcześniej
+zadane pytania o te działania nadal oczekują odpowiedzi.
+
+## Następne wykonanie
+
+1. Rozwiązać zatwierdzoną trasą miejsce oraz profil runtime-only.
+2. Zbudować aktualny snapshot i sprawdzić native source binding.
+3. Uruchomić obie ścieżki; brak pojedynczego punktu diagnozować osobno,
+   bez przedstawiania niezależnych relaksacji jako jednej ścieżki.
+4. Sprawdzić pełne residuale, Gamma/nonzero demag probes, fazę i siatkę.
+5. Nanieść zaakceptowane częstotliwości na scatterplot z analityką; jawnie
+   oznaczyć brakujące/odrzucone punkty. Nie interpolować ich jako wyników FEM.
+
+Stan naukowy: NOT VERIFIED dla nowego runtime i zagęszczonego solve.

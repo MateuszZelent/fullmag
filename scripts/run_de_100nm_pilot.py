@@ -29,6 +29,15 @@ PILOTS = {
     "de-smoke-five": ("examples/fem_de_smoke_numeric.py", "five"),
 }
 
+# Explicit dense input selectors; numerical certification remains a separate gate.
+PILOTS["de-smoke-positive-26"] = ("examples/fem_de_smoke_numeric.py", "positive-26")
+PILOTS["de-smoke-bv-positive-26"] = ("examples/fem_de_smoke_numeric.py", "bv-positive-26")
+for _geometry_prefix in ("", "bv-"):
+    for _k_um in (*range(26), -25):
+        _sampling = f"{_geometry_prefix}k{_k_um}"
+        PILOTS.setdefault(f"de-smoke-{_sampling}", ("examples/fem_de_smoke_numeric.py", _sampling))
+
+
 
 def pilot_model(pilot):
     if pilot not in PILOTS:

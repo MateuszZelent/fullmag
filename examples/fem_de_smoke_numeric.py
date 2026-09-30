@@ -13,21 +13,25 @@ import os
 import fullmag as fm
 
 SAMPLING = os.environ.get("FULLMAG_DE_SMOKE_SAMPLING", "two")
-if SAMPLING not in ("two", "five", "k0", "k2", "k25", "bv-k25", "k-25", "bv-k-25", "k5", "k7", "k10", "k12", "k15", "k17", "k20", "k22", "bv-k2", "bv-k5", "bv-k7", "bv-k10", "bv-k12", "bv-k15", "bv-k17", "bv-k20", "bv-k22", "positive-six", "bv-positive-six", "signed-eleven"):
+_SINGLE_K_NAMES = {f"{prefix}k{k}" for prefix in ("", "bv-") for k in (*range(26), -25)}
+_PATH_NAMES = {"two", "five", "positive-six", "bv-positive-six", "positive-26", "bv-positive-26", "signed-eleven"}
+if SAMPLING not in _SINGLE_K_NAMES | _PATH_NAMES:
     raise ValueError(f"Unsupported FULLMAG_DE_SMOKE_SAMPLING: {SAMPLING}")
 _single_k_name = SAMPLING.removeprefix("bv-")
-IS_SINGLE = _single_k_name in ("k0", "k2", "k5", "k7", "k10", "k12", "k15", "k17", "k20", "k22", "k25", "k-25")
+IS_SINGLE = SAMPLING in _SINGLE_K_NAMES
 KY = ((float(_single_k_name[1:]) * 1e6,) if IS_SINGLE else
+      tuple(k * 1e6 for k in range(26)) if SAMPLING in ("positive-26", "bv-positive-26") else
       (2e6, 5e6, 10e6, 15e6, 20e6, 25e6) if SAMPLING in ("positive-six", "bv-positive-six") else
       (0.0, 2e6) if SAMPLING == "two" else
       (0.0, 1e6, 2e6, 3e6, 5e6) if SAMPLING == "five" else
       (-3e6, -2e6, -1.5e6, -1e6, -0.5e6, 0.0,
        0.5e6, 1e6, 1.5e6, 2e6, 3e6))
-REQUESTED_MODE_COUNT = 1 if IS_SINGLE or SAMPLING in ("positive-six", "bv-positive-six", "signed-eleven") else 4
+REQUESTED_MODE_COUNT = 4 if SAMPLING in ("two", "five") else 1
 IS_BV = SAMPLING.startswith("bv-")
+IS_GAMMA_SINGLE = IS_SINGLE and KY[0] == 0.0
 K_VECTORS = [(k, 0.0, 0.0) if IS_BV else (0.0, k, 0.0) for k in KY]
 FREQUENCY_MIN_HZ = 12e9 if SAMPLING in ("k25", "k-25") else 8.5e9
-FREQUENCY_MAX_HZ = 16e9 if (SAMPLING in ("k25", "k-25", "positive-six") or (IS_SINGLE and not IS_BV and abs(KY[0]) >= 15e6)) else 12e9
+FREQUENCY_MAX_HZ = 16e9 if (SAMPLING in ("k25", "k-25", "positive-six", "positive-26") or (IS_SINGLE and not IS_BV and abs(KY[0]) >= 15e6)) else 12e9
 RELAX_DT_S = 5e-15
 RELAX_MAX_STEPS = 50000
 RELAX_MAX_TIME_S = RELAX_DT_S * RELAX_MAX_STEPS
@@ -138,8 +142,8 @@ study.stages.add_eigenmodes(
                    for k, vector in zip(KY, K_VECTORS)],
            samples_per_segment=[1] * (len(KY) - 1),
        )}),
-    bc=(fm.PeriodicBC(["x_faces", "y_faces"]) if SAMPLING == "k0" else
+    bc=(fm.PeriodicBC(["x_faces", "y_faces"]) if IS_GAMMA_SINGLE else
         fm.FloquetBC(["x_faces", "y_faces"],
                      phase_convention="exp_minus_i_k_dot_delta_r")),
-    magnetostatic_bc="periodic_airbox_k0" if SAMPLING == "k0" else "floquet_airbox",
+    magnetostatic_bc="periodic_airbox_k0" if IS_GAMMA_SINGLE else "floquet_airbox",
 )
