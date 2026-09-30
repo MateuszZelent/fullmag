@@ -411,12 +411,6 @@ pub(super) fn eigen_mode_field_id(sample_index: usize, raw_mode_index: usize) ->
     format!("analysis:eigen:sample-{sample_index:04}:mode-{raw_mode_index:04}")
 }
 
-pub(super) fn eigen_mode_field_resource_key(mode_field_id: &str) -> String {
-    format!(
-        "/v2/sessions/current/data/fields/{mode_field_id}/samples/vector?view=phase_rotated_real&phase_rad=0"
-    )
-}
-
 pub(super) fn result_mode(
     result: &PathSolveResult,
     sample_index: usize,

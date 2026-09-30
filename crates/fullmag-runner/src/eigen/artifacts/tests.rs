@@ -296,10 +296,7 @@ fn eigen_artifact_writer_emits_v2_contract_files() {
         spectrum["samples"][0]["modes"][0]["mode_field_id"],
         "analysis:eigen:sample-0000:mode-0000"
     );
-    assert_eq!(
-            spectrum["samples"][0]["modes"][0]["mode_field_resource_key"],
-            "/v2/sessions/current/data/fields/analysis:eigen:sample-0000:mode-0000/samples/vector?view=phase_rotated_real&phase_rad=0"
-        );
+    assert!(spectrum["samples"][0]["modes"][0]["mode_field_resource_key"].is_null());
     assert!(spectrum["samples"][0]["modes"][0]
         .get("component_participation")
         .is_none());
@@ -314,6 +311,9 @@ fn eigen_artifact_writer_emits_v2_contract_files() {
         spectrum_v3["samples"][0]["modes"][0]["component_participation"]["definition_id"],
         crate::eigen::MODAL_PARTICIPATION_DEFINITION_ID
     );
+
+    assert!(!spectrum.to_string().contains("/v2/sessions/current"));
+    assert!(!spectrum_v3.to_string().contains("/v2/sessions/current"));
 
     let branches: Value = serde_json::from_slice(
         &std::fs::read(eigen_dir.join("branches.v2.json"))
@@ -340,10 +340,9 @@ fn eigen_artifact_writer_emits_v2_contract_files() {
         branches["branches"][0]["points"][0]["mode_field_id"],
         "analysis:eigen:sample-0000:mode-0000"
     );
-    assert_eq!(
-            branches["branches"][0]["points"][0]["mode_field_resource_key"],
-            "/v2/sessions/current/data/fields/analysis:eigen:sample-0000:mode-0000/samples/vector?view=phase_rotated_real&phase_rad=0"
-        );
+    assert!(branches["branches"][0]["points"][0]["mode_field_resource_key"].is_null());
+
+    assert!(!branches.to_string().contains("/v2/sessions/current"));
 
     let dispersion = std::fs::read_to_string(eigen_dir.join("dispersion.csv"))
         .expect("dispersion.csv should be written");
@@ -354,7 +353,7 @@ fn eigen_artifact_writer_emits_v2_contract_files() {
     assert_eq!(
             Some(dispersion_header),
             Some(
-                "sample_index,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,label,raw_mode_index,branch_id,frequency_hz,omega_rad_s,analytic_frequency_hz,relative_error,validation_geometry,line_width_hz,residual_norm,overlap_score,tracking_score_source,mode_field_id,mode_field_resource_key"
+                "sample_index,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,label,raw_mode_index,branch_id,frequency_hz,omega_rad_s,analytic_frequency_hz,relative_error,validation_geometry,line_width_hz,residual_norm,overlap_score,tracking_score_source,mode_field_id"
             )
         );
     let dispersion_row = dispersion_lines
@@ -382,10 +381,8 @@ fn eigen_artifact_writer_emits_v2_contract_files() {
         dispersion_columns.get(column("mode_field_id")),
         Some(&"analysis:eigen:sample-0000:mode-0000")
     );
-    assert_eq!(
-            dispersion_columns.get(column("mode_field_resource_key")),
-            Some(&"/v2/sessions/current/data/fields/analysis:eigen:sample-0000:mode-0000/samples/vector?view=phase_rotated_real&phase_rad=0")
-        );
+    assert!(!header_columns.contains(&"mode_field_resource_key"));
+    assert!(!dispersion.contains("/v2/sessions/current"));
 
     let mode: Value = serde_json::from_slice(
         &std::fs::read(eigen_dir.join("modes/sample_0000_mode_0000.json"))
@@ -400,10 +397,8 @@ fn eigen_artifact_writer_emits_v2_contract_files() {
         mode["mode_field_id"],
         "analysis:eigen:sample-0000:mode-0000"
     );
-    assert_eq!(
-            mode["mode_field_resource_key"],
-            "/v2/sessions/current/data/fields/analysis:eigen:sample-0000:mode-0000/samples/vector?view=phase_rotated_real&phase_rad=0"
-        );
+    assert!(mode["mode_field_resource_key"].is_null());
+    assert!(!mode.to_string().contains("/v2/sessions/current"));
     for required in [
         "residual_norm",
         "residual_linf",
@@ -523,10 +518,8 @@ fn eigen_artifact_writer_emits_v2_contract_files() {
         family_manifest["artifacts"]["mode_metadata_paths"][0],
         "eigen/modes/sample_0000/mode_0000.json"
     );
-    assert_eq!(
-        family_manifest["resources"]["mode_field_resources"][0],
-        "/v2/sessions/current/analysis/frequency-domain/eigen/mode-field/0/0/meta"
-    );
+    assert!(!family_manifest.to_string().contains("/v2/sessions/current/"));
+    assert_eq!(family_manifest["resources"]["mode_field_resources"], serde_json::json!([]));
     assert_eq!(
         family_manifest["diagnostics"]["tracking_score_source"],
         "seed_only"
@@ -1520,6 +1513,10 @@ fn field_sweep_builder_preserves_sample_and_mode_identity_and_marks_missing_hand
         "sample-0000/mode-0000"
     );
     assert_eq!(artifact.samples[0].bias_field_a_per_m, [40_000.0, 0.0, 0.0]);
+    assert_eq!(artifact.samples[0].modes[0].mode_field_resource_key, None);
+    assert!(!serde_json::to_string(&artifact).unwrap().contains("/v2/sessions/current/"));
+    assert_eq!(artifact.samples[0].modes[0].mode_artifact_path.as_deref(),
+               Some("eigen/modes/sample_0000/mode_0000.json"));
     assert_eq!(
         artifact.samples[0].modes[0].mode_field_id,
         Some("analysis:eigen:sample-0000:mode-0000".to_string())

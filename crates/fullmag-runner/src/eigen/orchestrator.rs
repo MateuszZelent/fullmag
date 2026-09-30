@@ -343,9 +343,10 @@ mod tests {
             "eigen/modes/sample_0000/mode_0002.json"
         );
         assert_eq!(
-            family_manifest["resources"]["mode_field_resources"][0],
-            "/v2/sessions/current/analysis/frequency-domain/eigen/mode-field/0/2/meta"
+            family_manifest["resources"]["mode_field_resources"],
+            serde_json::json!([])
         );
+        assert!(!family_manifest.to_string().contains("/v2/sessions/current"));
     }
 
     #[test]

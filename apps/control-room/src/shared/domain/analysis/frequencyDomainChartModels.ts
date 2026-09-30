@@ -1,10 +1,10 @@
+import { fieldVectorResourceKey as canonicalFieldVectorResourceKey } from "@/kernel/api/fieldQueryIdentity";
 import type { AnalysisChartResourceRef } from "./chartCursorPoint";
 import {
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_BRANCHES_V2_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
-  DATA_FIELD_VECTOR_PATH,
 } from "@/kernel/api/apiPaths";
 import type { FrequencyDomainKPathMetadataResource } from "@/kernel/api/apiTypes";
 import type { SelectionRef } from "@/kernel/selection/selectionTypes";
@@ -575,7 +575,7 @@ function frequencyChartScale(valuesHz: readonly number[]): FrequencyChartScale {
 }
 
 function fieldVectorResourceKey(fieldId: string): string {
-  return `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", fieldId)}?view=phase_rotated_real&phase_rad=0`;
+  return canonicalFieldVectorResourceKey(fieldId, { view: "phase_rotated_real", phase_rad: 0 });
 }
 
 function susceptibilityValues(value: unknown): number[] {
@@ -1160,7 +1160,9 @@ export function buildEigenBranchesModel(
         modeFieldId: stringValue(point?.mode_field_id ?? point?.modeFieldId),
         modeFieldResourceKey: stringValue(
           point?.mode_field_resource_key ?? point?.modeFieldResourceKey,
-        ),
+        ) ?? (stringValue(point?.mode_field_id ?? point?.modeFieldId)
+          ? fieldVectorResourceKey(stringValue(point?.mode_field_id ?? point?.modeFieldId)!)
+          : null),
         overlapPrev: finiteNumber(point?.overlap_prev ?? point?.overlapPrev),
         rawModeIndex: finiteInteger(
           point?.raw_mode_index ?? point?.rawModeIndex ?? point?.mode_index,
@@ -1817,7 +1819,9 @@ function parseDispersionCsv(csv: string): {
       modeFieldId: stringValue(row.mode_field_id ?? row.modeFieldId),
       modeFieldResourceKey: stringValue(
         row.mode_field_resource_key ?? row.modeFieldResourceKey,
-      ),
+      ) ?? (stringValue(row.mode_field_id ?? row.modeFieldId)
+        ? fieldVectorResourceKey(stringValue(row.mode_field_id ?? row.modeFieldId)!)
+        : null),
       overlap: finiteNumber(row.overlap_score ?? row.overlapScore ?? row.overlap),
       pathS,
       rawModeIndex: finiteInteger(row.raw_mode_index ?? row.mode_index ?? row.rawModeIndex ?? row.modeIndex),

@@ -531,11 +531,12 @@ def require_mode_field_handoff(
     expected_field_id = mode_field_id(sample_index, raw_mode_index)
     expected_resource_key = mode_field_resource_key(expected_field_id)
     require_equal(payload.get("mode_field_id"), expected_field_id, f"{name}.mode_field_id")
-    require_equal(
-        payload.get("mode_field_resource_key"),
-        expected_resource_key,
-        f"{name}.mode_field_resource_key",
-    )
+    if payload.get("mode_field_resource_key") is not None:
+        require_equal(
+            payload.get("mode_field_resource_key"),
+            expected_resource_key,
+            f"{name}.mode_field_resource_key",
+        )
 
 
 def require_tracking_summary(payload: dict, name: str) -> None:
@@ -1212,16 +1213,16 @@ def validate_mode_summary(
     expected_resource_key = mode_field_resource_key(expected_field_id)
     has_field_id = mode.get("mode_field_id") is not None
     has_resource_key = mode.get("mode_field_resource_key") is not None
-    if has_field_id != has_resource_key:
-        missing_name = "mode.mode_field_resource_key" if has_field_id else "mode.mode_field_id"
-        fail(f"{missing_name} requires the paired mode field handoff")
+    if has_resource_key and not has_field_id:
+        fail("mode.mode_field_id is required for a legacy mode field resource key")
     if has_field_id:
         require_equal(mode.get("mode_field_id"), expected_field_id, "mode.mode_field_id")
-        require_equal(
-            mode.get("mode_field_resource_key"),
-            expected_resource_key,
-            "mode.mode_field_resource_key",
-        )
+        if has_resource_key:
+            require_equal(
+                mode.get("mode_field_resource_key"),
+                expected_resource_key,
+                "mode.mode_field_resource_key",
+            )
     frequency_hz = require_finite_number(mode.get("frequency_hz"), "mode.frequency_hz")
     require_frequency_inside_window(frequency_hz, requested_window_hz, "mode.frequency_hz")
     frequency_real_hz = require_finite_number(mode.get("frequency_real_hz"), "mode.frequency_real_hz")
@@ -1264,11 +1265,12 @@ def validate_mode_summary(
         f"{metadata_path}.raw_mode_index",
     )
     require_equal(metadata.get("mode_field_id"), expected_field_id, f"{metadata_path}.mode_field_id")
-    require_equal(
-        metadata.get("mode_field_resource_key"),
-        expected_resource_key,
-        f"{metadata_path}.mode_field_resource_key",
-    )
+    if metadata.get("mode_field_resource_key") is not None:
+        require_equal(
+            metadata.get("mode_field_resource_key"),
+            expected_resource_key,
+            f"{metadata_path}.mode_field_resource_key",
+        )
     metadata_frequency_hz = require_finite_number(
         metadata.get("frequency_hz"),
         f"{metadata_path}.frequency_hz",
@@ -4213,7 +4215,6 @@ def validate_dispersion(
         "overlap_score",
         "tracking_score_source",
         "mode_field_id",
-        "mode_field_resource_key",
     }
     missing = required_columns.difference(reader.fieldnames or [])
     if missing:
@@ -4343,7 +4344,7 @@ def validate_dispersion(
                 f"dispersion row {row_index}.mode_field_id",
             )
             require_equal(
-                row.get("mode_field_resource_key"),
+                row.get("mode_field_resource_key", ""),
                 "",
                 f"dispersion row {row_index}.mode_field_resource_key",
             )
@@ -4355,11 +4356,12 @@ def validate_dispersion(
                 expected_field_id,
                 f"dispersion row {row_index}.mode_field_id",
             )
-            require_equal(
-                row.get("mode_field_resource_key"),
-                expected_resource_key,
-                f"dispersion row {row_index}.mode_field_resource_key",
-            )
+            if "mode_field_resource_key" in row:
+                require_equal(
+                    row.get("mode_field_resource_key"),
+                    expected_resource_key,
+                    f"dispersion row {row_index}.mode_field_resource_key",
+                )
         frequency_hz = require_finite_number(
             float(row["frequency_hz"]),
             f"dispersion row {row_index}.frequency_hz",
@@ -4444,11 +4446,13 @@ def validate_typed_modal_field_sweep(
     resources = manifest.get("resources")
     if not isinstance(resources, dict):
         fail("manifest.resources must be an object")
-    require_equal(
-        resources.get("field_sweep_resource_key"),
-        "/v2/sessions/current/analysis/frequency-domain/eigen/field-sweep.v1",
-        "manifest.resources.field_sweep_resource_key",
-    )
+    # Exact manifests carry durable paths; validate a legacy transport key only if present.
+    if resources.get("field_sweep_resource_key") is not None:
+        require_equal(
+            resources.get("field_sweep_resource_key"),
+            "/v2/sessions/current/analysis/frequency-domain/eigen/field-sweep.v1",
+            "manifest.resources.field_sweep_resource_key",
+        )
     field_sweep = load_json(path)
     prefix = "field_sweep"
     require_equal(field_sweep.get("schema_version"), "eigen/field_sweep.v1", f"{prefix}.schema_version")
@@ -4568,6 +4572,7 @@ def validate_typed_modal_field_sweep(
     completed_from_rows = 0
     known_branch_ids = set(branch_ids_by_mode.values())
     covered_modes: set[tuple[int, int]] = set()
+    covered_field_modes: set[tuple[int, int]] = set()
     for sample_position, sample in enumerate(samples):
         sample_prefix = f"{prefix}.samples[{sample_position}]"
         sample_id = require_non_empty_string(sample.get("sample_id"), f"{sample_prefix}.sample_id")
@@ -4653,26 +4658,42 @@ def validate_typed_modal_field_sweep(
                 f"{mode_prefix}.angular_frequency_rad_per_s",
                 absolute_tolerance=1.0e-3,
             )
+            require_equal(mode.get("source_revision"), source_revision, f"{mode_prefix}.source_revision")
+            require_equal(mode.get("status"), sample_status, f"{mode_prefix}.status")
+            if mode.get("residual_relative_l2") is not None:
+                residual = require_finite_number(mode.get("residual_relative_l2"), f"{mode_prefix}.residual_relative_l2")
+                if residual < 0.0:
+                    fail(f"{mode_prefix}.residual_relative_l2 must be non-negative")
+            field_status = mode.get("field_status")
+            if field_status is None:
+                field_status = "ready" if mode.get("mode_field_id") is not None else "spectrum-only"
+            if field_status == "spectrum-only":
+                for reference_name in ["mode_field_id", "mode_field_resource_key", "mode_artifact_path"]:
+                    require_equal(mode.get(reference_name), None, f"{mode_prefix}.{reference_name}")
+                continue
+            require_equal(field_status, "ready", f"{mode_prefix}.field_status")
+            require_non_empty_string(mode.get("mode_field_id"), f"{mode_prefix}.mode_field_id")
+            require_non_empty_string(known_mode_summaries[mode_key].get("mode_field_id"), f"{mode_prefix}.source_mode_field_id")
+            covered_field_modes.add(mode_key)
             metadata_rel, metadata_path = require_bundle_path(root, mode.get("mode_artifact_path"), f"{mode_prefix}.mode_artifact_path")
             require_equal(metadata_rel, nested_mode_path(sample_index, raw_mode_index), f"{mode_prefix}.mode_artifact_path")
             metadata = load_json(metadata_path)
             expected_summary = known_mode_summaries[mode_key]
             require_equal(mode.get("mode_field_id"), expected_summary.get("mode_field_id"), f"{mode_prefix}.mode_field_id")
-            require_equal(mode.get("mode_field_resource_key"), expected_summary.get("mode_field_resource_key"), f"{mode_prefix}.mode_field_resource_key")
+            # Field-sweep omits HTTP transport while mode/spectrum bundles may still use it.
+            if mode.get("mode_field_resource_key") is not None:
+                require_equal(mode.get("mode_field_resource_key"), mode_field_resource_key(mode_field_id(sample_index, raw_mode_index)), f"{mode_prefix}.mode_field_resource_key")
             require_equal(metadata.get("mode_field_id"), mode.get("mode_field_id"), f"{mode_prefix}.mode_field_id")
-            require_equal(metadata.get("mode_field_resource_key"), mode.get("mode_field_resource_key"), f"{mode_prefix}.mode_field_resource_key")
             require_equal(metadata.get("component_basis"), "global_xyz", f"{mode_prefix}.component_basis")
             require_equal(metadata.get("value_kind"), "complex_spatial_vector", f"{mode_prefix}.value_kind")
-            require_equal(mode.get("source_revision"), source_revision, f"{mode_prefix}.source_revision")
             require_finite_number(mode.get("residual_relative_l2"), f"{mode_prefix}.residual_relative_l2")
-            require_equal(mode.get("status"), sample_status, f"{mode_prefix}.status")
     require_equal(completed_sample_count, completed_from_rows, f"{prefix}.completed_sample_count")
     visualizable_modes = {
         mode_key
         for mode_key, mode_summary in known_mode_summaries.items()
         if mode_summary.get("mode_field_id") is not None
     }
-    if complete and covered_modes != visualizable_modes:
+    if complete and covered_field_modes != visualizable_modes:
         fail(f"{prefix}.complete requires every visualizable spectrum mode to resolve in the field sweep")
     expected_self_digest = canonical_artifact_self_digest(field_sweep, prefix)
     require_equal(

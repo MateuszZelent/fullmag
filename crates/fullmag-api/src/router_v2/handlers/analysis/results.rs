@@ -1546,6 +1546,14 @@ fn build_field_sweep_index(
     })
 }
 
+fn modal_field_vector_resource_key(field_id: Option<&str>) -> Option<String> {
+    let field_id = field_id.filter(|id| !id.trim().is_empty())?;
+    Some(format!(
+        "/v2/sessions/current/data/fields/{}/samples/vector?phase_rad=0&view=phase_rotated_real",
+        encode_path_segment(field_id),
+    ))
+}
+
 fn field_sweep_item(
     run_id: &str,
     dataset_id: &str,
@@ -1554,9 +1562,18 @@ fn field_sweep_item(
     mode: FrequencyDomainFieldSweepModePayload,
     mesh_ref: Option<AnalysisResultMeshRef>,
 ) -> AnalysisResultSpectralItemSummary {
+    // Derive transport only in the result projection, preserving the hashed source payload.
+    let field_resource_key = mode.mode_field_resource_key.as_ref()
+        .filter(|key| !key.trim().is_empty()).cloned().or_else(|| {
+            mode.mode_artifact_path.as_deref().filter(|path| !path.trim().is_empty())?;
+            modal_field_vector_resource_key(mode.mode_field_id.as_deref())
+        });
     let field_ready = mode.field_status.as_deref() == Some("ready")
-        && mode.mode_field_id.is_some()
-        && mode.mode_field_resource_key.is_some()
+        && mode
+            .mode_field_id
+            .as_deref()
+            .is_some_and(|id| !id.trim().is_empty())
+        && field_resource_key.is_some()
         && mesh_ref.is_some();
     let field_reason = if field_ready {
         None
@@ -1599,7 +1616,7 @@ fn field_sweep_item(
         field_ref: field_ready.then(|| AnalysisResultFieldRef {
             field_id: mode.mode_field_id.unwrap_or_default(),
             field_revision: mode.source_revision.clone(),
-            resource_key: mode.mode_field_resource_key.unwrap_or_default(),
+            resource_key: field_resource_key.unwrap_or_default(),
             status: "ready".to_string(),
             quantity_id: Some("m".to_string()),
             representation: Some("complex-vector-xyz".to_string()),
@@ -2748,7 +2765,11 @@ fn spectrum_v3_item(
     mode: FrequencyDomainSpectrumV3ModePayload,
     mesh_ref: Option<AnalysisResultMeshRef>,
 ) -> AnalysisResultSpectralItemSummary {
-    let field_ready = mode.mode_field_id.is_some() && mode.mode_field_resource_key.is_some();
+    let field_resource_key = mode.mode_field_resource_key.as_ref()
+        .filter(|key| !key.trim().is_empty()).cloned()
+        .or_else(|| modal_field_vector_resource_key(mode.mode_field_id.as_deref()));
+    let field_ready = mode.mode_field_id.as_deref().is_some_and(|id| !id.trim().is_empty())
+        && field_resource_key.is_some();
     let item_id = mode.mode_id.clone();
     AnalysisResultSpectralItemSummary {
         item_id: item_id.clone(),
@@ -2778,7 +2799,7 @@ fn spectrum_v3_item(
         field_ref: field_ready.then(|| AnalysisResultFieldRef {
             field_id: mode.mode_field_id.unwrap_or_default(),
             field_revision: source_revision.to_string(),
-            resource_key: mode.mode_field_resource_key.unwrap_or_default(),
+            resource_key: field_resource_key.unwrap_or_default(),
             status: "ready".to_string(),
             quantity_id: Some("m".to_string()),
             representation: Some("complex-vector-xyz".to_string()),
@@ -4268,6 +4289,47 @@ mod tests {
                     .to_string(),
             ),
         });
+        let durable_mode = FrequencyDomainFieldSweepModePayload {
+            mode_artifact_path: Some("eigen/modes/sample_0000/mode_0003.json".to_string()),
+            mode_field_id: Some(" field/1:α ".to_string()),
+            mode_field_resource_key: None,
+            ..FrequencyDomainFieldSweepModePayload {
+                sample_id: "sample/1".to_string(),
+                mode_id: "mode/1".to_string(),
+                raw_mode_index: 3,
+                branch_id: Some(7),
+                frequency_hz: 2.5e9,
+                angular_frequency_rad_per_s: 2.5e9,
+                mode_artifact_path: None,
+                mode_field_id: Some("field-1".to_string()),
+                mode_field_resource_key: Some("data/fields/field-1".to_string()),
+                residual_relative_l2: Some(1.0e-8),
+                source_revision: "revision-1".to_string(),
+                field_status: Some("ready".to_string()),
+                status: "ready".to_string(),
+                extra: FrequencyDomainArtifactExtras(BTreeMap::new()),
+            }
+        };
+        let durable_payload = serde_json::to_value(&durable_mode).unwrap();
+        let durable_item = field_sweep_item(
+            "run/1",
+            "dataset/1",
+            "sample/1",
+            "revision-1",
+            durable_mode.clone(),
+            mesh_ref.clone(),
+        );
+        assert_eq!(durable_item.status.completeness, "ready");
+        assert_eq!(durable_item.field_ref.as_ref().unwrap().field_id, " field/1:α ");
+        assert_eq!(
+            durable_item.field_ref.as_ref().unwrap().resource_key,
+            "/v2/sessions/current/data/fields/%20field%2F1%3A%CE%B1%20/samples/vector?phase_rad=0&view=phase_rotated_real",
+        );
+        assert_eq!(
+            serde_json::to_value(&durable_mode).unwrap(),
+            durable_payload
+        );
+
         let item = field_sweep_item(
             "run/1",
             "dataset/1",
@@ -4346,6 +4408,33 @@ mod tests {
             axis_values_path("run/1", "dataset/1", "bias/field"),
             "/v2/sessions/current/analysis/results/runs/run%2F1/datasets/dataset%2F1/axes/bias%2Ffield/values",
         );
+    }
+
+    #[test]
+    fn spectrum_v3_items_project_durable_field_identity_without_mutating_payload() {
+        let mode: FrequencyDomainSpectrumV3ModePayload = serde_json::from_value(serde_json::json!({
+            "mode_id": "sample-0000/mode-0000",
+            "raw_mode_index": 0,
+            "frequency_hz": 1.0e9,
+            "mode_field_id": "analysis:eigen:field/α",
+            "residual_relative_l2": 1.0e-8,
+            "component_participation": {
+                "schema_version": "modal_component_participation.v1",
+                "definition_id": "volume_weighted_complex_l2_fraction.v1",
+                "status": "unavailable", "quantity_id": "m", "quantity_symbol": "m",
+                "unit": "1", "component_basis": "global_xyz",
+                "integration_method": "not_available", "qualification": "unvalidated",
+                "provenance": {"solver_device": "cpu", "observable_lane": "reference"},
+                "objects": [],
+                "unavailable": {"reason_code": "not_computed", "detail": "fixture"}
+            }
+        })).unwrap();
+        let before = serde_json::to_value(&mode).unwrap();
+        let item = spectrum_v3_item("run", "dataset", "sample", "revision", mode.clone(), None);
+        assert_eq!(item.field_ref.as_ref().unwrap().field_id, "analysis:eigen:field/α");
+        assert_eq!(item.field_ref.as_ref().unwrap().resource_key,
+            "/v2/sessions/current/data/fields/analysis%3Aeigen%3Afield%2F%CE%B1/samples/vector?phase_rad=0&view=phase_rotated_real");
+        assert_eq!(serde_json::to_value(&mode).unwrap(), before);
     }
 
     #[test]

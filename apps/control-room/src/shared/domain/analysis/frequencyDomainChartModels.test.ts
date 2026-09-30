@@ -1,3 +1,4 @@
+import { fieldVectorResourceKey as canonicalFieldVectorResourceKey } from "@/kernel/api/fieldQueryIdentity";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -49,9 +50,11 @@ function textResource(text: string): FrequencyDomainTextArtifactLike {
 
 function fieldVectorResourceKey(
   fieldId: string,
-  query = "view=phase_rotated_real&phase_rad=0",
+  query?: string,
 ): string {
-  return `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", fieldId)}?${query}`;
+  return query === undefined
+    ? canonicalFieldVectorResourceKey(fieldId, { view: "phase_rotated_real", phase_rad: 0 })
+    : `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", fieldId)}?${query}`;
 }
 
 describe("frequencyDomainChartModels", () => {
@@ -562,6 +565,18 @@ describe("frequencyDomainChartModels", () => {
     });
   });
 
+  it("derives an encoded dispersion field route from durable ID without a CSV transport column", () => {
+    const model = buildEigenDispersionChartModel(textResource([
+      "sample_index,raw_mode_index,path_s_rad_per_m,frequency_hz,mode_field_id",
+      "2,0,5.0e7,1.2e9,analysis:eigen:field/α",
+    ].join("\n")));
+    expect(model.points[0]?.modeFieldResourceKey).toBe(
+      fieldVectorResourceKey("analysis:eigen:field/α"),
+    );
+    expect(model.points[0]?.modeFieldResourceKey).toContain("%2F%CE%B1");
+    expect(buildEigenDispersionPointSelectionRef(model.points[0]!).kind).toBe("results.eigen.mode");
+  });
+
   it("selects a dispersion point with mode field metadata as a 3D mode handoff", () => {
     const model = buildEigenDispersionChartModel(
       textResource(
@@ -641,7 +656,7 @@ describe("frequencyDomainChartModels", () => {
         points: [
           expect.objectContaining({
             modeFieldId: "analysis:eigen:sample-0000:mode-0003",
-            modeFieldResourceKey: null,
+            modeFieldResourceKey: fieldVectorResourceKey("analysis:eigen:sample-0000:mode-0003"),
             residualNorm: 1e-7,
           }),
           expect.objectContaining({

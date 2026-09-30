@@ -23,7 +23,6 @@ pub(super) struct ModeSummaryArtifact {
     #[serde(skip_serializing_if = "Option::is_none")]
     branch_id: Option<usize>,
     mode_field_id: String,
-    mode_field_resource_key: String,
     frequency_hz: f64,
     frequency_real_hz: f64,
     frequency_imag_hz: f64,
@@ -94,7 +93,6 @@ struct BranchPointArtifact {
     tracking_score_source: &'static str,
     modal_overlap_available: bool,
     mode_field_id: String,
-    mode_field_resource_key: String,
     overlap_prev: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     modal_overlap_unavailable_reason: Option<&'static str>,
@@ -138,7 +136,6 @@ pub(super) fn summarize_mode(
     solver_model: EigenSolverModel,
 ) -> ModeSummaryArtifact {
     let mode_field_id = eigen_mode_field_id(sample.sample.sample_index, mode.raw_mode_index);
-    let mode_field_resource_key = eigen_mode_field_resource_key(&mode_field_id);
     let residual_absolute_l2 = finite_or_default(mode.residual_norm, 0.0);
     let residual_relative_l2 = residual_absolute_l2;
     let residual_linf = finite_or_default(mode.residual_linf, residual_absolute_l2);
@@ -153,7 +150,6 @@ pub(super) fn summarize_mode(
         raw_mode_index: mode.raw_mode_index,
         branch_id: mode.branch_id,
         mode_field_id,
-        mode_field_resource_key,
         frequency_hz: mode.frequency_real_hz,
         frequency_real_hz: mode.frequency_real_hz,
         frequency_imag_hz: mode.frequency_imag_hz,
@@ -460,7 +456,6 @@ pub fn write_frequency_domain_eigen_manifest(
         .map(|duration| format!("unix:{}", duration.as_secs()))
         .unwrap_or_else(|_| "unix:0".to_string());
     let mode_metadata_paths = eigen_mode_metadata_paths(result);
-    let mode_field_resources = eigen_mode_field_resources(result);
     let sample_count = result.samples.len();
     let field_sweep_v1_path = build_frequency_domain_field_sweep_artifact(result, identity)?
         .is_some()
@@ -574,26 +569,7 @@ pub fn write_frequency_domain_eigen_manifest(
             mode_metadata_paths,
             frequency_point_paths: Vec::new(),
         },
-        resources: FrequencyDomainResourceIndex {
-            spectrum_resource_key: Some(
-                "/v2/sessions/current/analysis/frequency-domain/eigen/spectrum.v2",
-            ),
-            branches_resource_key: dispersion_published
-                .then_some("/v2/sessions/current/analysis/frequency-domain/eigen/branches.v2"),
-            dispersion_resource_key: dispersion_published
-                .then_some("/v2/sessions/current/analysis/frequency-domain/eigen/dispersion"),
-            diagnostics_resource_key: None,
-            eigen_diagnostics_resource_key: Some(
-                "/v2/sessions/current/analysis/frequency-domain/eigen/diagnostics.v2",
-            ),
-            response_sweep_resource_key: None,
-            response_map_resource_key: None,
-            response_progress_resource_key: None,
-            response_cancel_requested_resource_key: None,
-            response_diagnostics_resource_key: None,
-            mode_field_resources,
-            response_field_resources: Vec::new(),
-        },
+        resources: FrequencyDomainResourceIndex::default(),
         validation: FrequencyDomainValidation {
             dispersion_validation: dispersion_published
                 .then(|| result.dispersion_validation.as_ref())
@@ -658,21 +634,6 @@ fn eigen_mode_metadata_paths(result: &PathSolveResult) -> Vec<String> {
             sample.modes.iter().map(|mode| {
                 format!(
                     "eigen/modes/sample_{:04}/mode_{:04}.json",
-                    sample.sample.sample_index, mode.raw_mode_index
-                )
-            })
-        })
-        .collect()
-}
-
-fn eigen_mode_field_resources(result: &PathSolveResult) -> Vec<String> {
-    result
-        .samples
-        .iter()
-        .flat_map(|sample| {
-            sample.modes.iter().map(|mode| {
-                format!(
-                    "/v2/sessions/current/analysis/frequency-domain/eigen/mode-field/{}/{}/meta",
                     sample.sample.sample_index, mode.raw_mode_index
                 )
             })
@@ -786,7 +747,6 @@ pub fn write_branch_bundle(base_dir: &Path, result: &PathSolveResult) -> std::io
                 .map(|(point_index, point)| {
                     let mode_field_id =
                         eigen_mode_field_id(point.sample_index, point.raw_mode_index);
-                    let mode_field_resource_key = eigen_mode_field_resource_key(&mode_field_id);
                     BranchPointArtifact {
                         sample_index: point.sample_index,
                         raw_mode_index: point.raw_mode_index,
@@ -807,7 +767,6 @@ pub fn write_branch_bundle(base_dir: &Path, result: &PathSolveResult) -> std::io
                             point_index,
                         ),
                         mode_field_id,
-                        mode_field_resource_key,
                         overlap_prev: point.overlap_prev,
                         modal_overlap_unavailable_reason: branch_point_tracking_unavailable_reason(
                             result,
@@ -875,7 +834,7 @@ pub fn write_branch_bundle(base_dir: &Path, result: &PathSolveResult) -> std::io
     let mut dispersion = Vec::<u8>::new();
     writeln!(
         &mut dispersion,
-        "sample_index,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,label,raw_mode_index,branch_id,frequency_hz,omega_rad_s,analytic_frequency_hz,relative_error,validation_geometry,line_width_hz,residual_norm,overlap_score,tracking_score_source,mode_field_id,mode_field_resource_key"
+        "sample_index,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,label,raw_mode_index,branch_id,frequency_hz,omega_rad_s,analytic_frequency_hz,relative_error,validation_geometry,line_width_hz,residual_norm,overlap_score,tracking_score_source,mode_field_id"
     )?;
     for sample in &result.samples {
         let k = sample.sample.k_vector;
@@ -884,7 +843,7 @@ pub fn write_branch_bundle(base_dir: &Path, result: &PathSolveResult) -> std::io
             let validation_columns = de_bv_analytic_csv_columns(result, &sample.sample, mode);
             writeln!(
                 &mut dispersion,
-                "{},{:.16e},{:.16e},{:.16e},{:.16e},{},{},{},{:.16e},{:.16e},{},{},{},{},{},{},{},{},{}",
+                "{},{:.16e},{:.16e},{:.16e},{:.16e},{},{},{},{:.16e},{:.16e},{},{},{},{},{},{},{},{}",
                 sample.sample.sample_index,
                 sample.sample.path_s,
                 k[0],
@@ -907,10 +866,6 @@ pub fn write_branch_bundle(base_dir: &Path, result: &PathSolveResult) -> std::io
                 resolve_overlap_score(result, sample.sample.sample_index, mode),
                 mode_tracking_score_source(result, sample.sample.sample_index, mode.raw_mode_index),
                 eigen_mode_field_id(sample.sample.sample_index, mode.raw_mode_index),
-                eigen_mode_field_resource_key(&eigen_mode_field_id(
-                    sample.sample.sample_index,
-                    mode.raw_mode_index
-                )),
             )?;
         }
     }

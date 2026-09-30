@@ -43893,7 +43893,7 @@ async fn frequency_domain_field_sweep_and_fmr_resources_serve_typed_payloads() {
 }
 
 #[tokio::test]
-async fn frequency_domain_field_sweep_rejects_unpaired_typed_field_reference() {
+async fn frequency_domain_field_sweep_accepts_durable_field_reference_without_transport_key() {
     let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
     let eigen_dir = artifact_dir.join("eigen");
     fs::create_dir_all(&eigen_dir).expect("eigen artifact directory should exist");
@@ -43997,7 +43997,14 @@ async fn frequency_domain_field_sweep_rejects_unpaired_typed_field_reference() {
         .await
         .unwrap();
 
-    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(response.status(), StatusCode::OK);
+    let response_payload = body_json(response).await;
+    let mode = &response_payload["payload"]["samples"][0]["modes"][0];
+    assert_eq!(
+        mode["mode_field_id"],
+        "analysis:eigen:sample-0000:mode-0000"
+    );
+    assert!(mode["mode_field_resource_key"].is_null());
 }
 
 #[tokio::test]

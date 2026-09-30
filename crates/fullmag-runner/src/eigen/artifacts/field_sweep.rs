@@ -172,8 +172,8 @@ pub fn build_frequency_domain_field_sweep_artifact(
                         )
                     }),
                     mode_field_id: field_payload_valid.then_some(mode_field_id.clone()),
-                    mode_field_resource_key: field_payload_valid
-                        .then(|| eigen_mode_field_resource_key(&mode_field_id)),
+                    // Transport is projected by the API from the owning dataset.
+                    mode_field_resource_key: None,
                     residual_relative_l2: mode.residual_norm,
                     source_revision: result_source_revision(result),
                     field_status: if field_payload_valid {

@@ -93,6 +93,15 @@ bounded data plane oraz jeden frontend analityczny oparty o pinned source.
 27. [Natywna granica tożsamości FMR](27-native-fmr-artifact-identity-boundary.md)
     — osobny kontekst ABI C/Rust, walidacja i przekazanie do solve oraz sześć
     punktów publikacji; managed build PASS, testy NOT RUN, runtime NOT VERIFIED.
+28. [Manifest modalny i field-sweep](28-modal-manifest-and-field-sweep-durable-references.md)
+    — durable indeks i ID pola bez mutable transportu, zgodny odczyt API;
+    native bundles i dowody runtime pozostają otwarte.
+29. [Pakiety modalne bez zapisywanego transportu](29-modal-bundles-without-persisted-transport.md)
+    — spectrum, mode metadata, branches i CSV przechodzą na ID; zgodne
+    walidatory oraz projekcje API/wykresów; review i managed build PASS,
+    testy NOT RUN, runtime pozostaje otwarty.
+
+
 
 Pozostałe resource keys w `runner/eigen/artifacts`, przeprowadzenie identity z
 głównego runner context, FEM artifact writers i migracja legacy copy-on-write,

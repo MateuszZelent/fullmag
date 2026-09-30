@@ -40,8 +40,14 @@ a zapisane punkty pozostają w `artifacts.frequency_point_paths`.
 Adapter API jest miejscem projekcji transportu po rozwiązaniu właściciela;
 usunięcie odnośników nie jest dowodem gotowej obsługi historycznych runów.
 Stare wejścia writera bez identity zachowują odnośniki legacy i nie stanowią
-dowodu nowej publikacji. Natywny writer FEM i writer modal-eigen wymagają
-osobnej migracji swoich odnośników.
+dowodu nowej publikacji. Manifest modalny z dokładną tożsamością stosuje
+ten sam pusty indeks transportu. Bezpośrednie Rust writers spectrum v2/v3,
+mode metadata i branches zapisują `mode_field_id` bez `mode_field_resource_key`;
+CSV nie publikuje kolumny transportowej. Walidatory dopuszczają jej brak,
+a każdy obecny legacy key nadal musi odpowiadać temu samemu ID. API i modele
+widoku wyliczają transport bez zmiany persisted payloadu. Niemigrowane native
+writers, copy-on-write starych artefaktów oraz historyczne pinned API pozostają
+odrębną pracą; nie jest to dowód pełnego cutoveru ani runtime qualification.
 
 ## A1S — typed server-side analysis artifacts (schema freeze)
 
@@ -95,6 +101,13 @@ rzeczywistych bajtów odpowiednio `eigen/spectrum.v2.json` i
 niezależny od digestu source i obejmuje po wyzerowaniu tych dwóch pól całą
 deklarację skanu.
 
+Trwały field-sweep zapisuje `mode_field_id` i względny `mode_artifact_path`
+dla dostępnego payloadu, bez HTTP `mode_field_resource_key`. Reader akceptuje
+starszą kompletną parę ID/key, lecz key bez ID oraz puste wartości są błędem.
+Transport może być wyliczony w modelu widoku przez warstwę API; nie wolno
+wzbogacać nim hashed payloadu ani zmieniać jego JSON przy zachowaniu starego
+`content_sha256`. Spectrum-only nadal nie ma referencji do payloadu.
+
 ```json
 {
   "schema_version": "eigen/field_sweep.v1",
@@ -121,7 +134,6 @@ deklarację skanu.
       "angular_frequency_rad_per_s": 6.283185307179586e9,
       "mode_artifact_path": "eigen/modes/sample_0000/mode_0000.json",
       "mode_field_id": "analysis:eigen:sample-0000:mode-0000",
-      "mode_field_resource_key": "/v2/sessions/current/data/fields/...",
       "residual_relative_l2": 1.0e-9,
       "source_revision": "sha256:...",
       "status": "complete"
@@ -631,7 +643,7 @@ Each mode summary must include:
 - `raw_mode_index`,
 - optional `branch_id`,
 - `mode_field_id`,
-- `mode_field_resource_key`,
+- optional legacy `mode_field_resource_key` (new direct writers omit HTTP transport),
 - `frequency_real_hz`,
 - `frequency_imag_hz`,
 - `angular_frequency_rad_per_s`,
@@ -725,7 +737,7 @@ Each point must include:
 - `tracking_score_source`,
 - `modal_overlap_available`,
 - `mode_field_id`,
-- `mode_field_resource_key`,
+- optional legacy `mode_field_resource_key` (new direct writers omit HTTP transport),
 - optional `overlap_prev`,
 - optional `modal_overlap_unavailable_reason`.
 
@@ -772,7 +784,7 @@ hand off to mode-field resources.
 The CSV header must include:
 
 ```text
-sample_index,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,label,raw_mode_index,branch_id,frequency_hz,omega_rad_s,analytic_frequency_hz,relative_error,validation_geometry,line_width_hz,residual_norm,overlap_score,tracking_score_source,mode_field_id,mode_field_resource_key
+sample_index,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,label,raw_mode_index,branch_id,frequency_hz,omega_rad_s,analytic_frequency_hz,relative_error,validation_geometry,line_width_hz,residual_norm,overlap_score,tracking_score_source,mode_field_id
 ```
 
 For `KSamplingIR::Path`, public sample count and `path_s_rad_per_m` must follow
@@ -784,7 +796,10 @@ last segment returns from the final control point to the first control point;
 the final CSV sample therefore has the first control point k-vector at the
 total closed-loop arclength.
 
-The eigen artifact validator treats every header field listed above as required.
+The eigen artifact validator treats the identity and numerical columns listed
+above as required. The legacy `mode_field_resource_key` column is optional;
+when present for a mode with a field, its value must match the canonical
+legacy route for that field ID. New direct writers omit that column.
 Each public mode key `(sample_index, raw_mode_index)` published in
 `eigen/spectrum.v2.json` must appear exactly once in `dispersion.csv`.
 `path_s_rad_per_m`, `kx_rad_per_m`, `ky_rad_per_m`, `kz_rad_per_m`, and
@@ -848,8 +863,9 @@ the same `(sample_index, raw_mode_index)`.
 modal-overlap-tracked point, or frequency-fallback point. When
 `eigen/branches.v2.json` is present, the CSV `tracking_score_source` must match
 the branch point with the same `(sample_index, raw_mode_index)`.
-`mode_field_id` and `mode_field_resource_key` must match the selected mode
-payload resource when a mode field is emitted, so a dispersion point can be
+`mode_field_id` must match the selected mode payload when a mode field is
+emitted. An optional legacy `mode_field_resource_key`, if present, must match
+the same ID; the API/view adapter derives the route when absent. A dispersion point can be
 handed off to the same 3D mode overlay as the corresponding branch point.
 When the modal payload has positive `frequency_imag_hz`, `line_width_hz` is
 required and equals `2 * frequency_imag_hz`, matching `linewidth_fwhm_hz`.
@@ -984,7 +1000,7 @@ Required fields:
 - `normalization`,
 - `damping_policy`,
 - `mode_field_id`,
-- `mode_field_resource_key`,
+- optional legacy `mode_field_resource_key` (new direct writers omit HTTP transport),
 - `residual_norm`,
 - `residual_absolute_l2`,
 - `residual_relative_l2`,
@@ -1006,7 +1022,8 @@ Required fields:
 Mode metadata must not inline large vector arrays such as `real`, `imag`,
 `amplitude`, or `phase`. Reconstructed physical vectors live in
 `eigen/mode_fields.zarr` by default and are exposed through the data-plane
-field resource referenced by `mode_field_resource_key`.
+field resource derived from `mode_field_id` by the API/view adapter; a legacy
+`mode_field_resource_key` remains readable when present.
 
 The per-mode metadata payload is the detailed version of the corresponding
 `eigen/spectrum.v2.json` mode summary, not a second source of truth. For the

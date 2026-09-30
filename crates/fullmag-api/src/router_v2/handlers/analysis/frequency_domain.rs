@@ -2182,6 +2182,51 @@ pub(crate) fn decode_frequency_domain_artifact_payload(
     Ok(payload)
 }
 
+// Persisted field identity does not require an HTTP route. Legacy readers may
+// still carry a transport key, but a key without an identity remains invalid.
+fn modal_field_has_reference(
+    field_id: Option<&str>,
+    transport_key: Option<&str>,
+) -> Result<bool, ApiError> {
+    match (field_id, transport_key) {
+        (Some(field_id), None) if !field_id.trim().is_empty() => Ok(true),
+        (Some(field_id), Some(key)) if !field_id.trim().is_empty() && !key.trim().is_empty() => {
+            Ok(true)
+        }
+        (None, None) => Ok(false),
+        _ => Err(ApiError::internal(
+            "eigen field sweep mode has an invalid field identity or orphan transport key",
+        )),
+    }
+}
+
+#[cfg(test)]
+mod durable_field_reference_tests {
+    use super::modal_field_has_reference;
+
+    #[test]
+    fn durable_field_identity_keeps_payload_available_without_transport() {
+        assert!(
+            modal_field_has_reference(
+                Some("analysis:eigen:sample-0000:mode-0000"),
+                None
+            )
+            .unwrap()
+        );
+        assert!(
+            modal_field_has_reference(
+                Some("field:legacy"),
+                Some("/v2/sessions/current/data/fields/legacy")
+            )
+            .unwrap()
+        );
+        assert!(!modal_field_has_reference(None, None).unwrap());
+        assert!(modal_field_has_reference(None, Some("/route")).is_err());
+        assert!(modal_field_has_reference(Some(""), None).is_err());
+        assert!(modal_field_has_reference(Some("field:owned"), Some(" ")).is_err());
+    }
+}
+
 fn validate_frequency_domain_field_sweep(
     field_sweep: &FrequencyDomainFieldSweepArtifactPayload,
 ) -> Result<(), ApiError> {
@@ -2368,20 +2413,9 @@ fn validate_frequency_domain_field_sweep(
                         ));
                     }
                 }
-                let has_field_reference = match (&mode.mode_field_id, &mode.mode_field_resource_key)
-                {
-                    (Some(field_id), Some(resource_key))
-                        if !field_id.trim().is_empty() && !resource_key.trim().is_empty() =>
-                    {
-                        true
-                    }
-                    (None, None) => false,
-                    _ => {
-                        return Err(ApiError::internal(
-                            "eigen field sweep mode field identity and resource key must be published together",
-                        ));
-                    }
-                };
+                let has_field_reference = modal_field_has_reference(
+                    mode.mode_field_id.as_deref(), mode.mode_field_resource_key.as_deref(),
+                )?;
                 let has_mode_artifact = match &mode.mode_artifact_path {
                     Some(path) if !path.trim().is_empty() => true,
                     None => false,
@@ -2529,16 +2563,10 @@ fn validate_frequency_domain_spectrum_v3(
                     "eigen spectrum v3 contains invalid residual_relative_l2",
                 ));
             }
-            match (&mode.mode_field_id, &mode.mode_field_resource_key) {
-                (Some(field_id), Some(resource_key))
-                    if !field_id.trim().is_empty() && !resource_key.trim().is_empty() => {}
-                (None, None) => {}
-                _ => {
-                    return Err(ApiError::internal(
-                        "eigen spectrum v3 mode field identity and resource key must be published together",
-                    ));
-                }
-            }
+            modal_field_has_reference(
+                mode.mode_field_id.as_deref(),
+                mode.mode_field_resource_key.as_deref(),
+            )?;
             validate_modal_participation(&mode.component_participation)?;
         }
     }
