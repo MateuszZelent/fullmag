@@ -1910,20 +1910,16 @@ def _generate_coincident_ring_airbox_mesh(
     xmin, ymin, zmin, xmax, ymax, zmax = (float(value) * SCALE for value in bounds)
     body_bottom = -0.5 * sz * SCALE
     body_top = 0.5 * sz * SCALE
-    internal = [
-        body_bottom + (body_top - body_bottom) * index / n_layers
-        for index in range(n_layers + 1)
-    ]
-    levels = [zmin, *internal, zmax]
-    if tool is None:
-        h_inner = float(hmax)
-        if airbox.minimum_element_size is not None:
-            h_inner = min(h_inner, float(airbox.minimum_element_size))
-        h_outer = float(airbox.maximum_element_size) if airbox.maximum_element_size is not None else float(hmax)
-        levels = [value * SCALE for value in _box_airbox_layer_levels(
-            body_bottom / SCALE, body_top / SCALE, zmin / SCALE, zmax / SCALE,
-            n_layers, h_inner=h_inner, h_outer=h_outer, growth=float(airbox.grading_ratio),
-        )]
+    if airbox.grading_mode != "geometric":
+        raise ValueError("exact-cell layered airbox currently supports only geometric airbox grading")
+    h_inner = float(hmax)
+    if airbox.minimum_element_size is not None:
+        h_inner = min(h_inner, float(airbox.minimum_element_size))
+    h_outer = float(airbox.maximum_element_size) if airbox.maximum_element_size is not None else float(hmax)
+    levels = [value * SCALE for value in _box_airbox_layer_levels(
+        body_bottom / SCALE, body_top / SCALE, zmin / SCALE, zmax / SCALE,
+        n_layers, h_inner=h_inner, h_outer=h_outer, growth=float(airbox.grading_ratio),
+    )]
     if any(levels[index + 1] <= levels[index] for index in range(len(levels) - 1)):
         raise ValueError("coincident ring airbox must have positive z clearance")
 
@@ -1988,15 +1984,14 @@ def _generate_coincident_ring_airbox_mesh(
                 )
             )
         else:
-            if tool is None:
-                # The final air field must not coarsen the magnetic source face.
-                source_field = gmsh.model.mesh.field.add("Constant")
-                gmsh.model.mesh.field.setNumbers(source_field, "SurfacesList", [annulus_surface])
-                gmsh.model.mesh.field.setNumber(source_field, "VIn", source_hmax_scaled)
-                gmsh.model.mesh.field.setNumber(source_field, "VOut", 1.0e22)
-                gmsh.model.mesh.field.setNumber(source_field, "IncludeBoundary", 1)
-                gmsh.model.mesh.field.setAsBackgroundMesh(source_field)
-                source_fields.append(source_field)
+            # The final air field must not coarsen the magnetic source face.
+            source_field = gmsh.model.mesh.field.add("Constant")
+            gmsh.model.mesh.field.setNumbers(source_field, "SurfacesList", [annulus_surface])
+            gmsh.model.mesh.field.setNumber(source_field, "VIn", source_hmax_scaled)
+            gmsh.model.mesh.field.setNumber(source_field, "VOut", 1.0e22)
+            gmsh.model.mesh.field.setNumber(source_field, "IncludeBoundary", 1)
+            gmsh.model.mesh.field.setAsBackgroundMesh(source_field)
+            source_fields.append(source_field)
             gmsh.option.setNumber("Mesh.MeshSizeFromPoints", 1)
             gmsh.option.setNumber("Mesh.MeshSizeExtendFromBoundary", 0)
             gmsh.option.setNumber("Mesh.CharacteristicLengthMax", source_hmax_scaled)

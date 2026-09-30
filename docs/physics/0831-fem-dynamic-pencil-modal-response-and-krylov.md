@@ -1401,3 +1401,27 @@ Regresja generacji nie dowodzi zgodności częstotliwości eigensolve.
 |---|---|---|
 | source-box-layer-source-face | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `_generate_coincident_ring_airbox_mesh` |
 | source-box-lateral-regression | `scripts/test_box_layered_airbox_mesh.py` | `test_box_lateral_resolution_survives_final_air_fields` |
+
+
+## Warstwy powietrza w periodycznej komórce antidot A1
+
+Ekstruzja wspólnej domeny Box minus Cylinder musi realizować stopniowanie
+powietrza w osi z przez jawne płaszczyzny, tak samo jak pełny film Box.
+Samo pole rozmiaru Gmsh nie dzieli ekstruzji z jednym elementem na odcinek.
+Dla geometric pierwszy krok wynosi min(hmax filmu, jawne minimum powietrza),
+następne rosną przez grading_ratio do maximum_element_size; ostatni krok
+kończy się dokładnie na zewnętrznej granicy Dirichleta. Film zachowuje n
+jednakowych warstw. Zmiana n nie zmienia płaszczyzn zewnętrznego powietrza.
+Jednostką długości w publicznym Python i IR jest metr; GEO używa skali 1e6,
+a eksport przywraca SI. Translacje PBC x/y obejmują wszystkie warstwy.
+Ta poprawka dotyczy generacji shared-domain dla FEM CPU/GPU, nie zmienia
+równania Poissona ani fazy exp(-i k dot r). Alternatywne stopniowanie linear
+w tej ścieżce nadal wymaga osobnej realizacji i nie może być wykonane jako
+geometric. Test rzeczywistej siatki kontroluje pionowy span powietrza,
+płaszczyzny, objętość komórki, dodatnie objętości elementów i pełne szwy.
+Jest to dowód generacji; częstotliwości A1, zbieżność airboxu i porównanie
+z COMSOL pozostają NOT VERIFIED do odbioru nowych managed artefaktów.
+
+| ID | Plik | Symbol |
+|---|---|---|
+| source-ring-air-layer-regression | `scripts/test_box_layered_airbox_mesh.py` | `test_ring_air_realizes_graded_vertical_resolution` |

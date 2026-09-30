@@ -335,7 +335,8 @@
       "path": "scripts/test_box_layered_airbox_mesh.py",
       "symbol": "test_box_lateral_resolution_survives_final_air_fields",
       "responsibility": "Independent mesh refinement, volume, oriented translation and Floquet phase regression"
-    }
+    },
+    {"id": "source-ring-air-layer-regression", "path": "scripts/test_box_layered_airbox_mesh.py", "symbol": "test_ring_air_realizes_graded_vertical_resolution", "responsibility": "Verify actual graded exterior air planes, positive Tet4 volumes and full periodic sides for the antidot cell."}
   ],
   "public_api": {
     "parameters": [

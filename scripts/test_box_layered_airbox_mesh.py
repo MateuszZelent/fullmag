@@ -173,3 +173,47 @@ def test_box_lateral_resolution_survives_final_air_fields():
                 a=np.exp(-1j*k*mesh.nodes[pair["node_a"]][axis])
                 b=np.exp(-1j*k*mesh.nodes[pair["node_b"]][axis])
                 assert abs(b-phase*a)<1e-14
+
+
+@pytest.mark.parametrize("layers", [1, 3])
+def test_ring_air_realizes_graded_vertical_resolution(layers):
+    from fullmag.model.geometry import Cylinder
+    from fullmag.meshing._gmsh_swept import generate_swept_box_cylinder_ring_mesh
+    geometry = Box(size=(40e-9, 40e-9, 10e-9)) - Cylinder(radius=8e-9, height=10e-9)
+    mesh = generate_swept_box_cylinder_ring_mesh(
+        geometry, 10e-9, layers, order=1, distribution="fixed", recombine=False,
+        airbox=AirboxOptions(size=(40e-9, 40e-9, 410e-9),
+                            maximum_element_size=50e-9, grading_ratio=1.3),
+        options=MeshOptions(mesh_strategy="thin_film_tetrahedral",
+                            periodic_pair_ids=["x_faces", "y_faces"]))
+    nodes = np.asarray(mesh.nodes)
+    xyz = nodes[np.asarray(mesh.elements)]
+    volumes = np.linalg.det(xyz[:, 1:] - xyz[:, :1]) / 6
+    assert np.all(volumes > 0)
+    assert volumes.sum() == pytest.approx(40e-9*40e-9*410e-9, rel=1e-12)
+    air = np.asarray(mesh.element_markers) == 0
+    assert np.max(np.ptp(xyz[air, :, 2], axis=1)) <= 50e-9*(1+1e-12)
+    actual = np.unique(np.round(nodes[:, 2], 17))
+    expected = _box_airbox_layer_levels(-5e-9, 5e-9, -205e-9, 205e-9, layers,
+                                       h_inner=10e-9, h_outer=50e-9, growth=1.3)
+    np.testing.assert_allclose(actual, expected, atol=1e-16, rtol=0)
+    for pair_id, axis in (("x_faces", 0), ("y_faces", 1)):
+        required = set(np.flatnonzero(np.isclose(np.abs(nodes[:, axis]), 20e-9,
+                                                rtol=0, atol=1e-16)))
+        mapped = {int(pair[key]) for pair in mesh.periodic_node_pairs
+                  if pair["pair_id"] == pair_id for key in ("node_a", "node_b")}
+        assert required <= mapped
+
+
+def test_ring_linear_air_grading_is_rejected_before_gmsh(monkeypatch):
+    import fullmag.meshing._gmsh_swept as swept
+    from fullmag.model.geometry import Cylinder
+    def forbidden():
+        pytest.fail("unsupported grading must fail before Gmsh initialization")
+    monkeypatch.setattr(swept, "_import_gmsh", forbidden)
+    geometry = Box(size=(40e-9, 40e-9, 10e-9)) - Cylinder(radius=8e-9, height=10e-9)
+    with pytest.raises(ValueError, match="only geometric"):
+        swept.generate_swept_box_cylinder_ring_mesh(
+            geometry, 10e-9, 3, order=1, distribution="fixed", recombine=False,
+            airbox=AirboxOptions(size=(40e-9, 40e-9, 410e-9), grading_mode="linear"),
+            options=MeshOptions(mesh_strategy="thin_film_tetrahedral"))
