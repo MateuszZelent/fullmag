@@ -45,6 +45,138 @@ impl TensorDatasetSliceRead {
     }
 }
 
+/// A comparison source keeps semantic metadata separate from tensor storage.
+pub struct TensorDatasetComparisonSource<'a> {
+    pub field: &'a TensorDatasetField<'a>,
+    pub descriptor: &'a fullmag_quantities::DatasetFieldDescriptor,
+    pub status: &'a fullmag_quantities::DatasetStatus,
+}
+
+/// Read both operands from CAS and apply the same pinned evaluator used by
+/// other storage adapters. This does not write, solve, project or publish.
+pub fn compare_tensor_dataset_slices(
+    cas: &CasStore,
+    request: &fullmag_quantities::dataset_difference::DatasetDifferenceRequest,
+    left: &TensorDatasetComparisonSource<'_>,
+    right: &TensorDatasetComparisonSource<'_>,
+) -> Result<fullmag_quantities::dataset_difference::DatasetDifference, TensorDatasetComparisonError>
+{
+    use fullmag_quantities::dataset_difference::{
+        compare_dataset_field_slices, validate_dataset_difference_sources, DatasetDifferenceInput,
+    };
+    request
+        .validate_read_budget()
+        .map_err(TensorDatasetComparisonError::Difference)?;
+    validate_dataset_difference_sources(
+        request,
+        left.descriptor,
+        left.status,
+        right.descriptor,
+        right.status,
+    )
+    .map_err(TensorDatasetComparisonError::Difference)?;
+    validate_comparison_tensor_layout(left)?;
+    validate_comparison_tensor_layout(right)?;
+    let left_layout = left.field.planes[0].descriptor;
+    let right_layout = right.field.planes[0].descriptor;
+    if left_layout.shape != right_layout.shape
+        || left_layout.logical_axes != right_layout.logical_axes
+    {
+        return Err(TensorDatasetComparisonError::UnsupportedLayout);
+    }
+    let a = read_tensor_dataset_slice(cas, &request.left.request, left.field)
+        .map_err(TensorDatasetComparisonError::Read)?;
+    let b = read_tensor_dataset_slice(cas, &request.right.request, right.field)
+        .map_err(TensorDatasetComparisonError::Read)?;
+    let a_bytes = a.part_bytes.iter().map(Vec::as_slice).collect::<Vec<_>>();
+    let b_bytes = b.part_bytes.iter().map(Vec::as_slice).collect::<Vec<_>>();
+    compare_dataset_field_slices(
+        request,
+        &DatasetDifferenceInput {
+            manifest: &a.manifest,
+            descriptor: left.descriptor,
+            status: left.status,
+            part_bytes: &a_bytes,
+        },
+        &DatasetDifferenceInput {
+            manifest: &b.manifest,
+            descriptor: right.descriptor,
+            status: right.status,
+            part_bytes: &b_bytes,
+        },
+    )
+    .map_err(TensorDatasetComparisonError::Difference)
+}
+
+fn validate_comparison_tensor_layout(
+    source: &TensorDatasetComparisonSource<'_>,
+) -> Result<(), TensorDatasetComparisonError> {
+    let field = source.field;
+    if field.planes.len() > 2
+        || field
+            .planes
+            .iter()
+            .any(|plane| plane.descriptor.chunks.len() > 16_384)
+    {
+        return Err(TensorDatasetComparisonError::MetadataLimit);
+    }
+    for plane in &field.planes {
+        fullmag_quantities::dataset_difference::dataset_comparison_digest(plane.descriptor)
+            .map_err(TensorDatasetComparisonError::Difference)?;
+    }
+    let first = field
+        .planes
+        .first()
+        .ok_or(TensorDatasetComparisonError::UnsupportedLayout)?
+        .descriptor;
+    let elements = usize::try_from(field.total_elements)
+        .map_err(|_| TensorDatasetComparisonError::UnsupportedLayout)?;
+    let components = field.component_count as usize;
+    if field.field_layout_digest != source.descriptor.layout_digest {
+        return Err(TensorDatasetComparisonError::UnsupportedLayout);
+    }
+    // Slice offsets index consecutive elements. Component-major tensors must
+    // be explicitly transformed before using this adapter.
+    if source
+        .descriptor
+        .function_space
+        .as_ref()
+        .is_some_and(|space| {
+            space.ordering == fullmag_quantities::FunctionSpaceOrdering::ByComponent
+        })
+    {
+        return Err(TensorDatasetComparisonError::UnsupportedLayout);
+    }
+    match source.descriptor.component_axis.as_deref() {
+        Some(axis)
+            if first.shape == [elements, components]
+                && first.logical_axes.len() == 2
+                && first.logical_axes[1] == axis => {}
+        None if components == 1 && first.shape == [elements] && first.logical_axes.len() == 1 => {}
+        _ => return Err(TensorDatasetComparisonError::UnsupportedLayout),
+    }
+    if field.planes.iter().any(|plane| {
+        plane.descriptor.shape != first.shape || plane.descriptor.logical_axes != first.logical_axes
+    }) {
+        return Err(TensorDatasetComparisonError::UnsupportedLayout);
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TensorDatasetComparisonError {
+    UnsupportedLayout,
+    MetadataLimit,
+    Read(TensorDatasetSliceError),
+    Difference(fullmag_quantities::dataset_difference::DatasetDifferenceError),
+}
+impl fmt::Display for TensorDatasetComparisonError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "tensor dataset comparison: {self:?}")
+    }
+}
+impl std::error::Error for TensorDatasetComparisonError {}
+
 pub fn read_tensor_dataset_slice(
     cas: &CasStore,
     request: &DatasetFieldSliceRequest,
@@ -374,6 +506,114 @@ fn sha256_prefixed(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
     use fullmag_quantities::{MaterializedDatasetRef, DATASET_SLICE_SCHEMA_VERSION};
+
+    #[test]
+    fn comparison_refuses_transposed_and_mixed_plane_layouts() {
+        use fullmag_quantities::*;
+        let digest = format!("sha256:{}", "a".repeat(64));
+        let descriptor = DatasetFieldDescriptor {
+            quantity_id: QuantityId::M,
+            unit: "1".into(),
+            tensor_rank: 1,
+            frame: FieldFrameDescriptor {
+                kind: FieldFrameKind::Laboratory,
+                frame_id: "lab".into(),
+            },
+            sample_location: FieldSampleLocation::Global,
+            active_support: ActiveSupportDescriptor {
+                support_fingerprint: "support".into(),
+                selection: None,
+            },
+            function_space: None,
+            topology_id: "topology".into(),
+            carrier_id: "carrier".into(),
+            layout_digest: digest.clone(),
+            axes: vec![FieldAxisDescriptor {
+                axis_id: "c".into(),
+                unit: "1".into(),
+                length: 3,
+            }],
+            component_axis: Some("c".into()),
+            complex_encoding: ComplexEncoding::RealImagPair,
+            harmonic_convention: Some(HarmonicConvention::ExpPositiveIOmegaT),
+            normalization: FieldNormalization::None,
+            value_representation: FieldValueRepresentation::PhysicalField,
+            modal_semantics: None,
+            resolution: FieldResolution::Quantitative,
+        };
+        let status = DatasetStatus {
+            availability: DatasetAvailability::Ready,
+            reason: None,
+            actions: vec![],
+        };
+        let row = TensorDescriptor::new_f64("real", vec![2, 3], vec!["sample".into(), "c".into()]);
+        let transpose =
+            TensorDescriptor::new_f64("imag", vec![3, 2], vec!["c".into(), "sample".into()]);
+        fn make_field<'a>(
+            digest: &'a str,
+            real: &'a TensorDescriptor,
+            imag: &'a TensorDescriptor,
+        ) -> TensorDatasetField<'a> {
+            TensorDatasetField {
+                field_layout_digest: digest,
+                total_elements: 2,
+                component_count: 3,
+                complex_encoding: ComplexEncoding::RealImagPair,
+                harmonic_convention: Some(HarmonicConvention::ExpPositiveIOmegaT),
+                planes: vec![
+                    TensorDatasetPlane {
+                        plane: DatasetSlicePlane::Real,
+                        descriptor: real,
+                    },
+                    TensorDatasetPlane {
+                        plane: DatasetSlicePlane::Imaginary,
+                        descriptor: imag,
+                    },
+                ],
+            }
+        }
+        let valid = make_field(&digest, &row, &row);
+        assert!(
+            validate_comparison_tensor_layout(&TensorDatasetComparisonSource {
+                field: &valid,
+                descriptor: &descriptor,
+                status: &status,
+            })
+            .is_ok()
+        );
+        for field in [
+            make_field(&digest, &transpose, &transpose),
+            make_field(&digest, &row, &transpose),
+        ] {
+            assert_eq!(
+                validate_comparison_tensor_layout(&TensorDatasetComparisonSource {
+                    field: &field,
+                    descriptor: &descriptor,
+                    status: &status,
+                }),
+                Err(TensorDatasetComparisonError::UnsupportedLayout)
+            );
+        }
+        let mut oversized = row.clone();
+        oversized.chunks = vec![
+            crate::TensorChunk {
+                object_ref: digest.clone(),
+                offset: 0,
+                length: 1,
+                sha256: Some(digest.clone()),
+            };
+            16_385
+        ];
+        let field = make_field(&digest, &oversized, &oversized);
+        assert_eq!(
+            validate_comparison_tensor_layout(&TensorDatasetComparisonSource {
+                field: &field,
+                descriptor: &descriptor,
+                status: &status,
+            }),
+            Err(TensorDatasetComparisonError::MetadataLimit)
+        );
+    }
 
     #[test]
     fn reads_exact_cross_chunk_range_and_decodes_it() {

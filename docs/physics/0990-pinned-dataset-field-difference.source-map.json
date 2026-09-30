@@ -1,0 +1,139 @@
+{
+  "document": {
+    "path": "docs/physics/0990-pinned-dataset-field-difference.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "not_applicable",
+      "reason": "CPU post-processing zapisanych danych, poza wykonaniem solvera; runtime unqualified"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "not_applicable",
+      "reason": "CPU post-processing zapisanych danych, poza wykonaniem solvera; runtime unqualified"
+    },
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "not_applicable",
+      "reason": "CPU post-processing zapisanych danych, poza wykonaniem solvera; runtime unqualified"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "not_applicable",
+      "reason": "CPU post-processing zapisanych danych, poza wykonaniem solvera; runtime unqualified"
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-pinned-field-difference",
+      "symbols": [
+        "a",
+        "c",
+        "d",
+        "p",
+        "i",
+        "b",
+        "fl"
+      ],
+      "sources": [
+        "difference"
+      ]
+    }
+  ],
+  "symbols": [
+    {
+      "id": "a",
+      "latex": "a_{p,i}",
+      "meaning": "Wartość lewego zapisanego pola",
+      "si_unit": "1"
+    },
+    {
+      "id": "c",
+      "latex": "c_{p,i}",
+      "meaning": "Wartość prawego zapisanego pola",
+      "si_unit": "1"
+    },
+    {
+      "id": "d",
+      "latex": "d_{p,i}",
+      "meaning": "Różnica wartości w tej samej jednostce",
+      "si_unit": "1"
+    },
+    {
+      "id": "p",
+      "latex": "p",
+      "meaning": "Płaszczyzna values albo real/imaginary",
+      "si_unit": "1"
+    },
+    {
+      "id": "i",
+      "latex": "i",
+      "meaning": "Spłaszczony indeks skalarny: element i komponent wycinka w tym samym layout",
+      "si_unit": "1"
+    },
+    {
+      "id": "b",
+      "latex": "b",
+      "meaning": "Precyzja F32 lub F64",
+      "si_unit": "1"
+    },
+    {
+      "id": "fl",
+      "latex": "\\operatorname{fl}_{b}",
+      "meaning": "Arytmetyka zmiennoprzecinkowa w zadanej precyzji",
+      "si_unit": "1"
+    }
+  ],
+  "sources": [
+    {
+      "id": "difference",
+      "path": "crates/fullmag-quantities/src/dataset_difference.rs",
+      "symbol": "compare_dataset_field_slices",
+      "responsibility": "Odejmowanie i receipt"
+    },
+    {
+      "id": "budget",
+      "path": "crates/fullmag-quantities/src/dataset_difference.rs",
+      "symbol": "DatasetDifferenceRequest",
+      "responsibility": "Pinned sources i limity"
+    },
+    {
+      "id": "compatibility",
+      "path": "crates/fullmag-quantities/src/dataset.rs",
+      "symbol": "validate_field_compatibility",
+      "responsibility": "Odmowa niezgodnej semantyki"
+    },
+    {
+      "id": "decode",
+      "path": "crates/fullmag-quantities/src/dataset_slice.rs",
+      "symbol": "decode_part_bytes",
+      "responsibility": "Checksum i finite decode"
+    },
+    {
+      "id": "cas",
+      "path": "crates/fullmag-session/src/dataset_slice_adapter.rs",
+      "symbol": "compare_tensor_dataset_slices",
+      "responsibility": "Odczyt CAS"
+    },
+    {
+      "id": "source-status",
+      "path": "crates/fullmag-quantities/src/dataset_difference.rs",
+      "symbol": "validate_dataset_difference_sources",
+      "responsibility": "Ready/quantitative i digest descriptoru"
+    },
+    {
+      "id": "metadata-digest",
+      "path": "crates/fullmag-quantities/src/dataset_difference.rs",
+      "symbol": "dataset_comparison_digest",
+      "responsibility": "Streamowany typed JSON, SHA i limit"
+    }
+  ],
+  "public_api": {
+    "parameters": []
+  }
+}

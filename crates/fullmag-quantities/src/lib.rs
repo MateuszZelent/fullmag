@@ -17,6 +17,7 @@
 pub mod accepted_state;
 pub mod catalog;
 pub mod dataset;
+pub mod dataset_difference;
 pub mod dataset_slice;
 pub mod descriptor;
 pub mod eval;
