@@ -24,7 +24,9 @@ use std::sync::{Arc, Mutex};
 use anyhow::{Context, Result};
 
 use crate::cas::CasStore;
-use crate::durability::{atomic_write, confirm_publication, sync_directory};
+use crate::durability::{
+    atomic_write, atomic_write_verified_file, confirm_publication, sync_directory,
+};
 use crate::repository_path::{checked_path, create_parent, reject_link, validate_store_id};
 use crate::solution_set_catalog::SolutionSetCatalog;
 use crate::types::*;
@@ -4303,9 +4305,8 @@ impl SessionStore {
     }
 
     /// Internal import adapter; only call after validating the complete archive.
-    pub(crate) fn write_import_document(&self, relative_path: &str, data: &[u8]) -> Result<()> {
+    fn prepare_import_document_path(&self, relative_path: &str) -> Result<PathBuf> {
         validate_document_namespace(relative_path)?;
-        let _lease = self.write_transaction()?;
         let components: Vec<_> = relative_path.split('/').collect();
         if components.len() >= 5 && components[0] == "runs" && components[2] == "checkpoints" {
             validate_store_id(components[1])?;
@@ -4318,8 +4319,31 @@ impl SessionStore {
                 anyhow::bail!("committed checkpoint documents are immutable");
             }
         }
-        let path = create_parent(&self.root, relative_path)?;
+        create_parent(&self.root, relative_path)
+    }
+
+    /// Internal import adapter; only call after validating the complete archive.
+    pub(crate) fn write_import_document(&self, relative_path: &str, data: &[u8]) -> Result<()> {
+        validate_document_namespace(relative_path)?;
+        let _lease = self.write_transaction()?;
+        let path = self.prepare_import_document_path(relative_path)?;
         atomic_write(&path, data)
+    }
+
+    /// Stream a verified staged document into the store without materializing
+    /// its contents. Namespace and checkpoint immutability checks are shared
+    /// with the byte-oriented import adapter above.
+    pub(crate) fn write_import_document_file(
+        &self,
+        relative_path: &str,
+        source: &Path,
+        expected_hash: &str,
+        expected_length: u64,
+    ) -> Result<()> {
+        validate_document_namespace(relative_path)?;
+        let _lease = self.write_transaction()?;
+        let path = self.prepare_import_document_path(relative_path)?;
+        atomic_write_verified_file(&path, source, expected_hash, expected_length)
     }
 
     pub(crate) fn write_checkpoint_payload(
@@ -6794,5 +6818,24 @@ mod admission_tests {
             .task_admission_path("run-admission", "task-admission-b", "attempt-admission-b")
             .unwrap()
             .exists());
+    }
+
+    #[test]
+    fn import_document_file_streams_and_keeps_checkpoint_immutable() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(temp.path().join("session-store")).unwrap();
+        let source = temp.path().join("staged-document");
+        let data = b"checkpoint document";
+        fs::write(&source, data).unwrap();
+        let hash = crate::cas::hex_sha256(data);
+        let relative = "runs/run-1/checkpoints/cp-1/checkpoint.json";
+
+        store
+            .write_import_document_file(relative, &source, &hash, data.len() as u64)
+            .unwrap();
+        assert_eq!(store.read_document(relative).unwrap(), Some(data.to_vec()));
+        assert!(store
+            .write_import_document_file(relative, &source, &hash, data.len() as u64)
+            .is_err());
     }
 }

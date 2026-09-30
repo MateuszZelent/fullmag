@@ -53,7 +53,7 @@ use zip::write::SimpleFileOptions;
 use zip::CompressionMethod;
 
 use crate::archive_source::ArchiveSource;
-use crate::archive_document::{ArchiveFileSnapshot, MAX_CONTROL_DOCUMENT_BYTES};
+use crate::archive_document::{ArchiveDocuments, ArchiveFileSnapshot, MAX_CONTROL_DOCUMENT_BYTES};
 use crate::reachability::{self, ReachabilityMode, ReachabilityReport};
 use crate::store::SessionStore;
 use crate::types::*;
@@ -1446,7 +1446,7 @@ pub fn preflight_fms<R: Read + Seek>(
     }
 
     let reachability = reachability::walk_archive_documents(&documents, ReachabilityMode::Restore)?;
-    let inspection = build_inspection(&session, &documents, scan.total_compressed, &reachability);
+    let inspection = build_inspection(&session, &ArchiveDocuments::Memory(&documents), scan.total_compressed, &reachability);
     Ok(FmsPreflight {
         session,
         workspace,
@@ -1455,6 +1455,172 @@ pub fn preflight_fms<R: Read + Seek>(
         reachability,
         documents,
     })
+}
+
+/// A validated archive whose decoded payloads reside in an owned private directory.
+/// The handle must remain alive until inspection or import has finished.
+#[derive(Debug)]
+pub struct FmsStagedPreflight {
+    pub session: FmsSessionManifest,
+    pub workspace: FmsWorkspaceManifest,
+    pub export_profile: FmsExportProfile,
+    pub inspection: SessionInspection,
+    pub reachability: ReachabilityReport,
+    root: PathBuf,
+    documents: HashMap<String, ArchiveFileSnapshot>,
+}
+
+impl FmsStagedPreflight {
+    pub fn contains_document(&self, name: &str) -> bool {
+        self.documents.contains_key(name)
+    }
+
+    /// Read one explicitly requested control document within the metadata budget.
+    pub fn read_document(&self, name: &str) -> Result<Vec<u8>> {
+        validate_portable_namespace_path(name)?;
+        self.documents.get(name).context("required archive document is missing")?
+            .read_control(&self.root, name)
+    }
+}
+
+impl Drop for FmsStagedPreflight {
+    fn drop(&mut self) {
+        // Only this handle's exclusive UUID directory is eligible for cleanup.
+        if crate::repository_path::reject_link(&self.root).is_ok() {
+            if let Err(error) = fs::remove_dir_all(&self.root) {
+                tracing::warn!(path = %self.root.display(), %error, "archive staging cleanup failed");
+            }
+        }
+    }
+}
+
+/// Decode once into private files beneath the caller's managed storage root.
+/// Admission reserves two decoded copies plus metadata/headroom before decoding;
+/// it is an observation of free capacity, not a cross-process disk reservation.
+pub fn preflight_fms_staged<R: Read + Seek>(
+    reader: R,
+    required_documents: &[&str],
+    staging_parent: &Path,
+) -> Result<FmsStagedPreflight> {
+    use sha2::{Digest, Sha256};
+    let mut source = ArchiveSource::new(reader)?;
+    let scan = scan_zip_directory(&mut source)?;
+    crate::repository_path::reject_link(staging_parent)?;
+    let parent = fs::canonicalize(staging_parent)?;
+    let decoded = scan.entries.iter().try_fold(0u64, |sum, entry| {
+        sum.checked_add(entry.uncompressed_size).context("archive disk budget overflow")
+    })?;
+    let metadata_budget = (scan.entries.len() as u64).checked_mul(16 * 1024)
+        .context("archive metadata disk budget overflow")?;
+    let required = decoded.checked_mul(2)
+        .and_then(|size| size.checked_add(metadata_budget))
+        .and_then(|size| size.checked_add(256 * 1024 * 1024))
+        .context("archive disk admission overflow")?;
+    crate::archive_capacity::require_capacity(&parent, required)?;
+    let root = parent.join(format!(".fms-decode-{}", uuid::Uuid::new_v4()));
+    let mut builder = fs::DirBuilder::new();
+    #[cfg(unix)] {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder.create(&root).context("creating exclusive archive staging")?;
+    let mut owner = ArchiveStagingOwner(root);
+    let mut documents = HashMap::new();
+    source.seek(SeekFrom::Start(0))?;
+    let mut archive = zip::ZipArchive::new(source)?;
+    if archive.len() != scan.entries.len() { bail!("ZIP central directory entry count is inconsistent"); }
+    for (index, metadata) in scan.entries.iter().enumerate() {
+        let name = &metadata.name;
+        let mut entry = archive.by_index(index)?;
+        if entry.name_raw() != name.as_bytes() || entry.size() != metadata.uncompressed_size
+            || entry.compressed_size() != metadata.compressed_size {
+            bail!("ZIP entry metadata disagrees with validated central directory");
+        }
+        if entry.is_symlink() { bail!("symlink entries are not permitted (`{name}`)"); }
+        if name.ends_with('/') { continue; }
+        let path = crate::repository_path::checked_path(&owner.0, name)?;
+        fs::create_dir_all(path.parent().context("archive document parent missing")?)?;
+        let mut file = fs::OpenOptions::new().write(true).create_new(true).open(&path)?;
+        let mut hasher = Sha256::new();
+        let mut length = 0u64;
+        let mut buffer = [0u8; 64 * 1024];
+        // One additional byte forces CRC/EOF validation and rejects underdeclared sizes.
+        let mut bounded = (&mut entry).take(metadata.uncompressed_size.checked_add(1)
+            .context("ZIP entry read limit overflow")?);
+        loop {
+            let count = bounded.read(&mut buffer)?;
+            if count == 0 { break; }
+            length = length.checked_add(count as u64).context("decoded length overflow")?;
+            if length > metadata.uncompressed_size { bail!("ZIP entry `{name}` exceeds declared length"); }
+            hasher.update(&buffer[..count]);
+            file.write_all(&buffer[..count])?;
+        }
+        if length != metadata.uncompressed_size { bail!("ZIP entry `{name}` actual length differs from declaration"); }
+        file.flush()?;
+        let digest = format!("{:x}", hasher.finalize());
+        if let Some(expected) = cas_digest_from_path(name)? {
+            if digest != expected { bail!("CAS SHA-256 mismatch for `{name}`"); }
+        }
+        documents.insert(name.clone(), ArchiveFileSnapshot { byte_count: length, content_sha256: digest });
+    }
+    let view = ArchiveDocuments::Files { snapshots: &documents, root: &owner.0 };
+    let json = |name: &str| -> Result<Vec<u8>> {
+        view.read(name)?.map(|value| value.into_owned()).with_context(|| format!("entry `{name}` missing"))
+    };
+    let session: FmsSessionManifest = serde_json::from_slice(&json("manifest/session.json")?)?;
+    let workspace: FmsWorkspaceManifest = serde_json::from_slice(&json("manifest/workspace.json")?)?;
+    let export_profile: FmsExportProfile = serde_json::from_slice(&json("manifest/export_profile.json")?)?;
+    if workspace.script_ref != "project/main.py" { bail!("workspace script_ref must be `project/main.py`"); }
+    let script = documents.get("project/main.py").context("new .fms archives require `project/main.py`")?;
+    if script.byte_count == 0 || script.content_sha256 != workspace.script_sha256 {
+        bail!("archive script is empty or SHA-256 mismatched");
+    }
+    for required in required_documents {
+        validate_portable_namespace_path(required)?;
+        if !documents.contains_key(*required) { bail!("required archive document `{required}` is missing"); }
+    }
+    let reachability = reachability::walk_import_file_documents(&documents, &owner.0)?;
+    let inspection = build_inspection(&session, &view, scan.total_compressed, &reachability);
+    let root = std::mem::take(&mut owner.0);
+    Ok(FmsStagedPreflight { session, workspace, export_profile, inspection, reachability, root, documents })
+}
+
+struct ArchiveStagingOwner(PathBuf);
+impl Drop for ArchiveStagingOwner {
+    fn drop(&mut self) {
+        if self.0.as_os_str().is_empty() { return; }
+        if crate::repository_path::reject_link(&self.0).is_ok() {
+            if let Err(error) = fs::remove_dir_all(&self.0) {
+                tracing::warn!(path = %self.0.display(), %error, "archive staging cleanup failed");
+            }
+        }
+    }
+}
+
+/// Publish an already validated archive without decoding it a second time.
+pub fn unpack_fms_staged(preflight: &FmsStagedPreflight, store: &SessionStore) -> Result<FmsSessionManifest> {
+    if matches!(preflight.session.profile, SaveProfile::Solved | SaveProfile::Resume | SaveProfile::Archive) {
+        preflight.reachability.require_complete()?;
+    }
+    let _lease = store.write_transaction()?;
+    ensure_unpack_destination_pristine(store.root())?;
+    for phase in 0..3 {
+        for (name, snapshot) in &preflight.documents {
+            let object = name.starts_with("objects/sha256/");
+            let marker = name.ends_with("/checkpoint.json");
+            if (phase == 0 && object) || (phase == 1 && !object && !marker) || (phase == 2 && !object && marker) {
+                let source = crate::repository_path::checked_path(&preflight.root, name)?;
+                if object {
+                    store.cas().put_file(&source, &snapshot.content_sha256, snapshot.byte_count)?;
+                } else {
+                    store.write_import_document_file(name, &source, &snapshot.content_sha256, snapshot.byte_count)?;
+                }
+            }
+        }
+    }
+    store.solution_sets().reconcile_all()?;
+    store.commit_session(&preflight.session)?;
+    Ok(preflight.session.clone())
 }
 
 fn scan_zip_directory<R: Read + Seek>(source: &mut ArchiveSource<R>) -> Result<ZipDirectoryScan> {
@@ -1663,7 +1829,7 @@ fn u64_le(bytes: &[u8], offset: usize) -> Result<u64> {
 
 fn build_inspection(
     session: &FmsSessionManifest,
-    documents: &HashMap<String, Vec<u8>>,
+    documents: &ArchiveDocuments<'_>,
     total_compressed: u64,
     reachability: &ReachabilityReport,
 ) -> SessionInspection {
@@ -1717,7 +1883,10 @@ fn build_inspection(
             warnings.push(format!("solved run '{run_id}' has no packaged artifacts"));
         }
         for name in checkpoint_names {
-            match document_json::<FmsCheckpoint>(documents, &name) {
+            match documents.read(&name).and_then(|data| {
+                let data = data.context("checkpoint descriptor disappeared")?;
+                serde_json::from_slice::<FmsCheckpoint>(&data).map_err(Into::into)
+            }) {
                 Ok(cp) => {
                     let summary = CheckpointSummary {
                         checkpoint_id: cp.checkpoint_id,
@@ -2158,6 +2327,49 @@ mod tests {
             }],
             coverage: Vec::new(),
         }
+    }
+
+    #[test]
+    fn staged_preflight_restores_opaque_files_and_removes_only_owned_staging() {
+        let parent = tempfile::tempdir().unwrap();
+        let sentinel = parent.path().join("preserved");
+        fs::write(&sentinel, b"foreign").unwrap();
+        let script = b"print('verified')".to_vec();
+        let workspace = test_workspace(&script);
+        let payload = vec![13u8; MAX_CONTROL_DOCUMENT_BYTES as usize + 1];
+        let archive = archive_with_entries(&workspace, [
+            ("project/main.py".to_string(), script),
+            ("project/opaque.json".to_string(), payload.clone()),
+        ]);
+        let staged = preflight_fms_staged(Cursor::new(&archive), &[], parent.path()).unwrap();
+        let root = staged.root.clone();
+        assert!(staged.contains_document("project/opaque.json"));
+        assert!(staged.read_document("project/opaque.json").is_err());
+        let legacy = preflight_fms(Cursor::new(&archive), &[]).unwrap();
+        assert_eq!(staged.inspection.restore_class, legacy.inspection.restore_class);
+        let store = SessionStore::open(parent.path().join("restored")).unwrap();
+        unpack_fms_staged(&staged, &store).unwrap();
+        assert_eq!(store.read_document("project/opaque.json").unwrap().unwrap(), payload);
+        drop(staged);
+        assert!(!root.exists());
+        assert_eq!(fs::read(sentinel).unwrap(), b"foreign");
+    }
+
+    #[test]
+    fn staged_decode_failure_cleans_owned_directory_and_changed_payload_fails_closed() {
+        let parent = tempfile::tempdir().unwrap();
+        let script = b"print('verified')".to_vec();
+        let workspace = test_workspace(&script);
+        let invalid = archive_with_entries(&workspace, [("project/main.py".to_string(), b"changed".to_vec())]);
+        assert!(preflight_fms_staged(Cursor::new(invalid), &[], parent.path()).is_err());
+        assert_eq!(fs::read_dir(parent.path()).unwrap().count(), 0);
+        let archive = archive_with_entries(&workspace, [("project/main.py".to_string(), script)]);
+        let staged = preflight_fms_staged(Cursor::new(archive), &[], parent.path()).unwrap();
+        fs::write(staged.root.join("project/main.py"), b"changed").unwrap();
+        assert!(staged.read_document("project/main.py").is_err());
+        let store = SessionStore::open(parent.path().join("restored")).unwrap();
+        assert!(unpack_fms_staged(&staged, &store).is_err());
+        assert!(store.current_session().unwrap().is_none());
     }
 
     #[test]

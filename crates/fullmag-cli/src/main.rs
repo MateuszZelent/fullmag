@@ -403,7 +403,7 @@ fn coupled_checkpoint_state(value: Value) -> Result<Value> {
 fn handle_session(cmd: args::SessionSubcommand) -> Result<()> {
     use args::SessionSubcommand;
     use fullmag_session::{
-        hex_sha256, inspect_fms, pack_fms_file, preflight_fms, unpack_fms, FmsExportProfile,
+        hex_sha256, pack_fms_file, preflight_fms_staged, unpack_fms_staged, FmsExportProfile,
         FmsSessionManifest, FmsWorkspaceManifest, PackOptions, SessionStore,
     };
 
@@ -475,11 +475,32 @@ fn handle_session(cmd: args::SessionSubcommand) -> Result<()> {
         }
         SessionSubcommand::Open { path } => {
             let file = std::fs::File::open(&path)?;
-            let mut reader = std::io::BufReader::new(file);
-            preflight_fms(&mut reader, &[])?;
-            std::io::Seek::rewind(&mut reader)?;
-            let store = SessionStore::open(&default_store_root)?;
-            let session = unpack_fms(reader, &store)?;
+            let reader = std::io::BufReader::new(file);
+            let decoding_root = default_store_root.parent().context("session storage parent is missing")?;
+            std::fs::create_dir_all(decoding_root)?;
+            let preflight = preflight_fms_staged(reader, &[], decoding_root)?;
+            if default_store_root.exists() {
+                bail!("session import destination already exists: {}", default_store_root.display());
+            }
+            let staging = decoding_root.join(format!(".session-import-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir(&staging)?;
+            let result = (|| -> Result<_> {
+                let store = SessionStore::open(&staging)?;
+                let session = unpack_fms_staged(&preflight, &store)?;
+                drop(store);
+                fullmag_session::publish_directory(&staging, &default_store_root)?;
+                Ok(session)
+            })();
+            let session = match result {
+                Ok(session) => session,
+                Err(error) => {
+                    if error.downcast_ref::<fullmag_session::PublicationUncertain>().is_none()
+                        && error.downcast_ref::<fullmag_session::WriterReleaseUnconfirmed>().is_none() {
+                        let _ = std::fs::remove_dir_all(&staging);
+                    }
+                    return Err(error.context(format!("import staging: {}; destination: {}", staging.display(), default_store_root.display())));
+                }
+            };
 
             println!("Session imported: {}", session.name);
             println!("  session_id: {}", session.session_id);
@@ -489,7 +510,10 @@ fn handle_session(cmd: args::SessionSubcommand) -> Result<()> {
         SessionSubcommand::Inspect { path } => {
             let file = std::fs::File::open(&path)?;
             let reader = std::io::BufReader::new(file);
-            let info = inspect_fms(reader)?;
+            let decoding_root = default_store_root.parent().context("session storage parent is missing")?;
+            std::fs::create_dir_all(decoding_root)?;
+            let staged = preflight_fms_staged(reader, &[], decoding_root)?;
+            let info = &staged.inspection;
 
             println!("Session: {}", info.name);
             println!("  format:          {}", info.format_version);
@@ -499,7 +523,7 @@ fn handle_session(cmd: args::SessionSubcommand) -> Result<()> {
             println!("  saved_at:        {}", info.saved_at);
             println!("  restore_class:   {:?}", info.restore_class);
             println!("  runs:            {}", info.run_count);
-            if let Some(s) = info.latest_checkpoint {
+            if let Some(s) = &info.latest_checkpoint {
                 println!("  latest_ckpt:     step={} t={:.6e}", s.step, s.time_s);
             }
             if !info.warnings.is_empty() {

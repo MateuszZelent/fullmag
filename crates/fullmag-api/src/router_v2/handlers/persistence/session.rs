@@ -47,9 +47,10 @@ pub async fn export_session(
     tag = "persistence"
 )]
 pub async fn inspect_project_archive(
+    State(state): State<Arc<AppState>>,
     Json(req): Json<SessionImportInspectRequest>,
 ) -> Result<Json<SessionImportInspectResponse>, ApiError> {
-    crate::session_persistence::import_session_inspect(Json(req)).await
+    crate::session_persistence::import_session_inspect(State(state), Json(req)).await
 }
 
 #[utoipa::path(

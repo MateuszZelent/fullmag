@@ -49,6 +49,7 @@ pub enum RestoreClass {
 
 /// Top-level manifest written as `manifest/session.json` in the `.fms` archive.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FmsSessionManifest {
     /// Always `"fullmag.session.v1"`.
     pub format: String,
@@ -102,6 +103,7 @@ impl FmsSessionManifest {
 
 /// Workspace layout metadata, written as `manifest/workspace.json`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FmsWorkspaceManifest {
     pub workspace_id: String,
     pub problem_name: String,
@@ -129,6 +131,7 @@ pub struct FmsWorkspaceManifest {
 // ── Export profile ─────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FmsExportProfile {
     pub profile: SaveProfile,
     pub include_fields: FieldCapturePolicy,
@@ -1125,6 +1128,7 @@ pub enum CoordinatorGenesisCommitDisposition {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FmsTaskCatalogEntry {
     pub task_id: String,
     pub input_fingerprint: String,
@@ -2140,6 +2144,7 @@ impl FmsStudyOutputManifest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FmsArtifactCatalogEntry {
     pub artifact_id: String,
     pub task_id: String,
@@ -2620,6 +2625,7 @@ fn validate_prefixed_sha256(value: &str, field: &str) -> Result<()> {
 
 /// Per-run manifest, written as `runs/<run_id>/run_manifest.json`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FmsRunManifest {
     pub run_id: String,
     pub status: RunStatus,
@@ -2655,6 +2661,7 @@ pub enum RunStatus {
 
 /// Checkpoint descriptor, written as `runs/<run>/checkpoints/<cp>/checkpoint.json`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FmsCheckpoint {
     pub checkpoint_id: String,
     pub run_id: String,
@@ -2703,6 +2710,7 @@ impl FmsCheckpoint {
 
 /// Hashes and signatures for determining the restore class.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CheckpointCompatibility {
     /// ABI tag for exact resume matching, e.g. `"fullmag.fdm.cpu.llg.v1"`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2740,6 +2748,7 @@ pub struct CheckpointCompatibility {
 
 /// Snapshot of common solver state saved alongside a checkpoint.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CommonSolverState {
     pub step: u64,
     pub time_s: f64,
@@ -2751,6 +2760,7 @@ pub struct CommonSolverState {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SolverEnergies {
     #[serde(default)]
     pub exchange: f64,
@@ -2772,6 +2782,7 @@ pub struct SolverEnergies {
 
 /// Describes a binary tensor stored in the CAS object store.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TensorDescriptor {
     pub format: String,
     pub name: String,
@@ -2826,6 +2837,7 @@ impl TensorDtype {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TensorChunk {
     pub object_ref: String,
     /// Byte offset in the complete decoded tensor (not an element index).
@@ -2840,6 +2852,7 @@ pub struct TensorChunk {
 
 /// A named reference to a serialized field in the archive.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FieldRef {
     pub name: String,
     pub role: FieldRole,
@@ -2860,6 +2873,7 @@ pub enum FieldRole {
 
 /// Envelope for backend restart payloads.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct BackendStatePayload {
     pub format: String,
     pub backend_family: String,
@@ -2876,6 +2890,7 @@ pub struct BackendStatePayload {
 
 /// Counter-based RNG state for reproducible thermal noise.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RngState {
     pub global_seed: u64,
     pub stream_family: String,
@@ -2926,11 +2941,13 @@ pub struct SessionFileLock {
 // ── Artifact index ─────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ArtifactIndex {
     pub entries: Vec<ArtifactIndexEntry>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ArtifactIndexEntry {
     pub logical_path: String,
     pub artifact_type: String,
@@ -2954,3 +2971,39 @@ pub type ScriptBuilderSnapshot = serde_json::Value;
 
 /// Serialized model builder graph. Stored as opaque JSON.
 pub type ModelBuilderGraphSnapshot = serde_json::Value;
+
+#[cfg(test)]
+mod graph_schema_tests {
+    use super::*;
+
+    #[test]
+    fn graph_control_records_reject_untracked_reference_fields() {
+        let mut task = serde_json::json!({"task_id": "task", "input_fingerprint": "a".repeat(64),
+            "lifecycle": "queued"});
+        assert!(serde_json::from_value::<FmsTaskCatalogEntry>(task.clone()).is_ok());
+        task["hidden_object_ref"] = serde_json::json!("a".repeat(64));
+        assert!(serde_json::from_value::<FmsTaskCatalogEntry>(task).is_err());
+        let mut artifact = serde_json::json!({"artifact_id": "artifact", "task_id": "task",
+            "attempt_id": "attempt", "ownership_epoch": 1, "logical_path": "state",
+            "artifact_type": "state", "content_sha256": "a".repeat(64),
+            "status": "published", "required": false});
+        assert!(serde_json::from_value::<FmsArtifactCatalogEntry>(artifact.clone()).is_ok());
+        artifact["hidden_object_ref"] = serde_json::json!("b".repeat(64));
+        assert!(serde_json::from_value::<FmsArtifactCatalogEntry>(artifact).is_err());
+        let state = serde_json::json!({"step": 0, "time_s": 0.0, "dt": 1.0,
+            "energies": {}, "hidden_object_ref": "a".repeat(64)});
+        assert!(serde_json::from_value::<CommonSolverState>(state).is_err());
+        let index = serde_json::json!({"entries": [], "hidden_object_ref": "a".repeat(64)});
+        assert!(serde_json::from_value::<ArtifactIndex>(index).is_err());
+        let entry = serde_json::json!({"logical_path": "field", "artifact_type": "state",
+            "size_bytes": 0, "required": false, "hidden_object_ref": "a".repeat(64)});
+        assert!(serde_json::from_value::<ArtifactIndexEntry>(entry).is_err());
+        let state = serde_json::json!({"step": 0, "time_s": 0.0, "dt": 1.0,
+            "energies": {"hidden_object_ref": "a".repeat(64)}});
+        assert!(serde_json::from_value::<CommonSolverState>(state).is_err());
+        let backend = serde_json::json!({"format": "fullmag.backend_state.v1",
+            "backend_family": "fdm", "extra": {"step": 0},
+            "hidden_object_ref": "a".repeat(64)});
+        assert!(serde_json::from_value::<BackendStatePayload>(backend).is_err());
+    }
+}

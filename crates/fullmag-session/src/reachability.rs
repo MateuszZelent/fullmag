@@ -109,10 +109,13 @@ impl ReachabilityReport {
     }
 
     fn missing(&mut self, message: impl Into<String>) -> Result<()> {
-        let message = message.into();
-        self.complete = false;
-        self.warnings.push(message.clone());
+        self.conservative(message);
         Ok(())
+    }
+
+    fn conservative(&mut self, message: impl Into<String>) {
+        self.complete = false;
+        self.warnings.push(message.into());
     }
 
     /// Refuse to publish a graph which is missing a required payload.
@@ -145,6 +148,141 @@ pub fn validate_file_ref(value: &str) -> Result<()> {
         .with_context(|| format!("unsafe session document reference `{value}`"))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RunPathKind {
+    KnownRecord,
+    OpaqueArtifact,
+    Unknown,
+}
+
+const KNOWN_RUN_RECORDS: &[&str] = &[
+    "run_manifest.json",
+    "run_intent.json",
+    "run_catalog.json",
+    "artifact_catalog.json",
+    "preparation_receipt.json",
+];
+
+const KNOWN_CHECKPOINT_RECORDS: &[&str] = &[
+    "checkpoint.json",
+    "common_state.json",
+    "backend_state.json",
+    "integrator_state.json",
+    "rng_state.json",
+];
+
+fn is_json_record_name(value: &str) -> bool {
+    value
+        .strip_suffix(".json")
+        .filter(|stem| !stem.is_empty())
+        .is_some_and(|stem| validate_component(stem).is_ok())
+}
+
+/// Classify a file below `runs/` before any typed parser sees it.  This is
+/// intentionally shared by the directory and archive walkers: adding a new
+/// producer record requires an explicit namespace entry here before GC/export
+/// may claim a complete graph.
+fn classify_run_path(relative: &str) -> Result<RunPathKind> {
+    let Some(rest) = relative.strip_prefix("runs/") else {
+        bail!("run namespace path does not start with `runs/`: `{relative}`")
+    };
+    let Some((run_id, tail)) = rest.split_once('/') else {
+        validate_component(rest)
+            .with_context(|| format!("invalid run namespace identity in `{relative}`"))?;
+        bail!("reserved run namespace container must be a directory: `{relative}`")
+    };
+    validate_component(run_id)
+        .with_context(|| format!("invalid run namespace identity in `{relative}`"))?;
+
+    let parts = tail.split('/').collect::<Vec<_>>();
+    if is_reserved_run_container(&parts) {
+        bail!("reserved run namespace container must be a directory: `{relative}`")
+    }
+    if tail == "artifacts" || tail.starts_with("artifacts/") {
+        return Ok(RunPathKind::OpaqueArtifact);
+    }
+
+    let kind = if parts.len() == 1 && KNOWN_RUN_RECORDS.contains(&parts[0]) {
+        RunPathKind::KnownRecord
+    } else if parts.len() == 3
+        && parts[0] == "checkpoints"
+        && !parts[1].is_empty()
+        && validate_component(parts[1]).is_ok()
+        && KNOWN_CHECKPOINT_RECORDS.contains(&parts[2])
+    {
+        RunPathKind::KnownRecord
+    } else if parts.len() == 2
+        && matches!(
+            parts[0],
+            "task_preparation_receipts"
+                | "worker_inbox"
+                | "retry_decisions"
+                | "preparation_retry_decisions"
+                | "worker_process_exit_receipts"
+                | "preparation_process_exit_receipts"
+                | "preparation_process_launches"
+        )
+        && is_json_record_name(parts[1])
+    {
+        RunPathKind::KnownRecord
+    } else if parts.len() == 3
+        && matches!(parts[0], "resource_leases" | "preparation_resource_leases")
+        && !parts[1].is_empty()
+        && validate_component(parts[1]).is_ok()
+        && is_json_record_name(parts[2])
+    {
+        RunPathKind::KnownRecord
+    } else if parts.len() == 3
+        && parts[0] == "task_admissions"
+        && !parts[1].is_empty()
+        && validate_component(parts[1]).is_ok()
+        && is_json_record_name(parts[2])
+    {
+        RunPathKind::KnownRecord
+    } else if parts.len() == 3
+        && parts[0] == "coordinator_journal"
+        && matches!(parts[1], "command" | "event")
+        && is_json_record_name(parts[2])
+    {
+        RunPathKind::KnownRecord
+    } else {
+        RunPathKind::Unknown
+    };
+    Ok(kind)
+}
+
+fn is_reserved_run_container(parts: &[&str]) -> bool {
+    match parts {
+        [name]
+            if matches!(
+                *name,
+                "artifacts"
+                    | "checkpoints"
+                    | "worker_inbox"
+                    | "task_preparation_receipts"
+                    | "retry_decisions"
+                    | "preparation_retry_decisions"
+                    | "worker_process_exit_receipts"
+                    | "preparation_process_exit_receipts"
+                    | "preparation_process_launches"
+                    | "resource_leases"
+                    | "preparation_resource_leases"
+                    | "task_admissions"
+                    | "coordinator_journal"
+            ) => true,
+        [container, _]
+            if matches!(
+                *container,
+                "checkpoints"
+                    | "resource_leases"
+                    | "preparation_resource_leases"
+                    | "task_admissions"
+                    | "coordinator_journal"
+            ) => true,
+        _ => false,
+    }
+}
+
 /// Walk a directory-backed session store.
 ///
 /// The walker is deliberately conservative.  A malformed recognized root is
@@ -160,6 +298,8 @@ pub fn walk_store_root(root: &Path, mode: ReachabilityMode) -> Result<Reachabili
         report: ReachabilityReport::new(),
         seen_files: HashSet::new(),
         seen_checkpoints: HashSet::new(),
+        namespace_files: HashSet::new(),
+        unclassified_paths: HashSet::new(),
     };
     walker.walk_store()
 }
@@ -179,6 +319,8 @@ pub fn walk_archive_documents(
         mode,
         report: ReachabilityReport::new(),
         seen_checkpoints: HashSet::new(),
+        namespace_files: HashSet::new(),
+        unclassified_paths: HashSet::new(),
     };
     walker.walk_archive()
 }
@@ -198,6 +340,24 @@ pub(crate) fn walk_export_file_documents(
         mode: ReachabilityMode::Export,
         report: ReachabilityReport::new(),
         seen_checkpoints: HashSet::new(),
+        namespace_files: HashSet::new(),
+        unclassified_paths: HashSet::new(),
+    };
+    walker.walk_archive()
+}
+
+/// Traverse a decoded import inventory using the same typed restore graph.
+pub(crate) fn walk_import_file_documents(
+    documents: &HashMap<String, ArchiveFileSnapshot>, root: &Path,
+) -> Result<ReachabilityReport> {
+    let root = fs::canonicalize(root)?;
+    let mut walker = ArchiveWalker {
+        documents: ArchiveDocuments::Files { snapshots: documents, root: &root },
+        cas_root: Some(&root), mode: ReachabilityMode::Restore,
+        report: ReachabilityReport::new(),
+        seen_checkpoints: HashSet::new(),
+        namespace_files: HashSet::new(),
+        unclassified_paths: HashSet::new(),
     };
     walker.walk_archive()
 }
@@ -220,6 +380,8 @@ pub fn walk_checkpoint(root: &Path, checkpoint: &FmsCheckpoint) -> Result<Reacha
         report: ReachabilityReport::new(),
         seen_files: HashSet::new(),
         seen_checkpoints: HashSet::new(),
+        namespace_files: HashSet::new(),
+        unclassified_paths: HashSet::new(),
     };
     walker.walk_checkpoint_value(checkpoint, &relative)?;
     walker.report.require_complete()?;
@@ -232,6 +394,8 @@ struct StoreWalker {
     report: ReachabilityReport,
     seen_files: HashSet<String>,
     seen_checkpoints: HashSet<String>,
+    namespace_files: HashSet<String>,
+    unclassified_paths: HashSet<String>,
 }
 
 impl StoreWalker {
@@ -249,6 +413,7 @@ impl StoreWalker {
         self.walk_runs_dir()?;
         self.walk_solutions_dir()?;
         self.walk_objects_dir()?;
+        self.finalize_run_namespace_coverage();
 
         if matches!(self.mode, ReachabilityMode::Gc) && !self.report.complete {
             self.report.require_complete()?;
@@ -668,6 +833,7 @@ impl StoreWalker {
             let run_id = run_entry.file_name().to_string_lossy().into_owned();
             validate_component(&run_id)
                 .with_context(|| format!("invalid run directory `{run_id}`"))?;
+            self.walk_run_namespace_coverage(&run_entry.path(), &format!("runs/{run_id}"))?;
             let run_ref = format!("runs/{run_id}/run_manifest.json");
             let run_path = run_entry.path().join("run_manifest.json");
             if run_path.exists() {
@@ -751,6 +917,62 @@ impl StoreWalker {
             }
         }
         Ok(())
+    }
+
+    fn walk_run_namespace_coverage(&mut self, directory: &Path, prefix: &str) -> Result<()> {
+        // Artifact nesting is untrusted input; directory depth must not grow
+        // the call stack while computing namespace coverage.
+        let mut pending = vec![(directory.to_path_buf(), prefix.to_string())];
+        while let Some((directory, prefix)) = pending.pop() {
+            reject_link_chain(&self.root, &prefix)?;
+            for entry in read_directory(&directory)? {
+                let file_type = entry.file_type()?;
+                if file_type.is_symlink() {
+                    bail!("symlink under session run namespace: {}", entry.path().display());
+                }
+                let name = entry.file_name().to_string_lossy().into_owned();
+                let relative = format!("{prefix}/{name}");
+                if file_type.is_dir() {
+                    pending.push((entry.path(), relative));
+                    continue;
+                }
+                if !file_type.is_file() {
+                    bail!("unsupported session run entry `{relative}`");
+                }
+                validate_file_ref(&relative)?;
+                reject_link_chain(&self.root, &relative)?;
+                match classify_run_path(&relative)? {
+                    RunPathKind::OpaqueArtifact => {
+                        self.report.file_refs.insert(relative);
+                    }
+                    RunPathKind::KnownRecord => {
+                        self.namespace_files.insert(relative);
+                    }
+                    RunPathKind::Unknown => {
+                        self.namespace_files.insert(relative.clone());
+                        self.unclassified_paths.insert(relative);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn finalize_run_namespace_coverage(&mut self) {
+        let mut paths = self.namespace_files.iter().collect::<Vec<_>>();
+        paths.sort();
+        for relative in paths {
+            if !self.seen_files.contains(relative) {
+                let kind = if self.unclassified_paths.contains(relative) {
+                    "unknown session run document"
+                } else {
+                    "unconsumed session run document"
+                };
+                self.report.conservative(format!(
+                    "{kind} `{relative}` requires conservative GC"
+                ));
+            }
+        }
     }
 
     fn walk_run_resource_leases(&mut self, run_dir: &Path, run_id: &str) -> Result<()> {
@@ -1747,10 +1969,18 @@ impl StoreWalker {
                 }
             }
             ReferenceKind::BackendState => {
-                validate_restart_payload(data, kind, source)?;
+                if validate_restart_payload(data, kind, source)? {
+                    self.report.conservative(format!(
+                        "opaque backend restart state `{source}` requires conservative retention"
+                    ));
+                }
             }
             ReferenceKind::IntegratorPayload | ReferenceKind::RngPayload => {
-                validate_restart_payload(data, kind, source)?;
+                if validate_restart_payload(data, kind, source)? {
+                    self.report.conservative(format!(
+                        "opaque integrator restart payload `{source}` requires conservative retention"
+                    ));
+                }
             }
             ReferenceKind::Unknown => {
                 // Opaque plan/live documents may carry CAS references that
@@ -1835,6 +2065,8 @@ struct ArchiveWalker<'a> {
     mode: ReachabilityMode,
     report: ReachabilityReport,
     seen_checkpoints: HashSet<String>,
+    namespace_files: HashSet<String>,
+    unclassified_paths: HashSet<String>,
 }
 
 impl<'a> ArchiveWalker<'a> {
@@ -2075,10 +2307,30 @@ impl<'a> ArchiveWalker<'a> {
             self.walk_checkpoint(&name, run_id, checkpoint_id)?;
         }
 
+        self.finalize_namespace_coverage();
+
         if matches!(self.mode, ReachabilityMode::Gc) && !self.report.complete {
             self.report.require_complete()?;
         }
         Ok(std::mem::take(&mut self.report))
+    }
+
+    fn finalize_namespace_coverage(&mut self) {
+        let mut paths = self.namespace_files.iter().collect::<Vec<_>>();
+        paths.sort();
+        for relative in paths {
+            if self.report.file_refs.contains(relative) {
+                continue;
+            }
+            let kind = if self.unclassified_paths.contains(relative) {
+                "unknown archive run document"
+            } else {
+                "unconsumed archive run document"
+            };
+            self.report.conservative(format!(
+                "{kind} `{relative}` requires conservative retention"
+            ));
+        }
     }
 
     fn validate_archive_namespace(&mut self) -> Result<()> {
@@ -2122,7 +2374,20 @@ impl<'a> ArchiveWalker<'a> {
                         ));
                     }
                 }
-                "runs" => {}
+                "runs" => match classify_run_path(name)? {
+                    RunPathKind::KnownRecord => {
+                        self.namespace_files.insert(name.clone());
+                    }
+                    RunPathKind::OpaqueArtifact => {
+                        // Artifacts are intentionally opaque binary leaves, but
+                        // they still belong to the imported/exported graph.
+                        self.report.file_refs.insert(name.clone());
+                    }
+                    RunPathKind::Unknown => {
+                        self.namespace_files.insert(name.clone());
+                        self.unclassified_paths.insert(name.clone());
+                    }
+                },
                 "solutions" => validate_solution_archive_path(name)?,
                 "objects" => {
                     let Some(object_ref) = name.strip_prefix("objects/sha256/") else {
@@ -2286,6 +2551,7 @@ impl<'a> ArchiveWalker<'a> {
                 "archive references missing run manifest `{run_ref}`"
             ));
         };
+        self.report.file_refs.insert(run_ref.to_string());
         let run: FmsRunManifest = parse_json(&data, run_ref)?;
         if run.run_id != expected_run_id {
             bail!(
@@ -2898,6 +3164,7 @@ impl<'a> ArchiveWalker<'a> {
                 "archive references missing checkpoint `{relative}`"
             ));
         };
+        self.report.file_refs.insert(relative.to_string());
         let checkpoint: FmsCheckpoint = parse_json(&data, relative)?;
         validate_checkpoint(
             &checkpoint,
@@ -3020,10 +3287,18 @@ impl<'a> ArchiveWalker<'a> {
                 }
             }
             ReferenceKind::BackendState => {
-                validate_restart_payload(data, kind, source)?;
+                if validate_restart_payload(data, kind, source)? {
+                    self.report.conservative(format!(
+                        "opaque backend restart state `{source}` requires conservative retention"
+                    ));
+                }
             }
             ReferenceKind::IntegratorPayload | ReferenceKind::RngPayload => {
-                validate_restart_payload(data, kind, source)?;
+                if validate_restart_payload(data, kind, source)? {
+                    self.report.conservative(format!(
+                        "opaque integrator restart payload `{source}` requires conservative retention"
+                    ));
+                }
             }
             ReferenceKind::Unknown => {
                 self.report.complete = false;
@@ -3184,7 +3459,7 @@ fn validate_checkpoint_payload_ref(
     Ok(())
 }
 
-fn validate_restart_payload(data: &[u8], kind: ReferenceKind, source: &str) -> Result<()> {
+fn validate_restart_payload(data: &[u8], kind: ReferenceKind, source: &str) -> Result<bool> {
     match kind {
         ReferenceKind::BackendState => {
             let payload: BackendStatePayload = parse_json(data, source)?;
@@ -3200,22 +3475,38 @@ fn validate_restart_payload(data: &[u8], kind: ReferenceKind, source: &str) -> R
             {
                 bail!("backend restart payload `{source}` has no material state")
             }
+            Ok(payload
+                .integrator_state
+                .as_ref()
+                .is_some_and(is_nonempty_json)
+                || is_nonempty_json(&payload.extra))
         }
         ReferenceKind::IntegratorPayload => {
             let value: serde_json::Value = parse_json(data, source)?;
             if value.as_object().map_or(true, |map| map.is_empty()) {
                 bail!("restart payload `{source}` has no material state")
             }
+            Ok(true)
         }
         ReferenceKind::RngPayload => {
             let state: crate::types::RngState = parse_json(data, source)?;
             if state.stream_family.trim().is_empty() {
                 bail!("RNG restart payload `{source}` has no usable stream identity")
             }
+            Ok(false)
         }
-        _ => {}
+        _ => Ok(false),
     }
-    Ok(())
+}
+
+fn is_nonempty_json(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Null => false,
+        serde_json::Value::Array(values) => !values.is_empty(),
+        serde_json::Value::Object(values) => !values.is_empty(),
+        serde_json::Value::String(value) => !value.is_empty(),
+        serde_json::Value::Bool(_) | serde_json::Value::Number(_) => true,
+    }
 }
 
 fn validate_descriptor(

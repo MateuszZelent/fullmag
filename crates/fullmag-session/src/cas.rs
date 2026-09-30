@@ -68,7 +68,10 @@ impl CasStore {
         let _lease = self.writer.acquire()?;
         let hash = hex_sha256(data);
         let dest = self.object_path(&hash)?;
-        if self.get(&hash)?.is_some() {
+        if let Some(existing_length) = self.verified_length(&hash)? {
+            if existing_length != u64::try_from(data.len())? {
+                anyhow::bail!("CAS object {hash} length differs from the supplied bytes");
+            }
             self.pin(&hash)?;
             return Ok(hash);
         }
@@ -77,6 +80,57 @@ impl CasStore {
         self.pin(&hash)?;
         crate::durability::atomic_write(&dest, data)?;
         Ok(hash)
+    }
+
+    /// Store a verified file without materializing its contents in memory.
+    ///
+    /// The source is fingerprinted before pinning and verified again while it
+    /// is copied into the atomic publication staging file.  This closes the
+    /// source-identity race without weakening the existing pin-before-
+    /// publication rule.
+    pub(crate) fn put_file(
+        &self,
+        source: &Path,
+        expected_hash: &str,
+        expected_length: u64,
+    ) -> Result<String> {
+        validate_hash(expected_hash)?;
+        reject_link(source)?;
+        let _lease = self.writer.acquire()?;
+
+        let (actual_hash, actual_length) = file_content_identity(source)?;
+        if actual_hash != expected_hash {
+            anyhow::bail!(
+                "CAS source digest mismatch: expected {expected_hash}, got {actual_hash}"
+            );
+        }
+        if actual_length != expected_length {
+            anyhow::bail!(
+                "CAS source length mismatch: expected {expected_length}, got {actual_length}"
+            );
+        }
+
+        let dest = self.object_path(expected_hash)?;
+        if let Some(existing_length) = self.verified_length(expected_hash)? {
+            if existing_length != expected_length {
+                anyhow::bail!(
+                    "CAS object {expected_hash} length mismatch: expected {expected_length}, found {existing_length}"
+                );
+            }
+            self.pin(expected_hash)?;
+            return Ok(expected_hash.to_owned());
+        }
+
+        // Durable pin precedes publication: a later, separate checkpoint write
+        // must not lose this blob to a concurrent GC between the two calls.
+        self.pin(expected_hash)?;
+        crate::durability::atomic_write_verified_file(
+            &dest,
+            source,
+            expected_hash,
+            expected_length,
+        )?;
+        Ok(expected_hash.to_owned())
     }
 
     fn pin(&self, hash: &str) -> Result<()> {
@@ -324,6 +378,7 @@ fn stream_file_identity(
     expected_length: Option<u64>,
     writer: &mut impl Write,
 ) -> Result<(String, u64)> {
+    reject_link(path)?;
     if let Some(hash) = expected_hash {
         validate_hash(hash)?;
     }
@@ -461,6 +516,25 @@ mod tests {
         let h1 = cas.put(b"same").unwrap();
         let h2 = cas.put(b"same").unwrap();
         assert_eq!(h1, h2);
+    }
+
+    #[test]
+    fn put_file_streams_verified_source_and_rejects_changed_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        let cas = CasStore::open(dir.path().join("objects")).unwrap();
+        let source = dir.path().join("staged-object");
+        let data = vec![17_u8; 2 * 1024 * 1024 + 19];
+        let hash = hex_sha256(&data);
+        fs::write(&source, &data).unwrap();
+
+        assert_eq!(cas.put_file(&source, &hash, data.len() as u64).unwrap(), hash);
+        assert_eq!(cas.verified_length(&hash).unwrap(), Some(data.len() as u64));
+
+        fs::write(&source, b"changed source").unwrap();
+        assert!(cas
+            .put_file(&source, &hash, data.len() as u64)
+            .is_err());
+        assert_eq!(cas.verified_length(&hash).unwrap(), Some(data.len() as u64));
     }
 
     #[test]

@@ -14,6 +14,7 @@
 //! - **`capture`** — Checkpoint capture logic bridging the runner's live state
 //!   to the serializable session format.
 
+mod archive_capacity;
 mod archive_document;
 mod archive_source;
 pub mod capture;
@@ -37,13 +38,14 @@ pub use capture::{
     capture_checkpoint, determine_restore_class, CaptureRequest, CaptureResult,
     CheckpointSnapshotProvider,
 };
+pub use archive_capacity::ArchiveCapacityUnavailable;
 pub use cas::{hex_sha256, CasStore};
 pub use durability::{
-    durability_capability, DirectorySyncCapability, DurabilityCapability, PowerLossCapability,
-    PublicationUncertain,
+    durability_capability, publish_directory, DirectorySyncCapability, DurabilityCapability, PowerLossCapability,
+    PublicationUncertain, WriterReleaseUnconfirmed,
 };
 pub use fms::{
-    inspect_fms, pack_fms, pack_fms_file, preflight_fms, unpack_fms, FmsPreflight, PackOptions,
+    inspect_fms, pack_fms, pack_fms_file, preflight_fms, preflight_fms_staged, unpack_fms, unpack_fms_staged, FmsPreflight, FmsStagedPreflight, PackOptions,
 };
 pub use store::{GcPlan, RunBacklogFull, SessionStore};
 pub use types::*;

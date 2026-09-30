@@ -5,8 +5,8 @@ use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use axum::Json;
 use axum::extract::State;
+use axum::Json;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use utoipa::ToSchema;
@@ -18,8 +18,8 @@ use crate::router_v2::handlers::visualization::display::{
     canonicalize_visualization_overrides_with_diagnostics,
 };
 use crate::schemas::visualization_state::{
-    PlanarColorRangeMode, PlanarColorRangeState, PlanarSourceSelectionState,
-    default_planar_color_range_state, default_planar_visualization_state,
+    default_planar_color_range_state, default_planar_visualization_state, PlanarColorRangeMode,
+    PlanarColorRangeState, PlanarSourceSelectionState,
 };
 use crate::types::{
     AppState, CurrentWorkspaceLayout, CurrentWorkspaceRibbon, CurrentWorkspaceSelection,
@@ -30,10 +30,10 @@ use crate::{
 };
 
 use fullmag_session::{
+    capture_checkpoint, determine_restore_class, pack_fms, preflight_fms_staged, unpack_fms_staged,
     CaptureRequest, CheckpointCompatibility, CheckpointSnapshotProvider, FieldCapturePolicy,
-    FmsExportProfile, FmsPreflight, FmsRunManifest, FmsSessionManifest, FmsWorkspaceManifest,
-    PackOptions, SaveProfile, SessionInspection, SessionStore, SolverEnergies, capture_checkpoint,
-    determine_restore_class, inspect_fms, pack_fms, preflight_fms, unpack_fms,
+    FmsExportProfile, FmsStagedPreflight, FmsRunManifest, FmsSessionManifest, FmsWorkspaceManifest,
+    PackOptions, SaveProfile, SessionInspection, SessionStore, SolverEnergies,
 };
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -1146,15 +1146,29 @@ pub(crate) async fn export_session_with_context(
     }))
 }
 
+fn archive_preflight_error(error: anyhow::Error, operation: &str) -> ApiError {
+    let infrastructure = error.downcast_ref::<fullmag_session::ArchiveCapacityUnavailable>().is_some()
+        || error.chain().any(|cause| cause.downcast_ref::<std::io::Error>().is_some_and(|io| {
+            !matches!(io.kind(), std::io::ErrorKind::InvalidData | std::io::ErrorKind::UnexpectedEof)
+        }));
+    let message = format!("{operation}: {error}");
+    if infrastructure { ApiError::internal(message) } else { ApiError::bad_request(message) }
+}
+
 /// `POST /v2/persistence/imports/inspections`
 pub(crate) async fn import_session_inspect(
+    State(state): State<Arc<AppState>>,
     Json(req): Json<SessionImportInspectRequest>,
 ) -> Result<Json<SessionImportInspectResponse>, ApiError> {
     let fms_bytes = base64_decode(&req.fms_base64)
         .map_err(|e| ApiError::bad_request(format!("invalid base64: {e}")))?;
 
-    let inspection = inspect_fms(Cursor::new(&fms_bytes))
-        .map_err(|e| ApiError::bad_request(format!("invalid .fms file: {e}")))?;
+    let decoding_root = session_store_root(&state).join("imports");
+    std::fs::create_dir_all(&decoding_root)
+        .map_err(|error| ApiError::internal(format!("creating archive decode root: {error}")))?;
+    let staged = preflight_fms_staged(Cursor::new(&fms_bytes), &[], &decoding_root)
+        .map_err(|error| archive_preflight_error(error, "invalid_fms_preflight"))?;
+    let inspection = staged.inspection.clone();
 
     Ok(Json(SessionImportInspectResponse { inspection }))
 }
@@ -1360,7 +1374,7 @@ fn safe_import_session_id(session_id: &str) -> String {
 }
 
 fn validate_imported_snapshot_run(
-    preflight: &FmsPreflight,
+    preflight: &FmsStagedPreflight,
     persisted: &PersistedCurrentLiveSnapshot,
 ) -> Result<(), ApiError> {
     if persisted.session.session_id != preflight.session.session_id {
@@ -1380,12 +1394,12 @@ fn validate_imported_snapshot_run(
             "invalid_fms_snapshot: active run '{run_id}' is not declared by manifest/session.json"
         )));
     }
-    let run_bytes = preflight.documents.get(&run_ref).ok_or_else(|| {
+    let run_bytes = preflight.read_document(&run_ref).map_err(|_| {
         ApiError::bad_request(format!(
             "invalid_fms_snapshot: declared run manifest '{run_ref}' is missing"
         ))
     })?;
-    let run_manifest: FmsRunManifest = serde_json::from_slice(run_bytes).map_err(|error| {
+    let run_manifest: FmsRunManifest = serde_json::from_slice(&run_bytes).map_err(|error| {
         ApiError::bad_request(format!(
             "invalid_fms_snapshot: declared run manifest '{run_ref}' is invalid: {error}"
         ))
@@ -1401,7 +1415,7 @@ fn validate_imported_snapshot_run(
         "project/ui_state.json",
         "project/current_live_snapshot.json",
     ] {
-        if !preflight.documents.contains_key(document) {
+        if !preflight.contains_document(document) {
             return Err(ApiError::bad_request(format!(
                 "invalid_fms_snapshot: required document '{document}' is missing"
             )));
@@ -1444,22 +1458,33 @@ fn normalize_imported_read_only(persisted: &mut PersistedCurrentLiveSnapshot) {
 
 fn publish_imported_session(
     state: &AppState,
-    fms_bytes: &[u8],
-    preflight: &FmsPreflight,
+    preflight: &FmsStagedPreflight,
     persisted: &PersistedCurrentLiveSnapshot,
     import_id: &str,
 ) -> Result<PathBuf, ApiError> {
+    if matches!(preflight.session.profile, SaveProfile::Solved | SaveProfile::Resume | SaveProfile::Archive) {
+        preflight.reachability.require_complete()
+            .map_err(|error| ApiError::bad_request(format!("invalid_fms_graph: {error}")))?;
+    }
     let imports = session_store_root(state).join("imports");
     std::fs::create_dir_all(&imports)
         .map_err(|error| ApiError::internal(format!("creating import root: {error}")))?;
     let published = imports.join(&import_id);
     let staging = imports.join(format!(".{import_id}.staging"));
 
+    // Exclusive UUID paths belong only to this operation. Uncertain durable
+    // writes retain their staging directory for reconciliation.
+    std::fs::create_dir(&staging)
+        .map_err(|error| ApiError::internal(format!("creating exclusive import staging: {error}")))?;
+    let mut retain_staging = false;
     let result = (|| -> Result<(), ApiError> {
         let staging_store = SessionStore::open(&staging)
             .map_err(|error| ApiError::internal(format!("creating import staging: {error}")))?;
-        let imported_session = unpack_fms(Cursor::new(fms_bytes), &staging_store)
-            .map_err(|error| ApiError::bad_request(format!("invalid_fms_unpack: {error}")))?;
+        let imported_session = unpack_fms_staged(preflight, &staging_store)
+            .map_err(|error| {
+                retain_staging = error.downcast_ref::<fullmag_session::PublicationUncertain>().is_some();
+                ApiError::internal(format!("archive import storage failure at {}: {error}", staging.display()))
+            })?;
         if imported_session.session_id != preflight.session.session_id {
             return Err(ApiError::bad_request(
                 "invalid_fms_unpack: session manifest changed during import",
@@ -1476,17 +1501,23 @@ fn publish_imported_session(
                 })?,
             )
             .map_err(|error| {
+                retain_staging = error.downcast_ref::<fullmag_session::PublicationUncertain>().is_some();
                 ApiError::internal(format!(
-                    "persisting rebased imported session snapshot: {error}"
+                    "persisting rebased imported session snapshot at {}: {error}", staging.display()
                 ))
             })?;
-        std::fs::rename(&staging, &published).map_err(|error| {
-            ApiError::internal(format!("publishing imported session snapshot: {error}"))
+        // Release writer ownership through its original path before moving
+        // the private root. All handles are closed at the publication boundary.
+        drop(staging_store);
+        fullmag_session::publish_directory(&staging, &published).map_err(|error| {
+            retain_staging = error.downcast_ref::<fullmag_session::PublicationUncertain>().is_some()
+                || error.downcast_ref::<fullmag_session::WriterReleaseUnconfirmed>().is_some();
+            ApiError::internal(format!("publishing imported session snapshot at {}: {error}", published.display()))
         })?;
         Ok(())
     })();
     if let Err(error) = result {
-        let _ = std::fs::remove_dir_all(&staging);
+        if !retain_staging { let _ = std::fs::remove_dir_all(&staging); }
         return Err(error);
     }
     Ok(published)
@@ -1514,16 +1545,18 @@ pub(crate) async fn import_session_commit_with_context(
     // The archive, persisted snapshot, presentation migration, and semantic
     // report must all be valid before opening a SessionStore or mutating live
     // application state.
-    let preflight = preflight_fms(
+    let decoding_root = session_store_root(&state).join("imports");
+    std::fs::create_dir_all(&decoding_root)
+        .map_err(|error| ApiError::internal(format!("creating archive decode root: {error}")))?;
+    let preflight = preflight_fms_staged(
         Cursor::new(&fms_bytes),
         &["project/current_live_snapshot.json"],
+        &decoding_root,
     )
-    .map_err(|error| ApiError::bad_request(format!("invalid_fms_preflight: {error}")))?;
-    let snapshot_bytes = preflight
-        .documents
-        .get("project/current_live_snapshot.json")
-        .expect("preflight required the current snapshot document");
-    let mut persisted: PersistedCurrentLiveSnapshot = serde_json::from_slice(snapshot_bytes)
+    .map_err(|error| archive_preflight_error(error, "invalid_fms_preflight"))?;
+    let snapshot_bytes = preflight.read_document("project/current_live_snapshot.json")
+        .map_err(|error| ApiError::bad_request(format!("invalid_fms_snapshot: {error}")))?;
+    let mut persisted: PersistedCurrentLiveSnapshot = serde_json::from_slice(&snapshot_bytes)
         .map_err(|error| ApiError::bad_request(format!("invalid_fms_snapshot: {error}")))?;
     let restored_display_presentation = restore_display_presentation(
         persisted.display_presentation_schema_version,
@@ -1565,6 +1598,10 @@ pub(crate) async fn import_session_commit_with_context(
         run.artifact_dir = restored_artifact_dir;
     }
     let restored: SessionStateResponse = persisted.clone().into();
+    validate_imported_snapshot_run(&preflight, &persisted)?;
+    let restored_ui_state = preflight.read_document("project/ui_state.json")
+        .map_err(|error| ApiError::bad_request(format!("invalid_fms_ui_state: {error}")))
+        .map(|raw| serde_json::from_slice::<serde_json::Value>(&raw).ok())?;
 
     // Publishing an imported workspace replaces the mutable `current` root.
     // Revalidate the request identity after preflight and keep the transition
@@ -1577,10 +1614,7 @@ pub(crate) async fn import_session_commit_with_context(
     if let Some(context) = request_context {
         crate::validate_current_live_request_context(&state, context).await?;
     }
-    let published_root =
-        publish_imported_session(&state, &fms_bytes, &preflight, &persisted, &import_id)?;
-    let published_store = SessionStore::open(&published_root)
-        .map_err(|error| ApiError::internal(format!("opening published import: {error}")))?;
+    publish_imported_session(&state, &preflight, &persisted, &import_id)?;
 
     // Drop queues, replay, and other session-owned side channels before the
     // imported snapshot becomes visible. The imported presentation below then
@@ -1621,13 +1655,8 @@ pub(crate) async fn import_session_commit_with_context(
     .await;
     publish_current_live_realtime_batch_changed(&state, &realtime_state, false, 0).await?;
 
-    let restored_ui_state = published_store
-        .read_document("project/ui_state.json")
-        .map_err(|e| ApiError::internal(format!("reading ui_state document: {e}")))?
-        .and_then(|raw| serde_json::from_slice::<serde_json::Value>(&raw).ok());
-
     Ok(Json(SessionImportCommitResponse {
-        session_id: preflight.session.session_id,
+        session_id: preflight.session.session_id.clone(),
         restore_mode: req.restore_mode,
         restore_class: preflight.inspection.restore_class,
         warnings,
@@ -1953,10 +1982,8 @@ pub(crate) async fn restore_checkpoint_with_context(
     }
     validate_checkpoint_restore_shape(snapshot, magnetization.len())?;
 
-    let restore_class = supported_checkpoint_restore_class(
-        &checkpoint,
-        &checkpoint_compatibility(snapshot),
-    );
+    let restore_class =
+        supported_checkpoint_restore_class(&checkpoint, &checkpoint_compatibility(snapshot));
     if restore_class != fullmag_session::RestoreClass::ExactResume {
         return Err(ApiError::conflict(format!(
             "checkpoint_restore_requires_exact_resume: checkpoint is classified as {restore_class:?}"
@@ -2411,7 +2438,8 @@ pub(crate) async fn list_recovery_with_context(
     let store = open_store(&state)?;
 
     let manifests = match request_context {
-        Some(context) => store.read_session_recovery(&context.session_id)
+        Some(context) => store
+            .read_session_recovery(&context.session_id)
             .map(|snapshot| snapshot.into_iter().collect()),
         None => store.list_recovery(),
     };
@@ -2452,12 +2480,17 @@ pub(crate) async fn clear_recovery_with_context(
     let store = open_store(&state)?;
 
     let before = match request_context {
-        Some(context) => store.clear_session_recovery(&context.session_id)
+        Some(context) => store
+            .clear_session_recovery(&context.session_id)
             .map_err(|e| ApiError::internal(e.to_string()))?,
         None => {
-            let count = store.list_recovery()
-                .map_err(|e| ApiError::internal(e.to_string()))?.len();
-            store.clear_recovery().map_err(|e| ApiError::internal(e.to_string()))?;
+            let count = store
+                .list_recovery()
+                .map_err(|e| ApiError::internal(e.to_string()))?
+                .len();
+            store
+                .clear_recovery()
+                .map_err(|e| ApiError::internal(e.to_string()))?;
             count
         }
     };
@@ -3193,8 +3226,7 @@ fn supported_checkpoint_restore_class(
     current: &CheckpointCompatibility,
 ) -> fullmag_session::RestoreClass {
     let class = determine_restore_class(&checkpoint.compatibility, current);
-    if class == fullmag_session::RestoreClass::ExactResume
-        && checkpoint.backend_state_ref.is_none()
+    if class == fullmag_session::RestoreClass::ExactResume && checkpoint.backend_state_ref.is_none()
     {
         fullmag_session::RestoreClass::LogicalResume
     } else {
@@ -3807,7 +3839,7 @@ mod terminal_field_generation_persistence_tests {
 mod planar_presentation_migration_tests {
     use super::*;
     use crate::schemas::visualization_state::{
-        VisualizationOverrideState, VisualizationScopeKind, default_planar_visualization_state,
+        default_planar_visualization_state, VisualizationOverrideState, VisualizationScopeKind,
     };
 
     fn persisted_document(
@@ -3855,12 +3887,10 @@ mod planar_presentation_migration_tests {
             .visualization_planar
             .expect("restored planar presentation");
         assert_eq!(planar.range.mode, PlanarColorRangeMode::Auto);
-        assert!(
-            restored
-                .visualization_restore_warnings
-                .iter()
-                .any(|warning| warning.contains("wersji v6"))
-        );
+        assert!(restored
+            .visualization_restore_warnings
+            .iter()
+            .any(|warning| warning.contains("wersji v6")));
     }
 
     #[test]
@@ -3885,11 +3915,9 @@ mod planar_presentation_migration_tests {
             restored["visualization_planar"]["source"],
             serde_json::json!({"kind": "default"})
         );
-        assert!(
-            restored["visualization_planar"]
-                .get("active_monitor_id")
-                .is_none()
-        );
+        assert!(restored["visualization_planar"]
+            .get("active_monitor_id")
+            .is_none());
     }
 
     #[test]
@@ -3917,11 +3945,9 @@ mod planar_presentation_migration_tests {
             restored["visualization_planar"]["source"],
             serde_json::json!({"kind": "monitor", "monitor_id": "plane-1"})
         );
-        assert!(
-            restored["visualization_planar"]
-                .get("active_monitor_id")
-                .is_none()
-        );
+        assert!(restored["visualization_planar"]
+            .get("active_monitor_id")
+            .is_none());
     }
 
     #[test]
@@ -3941,11 +3967,9 @@ mod planar_presentation_migration_tests {
             ..DisplayPresentationState::default()
         };
         let document = persisted_display_presentation(&state).expect("serialize v9 presentation");
-        assert!(
-            document["visualization_planar"]
-                .get("active_monitor_id")
-                .is_none()
-        );
+        assert!(document["visualization_planar"]
+            .get("active_monitor_id")
+            .is_none());
         assert_eq!(
             document["visualization_planar"]["source"]["kind"],
             "default"
@@ -3983,11 +4007,12 @@ mod planar_presentation_migration_tests {
     #[test]
     fn unknown_presentation_version_is_rejected_without_migration() {
         let document = serde_json::json!({});
-        assert!(
-            restore_display_presentation(Some(DISPLAY_PRESENTATION_SCHEMA_VERSION + 1), &document)
-                .expect_err("future schema must not mutate state")
-                .contains("unsupported")
-        );
+        assert!(restore_display_presentation(
+            Some(DISPLAY_PRESENTATION_SCHEMA_VERSION + 1),
+            &document
+        )
+        .expect_err("future schema must not mutate state")
+        .contains("unsupported"));
     }
 
     #[test]
@@ -4025,12 +4050,10 @@ mod planar_presentation_migration_tests {
         assert_eq!(overrides[0].scope, VisualizationScopeKind::Airbox);
         assert_eq!(overrides[0].scope_id, "airbox");
         assert_eq!(overrides[0].visible, Some(true));
-        assert!(
-            restored
-                .visualization_restore_warnings
-                .iter()
-                .any(|warning| warning.contains("ambiguous_airbox_ordering"))
-        );
+        assert!(restored
+            .visualization_restore_warnings
+            .iter()
+            .any(|warning| warning.contains("ambiguous_airbox_ordering")));
     }
 
     #[test]
@@ -4045,5 +4068,20 @@ mod planar_presentation_migration_tests {
             serde_json::from_str(r#"{"expected_state_version": 99}"#)
                 .expect("deserialize restore req");
         assert_eq!(req_restore.expected_state_version, Some(99));
+    }
+}
+
+#[cfg(test)]
+mod archive_error_regressions {
+    use super::*;
+
+    #[test]
+    fn archive_format_errors_and_storage_errors_have_distinct_http_statuses() {
+        let malformed = archive_preflight_error(
+            std::io::Error::new(std::io::ErrorKind::InvalidData, "CRC mismatch").into(), "preflight");
+        assert_eq!(malformed.status, axum::http::StatusCode::BAD_REQUEST);
+        let storage = archive_preflight_error(
+            std::io::Error::new(std::io::ErrorKind::PermissionDenied, "staging denied").into(), "preflight");
+        assert_eq!(storage.status, axum::http::StatusCode::INTERNAL_SERVER_ERROR);
     }
 }

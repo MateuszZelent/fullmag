@@ -57,7 +57,7 @@ impl CheckpointSnapshotProvider for SyntheticProvider {
             format: "fullmag.backend_state.v1".into(),
             backend_family: "synthetic-fdm".into(),
             integrator_kind: Some("llg".into()),
-            integrator_state: Some(serde_json::json!({"step": 7})),
+            integrator_state: None,
             rng_state: Some(RngState {
                 global_seed: 42,
                 stream_family: "thermal".into(),
@@ -65,7 +65,7 @@ impl CheckpointSnapshotProvider for SyntheticProvider {
                 substream_per_cell: Some(true),
                 last_consumed_nonce: 7,
             }),
-            extra: serde_json::json!({"backend_epoch": 3}),
+            extra: serde_json::Value::Null,
         }))
     }
 
@@ -442,7 +442,8 @@ fn archive_preflight_follows_descriptor_to_chunk_and_preserves_resume_payload() 
         store.read_document(&backend_ref).unwrap().unwrap()
     );
     let backend: BackendStatePayload = serde_json::from_slice(&backend_bytes).unwrap();
-    assert_eq!(backend.integrator_state.unwrap()["step"], 7);
+    assert!(backend.integrator_state.is_none());
+    assert!(backend.extra.is_null());
     let rng = backend.rng_state.unwrap();
     assert_eq!(rng.global_seed, 42);
     assert_eq!(rng.stream_family, "thermal");
@@ -518,6 +519,124 @@ fn archive_rejects_checkpoint_common_state_identity_mismatch() {
 }
 
 #[test]
+fn unknown_run_record_with_hidden_cas_reference_forces_conservative_retention() {
+    let hidden_hash = "a".repeat(64);
+    let mut documents = HashMap::new();
+    let run = run_manifest("run-unknown-record");
+    documents.insert(
+        "runs/run-unknown-record/run_manifest.json".into(),
+        serde_json::to_vec(&run).unwrap(),
+    );
+    documents.insert(
+        "runs/run-unknown-record/unclassified.json".into(),
+        serde_json::to_vec(&serde_json::json!({ "object_ref": hidden_hash })).unwrap(),
+    );
+
+    let report = walk_archive_documents(&documents, ReachabilityMode::Restore).unwrap();
+    assert!(!report.complete);
+    assert!(report
+        .warnings
+        .iter()
+        .any(|warning| warning.contains("unclassified.json")));
+}
+
+#[test]
+fn unknown_checkpoint_record_with_hidden_cas_reference_forces_conservative_retention() {
+    let hidden_hash = "b".repeat(64);
+    let checkpoint = FmsCheckpoint::new("run-unknown-checkpoint", 1, 0.0, 1e-12);
+    let checkpoint_path = format!(
+        "runs/{}/checkpoints/{}/checkpoint.json",
+        checkpoint.run_id, checkpoint.checkpoint_id
+    );
+    let mut documents = HashMap::new();
+    documents.insert(checkpoint_path, serde_json::to_vec(&checkpoint).unwrap());
+    documents.insert(
+        checkpoint.common_state_ref.clone(),
+        serde_json::to_vec(&CommonSolverState {
+            step: checkpoint.step,
+            time_s: checkpoint.time_s,
+            dt: checkpoint.dt,
+            energies: SolverEnergies::default(),
+            magnetization_ref: None,
+        })
+        .unwrap(),
+    );
+    let unknown_path = format!(
+        "runs/{}/checkpoints/{}/unclassified.json",
+        checkpoint.run_id, checkpoint.checkpoint_id
+    );
+    documents.insert(
+        unknown_path.clone(),
+        serde_json::to_vec(&serde_json::json!({ "object_ref": hidden_hash })).unwrap(),
+    );
+
+    let report = walk_archive_documents(&documents, ReachabilityMode::Restore).unwrap();
+    assert!(!report.complete);
+    assert!(report
+        .warnings
+        .iter()
+        .any(|warning| warning.contains(&unknown_path)));
+}
+
+#[test]
+fn orphan_known_checkpoint_record_forces_conservative_retention() {
+    let hidden_hash = "c".repeat(64);
+    let path = "runs/run-orphan/checkpoints/cp-1/common_state.json";
+    let state = CommonSolverState {
+        step: 1,
+        time_s: 0.0,
+        dt: 1e-12,
+        energies: SolverEnergies::default(),
+        magnetization_ref: Some(hidden_hash),
+    };
+    let mut documents = HashMap::new();
+    documents.insert(path.into(), serde_json::to_vec(&state).unwrap());
+
+    let report = walk_archive_documents(&documents, ReachabilityMode::Restore).unwrap();
+    assert!(!report.complete);
+    assert!(report
+        .warnings
+        .iter()
+        .any(|warning| warning.contains("unconsumed") && warning.contains(path)));
+}
+
+#[test]
+fn reserved_run_namespace_files_are_rejected_before_import() {
+    let paths = [
+        "runs/run-1",
+        "runs/run-1/artifacts",
+        "runs/run-1/checkpoints",
+        "runs/run-1/checkpoints/cp-1",
+        "runs/run-1/worker_inbox",
+        "runs/run-1/task_preparation_receipts",
+        "runs/run-1/retry_decisions",
+        "runs/run-1/preparation_retry_decisions",
+        "runs/run-1/worker_process_exit_receipts",
+        "runs/run-1/preparation_process_launches",
+        "runs/run-1/preparation_process_exit_receipts",
+        "runs/run-1/resource_leases",
+        "runs/run-1/resource_leases/resource-1",
+        "runs/run-1/preparation_resource_leases",
+        "runs/run-1/preparation_resource_leases/resource-1",
+        "runs/run-1/task_admissions",
+        "runs/run-1/task_admissions/task-1",
+        "runs/run-1/coordinator_journal",
+        "runs/run-1/coordinator_journal/command",
+        "runs/run-1/coordinator_journal/event",
+    ];
+    for path in paths {
+        let documents = HashMap::from([(path.to_string(), b"reserved".to_vec())]);
+        let error = walk_archive_documents(&documents, ReachabilityMode::Restore).expect_err(path);
+        assert!(
+            error
+                .to_string()
+                .contains("reserved run namespace container"),
+            "{path}: {error}"
+        );
+    }
+}
+
+#[test]
 fn backend_payload_schema_is_checked_from_checkpoint_field_not_filename() {
     let checkpoint = FmsCheckpoint::new("run-1", 1, 0.0, 1e-12);
     let checkpoint_path = format!(
@@ -550,6 +669,57 @@ fn backend_payload_schema_is_checked_from_checkpoint_field_not_filename() {
     );
 
     assert!(walk_archive_documents(&documents, ReachabilityMode::Restore).is_err());
+}
+
+#[test]
+fn opaque_backend_restart_state_forces_conservative_retention() {
+    let hidden_hash = "d".repeat(64);
+    let mut checkpoint = FmsCheckpoint::new("run-opaque-backend", 1, 0.0, 1e-12);
+    let backend = BackendStatePayload {
+        format: "fullmag.backend_state.v1".into(),
+        backend_family: "synthetic-fdm".into(),
+        integrator_kind: Some("llg".into()),
+        integrator_state: None,
+        rng_state: Some(RngState {
+            global_seed: 42,
+            stream_family: "synthetic".into(),
+            counter_base: 0,
+            substream_per_cell: None,
+            last_consumed_nonce: 0,
+        }),
+        extra: serde_json::json!({"hidden_object_ref": hidden_hash}),
+    };
+    let backend_bytes = serde_json::to_vec(&backend).unwrap();
+    let backend_ref = fullmag_session::hex_sha256(&backend_bytes);
+    checkpoint.backend_state_ref = Some(backend_ref.clone());
+
+    let mut documents = HashMap::new();
+    documents.insert(
+        format!(
+            "runs/{}/checkpoints/{}/checkpoint.json",
+            checkpoint.run_id, checkpoint.checkpoint_id
+        ),
+        serde_json::to_vec(&checkpoint).unwrap(),
+    );
+    documents.insert(
+        checkpoint.common_state_ref.clone(),
+        serde_json::to_vec(&CommonSolverState {
+            step: checkpoint.step,
+            time_s: checkpoint.time_s,
+            dt: checkpoint.dt,
+            energies: SolverEnergies::default(),
+            magnetization_ref: None,
+        })
+        .unwrap(),
+    );
+    documents.insert(format!("objects/sha256/{backend_ref}"), backend_bytes);
+
+    let report = walk_archive_documents(&documents, ReachabilityMode::Restore).unwrap();
+    assert!(!report.complete);
+    assert!(report.warnings.iter().any(|warning| {
+        warning.contains("opaque backend restart state") && warning.contains("backend_state")
+    }));
+    assert!(!report.object_refs.contains(&hidden_hash));
 }
 
 #[test]
