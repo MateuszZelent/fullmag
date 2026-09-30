@@ -83,5 +83,8 @@ indeks posiada linki przypięte do pełnego commita kodu.
 4. Wykonane regresje po odwołaniu zakazu, managed receipts, RAM i browser proof.
 
 Nie uruchamiano kolejnego ciężkiego buildu ani nie usuwano danych storage.
-Wcześniejsze buildy były ostatnio queued przy storage poniżej guard 8 GiB;
-tego historycznego stanu nie uznano za dowód bieżącego runtime.
+Ponowny odczyt runnera 30.09.2026: `worker_alive=true`, `accepting_jobs=true`,
+`worker_error=null`, brak aktywnych jobów i `storage_free_bytes=1752481792`
+(około 1,63 GiB), poniżej guard 8 GiB. Joby
+`a5b88dbd27414615ae44413357d542b7` oraz `106c264dfe954e6b816a7811bbde2d4b`
+pozostają queued, bez exit code. Nie jest to dowód bieżącego runtime.
