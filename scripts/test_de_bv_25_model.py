@@ -60,3 +60,26 @@ def test_six_point_path_preserves_equilibrium_and_direction(monkeypatch,sampling
     assert study["operator"]=={"kind":"full_2x2","include_demag":True}
     assert ir["problem_meta"]["runtime_metadata"]["de_smoke"]["k_vectors_rad_per_m"]==vectors
     assert study["equilibrium"]=={"kind":"relaxed_initial_state"}
+
+@pytest.mark.parametrize("sampling",["k25","bv-k25"])
+@pytest.mark.parametrize("level,hmax",[("L0",10e-9),("L1",7.5e-9),("L2",5e-9)])
+def test_mesh_convergence_preserves_physics(monkeypatch,sampling,level,hmax):
+    monkeypatch.setenv("FULLMAG_DE_SMOKE_SAMPLING",sampling)
+    monkeypatch.setenv("FULLMAG_DE_SMOKE_MESH_LEVEL",level)
+    monkeypatch.delenv("FULLMAG_DE_SMOKE_SOLVER_RTOL",raising=False)
+    fm.reset()
+    try:
+        loaded=fm.load_problem_from_script(ROOT/"examples/fem_de_smoke_numeric.py",lightweight_assets=True)
+        ir=loaded.stages[-1].problem.to_ir(requested_backend="fem",execution_mode="strict",
+                                         execution_precision="double",include_geometry_assets=False)
+    finally:
+        fm.reset()
+    meta=ir["problem_meta"]["runtime_metadata"]
+    assert meta["de_smoke"]["mesh_level"]==level
+    assert meta["de_smoke"]["magnetic_element_size_m"]==hmax
+    assert meta["mesh_workflow"]["per_geometry"][0]["hmax"]==hmax
+    assert meta["mesh_workflow"]["per_geometry"][0]["through_thickness_elements"]==3
+    assert meta["de_smoke"]["eigen_solver_rtol"]==1e-8
+    assert meta["de_smoke"]["air_padding_each_side_m"]==2e-6
+    assert ir["geometry"]["entries"][0]["size"]==pytest.approx([40e-9,40e-9,10e-9])
+    assert next(t for t in ir["energy_terms"] if t["kind"]=="zeeman")["B"]==[0.1,0,0]
