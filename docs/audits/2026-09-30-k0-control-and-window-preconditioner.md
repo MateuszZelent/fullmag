@@ -56,3 +56,36 @@ Nie commitowano tego fragmentu jako ukończonej poprawki natywnej.
 
 Pełny diagnostyczny JSON i SHA-256 wejść:
 C:\git\fullmag\storage\runs\eigensolve-dispersion-plan-20260-c5dfad6d7f548079\da4f8f86efb94b5cb32642bdb3c0893e\comsol-dispersion\78721295af26413680a1b863406e4a30\gamma-control-diagnostic.json
+
+
+## Korekta po #170: biblioteka runtime nie zawiera signed guards
+
+#170 eb7c78ea7e134ec9bcd56314f985f583 terminalnie succeeded, exit 0.
+Run e048e072613e408792416acc2b381692 zakończył się failed, exit 1,
+z identycznymi liczbami podokien jak #169. Jednak nie dowodzi to
+nieskuteczności signed guards: w diagnostyce nie ma coverage_guard_kind
+ani certified_spectral_guard_count.
+
+Kapsuła 129880aa018a44079d5fcbd234e7b991/source/tree zawiera oba pola
+w poisson_airbox_schur_matshell.cpp oraz nową regresję w pliku testowym.
+Biblioteka outputs/.fullmag/local/lib/libfullmag_fem.so w #170
+ma natomiast ten sam SHA-256 co #169:
+1f559a6ca62d42d2765312ccb77c7bba5fdccf46451f762ac582520bc3a670d3.
+Jej bytes nie zawierają original_descriptor_certified_signed_ritz.
+To potwierdzona rozbieżność kapsuły i dostarczonego kodu natywnego,
+mimo pozytywnego receipt i aktualnego stampu binarki Rust.
+
+Hipoteza przyczyny: cache Cargo/CMake bazuje na czasach plików, podczas
+gdy kapsuły zachowują mtimes; edycja do kolejnego snapshotu może być
+starsza od zakończenia poprzedniego buildu. Build script FEM nie miał
+rerun-if-env-changed dla hasha snapshotu. Szczegółowe rozdzielenie
+inwalidacji Cargo, CMake i selekcji kopiowanej biblioteki pozostaje do
+regresji i dowodu kolejnego buildu; nie nazywamy hipotezy wyłączną przyczyną.
+
+Dodano w źródłach śledzenie FULLMAG_SOURCE_SNAPSHOT_SHA256 przez Cargo
+oraz FULLMAG_FEM_SOURCE_SNAPSHOT_SHA256 jako definicję kompilacji
+targetu CMake fullmag_fem. Zmiana hasha ma wymusić przebudowanie obiektów
+bez usuwania cache. Walidowane są 64 małe cyfry hex.
+Rustfmt i diff check PASS; kompilacja i test odtworzenia cache NOT VERIFIED.
+Następny runtime musi wykazać nowe pola i właściwą bibliotekę,
+a nie tylko nowy stamp Rust. #171 nie ma tej poprawki invalidacji w snapshotcie.
