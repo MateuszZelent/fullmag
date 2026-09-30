@@ -1,5 +1,32 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
+## Najnowszy checkpoint — 2026-09-30: gęsta ścieżka DE/BV i kontrola certyfikatów
+
+Ta sekcja ma pierwszeństwo przed starszymi checkpointami poniżej.
+
+- Wejścia dla 52 punktów (26 DE, 26 BV, k=0…25 rad/µm co 1) są na remote:
+  c8ad2811f0c9d69aa028d70a47e138d0632e08b5. Jedna relaksacja źródłowa na
+  pełną ścieżkę; osobne kN/bv-kN służą diagnostyce i nie dowodzą jej handoffu.
+- Odtworzono i naprawiono 19 przypadków wadliwej kontroli certyfikatów:
+  pomylony operator Gamma/nonzero-k, luźniejsze residuale, dodatkowe próbki
+  lub mody, niezgodny sample_count, duplikaty i niepoprawny model descriptor,
+  a także inne granice Poissona lub gauge. Poprawny Gamma BV jest legalny.
+- Gęsta ścieżka wymaga pełnego certyfikatu i progu nie większego niż 1e-8.
+  Scope i liczba modów muszą odpowiadać żądaniu; certyfikat reduced-only
+  nie kwalifikuje gęstej ścieżki. Preflight pozostaje NOT VERIFIED naukowo.
+- Dokładny staged snapshot: 144 testy Python i 7 subtestów PASS; walidator
+  naukowej mapy źródeł exit 0. Working checkout: 158 i 7 PASS.
+  Nie kompilowano testów jednostkowych; nie wykonano nowych punktów FEM.
+- Stan wyników pozostaje 19 punktów historycznych; do siatki 52 brakuje 33.
+  Runner: brak aktywnych jobów, 4 705 071 104 B wolnego przy progu 8 GiB;
+  profil runtime-only poza allow-list. Decyzje operatora nadal oczekują.
+- Następny gate: świeży native-bound runtime, poprawny Gamma i cała ścieżka,
+  kontrole pól/fazy/siatki, następnie wykres i zbieżność. Pełny zakres
+  S00–S12, A1/COMSOL, tracking, API/UI, 2.5D, interakcje, GPU i integracja
+  pozostaje aktywny. Ten checkpoint nie zamyka celu.
+
+Dowody: [gęsta ścieżka](../../audits/2026-09-30-de-bv-dense-sampling.md).
+
 ## Najnowszy checkpoint — 2026-09-30: dopuszczanie runtime i profile DE/BV
 
 Ta sekcja ma pierwszeństwo przed starszymi checkpointami poniżej.

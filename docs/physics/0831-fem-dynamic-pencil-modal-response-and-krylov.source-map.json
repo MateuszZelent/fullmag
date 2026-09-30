@@ -215,6 +215,10 @@
     }
   ],
   "sources": [
+    {"id": "source-dense-spectrum-inventory", "path": "scripts/validate_de_smoke_rows.py", "symbol": "load_spectrum_v3_modes", "responsibility": "Strict relative and block certificates and unique sample inventory"},
+    {"id": "source-dense-row-preflight", "path": "scripts/validate_de_smoke_rows.py", "symbol": "validate_rows", "responsibility": "Dense path completeness, Gamma/nonzero operator scope and frozen residual admission"},
+    {"id": "source-dense-contract-regression", "path": "scripts/test_de_smoke_dense_sampling.py", "symbol": "test_dense_certificate_inventory_and_scope_are_strict", "responsibility": "Reject loose or misplaced certificates and extra spectrum records"},
+    {"id": "source-dense-input-regression", "path": "scripts/test_de_smoke_dense_sampling.py", "symbol": "test_dense_path_has_26_samples_and_one_shared_relaxation", "responsibility": "Public DE/BV KPath export and one shared source relaxation"},
     {"id": "source-python-eigen-stage", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "eigenmodes_stage", "responsibility": "Capture the public stage-first modal request."},
     {"id": "source-python-response-stage", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "frequency_response_stage", "responsibility": "Capture the public stage-first driven-response request and solver policy."},
     {"id": "source-python-eigenmodes", "path": "packages/fullmag-py/src/fullmag/model/study.py", "symbol": "class Eigenmodes", "responsibility": "Validate modal parameters and serialize the canonical modal study IR."},

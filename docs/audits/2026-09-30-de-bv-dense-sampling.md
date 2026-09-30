@@ -111,3 +111,23 @@ zadane pytania o te działania nadal oczekują odpowiedzi.
    oznaczyć brakujące/odrzucone punkty. Nie interpolować ich jako wyników FEM.
 
 Stan naukowy: NOT VERIFIED dla nowego runtime i zagęszczonego solve.
+
+
+## Aktualizacja: uszczelnienie kontroli wyników gęstej ścieżki
+
+Odtworzono 19 przypadków błędnego przyjęcia artefaktu lub niekontrolowanego
+wyjątku. Poprawiono scope certyfikatu Gamma/nonzero-k, limit residualu gęstej
+ścieżki niezależny od luźniejszych opcji diagnostycznych, sample_count,
+unikalność próbek, pełny inventory widma i liczbę modów względem count=1.
+Certyfikaty innych granic airboxu lub polityki gauge są odrzucane.
+Niepoprawny model descriptor daje kontrolowany ValueError. Gamma BV jest
+legalny przy tej samej osi M0 i normalnej filmu.
+
+Walidator używa pełnych residuali i seam certificate dla Floqueta; stare
+reduced-only wyniki poza gęstą ścieżką mogą przejść jedynie preflight z jawną
+listą brakujących wymagań. Żaden preflight nie daje kwalifikacji naukowej.
+Pilot przekazuje solver.v1.json i metadata.json do walidatora oraz zachowuje
+image_digest zatwierdzonego build context. Testy interpretowane: 158 PASS
+oraz 7 subtestów PASS. Nie wykonano kompilacji ani nowych punktów FEM.
+
+Dokładny staged snapshot: 144 testy i 7 subtestów PASS; walidacja naukowej mapy źródeł exit 0.

@@ -25,18 +25,27 @@ MODEL = "examples/fem_de_film_100nm_numeric_pilot.py"
 PILOTS = {
     "de100": (MODEL, None),
     "de-smoke-two": ("examples/fem_de_smoke_numeric.py", "two"),
+    "de-smoke-k0": ("examples/fem_de_smoke_numeric.py", "k0"),
     "de-smoke-k2": ("examples/fem_de_smoke_numeric.py", "k2"),
+    "de-smoke-k25": ("examples/fem_de_smoke_numeric.py", "k25"),
+    "de-smoke-bv-k25": ("examples/fem_de_smoke_numeric.py", "bv-k25"),
+    "de-smoke-positive-six": ("examples/fem_de_smoke_numeric.py", "positive-six"),
+    "de-smoke-bv-positive-six": ("examples/fem_de_smoke_numeric.py", "bv-positive-six"),
     "de-smoke-five": ("examples/fem_de_smoke_numeric.py", "five"),
+    "de-smoke-positive-26": ("examples/fem_de_smoke_numeric.py", "positive-26"),
+    "de-smoke-bv-positive-26": ("examples/fem_de_smoke_numeric.py", "bv-positive-26"),
+    "de-smoke-signed-eleven": ("examples/fem_de_smoke_numeric.py", "signed-eleven"),
 }
-
-# Explicit dense input selectors; numerical certification remains a separate gate.
-PILOTS["de-smoke-positive-26"] = ("examples/fem_de_smoke_numeric.py", "positive-26")
-PILOTS["de-smoke-bv-positive-26"] = ("examples/fem_de_smoke_numeric.py", "bv-positive-26")
 for _geometry_prefix in ("", "bv-"):
     for _k_um in (*range(26), -25):
         _sampling = f"{_geometry_prefix}k{_k_um}"
         PILOTS.setdefault(f"de-smoke-{_sampling}", ("examples/fem_de_smoke_numeric.py", _sampling))
-
+SOLVER_RTOL_CHOICES = ("1e-8", "1e-7", "1e-6")
+EPS_PREFILTER_CHOICES = ("1e-8", "1e-9", "1e-10", "1e-11")
+SHIFTED_KSP_RTOL_CHOICES = ("1e-8", "1e-9", "1e-10", "1e-11", "1e-12")
+GMRES_RESTART_CHOICES = ("8", "10", "12", "16", "30")
+MESH_LEVEL_CHOICES = ("L0", "L1", "L2", "L3")
+MESH_LEVEL_ELEMENT_SIZES_M = {"L0": 10e-9, "L1": 7.5e-9, "L2": 5e-9, "L3": 3.75e-9}
 
 
 def pilot_model(pilot):
@@ -58,10 +67,28 @@ def validate_model(context, pilot="de100"):
     return digest
 
 
-def compose_command(context, output, timeout_seconds=managed.DEFAULT_TIMEOUT_SECONDS, *, pilot="de100", external_model=False):
+def compose_command(context, output, timeout_seconds=managed.DEFAULT_TIMEOUT_SECONDS, *, pilot="de100", external_model=False, dense_oracle=False, solver_rtol=None, eps_prefilter=None, shifted_ksp_rtol=None, gmres_restart=None, mesh_level=None):
     model = pilot_model(pilot)
+    if mesh_level is not None and (not pilot.startswith("de-smoke-") or mesh_level not in MESH_LEVEL_CHOICES):
+        raise managed.BenchmarkError("mesh level requires a supported DE-SMOKE level")
     if external_model and pilot == "de100":
         raise managed.BenchmarkError("standalone input is supported only for DE-SMOKE")
+    if dense_oracle and pilot != "de-smoke-k2":
+        raise managed.BenchmarkError("dense oracle diagnostic is restricted to DE-SMOKE k2")
+    if solver_rtol is not None and pilot != "de-smoke-k2":
+        raise managed.BenchmarkError("solver rtol sweep is restricted to DE-SMOKE k2")
+    if solver_rtol is not None and solver_rtol not in SOLVER_RTOL_CHOICES:
+        raise managed.BenchmarkError("solver rtol sweep value is unsupported")
+    if (eps_prefilter is not None or shifted_ksp_rtol is not None) and not pilot.startswith("de-smoke-"):
+        raise managed.BenchmarkError("diagnostic EPS/KSP options are restricted to DE-SMOKE pilots")
+    if gmres_restart is not None and not pilot.startswith("de-smoke-"):
+        raise managed.BenchmarkError("diagnostic GMRES restart is restricted to DE-SMOKE pilots")
+    if eps_prefilter is not None and eps_prefilter not in EPS_PREFILTER_CHOICES:
+        raise managed.BenchmarkError("EPS prefilter value is unsupported")
+    if shifted_ksp_rtol is not None and shifted_ksp_rtol not in SHIFTED_KSP_RTOL_CHOICES:
+        raise managed.BenchmarkError("shifted KSP rtol value is unsupported")
+    if gmres_restart is not None and gmres_restart not in GMRES_RESTART_CHOICES:
+        raise managed.BenchmarkError("GMRES restart value is unsupported")
     command = managed._compose_command(context, output, ("c1",), timeout_seconds=timeout_seconds)
     if external_model:
         command[command.index("run")+1:command.index("run")+1] = [
@@ -74,6 +101,12 @@ def compose_command(context, output, timeout_seconds=managed.DEFAULT_TIMEOUT_SEC
          else "source_script=/workspace/capsule/" + model),
         *(["export FULLMAG_GMSH_THREADS=1",
             "export FULLMAG_DE_SMOKE_SAMPLING=" + PILOTS[pilot][1]] if PILOTS[pilot][1] else []),
+        *(["export FULLMAG_FLOQUET_DENSE_ORACLE=1"] if dense_oracle else []),
+        *(["export FULLMAG_DE_SMOKE_SOLVER_RTOL=" + solver_rtol] if solver_rtol else []),
+        *(["export FULLMAG_FLOQUET_EPS_PREFILTER_ABS=" + eps_prefilter] if eps_prefilter else []),
+        *(["export FULLMAG_FLOQUET_SHIFTED_KSP_RTOL=" + shifted_ksp_rtol] if shifted_ksp_rtol else []),
+        *(["export FULLMAG_FLOQUET_GMRES_RESTART=" + gmres_restart] if gmres_restart else []),
+        *(["export FULLMAG_DE_SMOKE_MESH_LEVEL=" + mesh_level] if mesh_level else []),
         'test -x "$runtime_bin"',
         'test -f "$source_script"',
         "case_dir=/workspace/benchmark-output/" + pilot,
@@ -114,13 +147,41 @@ def validate_smoke_potential_fields(case_dir, expected_sample_count):
             "mode_count": len(reports), "modes": reports}
 
 
-def execute(context, output, command, model_sha, timeout_seconds=managed.DEFAULT_TIMEOUT_SECONDS, *, pilot="de100", model_identity=None):
+def validate_mesh_level_metadata(case_dir, requested):
+    """Verify authoring resolution; actual mesh convergence remains separate."""
+    try:
+        metadata = json.loads((case_dir / "metadata.json").read_text(encoding="utf-8"))
+        runtime = metadata["problem_meta"]["runtime_metadata"]
+        model = runtime["de_smoke"]
+        requested_size = MESH_LEVEL_ELEMENT_SIZES_M[requested]
+        meshes = runtime["mesh_workflow"]["per_geometry"]
+        matches = (model.get("mesh_level") == requested and
+                   model.get("magnetic_element_size_m") == requested_size and
+                   isinstance(meshes, list) and len(meshes) == 1 and
+                   meshes[0].get("hmax") == requested_size)
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
+        raise managed.BenchmarkError("missing or malformed magnetic mesh metadata") from error
+    if not matches:
+        raise managed.BenchmarkError("model ignored or changed the requested magnetic mesh level")
+    return {"requested_level": requested, "resolved_level": model["mesh_level"],
+            "requested_element_size_m": requested_size,
+            "scope": "requested_magnetic_interface_mesh_settings",
+            "qualification": "NOT VERIFIED"}
+
+
+def execute(context, output, command, model_sha, timeout_seconds=managed.DEFAULT_TIMEOUT_SECONDS, *, pilot="de100", model_identity=None, dense_oracle=False, solver_rtol=None, eps_prefilter=None, shifted_ksp_rtol=None, gmres_restart=None, mesh_level=None):
     model = pilot_model(pilot)
     schema_name = "de100-pilot" if pilot == "de100" else "de-smoke"
     request = managed._run_request(context, output, (), command, timeout_seconds=timeout_seconds)
     request.update(schema=f"fullmag.{schema_name}.request.v1", operation=pilot + "-numerical-pilot",
                    public_model=model, cases=[pilot], sampling=PILOTS[pilot][1], model_sha256=model_sha,
                    orchestrator_sha256=managed._sha256_file(Path(__file__).resolve()))
+    request["dense_oracle_diagnostic_requested"] = dense_oracle
+    request["solver_rtol_sweep_requested"] = solver_rtol
+    request["eps_prefilter_diagnostic_requested"] = eps_prefilter
+    request["shifted_ksp_rtol_diagnostic_requested"] = shifted_ksp_rtol
+    request["gmres_restart_diagnostic_requested"] = gmres_restart
+    request["mesh_level_requested"] = mesh_level
     request["source"]["public_model_files"] = [*managed.PUBLIC_MODEL_FILES] if model_identity else [model, *managed.PUBLIC_MODEL_FILES]
     if model_identity:
         request["model_source"] = model_identity
@@ -136,7 +197,9 @@ def execute(context, output, command, model_sha, timeout_seconds=managed.DEFAULT
             model_input.verify_model(output, model_identity)
         with (output / "compose.log").open("x", encoding="utf-8") as log:
             completed = subprocess.run(command, cwd=context.layout["repo_root"],
-                                       env=managed._compose_environment(context.layout),
+                                       env=managed._compose_environment(
+                                           context.layout, context.image_digest
+                                       ),
                                        stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
                                        check=False, timeout=math.ceil(timeout_seconds)
                                        + managed.CONTAINER_TIMEOUT_GRACE_SECONDS
@@ -149,9 +212,14 @@ def execute(context, output, command, model_sha, timeout_seconds=managed.DEFAULT
             artifacts["case"] = pilot
             if PILOTS[pilot][1] is not None:
                 artifacts["row_preflight"] = validate_rows(
-                    output / pilot / "eigen/dispersion.csv", PILOTS[pilot][1])
+                    output / pilot / "eigen/dispersion.csv",
+                    PILOTS[pilot][1],
+                    output / pilot / "eigen/diagnostics/solver.v1.json",
+                    output / pilot / "metadata.json")
                 artifacts["potential_reconstruction"] = validate_smoke_potential_fields(
                     output / pilot, artifacts["row_preflight"]["sample_count"])
+            if mesh_level is not None:
+                artifacts["mesh_level_resolution"] = validate_mesh_level_metadata(output / pilot, mesh_level)
             result.update(status="completed_unqualified", artifacts=artifacts)
     except subprocess.TimeoutExpired:
         result["error"] = "host Compose watchdog expired after the container deadline and grace period"
@@ -184,12 +252,25 @@ def main(argv=None):
     parser.add_argument("--output-dir")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--pilot", choices=tuple(PILOTS), default="de100")
+    parser.add_argument("--mesh-level", choices=MESH_LEVEL_CHOICES,
+                        help="explicit magnetic/interface mesh level for a standalone DE-SMOKE input")
     parser.add_argument("--model-ref", help="full commit of standalone DE-SMOKE input; runtime remains build-bound")
+    parser.add_argument("--dense-oracle", action="store_true", help="run the bounded diagnostic dense Schur oracle for DE-SMOKE k2")
+    parser.add_argument("--solver-rtol", choices=SOLVER_RTOL_CHOICES,
+                        help="request a diagnostic DE-SMOKE k2 tolerance; default model uses 1e-8")
+    parser.add_argument("--eps-prefilter", choices=EPS_PREFILTER_CHOICES,
+                        help="diagnostic EPS absolute true-residual cutoff for DE-SMOKE pilots")
+    parser.add_argument("--shifted-ksp-rtol", choices=SHIFTED_KSP_RTOL_CHOICES,
+                        help="diagnostic shift-invert KSP rtol for DE-SMOKE pilots")
+    parser.add_argument("--gmres-restart", choices=GMRES_RESTART_CHOICES,
+                        help="diagnostic shift-invert GMRES restart for DE-SMOKE pilots")
     args = parser.parse_args(argv)
     try:
         layout = managed.fullmag_storage.resolve_layout(args.repo_root, "windows-native")
         input_data = None
         input_identity = None
+        if args.mesh_level and not args.model_ref:
+            raise ValueError("--mesh-level requires a versioned standalone --model-ref")
         if args.model_ref:
             if args.pilot == "de100":
                 raise ValueError("--model-ref requires a DE-SMOKE pilot")
@@ -202,17 +283,17 @@ def main(argv=None):
             output = Path(layout["storage_root"]) / "runs" / layout["worktree_id"] / args.job_id / (args.pilot + "-preview")
             print(json.dumps({"status": "dry_run", "qualification": "NOT VERIFIED",
                               "model_sha256": model_sha, "model_source": input_identity,
-                              "command": compose_command(context, output, pilot=args.pilot, external_model=input_identity is not None)}, indent=2))
+                              "command": compose_command(context, output, pilot=args.pilot, external_model=input_identity is not None, dense_oracle=args.dense_oracle, solver_rtol=args.solver_rtol, eps_prefilter=args.eps_prefilter, shifted_ksp_rtol=args.shifted_ksp_rtol, gmres_restart=args.gmres_restart, mesh_level=args.mesh_level)}, indent=2))
             return 0
         with managed.fullmag_storage.build_lock(layout):
             context = managed._validate_build_context(layout, managed._read_job(layout, args.job_id))
             model_sha = input_identity["sha256"] if input_identity else validate_model(context, args.pilot)
-            managed._inspect_image(managed.EXPECTED_IMAGE_DIGEST)
+            managed._inspect_image(context.image_digest)
             output = managed._new_output_dir(context, args.output_dir)
             output.mkdir(parents=True, exist_ok=False)
             if input_data is not None:
                 model_input.stage_model(output, input_data)
-            return execute(context, output, compose_command(context, output, pilot=args.pilot, external_model=input_identity is not None), model_sha, pilot=args.pilot, model_identity=input_identity)
+            return execute(context, output, compose_command(context, output, pilot=args.pilot, external_model=input_identity is not None, dense_oracle=args.dense_oracle, solver_rtol=args.solver_rtol, eps_prefilter=args.eps_prefilter, shifted_ksp_rtol=args.shifted_ksp_rtol, gmres_restart=args.gmres_restart, mesh_level=args.mesh_level), model_sha, pilot=args.pilot, model_identity=input_identity, dense_oracle=args.dense_oracle, solver_rtol=args.solver_rtol, eps_prefilter=args.eps_prefilter, shifted_ksp_rtol=args.shifted_ksp_rtol, gmres_restart=args.gmres_restart, mesh_level=args.mesh_level)
     except (managed.BenchmarkError, managed.fullmag_storage.StorageError, OSError, ValueError, sqlite3.Error, subprocess.SubprocessError, SyntaxError) as error:
         print(f"de100-pilot: {error}", file=sys.stderr)
         return 2

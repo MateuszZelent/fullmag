@@ -31,14 +31,17 @@ class PilotTests(unittest.TestCase):
     def test_successful_execution_remains_scientifically_unqualified(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
-            context = SimpleNamespace(layout={"repo_root": str(root)})
+            context = SimpleNamespace(
+                layout={"repo_root": str(root)}, image_digest="sha256:test"
+            )
             request = {"source": {}, "job": {}, "runtime": {}}
             with patch.object(pilot.managed, "_run_request", return_value=request), \
-                 patch.object(pilot.managed, "_compose_environment", return_value={}), \
+                 patch.object(pilot.managed, "_compose_environment", return_value={}) as compose_env, \
                  patch.object(pilot.subprocess, "run", return_value=SimpleNamespace(returncode=0)), \
                  patch.object(pilot.managed, "_validate_case_artifacts", return_value={"case": "c1"}), \
                  patch("builtins.print"):
                 self.assertEqual(pilot.execute(context, root, ["docker"], "abc"), 0)
+            compose_env.assert_called_once_with(context.layout, context.image_digest)
             result = json.loads((root / "run-result.json").read_text())
             self.assertEqual(result["status"], "completed_unqualified")
             self.assertEqual(result["qualification"], "NOT VERIFIED")
@@ -47,7 +50,9 @@ class PilotTests(unittest.TestCase):
     def test_process_failure_records_terminal_result(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
-            context = SimpleNamespace(layout={"repo_root": str(root)})
+            context = SimpleNamespace(
+                layout={"repo_root": str(root)}, image_digest="sha256:test"
+            )
             request = {"source": {}, "job": {}, "runtime": {}}
             with patch.object(pilot.managed, "_run_request", return_value=request), \
                  patch.object(pilot.managed, "_compose_environment", return_value={}), \
@@ -64,7 +69,9 @@ class PilotTests(unittest.TestCase):
         for failure in (pilot.subprocess.TimeoutExpired("docker", 3), KeyboardInterrupt()):
             with self.subTest(failure=type(failure).__name__), TemporaryDirectory() as tmp:
                 root = Path(tmp)
-                context = SimpleNamespace(layout={"repo_root": str(root)})
+                context = SimpleNamespace(
+                    layout={"repo_root": str(root)}, image_digest="sha256:test"
+                )
                 request = {"source": {}, "job": {}, "runtime": {}}
                 with patch.object(pilot.managed, "_run_request", return_value=request), \
                      patch.object(pilot.managed, "_compose_environment", return_value={}), \
@@ -89,7 +96,8 @@ class PilotTests(unittest.TestCase):
                 path.write_bytes(b"frozen model")
                 digest = hashlib.sha256(path.read_bytes()).hexdigest()
                 context = SimpleNamespace(source_tree=root, runtime_root=Path("/runtime"),
-                    job={"job_id": "b" * 32}, manifest={"files": [{"path": model, "sha256": digest}]})
+                    image_digest="sha256:test", job={"job_id": "b" * 32, "profile": "fem-cpu-slepc-runtime-v1"},
+                    manifest={"files": [{"path": model, "sha256": digest}]})
                 self.assertEqual(pilot.validate_model(context, name), digest)
                 command = pilot.compose_command(context, Path("/outputs"), pilot=name)
                 self.assertIn("export FULLMAG_DE_SMOKE_SAMPLING=" + sampling, command[-1])
@@ -106,7 +114,9 @@ class PilotTests(unittest.TestCase):
     def test_smoke_receipt_and_artifacts_remain_separate(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
-            context = SimpleNamespace(layout={"repo_root": str(root)})
+            context = SimpleNamespace(
+                layout={"repo_root": str(root)}, image_digest="sha256:test"
+            )
             with patch.object(pilot.managed, "_run_request", return_value={"source": {}, "job": {}, "runtime": {}}), \
                  patch.object(pilot.managed, "_compose_environment", return_value={}), \
                  patch.object(pilot.subprocess, "run", return_value=SimpleNamespace(returncode=0)), \
@@ -116,7 +126,10 @@ class PilotTests(unittest.TestCase):
                  patch("builtins.print"):
                 self.assertEqual(pilot.execute(context, root, ["docker"], "abc", pilot="de-smoke-two"), 0)
             validate.assert_called_once_with(root / "de-smoke-two", "c1")
-            row_check.assert_called_once_with(root / "de-smoke-two/eigen/dispersion.csv", "two")
+            row_check.assert_called_once_with(
+                root / "de-smoke-two/eigen/dispersion.csv", "two",
+                root / "de-smoke-two/eigen/diagnostics/solver.v1.json",
+                root / "de-smoke-two/metadata.json")
             field_check.assert_called_once_with(root / "de-smoke-two", 2)
             request = json.loads((root / "run-request.json").read_text())
             result = json.loads((root / "run-result.json").read_text())
@@ -129,7 +142,9 @@ class PilotTests(unittest.TestCase):
     def test_smoke_invalid_rows_cannot_be_completed(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
-            context = SimpleNamespace(layout={"repo_root": str(root)})
+            context = SimpleNamespace(
+                layout={"repo_root": str(root)}, image_digest="sha256:test"
+            )
             with patch.object(pilot.managed, "_run_request", return_value={"source": {}, "job": {}, "runtime": {}}), \
                  patch.object(pilot.managed, "_compose_environment", return_value={}), \
                  patch.object(pilot.subprocess, "run", return_value=SimpleNamespace(returncode=0)), \
@@ -170,7 +185,9 @@ class PilotTests(unittest.TestCase):
     def test_smoke_inconsistent_field_cannot_be_completed_after_exit_zero(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
-            context = SimpleNamespace(layout={"repo_root": str(root)})
+            context = SimpleNamespace(
+                layout={"repo_root": str(root)}, image_digest="sha256:test"
+            )
             with patch.object(pilot.managed, "_run_request", return_value={"source": {}, "job": {}, "runtime": {}}), \
                  patch.object(pilot.managed, "_compose_environment", return_value={}), \
                  patch.object(pilot.subprocess, "run", return_value=SimpleNamespace(returncode=0)), \
@@ -185,7 +202,9 @@ class PilotTests(unittest.TestCase):
             self.assertIn("gradient mismatch", result["error"])
 
     def test_command_selects_numerical_pilot_without_case_override(self):
-        context = SimpleNamespace(source_tree=Path("/capsule"), runtime_root=Path("/runtime"), job={"job_id": "a" * 32})
+        context = SimpleNamespace(source_tree=Path("/capsule"), runtime_root=Path("/runtime"),
+                                  image_digest="sha256:test",
+                                  job={"job_id": "a" * 32, "profile": "fem-cpu-slepc-runtime-v1"})
         command = pilot.compose_command(context, Path("/outputs"))
         shell = command[-1]
         self.assertIn("/workspace/capsule/" + pilot.MODEL, shell)
@@ -196,9 +215,63 @@ class PilotTests(unittest.TestCase):
         self.assertNotIn("build", command)
 
 
+    def test_signed_path_prefilter_diagnostic_keeps_physical_tolerance_unchanged(self):
+        context = SimpleNamespace(source_tree=Path("/capsule"), runtime_root=Path("/runtime"),
+                                  image_digest="sha256:test",
+                                  job={"job_id": "a" * 32, "profile": "fem-cpu-slepc-runtime-v1"})
+        shell = pilot.compose_command(context, Path("/outputs"),
+                                      pilot="de-smoke-signed-eleven",
+                                      eps_prefilter="1e-10")[-1]
+        self.assertIn("export FULLMAG_FLOQUET_EPS_PREFILTER_ABS=1e-10", shell)
+        self.assertIn("export FULLMAG_DE_SMOKE_SAMPLING=signed-eleven", shell)
+        self.assertNotIn("FULLMAG_DE_SMOKE_SOLVER_RTOL", shell)
+        with self.assertRaises(pilot.managed.BenchmarkError):
+            pilot.compose_command(context, Path("/outputs"), pilot="de100",
+                                  eps_prefilter="1e-10")
+        with self.assertRaises(pilot.managed.BenchmarkError):
+            pilot.compose_command(context, Path("/outputs"),
+                                  pilot="de-smoke-signed-eleven", solver_rtol="1e-7")
+
+    def test_mesh_level_is_recorded_and_ignored_setting_is_rejected(self):
+        context = SimpleNamespace(source_tree=Path("/capsule"), runtime_root=Path("/runtime"),
+                                  image_digest="sha256:test",
+                                  job={"job_id": "a" * 32, "profile": "fem-cpu-slepc-runtime-v1"})
+        shell = pilot.compose_command(context, Path("/outputs"), pilot="de-smoke-k25",
+                                      external_model=True, mesh_level="L1")[-1]
+        self.assertIn("export FULLMAG_DE_SMOKE_MESH_LEVEL=L1", shell)
+        self.assertNotIn("FULLMAG_DE_SMOKE_SOLVER_RTOL", shell)
+        with self.assertRaises(pilot.managed.BenchmarkError):
+            pilot.compose_command(context, Path("/outputs"), pilot="de-smoke-k25", mesh_level="L9")
+        with TemporaryDirectory() as temporary:
+            case = Path(temporary)
+            metadata = {"problem_meta": {"runtime_metadata": {
+                "de_smoke": {"mesh_level": "L0", "magnetic_element_size_m": 10e-9},
+                "mesh_workflow": {"per_geometry": [{"hmax": 10e-9}]},
+            }}}
+            (case / "metadata.json").write_text(json.dumps(metadata))
+            with self.assertRaises(pilot.managed.BenchmarkError):
+                pilot.validate_mesh_level_metadata(case, "L1")
+            metadata["problem_meta"]["runtime_metadata"]["de_smoke"].update(
+                mesh_level="L1", magnetic_element_size_m=7.5e-9)
+            metadata["problem_meta"]["runtime_metadata"]["mesh_workflow"]["per_geometry"][0]["hmax"] = 7.5e-9
+            (case / "metadata.json").write_text(json.dumps(metadata))
+            self.assertEqual(pilot.validate_mesh_level_metadata(case, "L1")["resolved_level"], "L1")
+            for malformed in ({}, {"problem_meta": None},
+                              {"problem_meta": {"runtime_metadata": []}}):
+                with self.subTest(metadata=malformed):
+                    (case / "metadata.json").write_text(json.dumps(malformed))
+                    with self.assertRaisesRegex(pilot.managed.BenchmarkError, "malformed"):
+                        pilot.validate_mesh_level_metadata(case, "L1")
+            (case / "metadata.json").unlink()
+            with self.assertRaisesRegex(pilot.managed.BenchmarkError, "missing"):
+                pilot.validate_mesh_level_metadata(case, "L1")
+
+
+
     def test_single_nonzero_k_pilot_is_separate_from_two_point_path(self):
         context = SimpleNamespace(source_tree=Path("/capsule"), runtime_root=Path("/runtime"),
-                                  job={"job_id": "a" * 32})
+                                  image_digest="sha256:test",
+                                  job={"job_id": "a" * 32, "profile": "fem-cpu-slepc-runtime-v1"})
         single = pilot.compose_command(context, Path("/outputs"), pilot="de-smoke-k2", external_model=True)[-1]
         self.assertIn("export FULLMAG_DE_SMOKE_SAMPLING=k2", single)
         self.assertIn("export FULLMAG_GMSH_THREADS=1", single)

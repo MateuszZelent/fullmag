@@ -1066,3 +1066,57 @@ nowego native runtime i nie kwalifikacja A1/COMSOL ani GPU.
 | `source-profile-mass` | `scripts/compare_de_bv_mode_profiles.py` | `consistent_inner_product` | Exact consistent P1 tetrahedral mass inner product |
 | `source-profile-overlap` | `scripts/compare_de_bv_mode_profiles.py` | `normalized_overlap` | Phase- and scale-invariant squared overlap |
 | `source-profile-mass-regression` | `scripts/test_compare_de_bv_mode_profiles.py` | `test_exact_p1_basis_mass_differs_from_lumping` | Independent analytical P1 basis mass check distinguishes consistent from lumped mass |
+
+## Zagęszczona ścieżka walidacyjna DE/BV
+
+Wejście examples/fem_de_smoke_numeric.py obsługuje teraz żądanie
+FULLMAG_DE_SMOKE_SAMPLING=positive-26 lub bv-positive-26: 26 punktów
+od 0 do 25 rad/µm co 1, odpowiednio k prostopadłe/równoległe do M0=x.
+To rozszerzenie istniejącego fixture, bez nowego publicznego API ani pól IR.
+KPath zawiera 26 jawnych KPoint i 25 odcinków samples_per_segment=1,
+a count=1 żąda jednego fizycznego modu na próbkę. Wszystkie próbki danego
+study korzystają z jednego źródłowego etapu relaksacji i jednej siatki.
+Adapter punktu Gamma normalizuje zerowy wektor z Floquet do Periodic;
+samodzielne k0 i bv-k0 od razu autorują PeriodicBC/periodic_airbox_k0.
+Źródło normalizacji: crates/fullmag-runner/src/fem/eigen_path_guards.rs,
+normalize_gamma_floquet_point_to_periodic_k0. Jej aktualny runtime wymaga buildu.
+
+Każdy punkt ma także samodzielne wejście kN lub bv-kN, N od 0 do 25,
+aby diagnozować konkretny brak. Takie osobne runy nie dowodzą wspólnego
+accepted equilibrium ani produkcyjnego trackingu całej ścieżki.
+Materiał, geometria, demag, PBC i SI pozostają takie jak w frozen film fixture:
+40×40×10 nm, Ms=800 kA/m, A=13 pJ/m, B=0.1 T w osi x, airbox po 2 µm.
+
+Nowy walidator gęstej ścieżki wymaga wszystkich 26 próbek, operator probe
+Gamma i operator probes dla 25 niezerowych punktów oraz pełnego certyfikatu
+descriptora każdego modu. Certyfikat tylko zredukowanych bloków nie wystarcza.
+Okno DE wynosi 8.5–16 GHz, BV 8.5–12 GHz; fizyczny próg residualu 1e-8
+pozostaje bez zmian. Te żądania nie dowodzą kompletności widma ani gałęzi.
+
+Regresje eksportu IR i syntetycznych artefaktów nie są numerycznym FEM runem.
+FEM CPU: source/contract evidence; aktualny managed runtime NOT VERIFIED.
+FEM GPU i FDM CPU/GPU: ten fixture ich nie waliduje. Biblioteka musi mieć
+zgodny native source binding i legalny profil runnera przed właściwym solve.
+
+Kontrola gęstej ścieżki porównuje również cały inventory spectrum.v3 z
+żądaniem: dokładnie 26 unikalnych próbek i jeden zaakceptowany mod na każdą,
+a sample_count musi zgadzać się z listą. Gamma wymaga native_descriptor;
+każdy niezerowy punkt wymaga full_projected_weak_form_and_periodic_seams.
+Sama flaga full_descriptor_certified nie identyfikuje właściwego operatora.
+Niezerowe punkty tego fixture wymagają poisson_boundary_kind=poisson_dirichlet
+oraz poisson_gauge_policy=none, zgodnie z zadanymi granicami airboxu.
+Efektywna tolerancja gęstej ścieżki jest minimum rtol żądania, tolerancji
+certyfikatu oraz zamrożonego progu 1e-8. Opcje diagnostyczne nie mogą
+poluzować tej bramki. Nie jest to dowód zbieżności dyskretyzacji.
+Źródła: scripts/validate_de_smoke_rows.py + load_spectrum_v3_modes oraz
+validate_rows; regresja: scripts/test_de_smoke_dense_sampling.py +
+test_dense_certificate_inventory_and_scope_are_strict.
+
+## Indeks źródeł zagęszczonej ścieżki
+
+| Source ID | Path | Symbol | Responsibility |
+|---|---|---|---|
+| `source-dense-spectrum-inventory` | `scripts/validate_de_smoke_rows.py` | `load_spectrum_v3_modes` | Strict relative and block certificates and unique sample inventory |
+| `source-dense-row-preflight` | `scripts/validate_de_smoke_rows.py` | `validate_rows` | Dense path completeness, Gamma/nonzero operator scope and frozen residual admission |
+| `source-dense-contract-regression` | `scripts/test_de_smoke_dense_sampling.py` | `test_dense_certificate_inventory_and_scope_are_strict` | Reject loose or misplaced certificates and extra spectrum records |
+| `source-dense-input-regression` | `scripts/test_de_smoke_dense_sampling.py` | `test_dense_path_has_26_samples_and_one_shared_relaxation` | Public DE/BV KPath export and one shared source relaxation |
