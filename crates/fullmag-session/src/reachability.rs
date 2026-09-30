@@ -2548,6 +2548,11 @@ impl<'a> ArchiveWalker<'a> {
         solution: &SolutionSet,
         source: &str,
     ) -> Result<()> {
+        if solution.members.iter().flat_map(|member| &member.artifacts)
+            .any(|artifact| artifact.schema_id == crate::solution_tensor_source::SOLUTION_TENSOR_SCHEMA)
+        {
+            self.follow_solution_run_owner(solution)?;
+        }
         for member in &solution.members {
             for artifact in &member.artifacts {
                 if artifact.schema_id == crate::solution_tensor_source::SOLUTION_TENSOR_SCHEMA {
@@ -2567,6 +2572,25 @@ impl<'a> ArchiveWalker<'a> {
             }
         }
         Ok(())
+    }
+
+    fn follow_solution_run_owner(&mut self, solution: &SolutionSet) -> Result<()> {
+        crate::repository_path::validate_store_id(&solution.run_id)?;
+        let relative = format!("runs/{}/run_intent.json", solution.run_id);
+        let bytes = self.documents.read(&relative)?
+            .context("typed solution tensor requires its archived run intent owner")?;
+        if bytes.len() as u64 > crate::archive_document::MAX_CONTROL_DOCUMENT_BYTES {
+            bail!("solution tensor run intent exceeds metadata budget");
+        }
+        let intent: FmsRunIntent = parse_json(&bytes, &relative)?;
+        intent.validate()?;
+        if intent.run_id != solution.run_id
+            || format!("sha256:{}", intent.payload_sha256) != solution.provenance.run_spec_digest
+        {
+            bail!("archived solution tensor RunSpec owner mismatch");
+        }
+        drop(bytes);
+        self.walk_run_intent(&relative, &solution.run_id)
     }
 
     fn add_archive_solution_tensor_artifact(

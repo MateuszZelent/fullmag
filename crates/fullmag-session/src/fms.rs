@@ -43,7 +43,7 @@
 //!    └─ sha256/
 //! ```
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Component, Path, PathBuf};
@@ -205,8 +205,14 @@ pub fn pack_fms<W: Write + Seek>(
     let _lease = store.write_transaction()?;
     validate_pack_input(workspace, documents)?;
     let canonical_root = canonical_store_root(store.root())?;
-    let run_entries = plan_run_entries(store.root(), &canonical_root, session, export_profile)?;
+    let mut run_entries = plan_run_entries(store.root(), &canonical_root, session, export_profile)?;
     let solution_entries = plan_solution_entries(store.root(), &canonical_root, export_profile)?;
+    plan_solution_tensor_owner_entries(
+        store.root(),
+        &canonical_root,
+        &solution_entries,
+        &mut run_entries,
+    )?;
     let cas_entries = plan_cas_entries(
         store.root(),
         &canonical_root,
@@ -422,6 +428,149 @@ fn plan_solution_entries(
         &mut entries,
     )?;
     Ok(entries)
+}
+
+fn plan_solution_tensor_owner_entries(
+    store_root: &Path,
+    canonical_root: &Path,
+    solution_entries: &[PackEntry],
+    run_entries: &mut Vec<PackEntry>,
+) -> Result<()> {
+    let mut owners: BTreeMap<String, (String, ArchiveFileSnapshot)> = BTreeMap::new();
+    for entry in solution_entries {
+        let Some((directory, expected_revision)) = solution_entry_identity(&entry.archive_path)?
+        else {
+            continue;
+        };
+        let data = entry
+            .snapshot
+            .read_control(canonical_root, &entry.archive_path)?;
+        let solution: fullmag_quantities::SolutionSet = serde_json::from_slice(&data)
+            .with_context(|| format!("parsing solution set `{}`", entry.archive_path))?;
+        solution
+            .validate()
+            .with_context(|| format!("validating solution set `{}`", entry.archive_path))?;
+        if crate::cas::hex_sha256(solution.solution_set_id.as_bytes()) != directory {
+            bail!(
+                "solution-set directory does not match logical identity `{}`",
+                entry.archive_path
+            );
+        }
+        if expected_revision.is_some_and(|revision| solution.revision != revision) {
+            bail!(
+                "solution-set revision path identity mismatch `{}`",
+                entry.archive_path
+            );
+        }
+        let has_tensor = solution.members.iter().any(|member| {
+            member
+                .artifacts
+                .iter()
+                .any(|artifact| artifact.schema_id == crate::solution_tensor_source::SOLUTION_TENSOR_SCHEMA)
+        });
+        if !has_tensor {
+            continue;
+        }
+
+        crate::repository_path::validate_store_id(&solution.run_id)
+            .with_context(|| format!("invalid tensor solution owner run `{}`", solution.run_id))?;
+        let run_intent_path = store_root
+            .join("runs")
+            .join(&solution.run_id)
+            .join("run_intent.json");
+        let intent_data = read_store_file_if_exists(store_root, canonical_root, &run_intent_path)?
+            .with_context(|| {
+                format!(
+                    "typed tensor solution `{}` requires owner run intent `{}`",
+                    entry.archive_path,
+                    run_intent_path.display()
+                )
+            })?;
+        let intent: FmsRunIntent = serde_json::from_slice(&intent_data)
+            .with_context(|| format!("parsing tensor owner run intent `{}`", solution.run_id))?;
+        intent
+            .validate()
+            .with_context(|| format!("validating tensor owner run intent `{}`", solution.run_id))?;
+        if intent.run_id != solution.run_id {
+            bail!(
+                "tensor solution `{}` owner run intent identity mismatch",
+                entry.archive_path
+            );
+        }
+        let owner_digest = format!("sha256:{}", intent.payload_sha256);
+        if owner_digest != solution.provenance.run_spec_digest {
+            bail!(
+                "tensor solution `{}` RunSpec provenance does not match owner run intent",
+                entry.archive_path
+            );
+        }
+        if let Some((previous_digest, _)) = owners.get(&solution.run_id) {
+            if previous_digest != &solution.provenance.run_spec_digest {
+                bail!(
+                    "tensor solutions for run `{}` have conflicting RunSpec provenance",
+                    solution.run_id
+                );
+            }
+            continue;
+        }
+        owners.insert(
+            solution.run_id.clone(),
+            (owner_digest, ArchiveFileSnapshot::from_bytes(&intent_data)),
+        );
+    }
+
+    for (run_id, (_, snapshot)) in owners {
+        let entry = PackEntry {
+            archive_path: format!("runs/{run_id}/run_intent.json"),
+            snapshot,
+        };
+        push_unique_pack_entry(run_entries, entry)?;
+    }
+    Ok(())
+}
+
+fn solution_entry_identity(path: &str) -> Result<Option<(&str, Option<u64>)>> {
+    let mut components = path.split('/');
+    if components.next() != Some("solutions") {
+        return Ok(None);
+    }
+    let Some(directory) = components.next() else {
+        return Ok(None);
+    };
+    reachability::validate_object_ref(directory)?;
+    let rest = components.collect::<Vec<_>>();
+    match rest.as_slice() {
+        ["manifest.json"] => Ok(Some((directory, None))),
+        ["revisions", file_name] => {
+            let revision_text = file_name
+                .strip_suffix(".json")
+                .filter(|value| {
+                    value.len() == 20 && value.bytes().all(|byte| byte.is_ascii_digit())
+                })
+                .with_context(|| format!("invalid solution-set revision filename `{file_name}`"))?;
+            let revision = revision_text.parse::<u64>()?;
+            if revision == 0 {
+                bail!("solution-set revision must be positive");
+            }
+            Ok(Some((directory, Some(revision))))
+        }
+        _ => Ok(None),
+    }
+}
+
+fn push_unique_pack_entry(entries: &mut Vec<PackEntry>, entry: PackEntry) -> Result<()> {
+    if let Some(existing) = entries
+        .iter()
+        .find(|existing| existing.archive_path == entry.archive_path)
+    {
+        if existing.snapshot.byte_count == entry.snapshot.byte_count
+            && existing.snapshot.content_sha256 == entry.snapshot.content_sha256
+        {
+            return Ok(());
+        }
+        bail!("duplicate archive path with conflicting content `{}`", entry.archive_path);
+    }
+    entries.push_entry(entry)
 }
 
 fn plan_run_entries(
@@ -3568,3 +3717,7 @@ mod tests {
             .any(|warning| warning.contains("no packaged artifacts")));
     }
 }
+
+#[cfg(test)]
+#[path = "fms_owner_closure_tests.rs"]
+mod owner_closure_tests;

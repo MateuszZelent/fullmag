@@ -48,6 +48,22 @@ To ograniczenie pozostaje otwarte: nowego formatu strukturalnego nie wolno
 publikować przed dodaniem jego typed grafu do publication, recovery, GC
 i export/import. Kontrakt nie certyfikuje kompletności nieznanych schematów.
 
+## Właściciel w archiwum FMS
+
+Eksport typed SolutionSet dołącza jego dokładny `run_intent.json`, również
+gdy właściciel nie znajduje się w `session.run_refs`. Wybór SolutionSet
+oraz same `run_refs` pozostają zgodne z istniejącym profilem; nie dodaje się
+niezwiązanych run manifests, leases ani działającego runtime'u.
+Tożsamość intentu i zweryfikowany digest payloadu muszą odpowiadać
+`run_id` i `provenance.run_spec_digest` każdej eksportowanej typed rewizji.
+Brak lub konflikt właściciela zatrzymuje plan eksportu przed zapisem ZIP.
+
+ArchiveWalker konsumuje ten intent jako właściciela typed SolutionSet,
+weryfikuje powiązanie i przechodzi także jego definition/study/assets CAS refs.
+Archiwum z typed tensorem bez właściciela lub z obcym digestem jest odrzucane
+przed publikacją importu. Opaque SolutionSet zachowuje istniejącą kompatybilność.
+Source-only round-trip regression nie jest dowodem wykonanego importu/runtime.
+
 Ten przyrost nie publikuje MaterializedDataset ani wyniku porównania,
 nie definiuje mapowania dataset→tensor i nie dodaje konsumenta UI.
 Stan `integrity=not_verified` istniejącego endpointu artefaktów pozostaje

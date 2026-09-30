@@ -376,6 +376,11 @@ fn store_and_archive_solution_walkers_retain_tensor_chunks_from_root_only() {
     let documents = HashMap::from([
         (solution_path, solution_bytes.clone()),
         (revision_path, solution_bytes),
+        (
+            "runs/run-tensor/run_intent.json".to_string(),
+            fs::read(fixture.store.root().join("runs/run-tensor/run_intent.json"))
+                .expect("read owner intent"),
+        ),
         (root_path, fixture.descriptor_bytes.clone()),
         (chunk_path.clone(), fixture.chunk_bytes.clone()),
     ]);
@@ -385,6 +390,21 @@ fn store_and_archive_solution_walkers_retain_tensor_chunks_from_root_only() {
         .object_refs
         .contains(&fixture.artifact.object_ref));
     assert!(archive_report.object_refs.contains(&fixture.chunk_ref));
+
+    let mut missing_owner = documents.clone();
+    missing_owner.remove("runs/run-tensor/run_intent.json");
+    assert!(walk_archive_documents(&missing_owner, ReachabilityMode::Restore).is_err());
+    let mut foreign_owner = documents.clone();
+    let other = FmsRunIntent::new(
+        "run-tensor",
+        "intent-foreign",
+        json!({"run_id":"run-tensor", "solver":"foreign"}),
+    );
+    foreign_owner.insert(
+        "runs/run-tensor/run_intent.json".to_string(),
+        serde_json::to_vec(&other).unwrap(),
+    );
+    assert!(walk_archive_documents(&foreign_owner, ReachabilityMode::Restore).is_err());
 
     let mut missing_chunk = documents.clone();
     missing_chunk.remove(&chunk_path);
