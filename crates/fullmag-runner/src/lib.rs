@@ -2581,6 +2581,24 @@ fn study_plan_state_sample_count(
     }
 }
 
+fn require_frequency_response_artifact_identity(
+    plan: &fullmag_ir::ExecutionPlanIR,
+    identity: Option<&eigen::FrequencyDomainArtifactIdentity>,
+) -> Result<(), RunError> {
+    let Some(identity) = identity else {
+        return Ok(());
+    };
+    identity.validate().map_err(|error| RunError {
+        message: format!("invalid frequency-domain artifact identity: {error}"),
+    })?;
+    let BackendPlanIR::FemFrequencyResponse(response) = &plan.backend_plan else {
+        return Err(RunError {
+            message: "exact FMR artifact identity requires a FEM frequency-response plan".into(),
+        });
+    };
+    frequency_response::validate_frequency_response_artifact_identity(response, Some(identity))
+}
+
 /// Run a problem with an already materialized execution plan.
 ///
 /// Interactive frontends use this to preserve the materialize -> wait ->
@@ -2593,6 +2611,35 @@ pub fn run_planned_problem(
     until_seconds: f64,
     output_dir: &Path,
 ) -> Result<RunResult, RunError> {
+    run_planned_problem_with_artifact_context(problem, plan, until_seconds, output_dir, None)
+}
+
+/// Execute an explicit dense-reference FMR plan with exact artifact ownership.
+/// Identity is runner-owned and does not change the canonical ProblemIR.
+pub fn run_planned_problem_with_artifact_identity(
+    problem: &ProblemIR,
+    plan: &fullmag_ir::ExecutionPlanIR,
+    until_seconds: f64,
+    output_dir: &Path,
+    artifact_identity: &eigen::FrequencyDomainArtifactIdentity,
+) -> Result<RunResult, RunError> {
+    run_planned_problem_with_artifact_context(
+        problem,
+        plan,
+        until_seconds,
+        output_dir,
+        Some(artifact_identity),
+    )
+}
+
+fn run_planned_problem_with_artifact_context(
+    problem: &ProblemIR,
+    plan: &fullmag_ir::ExecutionPlanIR,
+    until_seconds: f64,
+    output_dir: &Path,
+    artifact_identity: Option<&eigen::FrequencyDomainArtifactIdentity>,
+) -> Result<RunResult, RunError> {
+    require_frequency_response_artifact_identity(plan, artifact_identity)?;
     require_resolved_runtime_sampling(problem, plan)?;
     require_physics_graph_runtime_provenance(problem, plan)?;
     if let fullmag_ir::StudyIR::Hysteresis { .. } = &problem.study {
@@ -2686,9 +2733,10 @@ pub fn run_planned_problem(
             let stage_context =
                 types::FemStageExecutionContext::from_backend_plan(&plan.backend_plan)
                     .expect("FEM stage context");
-            frequency_response::execute_fem_frequency_response_validation_with_context(
+            frequency_response::execute_fem_frequency_response_validation_with_artifact_context(
                 response,
                 &stage_context,
+                artifact_identity,
                 output_dir,
                 None,
                 None,
@@ -2960,8 +3008,59 @@ pub fn run_planned_problem_with_callback_and_fem_mesh_identity_and_relax_handoff
     output_dir: &Path,
     field_every_n: u64,
     relax_handoff: Option<&AcceptedFemRelaxStageHandoff>,
-    mut on_step: impl FnMut(StepUpdate) -> StepAction + Send,
+    on_step: impl FnMut(StepUpdate) -> StepAction + Send,
 ) -> Result<RunResult, RunError> {
+    run_planned_problem_with_callback_artifact_context(
+        problem,
+        plan,
+        fem_mesh_identity,
+        until_seconds,
+        output_dir,
+        field_every_n,
+        relax_handoff,
+        on_step,
+        None,
+    )
+}
+
+/// Execute an explicit dense-reference FMR plan with exact artifact ownership.
+/// Identity is runner-owned and does not change the canonical ProblemIR.
+pub fn run_planned_problem_with_callback_and_artifact_identity(
+    problem: &ProblemIR,
+    plan: &fullmag_ir::ExecutionPlanIR,
+    fem_mesh_identity: Option<&StageFemMeshIdentity>,
+    until_seconds: f64,
+    output_dir: &Path,
+    field_every_n: u64,
+    relax_handoff: Option<&AcceptedFemRelaxStageHandoff>,
+    on_step: impl FnMut(StepUpdate) -> StepAction + Send,
+    artifact_identity: &eigen::FrequencyDomainArtifactIdentity,
+) -> Result<RunResult, RunError> {
+    run_planned_problem_with_callback_artifact_context(
+        problem,
+        plan,
+        fem_mesh_identity,
+        until_seconds,
+        output_dir,
+        field_every_n,
+        relax_handoff,
+        on_step,
+        Some(artifact_identity),
+    )
+}
+
+fn run_planned_problem_with_callback_artifact_context(
+    problem: &ProblemIR,
+    plan: &fullmag_ir::ExecutionPlanIR,
+    fem_mesh_identity: Option<&StageFemMeshIdentity>,
+    until_seconds: f64,
+    output_dir: &Path,
+    field_every_n: u64,
+    relax_handoff: Option<&AcceptedFemRelaxStageHandoff>,
+    mut on_step: impl FnMut(StepUpdate) -> StepAction + Send,
+    artifact_identity: Option<&eigen::FrequencyDomainArtifactIdentity>,
+) -> Result<RunResult, RunError> {
+    require_frequency_response_artifact_identity(plan, artifact_identity)?;
     require_resolved_runtime_sampling(problem, plan)?;
     require_physics_graph_runtime_provenance(problem, plan)?;
     if let fullmag_ir::StudyIR::Hysteresis { .. } = &problem.study {
@@ -2978,7 +3077,12 @@ pub fn run_planned_problem_with_callback_and_fem_mesh_identity_and_relax_handoff
     }
     let fem_stage_context = fem_mesh_identity
         .cloned()
-        .map(types::FemStageExecutionContext::from_mesh_identity);
+        .map(types::FemStageExecutionContext::from_mesh_identity)
+        .or_else(|| {
+            artifact_identity.and_then(|_| {
+                types::FemStageExecutionContext::from_backend_plan(&plan.backend_plan)
+            })
+        });
     let mut artifact_pipeline = artifact_pipeline::ArtifactPipeline::start_for_problem_and_plan(
         problem,
         plan,
@@ -3106,9 +3210,10 @@ pub fn run_planned_problem_with_callback_and_fem_mesh_identity_and_relax_handoff
             }
         }
         BackendPlanIR::FemFrequencyResponse(response) => {
-            frequency_response::execute_fem_frequency_response_validation_with_context(
+            frequency_response::execute_fem_frequency_response_validation_with_artifact_context(
                 response,
                 fem_stage_context.as_ref().expect("FEM stage context"),
+                artifact_identity,
                 output_dir,
                 None,
                 Some(&mut on_step as &mut dyn FnMut(StepUpdate) -> StepAction),
@@ -3422,8 +3527,71 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
     display_selection: &(dyn Fn() -> DisplaySelectionState + Send + Sync),
     interrupt_requested: Option<&std::sync::atomic::AtomicBool>,
     initial_snapshot: bool,
-    mut on_step: impl FnMut(StepUpdate) -> StepAction + Send,
+    on_step: impl FnMut(StepUpdate) -> StepAction + Send,
 ) -> Result<RunResult, RunError> {
+    run_planned_problem_with_live_preview_artifact_context(
+        problem,
+        plan,
+        fem_mesh_identity,
+        until_seconds,
+        output_dir,
+        autosave_root,
+        field_every_n,
+        display_selection,
+        interrupt_requested,
+        initial_snapshot,
+        on_step,
+        None,
+    )
+}
+
+/// Execute an explicit dense-reference FMR plan with exact artifact ownership.
+/// Identity is runner-owned and does not change the canonical ProblemIR.
+pub fn run_planned_problem_with_live_preview_and_artifact_identity(
+    problem: &ProblemIR,
+    plan: &fullmag_ir::ExecutionPlanIR,
+    fem_mesh_identity: Option<&StageFemMeshIdentity>,
+    until_seconds: f64,
+    output_dir: &Path,
+    autosave_root: &Path,
+    field_every_n: u64,
+    display_selection: &(dyn Fn() -> DisplaySelectionState + Send + Sync),
+    interrupt_requested: Option<&std::sync::atomic::AtomicBool>,
+    initial_snapshot: bool,
+    on_step: impl FnMut(StepUpdate) -> StepAction + Send,
+    artifact_identity: &eigen::FrequencyDomainArtifactIdentity,
+) -> Result<RunResult, RunError> {
+    run_planned_problem_with_live_preview_artifact_context(
+        problem,
+        plan,
+        fem_mesh_identity,
+        until_seconds,
+        output_dir,
+        autosave_root,
+        field_every_n,
+        display_selection,
+        interrupt_requested,
+        initial_snapshot,
+        on_step,
+        Some(artifact_identity),
+    )
+}
+
+fn run_planned_problem_with_live_preview_artifact_context(
+    problem: &ProblemIR,
+    plan: &fullmag_ir::ExecutionPlanIR,
+    fem_mesh_identity: Option<&StageFemMeshIdentity>,
+    until_seconds: f64,
+    output_dir: &Path,
+    autosave_root: &Path,
+    field_every_n: u64,
+    display_selection: &(dyn Fn() -> DisplaySelectionState + Send + Sync),
+    interrupt_requested: Option<&std::sync::atomic::AtomicBool>,
+    initial_snapshot: bool,
+    mut on_step: impl FnMut(StepUpdate) -> StepAction + Send,
+    artifact_identity: Option<&eigen::FrequencyDomainArtifactIdentity>,
+) -> Result<RunResult, RunError> {
+    require_frequency_response_artifact_identity(plan, artifact_identity)?;
     require_resolved_runtime_sampling(problem, plan)?;
     if let fullmag_ir::StudyIR::Hysteresis { .. } = &problem.study {
         return hysteresis::run_planned_hysteresis_with_live_preview(
@@ -3442,7 +3610,12 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
     }
     let fem_stage_context = fem_mesh_identity
         .cloned()
-        .map(types::FemStageExecutionContext::from_mesh_identity);
+        .map(types::FemStageExecutionContext::from_mesh_identity)
+        .or_else(|| {
+            artifact_identity.and_then(|_| {
+                types::FemStageExecutionContext::from_backend_plan(&plan.backend_plan)
+            })
+        });
     let mut artifact_pipeline =
         artifact_pipeline::ArtifactPipeline::start_for_problem_and_plan_with_autosave_root(
             problem,
@@ -3576,9 +3749,10 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
             )
         }
         BackendPlanIR::FemFrequencyResponse(response) => {
-            frequency_response::execute_fem_frequency_response_validation_with_context(
+            frequency_response::execute_fem_frequency_response_validation_with_artifact_context(
                 response,
                 fem_stage_context.as_ref().expect("FEM stage context"),
+                artifact_identity,
                 output_dir,
                 interrupt_requested,
                 Some(&mut on_step as &mut dyn FnMut(StepUpdate) -> StepAction),
@@ -6825,7 +6999,9 @@ mod tests {
                 body.contains("hysteresis::run_planned_hysteresis")
                     || body.contains(
                         "run_planned_problem_with_callback_and_fem_mesh_identity_and_relax_handoff(",
-                    ),
+                    )
+                    || body.contains("run_planned_problem_with_artifact_context(")
+                    || body.contains("run_planned_problem_with_live_preview_artifact_context("),
                 "{entrypoint} bypasses the shared hysteresis owner"
             );
         }

@@ -81,6 +81,10 @@ bounded data plane oraz jeden frontend analityczny oparty o pinned source.
     — identity-aware entrypointy pełnego i przerwanego response sweep,
     walidacja przed solve oraz dokładne session/run/stage/runtime w manifeście
     rodziny `driven_response`.
+25. [Kontekst tożsamości FMR w runnerze](25-fmr-runner-artifact-context.md)
+    — trzy wejścia dla jawnego `dense_reference`, walidacja przed zapisem
+    i odmowa nieobsługiwanej tożsamości writera natywnego; managed build PASS,
+    testy NOT RUN, produkcyjni callerzy i runtime pozostają otwarte.
 
 Pozostałe resource keys w `runner/eigen/artifacts`, przeprowadzenie identity z
 głównego runner context, FEM artifact writers i migracja legacy copy-on-write,
