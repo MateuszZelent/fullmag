@@ -215,6 +215,10 @@
     }
   ],
   "sources": [
+    {"id": "source-archived-poisson-weak", "path": "scripts/audit_de_bv_poisson_weak.py", "symbol": "weak_poisson_residual", "responsibility": "Independent P1 weak Poisson assembly with adjoint Floquet reduction and benchmark Dirichlet classes"},
+    {"id": "source-archived-poisson-inspection", "path": "scripts/audit_de_bv_poisson_weak.py", "symbol": "inspect", "responsibility": "Archive hash binding and diagnostic source scale fit without data correction"},
+    {"id": "source-coupled-mode-window-dedup", "path": "backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp", "symbol": "std::vector<SLEPcModalAcceptedMode> deduplicate_slepc_modes_by_overlap", "responsibility": "Preserve original coupled q/phi scale while normalized copies serve overlap selection"},
+
     {"id": "source-archived-potential-gradient", "path": "scripts/audit_de_bv_potential_fields.py", "symbol": "gradient_diagnostics", "responsibility": "Independent P1 Cartesian -grad(phi) consistency, not independent Poisson solve"},
     {"id": "source-archived-potential-inspection", "path": "scripts/audit_de_bv_potential_fields.py", "symbol": "inspect", "responsibility": "Hash/identity-bound full phi, explicit Floquet pairs and geometric outer-z diagnostic"},
     {"id": "source-archived-magnetic-pair-seams", "path": "scripts/audit_de_bv_periodic_seams.py", "symbol": "magnetic_pair_seams", "responsibility": "Independent archived physical-field diagnostic on declared oriented magnetic pairs"},
