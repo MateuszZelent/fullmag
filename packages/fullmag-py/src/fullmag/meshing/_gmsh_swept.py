@@ -1935,7 +1935,7 @@ def _generate_coincident_ring_airbox_mesh(
     try:
         _configure_gmsh_threads(gmsh, requested_threads=1, honor_environment=False)
         gmsh.model.add("fullmag_swept_box_cylinder_ring_coincident_airbox")
-        source_hmax_scaled = (float(hmax) * SCALE if tool is None else min(float(hmax) * SCALE, 2.0 * sz * SCALE / n_layers))
+        source_hmax_scaled = float(hmax) * SCALE
         z_source = levels[0]
         outer_points = [
             gmsh.model.geo.addPoint(x, y, z_source, source_hmax_scaled)

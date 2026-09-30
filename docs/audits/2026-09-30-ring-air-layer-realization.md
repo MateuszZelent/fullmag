@@ -35,3 +35,14 @@ niezmienionej siatce x/y. Potrzebna oddzielna kontrola tej zaleznosci.
 Obserwator sesja 45879 potwierdzony jako dzialajacy. Jego immutable capsule
 zawiera wcześniejsze poprawki Box, nie te poprawki A1. Nie restartowano joba
 ani obserwatora; A1 wymaga nowej kapsuly po zapisaniu tego przyrostu.
+
+
+## Uzupelnienie: niezalezne zagęszczenie x/y i z
+
+Regresja rzeczywistych pozycji x/y potwierdzila RED dla n=1 vs n=3 przy
+stalym hmax=10 nm. Z exact-cell generatora usunieto min(hmax,2*t/n);
+teraz powierzchnia zrodlowa zachowuje hmax niezaleznie od n.
+Zbiory x/y dla n=1 i n=3 sa identyczne, a hmax=5 nm zwieksza liczbe pozycji.
+79 testow +15 podtestow PASS, mapa naukowa PASS. Poprzedni akapit o
+zaleznosci bocznej dotyczy stanu sprzed tego uzupelnienia i pozostaje
+historycznym dowodem przyczyny. Pozostaly limit n=1/2/3 nie zostal zmieniony.

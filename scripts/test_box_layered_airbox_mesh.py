@@ -217,3 +217,22 @@ def test_ring_linear_air_grading_is_rejected_before_gmsh(monkeypatch):
             geometry, 10e-9, 3, order=1, distribution="fixed", recombine=False,
             airbox=AirboxOptions(size=(40e-9, 40e-9, 410e-9), grading_mode="linear"),
             options=MeshOptions(mesh_strategy="thin_film_tetrahedral"))
+
+
+def test_ring_lateral_resolution_is_independent_of_film_layers():
+    from fullmag.model.geometry import Cylinder
+    from fullmag.meshing._gmsh_swept import generate_swept_box_cylinder_ring_mesh
+    geometry = Box(size=(40e-9, 40e-9, 10e-9)) - Cylinder(radius=8e-9, height=10e-9)
+    def positions(hmax, layers):
+        mesh = generate_swept_box_cylinder_ring_mesh(
+            geometry, hmax, layers, order=1, distribution="fixed", recombine=False,
+            airbox=AirboxOptions(size=(40e-9, 40e-9, 410e-9), maximum_element_size=50e-9),
+            options=MeshOptions(mesh_strategy="thin_film_tetrahedral"))
+        body = np.asarray(mesh.elements)[np.asarray(mesh.element_markers)==1]
+        ids = np.unique(body)
+        return set(map(tuple, np.round(np.asarray(mesh.nodes)[ids,:2],17)))
+    coarse = positions(10e-9, 1)
+    refined_z = positions(10e-9, 3)
+    refined_xy = positions(5e-9, 3)
+    assert coarse == refined_z
+    assert len(refined_xy) > len(refined_z)

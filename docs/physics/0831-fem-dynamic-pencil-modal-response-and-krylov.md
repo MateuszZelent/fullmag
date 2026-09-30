@@ -1425,3 +1425,21 @@ z COMSOL pozostają NOT VERIFIED do odbioru nowych managed artefaktów.
 | ID | Plik | Symbol |
 |---|---|---|
 | source-ring-air-layer-regression | `scripts/test_box_layered_airbox_mesh.py` | `test_ring_air_realizes_graded_vertical_resolution` |
+
+
+## Niezalezna rozdzielczosc boczna komorki A1
+
+W exact-cell ring charakterystyczny rozmiar powierzchni zrodlowej wynosi
+hmax, tak jak dla Box. Historyczne min(hmax,2*t/n) uzaleznialo x/y od n
+warstw filmu, przez co roznicy czestotliwosci nie mozna bylo przypisac samej
+rozdzielczosci z. Ekstruzja Tet4 dopuszcza anizotropowe elementy; ten limit
+nie jest warunkiem realizacji n warstw. Usuwamy go tylko ze wspolnego
+exact-cell generatora. Inne historyczne sciezki meshera wymagaja osobnej
+walidacji. Pola lokalne nadal zachowuja swoje jawne rozmiary.
+Test porownuje rzeczywiste zbiory pozycji x/y dla n=1 i n=3 przy stalym
+hmax oraz wymaga wiekszej liczby pozycji po zmniejszeniu hmax. Badanie
+jakosci i zbieznosci widma na nowej siatce pozostaje odrebna bramka runtime.
+
+| ID | Plik | Symbol |
+|---|---|---|
+| source-ring-lateral-regression | `scripts/test_box_layered_airbox_mesh.py` | `test_ring_lateral_resolution_is_independent_of_film_layers` |
