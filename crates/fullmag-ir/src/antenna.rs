@@ -734,6 +734,7 @@ fn validate_solved_antenna_drive(
     solved_stage: Option<&AntennaFieldSolveStageIR>,
     pipeline_stage_ids: &BTreeSet<String>,
     study_kind: StudyKindIR,
+    active_stage_id: Option<&str>,
     errors: &mut Vec<String>,
 ) {
     let valid_projection = projection_ids.contains(drive.projection_ref.as_str());
@@ -792,6 +793,7 @@ fn validate_solved_antenna_drive(
     }
 
     if matches!(study_kind, StudyKindIR::Relaxation)
+        && drive.activation.is_active_for(study_kind, active_stage_id)
         && !matches!(drive.waveform, TimeDependenceIR::Constant)
     {
         errors.push(format!(
@@ -942,6 +944,11 @@ pub(crate) fn validate_antenna_composition(problem: &ProblemIRV04, errors: &mut 
     let pipeline_stage_ids =
         crate::validation::pipeline_stage_ids(&problem.problem_meta.runtime_metadata);
     let study_kind = problem.study.kind();
+    let active_stage_id = problem
+        .problem_meta
+        .runtime_metadata
+        .get("active_stage_id")
+        .and_then(serde_json::Value::as_str);
     let mut drive_ids = BTreeSet::new();
     for (index, drive) in problem.solved_antenna_drives.iter().enumerate() {
         let prefix = format!("solved_antenna_drives[{index}]");
@@ -968,6 +975,7 @@ pub(crate) fn validate_antenna_composition(problem: &ProblemIRV04, errors: &mut 
             solved_stage,
             &pipeline_stage_ids,
             study_kind,
+            active_stage_id,
             errors,
         );
     }
@@ -1242,6 +1250,11 @@ pub(crate) fn validate_antenna_composition_v03(problem: &ProblemIR, errors: &mut
     let pipeline_stage_ids =
         crate::validation::pipeline_stage_ids(&problem.problem_meta.runtime_metadata);
     let study_kind = problem.study.kind();
+    let active_stage_id = problem
+        .problem_meta
+        .runtime_metadata
+        .get("active_stage_id")
+        .and_then(serde_json::Value::as_str);
     let mut drive_ids = BTreeSet::new();
     for (index, drive) in problem.solved_antenna_drives.iter().enumerate() {
         let prefix = format!("solved_antenna_drives[{index}]");
@@ -1266,6 +1279,7 @@ pub(crate) fn validate_antenna_composition_v03(problem: &ProblemIR, errors: &mut
             stage,
             &pipeline_stage_ids,
             study_kind,
+            active_stage_id,
             errors,
         );
     }
@@ -1432,6 +1446,7 @@ mod tests {
             Some(&stage),
             &BTreeSet::from(["run".to_string()]),
             StudyKindIR::TimeEvolution,
+            Some("run"),
             &mut errors,
         );
 
@@ -1454,7 +1469,9 @@ mod tests {
                 t_on: 0.0,
                 t_off: 1.0,
             },
-            DriveActivationIR::AllTimeEvolution {},
+            DriveActivationIR::StageIds {
+                stage_ids: vec!["relax".to_string()],
+            },
         );
         let mut errors = Vec::new();
         validate_solved_antenna_drive(
@@ -1465,6 +1482,7 @@ mod tests {
             Some(&stage),
             &BTreeSet::from(["relax".to_string()]),
             StudyKindIR::Relaxation,
+            Some("relax"),
             &mut errors,
         );
 
@@ -1472,6 +1490,39 @@ mod tests {
             .iter()
             .any(|error| error
                 .contains("dynamic waveform is invalid in a minimizer/relaxation study")));
+    }
+
+    #[test]
+    fn solved_drive_validation_allows_inactive_dynamic_drive_during_relaxation() {
+        let stage = solved_stage();
+        for activation in [
+            DriveActivationIR::AllTimeEvolution {},
+            DriveActivationIR::StageIds {
+                stage_ids: vec!["run".to_string()],
+            },
+        ] {
+            let drive = solved_drive(
+                TimeDependenceIR::Sinusoidal {
+                    frequency_hz: 1.0e9,
+                    phase_rad: 0.1,
+                    offset: 0.0,
+                },
+                activation,
+            );
+            let mut errors = Vec::new();
+            validate_solved_antenna_drive(
+                "solved_antenna_drives[0]",
+                &drive,
+                &BTreeSet::from(["projection_1"]),
+                &BTreeSet::from(["port_1"]),
+                Some(&stage),
+                &BTreeSet::from(["relax".to_string(), "run".to_string()]),
+                StudyKindIR::Relaxation,
+                Some("relax"),
+                &mut errors,
+            );
+            assert!(errors.is_empty(), "{errors:?}");
+        }
     }
 
     #[test]
@@ -1495,6 +1546,7 @@ mod tests {
             Some(&stage),
             &BTreeSet::from(["run".to_string()]),
             StudyKindIR::TimeEvolution,
+            Some("run"),
             &mut errors,
         );
         assert!(errors.iter().any(|error| {
@@ -1518,6 +1570,7 @@ mod tests {
             Some(&stage),
             &BTreeSet::from(["run".to_string()]),
             StudyKindIR::TimeEvolution,
+            Some("run"),
             &mut errors,
         );
         assert!(errors.iter().any(|error| {
