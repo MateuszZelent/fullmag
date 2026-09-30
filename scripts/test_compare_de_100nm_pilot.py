@@ -82,6 +82,25 @@ class ComparisonTests(unittest.TestCase):
             self.assertEqual(result[1]["residual_relative_l2"], 1.78e-14)
             self.assertEqual(result[1]["residual_scope"], "reduced_original_blocks_only")
 
+    def test_csv_cannot_omit_a_mode_present_in_native_spectrum(self):
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "dispersion.csv"
+            rows = [dict(sample_index=0, raw_mode_index=0, branch_id=0,
+                         kx_rad_per_m=0, ky_rad_per_m=2e6, kz_rad_per_m=0,
+                         frequency_hz=reference(2e6), residual_norm="")]
+            with path.open("w", newline="") as stream:
+                writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
+                writer.writeheader()
+                writer.writerows(rows)
+            spectrum_path = path.parent / "spectrum.v3.json"
+            write_spectrum_v3(spectrum_path, rows)
+            spectrum = json.loads(spectrum_path.read_text())
+            extra = {**spectrum["samples"][0]["modes"][0], "raw_mode_index": 1}
+            spectrum["samples"][0]["modes"].append(extra)
+            spectrum_path.write_text(json.dumps(spectrum))
+            with self.assertRaisesRegex(ValueError, "mode coverage"):
+                read_modes(path, (2e6,))
+
     def test_smoke_comparison_reads_model_and_rejects_mismatches(self):
         with TemporaryDirectory() as tmp:
             run = Path(tmp)
@@ -205,7 +224,9 @@ class ComparisonTests(unittest.TestCase):
             ks = (0.0, 2e6)
             rows = [{"sample_index": i, "raw_mode_index": 0, "branch_id": 0,
                      "kx_rad_per_m": 0., "ky_rad_per_m": k, "kz_rad_per_m": 0.,
-                     "frequency_hz": reference(k, parameters), "residual_norm": 1e-12}
+                     "frequency_hz": reference(k, parameters), "residual_norm": 1e-12,
+                     "residual_scope": "native_descriptor" if i == 0 else "reduced_original_blocks_only",
+                     "residual_relative_l2": 1e-10 if i == 0 else 1e-9}
                     for i, k in enumerate(ks)]
             request = {"model_sha256": "a"*64, "job": {"job_id": "b"*32}}
             loaded = (request, rows, parameters, ks, 2e-6, source, metadata)
@@ -217,6 +238,11 @@ class ComparisonTests(unittest.TestCase):
             self.assertEqual(report["parameters_from_metadata"]["film_thickness_m"], 10e-9)
             self.assertEqual(report["mode_rows"], 2)
             self.assertEqual(report["max_abs_relative_difference"], 0.)
+            self.assertEqual(report["residual_scope"], "mixed")
+            self.assertEqual(report["residual_scope_counts"],
+                             {"native_descriptor": 1, "reduced_original_blocks_only": 1})
+            self.assertEqual(report["max_relative_residual_l2_by_scope"],
+                             {"native_descriptor": 1e-10, "reduced_original_blocks_only": 1e-9})
             self.assertGreater((output/"dispersion.png").stat().st_size, 1000)
             self.assertTrue((output/"dispersion.pdf").read_bytes().startswith(b"%PDF"))
             self.assertEqual(len((output/"branch-comparison.csv").read_text().splitlines()), 3)

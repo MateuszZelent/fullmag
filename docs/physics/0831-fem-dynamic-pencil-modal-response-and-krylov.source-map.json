@@ -353,6 +353,18 @@
       "path": "scripts/test_compare_de_100nm_pilot.py",
       "symbol": "test_supported_de_sampling_includes_k25_and_rejects_bv",
       "responsibility": "Regression evidence for metadata routing, explicit branch selection and unqualified plotting"
+    },
+    {
+      "id": "source-de-csv-native-coverage",
+      "path": "scripts/compare_de_100nm_pilot.py",
+      "symbol": "read_modes",
+      "responsibility": "Reject incomplete CSV/native mode joins and preserve residual scope"
+    },
+    {
+      "id": "source-de-csv-native-coverage-test",
+      "path": "scripts/test_compare_de_100nm_pilot.py",
+      "symbol": "test_csv_cannot_omit_a_mode_present_in_native_spectrum",
+      "responsibility": "Reject modes omitted from CSV while present in the native spectrum"
     }
   ],
   "public_api": {

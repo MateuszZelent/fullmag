@@ -85,6 +85,8 @@ def read_modes(path, expected_k=None):
         rows.append({**values, "sample_index": key[0], "raw_mode_index": key[1],
                      "branch_id": int(row["branch_id"]) if row["branch_id"] else None,
                      **residual_fields})
+    if native_modes is not None and keys != set(native_modes):
+        raise ValueError("CSV/native spectrum mode coverage mismatch")
     expected_k = tuple(k*1e6 for k in range(-40, 41, 10)) if expected_k is None else tuple(expected_k)
     if {row["sample_index"] for row in rows} != set(range(len(expected_k))):
         raise ValueError("Numerical samples do not cover the declared DE path")
@@ -182,7 +184,18 @@ def main(argv=None):
     ax.set(xlabel="k_y [rad/µm]", ylabel="f [GHz]", title=f"DE {parameters['film_thickness_m']*1e9:g} nm: FEM i referencja n=0 (bez kwalifikacji)")
     ax.grid(alpha=.25);ax.legend();fig.tight_layout()
     fig.savefig(output/"dispersion.png",dpi=180);fig.savefig(output/"dispersion.pdf");plt.close(fig)
+    residual_scope_counts = {}
+    residual_maxima = {}
+    for row in rows:
+        scope = row.get("residual_scope") or "unavailable"
+        residual_scope_counts[scope] = residual_scope_counts.get(scope, 0) + 1
+        residual = row.get("residual_relative_l2")
+        if residual is not None:
+            residual_maxima[scope] = max(residual_maxima.get(scope, 0.0), residual)
     report={"qualification":"NOT VERIFIED", "parameters_from_metadata":parameters,
+            "residual_scope": next(iter(residual_scope_counts)) if len(residual_scope_counts) == 1 else "mixed",
+            "residual_scope_counts":residual_scope_counts,
+            "max_relative_residual_l2_by_scope":residual_maxima,
             "model_sha256":request["model_sha256"],"source_job":request["job"],
             "dispersion_sha256":hashlib.sha256(source.read_bytes()).hexdigest(),
             "selected_branch":args.branch_id,"mode_rows":len(rows),

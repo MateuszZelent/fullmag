@@ -1,5 +1,26 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
+## Porównanie analityczne i zakres certyfikatów — aktualny checkpoint
+
+- Poprzedni turn był postępem: commit 1f28560e4e7dae11b1808bb8278532dd6962dc32
+  jest na remote. Obsługa wszystkich zadeklarowanych samplingów DE, rzeczywiste
+  parametry SI i grubość filmu; 16 testów PASS w dokładnej wersji staged.
+- Archiwalny DE L2 k25: 13.57898179883188 GHz, referencja n=0
+  13.673868175350407 GHz, -0.6939249033391826%. To stara siatka, nie nowa
+  zbieżność grubości ani wynik COMSOL A1.
+- Nowa regresja wykazała pominięty mod natywnego widma w CSV oraz brak scope
+  w podsumowaniu residuali. Naprawiono kompletność joinu i podział maksimum
+  według scope; raport nadal NOT VERIFIED. 11+6 testów PASS.
+- #179 nadal queued (potwierdzone klientem runnera), ten sam digest i profil.
+  Wolne miejsce 6271270912 B, poniżej 8 GiB. Procesy 66068/2072 żywe;
+  nie restartowano ich. Oczekująca zgoda na sześć execution nie nadeszła.
+- Kontrola exact staged źródeł/mapy jest oddzielna od changed-page checkera,
+  który łączy mapę commita z roboczą treścią strony. Ten drugi ujawnił siedem
+  rozbieżności symbolów z pozostałego WIP; nie nadpisano tych zmian.
+- Zakres S00–S12 pozostaje bez zmian: nowe runtime, zbieżność i profile,
+  Gamma, airbox, ścieżka k, A1/COMSOL, API/UI, GPU, review i integracja.
+
+
 ## #178 blocked, aktualizacja runnera i przejęcie przez #179 — 2026-09-30 16:06 UTC
 
 Ta sekcja zastępuje wcześniejsze informacje o running #178 i żywych sesjach

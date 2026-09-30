@@ -1517,3 +1517,20 @@ routing, metadane, mapowanie CSV, referencję i render; nie kwalifikują FEM.
 |---|---|---|
 | source-de-pilot-metadata-comparison | `scripts/compare_de_100nm_pilot.py::load_comparison_input` | Metadane SI i receipt; FEM CPU postprocessing, NOT VERIFIED |
 | source-de-pilot-comparison-tests | `scripts/test_compare_de_100nm_pilot.py::test_supported_de_sampling_includes_k25_and_rejects_bv` | Regresja routingu DE, test źródeł |
+
+### Kompletność widma i zakres residuali w raporcie DE
+
+CSV i sąsiedni `spectrum.v3.json`, jeśli istnieje, muszą zawierać dokładnie
+ten sam zbiór par indeksów próbki i modu. `read_modes` odrzuca również
+mod obecny tylko w natywnym widmie; nie raportuje takiego eksportu jako
+kompletnego. Częstotliwości połączonych rekordów muszą być zgodne.
+
+Raport zachowuje liczbę rekordów i maksymalny względny residual osobno dla
+każdego natywnego scope. Przy wielu zakresach podaje `mixed`; bez dostępnego
+scope podaje `unavailable`. Łączne maksimum nie oznacza certyfikacji pełnego
+układu. Próg akceptacji solvera i równania nie zostały zmienione.
+
+| Source ID | Path + symbol | Odpowiedzialność i dowód |
+|---|---|---|
+| source-de-csv-native-coverage | `scripts/compare_de_100nm_pilot.py::read_modes` | Dokładna zgodność indeksów CSV/widma i zachowanie scope; postprocessing FEM CPU |
+| source-de-csv-native-coverage-test | `scripts/test_compare_de_100nm_pilot.py::test_csv_cannot_omit_a_mode_present_in_native_spectrum` | Odrzucenie niepełnego eksportu, regression check |
