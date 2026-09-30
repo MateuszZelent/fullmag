@@ -334,7 +334,24 @@ if(FULLMAG_USE_MFEM_STACK)
     endif()
 endif()
 
+# A managed capsule is identified by content rather than preserved mtimes.
+# Changing this definition forces CMake to rebuild native objects without
+# deleting caches, even when a later snapshot has older source timestamps.
+set(FULLMAG_FEM_SOURCE_SNAPSHOT_SHA256 "" CACHE STRING
+    "Managed source snapshot bound to the native FEM build")
+if(NOT FULLMAG_FEM_SOURCE_SNAPSHOT_SHA256 STREQUAL "")
+    string(LENGTH "${FULLMAG_FEM_SOURCE_SNAPSHOT_SHA256}" snapshot_digest_length)
+    if(NOT snapshot_digest_length EQUAL 64 OR
+       FULLMAG_FEM_SOURCE_SNAPSHOT_SHA256 MATCHES "[^0-9a-f]")
+        message(FATAL_ERROR "FULLMAG_FEM_SOURCE_SNAPSHOT_SHA256 must be lowercase SHA-256")
+    endif()
+endif()
 add_library(fullmag_fem SHARED ${FEM_SOURCES})
+if(NOT FULLMAG_FEM_SOURCE_SNAPSHOT_SHA256 STREQUAL "")
+    target_compile_definitions(fullmag_fem PRIVATE
+        FULLMAG_FEM_SOURCE_SNAPSHOT_SHA256="${FULLMAG_FEM_SOURCE_SNAPSHOT_SHA256}")
+endif()
+
 
 if(FULLMAG_ENABLE_NVTX)
     target_compile_definitions(fullmag_fem PRIVATE FULLMAG_ENABLE_NVTX=1)

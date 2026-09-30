@@ -71,6 +71,18 @@ fn generate_gpu_execution_receipt_abi_assertions(out_dir: &std::path::Path) {
 fn main() {
     let out_dir = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());
     generate_gpu_execution_receipt_abi_assertions(&out_dir);
+    // Capsules preserve source mtimes. A later capture can therefore contain
+    // changed C++ older than objects built by an earlier concurrent job.
+    println!("cargo:rerun-if-env-changed=FULLMAG_SOURCE_SNAPSHOT_SHA256");
+    let source_snapshot = std::env::var("FULLMAG_SOURCE_SNAPSHOT_SHA256").unwrap_or_default();
+    if !source_snapshot.is_empty()
+        && (source_snapshot.len() != 64
+            || !source_snapshot
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)))
+    {
+        panic!("FULLMAG_SOURCE_SNAPSHOT_SHA256 must be a lowercase SHA-256 digest");
+    }
     println!("cargo:rerun-if-env-changed=FULLMAG_CUDA_ARCHITECTURES");
     if let Ok(lib_dir) = std::env::var("FULLMAG_FEM_LIB_DIR") {
         println!("cargo:rustc-link-search=native={}", lib_dir);
@@ -134,6 +146,10 @@ fn main() {
         .arg("-B")
         .arg(&build_dir)
         .arg(format!("-DCMAKE_BUILD_TYPE={}", cmake_build_type))
+        .arg(format!(
+            "-DFULLMAG_FEM_SOURCE_SNAPSHOT_SHA256={}",
+            source_snapshot
+        ))
         .arg(format!(
             "-DFULLMAG_ENABLE_CUDA={}",
             if use_mfem_stack { "ON" } else { "OFF" }
