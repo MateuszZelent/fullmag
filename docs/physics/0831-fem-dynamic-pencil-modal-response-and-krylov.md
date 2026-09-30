@@ -1376,3 +1376,28 @@ obsługi alternatywnego stopniowania, nie dowód jego realizacji.
 | ID | Plik | Symbol |
 |---|---|---|
 | source-box-layer-report | `packages/fullmag-py/src/fullmag/meshing/mesh_build_report.py` | `_build_mesh_operation_statuses` |
+
+
+## Zachowanie źródłowego zagęszczenia filmu
+
+Generator `_generate_coincident_ring_airbox_mesh` zachowuje zadany
+rozmiar powierzchni źródłowej także po dołączeniu pól powietrza.
+Wariant Box bez lokalnych pól ma jawne pole Constant ograniczone
+do powierzchni źródłowej i jej brzegu. To pole pozostaje w końcowej
+kombinacji rozmiarów: powietrze nie nadpisuje bocznego hmax filmu.
+Hmax to cel charakterystycznego rozmiaru Gmsh, a nie ścisły limit
+długości każdej krawędzi tetraedru.
+Sprawdzamy monotoniczne zagęszczenie x/y przy zmniejszaniu hmax,
+stałą siatkę x/y przy zmianie liczby warstw, zgodność translacji SI
+i fazy exp(-i k·r), dodatnie objętości oraz objętość filmu i airboxu.
+Eksperyment z Mesh.MeshOnlyEmpty, opisanym w
+[Gmsh 4.15.2](https://gmsh.info/doc/texinfo/#Mesh-options), odrzucono:
+wielostopniowa ekstruzja wymaga ponownego zbudowania zgodnych siatek
+powierzchni potomnych; zachowanie starej siatki dawało brak węzłów
+ekstrudowanych. Nie jest to część implementacji.
+Regresja generacji nie dowodzi zgodności częstotliwości eigensolve.
+
+| ID | Plik | Symbol |
+|---|---|---|
+| source-box-layer-source-face | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `_generate_coincident_ring_airbox_mesh` |
+| source-box-lateral-regression | `scripts/test_box_layered_airbox_mesh.py` | `test_box_lateral_resolution_survives_final_air_fields` |

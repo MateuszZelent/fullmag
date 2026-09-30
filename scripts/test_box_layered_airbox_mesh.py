@@ -137,3 +137,39 @@ def test_box_unsupported_controls_fail_before_gmsh(monkeypatch, layers, hmax, mo
             distribution="fixed", recombine=False,
             airbox=AirboxOptions(size=(40e-9, 40e-9, 410e-9), grading_mode=mode),
             options=MeshOptions(mesh_strategy="thin_film_tetrahedral"))
+
+
+def test_box_lateral_resolution_survives_final_air_fields():
+    def mesh_at(hmax, layers):
+        mesh = generate_swept_tetrahedral_box_airbox_mesh(
+            Box(size=(40e-9, 40e-9, 10e-9)), hmax, layers, order=1,
+            distribution="fixed", recombine=False,
+            airbox=AirboxOptions(size=(40e-9,40e-9,410e-9),maximum_element_size=50e-9),
+            options=MeshOptions(mesh_strategy="thin_film_tetrahedral",periodic_pair_ids=["x_faces","y_faces"]))
+        xyz=np.asarray(mesh.nodes)[np.asarray(mesh.elements)]
+        determinant=np.linalg.det(xyz[:,1:] - xyz[:,:1])
+        assert np.all(determinant > 0)
+        volumes=determinant/6
+        assert volumes.sum() == pytest.approx(40e-9*40e-9*410e-9,rel=1e-12)
+        body=np.asarray(mesh.element_markers)==1
+        assert volumes[body].sum() == pytest.approx(40e-9*40e-9*10e-9,rel=1e-12)
+        magnetic_nodes=np.unique(np.asarray(mesh.elements)[body])
+        xy=np.asarray(mesh.nodes)[magnetic_nodes,:2]
+        return mesh, set(map(tuple,np.round(xy,17)))
+    coarse, coarse_xy=mesh_at(10e-9,3)
+    fine, fine_xy=mesh_at(5e-9,3)
+    thicker, thicker_xy=mesh_at(5e-9,6)
+    assert len(coarse_xy)>4
+    assert len(fine_xy)>len(coarse_xy)
+    assert fine_xy == thicker_xy
+    for mesh in (coarse, fine, thicker):
+        for pair in mesh.periodic_node_pairs:
+            axis=0 if pair["pair_id"]=="x_faces" else 1
+            delta=np.asarray(mesh.nodes[pair["node_b"]])-np.asarray(mesh.nodes[pair["node_a"]])
+            translation=np.zeros(3);translation[axis]=40e-9
+            assert np.linalg.norm(delta-translation)<1e-18
+            for k in (25e6,-25e6):
+                phase=np.exp(-1j*k*translation[axis])
+                a=np.exp(-1j*k*mesh.nodes[pair["node_a"]][axis])
+                b=np.exp(-1j*k*mesh.nodes[pair["node_b"]][axis])
+                assert abs(b-phase*a)<1e-14

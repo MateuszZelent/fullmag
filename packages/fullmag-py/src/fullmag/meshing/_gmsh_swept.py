@@ -1988,6 +1988,15 @@ def _generate_coincident_ring_airbox_mesh(
                 )
             )
         else:
+            if tool is None:
+                # The final air field must not coarsen the magnetic source face.
+                source_field = gmsh.model.mesh.field.add("Constant")
+                gmsh.model.mesh.field.setNumbers(source_field, "SurfacesList", [annulus_surface])
+                gmsh.model.mesh.field.setNumber(source_field, "VIn", source_hmax_scaled)
+                gmsh.model.mesh.field.setNumber(source_field, "VOut", 1.0e22)
+                gmsh.model.mesh.field.setNumber(source_field, "IncludeBoundary", 1)
+                gmsh.model.mesh.field.setAsBackgroundMesh(source_field)
+                source_fields.append(source_field)
             gmsh.option.setNumber("Mesh.MeshSizeFromPoints", 1)
             gmsh.option.setNumber("Mesh.MeshSizeExtendFromBoundary", 0)
             gmsh.option.setNumber("Mesh.CharacteristicLengthMax", source_hmax_scaled)

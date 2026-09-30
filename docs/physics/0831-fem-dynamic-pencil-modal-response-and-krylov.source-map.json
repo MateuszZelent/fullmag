@@ -323,6 +323,18 @@
       "path": "packages/fullmag-py/src/fullmag/meshing/mesh_build_report.py",
       "symbol": "_build_mesh_operation_statuses",
       "responsibility": "Report realized layered Box method and sweep direction without inferring thickness resolution from lateral hmax"
+    },
+    {
+      "id": "source-box-layer-source-face",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py",
+      "symbol": "_generate_coincident_ring_airbox_mesh",
+      "responsibility": "Persistent source face sizing and synchronized Tet4 body-air extrusion"
+    },
+    {
+      "id": "source-box-lateral-regression",
+      "path": "scripts/test_box_layered_airbox_mesh.py",
+      "symbol": "test_box_lateral_resolution_survives_final_air_fields",
+      "responsibility": "Independent mesh refinement, volume, oriented translation and Floquet phase regression"
     }
   ],
   "public_api": {

@@ -35,3 +35,25 @@ zerowa/bool liczba warstw i niefinity hmax są odrzucane przed Gmsh.
 feature-aware PASS. #176 pozostaje kapsułą poprzedniego commita 61a53f4a;
 nie zawiera uzupełnienia raportowania. Geometria dla wejść benchmarku
 geometric nie została zmieniona przez ten przyrost.
+
+## Zachowanie rozmiaru bocznego i job #176
+
+Wariant Box bez lokalnych pól rozmiaru miał tę samą liczbę pozycji x/y
+przy hmax=10 i 5 nm: 5/5. Jawne pole Constant źródłowej powierzchni
+zachowywane w końcowej kombinacji daje 31/99. Zwiększenie liczby warstw
+nie zmienia zbioru pozycji x/y. Wszystkie tetraedry mają dodatni
+wyznacznik, sumy objętości filmu i airboxu są zgodne z geometrią;
+translacje i fazy +/-25 rad/µm są zgodne z pozycjami węzłów.
+75 testów + 15 subtests PASS. Kanoniczna recepta DE z lokalnymi polami
+nie miała tego problemu; nie mieszamy tej regresji z dowodem solvera.
+
+#176 jest terminalnie blocked przed utworzeniem kontenera. Przyczyna:
+obserwator batcha utworzył wcześniej jobowy katalog na własny log,
+a preflight builda wymaga nowego run_root. Błąd orkiestracji agenta;
+nie był to błąd solvera ani brak miejsca. Sesja 69118 jest terminalna,
+żaden pilot nie wystartował. Katalog zawiera jedynie log sterowania
+comsol-dispersion/thickness-l2-batch-20260930/batch-control.json.
+Zachowujemy go i kapsułę źródeł. Nowa orkiestracja zapisuje status
+oczekiwania poza katalogiem managed joba, a wyniki przydziela dopiero
+po odbiorze succeeded/exit 0. Następny snapshot musi zawierać aktualną
+poprawkę generatora; nie można uznać #176 za zbudowany runtime.
