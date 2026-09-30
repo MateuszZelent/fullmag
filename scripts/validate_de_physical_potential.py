@@ -199,6 +199,36 @@ def _validate_declared_mode_binding(
             "manifest_sha256": "sha256:" + _sha256(manifest_path)}
 
 
+def _validate_source_mesh_binding(manifest: dict[str, Any], metadata: dict[str, Any], metadata_path: Path) -> dict[str, Any]:
+    """Recompute the canonical v3 topology without coercing producer arrays."""
+    from types import SimpleNamespace
+    source = Path(__file__).resolve().parents[1] / "packages/fullmag-py/src"
+    if str(source) not in sys.path:
+        sys.path.insert(0, str(source))
+    try:
+        from fullmag.meshing._gmsh_types import MeshData
+        mesh = metadata["execution_plan"]["backend_plan"]["mesh"]
+        cells, facets = mesh["cells"], mesh["facets"]
+        values = {"nodes": mesh["nodes"], "element_markers": mesh["element_markers"],
+                  "boundary_markers": mesh["boundary_markers"],
+                  "periodic_boundary_pairs": mesh.get("periodic_boundary_pairs", []),
+                  "periodic_node_pairs": mesh.get("periodic_node_pairs", [])}
+        for prefix, connectivity in (("cell", cells), ("facet", facets)):
+            for key in ("types", "offsets", "nodes"):
+                values[prefix + "_" + key] = connectivity[key]
+            values[prefix + "_global_ordinals"] = connectivity.get("global_ordinals", [])
+        values["cell_mesh_parts"] = cells.get("mesh_parts", [])
+        values["facet_roles"] = facets["roles"]
+        actual = MeshData.topology_fingerprint_v3(SimpleNamespace(**values))
+    except (ImportError, KeyError, TypeError, ValueError, OverflowError, struct.error) as exc:
+        _fail(f"cannot recompute canonical source mesh topology: {exc}")
+    expected = "sha256:" + _declared_digest(manifest.get("source_mesh_topology_sha256"), "source_mesh_topology_sha256")
+    _require(actual == expected, "recomputed source mesh topology disagrees with potential manifest")
+    return {"status": "consistent", "fingerprint_version": "v3",
+            "source_mesh_topology_sha256": actual,
+            "metadata_sha256": "sha256:" + _sha256(metadata_path)}
+
+
 def _read_complex_values(path: Path, count: int, description: str) -> list[complex]:
     try:
         raw = path.read_bytes()
@@ -335,6 +365,7 @@ def validate_physical_potential(
     rtol: float = DEFAULT_RTOL,
     zero_scale: float = DEFAULT_ZERO_SCALE,
     mode_metadata_path: Path | str | None = None,
+    verify_source_mesh: bool = False,
 ) -> dict[str, Any]:
     """Compare stored Tet4 element fields with an independent P1 gradient.
 
@@ -347,6 +378,7 @@ def validate_physical_potential(
 
     _require(_is_real(rtol) and rtol >= 0.0, "rtol must be a finite non-negative number")
     _require(_is_real(zero_scale) and zero_scale > 0.0, "zero_scale must be a finite positive number")
+    _require(isinstance(verify_source_mesh, bool), "verify_source_mesh must be boolean")
     metadata_file = Path(mesh_metadata_path).resolve()
     manifest_file = Path(manifest_path).resolve()
     run_root = metadata_file.parent
@@ -362,6 +394,8 @@ def validate_physical_potential(
             run_root, potential_path, field_path)
     metadata = _load_json(metadata_file, "run metadata")
     nodes, elements = _extract_mesh(metadata)
+    source_mesh_binding = (_validate_source_mesh_binding(manifest, metadata, metadata_file)
+                           if verify_source_mesh else {"status": "not_requested"})
     _require(potential_count == len(nodes), f"manifest potential.count={potential_count} does not match mesh node count {len(nodes)}")
     _require(field_count == len(elements), f"manifest demag_field.count={field_count} does not match mesh element count {len(elements)}")
 
@@ -422,6 +456,7 @@ def validate_physical_potential(
         "reconstruction_agreement": mismatch_count == 0,
         "manifest_schema_version": manifest.get("schema_version"),
         "identity_binding": identity_binding,
+        "source_mesh_binding": source_mesh_binding,
         "potential_path": str(potential_path),
         "demag_field_path": str(field_path),
         "comparison": comparison,
@@ -434,6 +469,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--manifest", required=True, type=Path, help="physical_potential.v1.json")
     parser.add_argument("--mesh-metadata", required=True, type=Path, help="run metadata.json containing execution_plan.backend_plan.mesh")
     parser.add_argument("--mode-metadata", type=Path, help="optional published mode JSON for declared identity binding")
+    parser.add_argument("--verify-source-mesh", action="store_true", help="recompute canonical v3 source topology")
     parser.add_argument("--rtol", type=float, default=DEFAULT_RTOL, help=f"relative tolerance (default: {DEFAULT_RTOL:g})")
     parser.add_argument("--zero-scale", type=float, default=DEFAULT_ZERO_SCALE, help=f"positive A/m scale floor (default: {DEFAULT_ZERO_SCALE:g})")
     return parser
@@ -442,7 +478,7 @@ def _build_parser() -> argparse.ArgumentParser:
 def main(argv: Iterable[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     try:
-        report = validate_physical_potential(args.manifest, args.mesh_metadata, rtol=args.rtol, zero_scale=args.zero_scale, mode_metadata_path=args.mode_metadata)
+        report = validate_physical_potential(args.manifest, args.mesh_metadata, rtol=args.rtol, zero_scale=args.zero_scale, mode_metadata_path=args.mode_metadata, verify_source_mesh=args.verify_source_mesh)
     except ValidationError as exc:
         error_report = {
             "schema_version": RESULT_SCHEMA_VERSION,

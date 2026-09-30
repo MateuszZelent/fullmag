@@ -172,6 +172,7 @@ class PilotTests(unittest.TestCase):
             with patch.object(pilot, "validate_physical_potential", return_value={
                 "status": "consistent", "reconstruction_agreement": True,
                 "identity_binding": {"status": "consistent"},
+                "source_mesh_binding": {"status": "consistent"},
                 "qualification": "NOT VERIFIED"}) as validate:
                 result = pilot.validate_smoke_potential_fields(root, 2)
             self.assertEqual(validate.call_count, 2)

@@ -141,6 +141,50 @@ class PhysicalPotentialValidatorTests(unittest.TestCase):
         mode_path.write_text(json.dumps({"sample_index": 0, "raw_mode_index": 0, **identities}))
         return mode_path
 
+    def topology_bound_fixture(self):
+        import sys
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "packages/fullmag-py/src"))
+        from fullmag.meshing._gmsh_types import MeshData
+        mesh = MeshData.from_legacy_tet4(
+            nodes=self.fixture.nodes, elements=self.fixture.elements,
+            element_markers=[1], boundary_faces=[], boundary_markers=[])
+        metadata = json.loads(self.fixture.metadata_path.read_text())
+        metadata["execution_plan"]["backend_plan"]["mesh"] = mesh.to_ir("fixture")
+        self.fixture.metadata_path.write_text(json.dumps(metadata))
+        manifest = json.loads(self.fixture.manifest_path.read_text())
+        manifest["source_mesh_topology_sha256"] = mesh.topology_fingerprint_v3()
+        self.fixture.manifest_path.write_text(json.dumps(manifest))
+
+    def test_source_mesh_fingerprint_is_recomputed(self):
+        self.topology_bound_fixture()
+        result = validate_physical_potential(self.fixture.manifest_path, self.fixture.metadata_path,
+                                             verify_source_mesh=True)
+        self.assertEqual(result["source_mesh_binding"]["status"], "consistent")
+        self.assertEqual(result["qualification"], "NOT VERIFIED")
+
+    def test_correct_gradient_on_different_mesh_cannot_pass_topology_binding(self):
+        self.topology_bound_fixture()
+        metadata = json.loads(self.fixture.metadata_path.read_text())
+        metadata["execution_plan"]["backend_plan"]["mesh"]["element_markers"] = [2]
+        self.fixture.metadata_path.write_text(json.dumps(metadata))
+        # The gradient does not observe material markers; topology identity must.
+        self.assertTrue(self.fixture.validate()["reconstruction_agreement"])
+        with self.assertRaisesRegex(ValidationError, "source mesh topology"):
+            validate_physical_potential(self.fixture.manifest_path, self.fixture.metadata_path,
+                                        verify_source_mesh=True)
+
+    def test_recomputed_topology_rejects_missing_facets_and_boolean_indices(self):
+        for corrupt in ("facets", "boolean_index"):
+            self.topology_bound_fixture()
+            metadata = json.loads(self.fixture.metadata_path.read_text())
+            mesh = metadata["execution_plan"]["backend_plan"]["mesh"]
+            if corrupt == "facets": del mesh["facets"]
+            else: mesh["cells"]["global_ordinals"] = [True]
+            self.fixture.metadata_path.write_text(json.dumps(metadata))
+            with self.subTest(corrupt=corrupt), self.assertRaises(ValidationError):
+                validate_physical_potential(self.fixture.manifest_path, self.fixture.metadata_path,
+                                            verify_source_mesh=True)
+
     def test_declared_mode_binding_is_verified_separately(self):
         mode = self.bound_fixture()
         result = validate_physical_potential(self.fixture.manifest_path, self.fixture.metadata_path,

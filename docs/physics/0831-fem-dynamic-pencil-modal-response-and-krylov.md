@@ -1698,3 +1698,22 @@ nie modyfikuje kapsuły ani receipt #182.
 | scripts/validate_de_physical_potential.py | _validate_declared_mode_binding | Tożsamość deklaracji i ścieżek przed porównaniem gradientu |
 | scripts/run_de_100nm_pilot.py | validate_smoke_potential_fields | Obowiązkowe związanie każdego opublikowanego modu |
 | scripts/test_de_physical_potential.py | class PhysicalPotentialValidatorTests | Zmienione indeksy/hash, błędne typy i duplicate JSON |
+
+(physical-potential-source-mesh-binding)=
+## Przeliczenie tożsamości siatki rekonstrukcji
+
+Opcjonalny parametr pomocniczy `verify_source_mesh=False` zachowuje dawną
+kontrolę algebraiczną. Pilot DE-SMOKE wymaga `True`: oblicza fingerprint v3
+z kanonicznych nodes/cells/facets, markerów i par periodycznych dokładnie
+według `MeshData.topology_fingerprint_v3`, zamiast porównywać wyłącznie deklaracje.
+Dane legacy bez kanonicznej topologii nie przechodzą tej bramki. CLI:
+`--verify-source-mesh`. Raport source_mesh_binding wiąże również SHA-256
+pliku metadata. Przeliczenie fingerprintu nie jest dowodem Poissona ani zbieżności.
+Nie zmienia równań, jednostek, publicznego DSL ani ProblemIR.
+FEM CPU/GPU: kontrola formatu artefaktów; bez dowodu wykonania urządzenia.
+FDM CPU/GPU: nie dotyczy artefaktu Tet4. Kwalifikacja nadal NOT VERIFIED.
+
+| Źródło | Owner | Kontrakt |
+|---|---|---|
+| scripts/validate_de_physical_potential.py | _validate_source_mesh_binding | Fingerprint kanonicznej topologii z metadata |
+| packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py | topology_fingerprint_v3 | Istniejący kontrakt v3; bez kopii algorytmu |

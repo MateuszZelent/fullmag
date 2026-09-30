@@ -1,5 +1,12 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
+## S04/S07 — fingerprint siatki rekonstrukcji
+
+- Pilot przelicza v3 z rzeczywistych metadanych; 37 testów Python PASS, 9/9 historycznych artefaktów #173 zgodnych również topologicznie.
+- Audyt: docs/audits/2026-09-30-physical-potential-source-mesh.md. To spójność artefaktów, nie Poisson/zbieżność.
+- #182 terminalny blocked przed buildem: dodatkowe bytecode w kapsule. Obserwator zatrzymany; kapsuła i źródła zachowane. Naprawa kontrolera i ponowienie: osobny przyrost.
+- Pełne S00–S12 nadal otwarte; nowych częstotliwości brak.
+
 ## S04/S07 — kontrola tożsamości potencjału; miejsce zwolnione
 
 - Pilot wymaga zgodnych deklaracji sample/mode, siatki, operatora i fazy oraz kanonicznych ścieżek; poprawny gradient sam nie wystarcza.

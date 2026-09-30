@@ -145,14 +145,16 @@ def validate_smoke_potential_fields(case_dir, expected_sample_count):
         managed._regular_file(manifest, "DE-SMOKE mode potential manifest")
         mode_metadata = case_dir / "eigen/modes" / vector.parent.parent.name / (vector.parent.name + ".json")
         managed._regular_file(mode_metadata, "DE-SMOKE published mode metadata")
-        report = validate_physical_potential(manifest, metadata, mode_metadata_path=mode_metadata)
+        report = validate_physical_potential(manifest, metadata, mode_metadata_path=mode_metadata, verify_source_mesh=True)
+        if report.get("source_mesh_binding", {}).get("status") != "consistent":
+            raise managed.BenchmarkError("DE-SMOKE potential has no recomputed source mesh binding")
         if report.get("identity_binding", {}).get("status") != "consistent":
             raise managed.BenchmarkError("DE-SMOKE potential has no verified declared mode binding")
         if report.get("status") != "consistent" or report.get("reconstruction_agreement") is not True:
             raise managed.BenchmarkError(
                 f"DE-SMOKE potential gradient mismatch: {manifest.relative_to(case_dir)}")
         reports.append({"manifest": manifest.relative_to(case_dir).as_posix(), **report})
-    return {"qualification": "NOT VERIFIED", "scope": "stored_field_reconstruction_and_declared_mode_binding",
+    return {"qualification": "NOT VERIFIED", "scope": "stored_field_reconstruction_and_mode_and_source_mesh_binding",
             "mode_count": len(reports), "modes": reports}
 
 
