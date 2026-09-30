@@ -59,7 +59,9 @@ Poprzednia blokada storage nie jest już aktualnym stanem.
 
 Job source36 `a5b88dbd27414615ae44413357d542b7` ma `failed`, exit 2:
 `workspace mountpoint is unsafe: /workspace/.fullmag-cargo`.
-Job source37 `106c264dfe954e6b816a7811bbde2d4b` ma `running`, bez exit code.
+Późniejszy odczyt: job source37 `106c264dfe954e6b816a7811bbde2d4b` ma
+`failed`, exit 2: wymagany Rust nightly nie jest zainstalowany.
+Ten sam układ mountów przeszedł w job37 kontrolę, więc nie luzowano guard job36.
 Żaden z tych stanów nie dowodzi runtime przyrostu 41.
 Nie zlecano nowego ciężkiego buildu, nie restartowano runnera ani nie usuwano danych.
 

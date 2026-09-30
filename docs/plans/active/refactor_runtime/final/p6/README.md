@@ -157,3 +157,7 @@ pamięci i wszystkich lane'ów pozostają otwarte. P6 wynosi **52%**.
 41. [Przypięty tensor i trwały graf chunków](41-pinned-solution-tensor-graph.md)
     — owner fences, typed root i transitive publication/recovery/GC/export/import;
     source check/review PASS, regresje NOT RUN, FMS owner closure otwarte.
+
+42. [Właściciel przypiętego tensora w FMS](42-fms-pinned-tensor-owner-closure.md)
+    — exact intent i owner CAS closure, fail-closed export/import;
+    source check/review PASS, round-trip NOT RUN, lokalna publication owner barrier otwarta.
