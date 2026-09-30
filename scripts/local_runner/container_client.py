@@ -65,6 +65,7 @@ SLEPC_MODAL_PROFILES = (
     *CURRENT_CONTRACT_PROFILES,
     "fem-cpu-slepc-modal-v1",
     "fem-cpu-slepc-runtime-v1",
+    "fem-cpu-slepc-runtime-v2",
 )
 _PROFILE_LISTS = (
     ALLOWED_PROFILES,
@@ -330,6 +331,7 @@ def configure(
     image: str | None = None,
     enable_current_contracts: bool = False,
     enable_slepc_modal: bool = False,
+    enable_slepc_runtime_v2: bool = False,
 ) -> dict[str, Any]:
     """Install or update host configuration without contacting Docker.
 
@@ -342,9 +344,10 @@ def configure(
         image_id = image
     elif image is not None:
         raise ContainerClientError("Specify only one coordinator image ID")
-    if not isinstance(enable_current_contracts, bool) or not isinstance(enable_slepc_modal, bool):
+    if not all(isinstance(flag, bool) for flag in
+               (enable_current_contracts, enable_slepc_modal, enable_slepc_runtime_v2)):
         raise ContainerClientError("Profile activation flags must be boolean")
-    if enable_current_contracts and enable_slepc_modal:
+    if sum((enable_current_contracts, enable_slepc_modal, enable_slepc_runtime_v2)) > 1:
         raise ContainerClientError("Choose only one profile activation set")
     operator = _owner(owner)
     image = _image_id(image_id)
@@ -391,10 +394,15 @@ def configure(
                     port = CONTAINER_PORT
             port = _port(port)
             token = secrets.token_urlsafe(48)
-        if enable_slepc_modal:
+        if enable_slepc_runtime_v2:
+            if "fem-cpu-slepc-runtime-v2" not in selected_profiles:
+                selected_profiles.append("fem-cpu-slepc-runtime-v2")
+        elif enable_slepc_modal:
             selected_profiles = list(SLEPC_MODAL_PROFILES)
-        elif enable_current_contracts and "fem-cpu-slepc-modal-v1" not in selected_profiles:
-            selected_profiles = list(CURRENT_CONTRACT_PROFILES)
+        elif enable_current_contracts:
+            for profile in CURRENT_CONTRACT_PROFILES:
+                if profile not in selected_profiles:
+                    selected_profiles.append(profile)
         public = _public_record(storage, operator, image, port, allowed_profiles=selected_profiles)
         secret = _secret_record(storage, operator, token, port, allowed_profiles=selected_profiles)
         atomic_json(secret_path, secret)

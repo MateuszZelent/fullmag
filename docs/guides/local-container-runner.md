@@ -112,6 +112,15 @@ akceptuje oba profile SLEPc, a źródło `fullmag-bin` i `libfullmag_fem` w tras
 runtime-only jest powiązane hashami. Sam receipt pozostaje `NOT VERIFIED` i nie
 jest dowodem CTest ani kwalifikacji fizycznej.
 
+
+Aktywacja wyłącznie profilu runtime-v2 odbywa się przez
+`container-configure --image-id <immutable-coordinator-id> --enable-slepc-runtime-v2`.
+Zachowuje istniejące profile, token oraz ustawienia operatora; ponowienie nie
+powiela wpisu. Późniejsza aktywacja current-contracts również zachowuje profile
+wcześniej dodane przez operatora. Wymiana koordynatora wymaga pustej kolejki
+aktywnego wykonania i zatrzymanego workera po graceful pause; nie anuluje się
+w tym celu cudzych jobów.
+
 Ponieważ CUDA-enabled `libfullmag_fem` może zachować transitive
 `libcuda.so.1` także w CPU lane, trusted post-build probe dodaje wyłącznie
 image-owned `/usr/local/cuda/compat` do `LD_LIBRARY_PATH`, gdy zawiera

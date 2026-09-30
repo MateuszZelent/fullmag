@@ -33,6 +33,7 @@ def main(argv=None):
     profile_activation = container_config.add_mutually_exclusive_group()
     profile_activation.add_argument('--enable-current-contracts', action='store_true')
     profile_activation.add_argument('--enable-slepc-modal', action='store_true')
+    profile_activation.add_argument('--enable-slepc-runtime-v2', action='store_true')
     replacement = sub.add_parser('container-replace')
     replacement.add_argument('--image-id', required=True)
     sub.add_parser('container-resume')
@@ -92,6 +93,7 @@ def main(argv=None):
                     port=args.port,
                     enable_current_contracts=args.enable_current_contracts,
                     enable_slepc_modal=args.enable_slepc_modal,
+                    enable_slepc_runtime_v2=args.enable_slepc_runtime_v2,
                 )
             elif args.action == 'container-replace':
                 result = container_client.replace(layout, args.image_id, owner=owner)

@@ -168,6 +168,28 @@ class ContainerClientTests(unittest.TestCase):
         )
         self.assertEqual(list(container_client.SLEPC_MODAL_PROFILES), preserved["allowed_profiles"])
 
+    def test_runtime_v2_activation_preserves_profiles_identity_and_secret(self):
+        initial = self.configure()
+        secret_path = self.storage / "index" / "local-runner-container-secret.json"
+        before = json.loads(secret_path.read_text())
+        activated = container_client.configure(
+            self.layout, image_id=IMAGE, owner="alice", enable_slepc_runtime_v2=True)
+        expected = initial["allowed_profiles"] + ["fem-cpu-slepc-runtime-v2"]
+        self.assertEqual(activated["allowed_profiles"], expected)
+        after = json.loads(secret_path.read_text())
+        self.assertEqual(after["allowed_profiles"], expected)
+        self.assertEqual(after["token"], before["token"])
+        self.assertEqual(activated["image_id"], initial["image_id"])
+        repeated = container_client.configure(
+            self.layout, image_id=IMAGE, owner="alice", enable_slepc_runtime_v2=True)
+        self.assertEqual(repeated["allowed_profiles"], expected)
+        self.assertNotIn("fem-cpu-slepc-runtime-v1", expected)
+        upgraded = container_client.configure(
+            self.layout, image_id=IMAGE, owner="alice", enable_current_contracts=True)
+        self.assertEqual(set(upgraded["allowed_profiles"]),
+                         set(container_client.CURRENT_CONTRACT_PROFILES) |
+                         {"fem-cpu-slepc-runtime-v2"})
+
     def test_configure_rejects_mismatched_public_and_secret_profile_lists(self):
         self.configure()
         secret_path = self.storage / "index" / "local-runner-container-secret.json"
