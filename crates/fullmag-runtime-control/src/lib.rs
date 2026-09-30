@@ -583,6 +583,7 @@ pub use scheduler::{
 };
 
 mod solution_set;
+mod study_field_tensor;
 
 mod study;
 pub use study::{

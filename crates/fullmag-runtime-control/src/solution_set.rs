@@ -288,6 +288,14 @@ fn build_solution(
             format!("{}@{}", output.codec_id, output.codec_version),
             accepted_state_for_kind(&manifest, kind),
         )?;
+        let field_tensor = crate::study_field_tensor::materialize_study_state_tensor(
+            store,
+            resolved_plan,
+            &artifact,
+            output,
+            claim.run_id.as_str(),
+            &provenance.run_spec_digest,
+        )?;
         coverage.push(SolutionArtifactCoverage {
             artifact_id: artifact.artifact_id.clone(),
             state: SolutionCoverageState::Unknown,
@@ -299,6 +307,12 @@ fn build_solution(
             .entry(Some(output.case_id.clone()))
             .or_default()
             .push(artifact);
+        if let Some(field_tensor) = field_tensor {
+            artifacts_by_case
+                .entry(Some(output.case_id.clone()))
+                .or_default()
+                .push(field_tensor);
+        }
     }
 
     let metadata = artifacts_by_case.entry(None).or_default();

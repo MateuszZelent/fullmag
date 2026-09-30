@@ -75,13 +75,68 @@ Tożsamość dataset/sample/item/field z requestu musi odpowiadać bindingowi.
 Odczyt zwraca również oryginalne statusy i oceny właścicieli; nie awansuje
 ich do converged, quantitative ani qualified.
 
-Ten kontrakt sam nie dowodzi prawdziwości deklaracji producenta. Istniejące
-writery nie emitują jeszcze bindingu; wymagane są adapter producenta,
-walidacja semantyki, trwały manifest MaterializedDataset oraz konsument API/UI.
+Ten kontrakt sam nie dowodzi prawdziwości deklaracji producenta. Pierwszy
+adapter producenta i jego walidacja opisane są poniżej; nadal wymagane są
+trwały manifest MaterializedDataset oraz konsument API/UI.
 Nie kwalifikuje się tego etapu jako ukończonej materializacji datasetu.
 Starsze wersje strict readera odrzucają rozszerzone rooty, więc reader musi
 zostać wdrożony przed włączeniem writera. Rollback wyłącza emisję bindingu,
 zachowując nowe immutable rooty i reader do ich odczytu.
+
+### Producent zapisanego stanu FEM H1 P1
+
+Pierwszy producent korzysta z istniejącego `fullmag.runner.field_json@v1`.
+Wersjonowany `layout.field_semantics` jest częścią layoutu objętego
+`state_identity.layout_sha256`; top-level codec i stare layouty pozostają
+zgodne. Wdrożenie nie wymaga planowanego wcześniej codec v2.
+
+Fabryka `fullmag-runner::fem_p1_magnetization_field_semantics` odczytuje
+dokładny mesh i jego maskę magnetic support z przyjętego zwykłego planu FEM
+P1. Wymaga kompletnego poprawnego mesha; nie korzysta z fallbacku dla
+brakujących markerów. Envelope `fullmag.fem_p1_m_field_semantics.v1`
+zawiera jawną maskę oraz descriptor z osiami `node/component`.
+Fingerprint supportu obejmuje topologię i maskę, a fingerprint layoutu
+obejmuje jawny preimage przestrzeni i kolejności. Nie hashuje sam siebie.
+
+Tylko zapis `m` otrzymuje envelope, po sprawdzeniu kompletnej liczby
+węzłów i skończonych wartości. Warstwa aplikacji waliduje go względem
+state layoutu. Przy tworzeniu SolutionSet materializer porównuje go także
+z fabryką uruchomioną na dokładnym accepted execution planie, zamiast
+ufać samemu deklarowanemu topology ID lub producentowi.
+
+Oryginalny JSON stanu pozostaje artefaktem. Materializer zapisuje dodatkowy
+F64 tensor little endian w chunkach po najwyżej 8192 węzły (196608 bajtów),
+z bindingiem dataset/sample/item/field i oryginalnym accepted state.
+Tożsamości wynikają z immutable ownera i dokładnego źródła, bez joinów
+po indeksach lub wartościach float. Artefakt trafia do tego samego membera
+przed terminal close; ponowny zapis tych samych danych daje ten sam root.
+Root i chunky przechodzą dotychczasową bramkę publikacji i pin retirement.
+`item_id` identyfikuje źródłowy artefakt JSON; nowy tensor ma własny,
+niezmienny `artifact_id`. Binding nie jest samodzielnym dowodem właściciela:
+odczyt wymaga dokładnego run/set/revision/member/artifact/root z resolvera.
+Pola dataset/group są deterministyczną tożsamością tego producenta, a nie
+ogólną regułą autoryzacji wszystkich producentów tensorów.
+
+Writer i materializer wdraża się razem, po readerze rozszerzonych rootów.
+Nie dodaje się tensoru wstecz do terminalnego membera lub zamkniętej rewizji;
+istniejąca bramka publikacji odrzuca taki late append.
+
+Źródłowy JSON ma budżet wejścia 64 MiB. W obsługiwanym planie FEM P1
+przekroczenie budżetu zatrzymuje publikację z jawnym błędem, również dla
+starego dużego JSON. Błąd budowy semantyki zatrzymuje zapis `m`; nie jest
+zamieniany na brak envelope. Legacy bez envelope mieszczące się w budżecie
+pozostaje oryginalnym artefaktem bez nowego pola ilościowego.
+Nie powstaje zastępcze zero ani implicit solve. Chunkowany output nie jest
+streamingowym dekoderem wejściowego JSON — pomiar peak RAM pozostaje osobną
+bramką. Nie zmienia się StudyOutputManifest ani jego portów.
+
+FDM CPU/GPU, FEM eigen/response, wyższe rzędy FEM oraz snapshot/Zarr
+pozostają poza tym producentem. Nie oznacza to zmiany ich obsługi solvera.
+`Quantitative` opisuje rozdzielczość pełnego zapisanego pola; normalization
+pozostaje `None`. Nie deklaruje się converged, jednostkowej normy wektorów,
+kwalifikacji FEM CPU/GPU ani parytetu urządzeń. Status i scientific assessment
+pochodzą nadal z właściciela. Pełny manifest MaterializedDataset i consumer
+API/UI wymagają następnego etapu.
 
 Nieznane schema IDs zachowują istniejącą semantykę opaque leaf.
 Nie stosuje się heurystycznego skanowania JSON ani typowania po nazwie pliku.
@@ -105,8 +160,9 @@ Archiwum z typed tensorem bez właściciela lub z obcym digestem jest odrzucane
 przed publikacją importu. Opaque SolutionSet zachowuje istniejącą kompatybilność.
 Source-only round-trip regression nie jest dowodem wykonanego importu/runtime.
 
-Ten przyrost nie publikuje MaterializedDataset ani wyniku porównania,
-nie definiuje mapowania dataset→tensor i nie dodaje konsumenta UI.
+Ta ścieżka nie publikuje pełnego MaterializedDataset ani wyniku porównania
+i nie dodaje konsumenta UI. Binding określa tożsamość pola i jego tensor;
+nie zastępuje właściciela pełnego manifestu datasetu ani jego definicji.
 Stan `integrity=not_verified` istniejącego endpointu artefaktów pozostaje
 niezmieniony. Kwalifikacja runtime, testy recovery/import i pomiary pamięci
 wymagają osobnych dowodów; source check ich nie zastępuje.

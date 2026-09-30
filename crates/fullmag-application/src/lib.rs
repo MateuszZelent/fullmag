@@ -60,6 +60,7 @@ pub use run_spec::{
     SubmitReceipt, RUN_INTENT_SCHEMA, RUN_SPEC_SCHEMA,
 };
 pub use study_artifact::{
+    decode_magnetization_field_semantics,
     decode_study_artifact, decode_study_artifact_bytes, encode_study_scalar_artifact,
     study_artifact_content_sha256, study_state_layout_sha256, DecodedStudyArtifact,
     MagnetizationStateArtifact, StudyScalarArtifact, MAGNETIZATION_STATE_IDENTITY_SCHEMA,

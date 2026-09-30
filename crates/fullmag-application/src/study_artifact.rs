@@ -5,6 +5,7 @@
 //! use a small SI-valued envelope with their quantity and unit named.
 
 use crate::execution::{ExecutionError, ResolvedStudyArtifact};
+use fullmag_quantities::fem_state_field::FemP1MagnetizationFieldSemantics;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -150,6 +151,54 @@ pub fn study_state_layout_sha256(layout: &Value) -> Result<String, ExecutionErro
     Ok(study_artifact_content_sha256(&bytes))
 }
 
+/// Decode the optional producer-owned FEM P1 magnetization semantics.
+///
+/// Legacy state artifacts intentionally return `None`.  A non-null envelope
+/// is accepted only for the exact FEM P1 scope; all scientific field
+/// semantics are then validated by the canonical quantities crate.
+pub fn decode_magnetization_field_semantics(
+    state: &MagnetizationStateArtifact,
+) -> Result<Option<FemP1MagnetizationFieldSemantics>, ExecutionError> {
+    let Some(raw_semantics) = state.layout.get("field_semantics") else {
+        return Ok(None);
+    };
+    if raw_semantics.is_null() {
+        return Ok(None);
+    }
+
+    let backend = state
+        .layout
+        .get("backend")
+        .and_then(Value::as_str)
+        .ok_or_else(|| invalid("magnetization field semantics require a backend identity"))?;
+    if backend != "fem" {
+        return Err(invalid(
+            "magnetization field semantics are supported only for backend `fem`",
+        ));
+    }
+    if state.layout.get("fe_order").and_then(Value::as_u64) != Some(1) {
+        return Err(invalid(
+            "magnetization field semantics require FEM finite-element order 1",
+        ));
+    }
+    let topology_fingerprint = state
+        .layout
+        .get("topology_fingerprint")
+        .and_then(Value::as_str)
+        .ok_or_else(|| invalid("magnetization field semantics require a topology fingerprint"))?;
+
+    let semantics: FemP1MagnetizationFieldSemantics = serde_json::from_value(raw_semantics.clone())
+        .map_err(|error| invalid(format!("parse FEM magnetization field semantics: {error}")))?;
+    semantics
+        .validate(topology_fingerprint, state.values.len())
+        .map_err(|error| {
+            invalid(format!(
+                "validate FEM magnetization field semantics: {error}"
+            ))
+        })?;
+    Ok(Some(semantics))
+}
+
 fn decode_magnetization_state(bytes: &[u8]) -> Result<MagnetizationStateArtifact, ExecutionError> {
     let payload: MagnetizationFieldArtifactV1 = serde_json::from_slice(bytes)
         .map_err(|error| invalid(format!("parse runner magnetization field JSON v1: {error}")))?;
@@ -198,7 +247,7 @@ fn decode_magnetization_state(bytes: &[u8]) -> Result<MagnetizationStateArtifact
     }
     validate_magnetization_layout(layout_backend, &payload.layout, payload.values.len())?;
 
-    Ok(MagnetizationStateArtifact {
+    let state = MagnetizationStateArtifact {
         step: payload.step,
         time_s: payload.time,
         solver_dt_s: payload.solver_dt,
@@ -206,7 +255,9 @@ fn decode_magnetization_state(bytes: &[u8]) -> Result<MagnetizationStateArtifact
         layout: payload.layout,
         provenance: payload.provenance,
         values: payload.values,
-    })
+    };
+    decode_magnetization_field_semantics(&state)?;
+    Ok(state)
 }
 
 fn validate_magnetization_layout(
@@ -421,6 +472,28 @@ mod tests {
         .unwrap()
     }
 
+    fn fem_layout() -> Value {
+        json!({
+            "backend": "fem",
+            "fe_order": 1,
+            "n_nodes": 2,
+            "n_elements": 1,
+            "topology_fingerprint": format!("sha256:{}", "c".repeat(64)),
+        })
+    }
+
+    fn state_with_layout(layout: Value) -> MagnetizationStateArtifact {
+        MagnetizationStateArtifact {
+            step: 4,
+            time_s: 4.0e-12,
+            solver_dt_s: 1.0e-12,
+            space_fingerprint: study_state_layout_sha256(&layout).unwrap(),
+            layout,
+            provenance: json!({"execution_resolution": {"requested": "fem"}}),
+            values: vec![[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+        }
+    }
+
     fn decode_bytes(
         data_kind: &str,
         codec_id: &str,
@@ -485,13 +558,7 @@ mod tests {
 
     #[test]
     fn decodes_only_identified_fem_h1_p1_nodal_state() {
-        let layout = json!({
-            "backend": "fem",
-            "fe_order": 1,
-            "n_nodes": 2,
-            "n_elements": 1,
-            "topology_fingerprint": format!("sha256:{}", "c".repeat(64)),
-        });
+        let layout = fem_layout();
         let decoded = decode_bytes(
             "state",
             STUDY_MAGNETIZATION_CODEC_ID,
@@ -519,6 +586,91 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.to_string().contains("only supports identified H1 P1"));
+    }
+
+    #[test]
+    fn decodes_v1_fem_semantics_and_binds_them_to_layout_identity() {
+        let topology_fingerprint = format!("sha256:{}", "c".repeat(64));
+        let semantics =
+            FemP1MagnetizationFieldSemantics::new(&topology_fingerprint, 2, vec![true, false])
+                .expect("canonical FEM P1 semantics");
+        let mut layout = fem_layout();
+        layout["field_semantics"] = serde_json::to_value(&semantics).unwrap();
+        let bytes = state_bytes(layout);
+
+        let decoded = decode_study_artifact_bytes(
+            "state",
+            STUDY_MAGNETIZATION_CODEC_ID,
+            STUDY_MAGNETIZATION_CODEC_VERSION,
+            &bytes,
+        )
+        .unwrap();
+        let DecodedStudyArtifact::MagnetizationState(state) = decoded else {
+            panic!("expected a magnetization state");
+        };
+        assert_eq!(
+            decode_magnetization_field_semantics(&state)
+                .unwrap()
+                .expect("FEM semantics"),
+            semantics
+        );
+        let layout_digest = study_state_layout_sha256(&state.layout).unwrap();
+        assert_eq!(state.space_fingerprint, layout_digest);
+
+        let mut tampered: Value = serde_json::from_slice(&bytes).unwrap();
+        tampered["layout"]["field_semantics"]["descriptor"]["axes"][0]["length"] = json!(1);
+        let tampered_bytes = serde_json::to_vec(&tampered).unwrap();
+        let error = decode_study_artifact_bytes(
+            "state",
+            STUDY_MAGNETIZATION_CODEC_ID,
+            STUDY_MAGNETIZATION_CODEC_VERSION,
+            &tampered_bytes,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("state identity does not match"));
+    }
+
+    #[test]
+    fn legacy_magnetization_state_has_no_field_semantics() {
+        let state = state_with_layout(fdm_layout());
+        assert!(decode_magnetization_field_semantics(&state)
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn field_semantics_require_exact_fem_p1_scope() {
+        let mut non_fem_layout = fdm_layout();
+        non_fem_layout["field_semantics"] = json!({});
+        assert!(decode_magnetization_field_semantics(&state_with_layout(non_fem_layout)).is_err());
+
+        let mut non_p1_layout = fem_layout();
+        non_p1_layout["fe_order"] = json!(2);
+        non_p1_layout["field_semantics"] = json!({});
+        assert!(decode_magnetization_field_semantics(&state_with_layout(non_p1_layout)).is_err());
+    }
+
+    #[test]
+    fn malformed_fem_field_semantics_fail_closed() {
+        let malformed = [
+            ("unknown_scope_field", json!({"scope": "not_fem"})),
+            (
+                "unknown_topology_field",
+                json!({"topology_fingerprint": "not-a-digest"}),
+            ),
+            ("unknown_mask_field", json!({"mask": "not-a-selection"})),
+            ("unknown_quantity_field", json!({"quantity": "not-m"})),
+            ("unknown_shape_field", json!({"shape": [2, 2]})),
+        ];
+        for (label, raw_semantics) in malformed {
+            let mut layout = fem_layout();
+            layout["field_semantics"] = raw_semantics;
+            let result = decode_magnetization_field_semantics(&state_with_layout(layout));
+            assert!(
+                result.is_err(),
+                "{label}: malformed semantics were accepted"
+            );
+        }
     }
 
     #[test]

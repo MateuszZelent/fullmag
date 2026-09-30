@@ -17,6 +17,7 @@ pub const MU0: f64 = 4.0 * std::f64::consts::PI * 1e-7;
 mod antenna_fields;
 pub mod artifact_pipeline;
 mod artifacts;
+pub use artifacts::fem_p1_magnetization_field_semantics;
 #[cfg(feature = "stage-autosave-hdf5")]
 pub mod autosave_hdf5;
 pub mod autosave_storage;

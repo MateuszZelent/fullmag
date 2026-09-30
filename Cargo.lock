@@ -1165,6 +1165,7 @@ version = "0.1.0"
 dependencies = [
  "fullmag-ir",
  "fullmag-plan",
+ "fullmag-quantities",
  "serde",
  "serde_json",
  "sha2",

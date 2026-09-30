@@ -21,6 +21,7 @@ pub mod dataset_difference;
 pub mod dataset_slice;
 pub mod descriptor;
 pub mod eval;
+pub mod fem_state_field;
 pub mod id;
 pub mod provider;
 pub mod reduction;
