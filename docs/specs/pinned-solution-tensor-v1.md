@@ -40,6 +40,14 @@ Resolver metadanych weryfikuje root, lecz nie czyta wszystkich payloadów.
 Odczyt wycinka nadal musi sprawdzić rzeczywiste CAS bytes; wcześniejsza
 publikacja nie zastępuje integralności późniejszego odczytu.
 
+Przed odczytem payloadów i zapisem typed SolutionSet wymagany jest zgodny,
+bounded `run_intent.json` właściciela. Ta sama bramka obowiązuje przy
+idempotentnym replayu, odzyskiwaniu katalogu, odkrywaniu durable objects
+i StoreWalker GC. Usunięty intent albo zmieniony digest nie upoważnia do
+nowej publikacji, promocji current ani zwolnienia pinów. Inspekcja istniejącej
+rewizji przez read-only API pozostaje możliwa bez automatycznej naprawy;
+nie usuwa się historycznych metadanych jako skutku błędu właściciela.
+
 ## Granice i zgodność
 
 Nieznane schema IDs zachowują istniejącą semantykę opaque leaf.

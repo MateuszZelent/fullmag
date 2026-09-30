@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fs;
 use std::io::Cursor;
 
 use fullmag_quantities::{
@@ -64,29 +65,25 @@ fn tensor_export_fixture(with_owner_intent: bool) -> TensorExportFixture {
         .cas()
         .put(owner_asset_bytes)
         .expect("publish tensor owner asset");
-    let run_spec_digest = if with_owner_intent {
-        let mut intent = FmsRunIntent::new(
-            run_id,
-            "intent-tensor-owner",
-            json!({
-                "run_id": run_id,
-                "solver": "fixture",
-                "immutable_assets": [{
-                    "asset_id": "owner-asset",
-                    "content_sha256": owner_asset_ref.clone(),
-                }]
-            }),
-        );
-        intent
-            .asset_object_refs
-            .insert("owner-asset".to_string(), owner_asset_ref.clone());
-        store
-            .commit_run_intent(&intent)
-            .expect("publish tensor owner intent");
-        format!("sha256:{}", intent.payload_sha256)
-    } else {
-        digest('a')
-    };
+    let mut intent = FmsRunIntent::new(
+        run_id,
+        "intent-tensor-owner",
+        json!({
+            "run_id": run_id,
+            "solver": "fixture",
+            "immutable_assets": [{
+                "asset_id": "owner-asset",
+                "content_sha256": owner_asset_ref.clone(),
+            }]
+        }),
+    );
+    intent
+        .asset_object_refs
+        .insert("owner-asset".to_string(), owner_asset_ref.clone());
+    store
+        .commit_run_intent(&intent)
+        .expect("publish tensor owner intent");
+    let run_spec_digest = format!("sha256:{}", intent.payload_sha256);
 
     let chunk_bytes = vec![0_u8; 16];
     let chunk_ref = store
@@ -153,6 +150,16 @@ fn tensor_export_fixture(with_owner_intent: bool) -> TensorExportFixture {
     store
         .publish_solution_set(&solution)
         .expect("publish tensor solution set");
+    if !with_owner_intent {
+        fs::remove_file(
+            store
+                .root()
+                .join("runs")
+                .join(run_id)
+                .join("run_intent.json"),
+        )
+        .expect("remove owner intent after valid solution publication");
+    }
 
     TensorExportFixture {
         _directory: directory,

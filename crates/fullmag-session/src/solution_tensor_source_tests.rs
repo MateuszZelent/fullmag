@@ -276,6 +276,17 @@ fn publish_rejects_missing_corrupt_and_length_mismatched_tensor_chunks() {
                 .expect("publish short chunk"),
             _ => unreachable!(),
         };
+        let intent = FmsRunIntent::new(
+            "run-tensor",
+            "intent-tensor-payload-check",
+            json!({
+                "run_id": "run-tensor",
+                "solver": "payload-check"
+            }),
+        );
+        store
+            .commit_run_intent(&intent)
+            .expect("publish tensor payload owner intent");
         let descriptor = valid_descriptor(&chunk_ref, expected_payload.len());
         let descriptor_bytes = serde_json::to_vec(&descriptor).expect("serialize descriptor");
         store
@@ -283,7 +294,12 @@ fn publish_rejects_missing_corrupt_and_length_mismatched_tensor_chunks() {
             .put(&descriptor_bytes)
             .expect("publish descriptor");
         let artifact = artifact_for_descriptor(&descriptor_bytes);
-        let solution = tensor_solution("run-tensor", "solution-tensor", digest('a'), artifact);
+        let solution = tensor_solution(
+            "run-tensor",
+            "solution-tensor",
+            format!("sha256:{}", intent.payload_sha256),
+            artifact,
+        );
 
         let result = store.publish_solution_set(&solution);
         assert!(result.is_err(), "accepted {scenario} tensor chunk");
@@ -416,4 +432,23 @@ fn store_and_archive_solution_walkers_retain_tensor_chunks_from_root_only() {
     let mut corrupt_chunk = documents;
     corrupt_chunk.insert(chunk_path, b"corrupt archive chunk".to_vec());
     assert!(walk_archive_documents(&corrupt_chunk, ReachabilityMode::Restore).is_err());
+}
+
+#[test]
+fn missing_typed_owner_blocks_gc_and_writer_reopen_without_erasing_metadata() {
+    let fixture = published_tensor_fixture();
+    let root = fixture.store.root().to_path_buf();
+    fs::remove_file(root.join("runs/run-tensor/run_intent.json")).expect("remove fixture owner");
+    assert!(fixture.store.gc_preview().is_err());
+    assert!(walk_store_root(&root, ReachabilityMode::Gc).is_err());
+    assert_eq!(
+        fixture
+            .store
+            .solution_sets()
+            .read_revision(&fixture.solution.solution_set_id, 1)
+            .unwrap(),
+        Some(fixture.solution)
+    );
+    assert!(SessionStore::open_existing(&root).is_ok());
+    assert!(SessionStore::open(&root).is_err());
 }

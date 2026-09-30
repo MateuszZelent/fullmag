@@ -132,6 +132,12 @@ impl SolutionSetCatalog {
             bail!("solution-set revision must be positive");
         }
 
+        // Validate the owner closure and every recognized payload before any
+        // idempotent replay shortcut.  A replay must not turn a previously
+        // valid pointer into an authorization for a missing or changed run
+        // owner.
+        self.verify_typed_artifacts(std::iter::once(solution))?;
+
         let current = self.read(&solution.solution_set_id)?;
         if let Some(current) = &current {
             if solution.revision == current.revision {
@@ -144,11 +150,6 @@ impl SolutionSetCatalog {
         } else if solution.revision != 1 {
             bail!("first solution-set revision must be 1");
         }
-
-        // Keep the catalog's direct publication path behind the same typed
-        // descriptor barrier as SessionStore::publish_solution_set.  This
-        // must happen before the immutable revision write below.
-        self.verify_typed_artifacts(std::iter::once(solution))?;
 
         let bytes = serde_json::to_vec_pretty(solution)?;
         if bytes.len() as u64 > MAX_SOLUTION_MANIFEST_BYTES {
@@ -214,6 +215,14 @@ impl SolutionSetCatalog {
                     validate_successor(previous, solution)?;
                 }
                 previous = Some(solution);
+
+                // Recovery and durable-graph discovery are publication
+                // boundaries too: a recognized tensor must still be owned by
+                // the immutable run intent before its descriptor is parsed.
+                crate::solution_tensor_source::verify_solution_tensor_run_owner(
+                    &self.root,
+                    solution,
+                )?;
 
                 for member in &solution.members {
                     for artifact in &member.artifacts {
@@ -460,6 +469,13 @@ impl SolutionSetCatalog {
     ) -> Result<()> {
         let mut cas = None;
         for solution in solutions {
+            // Keep the owner closure ahead of CAS/descriptor reads.  Unknown
+            // schemas remain opaque because the shared helper is a no-op for
+            // them.
+            crate::solution_tensor_source::verify_solution_tensor_run_owner(
+                &self.root,
+                solution,
+            )?;
             for member in &solution.members {
                 for artifact in &member.artifacts {
                     // Keep unknown schemas opaque until their typed contract
@@ -671,10 +687,12 @@ fn coverage_rank(state: fullmag_quantities::SolutionCoverageState) -> u8 {
 mod tests {
     use super::*;
     use crate::store::SessionStore;
+    use crate::FmsRunIntent;
     use fullmag_quantities::{
         ScientificAssessment, ScientificAssessmentStatus, SolutionArtifactKind,
         SolutionArtifactRef, SolutionMember, SolutionSetProvenance, SOLUTION_SET_SCHEMA_VERSION,
     };
+    use serde_json::json;
 
     fn digest(character: char) -> String {
         format!("sha256:{}", character.to_string().repeat(64))
@@ -738,6 +756,63 @@ mod tests {
         solution
     }
 
+    fn commit_tensor_owner(
+        store: &SessionStore,
+        solution: &mut SolutionSet,
+        run_id: &str,
+    ) -> FmsRunIntent {
+        solution.run_id = run_id.to_string();
+        let intent = FmsRunIntent::new(
+            run_id,
+            format!("intent-{run_id}"),
+            json!({
+                "run_id": run_id,
+                "source": "solution-set-catalog-tests"
+            }),
+        );
+        store
+            .commit_run_intent(&intent)
+            .expect("commit tensor run owner");
+        solution.provenance.run_spec_digest = format!("sha256:{}", intent.payload_sha256);
+        intent
+    }
+
+    fn tensor_solution_with_payload(
+        store: &SessionStore,
+        run_id: &str,
+    ) -> (SolutionSet, String, String, u64) {
+        let payload = 1.0_f64.to_le_bytes().to_vec();
+        let chunk_ref = store.cas().put(&payload).expect("publish tensor chunk");
+
+        let mut descriptor =
+            crate::TensorDescriptor::new_f64("value", vec![1], vec!["sample".to_string()]);
+        descriptor.chunks.push(crate::TensorChunk {
+            object_ref: chunk_ref.clone(),
+            offset: 0,
+            length: payload.len(),
+            sha256: Some(chunk_ref.clone()),
+        });
+        let descriptor_bytes = serde_json::to_vec_pretty(&descriptor).unwrap();
+        let descriptor_ref = store
+            .cas()
+            .put(&descriptor_bytes)
+            .expect("publish tensor descriptor");
+
+        let mut value = solution_with_artifact(
+            descriptor_ref.clone(),
+            descriptor_bytes.len() as u64,
+        );
+        value.run_id = run_id.to_string();
+        value.members[0].artifacts[0].schema_id =
+            crate::solution_tensor_source::SOLUTION_TENSOR_SCHEMA.to_string();
+        (
+            value,
+            descriptor_ref,
+            chunk_ref,
+            descriptor_bytes.len() as u64,
+        )
+    }
+
     #[test]
     fn oversized_manifest_is_rejected_before_publishing_a_revision() {
         let directory = tempfile::tempdir().unwrap();
@@ -752,10 +827,12 @@ mod tests {
     #[test]
     fn direct_catalog_publish_rejects_unverified_tensor_before_revision_write() {
         let directory = tempfile::tempdir().unwrap();
-        let catalog = SolutionSetCatalog::open(directory.path()).unwrap();
+        let store = SessionStore::open(directory.path()).unwrap();
+        let catalog = store.solution_sets();
         let mut value = solution_with_artifact("0".repeat(64), 1);
         value.members[0].artifacts[0].schema_id =
             crate::solution_tensor_source::SOLUTION_TENSOR_SCHEMA.to_string();
+        commit_tensor_owner(&store, &mut value, "run-tensor-invalid");
 
         assert!(catalog.publish(&value).is_err());
         assert!(catalog.read(&value.solution_set_id).unwrap().is_none());
@@ -763,6 +840,107 @@ mod tests {
             .read_revision(&value.solution_set_id, 1)
             .unwrap()
             .is_none());
+    }
+
+    #[test]
+    fn typed_publication_rejects_missing_run_owner_before_revision_write() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(directory.path()).unwrap();
+        let (value, _, _, _) = tensor_solution_with_payload(&store, "run-tensor-missing-owner");
+
+        assert!(store.publish_solution_set(&value).is_err());
+        assert!(store
+            .solution_sets()
+            .read(&value.solution_set_id)
+            .unwrap()
+            .is_none());
+        assert!(store
+            .solution_sets()
+            .read_revision(&value.solution_set_id, 1)
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn typed_publication_rejects_wrong_run_owner_digest_or_run() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(directory.path()).unwrap();
+        let (mut wrong_digest, _, _, _) =
+            tensor_solution_with_payload(&store, "run-tensor-wrong-digest");
+        commit_tensor_owner(&store, &mut wrong_digest, "run-tensor-wrong-digest");
+        wrong_digest.provenance.run_spec_digest = digest('a');
+
+        assert!(store.publish_solution_set(&wrong_digest).is_err());
+        assert!(store
+            .solution_sets()
+            .read(&wrong_digest.solution_set_id)
+            .unwrap()
+            .is_none());
+
+        let other_directory = tempfile::tempdir().unwrap();
+        let other_store = SessionStore::open(other_directory.path()).unwrap();
+        let (mut wrong_run, _, _, _) =
+            tensor_solution_with_payload(&other_store, "run-tensor-wrong-run");
+        let owner = FmsRunIntent::new(
+            "run-tensor-owner",
+            "intent-run-tensor-owner",
+            json!({
+                "run_id": "run-tensor-owner",
+                "source": "solution-set-catalog-tests"
+            }),
+        );
+        other_store
+            .commit_run_intent(&owner)
+            .expect("commit owner for different run");
+        let wrong_run_owner_path = create_parent(
+            other_store.root(),
+            "runs/run-tensor-wrong-run/run_intent.json",
+        )
+        .expect("create mismatched owner path");
+        crate::durability::atomic_write(
+            &wrong_run_owner_path,
+            &serde_json::to_vec_pretty(&owner).expect("serialize mismatched owner"),
+        )
+        .expect("persist mismatched owner bytes");
+        wrong_run.provenance.run_spec_digest = format!("sha256:{}", owner.payload_sha256);
+
+        assert!(other_store.publish_solution_set(&wrong_run).is_err());
+        assert!(other_store
+            .solution_sets()
+            .read(&wrong_run.solution_set_id)
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn typed_idempotent_replay_revalidates_run_owner() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(directory.path()).unwrap();
+        let (mut value, _, _, _) = tensor_solution_with_payload(&store, "run-tensor-replay");
+        commit_tensor_owner(&store, &mut value, "run-tensor-replay");
+        store
+            .publish_solution_set(&value)
+            .expect("publish verified tensor solution");
+        let before = store
+            .solution_sets()
+            .read(&value.solution_set_id)
+            .unwrap()
+            .expect("current solution-set manifest");
+
+        fs::remove_file(
+            store
+                .root()
+                .join("runs")
+                .join("run-tensor-replay")
+                .join("run_intent.json"),
+        )
+        .expect("remove owner for replay regression");
+
+        assert!(store.solution_sets().publish(&value).is_err());
+        assert_eq!(
+            store.solution_sets().read(&value.solution_set_id).unwrap(),
+            Some(before)
+        );
     }
 
     #[test]
@@ -875,6 +1053,59 @@ mod tests {
             .expect("reconcile recovered catalog");
         assert_eq!(outcome.previous_current_revision, Some(2));
         assert_eq!(outcome.promoted_revision, None);
+    }
+
+    #[test]
+    fn recovery_rejects_typed_orphan_promotion_and_preserves_current_pointer() {
+        let directory = tempfile::tempdir().expect("temporary session store");
+        let store = SessionStore::open(directory.path()).expect("open session store");
+        let (mut first, _, _, _) = tensor_solution_with_payload(&store, "run-tensor-recovery");
+        commit_tensor_owner(&store, &mut first, "run-tensor-recovery");
+        store
+            .publish_solution_set(&first)
+            .expect("publish verified first revision");
+        let current_before = store
+            .solution_sets()
+            .read(&first.solution_set_id)
+            .unwrap()
+            .expect("current first revision");
+
+        let owner_path = store
+            .root()
+            .join("runs")
+            .join("run-tensor-recovery")
+            .join("run_intent.json");
+        fs::remove_file(owner_path).expect("remove owner before recovery");
+
+        let mut orphan = first.clone();
+        orphan.revision = 2;
+        orphan.manifest_state = SolutionSetManifestState::Closed;
+        orphan.execution_status = SolutionExecutionStatus::Succeeded;
+        orphan.members[0].execution_status = SolutionExecutionStatus::Succeeded;
+        let orphan_path = create_parent(
+            &store.solution_sets().root,
+            &store
+                .solution_sets()
+                .revision_relative_path(&orphan.solution_set_id, orphan.revision),
+        )
+        .expect("orphan path");
+        crate::durability::atomic_write(
+            &orphan_path,
+            &serde_json::to_vec_pretty(&orphan).expect("serialize orphan"),
+        )
+        .expect("persist typed orphan revision");
+
+        assert!(store
+            .solution_sets()
+            .reconcile(&first.solution_set_id)
+            .is_err());
+        assert_eq!(
+            store
+                .solution_sets()
+                .read(&first.solution_set_id)
+                .unwrap(),
+            Some(current_before)
+        );
     }
 
     #[test]
@@ -991,27 +1222,9 @@ mod tests {
     fn durable_solution_objects_include_verified_tensor_chunks() {
         let directory = tempfile::tempdir().expect("temporary session store");
         let store = SessionStore::open(directory.path()).expect("open session store");
-        let payload = 1.0_f64.to_le_bytes().to_vec();
-        let chunk_ref = store.cas().put(&payload).expect("publish tensor chunk");
-
-        let mut descriptor =
-            crate::TensorDescriptor::new_f64("value", vec![1], vec!["sample".to_string()]);
-        descriptor.chunks.push(crate::TensorChunk {
-            object_ref: chunk_ref.clone(),
-            offset: 0,
-            length: payload.len(),
-            sha256: Some(chunk_ref.clone()),
-        });
-        let descriptor_bytes = serde_json::to_vec_pretty(&descriptor).unwrap();
-        let descriptor_ref = store
-            .cas()
-            .put(&descriptor_bytes)
-            .expect("publish tensor descriptor");
-
-        let mut value =
-            solution_with_artifact(descriptor_ref.clone(), descriptor_bytes.len() as u64);
-        value.members[0].artifacts[0].schema_id =
-            crate::solution_tensor_source::SOLUTION_TENSOR_SCHEMA.to_string();
+        let (mut value, descriptor_ref, chunk_ref, descriptor_byte_length) =
+            tensor_solution_with_payload(&store, "run-tensor-durable");
+        commit_tensor_owner(&store, &mut value, "run-tensor-durable");
         store
             .publish_solution_set(&value)
             .expect("publish verified tensor solution");
@@ -1023,9 +1236,9 @@ mod tests {
             .expect("collect durable tensor graph");
         assert_eq!(
             durable.get(&descriptor_ref),
-            Some(&(descriptor_bytes.len() as u64))
+            Some(&descriptor_byte_length)
         );
-        assert_eq!(durable.get(&chunk_ref), Some(&(payload.len() as u64)));
+        assert_eq!(durable.get(&chunk_ref), Some(&8_u64));
     }
 
     #[test]

@@ -721,6 +721,7 @@ impl StoreWalker {
     }
 
     fn walk_solution_objects(&mut self, solution: &SolutionSet, source: &str) -> Result<()> {
+        crate::solution_tensor_source::verify_solution_tensor_run_owner(&self.root, solution)?;
         for member in &solution.members {
             for artifact in &member.artifacts {
                 self.follow_solution_object_ref(

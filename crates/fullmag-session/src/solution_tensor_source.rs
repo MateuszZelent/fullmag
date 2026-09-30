@@ -68,26 +68,7 @@ pub fn resolve_solution_tensor(
     source: &PinnedSolutionTensorSource,
 ) -> Result<ResolvedSolutionTensor> {
     source.validate()?;
-    // Keep this read bounded even if a caller opens an untrusted existing store.
-    let path = crate::repository_path::checked_path(
-        store.root(),
-        &format!("runs/{}/run_intent.json", source.run_id),
-    )?;
-    let mut bytes = Vec::new();
-    std::fs::File::open(&path)
-        .context("solution tensor run intent is missing")?
-        .take(MAX_RUN_INTENT_BYTES + 1)
-        .read_to_end(&mut bytes)?;
-    if bytes.len() as u64 > MAX_RUN_INTENT_BYTES {
-        bail!("solution tensor run intent exceeds metadata budget");
-    }
-    let intent: FmsRunIntent = serde_json::from_slice(&bytes)?;
-    intent.validate()?;
-    if intent.run_id != source.run_id
-        || format!("sha256:{}", intent.payload_sha256) != source.run_spec_digest
-    {
-        bail!("solution tensor RunSpec owner mismatch");
-    }
+    read_solution_run_owner(store.root(), &source.run_id, &source.run_spec_digest)?;
     let solution = store
         .solution_sets()
         .read_revision(&source.solution_set_id, source.solution_revision)?
@@ -125,6 +106,50 @@ pub fn resolve_solution_tensor(
         provenance: solution.provenance.clone(),
         accepted_state: artifact.accepted_state.clone(),
     })
+}
+
+/// Owner closure for typed tensor producers; opaque schemas retain compatibility.
+/// The caller holds the repository writer lease for publication/reconciliation.
+pub(crate) fn verify_solution_tensor_run_owner(
+    root: &std::path::Path,
+    solution: &fullmag_quantities::SolutionSet,
+) -> Result<()> {
+    if solution
+        .members
+        .iter()
+        .flat_map(|member| &member.artifacts)
+        .any(|artifact| artifact.schema_id == SOLUTION_TENSOR_SCHEMA)
+    {
+        read_solution_run_owner(root, &solution.run_id, &solution.provenance.run_spec_digest)?;
+    }
+    Ok(())
+}
+
+fn read_solution_run_owner(
+    root: &std::path::Path,
+    run_id: &str,
+    run_spec_digest: &str,
+) -> Result<FmsRunIntent> {
+    crate::repository_path::validate_store_id(run_id)?;
+    if !fullmag_quantities::is_canonical_sha256(run_spec_digest) {
+        bail!("solution tensor requires a canonical RunSpec owner digest");
+    }
+    let path =
+        crate::repository_path::checked_path(root, &format!("runs/{run_id}/run_intent.json"))?;
+    let mut bytes = Vec::new();
+    std::fs::File::open(&path)
+        .context("solution tensor run intent is missing")?
+        .take(MAX_RUN_INTENT_BYTES + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_RUN_INTENT_BYTES {
+        bail!("solution tensor run intent exceeds metadata budget");
+    }
+    let intent: FmsRunIntent = serde_json::from_slice(&bytes)?;
+    intent.validate()?;
+    if intent.run_id != run_id || format!("sha256:{}", intent.payload_sha256) != run_spec_digest {
+        bail!("solution tensor RunSpec owner mismatch");
+    }
+    Ok(intent)
 }
 
 pub(crate) fn read_solution_tensor_artifact(
