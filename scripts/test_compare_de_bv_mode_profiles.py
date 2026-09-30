@@ -6,7 +6,7 @@ import numpy as np
 
 from compare_de_bv_mode_profiles import (
     bind_mesh, contained, consistent_inner_product, normalized_overlap,
-    pack_single_film_mesh, tetra_volumes,
+    pack_single_film_mesh, tetra_volumes, validate_record_parameters, load_record,
 )
 from fullmag.meshing._gmsh_types import MeshData
 
@@ -70,6 +70,54 @@ class ProfileMetricTests(unittest.TestCase):
         self.assertEqual(bind_mesh(mesh, fp).topology_fingerprint_v3(), fp)
         with self.assertRaises(ValueError):
             pack_single_film_mesh(replace(mesh, element_markers=np.array([2,1])))
+
+    def test_comparison_material_and_geometry_are_bound_to_actual_metadata(self):
+        import copy
+        model = {"schema": "fullmag.de-smoke.v1", "orientation": "M0=x,k=y,normal=z",
+                 "outer_boundary_kind": "poisson_dirichlet", "dispersion_geometry": "damon_eshbach",
+                 "film_thickness_m": 1e-8, "exchange_stiffness_j_per_m": 13e-12,
+                 "saturation_magnetization_a_per_m": 800000., "gamma0_m_per_a_s": 221100.,
+                 "external_induction_t": .1, "mu0_t_m_a": 4*np.pi*1e-7}
+        metadata = {"problem_meta": {"runtime_metadata": {"de_smoke": model}}}
+        record = {"geometry": "damon_eshbach", "parameters": {
+            "film_thickness_m": 1e-8, "exchange_stiffness_j_per_m": 13e-12,
+            "saturation_magnetisation_a_per_m": 800000., "gamma0_rad_s_per_a_m": 221100.,
+            "bias_field_a_per_m": .1/(4*np.pi*1e-7)}}
+        validate_record_parameters(record, metadata)
+        for key in record["parameters"]:
+            for bad in (0, True, float("nan"), record["parameters"][key]*1.001):
+                with self.subTest(key=key, bad=bad):
+                    changed = copy.deepcopy(record); changed["parameters"][key] = bad
+                    with self.assertRaises(ValueError): validate_record_parameters(changed, metadata)
+        for key, value in (("orientation", "M0=x,k=x,normal=z"),
+                           ("outer_boundary_kind", "robin"), ("dispersion_geometry", "backward_volume")):
+            with self.subTest(key=key):
+                changed = copy.deepcopy(metadata); changed["problem_meta"]["runtime_metadata"]["de_smoke"][key] = value
+                with self.assertRaises(ValueError): validate_record_parameters(record, changed)
+        with self.assertRaises(ValueError): validate_record_parameters(record, {})
+        record["geometry"] = "backward_volume"
+        model.update(orientation="M0=x,k=x,normal=z", dispersion_geometry="backward_volume")
+        validate_record_parameters(record, metadata)
+
+    def test_record_loader_requires_unique_hash_binding_of_metadata_bytes(self):
+        import hashlib
+        import tempfile
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); case = root / "pilot"; case.mkdir()
+            metadata = case / "metadata.json"; metadata.write_bytes(b"{}")
+            digest = hashlib.sha256(b"{}").hexdigest()
+            record = {"run_path": str(root), "pilot": "pilot", "artifact_sha256": {}}
+            with self.assertRaisesRegex(ValueError, "exactly one actual run metadata"):
+                load_record(record)
+            record["artifact_sha256"] = {"pilot/metadata.json": digest, "pilot/./metadata.json": digest}
+            with self.assertRaisesRegex(ValueError, "exactly one actual run metadata"):
+                load_record(record)
+            record["artifact_sha256"] = {"pilot/metadata.json": "a"*64}
+            # Model mutation between the first hash check and parser read is rejected.
+            with patch("compare_de_bv_mode_profiles.sha256", return_value="a"*64):
+                with self.assertRaisesRegex(ValueError, "metadata changed"):
+                    load_record(record)
 
     def test_artifact_path_cannot_leave_case(self):
         root = Path.cwd()

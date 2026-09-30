@@ -1246,3 +1246,26 @@ Poprawka C++: WIP, managed runtime NOT VERIFIED; brak nowego solve.
 
 Interpretowane regresje słabej postaci: 10 PASS, w tym jednostronna
 normalizacja oraz jawna macierz C^H z Dirichletem. To nie wykonanie C++.
+
+## Integralność parametrów diagnozy archiwalnej
+
+Parametry referencji i kontroli Poissona odczytane z rekordu porównania muszą
+odpowiadać hash-bound `metadata.json` tego samego runu. Kontrolujemy
+magnetyzację nasycenia [A/m], sztywność wymiany [J/m], stałą żyromagnetyczną
+[m/(A s)], grubość filmu [m], pole bias [A/m], orientację DE/BV i zewnętrzny
+warunek Dirichleta. Pole bias odtwarza się z indukcji [T] i przenikalności
+próżni [T m/A]. Tolerancja 32 epsilon maszynowych dotyczy tylko roundoff
+przeliczenia jednostek; nie jest tolerancją dopasowania fizycznego.
+Brakujące, niezgodne i niefinitywne parametry odrzucamy przed obliczeniem.
+Konieczny jest jeden jawny hash metadanych; sprawdzane są dokładnie bajty
+przekazane do parsera. Kontrola dotyczy jednego uniform-film DE-SMOKE;
+nie rozszerza zakresu na niejednorodne materiały ani dowolną równowagę.
+
+Regresja: zgodny rekord DE/BV jest akceptowany, zmiana każdego parametru,
+orientacji lub warunku zewnętrznego jest odrzucana. Ponowna kontrola 19
+archiwów zachowuje diagnozę 13 spójnych i 6 niespójnych par pól; nie jest
+nowym wykonaniem solvera ani dowodem zbieżności.
+
+| Source map ID | Źródło | Symbol |
+|---|---|---|
+| source-archived-run-parameters | `scripts/compare_de_bv_mode_profiles.py` | `validate_record_parameters` |

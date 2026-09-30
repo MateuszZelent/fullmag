@@ -101,12 +101,53 @@ def sha256(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def validate_record_parameters(record, metadata):
+    """Bind diagnostic SI parameters to the actual uniform-film run metadata."""
+    try:
+        model = metadata["problem_meta"]["runtime_metadata"]["de_smoke"]
+        geometry = record["geometry"]
+        orientations = {"damon_eshbach": "M0=x,k=y,normal=z",
+                        "backward_volume": "M0=x,k=x,normal=z"}
+        if (geometry not in orientations or model["schema"] != "fullmag.de-smoke.v1"
+                or model["orientation"] != orientations[geometry]
+                or model["outer_boundary_kind"] != "poisson_dirichlet"
+                or model.get("dispersion_geometry", geometry) != geometry):
+            raise ValueError("comparison geometry differs from actual DE-SMOKE metadata")
+        fields = {
+            "film_thickness_m": "film_thickness_m",
+            "exchange_stiffness_j_per_m": "exchange_stiffness_j_per_m",
+            "saturation_magnetisation_a_per_m": "saturation_magnetization_a_per_m",
+            "gamma0_rad_s_per_a_m": "gamma0_m_per_a_s",
+        }
+        def positive(value):
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not np.isfinite(value) or value <= 0:
+                raise ValueError("invalid actual or declared uniform-film SI parameter")
+            return float(value)
+        expected = {key: positive(model[source]) for key, source in fields.items()}
+        expected["bias_field_a_per_m"] = positive(model["external_induction_t"]) / positive(model["mu0_t_m_a"])
+        for key, value in expected.items():
+            declared = positive(record["parameters"][key])
+            if not np.isclose(declared, value, rtol=32*np.finfo(float).eps, atol=0):
+                raise ValueError("comparison parameter differs from actual run: " + key)
+    except (KeyError, TypeError) as error:
+        raise ValueError("missing uniform-film comparison parameter metadata") from error
+
+
 def load_record(record):
     run = Path(record["run_path"]).resolve()
     case = contained(run, record["pilot"])
     for relative, expected in record["artifact_sha256"].items():
         if sha256(contained(run, relative)) != expected:
             raise ValueError("comparison input hash mismatch")
+    metadata_path = contained(case, "metadata.json")
+    metadata_keys = [key for key in record["artifact_sha256"]
+                     if contained(run, key) == metadata_path]
+    if len(metadata_keys) != 1:
+        raise ValueError("comparison must bind exactly one actual run metadata file")
+    metadata_bytes = metadata_path.read_bytes()
+    if hashlib.sha256(metadata_bytes).hexdigest() != record["artifact_sha256"][metadata_keys[0]]:
+        raise ValueError("actual run metadata changed during comparison loading")
+    validate_record_parameters(record, json.loads(metadata_bytes))
     result = json.loads((run / "run-result.json").read_text(encoding="utf-8"))
     if result.get("status") != "completed_unqualified":
         raise ValueError("only accepted completed archived runs may be compared")
