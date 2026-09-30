@@ -165,3 +165,7 @@ pamięci i wszystkich lane'ów pozostają otwarte. P6 wynosi **52%**.
 43. [Lokalna bramka właściciela typed tensorów](43-local-pinned-tensor-owner-barrier.md)
     — owner przed publication/replay/recovery/GC, wspólny bounded reader;
     source check/review PASS, regresje NOT RUN, materializer/API/UI nadal otwarte.
+
+44. [Opis pola i wycinek z przypiętego tensora](44-pinned-tensor-field-binding.md)
+    — immutable binding w tensor root i odczyt pola przez exact SolutionSet owner;
+    producer hookup, pełny materializer, API/UI i runtime nadal otwarte.
