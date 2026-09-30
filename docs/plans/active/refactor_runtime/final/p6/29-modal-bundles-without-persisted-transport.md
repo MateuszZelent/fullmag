@@ -102,3 +102,14 @@ i nie hashowano niezależnie wszystkich plików wyjściowych.
 Późniejsze poprawki walidatora Python mają AST/review PASS, lecz nie są
 objęte tym receipt; zostały ujęte w kolejnym snapshotcie COW. Testy NOT RUN,
 browser, rzeczywisty modal runtime i scientific qualification NOT VERIFIED.
+
+## Kontrola ostrzeżeń React Doctor
+
+Hook commita `745235ea1f26dac15dd6c926219417cd24ad0c68` zakończył się exit 0.
+Skan czterech staged plików React: score 82, trzy ostrzeżenia wydajności.
+Porównanie pełnych funkcji `duplicateStableIds`,
+`fieldSweepSamplesMatchSpectrum` i `singleCrossArtifactRevision` z rodzicem
+`e889e6e2ed72494d71b33db24d137ed6796d1b7c` potwierdza, że ich treść jest
+niezmieniona. Ostrzeżenia o filter/map i includes odnoszą się do istniejącego
+kodu. Nie wykonywano niezwiązanych zmian ani ponownego niezmienionego skanu.
+Ten wynik nie zastępuje dowodu zachowania wykresów w przeglądarce.
