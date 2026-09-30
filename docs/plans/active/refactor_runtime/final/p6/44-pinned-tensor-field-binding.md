@@ -75,3 +75,8 @@ API/generated client i consumer istniejącego UI oraz bramki runtime/P7/P8.
 
 Kontrakty: [przypięty tensor](../../../../../specs/pinned-solution-tensor-v1.md)
 i [ADR 0029](../../../../../adr/0029-analysis-result-dataset-and-slice-selection.md).
+
+Aktualizacja po przyroście 45: zgodne rozszerzenie `layout.field_semantics`
+w codec v1 zastąpiło planowany codec v2. Producent i zapis tensoru zostały
+podłączone w [checkpointcie 45](45-recorded-fem-state-tensor-materializer.md);
+powyższy opis braku writerów przedstawia stan przyrostu 44.

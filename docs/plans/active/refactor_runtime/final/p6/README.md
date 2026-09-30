@@ -169,3 +169,7 @@ pamięci i wszystkich lane'ów pozostają otwarte. P6 wynosi **52%**.
 44. [Opis pola i wycinek z przypiętego tensora](44-pinned-tensor-field-binding.md)
     — immutable binding w tensor root i odczyt pola przez exact SolutionSet owner;
     producer hookup, pełny materializer, API/UI i runtime nadal otwarte.
+
+45. [Binarny tensor zapisanego pola FEM P1](45-recorded-fem-state-tensor-materializer.md)
+    — wersjonowany opis producenta, walidacja accepted planu i chunky w tym samym
+    SolutionSet; pełny MaterializedDataset, API/UI i runtime nadal otwarte.
