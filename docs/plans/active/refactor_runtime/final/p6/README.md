@@ -133,3 +133,7 @@ pamięci i wszystkich lane'ów pozostają otwarte. P6 wynosi **52%**.
 35. [Leniwa historia rewizji SolutionSet](35-lazy-solution-revision-history.md)
     — katalog ścieżek i walidacja sąsiadującej pary zamiast parsed historii;
     kontrola źródeł PASS, testy i pomiar RAM otwarte.
+
+36. [Seekable preflight ZIP](36-seekable-zip-preflight.md)
+    — brak kopii compressed archive, bounded metadata scan i actual length;
+    review i kontrola źródeł PASS, decoded staging i RAM nadal otwarte.

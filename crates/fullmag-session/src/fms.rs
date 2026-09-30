@@ -45,13 +45,14 @@
 
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
-use std::io::{Cursor, Read, Seek, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Component, Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use zip::write::SimpleFileOptions;
 use zip::CompressionMethod;
 
+use crate::archive_source::ArchiveSource;
 use crate::archive_document::{ArchiveFileSnapshot, MAX_CONTROL_DOCUMENT_BYTES};
 use crate::reachability::{self, ReachabilityMode, ReachabilityReport};
 use crate::store::SessionStore;
@@ -80,10 +81,17 @@ pub struct FmsPreflight {
 }
 
 const MAX_ZIP_ENTRIES: usize = 100_000;
+const MAX_ZIP_DIRECTORY_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_UNCOMPRESSED_ZIP_BYTES: u64 = 64 * 1024 * 1024 * 1024;
 
+struct ZipDirectoryEntry {
+    name: String,
+    compressed_size: u64,
+    uncompressed_size: u64,
+}
+
 struct ZipDirectoryScan {
-    names: Vec<String>,
+    entries: Vec<ZipDirectoryEntry>,
     total_compressed: u64,
 }
 
@@ -1315,12 +1323,23 @@ fn archive_entry_size(data: &[u8]) -> Result<u64> {
 fn validate_export_entry_metadata(entries: Vec<(String, u64)>) -> Result<()> {
     let mut registry = HashSet::new();
     let mut limits = ArchiveLimitAccounting::default();
+    let mut directory_bytes = 0_u64;
     for (path, uncompressed_size) in entries {
         validate_portable_namespace_path(&path)?;
         if !registry.insert(portable_extraction_key(&path)) {
             anyhow::bail!("duplicate archive path or case-fold collision `{path}`");
         }
         limits.account_entry(uncompressed_size)?;
+        if path.len() > u16::MAX as usize {
+            bail!("ZIP entry name exceeds portable header limit");
+        }
+        // Fixed central header and room for all three ZIP64 u64 fields.
+        // Export has no entry comments or caller-supplied extra fields.
+        directory_bytes = directory_bytes.checked_add(46 + path.len() as u64 + 28)
+            .context("ZIP central directory budget overflow")?;
+        if directory_bytes > MAX_ZIP_DIRECTORY_BYTES {
+            bail!("ZIP central directory exceeds metadata budget");
+        }
     }
     Ok(())
 }
@@ -1352,18 +1371,24 @@ pub fn preflight_fms<R: Read + Seek>(
     reader: R,
     required_documents: &[&str],
 ) -> Result<FmsPreflight> {
-    let mut reader = reader;
-    let mut bytes = Vec::new();
-    reader.read_to_end(&mut bytes)?;
-    let scan = scan_zip_directory(&bytes)?;
-    let mut archive = zip::ZipArchive::new(Cursor::new(bytes))?;
+    let mut source = ArchiveSource::new(reader)?;
+    let scan = scan_zip_directory(&mut source)?;
+    source.seek(SeekFrom::Start(0))?;
+    let mut archive = zip::ZipArchive::new(source)?;
     let mut documents = HashMap::new();
-    if archive.len() != scan.names.len() {
+    if archive.len() != scan.entries.len() {
         anyhow::bail!("ZIP central directory entry count is inconsistent");
     }
 
-    for (index, name) in scan.names.iter().enumerate() {
+    for (index, metadata) in scan.entries.iter().enumerate() {
+        let name = &metadata.name;
         let mut entry = archive.by_index(index)?;
+        if entry.name_raw() != name.as_bytes()
+            || entry.size() != metadata.uncompressed_size
+            || entry.compressed_size() != metadata.compressed_size
+        {
+            bail!("ZIP entry metadata disagrees with validated central directory");
+        }
         if entry.is_symlink() {
             anyhow::bail!("symlink entries are not permitted (`{name}`)");
         }
@@ -1372,7 +1397,12 @@ pub fn preflight_fms<R: Read + Seek>(
         }
 
         let mut data = Vec::new();
-        entry.read_to_end(&mut data)?;
+        let read_limit = metadata.uncompressed_size.checked_add(1)
+            .context("ZIP entry read limit overflow")?;
+        (&mut entry).take(read_limit).read_to_end(&mut data)?;
+        if data.len() as u64 != metadata.uncompressed_size {
+            bail!("ZIP entry `{name}` actual uncompressed length differs from declaration");
+        }
         if let Some(expected_digest) = cas_digest_from_path(&name)? {
             let actual_digest = crate::cas::hex_sha256(&data);
             if actual_digest != expected_digest {
@@ -1427,106 +1457,146 @@ pub fn preflight_fms<R: Read + Seek>(
     })
 }
 
-fn scan_zip_directory(bytes: &[u8]) -> Result<ZipDirectoryScan> {
-    let eocd = bytes
-        .windows(4)
-        .rposition(|window| window == b"PK\x05\x06")
-        .context("ZIP end-of-central-directory record not found")?;
-    if eocd + 22 > bytes.len() {
-        anyhow::bail!("truncated ZIP end-of-central-directory record");
-    }
-
-    let standard_entry_count = u16_le(bytes, eocd + 10)? as u64;
-    let standard_directory_size = u32_le(bytes, eocd + 12)? as u64;
-    let standard_directory_offset = u32_le(bytes, eocd + 16)? as u64;
-    let (entry_count, directory_size, directory_offset) = if standard_entry_count == u16::MAX as u64
-        || standard_directory_size == u32::MAX as u64
-        || standard_directory_offset == u32::MAX as u64
+fn scan_zip_directory<R: Read + Seek>(source: &mut ArchiveSource<R>) -> Result<ZipDirectoryScan> {
+    // Search only the bounded EOF tail instead of scanning the full source.
+    let tail_length = source.len().min(22 + u16::MAX as u64);
+    let tail_offset = source.len() - tail_length;
+    let tail = source.read_at(tail_offset, tail_length as usize)?;
+    let eocd_in_tail = tail.windows(4).enumerate().rev().find_map(|(offset, signature)| {
+        if signature != b"PK\x05\x06" || offset + 22 > tail.len() {
+            return None;
+        }
+        let comment_length = u16::from_le_bytes([tail[offset + 20], tail[offset + 21]]) as usize;
+        (offset + 22 + comment_length == tail.len()).then_some(offset)
+    }).context("ZIP end-of-central-directory record not found or invalid comment length")?;
+    let eocd = tail_offset + eocd_in_tail as u64;
+    let standard = &tail[eocd_in_tail..eocd_in_tail + 22];
+    if u16_le(standard, 4)? != 0 || u16_le(standard, 6)? != 0
+        || u16_le(standard, 8)? != u16_le(standard, 10)?
     {
-        if eocd < 20 || &bytes[eocd - 20..eocd - 16] != b"PK\x06\x07" {
-            anyhow::bail!("ZIP64 locator not found");
-        }
-        let zip64_offset = u64_le(bytes, eocd - 12)? as usize;
-        if zip64_offset + 56 > bytes.len()
-            || &bytes[zip64_offset..zip64_offset + 4] != b"PK\x06\x06"
-        {
-            anyhow::bail!("ZIP64 end-of-central-directory record not found");
-        }
-        (
-            u64_le(bytes, zip64_offset + 32)?,
-            u64_le(bytes, zip64_offset + 40)?,
-            u64_le(bytes, zip64_offset + 48)?,
-        )
+        bail!("multi-disk ZIP archives are not supported");
+    }
+    let standard_entry_count = u16_le(standard, 10)? as u64;
+    let standard_directory_size = u32_le(standard, 12)? as u64;
+    let standard_directory_offset = u32_le(standard, 16)? as u64;
+    let locator = if eocd >= 20 {
+        source.read_at(eocd - 20, 20)?
     } else {
-        (
-            standard_entry_count,
-            standard_directory_size,
-            standard_directory_offset,
-        )
+        Vec::new()
     };
+    let has_zip64_locator = locator.get(..4) == Some(b"PK\x06\x07".as_slice());
+    let (entry_count, directory_size, directory_offset, metadata_start) =
+        if has_zip64_locator || standard_entry_count == u16::MAX as u64
+            || standard_directory_size == u32::MAX as u64
+            || standard_directory_offset == u32::MAX as u64
+        {
+            let locator_offset = eocd.checked_sub(20).context("ZIP64 locator not found")?;
+            if !has_zip64_locator {
+                bail!("ZIP64 locator not found");
+            }
+            if u32_le(&locator, 4)? != 0 || u32_le(&locator, 16)? != 1 {
+                bail!("multi-disk ZIP64 archives are not supported");
+            }
+            let zip64_offset = u64_le(&locator, 8)?;
+            let zip64 = source.read_at(zip64_offset, 56)?;
+            if &zip64[..4] != b"PK\x06\x06" || u64_le(&zip64, 4)? < 44 {
+                bail!("ZIP64 end-of-central-directory record not found");
+            }
+            let record_size = u64_le(&zip64, 4)?;
+            if record_size > MAX_ZIP_DIRECTORY_BYTES {
+                bail!("ZIP64 end record exceeds metadata budget");
+            }
+            let record_end = zip64_offset.checked_add(12)
+                .and_then(|offset| offset.checked_add(record_size))
+                .context("ZIP64 record size overflow")?;
+            if record_end > locator_offset {
+                bail!("ZIP64 record overlaps locator");
+            }
+            if u32_le(&zip64, 16)? != 0 || u32_le(&zip64, 20)? != 0
+                || u64_le(&zip64, 24)? != u64_le(&zip64, 32)?
+            {
+                bail!("multi-disk ZIP64 archives are not supported");
+            }
+            let count = u64_le(&zip64, 32)?;
+            let size = u64_le(&zip64, 40)?;
+            let offset = u64_le(&zip64, 48)?;
+            if (standard_entry_count != u16::MAX as u64 && standard_entry_count != count)
+                || (standard_directory_size != u32::MAX as u64 && standard_directory_size != size)
+                || (standard_directory_offset != u32::MAX as u64 && standard_directory_offset != offset)
+            {
+                bail!("ZIP64 and standard directory declarations disagree");
+            }
+            (count, size, offset, zip64_offset)
+        } else {
+            (standard_entry_count, standard_directory_size, standard_directory_offset, eocd)
+        };
 
     ArchiveLimitAccounting::validate_declared_entry_count(entry_count)?;
-    let directory_end = directory_offset
-        .checked_add(directory_size)
-        .context("ZIP central directory size overflow")?;
-    if directory_end > bytes.len() as u64 {
-        anyhow::bail!("truncated ZIP central directory");
+    if directory_size > MAX_ZIP_DIRECTORY_BYTES {
+        bail!("ZIP central directory exceeds metadata budget");
     }
-
-    let mut offset = directory_offset as usize;
-    let directory_end = directory_end as usize;
-    let mut names = Vec::with_capacity(entry_count as usize);
+    let directory_end = directory_offset.checked_add(directory_size)
+        .context("ZIP central directory size overflow")?;
+    if directory_end > metadata_start {
+        bail!("truncated or overlapping ZIP central directory");
+    }
+    let mut offset = directory_offset;
+    let mut entries = Vec::with_capacity(entry_count as usize);
     let mut seen_names = HashSet::new();
     let mut limits = ArchiveLimitAccounting::default();
-    let mut total_compressed = 0u64;
+    let mut total_compressed = 0_u64;
     for _ in 0..entry_count {
-        if offset + 46 > directory_end || &bytes[offset..offset + 4] != b"PK\x01\x02" {
-            anyhow::bail!("malformed ZIP central directory entry");
+        if offset.checked_add(46).is_none_or(|end| end > directory_end) {
+            bail!("malformed ZIP central directory entry");
         }
-        let mut compressed_size = u32_le(bytes, offset + 20)? as u64;
-        let mut uncompressed_size = u32_le(bytes, offset + 24)? as u64;
-        let name_len = u16_le(bytes, offset + 28)? as usize;
-        let extra_len = u16_le(bytes, offset + 30)? as usize;
-        let comment_len = u16_le(bytes, offset + 32)? as usize;
-        let entry_end = offset
-            .checked_add(46 + name_len + extra_len + comment_len)
+        let header = source.read_at(offset, 46)?;
+        if &header[..4] != b"PK\x01\x02" {
+            bail!("malformed ZIP central directory entry");
+        }
+        if u16_le(&header, 34)? != 0 {
+            bail!("multi-disk ZIP entries are not supported");
+        }
+        let mut compressed_size = u32_le(&header, 20)? as u64;
+        let mut uncompressed_size = u32_le(&header, 24)? as u64;
+        let name_length = u16_le(&header, 28)? as usize;
+        let extra_length = u16_le(&header, 30)? as usize;
+        let comment_length = u16_le(&header, 32)? as usize;
+        let variable_length = name_length + extra_length + comment_length;
+        let entry_end = offset.checked_add(46 + variable_length as u64)
             .context("ZIP central directory entry size overflow")?;
         if entry_end > directory_end {
-            anyhow::bail!("truncated ZIP central directory entry");
+            bail!("truncated ZIP central directory entry");
         }
-        let name = std::str::from_utf8(&bytes[offset + 46..offset + 46 + name_len])
-            .context("ZIP entry name is not valid UTF-8")?
-            .to_owned();
+        let variable = source.read_at(offset + 46, variable_length)?;
+        let name = std::str::from_utf8(&variable[..name_length])
+            .context("ZIP entry name is not valid UTF-8")?.to_owned();
         validate_portable_namespace_path(&name)?;
         if !seen_names.insert(portable_extraction_key(&name)) {
-            anyhow::bail!("duplicate ZIP entry or case-fold collision `{name}`");
+            bail!("duplicate ZIP entry or case-fold collision `{name}`");
         }
-        let extra = &bytes[offset + 46 + name_len..offset + 46 + name_len + extra_len];
-        let needs_zip64_uncompressed = uncompressed_size == u32::MAX as u64;
-        let needs_zip64_compressed = compressed_size == u32::MAX as u64;
-        if needs_zip64_uncompressed || needs_zip64_compressed {
+        let extra = &variable[name_length..name_length + extra_length];
+        let needs_uncompressed = uncompressed_size == u32::MAX as u64;
+        let needs_compressed = compressed_size == u32::MAX as u64;
+        if needs_uncompressed || needs_compressed {
             let (zip64_uncompressed, zip64_compressed) =
-                zip64_sizes(extra, needs_zip64_uncompressed, needs_zip64_compressed)?;
-            if uncompressed_size == u32::MAX as u64 {
-                uncompressed_size =
-                    zip64_uncompressed.context("ZIP64 uncompressed size is missing")?;
+                zip64_sizes(extra, needs_uncompressed, needs_compressed)?;
+            if needs_uncompressed {
+                uncompressed_size = zip64_uncompressed.context("ZIP64 uncompressed size is missing")?;
             }
-            if compressed_size == u32::MAX as u64 {
+            if needs_compressed {
                 compressed_size = zip64_compressed.context("ZIP64 compressed size is missing")?;
             }
         }
         limits.account_entry(uncompressed_size)?;
-        total_compressed = total_compressed.saturating_add(compressed_size);
-        names.push(name);
+        total_compressed = total_compressed.checked_add(compressed_size)
+            .context("compressed ZIP size overflow")?;
+        entries.push(ZipDirectoryEntry { name, compressed_size, uncompressed_size });
         offset = entry_end;
     }
     if offset != directory_end {
-        anyhow::bail!("ZIP central directory has trailing data");
+        bail!("ZIP central directory has trailing data");
     }
-    Ok(ZipDirectoryScan {
-        names,
-        total_compressed,
-    })
+    Ok(ZipDirectoryScan { entries, total_compressed })
 }
 
 fn zip64_sizes(
@@ -2088,6 +2158,131 @@ mod tests {
             }],
             coverage: Vec::new(),
         }
+    }
+
+    #[test]
+    fn scanner_reads_bounded_metadata_from_large_seekable_source() {
+        use std::cell::Cell;
+        use std::rc::Rc;
+        struct CountReads {
+            input: Cursor<Vec<u8>>,
+            bytes: Rc<Cell<usize>>,
+        }
+        impl Read for CountReads {
+            fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+                let count = self.input.read(buffer)?;
+                self.bytes.set(self.bytes.get() + count);
+                Ok(count)
+            }
+        }
+        impl Seek for CountReads {
+            fn seek(&mut self, position: SeekFrom) -> std::io::Result<u64> {
+                self.input.seek(position)
+            }
+        }
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        writer.start_file("project/large.bin", SimpleFileOptions::default()
+            .compression_method(CompressionMethod::Stored)).unwrap();
+        writer.write_all(&vec![31; 4 * 1024 * 1024]).unwrap();
+        let bytes = writer.finish().unwrap().into_inner();
+        let count = Rc::new(Cell::new(0));
+        let mut source = ArchiveSource::new(CountReads {
+            input: Cursor::new(bytes), bytes: count.clone(),
+        }).unwrap();
+        let scan = scan_zip_directory(&mut source).unwrap();
+        assert_eq!(scan.entries.len(), 1);
+        assert_eq!(scan.entries[0].uncompressed_size, 4 * 1024 * 1024);
+        assert!(count.get() < 128 * 1024);
+    }
+
+    #[test]
+    fn preflight_preserves_nonzero_input_position() {
+        let script = b"print('window')";
+        let archive = archive_with_entries(&test_workspace(script),
+            [("project/main.py".to_string(), script.to_vec())]);
+        let mut bytes = b"ignored prefix".to_vec();
+        let start = bytes.len();
+        bytes.extend(archive);
+        let mut input = Cursor::new(bytes);
+        input.set_position(start as u64);
+        let checked = preflight_fms(input, &[]).unwrap();
+        assert_eq!(checked.documents["project/main.py"], script);
+    }
+
+    #[test]
+    fn scanner_checks_comment_length_and_ignores_signature_inside_comment() {
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        writer.set_comment("comment PK\x05\x06 suffix");
+        let bytes = writer.finish().unwrap().into_inner();
+        let mut source = ArchiveSource::new(Cursor::new(bytes.clone())).unwrap();
+        assert!(scan_zip_directory(&mut source).unwrap().entries.is_empty());
+        let mut truncated = bytes;
+        truncated.pop();
+        let mut source = ArchiveSource::new(Cursor::new(truncated)).unwrap();
+        assert!(scan_zip_directory(&mut source).is_err());
+    }
+
+    #[test]
+    fn preflight_rejects_actual_size_mismatch_and_entry_disk_number() {
+        let script = b"print('size')";
+        let original = archive_with_entries(&test_workspace(script),
+            [("project/main.py".to_string(), script.to_vec())]);
+        let eocd = original.windows(4).rposition(|bytes| bytes == b"PK\x05\x06").unwrap();
+        let directory = u32_le(&original, eocd + 16).unwrap() as usize;
+        let mut offset = directory;
+        let target = loop {
+            let length = u16_le(&original, offset + 28).unwrap() as usize;
+            if &original[offset + 46..offset + 46 + length] == b"project/main.py" {
+                break offset;
+            }
+            offset += 46 + length + u16_le(&original, offset + 30).unwrap() as usize
+                + u16_le(&original, offset + 32).unwrap() as usize;
+        };
+        for declared in [script.len() as u32 - 1, script.len() as u32 + 1] {
+            let mut malformed = original.clone();
+            let local = u32_le(&malformed, target + 42).unwrap() as usize;
+            malformed[target + 24..target + 28].copy_from_slice(&declared.to_le_bytes());
+            malformed[local + 22..local + 26].copy_from_slice(&declared.to_le_bytes());
+            assert!(preflight_fms(Cursor::new(malformed), &[]).is_err());
+        }
+        let mut malformed = original;
+        malformed[target + 34..target + 36].copy_from_slice(&1_u16.to_le_bytes());
+        let mut source = ArchiveSource::new(Cursor::new(malformed)).unwrap();
+        assert!(scan_zip_directory(&mut source).err().unwrap().to_string().contains("multi-disk"));
+    }
+
+    fn empty_zip64_fixture() -> Vec<u8> {
+        let mut zip64 = vec![0_u8; 56];
+        zip64[..4].copy_from_slice(b"PK\x06\x06");
+        zip64[4..12].copy_from_slice(&44_u64.to_le_bytes());
+        let mut locator = vec![0_u8; 20];
+        locator[..4].copy_from_slice(b"PK\x06\x07");
+        locator[16..20].copy_from_slice(&1_u32.to_le_bytes());
+        let mut standard = vec![0_u8; 22];
+        standard[..4].copy_from_slice(b"PK\x05\x06");
+        standard[8..10].copy_from_slice(&u16::MAX.to_le_bytes());
+        standard[10..12].copy_from_slice(&u16::MAX.to_le_bytes());
+        standard[12..16].copy_from_slice(&u32::MAX.to_le_bytes());
+        standard[16..20].copy_from_slice(&u32::MAX.to_le_bytes());
+        [zip64, locator, standard].concat()
+    }
+
+    #[test]
+    fn scanner_rejects_zip64_overflow_overlap_and_metadata_budget() {
+        let bytes = empty_zip64_fixture();
+        let mut source = ArchiveSource::new(Cursor::new(bytes.clone())).unwrap();
+        assert!(scan_zip_directory(&mut source).unwrap().entries.is_empty());
+        for (offset, value) in [(4, u64::MAX), (40, MAX_ZIP_DIRECTORY_BYTES + 1),
+            (48, u64::MAX), (56 + 8, u64::MAX)] {
+            let mut malformed = bytes.clone();
+            malformed[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
+            let mut source = ArchiveSource::new(Cursor::new(malformed)).unwrap();
+            assert!(scan_zip_directory(&mut source).is_err());
+        }
+        let mut multiple_disks = bytes;
+        multiple_disks[16..20].copy_from_slice(&1_u32.to_le_bytes());
+        let mut source = ArchiveSource::new(Cursor::new(multiple_disks)).unwrap();
+        assert!(scan_zip_directory(&mut source).is_err());
     }
 
     #[test]

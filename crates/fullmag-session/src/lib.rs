@@ -15,6 +15,7 @@
 //!   to the serializable session format.
 
 mod archive_document;
+mod archive_source;
 pub mod capture;
 pub mod cas;
 pub mod communication_policy;
