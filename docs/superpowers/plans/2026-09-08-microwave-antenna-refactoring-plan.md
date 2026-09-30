@@ -1055,6 +1055,35 @@ napęd; pełne oddziaływania, niejednorodne siatki, solve/relax/run, mnożenie
 bazy przez prąd w runnerze oraz GPU nadal wymagają osobnych dowodów.
 T13 pozostaje otwarte.
 
+**Zamrożony spin w polu anteny FEM CPU 2026-09-30:** nowa recepta
+`just verify-fem-antenna-frozen-cpu` zakończyła się kodem 0. Natywny
+`fem_llg_time_domain_qualification` wykonał sześć przypadków na tej samej
+siatce tet4: Heun, RK4, RK23 i RK45 przy kroku stałym oraz RK23/RK45 z
+adaptacją. Węzeł 0 ma referencję $\mathbf m_0=(0,1,0)$ i maskę frozen;
+trzy pozostałe zaczynają od $(0.6,0,0.8)$. Wyłączono exchange/demag,
+zastosowano bias $10^4\,\mathrm{A/m}$ i sinusoidalną antenę o bazie
+$10^6\,\mathrm{A/(m\,A)}$, prądzie $0.02\,\mathrm A$, częstotliwości
+$1\,\mathrm{GHz}$, fazie $0.7$ oraz offsecie $0.2$.
+
+Raport `.fullmag/reports/fem-antenna-frozen/qualification.json` ma schemat
+`fem_antenna_frozen.v1`, status `recorded_unvalidated` i snapshot źródeł
+`b3617dc960fc17b57f8b80747c365c8959b2ffa497a4a97b65f120ca98c00eb3`.
+Porównanie tożsamości źródeł przed i po wykonaniu przeszło. Niezależny
+`scripts/validate_fem_antenna_frozen.py::validate` potwierdził 21 próbek na
+przypadek: zamrożony spin zachował dokładnie referencję, a swobodne spiny
+zgadzały się z analityczną trajektorią z całki pola (maksymalny błąd
+$1.293\times10^{-6}$, próg $5\times10^{-6}$). `H_drive` na węźle frozen i
+swobodnym zgadzał się z przebiegiem w zapisanym czasie do
+$10^{-7}\,\mathrm{A/m}$; `max_torque_Apm` odpowiadał wyłącznie swobodnym
+węzłom do $10^{-7}\,\mathrm{A/m}$. Adaptacja miała 4 odrzucenia RK23 oraz
+2 RK45. Walidator odrzucił celowo zmienioną magnetyzację frozen, pole,
+magnetyzację swobodną i torque.
+
+Jest to dowód natywnego CPU dla pojedynczej maski frozen i jednorodnego
+pola preprojected. Nie sprawdza jeszcze węzłów niemagnetycznych na siatce
+mieszanej, okresowych ograniczeń, pełnego pipeline ani GPU. Punkt o ochronie
+frozen spins i maski magnetycznej pozostaje zatem otwarty.
+
 ## T14. Domknąć OpenAPI, zasoby i realtime
 
 Uzupełnienie implementacyjne 2026-09-21: `SolvedAntennaDriveResource` ma

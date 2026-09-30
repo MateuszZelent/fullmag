@@ -1505,15 +1505,155 @@ void write_antenna_cpu_trajectories(const std::filesystem::path &output)
     std::puts("FEM antenna CPU trajectories recorded; independent validation required");
 }
 
+void write_antenna_frozen_cpu(const std::filesystem::path &output)
+{
+    const auto digest = qualification_source_snapshot_sha256();
+    std::ofstream file(output);
+    require(static_cast<bool>(file), "open frozen antenna output");
+    file << std::setprecision(17)
+         << "{\"schema_version\":\"fem_antenna_frozen.v1\","
+         << "\"status\":\"recorded_unvalidated\",\"device\":\"cpu\","
+         << "\"precision\":\"fp64\",\"source_snapshot_sha256\":\""
+         << digest << "\",\"cases\":[";
+    const std::array<std::pair<fullmag_fem_integrator, const char *>, 4> integrators{{
+        {FULLMAG_FEM_INTEGRATOR_HEUN, "heun"},
+        {FULLMAG_FEM_INTEGRATOR_RK4, "rk4"},
+        {FULLMAG_FEM_INTEGRATOR_RK23_BS, "rk23"},
+        {FULLMAG_FEM_INTEGRATOR_RK45_DP54, "rk45"},
+    }};
+    const std::array<uint8_t, kNodeCount> frozen_mask{{1, 0, 0, 0}};
+    bool first_case = true;
+    for (bool adaptive_policy : {false, true}) {
+        for (const auto &[integrator, name] : integrators) {
+            if (adaptive_policy && integrator != FULLMAG_FEM_INTEGRATOR_RK23_BS &&
+                integrator != FULLMAG_FEM_INTEGRATOR_RK45_DP54) continue;
+            auto initial = uniform_magnetization(0.6, 0.0, 0.8);
+            initial[0] = 0.0;
+            initial[1] = 1.0;
+            initial[2] = 0.0;
+            const auto reference = initial;
+            auto basis = uniform_magnetization(0.0, 0.0, 2e4);
+            fullmag_fem_regional_field_drive_desc drive{};
+            drive.abi_version = FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION;
+            drive.struct_size = sizeof(drive);
+            drive.stable_id_hash = 1;
+            drive.target.abi_version = FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION;
+            drive.target.struct_size = sizeof(drive.target);
+            drive.target.kind = FULLMAG_FEM_FIELD_TARGET_GLOBAL;
+            drive.spatial_profile.abi_version = FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION;
+            drive.spatial_profile.struct_size = sizeof(drive.spatial_profile);
+            drive.spatial_profile.kind = FULLMAG_FEM_SPATIAL_PROFILE_PREPROJECTED_NODAL;
+            drive.spatial_profile.preprojected_h_xyz_a_per_m = basis.data();
+            drive.spatial_profile.preprojected_h_value_count = basis.size();
+            drive.waveform.abi_version = FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION;
+            drive.waveform.struct_size = sizeof(drive.waveform);
+            drive.waveform.kind = FULLMAG_FEM_TIME_SINUSOIDAL;
+            drive.waveform.parameters.sinusoidal = {1e9, 0.7, 0.2};
+            drive.time_origin = FULLMAG_FEM_TIME_ABSOLUTE;
+            auto plan = base_plan(initial, 0.1, integrator, 5e-13);
+            plan.enable_exchange = 0;
+            plan.material.exchange_stiffness = 0.0;
+            plan.external_field_am[2] = 1e4;
+            plan.regional_field_drives = &drive;
+            plan.regional_field_drive_count = 1;
+            plan.frozen_mask = frozen_mask.data();
+            plan.frozen_mask_len = frozen_mask.size();
+            plan.frozen_reference_xyz = reference.data();
+            plan.frozen_reference_len = reference.size();
+            fullmag_fem_adaptive_config_v2 adaptive{};
+            adaptive.abi_version = FULLMAG_FEM_ADAPTIVE_CONFIG_V2_ABI_VERSION;
+            adaptive.struct_size = sizeof(adaptive);
+            adaptive.base.atol = 2e-10;
+            adaptive.base.rtol = 0.0;
+            adaptive.base.dt_initial = 5e-13;
+            adaptive.base.dt_min = 1e-20;
+            adaptive.base.dt_max = 5e-11;
+            adaptive.base.safety = 0.9;
+            adaptive.base.growth_limit = 2.0;
+            adaptive.base.shrink_limit = 0.2;
+            adaptive.base.max_reject = 80;
+            auto *backend = adaptive_policy
+                ? fullmag_fem_backend_create_v2(&plan, &adaptive)
+                : fullmag_fem_backend_create(&plan);
+            require(backend != nullptr, "create frozen antenna CPU backend");
+            require_requested_execution_lane(backend);
+            if (!first_case) file << ',';
+            first_case = false;
+            file << "{\"integrator\":\"" << name << "\",\"timestep_policy\":\""
+                 << (adaptive_policy ? "adaptive" : "fixed")
+                 << "\",\"basis_hz_per_a\":1e6,\"peak_current_a\":0.02,"
+                 << "\"bias_hz_a_per_m\":1e4,\"alpha\":0.1,"
+                 << "\"waveform\":{\"kind\":\"sinusoidal\",\"frequency_hz\":1e9,"
+                 << "\"phase_rad\":0.7,\"offset\":0.2},\"samples\":[";
+            auto record = [&](double time_s, double max_torque) {
+                const auto m = copy_field(backend, FULLMAG_FEM_OBSERVABLE_M, "frozen antenna m");
+                const auto h = copy_field(backend, FULLMAG_FEM_OBSERVABLE_H_DRIVE, "frozen antenna drive");
+                require(m[0] == reference[0] && m[1] == reference[1] && m[2] == reference[2],
+                    "antenna moved the frozen spin");
+                for (size_t i = 6; i < kFieldLength; ++i) {
+                    require(std::abs(m[i] - m[3 + i % 3]) < 5e-13,
+                        "free antenna macrospins lost nodewise uniformity");
+                }
+                for (size_t i = 3; i < kFieldLength; ++i) {
+                    require(std::abs(h[i] - h[i % 3]) < 1e-8,
+                        "frozen antenna drive lost nodewise uniformity");
+                }
+                if (time_s > 0.0) file << ',';
+                file << "{\"time_s\":" << time_s
+                     << ",\"m_frozen\":[" << m[0] << ',' << m[1] << ',' << m[2] << ']'
+                     << ",\"m_free\":[" << m[3] << ',' << m[4] << ',' << m[5] << ']'
+                     << ",\"h_drive_frozen_a_per_m\":[" << h[0] << ',' << h[1] << ',' << h[2] << ']'
+                     << ",\"h_drive_free_a_per_m\":[" << h[3] << ',' << h[4] << ',' << h[5] << ']'
+                     << ",\"max_torque_a_per_m\":" << max_torque << '}';
+            };
+            record(0.0, 0.0);
+            uint64_t accepted = 0;
+            uint64_t rejected = 0;
+            double previous = 0.0;
+            double requested = adaptive_policy ? 5e-11 : 5e-13;
+            for (size_t sample = 1; sample <= 20; ++sample) {
+                const double target = sample * 5e-11;
+                fullmag_fem_step_stats endpoint{};
+                do {
+                    fullmag_fem_step_stats stats{};
+                    const double dt = adaptive_policy
+                        ? std::min(requested, target - previous) : 5e-13;
+                    require(fullmag_fem_backend_step(backend, dt, &stats) == FULLMAG_FEM_OK,
+                        std::string("frozen antenna step: ") + last_error(backend));
+                    require(stats.time_seconds > previous && stats.time_seconds <= target + 1e-20,
+                        "frozen antenna clock invalid");
+                    previous = stats.time_seconds;
+                    requested = stats.dt_suggested;
+                    endpoint = stats;
+                    rejected += stats.rejected_attempts;
+                    require(++accepted < 200000, "frozen antenna step budget exceeded");
+                } while (adaptive_policy ? previous < target : accepted % 100 != 0);
+                record(endpoint.time_seconds, endpoint.max_torque_Apm);
+            }
+            fullmag_fem_backend_destroy(backend);
+            file << "],\"accepted_steps\":" << accepted
+                 << ",\"rejected_attempts\":" << rejected << '}';
+        }
+    }
+    file << "]}\n";
+    file.close();
+    require(static_cast<bool>(file), "write frozen antenna output");
+    std::puts("FEM antenna frozen-spin trajectories recorded; independent validation required");
+}
+
 } // namespace
 
 int main(int argc, char **argv)
 {
     require(
         argc == 2 || argc == 3,
-        "usage: fem_llg_time_domain_qualification OUTPUT_JSON [cpu|gpu|antenna-cpu]");
+        "usage: fem_llg_time_domain_qualification OUTPUT_JSON [cpu|gpu|antenna-cpu|antenna-frozen-cpu]");
     if (argc == 3 && std::string(argv[2]) == "antenna-cpu") {
         write_antenna_cpu_trajectories(argv[1]);
+        return 0;
+    }
+    if (argc == 3 && std::string(argv[2]) == "antenna-frozen-cpu") {
+        write_antenna_frozen_cpu(argv[1]);
         return 0;
     }
     if (argc == 3) {

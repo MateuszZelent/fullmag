@@ -204,6 +204,24 @@
       "path": "justfile",
       "symbol": "verify-fem-antenna-cpu-trajectories",
       "responsibility": "Kontenerowe wykonanie bramki antenowej CPU z tożsamością źródeł"
+    },
+    {
+      "id": "source29",
+      "path": "backends/fem/tests/llg_time_domain_qualification.cpp",
+      "symbol": "main",
+      "responsibility": "Sześć natywnych trajektorii CPU z zamrożonym spinem i aktywnym polem antenowym"
+    },
+    {
+      "id": "source30",
+      "path": "scripts/validate_fem_antenna_frozen.py",
+      "symbol": "validate",
+      "responsibility": "Niezależna kontrola nieruchomego spinu, aktywnego pola, trajektorii swobodnej i torque"
+    },
+    {
+      "id": "source31",
+      "path": "justfile",
+      "symbol": "verify-fem-antenna-frozen-cpu",
+      "responsibility": "Kontenerowe wykonanie bramki frozen-spin z tożsamością źródeł"
     }
   ],
   "public_api": {

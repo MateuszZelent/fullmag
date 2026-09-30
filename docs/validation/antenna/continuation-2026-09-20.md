@@ -1,11 +1,24 @@
 # Anteny mikrofalowe — stan i przekazanie do dalszej pracy
 
-Data bazowego przekazania: 2026-09-20; aktualizacja: 2026-09-22. Status całości:
+Data bazowego przekazania: 2026-09-20; aktualizacja: 2026-09-30. Status całości:
 **częściowa implementacja, odbiór produkcyjny otwarty**.
 
 ## 1. Punkt wznowienia i zakres tego dokumentu
 
-### Najnowszy checkpoint — kwalifikacja antenowego CPU, 2026-09-22
+### Najnowszy checkpoint — frozen spin pod anteną FEM CPU, 2026-09-30
+
+`just verify-fem-antenna-frozen-cpu` przeszła z kodem 0: sześć natywnych
+trajektorii CPU FP64, 126 próbek, integratory Heun/RK4/RK23/RK45 przy
+stałym kroku oraz RK23/RK45 adaptive. Raport:
+`.fullmag/reports/fem-antenna-frozen/qualification.json`, snapshot źródeł
+`b3617dc960fc17b57f8b80747c365c8959b2ffa497a4a97b65f120ca98c00eb3`.
+Spin zamrożony pozostał dokładnie nieruchomy mimo niezerowego pola anteny;
+trzy swobodne spiny i metryka torque zgodziły się z niezależnym wzorcem.
+Zakres, tolerancje i ograniczenia zapisano w T13 planu T00–T18.
+Najbliższa pozostała luka T13 to węzły niemagnetyczne i ograniczenia PBC
+na mieszanej siatce, a następnie publiczny solve/projection → runner → LLG.
+
+### Wcześniejszy checkpoint — kwalifikacja antenowego CPU, 2026-09-22
 
 Ten checkpoint aktualizuje historyczny opis poniżej. Ostatni commit przed
 rozszerzeniem obserwabli: `0a631d305b61fd426c9381063268faaac9f117b2`.
