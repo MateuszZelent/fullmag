@@ -6,6 +6,7 @@
 
 use std::{
     collections::{BTreeMap, HashMap},
+    io::Read,
     path::Path,
     sync::Arc,
 };
@@ -21,7 +22,7 @@ use sha2::{Digest, Sha256};
 use utoipa::{IntoParams, ToSchema};
 
 use crate::artifacts::{
-    read_json_artifact_value, require_current_live_artifact_dir, try_resolve_artifact_path,
+    require_current_live_artifact_dir, try_resolve_artifact_path,
 };
 use crate::error::ApiError;
 use crate::router_v2::handlers::analysis::frequency_domain::{
@@ -42,6 +43,9 @@ pub const ANALYSIS_RESULT_INDEX_SCHEMA_VERSION: &str = "fullmag.analysis.result_
 const DEFAULT_PAGE_LIMIT: usize = 100;
 const MAX_PAGE_LIMIT: usize = 500;
 const MAX_INLINE_AXIS_VALUES: usize = 256;
+// Transitional JSON adapters have a raw-byte budget. Large datasets belong on
+// the bounded binary data plane; this is not a bound on serde's parsed heap.
+const MAX_RESULT_ARTIFACT_BYTES: u64 = 64 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
@@ -1131,19 +1135,18 @@ async fn load_result_indices(state: &Arc<AppState>) -> Result<ResultIndexCollect
     let (run_id, default_stage_id) = current_result_identity(state).await?;
     let mut datasets = Vec::new();
 
-    if try_resolve_artifact_path(&artifact_dir, "eigen/field_sweep.v1.json")?.is_some() {
-        let digest = artifact_digest(&artifact_dir, "eigen/field_sweep.v1.json")?;
-        let payload = match decode_frequency_domain_artifact_payload(
-            "eigen/field_sweep.v1.json",
-            read_json_artifact_value(&artifact_dir, "eigen/field_sweep.v1.json")?,
-        )? {
-            FrequencyDomainJsonArtifactPayload::FieldSweep(payload) => payload,
-            _ => {
-                return Err(ApiError::internal(
-                    "eigen/field_sweep.v1 artifact decoded to an unexpected payload",
-                ));
-            }
-        };
+    if let Some((value, digest)) =
+        read_result_artifact_snapshot(&artifact_dir, "eigen/field_sweep.v1.json")?
+    {
+        let payload =
+            match decode_frequency_domain_artifact_payload("eigen/field_sweep.v1.json", value)? {
+                FrequencyDomainJsonArtifactPayload::FieldSweep(payload) => payload,
+                _ => {
+                    return Err(ApiError::internal(
+                        "eigen/field_sweep.v1 artifact decoded to an unexpected payload",
+                    ));
+                }
+            };
         datasets.push(build_field_sweep_index(
             payload,
             digest,
@@ -1151,38 +1154,36 @@ async fn load_result_indices(state: &Arc<AppState>) -> Result<ResultIndexCollect
             default_stage_id.as_str(),
         )?);
     }
-    if try_resolve_artifact_path(&artifact_dir, "eigen/spectrum.v3.json")?.is_some() {
-        let digest = artifact_digest(&artifact_dir, "eigen/spectrum.v3.json")?;
-        let payload = match decode_frequency_domain_artifact_payload(
-            "eigen/spectrum.v3.json",
-            read_json_artifact_value(&artifact_dir, "eigen/spectrum.v3.json")?,
-        )? {
-            FrequencyDomainJsonArtifactPayload::SpectrumV3(payload) => payload,
-            _ => {
-                return Err(ApiError::internal(
-                    "eigen/spectrum.v3 artifact decoded to an unexpected payload",
-                ));
-            }
-        };
+    if let Some((value, digest)) =
+        read_result_artifact_snapshot(&artifact_dir, "eigen/spectrum.v3.json")?
+    {
+        let payload =
+            match decode_frequency_domain_artifact_payload("eigen/spectrum.v3.json", value)? {
+                FrequencyDomainJsonArtifactPayload::SpectrumV3(payload) => payload,
+                _ => {
+                    return Err(ApiError::internal(
+                        "eigen/spectrum.v3 artifact decoded to an unexpected payload",
+                    ));
+                }
+            };
         datasets.push(build_spectrum_v3_index(
             payload,
             digest,
             &run_id,
             default_stage_id.as_str(),
         )?);
-    } else if try_resolve_artifact_path(&artifact_dir, "eigen/spectrum.v2.json")?.is_some() {
-        let digest = artifact_digest(&artifact_dir, "eigen/spectrum.v2.json")?;
-        let payload = match decode_frequency_domain_artifact_payload(
-            "eigen/spectrum.v2.json",
-            read_json_artifact_value(&artifact_dir, "eigen/spectrum.v2.json")?,
-        )? {
-            FrequencyDomainJsonArtifactPayload::Spectrum(payload) => payload,
-            _ => {
-                return Err(ApiError::internal(
-                    "eigen/spectrum.v2 artifact decoded to an unexpected payload",
-                ));
-            }
-        };
+    } else if let Some((value, digest)) =
+        read_result_artifact_snapshot(&artifact_dir, "eigen/spectrum.v2.json")?
+    {
+        let payload =
+            match decode_frequency_domain_artifact_payload("eigen/spectrum.v2.json", value)? {
+                FrequencyDomainJsonArtifactPayload::Spectrum(payload) => payload,
+                _ => {
+                    return Err(ApiError::internal(
+                        "eigen/spectrum.v2 artifact decoded to an unexpected payload",
+                    ));
+                }
+            };
         datasets.push(build_spectrum_v2_index(
             payload,
             digest,
@@ -1191,13 +1192,12 @@ async fn load_result_indices(state: &Arc<AppState>) -> Result<ResultIndexCollect
         )?);
     }
 
-    if try_resolve_artifact_path(&artifact_dir, "response/magnetic_response_sweep.v2.json")?
-        .is_some()
+    if let Some((value, digest)) =
+        read_result_artifact_snapshot(&artifact_dir, "response/magnetic_response_sweep.v2.json")?
     {
-        let digest = artifact_digest(&artifact_dir, "response/magnetic_response_sweep.v2.json")?;
         let payload = match decode_frequency_domain_artifact_payload(
             "response/magnetic_response_sweep.v2.json",
-            read_json_artifact_value(&artifact_dir, "response/magnetic_response_sweep.v2.json")?,
+            value,
         )? {
             FrequencyDomainJsonArtifactPayload::ResponseSweep(payload) => payload,
             _ => {
@@ -1214,15 +1214,11 @@ async fn load_result_indices(state: &Arc<AppState>) -> Result<ResultIndexCollect
         )?);
     }
 
-    if try_resolve_artifact_path(&artifact_dir, "analysis/spin_wave_response.gamma.v1.json")?
-        .is_some()
+    if let Some((value, digest)) =
+        read_result_artifact_snapshot(&artifact_dir, "analysis/spin_wave_response.gamma.v1.json")?
     {
-        let digest = artifact_digest(&artifact_dir, "analysis/spin_wave_response.gamma.v1.json")?;
-        let payload = serde_json::from_value::<SpinWaveGammaResource>(read_json_artifact_value(
-            &artifact_dir,
-            "analysis/spin_wave_response.gamma.v1.json",
-        )?)
-        .map_err(|error| ApiError::internal(format!("invalid gamma artifact: {error}")))?;
+        let payload = serde_json::from_value::<SpinWaveGammaResource>(value)
+            .map_err(|error| ApiError::internal(format!("invalid gamma artifact: {error}")))?;
         datasets.push(build_gamma_index(
             payload,
             digest,
@@ -1231,21 +1227,11 @@ async fn load_result_indices(state: &Arc<AppState>) -> Result<ResultIndexCollect
         )?);
     }
 
-    if try_resolve_artifact_path(
+    if let Some((value, digest)) = read_result_artifact_snapshot(
         &artifact_dir,
         "analysis/dynamic_structure_factor.1d.v1.json",
-    )?
-    .is_some()
-    {
-        let digest = artifact_digest(
-            &artifact_dir,
-            "analysis/dynamic_structure_factor.1d.v1.json",
-        )?;
-        let payload =
-            serde_json::from_value::<DynamicStructureFactorResource>(read_json_artifact_value(
-                &artifact_dir,
-                "analysis/dynamic_structure_factor.1d.v1.json",
-            )?)
+    )? {
+        let payload = serde_json::from_value::<DynamicStructureFactorResource>(value)
             .map_err(|error| ApiError::internal(format!("invalid DSF artifact: {error}")))?;
         datasets.push(build_dsf_index(
             payload,
@@ -3490,13 +3476,55 @@ fn dataset_summary(dataset: &ResultDatasetIndex) -> AnalysisResultDatasetSummary
     }
 }
 
-fn artifact_digest(artifact_dir: &Path, artifact_path: &str) -> Result<String, ApiError> {
-    let path = try_resolve_artifact_path(artifact_dir, artifact_path)?.ok_or_else(|| {
-        ApiError::not_found(format!("result artifact '{artifact_path}' was not found"))
+/// Read once, then derive both the decoded value and revision from those bytes.
+/// A pathname replaced between hash and decode must never pair two generations.
+fn read_result_artifact_snapshot(
+    artifact_dir: &Path,
+    artifact_path: &str,
+) -> Result<Option<(Value, String)>, ApiError> {
+    let Some(path) = try_resolve_artifact_path(artifact_dir, artifact_path)? else {
+        return Ok(None);
+    };
+    let file = std::fs::File::open(path).map_err(|error| {
+        ApiError::internal(format!(
+            "failed to open result artifact '{artifact_path}': {error}"
+        ))
     })?;
-    let bytes = std::fs::read(path)
-        .map_err(|error| ApiError::internal(format!("failed to read result artifact: {error}")))?;
-    Ok(format!("sha256:{:x}", Sha256::digest(bytes)))
+    if !file.metadata()?.is_file() {
+        return Err(ApiError::internal(format!(
+            "RESULT_ARTIFACT_NOT_REGULAR: '{artifact_path}' must be a regular file"
+        )));
+    }
+    decode_result_artifact_snapshot(file, artifact_path, MAX_RESULT_ARTIFACT_BYTES).map(Some)
+}
+
+fn decode_result_artifact_snapshot(
+    reader: impl Read,
+    artifact_path: &str,
+    byte_limit: u64,
+) -> Result<(Value, String), ApiError> {
+    // The extra byte detects growth beyond the budget without trusting metadata.
+    let mut bytes = Vec::new();
+    reader
+        .take(byte_limit + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| {
+            ApiError::internal(format!(
+                "failed to read result artifact '{artifact_path}': {error}"
+            ))
+        })?;
+    if bytes.len() as u64 > byte_limit {
+        return Err(ApiError::internal(format!(
+            "RESULT_ARTIFACT_BYTE_LIMIT: '{artifact_path}' exceeds the {byte_limit}-byte JSON adapter budget"
+        )));
+    }
+    let value = serde_json::from_slice(&bytes).map_err(|error| {
+        ApiError::internal(format!(
+            "failed to parse result artifact '{artifact_path}': {error}"
+        ))
+    })?;
+    let digest = format!("sha256:{:x}", Sha256::digest(&bytes));
+    Ok((value, digest))
 }
 
 fn derived_dataset_revision(
@@ -4185,6 +4213,124 @@ fn item_matches(
 mod tests {
     use super::*;
     use crate::router_v2::handlers::analysis::frequency_domain::FrequencyDomainArtifactExtras;
+
+    #[test]
+    fn artifact_snapshot_binds_raw_bytes_including_insignificant_whitespace() {
+        let first = br#"{"generation":1}"#;
+        let second = br#"{ "generation": 1 }"#;
+        let (value, revision) =
+            decode_result_artifact_snapshot(&first[..], "fixture.json", 100).unwrap();
+        let (other_value, other_revision) =
+            decode_result_artifact_snapshot(&second[..], "fixture.json", 100).unwrap();
+        assert_eq!(value, other_value);
+        assert_eq!(revision, format!("sha256:{:x}", Sha256::digest(first)));
+        assert_ne!(revision, other_revision);
+    }
+
+    #[test]
+    fn artifact_snapshot_reads_no_more_than_budget_plus_one_byte() {
+        let bytes = br#"{"generation":1}"#;
+        assert!(
+            decode_result_artifact_snapshot(&bytes[..], "fixture.json", bytes.len() as u64).is_ok()
+        );
+        let mut reader = std::io::Cursor::new(&bytes[..]);
+        let error = decode_result_artifact_snapshot(&mut reader, "fixture.json", 4).unwrap_err();
+        assert!(error.message.starts_with("RESULT_ARTIFACT_BYTE_LIMIT:"));
+        assert_eq!(reader.position(), 5);
+    }
+
+    #[test]
+    fn artifact_snapshot_rejects_truncated_json_and_read_errors() {
+        assert!(
+            decode_result_artifact_snapshot(&br#"{"generation":"#[..], "fixture.json", 100)
+                .is_err()
+        );
+        struct FailedRead;
+        impl Read for FailedRead {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "injected reader failure",
+                ))
+            }
+        }
+        let error = decode_result_artifact_snapshot(FailedRead, "fixture.json", 100).unwrap_err();
+        assert!(error.message.contains("injected reader failure"));
+    }
+
+    #[test]
+    fn artifact_snapshot_does_not_reopen_a_replaced_generation_after_read() {
+        struct TestFile(std::path::PathBuf);
+        impl Drop for TestFile {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_file(&self.0);
+            }
+        }
+        struct ReplaceOnEof {
+            file: std::fs::File,
+            path: std::path::PathBuf,
+            replaced: bool,
+        }
+        impl Read for ReplaceOnEof {
+            fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+                let count = self.file.read(buffer)?;
+                if count == 0 && !self.replaced {
+                    std::fs::write(&self.path, br#"{"generation":2}"#)?;
+                    self.replaced = true;
+                }
+                Ok(count)
+            }
+        }
+        let owned = TestFile(
+            std::env::temp_dir().join(format!("result-snapshot-{}.json", uuid::Uuid::new_v4())),
+        );
+        let original = br#"{"generation":1}"#;
+        std::fs::write(&owned.0, original).unwrap();
+        let reader = ReplaceOnEof {
+            file: std::fs::File::open(&owned.0).unwrap(),
+            path: owned.0.clone(),
+            replaced: false,
+        };
+        let (value, digest) = decode_result_artifact_snapshot(reader, "fixture.json", 100).unwrap();
+        assert_eq!(value["generation"], 1);
+        assert_eq!(digest, format!("sha256:{:x}", Sha256::digest(original)));
+        assert_eq!(
+            serde_json::from_slice::<Value>(&std::fs::read(&owned.0).unwrap()).unwrap()
+                ["generation"],
+            2
+        );
+    }
+
+    #[test]
+    fn dataset_and_projection_revisions_bind_the_snapshot_digest() {
+        let payload = gamma_projection_fixture();
+        let bytes = serde_json::to_vec(&payload).unwrap();
+        let mut changed_bytes = bytes.clone();
+        changed_bytes.push(b' ');
+        let (_, digest) =
+            decode_result_artifact_snapshot(&bytes[..], "gamma.json", MAX_RESULT_ARTIFACT_BYTES)
+                .unwrap();
+        let (_, changed_digest) = decode_result_artifact_snapshot(
+            &changed_bytes[..],
+            "gamma.json",
+            MAX_RESULT_ARTIFACT_BYTES,
+        )
+        .unwrap();
+        let first =
+            build_gamma_index(payload.clone(), digest.clone(), "run:test", "stage:test").unwrap();
+        let second =
+            build_gamma_index(payload, changed_digest.clone(), "run:test", "stage:test").unwrap();
+        assert_eq!(first.manifest.source_artifacts[0].revision, digest);
+        assert_eq!(second.manifest.source_artifacts[0].revision, changed_digest);
+        assert_ne!(
+            first.manifest.dataset_revision,
+            second.manifest.dataset_revision
+        );
+        for projection in first.projections.values() {
+            assert_eq!(projection.dataset_revision, first.manifest.dataset_revision);
+        }
+        assert!(!first.projections.is_empty());
+    }
 
     #[test]
     fn page_limit_is_bounded_and_finite_ranges_are_validated() {
