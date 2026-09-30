@@ -959,7 +959,8 @@ std::vector<SLEPcModalAcceptedMode> deduplicate_slepc_modes_by_overlap(
         }
         SLEPcModalAcceptedMode mode =
             candidate_modes[static_cast<std::size_t>(candidate.source_index)];
-        mode.mode_vector = candidate.mode;
+        // Normalized copies are only for overlap selection. Preserve the
+        // original coupled q/phi scale and its descriptor certificates.
         accepted_modes.push_back(std::move(mode));
     }
     return accepted_modes;
