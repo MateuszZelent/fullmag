@@ -1120,3 +1120,41 @@ test_dense_certificate_inventory_and_scope_are_strict.
 | `source-dense-row-preflight` | `scripts/validate_de_smoke_rows.py` | `validate_rows` | Dense path completeness, Gamma/nonzero operator scope and frozen residual admission |
 | `source-dense-contract-regression` | `scripts/test_de_smoke_dense_sampling.py` | `test_dense_certificate_inventory_and_scope_are_strict` | Reject loose or misplaced certificates and extra spectrum records |
 | `source-dense-input-regression` | `scripts/test_de_smoke_dense_sampling.py` | `test_dense_path_has_26_samples_and_one_shared_relaxation` | Public DE/BV KPath export and one shared source relaxation |
+
+
+## Niezależny pomiar fazy 19 archiwalnych modów DE/BV
+
+Narzędzie `scripts/audit_de_bv_periodic_seams.py` korzysta z jawnych
+periodic_node_pairs i translacji periodic_boundary_pairs w siatce.
+Loader `load_record` wiąże finalny porządek siatki z tożsamością
+opublikowanego pola, sprawdza hashe binarnego payloadu i oryginalny
+full descriptor residual ≤ 10⁻⁸. Odtwarzanie fizycznego pola z envelope
+wykorzystuje tę samą konwencję przestrzenną co eq-fem-dynamic-ansatz.
+Porównanie odbywa się na zadeklarowanych parach A→B, nie przez
+zgadywanie par na podstawie współrzędnych. Położenia muszą zgadzać
+się z translacją w granicach zapisanej tolerancji siatki.
+
+| Zakres | Wynik |
+|---|---|
+| DE: 9 modów, po 28 par magnetycznych | max defekt względny 3.227404597226726e-16 |
+| BV: 10 modów, po 28 par magnetycznych | max defekt względny 3.3852323788985243e-16 |
+| Świadomie odwrócony znak fazy | defekt 0.1598…1.68294 |
+| Świadomie pominięta faza | defekt 0.07997…0.95885 |
+| Regresje narzędzia interpretowanego | 7 PASS |
+
+Warunki: film 40 × 40 × 10 nm, Ms=800000 A/m, A=13 pJ/m,
+gamma0=221100 m/(A·s), B0=0.1 T w +x, PBC x/y, demag airbox
+z phi=0 na górze/dole, DE k_y i BV k_x, k=2…25 rad/µm.
+Python/ProblemIR i częstotliwości nie zostały zmienione. To diagnostyka
+historycznych FEM CPU pól, nie nowy solve, FEM GPU ani FDM.
+
+Wnioski: fazowe zszycie magnetycznych pól tych 19 modów jest zgodne
+z deklarowaną konwencją na jawnych parach. Ta kontrola nie tłumaczy
+całej różnicy względem analityki i nie dowodzi phi/airbox, zbieżności
+siatki ani kompletności pasm. Pair-based diagnostic nie jest wykonaniem
+nowego root-class-based Rust ani jego testów. Qualification NOT VERIFIED.
+
+| Source ID | Źródło | Symbol |
+|---|---|---|
+| source-archived-magnetic-pair-seams | `scripts/audit_de_bv_periodic_seams.py` | `magnetic_pair_seams` |
+| source-archived-bound-mode-loader | `scripts/compare_de_bv_mode_profiles.py` | `load_record` |
