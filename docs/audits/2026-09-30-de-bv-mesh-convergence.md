@@ -123,3 +123,83 @@ porównania COMSOL.
 Zapisano mesh-mode-profile-diagnostic-20260930.json przy manifeście
 runów, z SHA-256 czterech wejściowych artefaktów każdego runu.
 Kwalifikacja pozostaje NOT VERIFIED.
+
+
+## Aktualizacja: runtime #173 i kontrola deklarowanych warstw
+
+
+## Wynik
+
+Managed runtime #173, CPU/double/strict, demag aktywny, niezmieniony próg
+końcowy 1e-8. Wszystkie podane niżej częstotliwości pochodzą z nowych,
+zaakceptowanych runów i mają hash-bound parametry rzeczywistego modelu.
+Model bazowy: 12f90bd08be257116ed2797cf3e62c42d8f06202.
+
+| Geometria k=25 rad/µm | Siatka | f [GHz] | Różnica wobec n=0 [%] | eps_full |
+|---|---|---:|---:|---:|
+| damon_eshbach | L0 | 13.384204251 | -2.118376 | 2.452e-10 |
+| backward_volume | L0 | 9.664769493 | -0.981155 | 2.311e-10 |
+| damon_eshbach | L1 | 13.436508613 | -1.735863 | 1.926e-09 |
+| damon_eshbach | L2 | 13.578981799 | -0.693925 | 2.158e-10 |
+| backward_volume | L2 | 9.740140954 | -0.208949 | 2.079e-10 |
+| damon_eshbach | L3 | 13.596286127 | -0.567375 | 2.158e-10 |
+
+Niezależny Poisson na wszystkich sześciu parach magnetyzacja/potencjał:
+max 2.4492870683193024e-14; błędny znak źródła daje około 1.
+Dla pięciu pierwszych modów projekcja na jednorodny envelope w metryce
+consistent P1 wynosi 0.999889…0.999999. To diagnoza profilu, nie kompletności.
+L0 ma 191 magnetycznych Tet4, L1 354, L2 791; fingerprinty i hashe są
+w artefakcie profiles. Dodatkowy DE L3 daje 13.596286127 GHz.
+
+Wyniki wspierają wpływ rozdzielczości siatki na różnicę względem analityki.
+Nie dowodzą osiągniętej granicy ciągłej: analityka n=0 jest przybliżeniem,
+a przez grubość i airbox pozostają niezależne bramki.
+
+## Nieudane punkty — nie są częstotliwościami zaakceptowanymi
+
+- BV L1 EPS 1e-10: limit iteracji, estimate 5.07e-10.
+- BV L1 EPS 1e-9 i KSP 1e-12: kandydat 9.692659902 GHz ma
+  residual magnetyczny 2.896e-8, więc przekracza oryginalną bramkę 1e-8.
+  Kandydat nie został wykorzystany w tabeli ani na wykresie.
+- BV L3 EPS 1e-10 i KSP 1e-12: pierwszy podsolver SLEPc zawiódł;
+  drugie podokno nie dostarczyło kandydata w swoim zakresie.
+- Γ L0: sonda demagu passed (Ny około zera, Nz 0.9975062344),
+  ale kompletność okna failed: 48/50 podokien zakończonych, dwa SLEPc
+  diverged. Nie ma zaakceptowanego Γ ani dowodu pełnego benchmarku K0.
+
+## Nowy błąd metodologiczny: deklaracja warstw bez realizacji
+
+Wersjonowane wejście d68496b55eb36e1e89544ef9803e8e6a8f704d02 dodało
+żądania 3/6/9 warstw oraz kontrolę deklaracji w metadanych. 59 testów,
+15 subtests i walidacja dokładnej staged mapy źródeł przeszły.
+Rzeczywisty run DE L2 z żądaniem 6 miał jednak ten sam fingerprint co 3:
+sha256:6dbbfe1d48350c9a5b7eff15a91e351852ee46d2b2153a0efeeb34fbb0e1a3b6.
+Częstotliwość była identyczna. Free-tet Box nie realizuje dokładnej ekstruzji
+warstw; thin_film_tetrahedral wybiera ścieżkę swept jedynie dla ring.
+Źródło: packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py::should_use_swept.
+
+Poprawiono wrapper: dodatkowo mierzy rzeczywistą pionową rozpiętość Tet4
+w filmie z execution plan, wymaga pokrycia grubości i ograniczenia span do
+t/n (tolerancja geometryczna 1e-6 t). Run t6 jest teraz poprawnie odrzucany:
+max span 10 nm, żądany maksymalny span 1.666667 nm.
+To bramka rozdzielczości dla Tet4, nie dowód dokładnej liczby płaskich warstw.
+Oryginalnego receipt runu nie nadpisano: jego wcześniejszy sukces oznaczał
+solve i deklaracje, nie zrealizowane badanie przez grubość.
+
+## Następne działania
+
+1. Zrealizować lub jawnie odrzucać żądane warstwy Box w shared-domain
+   mesherze; nie zastępować tego sprawdzeniem samego metadata.
+2. Wyjaśnić SLEPc BV L1/L3: odróżnić EPS prefilter od końcowego residualu,
+   zbadać true KSP residual i stabilność original-pencil bez zmiany progu.
+3. Naprawić Γ: diverged empty subwindows i certyfikat kompletności.
+4. Dopiero z aktualnymi zaakceptowanymi modami: kontrola warstw/airboxu,
+   tracking, pełna ścieżka, A1/COMSOL oraz pozostałe bramki S00–S12.
+
+## Artefakty
+
+- C:\Users\Mateusz\.codex\visualizations\2026\09\14\01a09ee1-29e6-7d51-98f0-082c5539a0d6\de-bv-ten-20260930\coupled-scale-k25-six-comparison.json — SHA-256 8a9096e51d80c7b59b0b4abe04bea530ec9a6798392ef04d00b1c32d80830fd9
+- C:\Users\Mateusz\.codex\visualizations\2026\09\14\01a09ee1-29e6-7d51-98f0-082c5539a0d6\de-bv-ten-20260930\coupled-scale-k25-six-poisson.json — SHA-256 0043d505ffcd20714049f206bf2a7a9280c4211eccda28ea8162a68615f4508b
+- C:\Users\Mateusz\.codex\visualizations\2026\09\14\01a09ee1-29e6-7d51-98f0-082c5539a0d6\de-bv-ten-20260930\coupled-scale-k25-five-profiles.json — SHA-256 adace9dca47b7ab3db51f59da37c08719d56b47a2e2960b2b4fc1e5c9a1365ec
+- C:\Users\Mateusz\.codex\visualizations\2026\09\14\01a09ee1-29e6-7d51-98f0-082c5539a0d6\de-bv-ten-20260930\coupled-scale-k25-six-mesh-convergence.png — SHA-256 b3b492b630a86c344dac82375090a02f565b1491cb014096dfea4b5fd8c5ac5a
+- C:\Users\Mateusz\.codex\visualizations\2026\09\14\01a09ee1-29e6-7d51-98f0-082c5539a0d6\de-bv-ten-20260930\coupled-scale-k25-six-mesh-convergence.pdf — SHA-256 ada7d03d12821d2b70baec898b82678a96629d5d575129c577012777ac5c9c06

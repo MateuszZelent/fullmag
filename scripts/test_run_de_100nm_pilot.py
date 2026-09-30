@@ -295,11 +295,28 @@ class PilotTests(unittest.TestCase):
         with TemporaryDirectory() as temporary:
             case = Path(temporary)
             metadata = {"problem_meta": {"runtime_metadata": {
-                "de_smoke": {"through_thickness_elements": 6},
+                "de_smoke": {"through_thickness_elements": 6, "film_thickness_m": 10e-9},
                 "mesh_workflow": {"per_geometry": [{"through_thickness_elements": 6}]}}}}
+            nodes, cells = [], []
+            for layer in range(6):
+                z = -5e-9 + layer * 10e-9 / 6
+                start = len(nodes)
+                nodes.extend([[0, 0, z], [1e-9, 0, z], [0, 1e-9, z], [0, 0, z + 10e-9/6]])
+                cells.append(list(range(start, start + 4)))
+            metadata["execution_plan"] = {"backend_plan": {
+                "kind": "fem_eigen", "mesh": {"nodes": nodes, "elements": cells}}}
             path = case / "metadata.json"
             path.write_text(json.dumps(metadata))
-            self.assertEqual(pilot.validate_thickness_layers_metadata(case, "6")["resolved_layers"], 6)
+            report = pilot.validate_thickness_layers_metadata(case, "6")
+            self.assertTrue(report["thickness_resolution_verified"])
+            self.assertEqual(report["declared_layers"], 6)
+            # Metadata can claim six layers while the mesh still crosses the full film.
+            metadata["execution_plan"]["backend_plan"]["mesh"] = {
+                "nodes": [[0,0,-5e-9],[1e-9,0,-5e-9],[0,1e-9,-5e-9],[0,0,5e-9]],
+                "elements": [[0,1,2,3]]}
+            path.write_text(json.dumps(metadata))
+            with self.assertRaisesRegex(pilot.managed.BenchmarkError, "realized tetra mesh"):
+                pilot.validate_thickness_layers_metadata(case, "6")
             for value in (3, 6.0, True):
                 metadata["problem_meta"]["runtime_metadata"]["mesh_workflow"]["per_geometry"][0]["through_thickness_elements"] = value
                 path.write_text(json.dumps(metadata))

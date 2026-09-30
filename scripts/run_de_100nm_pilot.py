@@ -18,7 +18,7 @@ import time
 
 import run_comsol_dispersion_benchmark as managed
 from validate_de_smoke_rows import validate_rows
-from validate_de_physical_potential import validate_physical_potential
+from validate_de_physical_potential import validate_physical_potential, _extract_mesh
 import de_smoke_model_input as model_input
 
 MODEL = "examples/fem_de_film_100nm_numeric_pilot.py"
@@ -180,7 +180,8 @@ def validate_thickness_layers_metadata(case, requested):
     if requested not in THICKNESS_LAYERS_CHOICES:
         raise managed.BenchmarkError("unsupported thickness layers")
     try:
-        runtime = json.loads((case / "metadata.json").read_text(encoding="utf-8"))["problem_meta"]["runtime_metadata"]
+        metadata = json.loads((case / "metadata.json").read_text(encoding="utf-8"))
+        runtime = metadata["problem_meta"]["runtime_metadata"]
         declared = runtime["de_smoke"]["through_thickness_elements"]
         geometries = runtime["mesh_workflow"]["per_geometry"]
         actual = geometries[0]["through_thickness_elements"] if len(geometries) == 1 else None
@@ -190,8 +191,29 @@ def validate_thickness_layers_metadata(case, requested):
         raise managed.BenchmarkError("missing or malformed thickness mesh metadata") from error
     if not matches:
         raise managed.BenchmarkError("model ignored or changed the requested thickness layers")
-    return {"requested_layers": int(requested), "resolved_layers": actual,
-            "scope": "requested_through_thickness_mesh_settings", "qualification": "NOT VERIFIED"}
+    thickness = runtime["de_smoke"].get("film_thickness_m")
+    if type(thickness) not in (int, float) or not math.isfinite(thickness) or thickness <= 0:
+        raise managed.BenchmarkError("missing physical film thickness")
+    nodes, elements = _extract_mesh(metadata)
+    tolerance = thickness * 1e-6
+    slab = [tuple(nodes[i][2] for i in cell) for cell in elements
+            if all(abs(nodes[i][2]) <= thickness / 2 + tolerance for i in cell)]
+    if not slab:
+        raise managed.BenchmarkError("no realized magnetic-film tetrahedra")
+    low = min(min(z) for z in slab)
+    high = max(max(z) for z in slab)
+    maximum_span = max(max(z) - min(z) for z in slab)
+    if (abs(high - low - thickness) > tolerance or maximum_span <= 0
+            or maximum_span > thickness / int(requested) + tolerance):
+        raise managed.BenchmarkError(
+            "realized tetra mesh does not meet requested thickness resolution: "
+            f"max vertical span {maximum_span:g} m, target {thickness / int(requested):g} m")
+    return {"requested_layers": int(requested), "declared_layers": actual,
+            "maximum_vertical_element_span_m": maximum_span,
+            "maximum_requested_vertical_span_m": thickness / int(requested),
+            "thickness_resolution_verified": True,
+            "scope": "uniform-film tetra vertical-span bound; not an exact extrusion layer count",
+            "qualification": "NOT VERIFIED"}
 
 
 def execute(context, output, command, model_sha, timeout_seconds=managed.DEFAULT_TIMEOUT_SECONDS, *, pilot="de100", model_identity=None, dense_oracle=False, solver_rtol=None, eps_prefilter=None, shifted_ksp_rtol=None, gmres_restart=None, mesh_level=None, thickness_layers=None):

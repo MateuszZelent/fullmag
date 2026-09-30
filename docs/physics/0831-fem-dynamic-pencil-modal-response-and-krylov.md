@@ -1299,3 +1299,17 @@ pól i źródeł oraz odrębnej zbieżności airboxu i kompletności widma.
 | source-de-thickness-model | `examples/fem_de_smoke_numeric.py` | `THICKNESS_LAYERS` |
 | source-de-thickness-wrapper | `scripts/run_de_100nm_pilot.py` | `validate_thickness_layers_metadata` |
 | source-de-thickness-regression | `scripts/test_de_bv_25_model.py` | `test_thickness_convergence_preserves_physics` |
+
+
+### Odbiór rzeczywistej rozdzielczości przez grubość
+
+Sam zapis `through_thickness_elements` nie dowodzi realizacji. Pomiar DE
+L2 z żądaniem 6 zachował fingerprint siatki wariantu 3 i tę samą częstotliwość.
+Wrapper dodatkowo odczytuje rzeczywiste węzły i Tet4 z execution plan.
+Dla jednorodnego filmu w płaszczyźnie xy wymaga pokrycia pełnej grubości
+oraz maksymalnej rozpiętości Tet4 w osi z nie większej niż grubość podzielona
+przez żądanie (z tolerancją geometryczną 1e-6 grubości). To dolna kontrola
+rozdzielczości unstructured Tet4, nie certyfikat dokładnej liczby płaskich
+warstw. Deklaracja i wykonana siatka są raportowane oddzielnie.
+Obecna ścieżka free-tet dla Box nie realizuje dokładnej ekstruzji warstw;
+nie wolno interpretować samego metadata jako wykonanego badania warstw.
