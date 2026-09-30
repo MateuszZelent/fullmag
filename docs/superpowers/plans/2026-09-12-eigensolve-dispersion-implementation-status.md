@@ -1,5 +1,12 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
+## #185 running po odtworzeniu nightly
+
+- Job #185 / a5aaa693ed3f4f3db64bf7823445097f, fem-cpu-slepc-runtime-v2: kontroler 3576 potwierdził running. Source digest 2a08f6022a6c5f32e68bbc46e5cc39534aa6f3f28ff501120b74ccb31888886c; kapsuła runs/eigensolve-dispersion-plan-20260-c5dfad6d7f548079/1e65a3d16374417193d39f07597bba71/source.
+- Snapshot HEAD a968a7867a93ef52791a90aede367edc73952446 wraz z WIP i jawnym tracking_mass.rs; obejmuje nową kontrolę kompletności wszystkich opublikowanych modów. Nightly cache odtworzony z image i sprawdzony offline jako użytkownik workera.
+- Konfiguracja i wyniki obserwatora wyłącznie w scientific-batches/nonzero-k-validation/a5aaa693ed3f4f3db64bf7823445097f. Źródła obserwuje klient worktree z -B, runtime korzysta z kapsuły. #184 oraz sesja 18780 terminalne failed/exit1; nie restartowano starego joba.
+- Po buildzie Γ L2/t3, następnie DE/BV k25 L2/t3/t6/t9. Brak nowych częstotliwości i dowodu kompilacji w chwili checkpointu; sukces builda nie zamyka nauki, a cały S00–S12 pozostaje otwarty.
+
 ## S12 — #184 terminalny; nightly odtworzony offline
 
 - #184 failed/exit2 przed kompilacją: pusty montowany cache rustup; nightly obecny w obrazie nie był dostępny pod RUSTUP_HOME workera. Kontroler 18780 terminalny exit1. Nie ma nowych częstotliwości.
