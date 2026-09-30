@@ -2792,6 +2792,9 @@ pub struct TensorDescriptor {
     pub endian: String,
     /// CAS object refs for each chunk.
     pub chunks: Vec<TensorChunk>,
+    /// Optional producer metadata, immutable under the tensor root CAS identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub field_binding: Option<crate::solution_tensor_field::TensorFieldBinding>,
 }
 
 impl TensorDescriptor {
@@ -2804,6 +2807,7 @@ impl TensorDescriptor {
             logical_axes: axes,
             endian: "little".into(),
             chunks: Vec::new(),
+            field_binding: None,
         }
     }
 

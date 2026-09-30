@@ -252,6 +252,9 @@ pub(crate) fn validate_solution_tensor_descriptor(descriptor: &TensorDescriptor)
     if cursor != total_bytes {
         bail!("solution tensor chunks do not cover shape");
     }
+    if let Some(binding) = &descriptor.field_binding {
+        binding.validate_for_tensor(descriptor)?;
+    }
     Ok(())
 }
 

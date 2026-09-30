@@ -83,6 +83,30 @@ pozostają backward-compatible i nie zmieniają formatu istniejących artefaktó
 - `cargo test -p fullmag-api frequency_domain`, focused Vitest, typecheck,
   lint i architecture/API hygiene.
 
+## Rozwinięcie: przypięte metadane pola w CAS
+
+Tensor wyniku może zawierać opcjonalny, wersjonowany `field_binding`.
+Dokładny SHA-256 rootu obejmuje zarówno dotychczasowy `TensorDescriptor`,
+jak i opis pola producenta; nie tworzy się osobnego magazynu Results ani
+referencji do aktywnego runtime'u. Odczyt pola wymaga przypiętego właściciela
+SolutionSet i zgodnej tożsamości dataset/sample/item/field. Dla pary real/imag
+obie płaszczyzny mają tego samego właściciela, grupę i opis semantyczny.
+
+Pole nie dodaje krawędzi CAS: jedyne payloady pozostają w `chunks`.
+Dotychczasowe bramki publikacji, recovery, GC i FMS walidują również binding
+przy parsowaniu typed rootu. Brak bindingu nie upoważnia do odgadywania
+jednostek ani przestrzeni z nazwy tensora. Oryginalne statusy wykonania
+i ocena naukowa pozostają oddzielne od integralności danych.
+
+Jest to kontrakt magazynu sesji, bez nowego endpointu i bez zmiany OpenAPI.
+Pełny MaterializedDataset, generator metadanych producenta oraz publiczny
+consumer pozostają osobnymi obowiązkami wdrożenia. Starsze rooty bez
+bindingu pozostają czytelne; starszy strict reader nie odczyta nowych rootów
+z bindingiem. Włączenie nowych writerów wymaga wcześniejszego wdrożenia
+readerów i wyklucza zapis do historycznej, zamkniętej rewizji.
+
+Kontrakt szczegółowy: [przypięty tensor](../specs/pinned-solution-tensor-v1.md).
+
 ## Referencje
 
 - `docs/audits/2026-09-01-results-mode-sweep-ui-audit-and-refactor-plan.md`;

@@ -97,6 +97,7 @@ fn tensor_export_fixture(with_owner_intent: bool) -> TensorExportFixture {
         shape: vec![2],
         logical_axes: vec!["sample".to_string()],
         endian: "little".to_string(),
+        field_binding: None,
         chunks: vec![TensorChunk {
             object_ref: chunk_ref.clone(),
             offset: 0,

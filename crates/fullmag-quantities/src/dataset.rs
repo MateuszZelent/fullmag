@@ -447,6 +447,13 @@ pub struct DatasetFieldDescriptor {
     pub resolution: FieldResolution,
 }
 
+impl DatasetFieldDescriptor {
+    /// Validate the shared semantic contract independently of a dataset manifest.
+    pub fn validate(&self) -> Result<(), DatasetContractError> {
+        validate_field_descriptor(self)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DatasetFieldRef {

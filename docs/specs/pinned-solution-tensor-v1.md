@@ -50,6 +50,39 @@ nie usuwa się historycznych metadanych jako skutku błędu właściciela.
 
 ## Granice i zgodność
 
+### Opcjonalny binding pola
+
+`TensorDescriptor.field_binding` jest opcjonalnym, strict obiektem
+`fullmag.tensor_field_binding.v1`. Zawiera dodatnią rewizję datasetu,
+sample/item/field ID, grupę płaszczyzn, identyfikator i wersję producenta,
+rolę płaszczyzny oraz pełny `DatasetFieldDescriptor`. Jest częścią tych
+samych immutable root bytes i nie dodaje nowych referencji CAS.
+Nieznane pola nadal są odrzucane. Brak bindingu zachowuje odczyt tensora,
+ale nie pozwala na odczyt przypiętego pola przez nowy adapter.
+
+Przed publikacją oraz w recovery/GC/FMS binding musi przejść walidację
+semantycznego kontraktu i dokładnego layoutu tensora. Obsługiwane są
+little-endian F32/F64, skalar `[element]` albo field `[element, component]`;
+component-major i native-with-mapping wymagają oddzielnej realizacji.
+Pełne osie, ich długości, component axis i rola Values/Real/Imaginary muszą
+się zgadzać. Adapter nie rekonstruuje ani nie normalizuje wartości.
+
+Odczyt `read_pinned_solution_field_slice` przyjmuje tylko request i dokładne
+przypięte źródła. Opis fizyczny odczytuje z rootu, zamiast przyjmować go od
+caller-a. Para real/imag wymaga dwóch różnych artefaktów/rootów w tej samej
+rewizji i memberze, zgodnej grupy/producenta oraz identycznego opisu pola.
+Tożsamość dataset/sample/item/field z requestu musi odpowiadać bindingowi.
+Odczyt zwraca również oryginalne statusy i oceny właścicieli; nie awansuje
+ich do converged, quantitative ani qualified.
+
+Ten kontrakt sam nie dowodzi prawdziwości deklaracji producenta. Istniejące
+writery nie emitują jeszcze bindingu; wymagane są adapter producenta,
+walidacja semantyki, trwały manifest MaterializedDataset oraz konsument API/UI.
+Nie kwalifikuje się tego etapu jako ukończonej materializacji datasetu.
+Starsze wersje strict readera odrzucają rozszerzone rooty, więc reader musi
+zostać wdrożony przed włączeniem writera. Rollback wyłącza emisję bindingu,
+zachowując nowe immutable rooty i reader do ich odczytu.
+
 Nieznane schema IDs zachowują istniejącą semantykę opaque leaf.
 Nie stosuje się heurystycznego skanowania JSON ani typowania po nazwie pliku.
 To ograniczenie pozostaje otwarte: nowego formatu strukturalnego nie wolno

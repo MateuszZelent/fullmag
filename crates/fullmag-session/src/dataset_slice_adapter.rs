@@ -636,6 +636,7 @@ mod tests {
             shape: vec![4, 1],
             logical_axes: vec!["sample".to_string(), "component".to_string()],
             endian: "little".to_string(),
+            field_binding: None,
             chunks: vec![
                 crate::TensorChunk {
                     object_ref: first_ref.clone(),

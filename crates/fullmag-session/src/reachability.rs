@@ -3675,6 +3675,9 @@ fn validate_descriptor(
     if cursor != total_bytes {
         bail!("tensor descriptor `{object_ref}` does not cover its complete byte payload")
     }
+    if let Some(binding) = &descriptor.field_binding {
+        binding.validate_for_tensor(descriptor)?;
+    }
     Ok(())
 }
 
