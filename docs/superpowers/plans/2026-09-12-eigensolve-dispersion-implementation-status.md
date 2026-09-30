@@ -1,5 +1,13 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
+## S04/S07 — kontrola tożsamości potencjału; miejsce zwolnione
+
+- Pilot wymaga zgodnych deklaracji sample/mode, siatki, operatora i fazy oraz kanonicznych ścieżek; poprawny gradient sam nie wystarcza.
+- 34 testy Python PASS; 9/9 historycznych artefaktów #173 consistent. Audyt: docs/audits/2026-09-30-physical-potential-mode-binding.md.
+- Runner zdrowy, ostatni odczyt 18.48 GB wolnego; #181 running, #182 queued. Kontroler 31729 zachowany, bez duplikatu.
+- Poprawka postprocessingu nie wchodzi do kapsuły #182; nowe wyniki sprawdzimy nią niezależnie. Nie ma jeszcze nowych częstotliwości ani dowodu zbieżności.
+- Następnie: sukces #182 → Γ/DE/BV L2/t3/t6/t9 → audyt artefaktów → zbieżność i wykres. Pełne S00–S12 nadal otwarte.
+
 ## #182 queued — snapshot poprawionej siatki i kontroler Γ/DE/BV
 
 - Commit 494443d64655b7f65e19bd79bc12b5ad19d26cd8 jest na remote.

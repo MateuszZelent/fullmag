@@ -166,8 +166,12 @@ class PilotTests(unittest.TestCase):
                 mode.mkdir(parents=True)
                 (mode / "vector.bin").write_bytes(b"mode")
                 (mode / "physical_potential.v1.json").write_text("{}")
+                published = root / f"eigen/modes/sample_{index:04}/mode_0000.json"
+                published.parent.mkdir(parents=True)
+                published.write_text("{}")
             with patch.object(pilot, "validate_physical_potential", return_value={
                 "status": "consistent", "reconstruction_agreement": True,
+                "identity_binding": {"status": "consistent"},
                 "qualification": "NOT VERIFIED"}) as validate:
                 result = pilot.validate_smoke_potential_fields(root, 2)
             self.assertEqual(validate.call_count, 2)
@@ -181,6 +185,39 @@ class PilotTests(unittest.TestCase):
                 "status": "consistent", "reconstruction_agreement": True}):
                 with self.assertRaises(pilot.managed.BenchmarkError):
                     pilot.validate_smoke_potential_fields(root, 2)
+
+    def test_smoke_rejects_correct_gradient_with_wrong_mode_phase_identity(self):
+        from test_de_physical_potential import PhysicalPotentialFixture
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fixture = PhysicalPotentialFixture(root)
+            (fixture.mode_dir / "vector.bin").write_bytes(b"published mode")
+            identities = {key: "sha256:" + char * 64 for key, char in (
+                ("source_mesh_topology_sha256", "a"),
+                ("operator_input_signature_sha256", "b"),
+                ("phase_constraint_sha256", "c"))}
+            manifest = json.loads(fixture.manifest_path.read_text())
+            manifest.update(sample_index=0, mode_index=0, **identities)
+            fixture.manifest_path.write_text(json.dumps(manifest))
+            mode = root / "eigen/modes/sample_0000/mode_0000.json"
+            mode.parent.mkdir(parents=True)
+            data = {"sample_index": 0, "raw_mode_index": 0, **identities}
+            data["phase_constraint_sha256"] = "sha256:" + "f" * 64
+            mode.write_text(json.dumps(data))
+            # Its gradient is correct; its producer identity belongs elsewhere.
+            self.assertTrue(pilot.validate_physical_potential(
+                fixture.manifest_path, fixture.metadata_path)["reconstruction_agreement"])
+            with self.assertRaisesRegex(ValueError, "phase_constraint_sha256"):
+                pilot.validate_smoke_potential_fields(root, 1)
+
+    def test_smoke_sample_count_rejects_bool(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            mode = root / "eigen/mode_fields/sample_0000/mode_0000"
+            mode.mkdir(parents=True)
+            (mode / "vector.bin").write_bytes(b"mode")
+            with self.assertRaisesRegex(pilot.managed.BenchmarkError, "expected samples"):
+                pilot.validate_smoke_potential_fields(root, True)
 
     def test_smoke_inconsistent_field_cannot_be_completed_after_exit_zero(self):
         with TemporaryDirectory() as tmp:

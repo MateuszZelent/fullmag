@@ -56,10 +56,18 @@ def _is_integer(value: Any) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
 
 
+def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        _require(key not in result, f"duplicate JSON key {key!r}")
+        result[key] = value
+    return result
+
+
 def _load_json(path: Path, description: str) -> dict[str, Any]:
     try:
         with path.open("r", encoding="utf-8") as stream:
-            value = json.load(stream)
+            value = json.load(stream, object_pairs_hook=_unique_json_object)
     except FileNotFoundError as exc:
         _fail(f"{description} does not exist: {path}")
     except (OSError, json.JSONDecodeError) as exc:
@@ -147,6 +155,48 @@ def _validate_manifest(manifest_path: Path, run_root: Path) -> tuple[dict[str, A
     _require(_sha256(potential_path) == potential_digest, "potential_full.bin does not match manifest sha256")
     _require(_sha256(field_path) == field_digest, "demag_element_full.bin does not match manifest sha256")
     return manifest, potential_path, potential_count, field_path, field_count
+
+
+def _validate_declared_mode_binding(
+    manifest: dict[str, Any], manifest_path: Path, mode_metadata_path: Path,
+    run_root: Path, potential_path: Path, field_path: Path,
+) -> dict[str, Any]:
+    """Bind declared provenance to one published mode, not a physics proof."""
+    try:
+        mode_metadata_path.relative_to(run_root)
+    except ValueError:
+        _fail("published mode metadata must be inside the metadata run root")
+    mode = _load_json(mode_metadata_path, "published mode metadata")
+    sample = manifest.get("sample_index")
+    raw_mode = manifest.get("mode_index")
+    for value, name in ((sample, "sample_index"), (raw_mode, "mode_index")):
+        _require(_is_integer(value) and value >= 0, f"manifest {name} must be a non-negative integer")
+    for name, expected in (("sample_index", sample), ("raw_mode_index", raw_mode)):
+        value = mode.get(name)
+        _require(_is_integer(value) and value == expected, f"mode metadata {name} disagrees with potential manifest")
+    if "index" in mode:
+        _require(_is_integer(mode["index"]) and mode["index"] == raw_mode,
+                 "mode metadata index disagrees with raw_mode_index")
+    field_dir = run_root / "eigen/mode_fields" / f"sample_{sample:04d}" / f"mode_{raw_mode:04d}"
+    expected_mode = run_root / "eigen/modes" / f"sample_{sample:04d}" / f"mode_{raw_mode:04d}.json"
+    _require(manifest_path == (field_dir / "physical_potential.v1.json"),
+             "potential manifest path disagrees with declared sample/mode")
+    _require(mode_metadata_path == expected_mode,
+             "mode metadata path disagrees with declared sample/mode")
+    _require(potential_path == (field_dir / "potential_full.bin"),
+             "potential sidecar path disagrees with declared sample/mode")
+    _require(field_path == (field_dir / "demag_element_full.bin"),
+             "demag sidecar path disagrees with declared sample/mode")
+    identities = {}
+    for key in ("source_mesh_topology_sha256", "operator_input_signature_sha256", "phase_constraint_sha256"):
+        expected = _declared_digest(manifest.get(key), key)
+        actual = _declared_digest(mode.get(key), "mode." + key)
+        _require(actual == expected, f"mode metadata {key} disagrees with potential manifest")
+        identities[key] = "sha256:" + expected
+    return {"status": "consistent", "scope": "declared_mode_provenance_only",
+            "sample_index": sample, "raw_mode_index": raw_mode, **identities,
+            "mode_metadata_sha256": "sha256:" + _sha256(mode_metadata_path),
+            "manifest_sha256": "sha256:" + _sha256(manifest_path)}
 
 
 def _read_complex_values(path: Path, count: int, description: str) -> list[complex]:
@@ -284,6 +334,7 @@ def validate_physical_potential(
     *,
     rtol: float = DEFAULT_RTOL,
     zero_scale: float = DEFAULT_ZERO_SCALE,
+    mode_metadata_path: Path | str | None = None,
 ) -> dict[str, Any]:
     """Compare stored Tet4 element fields with an independent P1 gradient.
 
@@ -304,6 +355,11 @@ def validate_physical_potential(
     except ValueError:
         _fail("physical-potential manifest must be inside the metadata run root")
     manifest, potential_path, potential_count, field_path, field_count = _validate_manifest(manifest_file, run_root)
+    identity_binding: dict[str, Any] = {"status": "not_requested"}
+    if mode_metadata_path is not None:
+        identity_binding = _validate_declared_mode_binding(
+            manifest, manifest_file, Path(mode_metadata_path).resolve(),
+            run_root, potential_path, field_path)
     metadata = _load_json(metadata_file, "run metadata")
     nodes, elements = _extract_mesh(metadata)
     _require(potential_count == len(nodes), f"manifest potential.count={potential_count} does not match mesh node count {len(nodes)}")
@@ -365,6 +421,7 @@ def validate_physical_potential(
         "qualification": QUALIFICATION,
         "reconstruction_agreement": mismatch_count == 0,
         "manifest_schema_version": manifest.get("schema_version"),
+        "identity_binding": identity_binding,
         "potential_path": str(potential_path),
         "demag_field_path": str(field_path),
         "comparison": comparison,
@@ -376,6 +433,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", required=True, type=Path, help="physical_potential.v1.json")
     parser.add_argument("--mesh-metadata", required=True, type=Path, help="run metadata.json containing execution_plan.backend_plan.mesh")
+    parser.add_argument("--mode-metadata", type=Path, help="optional published mode JSON for declared identity binding")
     parser.add_argument("--rtol", type=float, default=DEFAULT_RTOL, help=f"relative tolerance (default: {DEFAULT_RTOL:g})")
     parser.add_argument("--zero-scale", type=float, default=DEFAULT_ZERO_SCALE, help=f"positive A/m scale floor (default: {DEFAULT_ZERO_SCALE:g})")
     return parser
@@ -384,7 +442,7 @@ def _build_parser() -> argparse.ArgumentParser:
 def main(argv: Iterable[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     try:
-        report = validate_physical_potential(args.manifest, args.mesh_metadata, rtol=args.rtol, zero_scale=args.zero_scale)
+        report = validate_physical_potential(args.manifest, args.mesh_metadata, rtol=args.rtol, zero_scale=args.zero_scale, mode_metadata_path=args.mode_metadata)
     except ValidationError as exc:
         error_report = {
             "schema_version": RESULT_SCHEMA_VERSION,

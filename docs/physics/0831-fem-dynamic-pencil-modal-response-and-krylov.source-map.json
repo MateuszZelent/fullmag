@@ -569,7 +569,10 @@
       "path": "scripts/thin_film_thickness_oracle.py",
       "symbol": "solve_thickness_modes",
       "responsibility": "Independent small diagnostic LL spectrum and oracle-only residual"
-    }
+    },
+    {"id": "source-physical-potential-mode-binding", "path": "scripts/validate_de_physical_potential.py", "symbol": "_validate_declared_mode_binding", "responsibility": "Verifies declared sample/raw-mode identity, source hashes and canonical sidecar paths without a physics qualification claim.", "evidence_status": "python_regression_verified"},
+    {"id": "source-physical-potential-bound-pilot", "path": "scripts/run_de_100nm_pilot.py", "symbol": "validate_smoke_potential_fields", "responsibility": "Requires mode metadata and a consistent declared binding for each published potential.", "evidence_status": "python_regression_verified"},
+    {"id": "source-physical-potential-binding-regression", "path": "scripts/test_de_physical_potential.py", "symbol": "class PhysicalPotentialValidatorTests", "responsibility": "Tests mismatched indices/hashes, sidecar paths, malformed identities and duplicate JSON.", "evidence_status": "python_regression_verified"}
   ],
   "public_api": {
     "parameters": [

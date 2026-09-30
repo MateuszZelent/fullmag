@@ -1665,3 +1665,36 @@ Porównanie do aktualnego #179 i zbieżność FEM nadal NOT VERIFIED.
 |---|---|---|---|
 | source-thickness-oracle-matrices | `scripts/thin_film_thickness_oracle.py` | `modal_matrices` | całkowy demag i baza wymiany |
 | source-thickness-oracle-solve | `scripts/thin_film_thickness_oracle.py` | `solve_thickness_modes` | mały oracle LL, częstotliwości i residual własnego operatora |
+
+(physical-potential-declared-mode-binding)=
+## Powiązanie fizycznego potencjału z opublikowanym modem
+
+Niezależna zgodność zapisanego pola z gradientem potencjału nie dowodzi,
+że artefakt należy do badanego punktu i modu. Kontrola DE-SMOKE dodatkowo
+wiąże manifest z `eigen/modes/sample_NNNN/mode_MMMM.json` po sample_index,
+raw_mode_index oraz deklaracjach source_mesh_topology_sha256,
+operator_input_signature_sha256 i phase_constraint_sha256. Wymaga zgodnych,
+nieujemnych indeksów, poprawnych SHA-256, kanonicznych ścieżek wybranego modu
+oraz jego sidecarów. Powtórzone klucze JSON i sprzeczne indeksy są błędem,
+nie podstawą do wyboru ostatniej wartości.
+
+W `validate_physical_potential` parametr pomocniczy `mode_metadata_path`
+(default None) wybiera tę kontrolę: brak parametru zachowuje wyłącznie
+kontrolę algebraiczną i raportuje identity_binding=not_requested. Trasa
+`validate_smoke_potential_fields` przekazuje go obowiązkowo dla każdego
+opublikowanego pola. CLI udostępnia równoważne `--mode-metadata`.
+Nie zmienia to publicznego DSL, ProblemIR, operatorów ani równań mikromagnetycznych.
+FEM CPU/GPU: ten sam odczyt artefaktów, bez dowodu wykonania urządzenia.
+FDM CPU/GPU: nie dotyczy tego formatu potential Tet4.
+
+Status identity_binding=consistent oznacza zgodne deklaracje producenta,
+nie niezależne przeliczenie fingerprintu pełnej siatki, dowód równania Poissona,
+zbieżności FEM ani normalizacji potencjału względem magnetyzacji. Kwalifikacja
+raportu pozostaje NOT VERIFIED. Nowy walidator jest niezależnym postprocessing;
+nie modyfikuje kapsuły ani receipt #182.
+
+| Źródło | Owner | Kontrakt |
+|---|---|---|
+| scripts/validate_de_physical_potential.py | _validate_declared_mode_binding | Tożsamość deklaracji i ścieżek przed porównaniem gradientu |
+| scripts/run_de_100nm_pilot.py | validate_smoke_potential_fields | Obowiązkowe związanie każdego opublikowanego modu |
+| scripts/test_de_physical_potential.py | class PhysicalPotentialValidatorTests | Zmienione indeksy/hash, błędne typy i duplicate JSON |

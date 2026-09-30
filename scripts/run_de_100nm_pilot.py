@@ -126,7 +126,7 @@ def validate_smoke_potential_fields(case_dir, expected_sample_count):
     vectors = sorted(case_dir.glob("eigen/mode_fields/sample_*/mode_*/vector.bin"))
     if not vectors:
         raise managed.BenchmarkError("DE-SMOKE has no published mode fields")
-    if not isinstance(expected_sample_count, int) or expected_sample_count <= 0:
+    if isinstance(expected_sample_count, bool) or not isinstance(expected_sample_count, int) or expected_sample_count <= 0:
         raise managed.BenchmarkError("DE-SMOKE has no expected samples")
     samples = set()
     for vector in vectors:
@@ -143,12 +143,16 @@ def validate_smoke_potential_fields(case_dir, expected_sample_count):
     for vector in vectors:
         manifest = vector.parent / "physical_potential.v1.json"
         managed._regular_file(manifest, "DE-SMOKE mode potential manifest")
-        report = validate_physical_potential(manifest, metadata)
+        mode_metadata = case_dir / "eigen/modes" / vector.parent.parent.name / (vector.parent.name + ".json")
+        managed._regular_file(mode_metadata, "DE-SMOKE published mode metadata")
+        report = validate_physical_potential(manifest, metadata, mode_metadata_path=mode_metadata)
+        if report.get("identity_binding", {}).get("status") != "consistent":
+            raise managed.BenchmarkError("DE-SMOKE potential has no verified declared mode binding")
         if report.get("status") != "consistent" or report.get("reconstruction_agreement") is not True:
             raise managed.BenchmarkError(
                 f"DE-SMOKE potential gradient mismatch: {manifest.relative_to(case_dir)}")
         reports.append({"manifest": manifest.relative_to(case_dir).as_posix(), **report})
-    return {"qualification": "NOT VERIFIED", "scope": "stored_field_reconstruction_only",
+    return {"qualification": "NOT VERIFIED", "scope": "stored_field_reconstruction_and_declared_mode_binding",
             "mode_count": len(reports), "modes": reports}
 
 

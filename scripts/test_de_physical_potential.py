@@ -128,6 +128,75 @@ class PhysicalPotentialValidatorTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.tempdir.cleanup()
 
+    def bound_fixture(self):
+        manifest = json.loads(self.fixture.manifest_path.read_text())
+        identities = {key: "sha256:" + char * 64 for key, char in (
+            ("source_mesh_topology_sha256", "a"),
+            ("operator_input_signature_sha256", "b"),
+            ("phase_constraint_sha256", "c"))}
+        manifest.update(sample_index=0, mode_index=0, **identities)
+        self.fixture.manifest_path.write_text(json.dumps(manifest))
+        mode_path = self.fixture.root / "eigen/modes/sample_0000/mode_0000.json"
+        mode_path.parent.mkdir(parents=True, exist_ok=True)
+        mode_path.write_text(json.dumps({"sample_index": 0, "raw_mode_index": 0, **identities}))
+        return mode_path
+
+    def test_declared_mode_binding_is_verified_separately(self):
+        mode = self.bound_fixture()
+        result = validate_physical_potential(self.fixture.manifest_path, self.fixture.metadata_path,
+                                             mode_metadata_path=mode)
+        self.assertEqual(result["identity_binding"]["status"], "consistent")
+        self.assertEqual(result["qualification"], "NOT VERIFIED")
+
+    def test_wrong_mode_provenance_cannot_pass_gradient_check(self):
+        for key in ("sample_index", "raw_mode_index", "source_mesh_topology_sha256",
+                    "operator_input_signature_sha256", "phase_constraint_sha256"):
+            with self.subTest(key=key):
+                mode = self.bound_fixture()
+                data = json.loads(mode.read_text())
+                data[key] = 1 if key in ("sample_index", "raw_mode_index") else "sha256:" + "f" * 64
+                mode.write_text(json.dumps(data))
+                with self.assertRaises(ValidationError):
+                    validate_physical_potential(self.fixture.manifest_path, self.fixture.metadata_path,
+                                                 mode_metadata_path=mode)
+
+    def test_corrupt_or_missing_declared_identity_is_rejected(self):
+        for value in (None, True, -1, "0"):
+            mode = self.bound_fixture()
+            manifest = json.loads(self.fixture.manifest_path.read_text())
+            manifest["sample_index"] = value
+            self.fixture.manifest_path.write_text(json.dumps(manifest))
+            with self.assertRaises(ValidationError):
+                validate_physical_potential(self.fixture.manifest_path, self.fixture.metadata_path,
+                                             mode_metadata_path=mode)
+
+    def test_bound_sidecars_cannot_reference_another_mode(self):
+        mode = self.bound_fixture()
+        alternate = self.fixture.mode_dir / "other_potential.bin"
+        alternate.write_bytes(self.fixture.potential_path.read_bytes())
+        manifest = json.loads(self.fixture.manifest_path.read_text())
+        manifest["potential"]["path"] = alternate.relative_to(self.fixture.root).as_posix()
+        self.fixture.manifest_path.write_text(json.dumps(manifest))
+        with self.assertRaisesRegex(ValidationError, "sidecar path"):
+            validate_physical_potential(self.fixture.manifest_path, self.fixture.metadata_path,
+                                         mode_metadata_path=mode)
+
+    def test_bound_mode_cannot_be_relocated_to_another_directory(self):
+        mode = self.bound_fixture()
+        alternate = self.fixture.root / "relocated-mode.json"
+        alternate.write_bytes(mode.read_bytes())
+        with self.assertRaisesRegex(ValidationError, "mode metadata path"):
+            validate_physical_potential(self.fixture.manifest_path, self.fixture.metadata_path,
+                                         mode_metadata_path=alternate)
+
+    def test_duplicate_json_identity_is_rejected(self):
+        mode = self.bound_fixture()
+        text = mode.read_text()
+        mode.write_text('{"sample_index":1,' + text[1:])
+        with self.assertRaisesRegex(ValidationError, "duplicate"):
+            validate_physical_potential(self.fixture.manifest_path, self.fixture.metadata_path,
+                                         mode_metadata_path=mode)
+
     def test_independent_linear_complex_potential_agrees(self) -> None:
         report = self.fixture.validate()
         self.assertEqual(report["status"], "consistent")
