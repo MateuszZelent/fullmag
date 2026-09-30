@@ -1,5 +1,28 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
+## Aktualny dostęp do runnera — 2026-09-30 17:34 UTC
+
+- Sprawdzenie głównego klienta zwróciło `Container profile allow-list mismatch`.
+  Porównanie katalogów profili wykazało, że klient głównego checkoutu nie zna
+  `fem-cpu-slepc-runtime-v2`; zgodny klient tego worktree odczytał #179 poprawnie.
+  Nie zmieniano konfiguracji runnera ani listy dopuszczonych profili.
+- #179 nadal `queued`, ten sam digest e6d33f2ab37f1d529db133f12d0d45813fd2d89721121f740e7de3402e62d0fc.
+  Live health: worker_alive=true, accepting_jobs=true, worker_error=null,
+  active_jobs=[], coordinator.last_result.state=waiting_for_disk.
+  Wolne miejsce 5613461504 B (około 5.23 GiB); próg przyjęcia 8 GiB.
+- Sesje 66068, 28993 i 2072 zostały ponownie odpytane przez swoje uchwyty:
+  wszystkie nadal działają, bez nowego wyjścia. Nie uznano samych plików control
+  za dowód życia i nie uruchomiono drugiej serii.
+- Przygotowana seria: DE/BV k=25 rad/um dla 3/6/9 warstw przez grubość,
+  następnie Gamma L2/3 warstwy. Porównanie częstotliwości, residuali i profili
+  nastąpi po poprawnym managed buildzie i rzeczywistych wynikach każdego przypadku.
+- Prośba o usunięcie ośmiu dokładnych katalogów execution pozostaje bez odpowiedzi.
+  Niczego nie usunięto. Przed ewentualnym usunięciem nadal obowiązują świeże
+  kontrole zakończenia jobów, aktywnych użytkowników, mountów i bezpieczeństwa ścieżek.
+- Brak nowych wyników z poprawionej siatki. S00–S12, zbieżność, A1/COMSOL,
+  browser i integracja nadal niezamknięte. Ten checkpoint potwierdza oczekiwanie
+  na konkretne żywe procesy, nie kwalifikację solvera ani całego rozszerzenia.
+
 ## S01 — naprawiona kontrola rewizji dokumentacji; aktualizacja storage
 
 - Poprzedni turn był postępem: źródłowa poprawka tożsamości diagnostyki WIP,
