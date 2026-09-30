@@ -8,6 +8,27 @@ from local_runner import build_executor as executor
 
 
 class BuildExecutorTests(unittest.TestCase):
+    def test_cpu_mfem_abi_attestation_rejects_missing_or_wrong_prefix(self):
+        valid = {
+            'mfem_abi': {
+                'path': '/opt/fullmag-mfem-cpu/lib/libmfem.so.4.9.0',
+                'sha256': 'a' * 64,
+            },
+            'mfem_cmake_dir': '/opt/fullmag-mfem-cpu/lib/cmake/mfem',
+        }
+        self.assertTrue(executor.valid_cpu_mfem_abi_attestation(valid))
+        self.assertFalse(executor.valid_cpu_mfem_abi_attestation({}))
+        self.assertFalse(executor.valid_cpu_mfem_abi_attestation({
+            **valid, 'mfem_abi': {
+                **valid['mfem_abi'],
+                'path': '/opt/fullmag-deps/lib/libmfem.so.4.9.0',
+            },
+        }))
+        self.assertFalse(executor.valid_cpu_mfem_abi_attestation({
+            **valid,
+            'mfem_cmake_dir': '/opt/fullmag-mfem-cpu/../fullmag-deps/lib/cmake/mfem',
+        }))
+
     def test_mutable_caches_do_not_reuse_legacy_root_owned_trees(self):
         root = Path('/storage')
         paths = executor.dependency_cache_paths(root, 'fem-cpu-release')
@@ -176,22 +197,27 @@ class BuildExecutorTests(unittest.TestCase):
                             "floquet_targets"
                         ]
                     ),
+                    "shared_domain_target": executor.PROFILE_CONTRACTS[
+                        "fem-cpu-slepc-modal-v1"
+                    ]["shared_domain_target"],
                     "ctest_completed": True,
                     "executed_targets": [
                         "fem_poisson_airbox_modal_eigen_slepc_contract",
                         *executor.PROFILE_CONTRACTS["fem-cpu-slepc-modal-v1"]["floquet_targets"],
+                        executor.PROFILE_CONTRACTS["fem-cpu-slepc-modal-v1"]["shared_domain_target"],
                     ],
                 },
                 "runtime_library": "/workspace/.fullmag/local/lib/libfullmag_fem.so.0",
                 "attestation": {
                     "ctest_junit": {
                         "status": "pass",
-                        "testcase_count": 8,
+                        "testcase_count": 9,
                         "skipped_count": 0,
                         "failure_count": 0,
                         "testcases": [
                             "fem_poisson_airbox_modal_eigen_slepc_contract",
                             *executor.PROFILE_CONTRACTS["fem-cpu-slepc-modal-v1"]["floquet_targets"],
+                            executor.PROFILE_CONTRACTS["fem-cpu-slepc-modal-v1"]["shared_domain_target"],
                         ],
                     },
                     "cmake": {
@@ -216,6 +242,7 @@ class BuildExecutorTests(unittest.TestCase):
                             "modal_eigen_native_cpu_slepc_available": True,
                             "petsc_version": "3.24.6",
                             "slepc_version": "3.24.3",
+                            "diagnostics": {"native_source_snapshot_sha256": native["source_snapshot_sha256"]},
                         },
                     },
                     "resolution": {
@@ -289,6 +316,26 @@ class BuildExecutorTests(unittest.TestCase):
                 {"image_digest": image},
             )
             self.assertEqual(validated["state"], "succeeded")
+
+            dependency_values = result["attestation"]["dependency"]["dependency"]
+            for diagnostics in ({}, {"native_source_snapshot_sha256": "4" * 64}):
+                with self.subTest(native_diagnostics=diagnostics):
+                    dependency_values["diagnostics"] = diagnostics
+                    result_path.write_text(json.dumps(result), encoding="utf-8")
+                    changed = result_path.read_bytes()
+                    receipt["artifacts"][0].update(
+                        size=len(changed), sha256=hashlib.sha256(changed).hexdigest()
+                    )
+                    (root / "build-receipt.json").write_text(
+                        json.dumps(receipt), encoding="utf-8"
+                    )
+                    # Rehashing every changed artifact does not turn a stale
+                    # dependency query into evidence of the current native code.
+                    with self.assertRaisesRegex(ValueError, "native source binding"):
+                        executor.validate_build_receipt(root, job, {"image_digest": image})
+            dependency_values["diagnostics"] = {
+                "native_source_snapshot_sha256": native["source_snapshot_sha256"]
+            }
 
             result["source"]["snapshot_sha256"] = "4" * 64
             result_path.write_text(json.dumps(result), encoding="utf-8")
@@ -376,6 +423,7 @@ class BuildExecutorTests(unittest.TestCase):
                     "modal_eigen_native_cpu_slepc_available": True,
                     "petsc_version": "3.24.6",
                     "slepc_version": "3.24.3",
+                    "diagnostics_json": json.dumps({"native_source_snapshot_sha256": native["source_snapshot_sha256"]}),
                 },
                 "source": source,
             }
@@ -448,6 +496,25 @@ class BuildExecutorTests(unittest.TestCase):
                 {"image_digest": image},
             )
             self.assertEqual(validated["state"], "succeeded")
+
+            # Rehashing a valid receipt cannot disguise a stale/unbound native library.
+            for diagnostic in ({}, {"native_source_snapshot_sha256": "0" * 64}):
+                dependency_attestation["dependency"]["diagnostics_json"] = json.dumps(diagnostic)
+                changed = json.dumps(dependency_attestation).encode("utf-8")
+                (root / "dependency-attestation.json").write_bytes(changed)
+                for entry in receipt["artifacts"]:
+                    if entry["path"] == "dependency-attestation.json":
+                        entry.update(size=len(changed), sha256=hashlib.sha256(changed).hexdigest())
+                (root / "build-receipt.json").write_text(json.dumps(receipt), encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "native source binding"):
+                    executor.validate_build_receipt(root, job, {"image_digest": image})
+            dependency_attestation["dependency"]["diagnostics_json"] = json.dumps({
+                "native_source_snapshot_sha256": native["source_snapshot_sha256"]})
+            changed = json.dumps(dependency_attestation).encode("utf-8")
+            (root / "dependency-attestation.json").write_bytes(changed)
+            for entry in receipt["artifacts"]:
+                if entry["path"] == "dependency-attestation.json":
+                    entry.update(size=len(changed), sha256=hashlib.sha256(changed).hexdigest())
 
             runtime_attestation["startup_stamp"] = (
                 "[fullmag] build: test | source snapshot: " + "0" * 64

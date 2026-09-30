@@ -227,6 +227,18 @@ PROFILES["fem-cpu-slepc-runtime-v1"] = Profile(
     runtime_only=True,
     runtime_contract_schema="fullmag.fem.cpu.slepc_runtime_contract.v1",
 )
+PROFILES["fem-cpu-slepc-runtime-v2"] = Profile(
+    name="fem-cpu-slepc-runtime-v2",
+    lane="fem-cpu",
+    environment={
+        **PROFILES["fem-cpu-slepc-runtime-v1"].environment,
+        "FULLMAG_FEM_NATIVE_CUDA": "0",
+        "CMAKE_PREFIX_PATH": "/opt/fullmag-mfem-cpu:/opt/fullmag-deps",
+        "LD_LIBRARY_PATH": "/opt/fullmag-mfem-cpu/lib:/opt/fullmag-deps/lib:/usr/local/cuda/lib64",
+    },
+    runtime_only=True,
+    runtime_contract_schema="fullmag.fem.cpu.slepc_runtime_contract.v2",
+)
 
 REQUIRED_OUTPUTS = (
     "bin/fullmag-bin",
@@ -247,6 +259,7 @@ EXPECTED_BUILD_MARKER = {
     "fdm-cpu-release": "cpu",
     "fem-cpu-slepc-modal-v1": "fem-cpu",
     "fem-cpu-slepc-runtime-v1": "fem-cpu",
+    "fem-cpu-slepc-runtime-v2": "fem-cpu",
 }
 
 
@@ -265,7 +278,9 @@ def _runtime_contract(profile: Profile) -> dict[str, Any] | None:
         "precision": "double",
         "slepc": profile.environment.get("FULLMAG_FEM_WITH_SLEPC") == "ON",
         "cmake_options": {
-            "FULLMAG_ENABLE_CUDA": "ON",
+            "FULLMAG_ENABLE_CUDA": (
+                "OFF" if profile.name == "fem-cpu-slepc-runtime-v2" else "ON"
+            ),
             "FULLMAG_ENABLE_FEM_GPU": "ON",
             "FULLMAG_USE_MFEM_STACK": "ON",
             "FULLMAG_FEM_WITH_SLEPC": "ON",
@@ -959,6 +974,23 @@ def _write_json_artifact(artifacts: Path, name: str, payload: Mapping[str, Any])
         raise BuildEntryPointError(f"cannot publish runtime attestation: {name}") from error
 
 
+def validate_native_source_snapshot(diagnostics: object, expected: object) -> str:
+    """Reject unbound or stale native code, independently of Rust/cache stamps."""
+    if not isinstance(expected, str) or not SHA256_RE.fullmatch(expected):
+        raise BuildEntryPointError("expected native source snapshot is not lowercase SHA-256")
+    if isinstance(diagnostics, str):
+        try:
+            diagnostics = json.loads(diagnostics)
+        except (ValueError, TypeError) as error:
+            raise BuildEntryPointError("native source diagnostics are not valid JSON") from error
+    actual = diagnostics.get("native_source_snapshot_sha256") if isinstance(diagnostics, dict) else None
+    if not isinstance(actual, str) or not SHA256_RE.fullmatch(actual):
+        raise BuildEntryPointError("native library has no valid source snapshot binding")
+    if actual != expected:
+        raise BuildEntryPointError("native library source snapshot does not match capsule identity")
+    return actual
+
+
 def _attest_slepc_runtime(
     workspace: Path,
     artifacts: Path,
@@ -1041,6 +1073,7 @@ def _attest_slepc_runtime(
         )
     cache_path, native_library, native_library_sha256 = bound_cache
     observed_cmake_options: dict[str, dict[str, str]] = {}
+    mfem_cmake_dir: str | None = None
     try:
         cache_lines = cache_path.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError as error:
@@ -1055,6 +1088,8 @@ def _attest_slepc_runtime(
                 "type": value_type,
                 "value": value,
             }
+        if name == "MFEM_DIR":
+            mfem_cmake_dir = value
     missing_options = sorted(set(expected_cmake_options) - set(observed_cmake_options))
     if missing_options:
         raise BuildEntryPointError(
@@ -1076,6 +1111,16 @@ def _attest_slepc_runtime(
 
     probe_environment = dict(environment)
     probe_environment["FULLMAG_REPO_ROOT"] = str(workspace)
+    cpu_abi_profile = (
+        runtime_contract.get("schema") == "fullmag.fem.cpu.slepc_runtime_contract.v2"
+    )
+    if cpu_abi_profile and (
+        mfem_cmake_dir is None
+        or not Path(mfem_cmake_dir).resolve(strict=True).is_relative_to(
+            Path("/opt/fullmag-mfem-cpu").resolve(strict=True)
+        )
+    ):
+        raise BuildEntryPointError("MFEM CMake package did not resolve to CPU prefix")
     compatibility_paths = _cuda_driver_compatibility_paths()
     preloaded_compatibility_libraries = _preload_cuda_driver_compatibility_libraries(
         compatibility_paths
@@ -1085,6 +1130,38 @@ def _attest_slepc_runtime(
     if existing_library_path:
         library_paths.append(existing_library_path)
     probe_environment["LD_LIBRARY_PATH"] = os.pathsep.join(library_paths)
+    mfem_abi: dict[str, Any] | None = None
+    if cpu_abi_profile:
+        try:
+            linkage = subprocess.run(
+                ["ldd", str(runtime_library)],
+                env=probe_environment,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+                timeout=30,
+            )
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise BuildEntryPointError(f"MFEM CPU linkage probe failed: {error}") from error
+        if linkage.returncode != 0:
+            raise BuildEntryPointError("MFEM CPU linkage probe did not complete")
+        mfem_paths = []
+        for line in linkage.stdout.splitlines():
+            name, separator, resolved = line.strip().partition(" => ")
+            if separator and name.startswith("libmfem.so"):
+                mfem_paths.append(resolved.split(" (", 1)[0])
+        if len(mfem_paths) != 1:
+            raise BuildEntryPointError("MFEM CPU linkage is missing or ambiguous")
+        mfem_path = Path(mfem_paths[0]).resolve(strict=True)
+        cpu_prefix = Path("/opt/fullmag-mfem-cpu").resolve(strict=True)
+        if not mfem_path.is_relative_to(cpu_prefix / "lib"):
+            raise BuildEntryPointError(
+                f"MFEM CPU linkage resolved outside CPU prefix: {mfem_path}"
+            )
+        _, mfem_sha256 = sha256_file(mfem_path)
+        mfem_abi = {"path": str(mfem_path), "sha256": mfem_sha256}
     try:
         probe = subprocess.run(
             [str(runtime_bin), "runtime", "fem-availability", "--json"],
@@ -1205,6 +1282,9 @@ def _attest_slepc_runtime(
         raise BuildEntryPointError(
             "runtime FEM dependency query did not attest PETSc/SLEPc CPU modal support"
         )
+    dependency["native_source_snapshot_sha256"] = validate_native_source_snapshot(
+        dependency["diagnostics_json"], native_identity.get("source_snapshot_sha256")
+    )
     source = {
         "commit": native_identity.get("head_commit_full"),
         "snapshot_sha256": native_identity.get("source_snapshot_sha256"),
@@ -1220,6 +1300,8 @@ def _attest_slepc_runtime(
             "runtime_library_sha256": runtime_library_sha256,
             "native_library_sha256": native_library_sha256,
             "options": observed_cmake_options,
+            "mfem_abi": mfem_abi,
+            "mfem_cmake_dir": mfem_cmake_dir,
             "source": source,
         },
     )
@@ -1455,6 +1537,14 @@ def main(argv: list[str] | None = None) -> int:
                 ):
                     raise BuildEntryPointError(
                         f"invalid or failing contract receipt: {scenario}"
+                    )
+                if scenario == "slepc-modal":
+                    attestations = result.get("attestation")
+                    dependency = attestations.get("dependency") if isinstance(attestations, dict) else None
+                    values = dependency.get("dependency") if isinstance(dependency, dict) else None
+                    validate_native_source_snapshot(
+                        values.get("diagnostics") if isinstance(values, dict) else None,
+                        context["native_source_identity"]["source_snapshot_sha256"],
                     )
             if profile.build_runtime:
                 output = workspace / ".fullmag" / "local"

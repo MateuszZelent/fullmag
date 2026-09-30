@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import ast
 import hashlib
+import re
 import json
 import os
 from pathlib import Path
@@ -202,6 +204,21 @@ class BuildEntryPointTests(unittest.TestCase):
         self.assertFalse(entrypoint._runtime_contract(profile)["unit_test_targets"])
         self.assertFalse(entrypoint._runtime_contract(profile)["frontend_stages"])
 
+    def test_slepc_runtime_v2_uses_separate_cpu_mfem_abi(self) -> None:
+        profile = entrypoint.profile_for("fem-cpu-slepc-runtime-v2")
+        contract = entrypoint._runtime_contract(profile)
+        self.assertTrue(profile.runtime_only)
+        self.assertEqual(profile.environment["FULLMAG_FEM_NATIVE_CUDA"], "0")
+        self.assertTrue(profile.environment["CMAKE_PREFIX_PATH"].startswith(
+            "/opt/fullmag-mfem-cpu:"
+        ))
+        self.assertTrue(profile.environment["LD_LIBRARY_PATH"].startswith(
+            "/opt/fullmag-mfem-cpu/lib:"
+        ))
+        self.assertEqual(contract["cmake_options"]["FULLMAG_ENABLE_CUDA"], "OFF")
+        self.assertEqual(contract["schema"],
+                         "fullmag.fem.cpu.slepc_runtime_contract.v2")
+
     def test_slepc_runtime_profile_runs_only_native_build_and_publishes_identity(self) -> None:
         self.profile = "fem-cpu-slepc-runtime-v1"
         context = self._write_context()
@@ -266,6 +283,27 @@ class BuildEntryPointTests(unittest.TestCase):
             {entry["path"] for entry in receipt["artifacts"]},
         )
 
+    def test_modal_contract_embedded_python_has_valid_syntax(self) -> None:
+        script = Path(__file__).with_name("run_fem_cpu_slepc_modal_contract.sh").read_text(encoding="utf-8")
+        blocks = re.findall(r"<<'PY'\n(.*?)\nPY", script, re.S)
+        self.assertTrue(blocks)
+        for index, block in enumerate(blocks):
+            with self.subTest(block=index):
+                ast.parse(block, filename=f"modal-contract-heredoc-{index}")
+
+    def test_native_snapshot_binding_rejects_missing_malformed_and_stale_library(self) -> None:
+        expected = "a" * 64
+        for diagnostics in ({}, {"native_source_snapshot_sha256": ""},
+                            {"native_source_snapshot_sha256": "A" * 64},
+                            {"native_source_snapshot_sha256": "b" * 64}, "invalid", []):
+            with self.subTest(diagnostics=diagnostics):
+                with self.assertRaises(entrypoint.BuildEntryPointError):
+                    entrypoint.validate_native_source_snapshot(diagnostics, expected)
+        self.assertEqual(entrypoint.validate_native_source_snapshot(
+            json.dumps({"native_source_snapshot_sha256": expected}), expected), expected)
+        with self.assertRaises(entrypoint.BuildEntryPointError):
+            entrypoint.validate_native_source_snapshot({"native_source_snapshot_sha256": expected}, None)
+
     def test_slepc_runtime_probe_records_binary_and_dependency_attestations(self) -> None:
         output = self.workspace / ".fullmag" / "local"
         runtime_bin = output / "bin" / "fullmag-bin"
@@ -302,6 +340,8 @@ class BuildEntryPointTests(unittest.TestCase):
         native_library.parent.mkdir(parents=True)
         native_library.write_bytes(b"library")
 
+        expected_snapshot = str(self._identity()["source_snapshot_sha256"])
+
         class FakeQuery:
             argtypes = None
             restype = None
@@ -314,6 +354,7 @@ class BuildEntryPointTests(unittest.TestCase):
                 info.petsc_version = b"3.24.6"
                 info.slepc_version = b"3.24.3"
                 info.reason = b"available"
+                info.diagnostics_json = json.dumps({"native_source_snapshot_sha256": expected_snapshot}).encode()
                 return 0
 
         class FakeLibrary:
@@ -369,6 +410,17 @@ class BuildEntryPointTests(unittest.TestCase):
                     entrypoint.profile_for("fem-cpu-slepc-runtime-v1")
                 ),
             )
+            # Even a fresh Rust startup stamp and byte-matched CMake library
+            # must not admit native code bound to another source capsule.
+            expected_snapshot = "b" * 64
+            with self.assertRaisesRegex(entrypoint.BuildEntryPointError, "native library source snapshot"):
+                entrypoint._attest_slepc_runtime(
+                    self.workspace, self.artifacts,
+                    {"FULLMAG_CARGO_TARGET_DIR": str(cargo_target), "LD_LIBRARY_PATH": "/opt/petsc/lib"},
+                    identity, entrypoint._runtime_contract(
+                        entrypoint.profile_for("fem-cpu-slepc-runtime-v1")
+                    ),
+                )
 
         runtime_attestation = json.loads(
             (self.artifacts / "runtime-attestation.json").read_text(encoding="utf-8")
@@ -387,7 +439,7 @@ class BuildEntryPointTests(unittest.TestCase):
             ["/usr/local/cuda/compat/libcuda.so.1"],
         )
         self.assertEqual(
-            cdll_calls,
+            cdll_calls[:2],
             [
                 ("/usr/local/cuda/compat/libcuda.so.1", entrypoint.ctypes.RTLD_GLOBAL),
                 (str(runtime_library), 0),
@@ -397,6 +449,7 @@ class BuildEntryPointTests(unittest.TestCase):
             probe_environment["LD_LIBRARY_PATH"].split(os.pathsep)[:2],
             [str(runtime_library.parent), "/usr/local/cuda/compat"],
         )
+        self.assertEqual(cdll_calls[2:], cdll_calls[:2])
         self.assertEqual(dependency_attestation["status"], "pass")
         self.assertTrue(
             dependency_attestation["dependency"]["modal_eigen_native_cpu_slepc_available"]
@@ -567,6 +620,7 @@ class BuildEntryPointTests(unittest.TestCase):
             "fem_floquet_waveguide_demag_k_contract",
             "fem_floquet_waveguide_cross_section_contract",
             "fem_floquet_modal_solver_contract",
+            "fem_poisson_airbox_shared_domain_contract",
         ):
             self.assertIn(target, script)
 
@@ -625,8 +679,10 @@ class BuildEntryPointTests(unittest.TestCase):
                                 "fem_floquet_waveguide_demag_k_contract",
                                 "fem_floquet_waveguide_cross_section_contract",
                                 "fem_floquet_modal_solver_contract",
+                                "fem_poisson_airbox_shared_domain_contract",
                             ],
                             "modal_target": "fem_poisson_airbox_modal_eigen_slepc_contract",
+                            "shared_domain_target": "fem_poisson_airbox_shared_domain_contract",
                             "floquet_targets": [
                                 "fem_floquet_magnetic_operator_contract",
                                 "fem_floquet_bloch_scalar_contract",
@@ -641,7 +697,7 @@ class BuildEntryPointTests(unittest.TestCase):
                         "attestation": {
                             "ctest_junit": {
                                 "status": "pass",
-                                "testcase_count": 8,
+                                "testcase_count": 9,
                                 "skipped_count": 0,
                                 "failure_count": 0,
                                 "testcases": [
@@ -653,6 +709,7 @@ class BuildEntryPointTests(unittest.TestCase):
                                     "fem_floquet_waveguide_demag_k_contract",
                                     "fem_floquet_waveguide_cross_section_contract",
                                     "fem_floquet_modal_solver_contract",
+                                    "fem_poisson_airbox_shared_domain_contract",
                                 ],
                             },
                             "cmake": {
@@ -677,6 +734,7 @@ class BuildEntryPointTests(unittest.TestCase):
                                     "modal_eigen_native_cpu_slepc_available": True,
                                     "petsc_version": "3.24.6",
                                     "slepc_version": "3.24.3",
+                                    "diagnostics": {"native_source_snapshot_sha256": self._identity()["source_snapshot_sha256"]},
                                 },
                             },
                             "resolution": {

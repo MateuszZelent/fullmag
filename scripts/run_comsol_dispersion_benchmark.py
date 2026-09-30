@@ -2,7 +2,8 @@
 """Run the COMSOL-aligned C0/C1/A1 benchmark from one managed build.
 
 This is a host-side orchestration entry point.  It consumes a completed
-``fem-cpu-slepc-modal-v1`` runner job, verifies the exact source capsule,
+``fem-cpu-slepc-modal-v1`` or a supported runtime-only runner job. It
+verifies the exact source capsule,
 runtime receipt and pinned image, and then runs the already-built runtime in
 the repository's ``fem-modal-cpu`` Compose service.  It never builds an image
 or a native target and it does not silently replace the CPU/SLEPc lane.
@@ -56,7 +57,8 @@ from validate_comsol_dispersion_scientific_gate import (  # noqa: E402
 
 PROFILE = "fem-cpu-slepc-modal-v1"
 RUNTIME_PROFILE = "fem-cpu-slepc-runtime-v1"
-SUPPORTED_PROFILES = (PROFILE, RUNTIME_PROFILE)
+CPU_ABI_RUNTIME_PROFILE = "fem-cpu-slepc-runtime-v2"
+SUPPORTED_PROFILES = (PROFILE, RUNTIME_PROFILE, CPU_ABI_RUNTIME_PROFILE)
 EXPECTED_IMAGE_DIGEST = "sha256:e5f70bd632011f9a0d8163430dab81bc6f248e07e4af086dfdf77bcd087471d7"
 RECEIPT_SCHEMA = "fullmag.local-runner.build-receipt.v1"
 CONTRACT_SCHEMA = "fullmag.fem.cpu.slepc_modal_contract_result.v1"
@@ -103,7 +105,8 @@ FLOQUET_TARGETS = (
     "fem_floquet_waveguide_cross_section_contract",
     "fem_floquet_modal_solver_contract",
 )
-MODAL_TARGETS = (MODAL_TARGET, *FLOQUET_TARGETS)
+SHARED_DOMAIN_TARGET = "fem_poisson_airbox_shared_domain_contract"
+MODAL_TARGETS = (MODAL_TARGET, *FLOQUET_TARGETS, SHARED_DOMAIN_TARGET)
 REQUIRED_CASE_ARTIFACTS = (
     "metadata.json",
     "eigen/spectrum.v2.json",
@@ -139,6 +142,7 @@ class BuildContext:
     capsule: Path
     source_tree: Path
     runtime_root: Path
+    image_digest: str = EXPECTED_IMAGE_DIGEST
 
 
 def _is_reparse(path: Path) -> bool:
@@ -309,7 +313,7 @@ def _validated_build_evidence(
             artifacts / "contracts" / "slepc-modal" / "result.json", native_identity
         )
         return {"kind": "native_build_and_ctest", "source": contract["source"]}
-    if profile != RUNTIME_PROFILE:
+    if profile not in (RUNTIME_PROFILE, CPU_ABI_RUNTIME_PROFILE):
         raise BenchmarkError("unsupported benchmark build profile")
     attestation = _json_file(artifacts / "runtime-attestation.json", "runtime attestation")
     expected_source = {
@@ -322,7 +326,41 @@ def _validated_build_evidence(
         or attestation.get("source") != expected_source
     ):
         raise BenchmarkError("runtime build evidence source or status mismatch")
+    dependency = _json_file(artifacts / "dependency-attestation.json", "native dependency attestation")
+    values = dependency.get("dependency")
+    if dependency.get("status") != "pass" or dependency.get("source") != expected_source or not isinstance(values, dict):
+        raise BenchmarkError("runtime native dependency attestation source or status mismatch")
+    from local_runner.build_entrypoint import BuildEntryPointError, validate_native_source_snapshot
+    try:
+        validate_native_source_snapshot(values.get("diagnostics_json"), expected_source["snapshot_sha256"])
+    except BuildEntryPointError as error:
+        raise BenchmarkError(f"runtime native source binding failed: {error}") from error
+    if profile == CPU_ABI_RUNTIME_PROFILE:
+        cmake = _json_file(artifacts / "cmake-attestation.json", "CMake attestation")
+        mfem = cmake.get("mfem_abi")
+        if (
+            not isinstance(mfem, dict)
+            or not str(mfem.get("path", "")).startswith("/opt/fullmag-mfem-cpu/lib/")
+            or not SHA256_RE.fullmatch(str(mfem.get("sha256", "")))
+        ):
+            raise BenchmarkError("runtime build lacks CPU MFEM ABI evidence")
     return {"kind": "native_build_and_runtime_probes", "source": expected_source}
+
+
+def _expected_image_digest(layout: Mapping[str, Any], profile: str) -> str:
+    if profile not in SUPPORTED_PROFILES:
+        raise BenchmarkError("unsupported benchmark build profile")
+    storage = Path(layout["storage_root"])
+    catalog_path = _contained_path(
+        storage, "index/local-runner-build-config.json", "runner build catalog"
+    )
+    catalog = _json_file(catalog_path, "runner build catalog")
+    profiles = catalog.get("profiles")
+    configured = profiles.get(profile) if isinstance(profiles, dict) else None
+    digest = configured.get("image_digest") if isinstance(configured, dict) else None
+    if not isinstance(digest, str) or not IMAGE_RE.fullmatch(digest):
+        raise BenchmarkError("benchmark image is not pinned in the runner build catalog")
+    return digest
 
 
 def _validate_contract(
@@ -366,6 +404,7 @@ def _validate_contract(
     if (
         build.get("modal_target") != MODAL_TARGET
         or tuple(build.get("floquet_targets", ())) != FLOQUET_TARGETS
+        or build.get("shared_domain_target") != SHARED_DOMAIN_TARGET
         or not isinstance(options, list)
         or not required_options.issubset(options)
         or build.get("ctest_completed") is not True
@@ -425,6 +464,13 @@ def _validate_contract(
         or not dependency_values.get("slepc_version")
     ):
         raise BenchmarkError("SLEPc modal dependency attestation is incomplete")
+    from local_runner.build_entrypoint import BuildEntryPointError, validate_native_source_snapshot
+    try:
+        validate_native_source_snapshot(
+            dependency_values.get("diagnostics"), native_identity["source_snapshot_sha256"]
+        )
+    except BuildEntryPointError as error:
+        raise BenchmarkError(f"SLEPc modal native source binding failed: {error}") from error
     resolution = attestation.get("resolution")
     precision = resolution.get("precision") if isinstance(resolution, dict) else None
     if (
@@ -442,6 +488,7 @@ def _validate_contract(
 
 def _validate_build_context(layout: Mapping[str, Any], job: Mapping[str, Any]) -> BuildContext:
     storage = Path(layout["storage_root"])
+    expected_image = _expected_image_digest(layout, str(job["profile"]))
     payload = job["payload"]
     capsule = _contained_path(storage, payload["capsule_relative"], "source capsule")
     _regular_dir(capsule, "source capsule")
@@ -486,11 +533,11 @@ def _validate_build_context(layout: Mapping[str, Any], job: Mapping[str, Any]) -
         validate_build_receipt(
             artifacts,
             job,
-            {"image_digest": EXPECTED_IMAGE_DIGEST},
+            {"image_digest": expected_image},
         )
     except (OSError, ValueError, KeyError, TypeError) as error:
         raise BenchmarkError("managed build receipt verification failed") from error
-    if receipt.get("image_digest") != EXPECTED_IMAGE_DIGEST:
+    if receipt.get("image_digest") != expected_image:
         raise BenchmarkError("build receipt image digest is not the pinned modal image")
     if receipt.get("qualification") != "NOT VERIFIED" or receipt.get("state") != "succeeded":
         raise BenchmarkError("build receipt is not a completed unqualified build")
@@ -560,6 +607,7 @@ def _validate_build_context(layout: Mapping[str, Any], job: Mapping[str, Any]) -
         capsule=capsule,
         source_tree=source_tree,
         runtime_root=runtime_root,
+        image_digest=expected_image,
     )
 
 
@@ -656,6 +704,7 @@ def _container_identity(context: BuildContext, output_dir: Path) -> dict[str, An
     ).hexdigest()[:32]
     return {
         "name": f"fullmag-dispersion-{run_id}",
+        "image_digest": context.image_digest,
         "labels": {
             CONTAINER_LABEL_COMPONENT: CONTAINER_COMPONENT,
             CONTAINER_LABEL_JOB: job_id,
@@ -771,7 +820,7 @@ def _inspect_benchmark_container(
         return {"status": "blocked", "reason": "container labels identity mismatch"}
     image = inspected.get("Image")
     configured_image = config.get("Image") if isinstance(config, Mapping) else None
-    if EXPECTED_IMAGE_DIGEST not in {image, configured_image}:
+    if identity.get("image_digest", EXPECTED_IMAGE_DIGEST) not in {image, configured_image}:
         return {"status": "blocked", "reason": "container image identity mismatch"}
     mounts = inspected.get("Mounts")
     if not isinstance(mounts, list) or len(mounts) != len(expected_mounts):
@@ -944,20 +993,30 @@ def _compose_command(
         f"{output_dir}:/workspace/benchmark-output:rw",
     ]
     for key, value in (
-        ("FULLMAG_FEM_GPU_IMAGE", EXPECTED_IMAGE_DIGEST),
+        ("FULLMAG_FEM_GPU_IMAGE", context.image_digest),
         ("FULLMAG_FEM_EXECUTION", "cpu"),
         ("FULLMAG_FEM_MFEM_DEVICE", "cpu"),
         ("FULLMAG_FEM_WITH_SLEPC", "ON"),
         ("FULLMAG_USE_MFEM_STACK", "ON"),
         ("FULLMAG_FEM_REQUIRE_CEED", "1"),
         ("FULLMAG_FEM_REQUIRE_GPU", "0"),
+        ("CMAKE_PREFIX_PATH", (
+            "/opt/fullmag-mfem-cpu:/opt/fullmag-deps"
+            if context.job["profile"] == CPU_ABI_RUNTIME_PROFILE
+            else "/opt/fullmag-deps"
+        )),
         ("FULLMAG_API_PORT", "0"),
         ("FULLMAG_DISABLE_PREVIEW_3D", "1"),
         ("FULLMAG_DISABLE_CHARTS", "1"),
         ("FULLMAG_STATE_ROOT", "/workspace/benchmark-output/state"),
         ("FULLMAG_PYTHON", "/usr/local/bin/python3"),
         ("PYTHONPATH", "/workspace/capsule/packages/fullmag-py/src:/workspace/.fullmag/local"),
-        ("LD_LIBRARY_PATH", "/workspace/.fullmag/local/lib:/usr/local/cuda/compat:/opt/fullmag-deps/lib"),
+        ("LD_LIBRARY_PATH", (
+            "/workspace/.fullmag/local/lib:/opt/fullmag-mfem-cpu/lib:"
+            "/usr/local/cuda/compat:/opt/fullmag-deps/lib"
+            if context.job["profile"] == CPU_ABI_RUNTIME_PROFILE else
+            "/workspace/.fullmag/local/lib:/usr/local/cuda/compat:/opt/fullmag-deps/lib"
+        )),
         ("FULLMAG_REPO_ROOT", "/workspace/capsule"),
     ):
         command.extend(("-e", f"{key}={value}"))
@@ -988,14 +1047,16 @@ def _compose_command(
     return command
 
 
-def _compose_environment(layout: Mapping[str, Any]) -> dict[str, str]:
+def _compose_environment(
+    layout: Mapping[str, Any], image_digest: str = EXPECTED_IMAGE_DIGEST
+) -> dict[str, str]:
     environment = dict(os.environ)
     environment.update({str(key): str(value) for key, value in layout["env"].items()})
     if os.name == "nt":
         # Keep explicit `C:\\...:/container/path` bind mounts unambiguous in
         # Docker Compose's Windows path conversion layer.
         environment["COMPOSE_CONVERT_WINDOWS_PATHS"] = "1"
-    environment["FULLMAG_FEM_GPU_IMAGE"] = EXPECTED_IMAGE_DIGEST
+    environment["FULLMAG_FEM_GPU_IMAGE"] = image_digest
     environment["FULLMAG_FEM_EXECUTION"] = "cpu"
     environment["FULLMAG_FEM_MFEM_DEVICE"] = "cpu"
     environment["FULLMAG_FEM_WITH_SLEPC"] = "ON"
@@ -1161,7 +1222,7 @@ def _run_request(
             "public_model_files": list(PUBLIC_MODEL_FILES),
         },
         "runtime": {
-            "image_digest": EXPECTED_IMAGE_DIGEST,
+            "image_digest": context.image_digest,
             "backend": "fem",
             "device": "cpu",
             "precision": "double",
@@ -1379,7 +1440,7 @@ def _execute(
             process = subprocess.run(
                 list(command),
                 cwd=context.layout["repo_root"],
-                env=_compose_environment(context.layout),
+                env=_compose_environment(context.layout, context.image_digest),
                 stdin=subprocess.DEVNULL,
                 stdout=stream,
                 stderr=subprocess.STDOUT,
@@ -1503,7 +1564,7 @@ def _execute(
             "source_snapshot_sha256": context.native_identity["source_snapshot_sha256"],
         },
         "runtime": {
-            "image_digest": EXPECTED_IMAGE_DIGEST,
+            "image_digest": context.image_digest,
             "backend": "fem",
             "device": "cpu",
             "precision": "double",
@@ -1537,7 +1598,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=Path(__file__).resolve().parents[1],
         help="the Fullmag checkout whose canonical storage is used",
     )
-    parser.add_argument("--job-id", required=True, help="completed fem-cpu-slepc-modal-v1 job")
+    parser.add_argument(
+        "--job-id",
+        required=True,
+        help="completed fem-cpu-slepc-modal-v1, fem-cpu-slepc-runtime-v1 or v2 job",
+    )
     parser.add_argument(
         "--cases",
         type=_parse_cases,
@@ -1596,7 +1661,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                         "qualification": "NOT VERIFIED",
                         "job_id": args.job_id,
                         "cases": list(args.cases),
-                        "image_digest": EXPECTED_IMAGE_DIGEST,
+                        "image_digest": context.image_digest,
                         "compose_command": command,
                         "source_tree": str(context.source_tree),
                         "runtime_root": str(context.runtime_root),
@@ -1616,7 +1681,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             # the source job between the preflight and the Compose bind setup.
             locked_job = _read_job(layout, args.job_id)
             context = _validate_build_context(layout, locked_job)
-            _inspect_image(EXPECTED_IMAGE_DIGEST)
+            _inspect_image(context.image_digest)
             output_dir = _new_output_dir(context, args.output_dir)
             output_dir.mkdir(parents=True, exist_ok=False)
             command = _compose_command(

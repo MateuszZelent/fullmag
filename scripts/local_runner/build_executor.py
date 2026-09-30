@@ -16,6 +16,7 @@ from local_runner.coordinator import CoordinatorError, docker, inspect_owned
 from local_runner.queue import JobQueue
 from local_runner.worker import _resolve_storage_dir, _format_cpus, _format_memory
 from local_runner.worker_entrypoint import verify_source
+from local_runner.build_entrypoint import BuildEntryPointError, validate_native_source_snapshot
 
 
 PROFILES = {
@@ -26,6 +27,7 @@ PROFILES = {
     'fem-gpu-current-contracts-v1': ('fem', 'gpu'),
     'fem-cpu-slepc-modal-v1': ('fem', 'cpu'),
     'fem-cpu-slepc-runtime-v1': ('fem', 'cpu'),
+    'fem-cpu-slepc-runtime-v2': ('fem', 'cpu'),
 }
 PROFILE_CONTRACTS = {
     'fem-cpu-current-contracts-v1': {
@@ -49,6 +51,7 @@ PROFILE_CONTRACTS = {
             'fem_floquet_waveguide_cross_section_contract',
             'fem_floquet_modal_solver_contract',
         ),
+        'shared_domain_target': 'fem_poisson_airbox_shared_domain_contract',
     },
 }
 RUNTIME_PROFILE_CONTRACTS = {
@@ -69,6 +72,35 @@ RUNTIME_PROFILE_CONTRACTS = {
         'frontend_stages': [],
     },
 }
+RUNTIME_PROFILE_CONTRACTS['fem-cpu-slepc-runtime-v2'] = {
+    **RUNTIME_PROFILE_CONTRACTS['fem-cpu-slepc-runtime-v1'],
+    'schema': 'fullmag.fem.cpu.slepc_runtime_contract.v2',
+    'cmake_options': {
+        **RUNTIME_PROFILE_CONTRACTS['fem-cpu-slepc-runtime-v1']['cmake_options'],
+        'FULLMAG_ENABLE_CUDA': 'OFF',
+    },
+}
+
+
+def valid_cpu_mfem_abi_attestation(cmake_attestation):
+    if not isinstance(cmake_attestation, dict):
+        return False
+    mfem_abi = cmake_attestation.get('mfem_abi')
+    mfem_cmake_dir = cmake_attestation.get('mfem_cmake_dir')
+    if not isinstance(mfem_abi, dict):
+        return False
+    paths = (
+        (mfem_abi.get('path'), '/opt/fullmag-mfem-cpu/lib/'),
+        (mfem_cmake_dir, '/opt/fullmag-mfem-cpu/'),
+    )
+    if any(
+        not isinstance(path, str)
+        or not path.startswith(prefix)
+        or '..' in Path(path).parts
+        for path, prefix in paths
+    ):
+        return False
+    return re.fullmatch(r'[a-f0-9]{64}', str(mfem_abi.get('sha256', ''))) is not None
 TARGETS = {'source': '/source', 'workspace': '/workspace',
            'build': '/workspace/.fullmag-build', 'artifacts': '/artifacts',
            'trusted': '/runner', 'cargo': '/workspace/.fullmag-cargo',
@@ -349,6 +381,9 @@ def validate_build_receipt(artifacts, job, journal):
             or not runtime_library_bound
         ):
             raise ValueError('SLEPc runtime CMake attestation does not match the profile')
+        if job['profile'] == 'fem-cpu-slepc-runtime-v2':
+            if not valid_cpu_mfem_abi_attestation(cmake_attestation):
+                raise ValueError('SLEPc runtime v2 lacks CPU MFEM ABI attestation')
         startup_stamp = (
             runtime_attestation.get('startup_stamp')
             if isinstance(runtime_attestation, dict)
@@ -388,6 +423,12 @@ def validate_build_receipt(artifacts, job, journal):
             or not dependency.get('slepc_version')
         ):
             raise ValueError('SLEPc runtime dependency attestation is incomplete')
+        try:
+            validate_native_source_snapshot(
+                dependency.get('diagnostics_json'), expected_source['snapshot_sha256']
+            )
+        except BuildEntryPointError as error:
+            raise ValueError(f'SLEPc runtime native source binding failed: {error}') from error
         stages = receipt.get('stages')
         if not isinstance(stages, list) or len(stages) != 1:
             raise ValueError('SLEPc runtime receipt must contain only native-build')
@@ -522,6 +563,8 @@ def validate_build_receipt(artifacts, job, journal):
                     raise ValueError('SLEPc modal target mismatch')
                 if tuple(build.get('floquet_targets', ())) != tuple(contract['floquet_targets']):
                     raise ValueError('SLEPc Floquet target set mismatch')
+                if build.get('shared_domain_target') != contract['shared_domain_target']:
+                    raise ValueError('SLEPc shared-domain target mismatch')
                 options = build.get('options')
                 required_options = {
                     '-DFULLMAG_ENABLE_CUDA=ON',
@@ -531,7 +574,11 @@ def validate_build_receipt(artifacts, job, journal):
                 }
                 if not isinstance(options, list) or not required_options.issubset(options):
                     raise ValueError('SLEPc modal CMake options do not prove CPU/SLEPc mode')
-                expected_targets = [contract['modal_target'], *contract['floquet_targets']]
+                expected_targets = [
+                    contract['modal_target'],
+                    *contract['floquet_targets'],
+                    contract['shared_domain_target'],
+                ]
                 if build.get('ctest_completed') is not True or build.get('executed_targets') != expected_targets:
                     raise ValueError('SLEPc modal receipt does not prove all required CTest targets ran')
                 attestation = result.get('attestation')
@@ -585,6 +632,12 @@ def validate_build_receipt(artifacts, job, journal):
                     or not dependency_values.get('slepc_version')
                 ):
                     raise ValueError('SLEPc modal result lacks PETSc/SLEPc dependency attestation')
+                try:
+                    validate_native_source_snapshot(
+                        dependency_values.get('diagnostics'), expected_source['snapshot_sha256']
+                    )
+                except BuildEntryPointError as error:
+                    raise ValueError(f'SLEPc modal native source binding failed: {error}') from error
                 resolution = attestation.get('resolution')
                 if (
                     not isinstance(resolution, dict)

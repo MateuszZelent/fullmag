@@ -40,8 +40,9 @@ floquet_targets=(
   fem_floquet_waveguide_cross_section_contract
   fem_floquet_modal_solver_contract
 )
-targets=("$modal_target" "${floquet_targets[@]}")
-ctest_regex='^fem_(poisson_airbox_modal_eigen_slepc|floquet_(magnetic_operator|bloch_scalar|airbox_operator|dynamic_demag_k|waveguide_demag_k|waveguide_cross_section|modal_solver))_contract$'
+shared_domain_target=fem_poisson_airbox_shared_domain_contract
+targets=("$modal_target" "${floquet_targets[@]}" "$shared_domain_target")
+ctest_regex='^fem_(poisson_airbox_modal_eigen_slepc|poisson_airbox_shared_domain|floquet_(magnetic_operator|bloch_scalar|airbox_operator|dynamic_demag_k|waveguide_demag_k|waveguide_cross_section|modal_solver))_contract$'
 
 cmake_attestation="$report_dir/cmake-attestation.json"
 runtime_probe="$report_dir/fullmag-fem-availability.json"
@@ -107,7 +108,7 @@ payload = {
     "schema": "fullmag.fem.cpu.slepc_modal_contract_result.v1",
     "scenario": "slepc-modal",
     "status": os.environ["STATUS"],
-    "scope": "managed_fem_cpu_slepc_modal_and_floquet_contracts",
+    "scope": "managed_fem_cpu_slepc_modal_floquet_and_shared_domain_contracts",
     "requested": {
         "backend": "fem",
         "device": "cpu",
@@ -122,8 +123,10 @@ payload = {
             "-DFULLMAG_ENABLE_FEM_GPU=OFF",
             "-DFULLMAG_USE_MFEM_STACK=ON",
             "-DFULLMAG_FEM_WITH_SLEPC=ON",
+            "-DFULLMAG_FEM_SOURCE_SNAPSHOT_SHA256=" + os.environ["SOURCE_SNAPSHOT"],
         ],
         "modal_target": "fem_poisson_airbox_modal_eigen_slepc_contract",
+        "shared_domain_target": "fem_poisson_airbox_shared_domain_contract",
         "floquet_targets": [
             "fem_floquet_magnetic_operator_contract",
             "fem_floquet_bloch_scalar_contract",
@@ -144,6 +147,7 @@ payload = {
             "fem_floquet_waveguide_demag_k_contract",
             "fem_floquet_waveguide_cross_section_contract",
             "fem_floquet_modal_solver_contract",
+            "fem_poisson_airbox_shared_domain_contract",
         ] if os.environ.get("CTEST_COMPLETED") == "1" else []),
     },
     "source": {
@@ -172,6 +176,7 @@ cmake -S native -B "$build_dir" \
   -DFULLMAG_ENABLE_FEM_GPU=OFF \
   -DFULLMAG_USE_MFEM_STACK=ON \
   -DFULLMAG_FEM_WITH_SLEPC=ON \
+  -DFULLMAG_FEM_SOURCE_SNAPSHOT_SHA256="${FULLMAG_SOURCE_SNAPSHOT_SHA256:?managed source snapshot required}" \
   2>&1 | tee "$report_dir/configure.log"
 
 CMAKE_ATTESTATION="$cmake_attestation" python3 - "$build_dir/CMakeCache.txt" <<'PY'
@@ -281,6 +286,10 @@ import json
 from pathlib import Path
 import sys
 
+import os
+sys.path.insert(0, str(Path.cwd() / "scripts"))
+from local_runner.build_entrypoint import validate_native_source_snapshot
+
 library_path = Path(sys.argv[1])
 output_path = Path(sys.argv[2])
 
@@ -337,6 +346,9 @@ try:
     fields["diagnostics"] = json.loads(text(info.diagnostics_json))
 except ValueError:
     fields["diagnostics"] = text(info.diagnostics_json)
+fields["native_source_snapshot_sha256"] = validate_native_source_snapshot(
+    fields["diagnostics"], os.environ.get("FULLMAG_SOURCE_SNAPSHOT_SHA256")
+)
 output = {
     "schema": "fullmag.fem.slepc_modal.dependency_attestation.v1",
     "status": "pass",

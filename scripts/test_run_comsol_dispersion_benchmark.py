@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 import json
 import ntpath
 from pathlib import Path
@@ -19,6 +20,82 @@ import run_comsol_dispersion_benchmark as benchmark
 
 
 class ComsolDispersionBenchmarkTests(unittest.TestCase):
+    def test_runtime_evidence_rejects_stale_or_unbound_native_library(self):
+        native = {"head_commit_full": "d" * 40, "source_snapshot_sha256": "e" * 64}
+        source = {"commit": native["head_commit_full"], "snapshot_sha256": native["source_snapshot_sha256"]}
+        runtime = {"schema": "fullmag.fem.slepc_runtime.attestation.v1", "status": "pass", "source": source}
+        for profile in (benchmark.RUNTIME_PROFILE, benchmark.CPU_ABI_RUNTIME_PROFILE):
+            for stamp in (None, "a" * 64, "e" * 64):
+                with self.subTest(profile=profile, stamp=stamp):
+                    dependency = {"status": "pass", "source": source, "dependency": {
+                        "diagnostics_json": json.dumps({"native_source_snapshot_sha256": stamp})}}
+                    cmake = {"mfem_abi": {"path": "/opt/fullmag-mfem-cpu/lib/libmfem.so", "sha256": "f" * 64}}
+                    def fixture(path, _label):
+                        return {"runtime-attestation.json": runtime,
+                                "dependency-attestation.json": dependency,
+                                "cmake-attestation.json": cmake}[path.name]
+                    with patch.object(benchmark, "_json_file", side_effect=fixture):
+                        if stamp == native["source_snapshot_sha256"]:
+                            result = benchmark._validated_build_evidence(Path("artifacts"), profile, native)
+                            self.assertEqual(result["source"], source)
+                        else:
+                            with self.assertRaisesRegex(benchmark.BenchmarkError, "native source binding"):
+                                benchmark._validated_build_evidence(Path("artifacts"), profile, native)
+
+    def test_cpu_abi_compose_uses_pinned_image_and_cpu_mfem_library(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            base = self.fake_context(root)
+            image = "sha256:" + "f" * 64
+            context = replace(
+                base,
+                job={**base.job, "profile": benchmark.CPU_ABI_RUNTIME_PROFILE},
+                image_digest=image,
+            )
+            command = benchmark._compose_command(context, root / "output", benchmark.CASES)
+            self.assertIn("FULLMAG_FEM_GPU_IMAGE=" + image, command)
+            self.assertIn(
+                "CMAKE_PREFIX_PATH=/opt/fullmag-mfem-cpu:/opt/fullmag-deps",
+                command,
+            )
+            self.assertIn(
+                "LD_LIBRARY_PATH=/workspace/.fullmag/local/lib:"
+                "/opt/fullmag-mfem-cpu/lib:/usr/local/cuda/compat:/opt/fullmag-deps/lib",
+                command,
+            )
+            self.assertEqual(
+                benchmark._compose_environment(context.layout, image)["FULLMAG_FEM_GPU_IMAGE"],
+                image,
+            )
+            self.assertEqual(
+                benchmark._container_identity(context, root / "output")["image_digest"],
+                image,
+            )
+
+    def test_each_profile_requires_operator_pinned_image(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            layout = {"storage_root": str(root)}
+            with self.assertRaisesRegex(benchmark.BenchmarkError, "runner build catalog"):
+                benchmark._expected_image_digest(
+                    layout, benchmark.CPU_ABI_RUNTIME_PROFILE
+                )
+            catalog = root / "index" / "local-runner-build-config.json"
+            catalog.parent.mkdir()
+            image = "sha256:" + "a" * 64
+            catalog.write_text(json.dumps({"profiles": {
+                profile: {"image_digest": image}
+                for profile in benchmark.SUPPORTED_PROFILES
+            }}), encoding="utf-8")
+            for profile in benchmark.SUPPORTED_PROFILES:
+                self.assertEqual(
+                    benchmark._expected_image_digest(layout, profile), image
+                )
+            with self.assertRaisesRegex(
+                benchmark.BenchmarkError, "unsupported benchmark build profile"
+            ):
+                benchmark._expected_image_digest(layout, "fem-cpu-release")
+
     def fake_context(self, root: Path) -> benchmark.BuildContext:
         source = root / "capsule" / "tree"
         runtime = root / "build" / "artifacts" / "outputs" / ".fullmag" / "local"
@@ -48,6 +125,77 @@ class ComsolDispersionBenchmarkTests(unittest.TestCase):
             source_tree=source,
             runtime_root=runtime,
         )
+
+    def test_modal_contract_requires_executed_shared_domain_regression(self):
+        # List the required scenarios independently of the client's constants.
+        targets = [
+            "fem_poisson_airbox_modal_eigen_slepc_contract",
+            "fem_floquet_magnetic_operator_contract",
+            "fem_floquet_bloch_scalar_contract",
+            "fem_floquet_airbox_operator_contract",
+            "fem_floquet_dynamic_demag_k_contract",
+            "fem_floquet_waveguide_demag_k_contract",
+            "fem_floquet_waveguide_cross_section_contract",
+            "fem_floquet_modal_solver_contract",
+            "fem_poisson_airbox_shared_domain_contract",
+        ]
+        native = {"head_commit_full": "d" * 40, "source_snapshot_sha256": "e" * 64}
+        requested = {"backend": "fem", "device": "cpu", "precision": "double", "slepc": True}
+        resolved = {**requested, "fallback_used": False}
+        options = {
+            "FULLMAG_ENABLE_CUDA": "ON", "FULLMAG_ENABLE_FEM_GPU": "OFF",
+            "FULLMAG_USE_MFEM_STACK": "ON", "FULLMAG_FEM_WITH_SLEPC": "ON",
+        }
+        contract = {
+            "schema": benchmark.CONTRACT_SCHEMA, "scenario": "slepc-modal", "status": "pass",
+            "source": {"commit": native["head_commit_full"],
+                       "snapshot_sha256": native["source_snapshot_sha256"]},
+            "requested": requested, "resolved": resolved,
+            "build": {
+                "modal_target": targets[0], "floquet_targets": targets[1:-1],
+                "shared_domain_target": targets[-1],
+                "options": [f"-D{name}={value}" for name, value in options.items()],
+                "ctest_completed": True, "executed_targets": targets,
+            },
+            "attestation": {
+                "ctest_junit": {
+                    "status": "pass", "testcase_count": 9, "skipped_count": 0,
+                    "failure_count": 0, "testcases": targets,
+                },
+                "cmake": {"status": "pass", "options": {
+                    name: {"value": value} for name, value in options.items()}},
+                "runtime": {"status": "pass", "availability": {"native_fem_cpu_available": True},
+                            "startup_stamp": "source snapshot: " + native["source_snapshot_sha256"]},
+                "dependency": {"status": "pass", "dependency": {
+                    "petsc_available": True, "slepc_available": True,
+                    "modal_eigen_native_cpu_slepc_available": True,
+                    "petsc_version": "3.24.6", "slepc_version": "3.24.3",
+                    "diagnostics": {"native_source_snapshot_sha256": "e" * 64}}},
+                "resolution": {"status": "pass", "resolved": resolved, "precision": {
+                    "value": "double", "basis": "PETSC_USE_REAL_DOUBLE; sizeof(PetscReal)=8"}},
+            },
+        }
+        with patch.object(benchmark, "_json_file", return_value=contract):
+            self.assertEqual(benchmark._validate_contract(Path("contract.json"), native), contract)
+        mutations = (
+            ("stale native library", ("attestation", "dependency", "dependency", "diagnostics", "native_source_snapshot_sha256"), "b" * 64),
+            ("missing native binding", ("attestation", "dependency", "dependency", "diagnostics"), {}),
+            ("missing shared-domain metadata", ("build", "shared_domain_target"), None),
+            ("old eight-target build", ("build", "executed_targets"), targets[:-1]),
+            ("missing shared-domain JUnit case", ("attestation", "ctest_junit", "testcases"), targets[:-1]),
+            ("skipped regression", ("attestation", "ctest_junit", "skipped_count"), 1),
+            ("stale snapshot", ("source", "snapshot_sha256"), "0" * 64),
+        )
+        for label, keys, value in mutations:
+            with self.subTest(label=label):
+                altered = json.loads(json.dumps(contract))
+                record = altered
+                for key in keys[:-1]:
+                    record = record[key]
+                record[keys[-1]] = value
+                with patch.object(benchmark, "_json_file", return_value=altered):
+                    with self.assertRaises(benchmark.BenchmarkError):
+                        benchmark._validate_contract(Path("contract.json"), native)
 
     def test_compose_plan_is_pinned_cpu_slepc_and_has_no_build_or_default_image(self):
         with tempfile.TemporaryDirectory() as directory:
