@@ -1,5 +1,11 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
+## S12 — naprawa obserwatora niezmiennej kapsuły
+
+- #182 terminalny blocked przed buildem; zachowano kapsułę. Przyczyna: 8 wygenerowanych .pyc, bez zmian/braków wersjonowanych plików.
+- Nowy kontroler używa klienta worktree, -B i PYTHONDONTWRITEBYTECODE=1; blocked/interrupted kończą obserwację. 4 regresje Python PASS, w tym rzeczywisty import bez modyfikacji drzewa.
+- Audyt: docs/audits/2026-09-30-capsule-observer-bytecode.md. Następnie: nowa kapsuła/runtime-v2, poprawiony kontroler i seria Γ/DE/BV. Brak nowych częstotliwości.
+
 ## S04/S07 — fingerprint siatki rekonstrukcji
 
 - Pilot przelicza v3 z rzeczywistych metadanych; 37 testów Python PASS, 9/9 historycznych artefaktów #173 zgodnych również topologicznie.
