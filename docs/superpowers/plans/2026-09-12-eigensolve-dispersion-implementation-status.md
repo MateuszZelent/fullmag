@@ -1,5 +1,25 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
+## #179 przejęty po zwolnieniu miejsca; dalsza poprawka S07 — 2026-09-30
+
+- Użytkownik zwolnił miejsce. Live health pokazał 14703403008 B wolnego,
+  worker_alive=true, accepting_jobs=true, worker_error=null.
+- #179 ma running, updated_at=1790790044.1334934, nadal ten sam snapshot/digest.
+  Sesja 66068 potwierdziła przejście na running; 28993/2072 również żywe.
+  Nie zgłoszono duplikatu, nie wykonano cleanupu ani zmiany profili.
+- Przy pierwszym sprawdzeniu nie było jeszcze kontenera workera ani logu;
+  running oznacza przejęcie joba, nie dowód kompilacji. Wykonawca weryfikuje
+  kapsułę i native identity przed utworzeniem execution. Bramka buildu otwarta.
+  Powtarzające się wcześniejsze job_claimed były emitowane przed admission;
+  nie dowodzą powtarzanych startów kompilacji. Ostatni wpis 17:40:43 UTC.
+- S07 WIP dopracowany: wspólny selektor diagnostyki z kontrolą unikalnej
+  tożsamości i obiektowego diagnostics; adapter fizycznego Kittela korzysta
+  z niego zamiast własnego fallbacku do korzenia. Dodane regresje źródłowe.
+  rustfmt/parser i scoped diff check exit0; testy Rust nie skompilowane,
+  nie uruchomione. Zmiana nie wchodzi do wcześniejszego snapshotu #179.
+- Szczegóły i aktualne hashe w audycie eigen-sample-diagnostics-identity.
+  Pełny zakres S00–S12 nadal otwarty; nowych wyników solvera nie ma.
+
 ## Aktualny dostęp do runnera — 2026-09-30 17:34 UTC
 
 - Sprawdzenie głównego klienta zwróciło `Container profile allow-list mismatch`.
