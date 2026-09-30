@@ -14,7 +14,7 @@ import {
   buildEigenSpectrumChartModel,
   frequencyDomainManifestPayload,
 } from "@/shared/domain/analysis/frequencyDomainChartModels";
-import { buildEigenResidualSummary } from "@/shared/domain/analysis/eigenResidualSummary";
+import { buildEigenResidualSummary, readEigenModeResourcePayload } from "@/shared/domain/analysis/eigenResidualSummary";
 import { formatFrequencyHz } from "@/shared/domain/analysis/frequencyUnits";
 import { phasorAdapter } from "@/shared/domain/analysis/phasorConventionAdapter";
 import { Button } from "@/shared/ui/Button";
@@ -300,7 +300,7 @@ function useEigenModeSummary(selection: InspectorPanelProps["selection"]) {
     (point) =>
       point.sampleIndex === sampleIndex && point.rawModeIndex === modeIndex,
   );
-  const modePayload = record(eigenMode.data);
+  const modePayload = readEigenModeResourcePayload(eigenMode.data, sampleIndex, modeIndex);
   const componentSummary = record(modePayload?.component_summary);
   const frequencyHz =
     finiteNumber(modePayload?.frequency_real_hz) ??

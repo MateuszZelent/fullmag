@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildEigenResidualSummary } from "../src/shared/domain/analysis/eigenResidualSummary.ts";
+import { buildEigenResidualSummary, readEigenModeResourcePayload } from "../src/shared/domain/analysis/eigenResidualSummary.ts";
 
 test("keeps absolute and relative L2 residuals separate", () => {
   const value = buildEigenResidualSummary({ residual_absolute_l2: 2e-12,
@@ -43,4 +43,22 @@ test("shows the producer's projected full scope without claiming qualification",
   const value = buildEigenResidualSummary({ residual_relative_l2: 2e-10,
     block_residuals: { scope: "full_projected_weak_form_and_periodic_seams" } }, null);
   assert.equal(value.scope, "Full projected weak form and periodic seams");
+});
+
+test("reads the artifact payload inside the revisioned resource", () => {
+  const payload = { schema_version: "eigen_mode.v2", sample_index: 2, raw_mode_index: 3,
+    residual_relative_l2: 2e-10, block_residuals: { scope: "full_projected_weak_form_and_periodic_seams" } };
+  const resource = { status: "ready", schema_version: "frequency_domain_eigen_mode_resource.v1", payload };
+  assert.equal(readEigenModeResourcePayload(resource, 2, 3), payload);
+  assert.equal(buildEigenResidualSummary(readEigenModeResourcePayload(resource, 2, 3), null).relativeL2, 2e-10);
+});
+test("rejects missing, malformed and different-selection resource payloads", () => {
+  const payload = { schema_version: "eigen_mode.v2", sample_index: 2, raw_mode_index: 3 };
+  const ready = { status: "ready", payload };
+  for (const [resource, sample, mode] of [
+    [null, 2, 3], [{ ...ready, status: "missing" }, 2, 3],
+    [{ ...ready, payload: [] }, 2, 3], [ready, 1, 3], [ready, 2, 1],
+    [ready, null, 3], [ready, -1, 3], [ready, 2, 3.5],
+    [{ ...ready, payload: { ...payload, sample_index: "2" } }, 2, 3],
+  ]) assert.equal(readEigenModeResourcePayload(resource, sample, mode), null);
 });

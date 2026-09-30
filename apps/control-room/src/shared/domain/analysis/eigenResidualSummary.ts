@@ -37,3 +37,19 @@ export function buildEigenResidualSummary(
     scope,
   };
 }
+
+/** Read only the artifact matching the currently selected sample and raw mode. */
+export function readEigenModeResourcePayload(
+  resource: unknown,
+  sampleIndex: number | null,
+  rawModeIndex: number | null,
+): Record<string, unknown> | null {
+  if (sampleIndex == null || rawModeIndex == null ||
+      !Number.isInteger(sampleIndex) || !Number.isInteger(rawModeIndex) ||
+      sampleIndex < 0 || rawModeIndex < 0) return null;
+  const envelope = record(resource);
+  if (envelope?.status !== "ready") return null;
+  const payload = record(envelope.payload);
+  if (payload?.sample_index !== sampleIndex || payload?.raw_mode_index !== rawModeIndex) return null;
+  return payload;
+}

@@ -1,5 +1,20 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
+## S07/S08 — korekta diagnozy certyfikatu i koperty zasobu
+
+- Poprzedni turn: postęp ce954ba5d76741bc31011bdb9bf577baddbcbd44 na remote.
+- Rzeczywisty writer FEM eigen_output już uzupełnia block_residuals w pliku
+  modu; spectrum.v3 i mode #173 są zgodne. API zachowuje pola przez flatten.
+  Poprzednia hipoteza braku eksportu całej ścieżki była zbyt szeroka.
+- Właściwy błąd Inspector: odczyt zewnętrznego zasobu zamiast payload.
+  Naprawiono ready/identyczność sample_index i raw_mode_index; stare dane
+  po zmianie selekcji nie są używane jako metadane nowego modu.
+- Dziewięć testów adaptera PASS. Replay rzeczywistego artefaktu #173 zachował
+  residual względny 2.1580189814434916e-10 i pełny scope. To nie live API/browser.
+- Audyt został poprawiony. Pozostałe realizacje, bieżący runtime/browser,
+  zbieżność i pełne S00–S12 pozostają otwarte. Sesja 66068 potwierdzona żywa.
+
+
 ## S08 — jawna prezentacja residuali modu
 
 - Poprzedni turn: postęp, b2ad1981e342ab5417d7da9267e1518cf787037e na remote;

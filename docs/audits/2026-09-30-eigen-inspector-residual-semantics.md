@@ -23,8 +23,27 @@ NOT VERIFIED: pełny typecheck aplikacji i browser/render; w worktree brak
 kompletnych zależności aplikacji. Użyto wyłącznie już zainstalowanego TypeScript
 oraz React Doctor z głównego checkoutu, bez kopiowania lub instalacji pakietów.
 
-Luka S07: metadata writer modal_manifest nie publikuje block_residuals.scope.
-Ten fragment uczciwie prezentuje brak danych; nie implementuje jeszcze
-propagacji natywnego certyfikatu przez writer/API. Kolejny krok: powiązać
-certyfikat v3 z tożsamością próbki/modu i wystawić go w właściwym zasobie,
-z walidacją kontraktu, runtime oraz browser proof.
+## Korekta diagnozy po kontroli rzeczywistych artefaktów
+
+Wspólny modal_manifest nie publikuje block_residuals, ale rzeczywista ścieżka
+FEM eigen_output uzupełnia te pola podczas tworzenia v2 bundle. Plik modu i
+spectrum.v3 archiwalnego joba #173 zawierają zgodny pełny certyfikat. API
+FrequencyDomainModeArtifactPayload zachowuje dodatkowe pola przez serde flatten.
+Poprzednie przypisanie luki całemu writerowi/API było zbyt szerokie.
+
+Rzeczywisty błąd: useFrequencyDomainEigenModeResource zwraca zasób z payload,
+a useEigenModeSummary czytał record(eigenMode.data), czyli zewnętrzną kopertę.
+Naprawiono odczyt payloadu wraz z kontrolą ready i tożsamości sample_index /
+raw_mode_index. Inna selekcja, brak payloadu lub nieprawidłowe indeksy daje null.
+Nie dodano drugiego writera ani nowego endpointu.
+
+Dziewięć testów adaptera PASS, obejmujących kopertę i poprzednią selekcję.
+Replay rzeczywistego pliku modu #173: relative L2 2.1580189814434916e-10,
+scope Full projected weak form and periodic seams; absolute L2 niedostępny,
+nie został odtworzony z relative. SHA pliku:
+3c7cbb8c558a5300a8a98a3dec05c2c4539d70708588959123ba771a5cb961bd.
+To artifact_adapter_replay_NOT_live_API, nie dowód nowej symulacji ani browser.
+
+Następne bramki: live API/browser na bieżącym obrazie, zachowanie certyfikatu
+w pozostałych realizacjach i pełne S07/S08. Brak danych na innych ścieżkach
+pozostaje jawnie niedostępny, bez wygenerowanej certyfikacji.
