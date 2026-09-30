@@ -82,3 +82,21 @@ zgodności długości; złe krótsze/dłuższe payloads są odrzucane. Central h
 `disk_number_start` musi być zero, także przy sentinel wymagającym innego
 codec. Authored regresje obejmują oba kierunki długości oraz central disk 1.
 Żadna z tych regresji nie została skompilowana ani uruchomiona.
+
+## Przypięty build produkcyjny — queued
+
+Kod przyrostu: `69e11c75abdea606dd9c709b0fd517742158fe8c`, wypchnięty na master.
+Zlecono jeden job `a5b88dbd27414615ae44413357d542b7`,
+profil `fem-cpu-release`, request key `p6-seekable-zip-preflight-20260930-v1`,
+source **commit** z powyższym pełnym SHA. Digest kapsuły:
+`68c623ed240badce16fe4278e4f893c01e7be8daca770646a1ebfb8ee75913c5`.
+Capture ID `cb1b45c29562467db1a845f88700c5aa`.
+
+Sprawdzono, że archive_source.rs, fms.rs i lib.rs w kapsule są byte-for-byte
+zgodne z plikami tego commita. Build nie korzysta z obcych dirty zmian hosta;
+weryfikacja źródeł powyżej obejmowała współdzielony dirty checkout, a build
+jest osobną bramką integracji konkretnego HEAD. Kolejka przyjęła zlecenie,
+stan ponownego odczytu **queued**, exit code null. Worker jest zdrowy i
+wykonuje inny job; nie zatrzymywano go i nie uruchomiono drugiego wykonawcy.
+Queued nie jest PASS. Następny krok: terminalny receipt, inventory i source
+identity tego samego joba. Testy/runtime/peak RAM nadal NOT VERIFIED.
