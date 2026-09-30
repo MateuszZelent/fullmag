@@ -91,9 +91,12 @@ Wersjonowany `layout.field_semantics` jest częścią layoutu objętego
 zgodne. Wdrożenie nie wymaga planowanego wcześniej codec v2.
 
 Fabryka `fullmag-runner::fem_p1_magnetization_field_semantics` odczytuje
-dokładny mesh i jego maskę magnetic support z przyjętego zwykłego planu FEM
-P1. Wymaga kompletnego poprawnego mesha; nie korzysta z fallbacku dla
-brakujących markerów. Envelope `fullmag.fem_p1_m_field_semantics.v1`
+dokładny mesh z przyjętego zwykłego planu FEM P1. Wymaga pełnej bramki
+`validate_mesh_for_execution`, a markery aktywnych regionów pochodzą ze
+wspólnej z runtime funkcji `normalized_runtime_element_markers`.
+Maska korzysta z oryginalnej topologii i jawnych normalizowanych markerów,
+bez pełnej kopii mesha. Nie korzysta z fallbacku brakujących markerów
+ani nie akceptuje niejednoznacznego kontraktu regionów. Envelope `fullmag.fem_p1_m_field_semantics.v1`
 zawiera jawną maskę oraz descriptor z osiami `node/component`.
 Fingerprint supportu obejmuje topologię i maskę, a fingerprint layoutu
 obejmuje jawny preimage przestrzeni i kolejności. Nie hashuje sam siebie.

@@ -2,8 +2,8 @@
 
 use crate::artifact_pipeline::ArtifactPipelineSummary;
 use crate::dispatch::{
-    effective_fem_device_request, requested_registry_device_for_fdm, runtime_device,
-    runtime_precision,
+    effective_fem_device_request, normalized_runtime_element_markers,
+    requested_registry_device_for_fdm, runtime_device, runtime_precision,
 };
 use fullmag_ir::BackendPlanIR;
 use fullmag_quantities::fem_state_field::FemP1MagnetizationFieldSemantics;
@@ -1682,10 +1682,19 @@ pub fn fem_p1_magnetization_field_semantics(
     }
 
     // The preview adapter has compatibility handling for incomplete markers;
-    // a quantitative producer must supply a complete, valid mesh instead.
-    fem.mesh.validate().map_err(|errors| errors.join("; "))?;
-    let active_node_mask = crate::preview::mesh_quantity_active_mask("m", &fem.mesh)
-        .ok_or_else(|| "FEM magnetization active support is unavailable".to_string())?;
+    // a quantitative producer must supply the same validated runtime mesh.
+    fullmag_ir::validate_mesh_for_execution(&fem.mesh)
+        .map_err(|errors| errors.join("; "))?;
+    let normalized_markers = normalized_runtime_element_markers(fem)
+        .map_err(|error| error.message)?;
+    let active_node_mask = crate::preview::mesh_quantity_active_mask_with_element_markers(
+        "m",
+        &fem.mesh,
+        &normalized_markers,
+    )
+    .ok_or_else(|| "FEM magnetization active support is unavailable".to_string())?;
+    // Preserve the accepted source mesh identity; runtime marker normalization
+    // only supplies the support mask used by this artifact.
     let topology_fingerprint = fem.mesh.topology_fingerprint_v6();
     FemP1MagnetizationFieldSemantics::new(
         &topology_fingerprint,
@@ -9168,6 +9177,83 @@ mod tests {
         assert!(other["layout"].get("field_semantics").is_none());
 
         fs::remove_dir_all(root).expect("remove FEM field semantics error fixture");
+    }
+
+
+    #[test]
+    fn fem_p1_magnetization_factory_rejects_invalid_execution_mesh() {
+        let mut plan = test_fem_execution_plan();
+        {
+            let BackendPlanIR::Fem(fem) = &mut plan.backend_plan else {
+                panic!("test plan must be FEM");
+            };
+            fem.mesh.nodes[3] = [0.0, 0.0, 0.0];
+        }
+
+        let error = fem_p1_magnetization_field_semantics(&plan)
+            .expect_err("invalid FEM geometry must not receive field semantics");
+        assert!(error.contains("degenerate tetra volume"), "{error}");
+    }
+
+    #[test]
+    fn fem_p1_magnetization_factory_uses_runtime_marker_normalization_for_support() {
+        let mut plan = test_fem_execution_plan();
+        let expected_mask = {
+            let BackendPlanIR::Fem(fem) = &mut plan.backend_plan else {
+                panic!("test plan must be FEM");
+            };
+            fem.mesh.nodes.push([2.0, 0.0, 0.0]);
+            fem.mesh.set_tet4_cells(vec![[0, 1, 2, 3], [1, 2, 3, 4]]);
+            fem.mesh.element_markers = vec![1, 0];
+            fem.object_segments.clear();
+            fem.region_materials = vec![fullmag_ir::FemRegionMaterialIR {
+                object_id: "free".to_string(),
+                material: fem.material.clone(),
+                element_marker: 1,
+            }];
+
+            let normalized_markers = normalized_runtime_element_markers(fem)
+                .expect("region-material markers should normalize");
+            crate::preview::mesh_quantity_active_mask_with_element_markers(
+                "m",
+                &fem.mesh,
+                &normalized_markers,
+            )
+            .expect("magnetization support mask")
+        };
+        let semantics = fem_p1_magnetization_field_semantics(&plan)
+            .expect("valid region-material mesh should produce semantics")
+            .expect("FEM H1/P1 semantics should be present");
+        assert_eq!(semantics.active_node_mask, expected_mask);
+        assert_eq!(semantics.active_node_mask, vec![true, true, true, true, false]);
+
+        let mut all_zero_plan = test_fem_execution_plan();
+        {
+            let BackendPlanIR::Fem(all_zero_fem) = &mut all_zero_plan.backend_plan else {
+                panic!("test plan must be FEM");
+            };
+            all_zero_fem.mesh.element_markers = vec![0];
+        }
+        let all_zero_semantics = fem_p1_magnetization_field_semantics(&all_zero_plan)
+            .expect("all-zero marker fallback should be accepted by runtime normalization")
+            .expect("all-zero mesh should keep a quantitative FEM field");
+        assert_eq!(all_zero_semantics.active_node_mask, vec![true; 4]);
+
+        let mut ambiguous_plan = test_fem_execution_plan();
+        {
+            let BackendPlanIR::Fem(ambiguous_fem) = &mut ambiguous_plan.backend_plan else {
+                panic!("test plan must be FEM");
+            };
+            ambiguous_fem.mesh.nodes.push([2.0, 0.0, 0.0]);
+            ambiguous_fem
+                .mesh
+                .set_tet4_cells(vec![[0, 1, 2, 3], [1, 2, 3, 4]]);
+            ambiguous_fem.mesh.element_markers = vec![1, 2];
+            ambiguous_fem.object_segments.clear();
+        }
+        let error = fem_p1_magnetization_field_semantics(&ambiguous_plan)
+            .expect_err("ambiguous positive markers must not receive semantics");
+        assert!(error.contains("ambiguous FEM magnetic region contract"), "{error}");
     }
 
     #[test]
