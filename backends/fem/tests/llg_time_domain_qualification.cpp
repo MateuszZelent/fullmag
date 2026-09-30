@@ -1641,9 +1641,10 @@ void write_antenna_frozen_cpu(const std::filesystem::path &output)
     std::puts("FEM antenna frozen-spin trajectories recorded; independent validation required");
 }
 
-void write_antenna_mixed_cpu(const std::filesystem::path &output)
+void write_antenna_mixed_cpu(const std::filesystem::path &output, bool periodic)
 {
     const auto digest = qualification_source_snapshot_sha256();
+    constexpr std::array<uint32_t, 2> periodic_pairs{{1, 2}};
     constexpr std::array<double, 15> nodes{{
         0, 0, 0, kEdge, 0, 0, 0, kEdge, 0, 0, 0, kEdge, 0, 0, -kEdge,
     }};
@@ -1670,10 +1671,12 @@ void write_antenna_mixed_cpu(const std::filesystem::path &output)
     std::ofstream file(output);
     require(static_cast<bool>(file), "open mixed antenna output");
     file << std::setprecision(17)
-         << "{\"schema_version\":\"fem_antenna_mixed.v1\","
+         << "{\"schema_version\":\""
+         << (periodic ? "fem_antenna_mixed_pbc.v1" : "fem_antenna_mixed.v1") << "\","
          << "\"status\":\"recorded_unvalidated\",\"device\":\"cpu\","
          << "\"precision\":\"fp64\",\"source_snapshot_sha256\":\""
-         << digest << "\",\"cases\":[";
+         << digest << "\",\"periodic_node_pairs\":["
+         << (periodic ? "1,2" : "") << "],\"cases\":[";
     const std::array<std::pair<fullmag_fem_integrator, const char *>, 4> integrators{{
         {FULLMAG_FEM_INTEGRATOR_HEUN, "heun"},
         {FULLMAG_FEM_INTEGRATOR_RK4, "rk4"},
@@ -1681,6 +1684,7 @@ void write_antenna_mixed_cpu(const std::filesystem::path &output)
         {FULLMAG_FEM_INTEGRATOR_RK45_DP54, "rk45"},
     }};
     bool first_case = true;
+    bool periodic_mismatch_rejected = false;
     for (const auto &[integrator, name] : integrators) {
         auto initial = uniform_magnetization(0.6, 0.0, 0.8);
         initial.insert(initial.end(), {1.0, 0.0, 0.0});
@@ -1728,7 +1732,11 @@ void write_antenna_mixed_cpu(const std::filesystem::path &output)
         plan.mesh.facet_global_ordinals_len = facet_ordinals.size();
         plan.mesh.facet_markers = facet_markers.data();
         plan.mesh.facet_markers_len = facet_markers.size();
-        plan.enable_exchange = 0;
+        if (periodic) {
+            plan.mesh.periodic_node_pairs = periodic_pairs.data();
+            plan.mesh.periodic_node_pairs_len = periodic_pairs.size();
+        }
+        plan.enable_exchange = periodic ? 1 : 0;
         plan.material.exchange_stiffness = 0.0;
         plan.external_field_am[2] = 1e4;
         plan.regional_field_drives = &drive;
@@ -1757,6 +1765,13 @@ void write_antenna_mixed_cpu(const std::filesystem::path &output)
                 require(std::abs(h[i] - h[i % 3]) < 1e-8,
                     "mixed antenna drive lost full-domain uniformity");
             }
+            if (periodic) {
+                for (size_t component = 0; component < 3; ++component) {
+                    require(m[3 + component] == m[6 + component] &&
+                        h[3 + component] == h[6 + component],
+                        "periodic antenna pair disagrees after projection");
+                }
+            }
             if (time_s > 0.0) file << ',';
             file << "{\"time_s\":" << time_s
                  << ",\"m_magnetic\":[" << m[0] << ',' << m[1] << ',' << m[2] << ']'
@@ -1775,9 +1790,21 @@ void write_antenna_mixed_cpu(const std::filesystem::path &output)
             if (step % 100 == 0) record(stats.time_seconds, stats.max_torque_Apm);
         }
         fullmag_fem_backend_destroy(backend);
+        if (periodic && !periodic_mismatch_rejected) {
+            basis[8] += 1.0;
+            auto *invalid_backend = fullmag_fem_backend_create(&plan);
+            require(invalid_backend == nullptr,
+                "inconsistent preprojected antenna basis passed periodic pair preflight");
+            periodic_mismatch_rejected = true;
+        }
         file << "],\"accepted_steps\":" << accepted << '}';
     }
-    file << "]}\n";
+    file << ']';
+    if (periodic) {
+        file << ",\"periodic_basis_mismatch_rejected\":"
+             << (periodic_mismatch_rejected ? "true" : "false");
+    }
+    file << "}\n";
     file.close();
     require(static_cast<bool>(file), "write mixed antenna output");
     std::puts("FEM antenna mixed-mesh trajectories recorded; independent validation required");
@@ -1789,7 +1816,7 @@ int main(int argc, char **argv)
 {
     require(
         argc == 2 || argc == 3,
-        "usage: fem_llg_time_domain_qualification OUTPUT_JSON [cpu|gpu|antenna-cpu|antenna-frozen-cpu|antenna-mixed-cpu]");
+        "usage: fem_llg_time_domain_qualification OUTPUT_JSON [cpu|gpu|antenna-cpu|antenna-frozen-cpu|antenna-mixed-cpu|antenna-mixed-pbc-cpu]");
     if (argc == 3 && std::string(argv[2]) == "antenna-cpu") {
         write_antenna_cpu_trajectories(argv[1]);
         return 0;
@@ -1799,7 +1826,11 @@ int main(int argc, char **argv)
         return 0;
     }
     if (argc == 3 && std::string(argv[2]) == "antenna-mixed-cpu") {
-        write_antenna_mixed_cpu(argv[1]);
+        write_antenna_mixed_cpu(argv[1], false);
+        return 0;
+    }
+    if (argc == 3 && std::string(argv[2]) == "antenna-mixed-pbc-cpu") {
+        write_antenna_mixed_cpu(argv[1], true);
         return 0;
     }
     if (argc == 3) {

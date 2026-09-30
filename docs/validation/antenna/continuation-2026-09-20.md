@@ -5,7 +5,19 @@ Data bazowego przekazania: 2026-09-20; aktualizacja: 2026-09-30. Status całośc
 
 ## 1. Punkt wznowienia i zakres tego dokumentu
 
-### Najnowszy checkpoint — wspólna siatka magnetyk–airbox, 2026-09-30
+### Najnowszy checkpoint — algebraiczna para PBC, 2026-09-30
+
+`just verify-fem-antenna-mixed-pbc-cpu` przeszła dla czterech explicit RK
+na mieszanej siatce CPU FP64. Węzły magnetyczne pary $(1,2)$ zachowały
+identyczne pole i magnetyzację; preprojected basis z różnicą
+$1\,\mathrm{A/m}$ w parze została odrzucona przed wykonaniem.
+Raport `.fullmag/reports/fem-antenna-mixed-pbc/qualification.json` ma
+snapshot `8db6de990e936ce7e221766ba39dfc25f5c97fd99dd75861b987e2bf8c4e101e`.
+Po zmianie przeszła również poprzednia recepta bez PBC. Szczegóły i
+ograniczenia są w T13; to test algebraicznego wiązania na małej siatce,
+bez demag i bez fizycznego benchmarku periodycznego falowodu.
+
+### Wcześniejszy checkpoint — wspólna siatka magnetyk–airbox, 2026-09-30
 
 `just verify-fem-antenna-mixed-cpu` przeszła z kodem 0: cztery integratory
 FEM CPU FP64, po 2000 kroków na konforemnej parze tet4 z markerami $1/0$.

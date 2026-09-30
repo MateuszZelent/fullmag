@@ -10,10 +10,16 @@ from antenna_macrospin_oracle import compare_collinear_trajectory
 
 
 def validate(report: dict) -> list[dict]:
-    if (report.get('schema_version'), report.get('status'),
-        report.get('device'), report.get('precision')) != (
-            'fem_antenna_mixed.v1', 'recorded_unvalidated', 'cpu', 'fp64'):
+    schema = report.get('schema_version')
+    if schema not in ('fem_antenna_mixed.v1', 'fem_antenna_mixed_pbc.v1') or (
+        report.get('status'), report.get('device'), report.get('precision')) != (
+            'recorded_unvalidated', 'cpu', 'fp64'):
         raise ValueError('expected recorded FEM CPU FP64 mixed antenna artifact')
+    if schema == 'fem_antenna_mixed_pbc.v1':
+        if report.get('periodic_node_pairs') != [1, 2] or report.get('periodic_basis_mismatch_rejected') is not True:
+            raise ValueError('periodic pair or mismatch rejection evidence is missing')
+    elif report.get('periodic_node_pairs', []) != []:
+        raise ValueError('nonperiodic mixed mesh carries periodic pairs')
     if not re.fullmatch('[0-9a-f]{64}', report.get('source_snapshot_sha256', '')):
         raise ValueError('source snapshot digest is required')
     expected = {'heun', 'rk4', 'rk23', 'rk45'}

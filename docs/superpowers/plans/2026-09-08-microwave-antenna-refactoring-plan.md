@@ -1111,6 +1111,27 @@ rzeczywistego solve anteny, publicznych snapshotów ani GPU. Zatem oba
 podpunkty T13 o mixed-mesh i ochronie maski pozostają otwarte w szerszym
 zakresie.
 
+**Algebraiczna para PBC na mieszanej siatce CPU 2026-09-30:**
+`just verify-fem-antenna-mixed-pbc-cpu` zakończyła się kodem 0.
+Na tej samej siatce tet4 para magnetycznych węzłów $(1,2)$ jest jawnie
+związana przez natywny `periodic_node_pairs`. Ścieżka exchange pozostaje
+włączona zgodnie z kontraktem PBC, a jej współczynnik ustawiono na zero,
+aby zachować niezależny analityczny wzorzec Zeemana. Cztery integratory
+Heun/RK4/RK23/RK45 wykonały po 2000 kroków; pola i magnetyzacje węzłów
+pary były identyczne. Natywny preflight odrzucił drugą próbę utworzenia
+backendu po zwiększeniu jednej składowej bazy pola pary o
+$1\,\mathrm{A/m}$; nie uśredniał niezgodnych wartości.
+
+Raport `.fullmag/reports/fem-antenna-mixed-pbc/qualification.json` ma
+schemat `fem_antenna_mixed_pbc.v1`, snapshot
+`8db6de990e936ce7e221766ba39dfc25f5c97fd99dd75861b987e2bf8c4e101e`.
+Porównanie źródeł przed/po i niezależny walidator przeszły; walidator
+odrzucił też raport z usuniętym dowodem negatywnego preflight. Po zmianie
+tego samego kodu ponownie przeszła recepta bez PBC. Wynik dotyczy
+algebraicznej pary na małej siatce i stałego kroku CPU; nie jest
+benchmarkiem fizycznej komórki periodycznej, demag PBC, GPU ani publicznej
+projekcji bazy anteny.
+
 ## T14. Domknąć OpenAPI, zasoby i realtime
 
 Uzupełnienie implementacyjne 2026-09-21: `SolvedAntennaDriveResource` ma

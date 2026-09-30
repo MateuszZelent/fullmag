@@ -240,6 +240,18 @@
       "path": "justfile",
       "symbol": "verify-fem-antenna-mixed-cpu",
       "responsibility": "Kontenerowa bramka antenowej mieszanej siatki CPU z tożsamością źródeł"
+    },
+    {
+      "id": "source35",
+      "path": "backends/fem/tests/llg_time_domain_qualification.cpp",
+      "symbol": "main",
+      "responsibility": "Natywne wykonanie antenowej pary PBC na mieszanej siatce i negatywny preflight bazy"
+    },
+    {
+      "id": "source36",
+      "path": "justfile",
+      "symbol": "verify-fem-antenna-mixed-pbc-cpu",
+      "responsibility": "Kontenerowa bramka pary PBC z tożsamością źródeł"
     }
   ],
   "public_api": {

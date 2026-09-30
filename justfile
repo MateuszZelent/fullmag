@@ -942,6 +942,16 @@ verify-fem-antenna-mixed-cpu:
     "$FULLMAG_STORAGE_PYTHON" scripts/capture_source_snapshot_identity.py --repo-root "{{repo_root}}" --ignore-non-runtime-dirty --compare .fullmag/reports/fem-antenna-mixed/source-snapshot.v1.json --output .fullmag/reports/fem-antenna-mixed/source-snapshot-post.v1.json
     "$FULLMAG_STORAGE_PYTHON" scripts/validate_fem_antenna_mixed.py .fullmag/reports/fem-antenna-mixed/qualification.json
 
+verify-fem-antenna-mixed-pbc-cpu:
+    mkdir -p .fullmag/reports/fem-antenna-mixed-pbc
+    "$FULLMAG_STORAGE_PYTHON" scripts/capture_source_snapshot_identity.py --repo-root "{{repo_root}}" --ignore-non-runtime-dirty --output .fullmag/reports/fem-antenna-mixed-pbc/source-snapshot.v1.json
+    source_snapshot_sha256="$("$FULLMAG_STORAGE_PYTHON" -c 'import json,sys; print(json.load(open(sys.argv[1]))["source_snapshot_sha256"])' .fullmag/reports/fem-antenna-mixed-pbc/source-snapshot.v1.json)"; docker compose --profile fem-gpu run --rm \
+      -e FULLMAG_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" \
+      -e FULLMAG_FEM_QUALIFICATION_SOURCE_SNAPSHOT_SHA256="$source_snapshot_sha256" \
+      fem-gpu bash -lc 'cd /workspace && cmake -S native -B ${FULLMAG_BUILD_ROOT:-/workspace/.fullmag-build}/native -DCMAKE_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=OFF && cmake --build ${FULLMAG_BUILD_ROOT:-/workspace/.fullmag-build}/native --target fem_llg_time_domain_qualification && LD_LIBRARY_PATH=${FULLMAG_BUILD_ROOT:-/workspace/.fullmag-build}/native/backends/fem:${LD_LIBRARY_PATH:-} ${FULLMAG_BUILD_ROOT:-/workspace/.fullmag-build}/native/backends/fem/fem_llg_time_domain_qualification .fullmag/reports/fem-antenna-mixed-pbc/qualification.json antenna-mixed-pbc-cpu'
+    "$FULLMAG_STORAGE_PYTHON" scripts/capture_source_snapshot_identity.py --repo-root "{{repo_root}}" --ignore-non-runtime-dirty --compare .fullmag/reports/fem-antenna-mixed-pbc/source-snapshot.v1.json --output .fullmag/reports/fem-antenna-mixed-pbc/source-snapshot-post.v1.json
+    "$FULLMAG_STORAGE_PYTHON" scripts/validate_fem_antenna_mixed.py .fullmag/reports/fem-antenna-mixed-pbc/qualification.json
+
 verify-fem-llg-time-domain-qualification-gpu:
     rm -rf .fullmag/reports/fem-llg-time-domain-qualification/gpu-fp64
     mkdir -p .fullmag/reports/fem-llg-time-domain-qualification/gpu-fp64
