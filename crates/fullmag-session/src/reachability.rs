@@ -5,7 +5,7 @@
 //! traversal here gives garbage collection, export, and restore the same
 //! interpretation of that graph.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -146,6 +146,17 @@ pub fn validate_object_ref(value: &str) -> Result<()> {
 pub fn validate_file_ref(value: &str) -> Result<()> {
     crate::repository_path::validate_relative_path(value)
         .with_context(|| format!("unsafe session document reference `{value}`"))
+}
+
+fn register_materialized_dataset_revision(
+    revisions: &mut BTreeSet<(String, u64)>,
+    manifest: &crate::materialized_dataset::MaterializedDatasetManifest,
+) -> Result<()> {
+    let key = (manifest.dataset.dataset_id.clone(), manifest.dataset.revision);
+    if !revisions.insert(key) {
+        bail!("materialized dataset revision is duplicated in the containing SolutionSet");
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -298,6 +309,7 @@ pub fn walk_store_root(root: &Path, mode: ReachabilityMode) -> Result<Reachabili
         report: ReachabilityReport::new(),
         seen_files: HashSet::new(),
         seen_checkpoints: HashSet::new(),
+        tensor_descriptor_cache: None,
         namespace_files: HashSet::new(),
         unclassified_paths: HashSet::new(),
     };
@@ -319,6 +331,7 @@ pub fn walk_archive_documents(
         mode,
         report: ReachabilityReport::new(),
         seen_checkpoints: HashSet::new(),
+        tensor_descriptor_cache: None,
         namespace_files: HashSet::new(),
         unclassified_paths: HashSet::new(),
     };
@@ -340,6 +353,7 @@ pub(crate) fn walk_export_file_documents(
         mode: ReachabilityMode::Export,
         report: ReachabilityReport::new(),
         seen_checkpoints: HashSet::new(),
+        tensor_descriptor_cache: None,
         namespace_files: HashSet::new(),
         unclassified_paths: HashSet::new(),
     };
@@ -356,6 +370,7 @@ pub(crate) fn walk_import_file_documents(
         cas_root: Some(&root), mode: ReachabilityMode::Restore,
         report: ReachabilityReport::new(),
         seen_checkpoints: HashSet::new(),
+        tensor_descriptor_cache: None,
         namespace_files: HashSet::new(),
         unclassified_paths: HashSet::new(),
     };
@@ -380,6 +395,7 @@ pub fn walk_checkpoint(root: &Path, checkpoint: &FmsCheckpoint) -> Result<Reacha
         report: ReachabilityReport::new(),
         seen_files: HashSet::new(),
         seen_checkpoints: HashSet::new(),
+        tensor_descriptor_cache: None,
         namespace_files: HashSet::new(),
         unclassified_paths: HashSet::new(),
     };
@@ -394,6 +410,7 @@ struct StoreWalker {
     report: ReachabilityReport,
     seen_files: HashSet<String>,
     seen_checkpoints: HashSet<String>,
+    tensor_descriptor_cache: Option<(String, TensorDescriptor)>,
     namespace_files: HashSet<String>,
     unclassified_paths: HashSet<String>,
 }
@@ -721,7 +738,19 @@ impl StoreWalker {
     }
 
     fn walk_solution_objects(&mut self, solution: &SolutionSet, source: &str) -> Result<()> {
-        crate::solution_tensor_source::verify_solution_tensor_run_owner(&self.root, solution)?;
+        let mut dataset_revisions = BTreeSet::new();
+        let has_typed_tensor_root = solution
+            .members
+            .iter()
+            .flat_map(|member| &member.artifacts)
+            .any(|artifact| {
+                artifact.schema_id == crate::solution_tensor_source::SOLUTION_TENSOR_SCHEMA
+                    || artifact.schema_id
+                        == crate::materialized_dataset::MATERIALIZED_DATASET_SCHEMA
+            });
+        if has_typed_tensor_root {
+            crate::solution_tensor_source::verify_solution_tensor_run_owner(&self.root, solution)?;
+        }
         for member in &solution.members {
             for artifact in &member.artifacts {
                 self.follow_solution_object_ref(
@@ -729,8 +758,20 @@ impl StoreWalker {
                     artifact.byte_length,
                     source,
                 )?;
-                if artifact.schema_id == crate::solution_tensor_source::SOLUTION_TENSOR_SCHEMA {
-                    self.follow_solution_tensor_artifact(artifact, source)?;
+                match artifact.schema_id.as_str() {
+                    crate::solution_tensor_source::SOLUTION_TENSOR_SCHEMA => {
+                        let _ = self.follow_solution_tensor_artifact(artifact, source)?;
+                    }
+                    crate::materialized_dataset::MATERIALIZED_DATASET_SCHEMA => {
+                        self.follow_materialized_dataset_artifact(
+                            artifact,
+                            solution,
+                            &member.member_id,
+                            &mut dataset_revisions,
+                            source,
+                        )?;
+                    }
+                    _ => {}
                 }
             }
         }
@@ -746,18 +787,16 @@ impl StoreWalker {
         &mut self,
         artifact: &fullmag_quantities::SolutionArtifactRef,
         source: &str,
-    ) -> Result<()> {
+    ) -> Result<Option<TensorDescriptor>> {
+        crate::solution_tensor_source::validate_metadata_length(artifact)?;
+        if let Some((object_ref, descriptor)) = self.tensor_descriptor_cache.as_ref() {
+            if object_ref == &artifact.object_ref {
+                return Ok(Some(descriptor.clone()));
+            }
+        }
         let object_path = self.root.join("objects/sha256").join(&artifact.object_ref);
         if !object_path.exists() {
-            return Ok(());
-        }
-        if artifact.byte_length
-            > crate::solution_tensor_source::MAX_SOLUTION_TENSOR_METADATA_BYTES
-        {
-            bail!(
-                "solution tensor descriptor `{}` exceeds metadata budget",
-                artifact.object_ref
-            )
+            return Ok(None);
         }
 
         use std::io::Read;
@@ -775,10 +814,124 @@ impl StoreWalker {
         let descriptor = crate::solution_tensor_source::parse_solution_tensor_artifact(
             &data, artifact,
         )?;
-        for chunk in descriptor.chunks {
+        for chunk in &descriptor.chunks {
             self.follow_solution_object_ref(&chunk.object_ref, chunk.length as u64, source)?;
         }
+        self.tensor_descriptor_cache = Some((artifact.object_ref.clone(), descriptor.clone()));
+        Ok(Some(descriptor))
+    }
+
+    fn follow_materialized_dataset_artifact(
+        &mut self,
+        artifact: &fullmag_quantities::SolutionArtifactRef,
+        solution: &SolutionSet,
+        current_member_id: &str,
+        dataset_revisions: &mut BTreeSet<(String, u64)>,
+        source: &str,
+    ) -> Result<()> {
+        let object_path = self.root.join("objects/sha256").join(&artifact.object_ref);
+        if !object_path.exists() {
+            return Ok(());
+        }
+        if artifact.byte_length
+            > crate::materialized_dataset::MAX_MATERIALIZED_DATASET_METADATA_BYTES
+        {
+            bail!(
+                "materialized dataset manifest `{}` exceeds metadata budget",
+                artifact.object_ref
+            )
+        }
+        use std::io::Read;
+        reject_link_chain(&self.root, &format!("objects/sha256/{}", artifact.object_ref))?;
+        let mut data = Vec::new();
+        fs::File::open(&object_path)?
+            .take(crate::materialized_dataset::MAX_MATERIALIZED_DATASET_METADATA_BYTES + 1)
+            .read_to_end(&mut data)?;
+        if data.len() as u64 > crate::materialized_dataset::MAX_MATERIALIZED_DATASET_METADATA_BYTES
+        {
+            bail!(
+                "materialized dataset manifest `{}` exceeds metadata budget",
+                artifact.object_ref
+            )
+        }
+        let manifest = crate::materialized_dataset::parse_materialized_dataset_artifact(
+            &data, artifact,
+        )?;
+        register_materialized_dataset_revision(dataset_revisions, &manifest)?;
+        if artifact.accepted_state != manifest.field.accepted_state {
+            bail!("materialized dataset artifact accepted state differs from its field");
+        }
+        let owner = &manifest.field.source;
+        if owner.run_id != solution.run_id
+            || owner.solution_set_id != solution.solution_set_id
+            || owner.solution_revision > solution.revision
+            || owner.run_spec_digest != solution.provenance.run_spec_digest
+        {
+            bail!("materialized dataset owner is outside the containing SolutionSet");
+        }
+        if owner.member_id != current_member_id {
+            bail!("materialized dataset owner member differs from its containing member");
+        }
+        self.validate_current_materialized_tensor_record(
+            solution,
+            current_member_id,
+            &manifest.field.tensor_artifact,
+        )?;
+        if owner.solution_revision == solution.revision {
+            crate::materialized_dataset::validate_materialized_dataset_owner(&manifest, solution)?;
+        } else {
+            let historical = self.read_solution_revision(owner.solution_set_id.as_str(), owner.solution_revision)?;
+            crate::materialized_dataset::validate_materialized_dataset_owner(&manifest, &historical)?;
+        }
+        self.follow_solution_object_ref(
+            &manifest.field.tensor_artifact.object_ref,
+            manifest.field.tensor_artifact.byte_length,
+            source,
+        )?;
+        let Some(descriptor) =
+            self.follow_solution_tensor_artifact(&manifest.field.tensor_artifact, source)?
+        else {
+            return Ok(());
+        };
+        crate::materialized_dataset::validate_materialized_dataset_tensor(&manifest, &descriptor)
+    }
+
+    fn validate_current_materialized_tensor_record(
+        &self,
+        solution: &SolutionSet,
+        member_id: &str,
+        tensor_artifact: &fullmag_quantities::SolutionArtifactRef,
+    ) -> Result<()> {
+        let member = solution
+            .members
+            .iter()
+            .find(|member| member.member_id == member_id)
+            .context("materialized dataset current owner member is missing")?;
+        let current = member
+            .artifacts
+            .iter()
+            .find(|artifact| artifact.artifact_id == tensor_artifact.artifact_id)
+            .context("materialized dataset current owner tensor artifact is missing")?;
+        if current != tensor_artifact {
+            bail!("materialized dataset tensor artifact changed in the containing SolutionSet");
+        }
         Ok(())
+    }
+
+    fn read_solution_revision(
+        &mut self,
+        solution_set_id: &str,
+        revision: u64,
+    ) -> Result<SolutionSet> {
+        let directory = crate::cas::hex_sha256(solution_set_id.as_bytes());
+        let relative = format!(
+            "solutions/{directory}/revisions/{revision:020}.json"
+        );
+        let path = self.root.join(&relative);
+        let data = self.read_file(&path, &relative)?;
+        let historical: SolutionSet = parse_json(&data, &relative)?;
+        self.validate_solution_identity(&historical, &directory, Some(revision), &relative)?;
+        Ok(historical)
     }
 
     fn follow_solution_object_ref(
@@ -2108,6 +2261,7 @@ struct ArchiveWalker<'a> {
     mode: ReachabilityMode,
     report: ReachabilityReport,
     seen_checkpoints: HashSet<String>,
+    tensor_descriptor_cache: Option<(String, TensorDescriptor)>,
     namespace_files: HashSet<String>,
     unclassified_paths: HashSet<String>,
 }
@@ -2549,21 +2703,41 @@ impl<'a> ArchiveWalker<'a> {
         solution: &SolutionSet,
         source: &str,
     ) -> Result<()> {
-        if solution.members.iter().flat_map(|member| &member.artifacts)
-            .any(|artifact| artifact.schema_id == crate::solution_tensor_source::SOLUTION_TENSOR_SCHEMA)
-        {
+        let mut dataset_revisions = BTreeSet::new();
+        let has_typed_tensor_root = solution
+            .members
+            .iter()
+            .flat_map(|member| &member.artifacts)
+            .any(|artifact| {
+                artifact.schema_id == crate::solution_tensor_source::SOLUTION_TENSOR_SCHEMA
+                    || artifact.schema_id
+                        == crate::materialized_dataset::MATERIALIZED_DATASET_SCHEMA
+            });
+        if has_typed_tensor_root {
             self.follow_solution_run_owner(solution)?;
         }
         for member in &solution.members {
             for artifact in &member.artifacts {
-                if artifact.schema_id == crate::solution_tensor_source::SOLUTION_TENSOR_SCHEMA {
-                    self.add_archive_solution_tensor_artifact(artifact, source)?;
-                } else {
-                    self.add_archive_solution_object(
-                        &artifact.object_ref,
-                        artifact.byte_length,
-                        source,
-                    )?;
+                match artifact.schema_id.as_str() {
+                    crate::solution_tensor_source::SOLUTION_TENSOR_SCHEMA => {
+                        let _ = self.add_archive_solution_tensor_artifact(artifact, source)?;
+                    }
+                    crate::materialized_dataset::MATERIALIZED_DATASET_SCHEMA => {
+                        self.add_archive_materialized_dataset_artifact(
+                            artifact,
+                            solution,
+                            &member.member_id,
+                            &mut dataset_revisions,
+                            source,
+                        )?;
+                    }
+                    _ => {
+                        self.add_archive_solution_object(
+                            &artifact.object_ref,
+                            artifact.byte_length,
+                            source,
+                        )?;
+                    }
                 }
             }
         }
@@ -2598,43 +2772,178 @@ impl<'a> ArchiveWalker<'a> {
         &mut self,
         artifact: &fullmag_quantities::SolutionArtifactRef,
         source: &str,
-    ) -> Result<()> {
+    ) -> Result<Option<TensorDescriptor>> {
         crate::solution_tensor_source::validate_metadata_length(artifact)?;
+        if let Some((object_ref, descriptor)) = self.tensor_descriptor_cache.as_ref() {
+            if object_ref == &artifact.object_ref {
+                let descriptor = descriptor.clone();
+                self.add_archive_solution_object(
+                    &artifact.object_ref,
+                    artifact.byte_length,
+                    source,
+                )?;
+                return Ok(Some(descriptor));
+            }
+        }
         self.report.object_refs.insert(artifact.object_ref.clone());
-        let relative = format!("objects/sha256/{}", artifact.object_ref);
+        let Some(bytes) = self.bounded_archive_object(
+            &artifact.object_ref,
+            crate::solution_tensor_source::MAX_SOLUTION_TENSOR_METADATA_BYTES,
+        )? else {
+            self.report.missing(format!(
+                "solution set `{source}` references missing object `{}`", artifact.object_ref
+            ))?;
+            return Ok(None);
+        };
+        let descriptor = crate::solution_tensor_source::parse_solution_tensor_artifact(
+            &bytes, artifact,
+        )?;
+        for chunk in &descriptor.chunks {
+            self.add_archive_solution_object(&chunk.object_ref, chunk.length as u64, source)?;
+        }
+        self.tensor_descriptor_cache = Some((artifact.object_ref.clone(), descriptor.clone()));
+        Ok(Some(descriptor))
+    }
+
+    fn add_archive_materialized_dataset_artifact(
+        &mut self,
+        artifact: &fullmag_quantities::SolutionArtifactRef,
+        solution: &SolutionSet,
+        current_member_id: &str,
+        dataset_revisions: &mut BTreeSet<(String, u64)>,
+        source: &str,
+    ) -> Result<()> {
+        self.add_archive_solution_object(&artifact.object_ref, artifact.byte_length, source)?;
+        let Some(bytes) = self.bounded_archive_object(
+            &artifact.object_ref,
+            crate::materialized_dataset::MAX_MATERIALIZED_DATASET_METADATA_BYTES,
+        )? else {
+            return Ok(());
+        };
+        let manifest = crate::materialized_dataset::parse_materialized_dataset_artifact(
+            &bytes, artifact,
+        )?;
+        register_materialized_dataset_revision(dataset_revisions, &manifest)?;
+        if artifact.accepted_state != manifest.field.accepted_state {
+            bail!("materialized dataset artifact accepted state differs from its field");
+        }
+        let owner = &manifest.field.source;
+        if owner.run_id != solution.run_id
+            || owner.solution_set_id != solution.solution_set_id
+            || owner.solution_revision > solution.revision
+            || owner.run_spec_digest != solution.provenance.run_spec_digest
+        {
+            bail!("materialized dataset owner is outside the containing SolutionSet");
+        }
+        if owner.member_id != current_member_id {
+            bail!("materialized dataset owner member differs from its containing member");
+        }
+        self.validate_archive_current_materialized_tensor_record(
+            solution,
+            current_member_id,
+            &manifest.field.tensor_artifact,
+        )?;
+        if owner.solution_revision == solution.revision {
+            crate::materialized_dataset::validate_materialized_dataset_owner(&manifest, solution)?;
+        } else {
+            let historical = self.read_archive_solution_revision(
+                &owner.solution_set_id,
+                owner.solution_revision,
+            )?;
+            crate::materialized_dataset::validate_materialized_dataset_owner(&manifest, &historical)?;
+        }
+        let Some(descriptor) =
+            self.add_archive_solution_tensor_artifact(&manifest.field.tensor_artifact, source)?
+        else {
+            return Ok(());
+        };
+        crate::materialized_dataset::validate_materialized_dataset_tensor(&manifest, &descriptor)
+    }
+
+    fn validate_archive_current_materialized_tensor_record(
+        &self,
+        solution: &SolutionSet,
+        member_id: &str,
+        tensor_artifact: &fullmag_quantities::SolutionArtifactRef,
+    ) -> Result<()> {
+        let member = solution
+            .members
+            .iter()
+            .find(|member| member.member_id == member_id)
+            .context("materialized dataset current owner member is missing")?;
+        let current = member
+            .artifacts
+            .iter()
+            .find(|artifact| artifact.artifact_id == tensor_artifact.artifact_id)
+            .context("materialized dataset current owner tensor artifact is missing")?;
+        if current != tensor_artifact {
+            bail!("materialized dataset tensor artifact changed in the containing SolutionSet");
+        }
+        Ok(())
+    }
+
+    fn read_archive_solution_revision(
+        &mut self,
+        solution_set_id: &str,
+        revision: u64,
+    ) -> Result<SolutionSet> {
+        let directory = crate::cas::hex_sha256(solution_set_id.as_bytes());
+        let relative = format!(
+            "solutions/{directory}/revisions/{revision:020}.json"
+        );
+        let data = self
+            .documents
+            .read(&relative)?
+            .context("historical materialized dataset owner revision is missing")?;
+        self.report.file_refs.insert(relative.clone());
+        let historical: SolutionSet = parse_json(&data, &relative)?;
+        self.validate_archive_solution_identity(
+            &historical,
+            &directory,
+            Some(revision),
+            &relative,
+        )?;
+        Ok(historical)
+    }
+
+    fn bounded_archive_object(
+        &self,
+        object_ref: &str,
+        max_bytes: u64,
+    ) -> Result<Option<Vec<u8>>> {
+        validate_object_ref(object_ref)?;
+        let relative = format!("objects/sha256/{object_ref}");
         let file_root = self.cas_root.or_else(|| match &self.documents {
             ArchiveDocuments::Files { root, .. } => Some(*root),
             ArchiveDocuments::Memory(_) => None,
         });
-        let data;
-        let bytes = if let Some(root) = file_root {
+        if let Some(root) = file_root {
             use std::io::Read;
             let path = crate::repository_path::checked_path(root, &relative)?;
             if !path.exists() {
-                return self.report.missing(format!(
-                    "solution set `{source}` references missing object `{}`", artifact.object_ref
-                ));
+                return Ok(None);
             }
-            let mut bounded = Vec::new();
-            fs::File::open(path)?
-                .take(crate::solution_tensor_source::MAX_SOLUTION_TENSOR_METADATA_BYTES + 1)
-                .read_to_end(&mut bounded)?;
-            data = bounded;
-            data.as_slice()
-        } else {
-            let ArchiveDocuments::Memory(documents) = &self.documents else { unreachable!() };
-            let Some(bytes) = documents.get(&relative) else {
-                return self.report.missing(format!(
-                    "solution set `{source}` references missing object `{}`", artifact.object_ref
-                ));
-            };
-            bytes.as_slice()
-        };
-        let descriptor = crate::solution_tensor_source::parse_solution_tensor_artifact(bytes, artifact)?;
-        for chunk in descriptor.chunks {
-            self.add_archive_solution_object(&chunk.object_ref, chunk.length as u64, source)?;
+            reject_link_chain(root, &relative)?;
+            let mut data = Vec::new();
+            fs::File::open(path)?.take(max_bytes + 1).read_to_end(&mut data)?;
+            if data.len() as u64 > max_bytes {
+                bail!("CAS object `{object_ref}` exceeds bounded metadata budget");
+            }
+            if crate::cas::hex_sha256(&data) != object_ref {
+                bail!("CAS SHA-256 mismatch for `{relative}`");
+            }
+            return Ok(Some(data));
         }
-        Ok(())
+        let Some(data) = self.documents.read(&relative)? else {
+            return Ok(None);
+        };
+        if data.len() as u64 > max_bytes {
+            bail!("CAS object `{object_ref}` exceeds bounded metadata budget");
+        }
+        if crate::cas::hex_sha256(&data) != object_ref {
+            bail!("CAS SHA-256 mismatch for `{relative}`");
+        }
+        Ok(Some(data.into_owned()))
     }
 
     fn add_archive_solution_object(
@@ -3733,4 +4042,378 @@ fn read_directory(path: &Path) -> Result<Vec<fs::DirEntry>> {
 fn reject_link_chain(root: &Path, relative: &str) -> Result<()> {
     crate::repository_path::checked_path(root, relative)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::materialized_dataset::{
+        MaterializedDatasetManifest, MATERIALIZED_DATASET_SCHEMA,
+    };
+    use crate::solution_tensor_field::{TensorFieldBinding, TENSOR_FIELD_BINDING_SCHEMA};
+    use crate::solution_tensor_source::SOLUTION_TENSOR_SCHEMA;
+    use crate::{FmsRunIntent, TensorChunk, TensorDtype, TensorDescriptor};
+    use fullmag_quantities::{
+        ActiveSupportDescriptor, DatasetFieldDescriptor, DatasetSlicePlane, DatasetSource,
+        FieldAxisDescriptor, FieldFrameDescriptor, FieldFrameKind, FieldNormalization,
+        FieldResolution, FieldSampleLocation, FieldValueRepresentation, FunctionSpaceDescriptor,
+        FunctionSpaceOrdering, MaterializedDatasetRef, QuantityId, ScientificAssessment,
+        ScientificAssessmentStatus, SolutionArtifactKind, SolutionArtifactRef,
+        SolutionExecutionStatus, SolutionMember, SolutionSet, SolutionSetManifestState,
+        SolutionSetProvenance, SOLUTION_SET_SCHEMA_VERSION,
+    };
+    use serde_json::json;
+    use std::collections::HashMap;
+    use std::fs;
+    use std::path::Path;
+
+    fn digest(letter: char) -> String {
+        format!("sha256:{}", letter.to_string().repeat(64))
+    }
+
+    fn field_descriptor() -> DatasetFieldDescriptor {
+        let descriptor = DatasetFieldDescriptor {
+            quantity_id: QuantityId::M,
+            unit: "1".to_string(),
+            tensor_rank: 1,
+            frame: FieldFrameDescriptor {
+                kind: FieldFrameKind::Laboratory,
+                frame_id: "frame:lab".to_string(),
+            },
+            sample_location: FieldSampleLocation::Node,
+            active_support: ActiveSupportDescriptor {
+                support_fingerprint: digest('c'),
+                selection: None,
+            },
+            function_space: Some(FunctionSpaceDescriptor {
+                space_id: "space:fem-h1-p1".to_string(),
+                family: "H1".to_string(),
+                order: 1,
+                vector_dimension: 3,
+                ordering: FunctionSpaceOrdering::ByNode,
+                basis_id: "basis:fem-h1-p1".to_string(),
+                constraints_fingerprint: None,
+                partition_fingerprint: None,
+                orientation_mapping_ref: None,
+            }),
+            topology_id: "topology".to_string(),
+            carrier_id: "carrier".to_string(),
+            layout_digest: digest('d'),
+            axes: vec![
+                FieldAxisDescriptor {
+                    axis_id: "node".to_string(),
+                    unit: "1".to_string(),
+                    length: 2,
+                },
+                FieldAxisDescriptor {
+                    axis_id: "component".to_string(),
+                    unit: "1".to_string(),
+                    length: 3,
+                },
+            ],
+            component_axis: Some("component".to_string()),
+            complex_encoding: fullmag_quantities::ComplexEncoding::Real,
+            harmonic_convention: None,
+            normalization: FieldNormalization::None,
+            value_representation: FieldValueRepresentation::PhysicalField,
+            modal_semantics: None,
+            resolution: FieldResolution::Quantitative,
+        };
+        descriptor.validate().expect("reachability field fixture is valid");
+        descriptor
+    }
+
+    struct TensorFixture {
+        artifact: SolutionArtifactRef,
+        descriptor: TensorDescriptor,
+        objects: HashMap<String, Vec<u8>>,
+    }
+
+    fn tensor_fixture(label: &str, value: u8) -> TensorFixture {
+        let chunk_bytes = vec![value; 48];
+        let chunk_ref = crate::hex_sha256(&chunk_bytes);
+        let descriptor = TensorDescriptor {
+            format: SOLUTION_TENSOR_SCHEMA.to_string(),
+            name: format!("magnetization-{label}"),
+            dtype: TensorDtype::F64,
+            shape: vec![2, 3],
+            logical_axes: vec!["node".to_string(), "component".to_string()],
+            endian: "little".to_string(),
+            field_binding: Some(TensorFieldBinding {
+                format: TENSOR_FIELD_BINDING_SCHEMA.to_string(),
+                dataset: MaterializedDatasetRef {
+                    dataset_id: "dataset:reachability".to_string(),
+                    revision: 1,
+                },
+                sample_id: "sample".to_string(),
+                item_id: "item".to_string(),
+                field_id: "field:m".to_string(),
+                group_id: "group:reachability".to_string(),
+                producer_id: "producer:reachability".to_string(),
+                producer_version: "1".to_string(),
+                plane: DatasetSlicePlane::Values,
+                descriptor: field_descriptor(),
+            }),
+            chunks: vec![TensorChunk {
+                object_ref: chunk_ref.clone(),
+                offset: 0,
+                length: chunk_bytes.len(),
+                sha256: Some(chunk_ref.clone()),
+            }],
+        };
+        let descriptor_bytes = serde_json::to_vec(&descriptor).expect("serialize tensor fixture");
+        let descriptor_ref = crate::hex_sha256(&descriptor_bytes);
+        let artifact = SolutionArtifactRef {
+            artifact_id: format!("tensor-{label}"),
+            kind: SolutionArtifactKind::State,
+            schema_id: SOLUTION_TENSOR_SCHEMA.to_string(),
+            object_ref: descriptor_ref.clone(),
+            byte_length: descriptor_bytes.len() as u64,
+            accepted_state: None,
+        };
+        let objects = HashMap::from([
+            (chunk_ref, chunk_bytes),
+            (descriptor_ref, descriptor_bytes),
+        ]);
+        TensorFixture {
+            artifact,
+            descriptor,
+            objects,
+        }
+    }
+
+    fn reachability_solution(
+        revision: u64,
+        artifacts: Vec<SolutionArtifactRef>,
+        run_spec_digest: String,
+    ) -> SolutionSet {
+        let assessment = ScientificAssessment {
+            status: ScientificAssessmentStatus::Unassessed,
+            reason: Some("reachability fixture".to_string()),
+            evidence_artifact_ids: Vec::new(),
+        };
+        SolutionSet {
+            schema_version: SOLUTION_SET_SCHEMA_VERSION.to_string(),
+            solution_set_id: "reachability-solution".to_string(),
+            revision,
+            run_id: "reachability-run".to_string(),
+            manifest_state: SolutionSetManifestState::Closed,
+            execution_status: SolutionExecutionStatus::Succeeded,
+            scientific_assessment: assessment.clone(),
+            provenance: SolutionSetProvenance {
+                run_spec_digest,
+                model_digest: digest('b'),
+                physics_digest: digest('c'),
+                discretization_digest: digest('d'),
+                resolved_plan_digest: digest('e'),
+                acquisition_digest: digest('f'),
+                seed_digest: None,
+            },
+            members: vec![SolutionMember {
+                member_id: "member".to_string(),
+                task_id: "task".to_string(),
+                attempt_id: "attempt".to_string(),
+                ownership_epoch: 1,
+                case_id: Some("case".to_string()),
+                stage_id: "stage".to_string(),
+                execution_status: SolutionExecutionStatus::Succeeded,
+                scientific_assessment: assessment,
+                artifacts,
+            }],
+            coverage: Vec::new(),
+        }
+    }
+
+    fn materialized_artifact(
+        manifest: &MaterializedDatasetManifest,
+    ) -> (SolutionArtifactRef, Vec<u8>) {
+        let bytes = serde_json::to_vec(manifest).expect("serialize dataset fixture");
+        let object_ref = crate::hex_sha256(&bytes);
+        let artifact = SolutionArtifactRef {
+            artifact_id: format!("materialized-dataset-{object_ref}"),
+            kind: SolutionArtifactKind::Other,
+            schema_id: MATERIALIZED_DATASET_SCHEMA.to_string(),
+            object_ref,
+            byte_length: bytes.len() as u64,
+            accepted_state: None,
+        };
+        (artifact, bytes)
+    }
+
+    fn write_store_fixture(
+        root: &Path,
+        solution: &SolutionSet,
+        intent: &FmsRunIntent,
+        objects: &HashMap<String, Vec<u8>>,
+    ) {
+        let objects_root = root.join("objects/sha256");
+        let run_root = root.join("runs").join(&solution.run_id);
+        let solution_root = root
+            .join("solutions")
+            .join(crate::hex_sha256(solution.solution_set_id.as_bytes()));
+        fs::create_dir_all(&objects_root).expect("create fixture CAS");
+        fs::create_dir_all(&run_root).expect("create fixture run");
+        fs::create_dir_all(solution_root.join("revisions")).expect("create fixture revisions");
+        for (object_ref, bytes) in objects {
+            fs::write(objects_root.join(object_ref), bytes).expect("write fixture CAS object");
+        }
+        fs::write(
+            run_root.join("run_intent.json"),
+            serde_json::to_vec(intent).expect("serialize fixture intent"),
+        )
+        .expect("write fixture intent");
+        let solution_bytes = serde_json::to_vec(solution).expect("serialize fixture solution");
+        fs::write(solution_root.join("manifest.json"), &solution_bytes)
+            .expect("write fixture current solution");
+        fs::write(
+            solution_root
+                .join("revisions")
+                .join(format!("{:020}.json", solution.revision)),
+            solution_bytes,
+        )
+        .expect("write fixture solution revision");
+    }
+
+    fn archive_fixture(
+        solution: &SolutionSet,
+        intent: &FmsRunIntent,
+        objects: &HashMap<String, Vec<u8>>,
+    ) -> HashMap<String, Vec<u8>> {
+        let directory = crate::hex_sha256(solution.solution_set_id.as_bytes());
+        let solution_bytes = serde_json::to_vec(solution).expect("serialize archive solution");
+        let mut documents = HashMap::from([
+            (
+                format!("solutions/{directory}/manifest.json"),
+                solution_bytes.clone(),
+            ),
+            (
+                format!(
+                    "solutions/{directory}/revisions/{:020}.json",
+                    solution.revision
+                ),
+                solution_bytes,
+            ),
+            (
+                format!("runs/{}/run_intent.json", solution.run_id),
+                serde_json::to_vec(intent).expect("serialize archive intent"),
+            ),
+        ]);
+        documents.extend(
+            objects
+                .iter()
+                .map(|(object_ref, bytes)| (format!("objects/sha256/{object_ref}"), bytes.clone())),
+        );
+        documents
+    }
+
+    fn fixture_objects(fixtures: &[&TensorFixture]) -> HashMap<String, Vec<u8>> {
+        let mut objects = HashMap::new();
+        for fixture in fixtures {
+            objects.extend(fixture.objects.clone());
+        }
+        objects
+    }
+
+    #[test]
+    fn store_and_archive_walkers_reject_duplicate_dataset_revision_with_distinct_roots() {
+        let intent = FmsRunIntent::new(
+            "reachability-run",
+            "reachability-intent",
+            json!({"run_id": "reachability-run", "kind": "reachability-fixture"}),
+        );
+        let first = tensor_fixture("a", 1);
+        let second = tensor_fixture("b", 2);
+        let mut solution = reachability_solution(
+            1,
+            vec![first.artifact.clone(), second.artifact.clone()],
+            format!("sha256:{}", intent.payload_sha256),
+        );
+        let first_manifest = MaterializedDatasetManifest::from_recorded_tensor(
+            &solution,
+            "member",
+            &first.artifact,
+            &first.descriptor,
+        )
+        .expect("build first dataset fixture");
+        let second_manifest = MaterializedDatasetManifest::from_recorded_tensor(
+            &solution,
+            "member",
+            &second.artifact,
+            &second.descriptor,
+        )
+        .expect("build second dataset fixture");
+        let (first_artifact, first_bytes) = materialized_artifact(&first_manifest);
+        let (second_artifact, second_bytes) = materialized_artifact(&second_manifest);
+        solution.members[0].artifacts.extend([
+            first_artifact.clone(),
+            second_artifact.clone(),
+        ]);
+        solution.validate().expect("duplicate fixture solution is structural");
+
+        let mut objects = fixture_objects(&[&first, &second]);
+        objects.insert(first_artifact.object_ref.clone(), first_bytes);
+        objects.insert(second_artifact.object_ref.clone(), second_bytes);
+        let directory = tempfile::tempdir().expect("temporary duplicate fixture");
+        let store_root = directory.path().join("store");
+        write_store_fixture(&store_root, &solution, &intent, &objects);
+        let store_error = walk_store_root(&store_root, ReachabilityMode::Restore)
+            .expect_err("store walker accepted duplicate dataset identity");
+        assert!(store_error.to_string().contains("duplicated"));
+
+        let archive_error = walk_archive_documents(
+            &archive_fixture(&solution, &intent, &objects),
+            ReachabilityMode::Restore,
+        )
+        .expect_err("archive walker accepted duplicate dataset identity");
+        assert!(archive_error.to_string().contains("duplicated"));
+    }
+
+    #[test]
+    fn store_and_archive_walkers_reject_missing_historical_dataset_owner() {
+        let intent = FmsRunIntent::new(
+            "reachability-run",
+            "reachability-intent-history",
+            json!({"run_id": "reachability-run", "kind": "reachability-history-fixture"}),
+        );
+        let tensor = tensor_fixture("history", 3);
+        let mut solution = reachability_solution(
+            2,
+            vec![tensor.artifact.clone()],
+            format!("sha256:{}", intent.payload_sha256),
+        );
+        let mut manifest = MaterializedDatasetManifest::from_recorded_tensor(
+            &solution,
+            "member",
+            &tensor.artifact,
+            &tensor.descriptor,
+        )
+        .expect("build historical dataset fixture");
+        let historical_source = DatasetSource::PinnedSolution {
+            solution_id: solution.solution_set_id.clone(),
+            solution_revision: 1,
+        };
+        manifest.field.source.solution_revision = 1;
+        manifest.dataset.source = historical_source.clone();
+        manifest.definition.source = historical_source;
+        manifest.validate().expect("historical dataset fixture is structural");
+        let (manifest_artifact, manifest_bytes) = materialized_artifact(&manifest);
+        solution.members[0].artifacts.push(manifest_artifact.clone());
+        solution.validate().expect("historical fixture solution is structural");
+
+        let mut objects = fixture_objects(&[&tensor]);
+        objects.insert(manifest_artifact.object_ref.clone(), manifest_bytes);
+        let directory = tempfile::tempdir().expect("temporary historical fixture");
+        let store_root = directory.path().join("store");
+        write_store_fixture(&store_root, &solution, &intent, &objects);
+        let store_error = walk_store_root(&store_root, ReachabilityMode::Restore)
+            .expect_err("store walker accepted missing historical owner");
+        assert!(store_error.to_string().contains("revisions/00000000000000000001"));
+
+        let archive_error = walk_archive_documents(
+            &archive_fixture(&solution, &intent, &objects),
+            ReachabilityMode::Restore,
+        )
+        .expect_err("archive walker accepted missing historical owner");
+        assert!(archive_error.to_string().contains("historical"));
+    }
 }

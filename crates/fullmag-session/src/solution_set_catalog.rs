@@ -220,9 +220,9 @@ impl SolutionSetCatalog {
                 // boundaries too: a recognized tensor must still be owned by
                 // the immutable run intent before its descriptor is parsed.
                 crate::solution_tensor_source::verify_solution_tensor_run_owner(
-                    &self.root,
-                    solution,
+                    &self.root, solution,
                 )?;
+                self.verify_materialized_dataset_artifacts(solution)?;
 
                 for member in &solution.members {
                     for artifact in &member.artifacts {
@@ -463,6 +463,24 @@ impl SolutionSetCatalog {
         CasStore::existing(checked_path(&self.root, "objects")?, self.writer.clone())
     }
 
+    fn verify_materialized_dataset_artifacts(&self, solution: &SolutionSet) -> Result<()> {
+        if solution
+            .members
+            .iter()
+            .flat_map(|member| &member.artifacts)
+            .any(|artifact| {
+                artifact.schema_id == crate::materialized_dataset::MATERIALIZED_DATASET_SCHEMA
+            })
+        {
+            crate::materialized_dataset::verify_materialized_datasets_for_solution(
+                &self.root,
+                &self.existing_cas()?,
+                solution,
+            )?;
+        }
+        Ok(())
+    }
+
     fn verify_typed_artifacts<'a>(
         &self,
         solutions: impl IntoIterator<Item = &'a SolutionSet>,
@@ -472,10 +490,8 @@ impl SolutionSetCatalog {
             // Keep the owner closure ahead of CAS/descriptor reads.  Unknown
             // schemas remain opaque because the shared helper is a no-op for
             // them.
-            crate::solution_tensor_source::verify_solution_tensor_run_owner(
-                &self.root,
-                solution,
-            )?;
+            crate::solution_tensor_source::verify_solution_tensor_run_owner(&self.root, solution)?;
+            self.verify_materialized_dataset_artifacts(solution)?;
             for member in &solution.members {
                 for artifact in &member.artifacts {
                     // Keep unknown schemas opaque until their typed contract
@@ -798,10 +814,8 @@ mod tests {
             .put(&descriptor_bytes)
             .expect("publish tensor descriptor");
 
-        let mut value = solution_with_artifact(
-            descriptor_ref.clone(),
-            descriptor_bytes.len() as u64,
-        );
+        let mut value =
+            solution_with_artifact(descriptor_ref.clone(), descriptor_bytes.len() as u64);
         value.run_id = run_id.to_string();
         value.members[0].artifacts[0].schema_id =
             crate::solution_tensor_source::SOLUTION_TENSOR_SCHEMA.to_string();
@@ -819,9 +833,16 @@ mod tests {
         let catalog = SolutionSetCatalog::open(directory.path()).unwrap();
         let mut value = solution(1, SolutionSetManifestState::Open);
         value.scientific_assessment.reason = Some("x".repeat(MAX_SOLUTION_MANIFEST_BYTES as usize));
-        assert!(catalog.publish(&value).unwrap_err().to_string().contains("16 MiB"));
+        assert!(catalog
+            .publish(&value)
+            .unwrap_err()
+            .to_string()
+            .contains("16 MiB"));
         assert!(catalog.read(&value.solution_set_id).unwrap().is_none());
-        assert!(catalog.read_revision(&value.solution_set_id, 1).unwrap().is_none());
+        assert!(catalog
+            .read_revision(&value.solution_set_id, 1)
+            .unwrap()
+            .is_none());
     }
 
     #[test]
@@ -948,7 +969,10 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("oversized.json");
         fs::write(&path, vec![b'x'; MAX_SOLUTION_MANIFEST_BYTES as usize + 1]).unwrap();
-        assert!(read_solution_set(&path).unwrap_err().to_string().contains("16 MiB"));
+        assert!(read_solution_set(&path)
+            .unwrap_err()
+            .to_string()
+            .contains("16 MiB"));
     }
 
     #[test]
@@ -974,12 +998,10 @@ mod tests {
             catalog.read(&first.solution_set_id).unwrap(),
             Some(terminal)
         );
-        assert!(
-            catalog
-                .read_revision(&first.solution_set_id, 3)
-                .unwrap()
-                .is_none()
-        );
+        assert!(catalog
+            .read_revision(&first.solution_set_id, 3)
+            .unwrap()
+            .is_none());
     }
 
     #[test]
@@ -1100,10 +1122,7 @@ mod tests {
             .reconcile(&first.solution_set_id)
             .is_err());
         assert_eq!(
-            store
-                .solution_sets()
-                .read(&first.solution_set_id)
-                .unwrap(),
+            store.solution_sets().read(&first.solution_set_id).unwrap(),
             Some(current_before)
         );
     }
@@ -1234,10 +1253,7 @@ mod tests {
             .solution_sets()
             .durable_objects_locked()
             .expect("collect durable tensor graph");
-        assert_eq!(
-            durable.get(&descriptor_ref),
-            Some(&descriptor_byte_length)
-        );
+        assert_eq!(durable.get(&descriptor_ref), Some(&descriptor_byte_length));
         assert_eq!(durable.get(&chunk_ref), Some(&8_u64));
     }
 

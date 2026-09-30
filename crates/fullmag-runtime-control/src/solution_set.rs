@@ -367,7 +367,7 @@ fn build_solution(
     members.sort_unstable_by(|left, right| left.member_id.cmp(&right.member_id));
     coverage.sort_unstable_by(|left, right| left.artifact_id.cmp(&right.artifact_id));
 
-    Ok(Some(SolutionSet {
+    let mut solution = SolutionSet {
         schema_version: SOLUTION_SET_SCHEMA_VERSION.to_string(),
         solution_set_id,
         revision: 1,
@@ -382,7 +382,9 @@ fn build_solution(
         provenance,
         members,
         coverage,
-    }))
+    };
+    crate::study_dataset::attach_recorded_datasets(store, &mut solution)?;
+    Ok(Some(solution))
 }
 
 fn publish_revision(store: &SessionStore, desired: SolutionSet) -> Result<()> {

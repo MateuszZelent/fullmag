@@ -107,6 +107,38 @@ readerów i wyklucza zapis do historycznej, zamkniętej rewizji.
 
 Kontrakt szczegółowy: [przypięty tensor](../specs/pinned-solution-tensor-v1.md).
 
+## Rozwinięcie: trwały manifest zapisanego datasetu
+
+Pierwszy MaterializedDataset zapisanego pola jest strict artefaktem CAS
+`fullmag.materialized_dataset.v1` wewnątrz istniejącego SolutionSet.
+Manifest zawiera niezmienną definicję, dataset oraz dokładne źródło tensora
+z dodatnią rewizją SolutionSet, RunSpec, member/artifact/root i coverage.
+Nie powstaje drugi katalog Results ani oddzielny CURRENT datasetów.
+Indeks datasetów jest projekcją tego samego katalogu wyników.
+
+Manifest i tensor są publikowane w jednej rewizji SolutionSet pod istniejącą
+bramką writer lease. Pierwsza publikacja waliduje źródło względem dokładnej
+publikowanej rewizji; kolejne rewizje zachowują niezmienny manifest i jego
+pierwotną przypiętą rewizję. Nie jest to cykl hashy CAS: referencja właściciela
+wskazuje tożsamość katalogu i rewizję, a payloady wskazują konkretne hashe.
+
+Pierwsza realizacja obejmuje jedno pole rzeczywiste i jeden sample/item.
+`Ready` oznacza dostępność zweryfikowanych danych, nie sukces wykonania,
+zbieżność ani kwalifikację. Oryginalne statusy i oceny pozostają w dokładnym
+właścicielu SolutionSet. Nie dopisuje się manifestu do historycznych memberów
+lub rewizji przy odtwarzaniu; istniejące wyniki pozostają zgodne.
+
+Przed włączeniem producenta obowiązują typed publication, recovery, pin
+retirement, GC oraz FMS export/import obejmujące manifest → tensor → chunks
+wraz z dokładnym właścicielem runu. Nieznane schema pozostają opaque;
+nowy manifest nie może korzystać z tego wyjątku. Rollback wyłącza producenta,
+zachowując reader i traversal już opublikowanych manifestów.
+
+Kontrakt magazynu nie dodaje endpointu ani generated types. Publiczne
+zasoby datasetu i consumer UI pozostają zależnym etapem P6. Wymagane są
+source regression dla konfliktu ownera/rewizji/coverage oraz osobne bramki
+runtime, eksport/import i pamięci; source check nie zastępuje tych dowodów.
+
 ## Referencje
 
 - `docs/audits/2026-09-01-results-mode-sweep-ui-audit-and-refactor-plan.md`;

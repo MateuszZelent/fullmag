@@ -118,7 +118,10 @@ pub(crate) fn verify_solution_tensor_run_owner(
         .members
         .iter()
         .flat_map(|member| &member.artifacts)
-        .any(|artifact| artifact.schema_id == SOLUTION_TENSOR_SCHEMA)
+        .any(|artifact| {
+            artifact.schema_id == SOLUTION_TENSOR_SCHEMA
+                || artifact.schema_id == crate::materialized_dataset::MATERIALIZED_DATASET_SCHEMA
+        })
     {
         read_solution_run_owner(root, &solution.run_id, &solution.provenance.run_spec_digest)?;
     }

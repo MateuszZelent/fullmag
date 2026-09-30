@@ -466,7 +466,10 @@ fn plan_solution_tensor_owner_entries(
             member
                 .artifacts
                 .iter()
-                .any(|artifact| artifact.schema_id == crate::solution_tensor_source::SOLUTION_TENSOR_SCHEMA)
+                .any(|artifact| {
+                    artifact.schema_id == crate::solution_tensor_source::SOLUTION_TENSOR_SCHEMA
+                        || artifact.schema_id == crate::materialized_dataset::MATERIALIZED_DATASET_SCHEMA
+                })
         });
         if !has_tensor {
             continue;

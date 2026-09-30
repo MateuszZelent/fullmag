@@ -175,6 +175,9 @@ impl SessionStore {
             .context("validating solution-set before CAS publication barrier")?;
         let _lease = self.write_transaction()?;
         crate::solution_tensor_source::verify_solution_tensor_run_owner(&self.root, solution)?;
+        crate::materialized_dataset::verify_materialized_datasets_for_solution(
+            &self.root, &self.cas, solution,
+        )?;
         let mut referenced_objects = BTreeMap::new();
         for member in &solution.members {
             for artifact in &member.artifacts {

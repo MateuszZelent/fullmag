@@ -24,6 +24,7 @@ pub mod dataset_slice_adapter;
 mod durability;
 pub mod fms;
 pub mod mesh_operation;
+pub mod materialized_dataset;
 pub mod reachability;
 pub mod repository_path;
 pub mod solution_set_catalog;
