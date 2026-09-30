@@ -1825,11 +1825,71 @@ def _coincident_ring_airbox_bounds(
     return bounds
 
 
+def _box_airbox_layer_levels(
+    body_bottom: float, body_top: float, zmin: float, zmax: float,
+    n_layers: int, *, h_inner: float, h_outer: float, growth: float,
+) -> list[float]:
+    """Plan exact film planes and independently graded exterior planes (SI)."""
+    if isinstance(n_layers, bool) or not isinstance(n_layers, int) or n_layers < 1:
+        raise ValueError("film layer count must be a positive integer")
+    if not all(math.isfinite(v) for v in (body_bottom, body_top, zmin, zmax, h_inner, h_outer, growth)):
+        raise ValueError("layer planning inputs must be finite")
+    if not zmin < body_bottom < body_top < zmax:
+        raise ValueError("Box airbox requires positive clearance on both z faces")
+    if h_inner <= 0 or h_outer < h_inner or growth < 1:
+        raise ValueError("air layer sizes must be positive, ordered, and growth >= 1")
+
+    def exterior(interface: float, boundary: float, direction: float) -> list[float]:
+        result = []
+        position = interface
+        step = h_inner
+        while direction * (boundary - position) > 0:
+            remaining = direction * (boundary - position)
+            following = boundary if remaining <= step else position + direction * step
+            if following == position:
+                raise ValueError("air layer size is below coordinate resolution")
+            result.append(following)
+            position = following
+            step = min(step * growth, h_outer)
+        return result
+
+    lower = exterior(body_bottom, zmin, -1.0)
+    upper = exterior(body_top, zmax, 1.0)
+    film = [body_bottom + (body_top - body_bottom) * i / n_layers for i in range(n_layers + 1)]
+    film[0], film[-1] = body_bottom, body_top
+    return [*reversed(lower), *film, *upper]
+
+
+def generate_swept_tetrahedral_box_airbox_mesh(
+    geometry: Box, hmax: float, n_layers: int, *, order: int,
+    distribution: str, recombine: bool, airbox: AirboxOptions | None,
+    options: MeshOptions,
+) -> MeshData:
+    """Realize a fixed-layer Tet4 Box in its exact lateral periodic cell."""
+    if order != 1 or distribution != DISTRIBUTION_FIXED or recombine:
+        raise ValueError("layered tetrahedral Box requires P1 fixed non-recombined layers")
+    if options.sweep_direction not in (None, "auto", "z"):
+        raise ValueError("layered tetrahedral Box supports only the z sweep direction")
+    if options.sweep_face_meshing not in (None, "triangular"):
+        raise ValueError("layered tetrahedral Box requires a triangular source face")
+    if options.through_thickness_element_ratio not in (None, 1.0) or options.through_thickness_symmetric:
+        raise ValueError("layered tetrahedral Box requires uniform film layers")
+    if airbox is None:
+        raise ValueError("layered tetrahedral Box currently requires an exact-cell bbox airbox")
+    bounds = _coincident_ring_airbox_bounds(geometry, airbox)
+    if bounds is None:
+        raise ValueError("layered tetrahedral Box requires coincident lateral bbox airbox bounds")
+    return _generate_coincident_ring_airbox_mesh(
+        geometry, base=geometry, tool=None, hmax=hmax, n_layers=n_layers,
+        order=order, airbox=airbox, options=options, bounds=bounds,
+    )
+
+
 def _generate_coincident_ring_airbox_mesh(
-    geometry: Difference,
+    geometry: Geometry,
     *,
     base: Box,
-    tool: Cylinder,
+    tool: Cylinder | None,
     hmax: float,
     n_layers: int,
     order: int,
@@ -1837,10 +1897,10 @@ def _generate_coincident_ring_airbox_mesh(
     options: MeshOptions,
     bounds: tuple[float, float, float, float, float, float],
 ) -> MeshData:
-    """Mesh a ring and exact-cell airbox as synchronized GEO partitions."""
+    """Mesh a Box or ring and exact-cell airbox as synchronized GEO partitions."""
     SCALE = 1.0e6
     sx, sy, sz = (float(value) for value in base.size)
-    radius = float(tool.radius)
+    radius = float(tool.radius) if tool is not None else None
     xmin, ymin, zmin, xmax, ymax, zmax = (float(value) * SCALE for value in bounds)
     body_bottom = -0.5 * sz * SCALE
     body_top = 0.5 * sz * SCALE
@@ -1849,6 +1909,15 @@ def _generate_coincident_ring_airbox_mesh(
         for index in range(n_layers + 1)
     ]
     levels = [zmin, *internal, zmax]
+    if tool is None:
+        h_inner = float(hmax)
+        if airbox.minimum_element_size is not None:
+            h_inner = min(h_inner, float(airbox.minimum_element_size))
+        h_outer = float(airbox.maximum_element_size) if airbox.maximum_element_size is not None else float(hmax)
+        levels = [value * SCALE for value in _box_airbox_layer_levels(
+            body_bottom / SCALE, body_top / SCALE, zmin / SCALE, zmax / SCALE,
+            n_layers, h_inner=h_inner, h_outer=h_outer, growth=float(airbox.grading_ratio),
+        )]
     if any(levels[index + 1] <= levels[index] for index in range(len(levels) - 1)):
         raise ValueError("coincident ring airbox must have positive z clearance")
 
@@ -1864,7 +1933,7 @@ def _generate_coincident_ring_airbox_mesh(
     try:
         _configure_gmsh_threads(gmsh, requested_threads=1, honor_environment=False)
         gmsh.model.add("fullmag_swept_box_cylinder_ring_coincident_airbox")
-        source_hmax_scaled = min(float(hmax) * SCALE, 2.0 * sz * SCALE / n_layers)
+        source_hmax_scaled = (float(hmax) * SCALE if tool is None else min(float(hmax) * SCALE, 2.0 * sz * SCALE / n_layers))
         z_source = levels[0]
         outer_points = [
             gmsh.model.geo.addPoint(x, y, z_source, source_hmax_scaled)
@@ -1879,21 +1948,25 @@ def _generate_coincident_ring_airbox_mesh(
             gmsh.model.geo.addLine(outer_points[index], outer_points[(index + 1) % 4])
             for index in range(4)
         ]
-        center = gmsh.model.geo.addPoint(0.0, 0.0, z_source, source_hmax_scaled)
-        right = gmsh.model.geo.addPoint(radius * SCALE, 0.0, z_source, source_hmax_scaled)
-        top = gmsh.model.geo.addPoint(0.0, radius * SCALE, z_source, source_hmax_scaled)
-        left = gmsh.model.geo.addPoint(-radius * SCALE, 0.0, z_source, source_hmax_scaled)
-        bottom = gmsh.model.geo.addPoint(0.0, -radius * SCALE, z_source, source_hmax_scaled)
-        arcs = [
-            gmsh.model.geo.addCircleArc(right, center, top),
-            gmsh.model.geo.addCircleArc(top, center, left),
-            gmsh.model.geo.addCircleArc(left, center, bottom),
-            gmsh.model.geo.addCircleArc(bottom, center, right),
-        ]
         outer_loop = gmsh.model.geo.addCurveLoop(outer_lines)
-        circle_loop = gmsh.model.geo.addCurveLoop(arcs)
-        annulus_surface = gmsh.model.geo.addPlaneSurface([outer_loop, -circle_loop])
-        hole_surface = gmsh.model.geo.addPlaneSurface([circle_loop])
+        if tool is None:
+            annulus_surface = gmsh.model.geo.addPlaneSurface([outer_loop])
+            hole_surface = None
+        else:
+            center = gmsh.model.geo.addPoint(0.0, 0.0, z_source, source_hmax_scaled)
+            right = gmsh.model.geo.addPoint(radius * SCALE, 0.0, z_source, source_hmax_scaled)
+            top = gmsh.model.geo.addPoint(0.0, radius * SCALE, z_source, source_hmax_scaled)
+            left = gmsh.model.geo.addPoint(-radius * SCALE, 0.0, z_source, source_hmax_scaled)
+            bottom = gmsh.model.geo.addPoint(0.0, -radius * SCALE, z_source, source_hmax_scaled)
+            arcs = [
+                gmsh.model.geo.addCircleArc(right, center, top),
+                gmsh.model.geo.addCircleArc(top, center, left),
+                gmsh.model.geo.addCircleArc(left, center, bottom),
+                gmsh.model.geo.addCircleArc(bottom, center, right),
+            ]
+            circle_loop = gmsh.model.geo.addCurveLoop(arcs)
+            annulus_surface = gmsh.model.geo.addPlaneSurface([outer_loop, -circle_loop])
+            hole_surface = gmsh.model.geo.addPlaneSurface([circle_loop])
         gmsh.model.geo.synchronize()
 
         source_fields: list[int] = []
@@ -1920,11 +1993,11 @@ def _generate_coincident_ring_airbox_mesh(
         annulus_volumes: list[int] = []
         hole_volumes: list[int] = []
         current_annulus = int(annulus_surface)
-        current_hole = int(hole_surface)
+        current_hole = int(hole_surface) if hole_surface is not None else None
         for level_index in range(len(levels) - 1):
             step = float(levels[level_index + 1] - levels[level_index])
             extruded = gmsh.model.geo.extrude(
-                [(2, current_annulus), (2, current_hole)],
+                [(2, current_annulus)] + ([(2, current_hole)] if current_hole is not None else []),
                 0.0,
                 0.0,
                 step,
@@ -1934,7 +2007,7 @@ def _generate_coincident_ring_airbox_mesh(
             )
             gmsh.model.geo.synchronize()
             volumes = [int(tag) for dim, tag in extruded if int(dim) == 3]
-            if len(volumes) != 2:
+            if len(volumes) != (2 if tool is not None else 1):
                 raise RuntimeError("coincident ring extrusion must produce annulus and hole volumes")
             annulus_step: list[int] = []
             hole_step: list[int] = []
@@ -1945,10 +2018,11 @@ def _generate_coincident_ring_airbox_mesh(
                     annulus_step.append(volume)
                 else:
                     hole_step.append(volume)
-            if len(annulus_step) != 1 or len(hole_step) != 1:
+            if len(annulus_step) != 1 or len(hole_step) != (1 if tool is not None else 0):
                 raise RuntimeError("coincident ring extrusion volume identity is ambiguous")
             annulus_volumes.append(annulus_step[0])
-            hole_volumes.append(hole_step[0])
+            if hole_step:
+                hole_volumes.append(hole_step[0])
             top_surfaces = []
             for dim, tag in extruded:
                 if int(dim) != 2:
@@ -1958,12 +2032,14 @@ def _generate_coincident_ring_airbox_mesh(
                     top_surfaces.append((int(tag), float(box[3] - box[0])))
             next_annulus = [tag for tag, x_span in top_surfaces if math.isclose(x_span, sx * SCALE, rel_tol=1.0e-7, abs_tol=1.0e-9)]
             next_hole = [tag for tag, x_span in top_surfaces if not math.isclose(x_span, sx * SCALE, rel_tol=1.0e-7, abs_tol=1.0e-9)]
-            if len(next_annulus) != 1 or len(next_hole) != 1:
+            if len(next_annulus) != 1 or len(next_hole) != (1 if tool is not None else 0):
                 raise RuntimeError("coincident ring extrusion top-face identity is ambiguous")
-            current_annulus, current_hole = next_annulus[0], next_hole[0]
+            current_annulus = next_annulus[0]
+            current_hole = next_hole[0] if next_hole else None
 
-        body_volumes = annulus_volumes[1:-1]
-        air_volumes = [annulus_volumes[0], annulus_volumes[-1], *hole_volumes]
+        body_volumes = [volume for i, volume in enumerate(annulus_volumes)
+                        if body_bottom < 0.5 * (levels[i] + levels[i + 1]) < body_top]
+        air_volumes = [volume for volume in annulus_volumes if volume not in body_volumes] + hole_volumes
         if len(body_volumes) != n_layers:
             raise RuntimeError("coincident ring realization lost a magnetic layer volume")
         gmsh.model.addPhysicalGroup(3, body_volumes, tag=1)
@@ -2004,14 +2080,12 @@ def _generate_coincident_ring_airbox_mesh(
             _scale_periodic_boundary_pairs,
         )
 
-        periodic_candidates = [
-            surface
-            for surface in outer_surfaces
-            if not (
-                abs(float(gmsh.model.getBoundingBox(2, surface)[2]) - zmin) <= 1.0e-8
-                or abs(float(gmsh.model.getBoundingBox(2, surface)[5]) - zmax) <= 1.0e-8
-            )
-        ]
+        def is_z_cap(surface: int) -> bool:
+            box = gmsh.model.getBoundingBox(2, surface)
+            return any(abs(float(box[2]) - z) <= 1.0e-8
+                       and abs(float(box[5]) - z) <= 1.0e-8 for z in (zmin, zmax))
+
+        periodic_candidates = [surface for surface in outer_surfaces if not is_z_cap(surface)]
         periodic_specs = _configure_axis_periodic_surfaces(
             gmsh,
             surface_tags=periodic_candidates,
@@ -3454,10 +3528,9 @@ def should_use_swept(geometry: Geometry, opts: MeshOptions) -> bool:
         return True
     if strategy == "thin_film_tetrahedral":
         # The public thin-film recipe keeps tetrahedral topology.  The
-        # canonical antidot ring has a dedicated GEO extrusion that realizes
-        # that recipe with exact source planes; other geometries remain on
-        # their existing feature-aware/free-tet paths.
-        return _is_box_cylinder_ring(geometry)
+        # Box and canonical antidot ring use GEO extrusion to realize
+        # exact magnetic source planes while preserving Tet4 topology.
+        return isinstance(geometry, Box) or _is_box_cylinder_ring(geometry)
     if strategy == SWEEP_STRATEGY_AUTO or strategy is None:
         # Auto-detect: use swept if geometry is sweepable AND
         # through_thickness_elements is set
@@ -3520,6 +3593,11 @@ def generate_swept_mesh(
             recombine=recombine, airbox=airbox, options=options,
         )
     if isinstance(geometry, Box):
+        if options is not None and options.mesh_strategy == "thin_film_tetrahedral":
+            return generate_swept_tetrahedral_box_airbox_mesh(
+                geometry, hmax, n_layers, order=order, distribution=distribution,
+                recombine=recombine, airbox=airbox, options=options,
+            )
         result = classify_sweepability(geometry)
         fallback_axis = result.thin_axis if result.thin_axis is not None else 2
         thin_axis = _resolve_sweep_axis(

@@ -293,6 +293,30 @@
       "path": "scripts/test_de_bv_25_model.py",
       "symbol": "test_thickness_convergence_preserves_physics",
       "responsibility": "Controlled independent through-thickness convergence input and request verification"
+    },
+    {
+      "id": "source-box-layer-planes",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py",
+      "symbol": "_box_airbox_layer_levels",
+      "responsibility": "Exact film planes and independently graded airbox planes in SI"
+    },
+    {
+      "id": "source-box-layer-generator",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py",
+      "symbol": "generate_swept_tetrahedral_box_airbox_mesh",
+      "responsibility": "Fixed-layer Tet4 Box realization with explicit supported constraints"
+    },
+    {
+      "id": "source-box-layer-routing",
+      "path": "packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py",
+      "symbol": "_realize_fem_domain_mesh_asset_from_components_impl",
+      "responsibility": "Route public film recipe through shared GEO without replacing body resolution by air size"
+    },
+    {
+      "id": "source-box-layer-regression",
+      "path": "scripts/test_box_layered_airbox_mesh.py",
+      "symbol": "test_public_de_model_shared_domain_realizes_six_layers",
+      "responsibility": "Real Gmsh shared-domain realization of canonical DE model layer request"
     }
   ],
   "public_api": {

@@ -1313,3 +1313,49 @@ rozdzielczości unstructured Tet4, nie certyfikat dokładnej liczby płaskich
 warstw. Deklaracja i wykonana siatka są raportowane oddzielnie.
 Obecna ścieżka free-tet dla Box nie realizuje dokładnej ekstruzji warstw;
 nie wolno interpretować samego metadata jako wykonanego badania warstw.
+
+
+## Realizacja warstw Box w periodycznym airboxie
+
+Dla jednego osiowego Box, tetraedrów P1, stałego rozkładu warstw
+i airboxu bbox o identycznych granicach bocznych generator GEO realizuje
+każdą z żądanych warstw filmu jako osobny przedział ekstruzji.
+Nie zastępuje żądania warstw swobodną tetraedryzacją.
+`MeshOptions.through_thickness_elements` pozostaje kanonicznym wejściem
+Python→ProblemIR→mesh workflow; nie zmienia materiału ani operatora demagu.
+Obsługiwany kierunek to z, powierzchnia źródłowa jest trójkątna,
+bez rekombinacji; niespełnione ograniczenia kończą się jawnym błędem.
+
+Powietrze ma niezależne płaszczyzny: pierwszy krok od interfejsu
+wynika z minimum rozmiaru filmu i zadanej minimalnej wielkości powietrza,
+następne rosną według `AirboxOptions.grading_ratio` do
+`maximum_element_size`. Ostatni krok domyka rzeczywistą granicę airboxu.
+Wszystkie wielkości wejściowe są w metrach; skalowanie GEO do mikrometrów
+nie zmienia wyniku ani translacji Floqueta w artefaktach SI.
+
+Ścieżka pierścienia zachowuje dotychczasowy podział; nowe stopniowanie
+dotyczy Box. FDM CPU/GPU nie korzystają z tej siatki. Generacja FEM jest
+wspólna, lecz solver FEM CPU wymaga odrębnego managed run, a FEM GPU
+pozostaje NOT VERIFIED. Test planu płaszczyzn nie stanowi dowodu fizyki.
+Bramki: dokładna liczba płaszczyzn magnetycznych, maksymalny pionowy
+span Tet4, zgodne węzły periodyczne, dodatnie objętości, grupy body/air,
+zachowanie granicy potencjału, niezależny residual Poissona oraz pilot DE/BV.
+Mapa implementacji: `_box_airbox_layer_levels`,
+`generate_swept_tetrahedral_box_airbox_mesh`,
+`_generate_coincident_ring_airbox_mesh` w
+`packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py`; wybór wspólnej
+ścieżki: `asset_pipeline.py::_realize_fem_domain_mesh_asset_from_components_impl`.
+
+Indeks źródeł realizacji warstw:
+
+| ID | Plik | Symbol |
+|---|---|---|
+| source-box-layer-planes | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `_box_airbox_layer_levels` |
+| source-box-layer-generator | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `generate_swept_tetrahedral_box_airbox_mesh` |
+| source-box-layer-routing | `packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py` | `_realize_fem_domain_mesh_asset_from_components_impl` |
+| source-box-layer-regression | `scripts/test_box_layered_airbox_mesh.py` | `test_public_de_model_shared_domain_realizes_six_layers` |
+
+Kontrola szwów obejmuje także boczne powierzchnie pierwszej i ostatniej
+warstwy powietrza. Powierzchnia boczna dotykająca granicy z nie jest
+płaszczyzną zewnętrznego Dirichleta: wymaga zgodności obu granic z
+z jedną płaszczyzną. Ta korekta obejmuje wspólny generator Box i pierścienia.

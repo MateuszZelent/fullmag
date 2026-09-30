@@ -1,0 +1,114 @@
+"""Lightweight real-Gmsh regression for the exact-layer periodic film mesh."""
+import sys
+from pathlib import Path
+import numpy as np
+import pytest
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "packages/fullmag-py/src"))
+from fullmag.model.geometry import Box
+from fullmag.meshing._gmsh_types import MeshOptions, AirboxOptions
+from fullmag.meshing._gmsh_swept import (
+    _box_airbox_layer_levels, generate_swept_tetrahedral_box_airbox_mesh, should_use_swept,
+)
+
+
+def test_graded_planes_keep_film_and_outer_bounds():
+    levels = _box_airbox_layer_levels(-5e-9, 5e-9, -2.005e-6, 2.005e-6,
+                                    6, h_inner=10e-9/6, h_outer=100e-9, growth=1.3)
+    assert levels[0] == -2.005e-6 and levels[-1] == 2.005e-6
+    assert np.all(np.diff(levels) > 0)
+    film = [z for z in levels if -5e-9 <= z <= 5e-9]
+    assert len(film) == 7
+    assert np.max(np.diff(levels)) <= 100e-9 * (1 + 1e-12)
+
+
+@pytest.mark.parametrize("layers", [3, 6, 9])
+def test_real_mesh_keeps_requested_film_planes_and_periodic_air(layers):
+    pytest.importorskip("gmsh")
+    box = Box(size=(40e-9, 40e-9, 10e-9))
+    opts = MeshOptions(mesh_strategy="thin_film_tetrahedral",
+                       through_thickness_elements=layers, periodic_pair_ids=["x_faces", "y_faces"])
+    air = AirboxOptions(size=(40e-9, 40e-9, 410e-9),
+                        maximum_element_size=50e-9, grading_ratio=1.3)
+    assert should_use_swept(box, opts)
+    mesh = generate_swept_tetrahedral_box_airbox_mesh(
+        box, 10e-9, layers, order=1, distribution="fixed", recombine=False,
+        airbox=air, options=opts)
+    assert set(mesh.cell_types.tolist()) == {"tet4"}
+    assert set(mesh.facet_types.tolist()) == {"tri3"}
+    nodes = np.asarray(mesh.nodes)
+    cells = np.asarray(mesh.elements)
+    body = cells[np.asarray(mesh.element_markers) == 1]
+    xyz = nodes[body]
+    assert np.max(np.ptp(xyz[:, :, 2], axis=1)) <= 10e-9/layers + 1e-15
+    assert len(np.unique(np.round(xyz[:, :, 2].reshape(-1), decimals=17))) == layers + 1
+    matrices = xyz[:, 1:] - xyz[:, :1]
+    assert np.all(np.abs(np.linalg.det(matrices)) > 0)
+    assert mesh.periodic_boundary_pairs
+    assert mesh.periodic_node_pairs
+    # Every side-plane vertex, including both exterior air slabs, participates.
+    for pair_id, axis in (("x_faces", 0), ("y_faces", 1)):
+        required = set(np.flatnonzero(np.isclose(np.abs(nodes[:, axis]), 20e-9, rtol=0, atol=1e-16)))
+        mapped = {int(pair[key]) for pair in mesh.periodic_node_pairs
+                  if pair["pair_id"] == pair_id for key in ("node_a", "node_b")}
+        assert required <= mapped
+
+
+@pytest.mark.parametrize("kwargs", [dict(n_layers=0), dict(growth=.5), dict(h_inner=0), dict(zmin=-5e-9)])
+def test_invalid_plane_plan_fails(kwargs):
+    args = dict(body_bottom=-5e-9, body_top=5e-9, zmin=-205e-9, zmax=205e-9,
+                n_layers=3, h_inner=3e-9, h_outer=50e-9, growth=1.3)
+    args.update(kwargs)
+    with pytest.raises(ValueError):
+        _box_airbox_layer_levels(**args)
+
+
+
+def test_public_de_model_shared_domain_realizes_six_layers(monkeypatch):
+    import fullmag as fm
+    from fullmag.meshing.asset_pipeline import realize_fem_domain_mesh_asset_from_components_with_report
+    monkeypatch.setenv("FULLMAG_DE_SMOKE_THICKNESS_LAYERS", "6")
+    fm.reset()
+    try:
+        problem = fm.load_problem_from_script(Path(__file__).resolve().parents[1] / "examples/fem_de_smoke_numeric.py", lightweight_assets=True).stages[-1].problem
+        ir = problem.to_ir(requested_backend="fem", execution_mode="strict", execution_precision="double", include_geometry_assets=False)
+        meta = ir["problem_meta"]["runtime_metadata"]
+        mesh, markers, report = realize_fem_domain_mesh_asset_from_components_with_report(
+            geometries=[Box(size=(40e-9, 40e-9, 10e-9), name="film")],
+            hints=fm.FEM(order=1, hmax=10e-9), study_universe=meta["study_universe"],
+            mesh_workflow=meta["mesh_workflow"])
+        assert report.build_mode == "single_geometry_geo_layered_box"
+        assert markers == [{"geometry_name": "film", "marker": 1}]
+        body = np.asarray(mesh.elements)[np.asarray(mesh.element_markers) == 1]
+        z = np.asarray(mesh.nodes)[body, 2]
+        assert np.max(np.ptp(z, axis=1)) <= 10e-9/6 + 1e-15
+        assert len(np.unique(np.round(z.reshape(-1), 17))) == 7
+    finally:
+        fm.reset()
+
+
+def test_existing_ring_route_keeps_tetra_layers_and_full_periodic_sides():
+    from fullmag.model.geometry import Cylinder
+    from fullmag.meshing._gmsh_swept import generate_swept_box_cylinder_ring_mesh
+    geometry = Box(size=(40e-9, 40e-9, 10e-9)) - Cylinder(radius=8e-9, height=10e-9)
+    opts = MeshOptions(mesh_strategy="thin_film_tetrahedral", through_thickness_elements=3,
+                       periodic_pair_ids=["x_faces", "y_faces"])
+    mesh = generate_swept_box_cylinder_ring_mesh(
+        geometry, 10e-9, 3, order=1, distribution="fixed", recombine=False,
+        airbox=AirboxOptions(size=(40e-9, 40e-9, 410e-9)), options=opts)
+    assert set(mesh.cell_types.tolist()) == {"tet4"}
+    nodes = np.asarray(mesh.nodes)
+    body = np.asarray(mesh.elements)[np.asarray(mesh.element_markers) == 1]
+    assert len(np.unique(np.round(nodes[body, 2].reshape(-1), 17))) == 4
+    for pair_id, axis in (("x_faces", 0), ("y_faces", 1)):
+        required = set(np.flatnonzero(np.isclose(np.abs(nodes[:, axis]), 20e-9, rtol=0, atol=1e-16)))
+        mapped = {int(pair[key]) for pair in mesh.periodic_node_pairs
+                  if pair["pair_id"] == pair_id for key in ("node_a", "node_b")}
+        assert required <= mapped
+
+
+def test_film_refinement_keeps_exterior_plane_plan():
+    def exterior(n):
+        planes = _box_airbox_layer_levels(-5e-9, 5e-9, -205e-9, 205e-9, n,
+                                          h_inner=10e-9, h_outer=50e-9, growth=1.3)
+        return [z for z in planes if abs(z) > 5e-9]
+    assert exterior(3) == exterior(6) == exterior(9)

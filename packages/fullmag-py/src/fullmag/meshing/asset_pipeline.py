@@ -2635,7 +2635,13 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
         and not per_object_recipes
         and not object_regions
     )
-    single_geometry_occ_direct = mixed_shared_geo_direct or ring_shared_geo_direct
+    box_layered_geo_direct = (
+        len(geometries) == 1 and isinstance(geometries[0], Box)
+        and airbox is not None
+        and surface_mesh_options.mesh_strategy == "thin_film_tetrahedral"
+        and not per_object_recipes and not object_regions
+    )
+    single_geometry_occ_direct = mixed_shared_geo_direct or ring_shared_geo_direct or box_layered_geo_direct
     if (
         isinstance(mesh_workflow, Mapping)
         and bool(mesh_workflow.get("single_geometry_occ_direct")) is True
@@ -2775,6 +2781,8 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
             planned_build_mode = "single_geometry_geo_mixed"
         elif ring_shared_geo_direct:
             planned_build_mode = "single_geometry_geo_ring"
+        elif box_layered_geo_direct:
+            planned_build_mode = "single_geometry_geo_layered_box"
         elif single_geometry_occ_direct:
             planned_build_mode = "single_geometry_occ"
         elif conformal_occ_direct:
@@ -2835,7 +2843,7 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                 "error": str(exc),
                 "message": "Shared-domain mesh build failed",
             }
-            if mixed_shared_geo_direct or ring_shared_geo_direct:
+            if mixed_shared_geo_direct or ring_shared_geo_direct or box_layered_geo_direct:
                 payload["mixed_layer_topology_rejection"] = {
                     "schema_version": "mixed_layer_topology_rejection.v1",
                     "certificate_status": "rejected",
@@ -2866,13 +2874,13 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                 else float(hints.hmax)
             )
             if (
-                not (mixed_shared_geo_direct or ring_shared_geo_direct)
+                not (mixed_shared_geo_direct or ring_shared_geo_direct or box_layered_geo_direct)
                 and airbox is not None
                 and airbox.maximum_element_size is not None
                 and float(airbox.maximum_element_size) > effective_hmax
             ):
                 effective_hmax = float(airbox.maximum_element_size)
-            if not (mixed_shared_geo_direct or ring_shared_geo_direct):
+            if not (mixed_shared_geo_direct or ring_shared_geo_direct or box_layered_geo_direct):
                 for field in mesh_options.size_fields:
                     vin = field.get("params", {}).get("VIn") if isinstance(field.get("params"), dict) else None
                     if isinstance(vin, (int, float)) and float(vin) > effective_hmax:
@@ -2886,7 +2894,7 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                     else (
                         "single_geometry_geo_ring"
                         if ring_shared_geo_direct
-                        else "single_geometry_occ"
+                        else ("single_geometry_geo_layered_box" if box_layered_geo_direct else "single_geometry_occ")
                     )
                 )
                 emit_progress_event(
@@ -2899,7 +2907,7 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                             else (
                                 "Generating shared-GEO ring tetrahedral mesh"
                                 if ring_shared_geo_direct
-                                else "Generating direct OCC 3D tetrahedral mesh"
+                                else ("Generating shared-GEO layered Box tetrahedral mesh" if box_layered_geo_direct else "Generating direct OCC 3D tetrahedral mesh")
                             )
                         ),
                     }
@@ -2910,7 +2918,7 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                     else (
                         "Single-geometry shared-GEO ring mesh path selected"
                         if ring_shared_geo_direct
-                        else "Single-geometry OCC mesh path selected (skipping STL component import)"
+                        else ("Single-geometry layered Box mesh path selected" if box_layered_geo_direct else "Single-geometry OCC mesh path selected (skipping STL component import)")
                     )
                 )
                 mesh = generate_mesh(
