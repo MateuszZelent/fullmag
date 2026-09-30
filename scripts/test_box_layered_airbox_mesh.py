@@ -77,6 +77,12 @@ def test_public_de_model_shared_domain_realizes_six_layers(monkeypatch):
             hints=fm.FEM(order=1, hmax=10e-9), study_universe=meta["study_universe"],
             mesh_workflow=meta["mesh_workflow"])
         assert report.build_mode == "single_geometry_geo_layered_box"
+        status = next(s for s in report.operation_statuses if s.kind == "thin_film")
+        assert status.actual_method == "geo_layered_tetrahedral"
+        assert status.details["resolved_sweep_direction"] == "z"
+        diagnostic = report.to_dict()["thin_film_diagnostics"][0]
+        assert diagnostic["actual_method"] == "geo_layered_tetrahedral"
+        assert not any("maximum element size" in w for w in diagnostic["warnings"])
         assert markers == [{"geometry_name": "film", "marker": 1}]
         body = np.asarray(mesh.elements)[np.asarray(mesh.element_markers) == 1]
         z = np.asarray(mesh.nodes)[body, 2]
@@ -112,3 +118,22 @@ def test_film_refinement_keeps_exterior_plane_plan():
                                           h_inner=10e-9, h_outer=50e-9, growth=1.3)
         return [z for z in planes if abs(z) > 5e-9]
     assert exterior(3) == exterior(6) == exterior(9)
+
+
+@pytest.mark.parametrize("layers,hmax,mode,reason", [
+    (0, 10e-9, "geometric", "positive integer"),
+    (True, 10e-9, "geometric", "positive integer"),
+    (3, float("nan"), "geometric", "finite and positive"),
+    (3, 10e-9, "linear", "only geometric"),
+])
+def test_box_unsupported_controls_fail_before_gmsh(monkeypatch, layers, hmax, mode, reason):
+    import fullmag.meshing._gmsh_swept as swept
+    def forbidden():
+        pytest.fail("invalid controls must fail before Gmsh initialization")
+    monkeypatch.setattr(swept, "_import_gmsh", forbidden)
+    with pytest.raises(ValueError, match=reason):
+        generate_swept_tetrahedral_box_airbox_mesh(
+            Box(size=(40e-9, 40e-9, 10e-9)), hmax, layers, order=1,
+            distribution="fixed", recombine=False,
+            airbox=AirboxOptions(size=(40e-9, 40e-9, 410e-9), grading_mode=mode),
+            options=MeshOptions(mesh_strategy="thin_film_tetrahedral"))

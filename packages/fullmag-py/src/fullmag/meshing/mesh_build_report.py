@@ -552,6 +552,7 @@ def _build_mesh_operation_statuses(
     requested_thin_film = _requested_thin_film_method(opts)
     requested_sweep_direction = opts.sweep_direction or "auto"
     if requested_thin_film is not None:
+        exact_box_layers = build_mode == "single_geometry_geo_layered_box"
         for geometry in geometries:
             sweepability = classify_sweepability(geometry)
             scope = getattr(geometry, "geometry_name", type(geometry).__name__)
@@ -560,20 +561,20 @@ def _build_mesh_operation_statuses(
                     kind="thin_film",
                     scope=str(scope),
                     requested=True,
-                    status="applied" if sweepability.sweepable else "skipped",
+                    status="applied" if exact_box_layers or sweepability.sweepable else "skipped",
                     requested_method=requested_thin_film,
                     actual_method=(
-                        "feature_aware_tetrahedral" if sweepability.sweepable else "free_tetrahedral"
+                        "geo_layered_tetrahedral" if exact_box_layers else
+                        ("feature_aware_tetrahedral" if sweepability.sweepable else "free_tetrahedral")
                     ),
-                    reason=None if sweepability.sweepable else sweepability.reason,
+                    reason=None if exact_box_layers or sweepability.sweepable else sweepability.reason,
                     details={
                         "build_mode": build_mode,
                         "through_thickness_elements": opts.through_thickness_elements,
                         "requested_sweep_direction": requested_sweep_direction,
                         "resolved_sweep_direction": (
-                            "xyz"[sweepability.thin_axis]
-                            if sweepability.thin_axis is not None
-                            else None
+                            "z" if exact_box_layers else
+                            ("xyz"[sweepability.thin_axis] if sweepability.thin_axis is not None else None)
                         ),
                         "airbox_present": airbox is not None,
                     },
@@ -722,9 +723,9 @@ def _build_thin_film_diagnostics(
         warnings: list[str] = []
         if opts.through_thickness_elements is not None and opts.through_thickness_elements < 4:
             warnings.append("requested through-thickness layer count is below 4")
-        if estimated_layers is not None and estimated_layers < 4:
+        if actual_method != "geo_layered_tetrahedral" and estimated_layers is not None and estimated_layers < 4:
             warnings.append("estimated layers from maximum element size across thickness is below 4")
-        if hmax_ratio is not None and hmax_ratio > 0.5:
+        if actual_method != "geo_layered_tetrahedral" and hmax_ratio is not None and hmax_ratio > 0.5:
             warnings.append("maximum element size is too large relative to thin-film thickness")
         if opts.smoothing_steps == 0:
             warnings.append("smoothing is disabled for a thin-film mesh")

@@ -1359,3 +1359,20 @@ Kontrola szwów obejmuje także boczne powierzchnie pierwszej i ostatniej
 warstwy powietrza. Powierzchnia boczna dotykająca granicy z nie jest
 płaszczyzną zewnętrznego Dirichleta: wymaga zgodności obu granic z
 z jedną płaszczyzną. Ta korekta obejmuje wspólny generator Box i pierścienia.
+
+
+## Raport metody warstwowej i ograniczenie stopniowania
+
+`mesh_build_report.py::_build_mesh_operation_statuses` raportuje
+`geo_layered_tetrahedral` dla `single_geometry_geo_layered_box`,
+a nie historyczne `feature_aware_tetrahedral`. Kierunek realizacji to z.
+Ocena liczby warstw na podstawie bocznego hmax nie jest kryterium
+pionowej rozdzielczości tej ekstruzji; nadal wymagany jest pomiar elementów.
+Ograniczenie nowej ścieżki: `AirboxOptions.grading_mode` musi być
+`geometric` (wartość domyślna). Żądanie `linear` daje jawny błąd przed
+Gmsh zamiast wykonania innej metody. Jest to niezakończony zakres
+obsługi alternatywnego stopniowania, nie dowód jego realizacji.
+
+| ID | Plik | Symbol |
+|---|---|---|
+| source-box-layer-report | `packages/fullmag-py/src/fullmag/meshing/mesh_build_report.py` | `_build_mesh_operation_statuses` |

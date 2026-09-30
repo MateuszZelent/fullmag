@@ -24,3 +24,14 @@ kapsuła managed runtime-v2 zawierająca zmieniony pakiet Python, następnie
 DE/BV k25 z niezależnymi kontrolami Poissona i zbieżności przez grubość.
 Stary build #173 nie zawiera poprawki generatora; nie można go wykorzystać
 do deklaracji walidacji tej zmiany. Cały cel S00–S12 pozostaje otwarty.
+
+## Uzupełnienie raportowania
+
+Raport `actual_method` wskazuje `geo_layered_tetrahedral` i kierunek z.
+Boczny hmax nie powoduje ostrzeżenia o niewystarczających warstwach ekstruzji;
+nie usuwa to bramki pomiaru rzeczywistych elementów. Nieobsługiwane linear,
+zerowa/bool liczba warstw i niefinity hmax są odrzucane przed Gmsh.
+74 testy + 15 subtests PASS; osobna dotychczasowa regresja raportu
+feature-aware PASS. #176 pozostaje kapsułą poprzedniego commita 61a53f4a;
+nie zawiera uzupełnienia raportowania. Geometria dla wejść benchmarku
+geometric nie została zmieniona przez ten przyrost.

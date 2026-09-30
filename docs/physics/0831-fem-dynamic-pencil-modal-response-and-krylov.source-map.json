@@ -317,6 +317,12 @@
       "path": "scripts/test_box_layered_airbox_mesh.py",
       "symbol": "test_public_de_model_shared_domain_realizes_six_layers",
       "responsibility": "Real Gmsh shared-domain realization of canonical DE model layer request"
+    },
+    {
+      "id": "source-box-layer-report",
+      "path": "packages/fullmag-py/src/fullmag/meshing/mesh_build_report.py",
+      "symbol": "_build_mesh_operation_statuses",
+      "responsibility": "Report realized layered Box method and sweep direction without inferring thickness resolution from lateral hmax"
     }
   ],
   "public_api": {

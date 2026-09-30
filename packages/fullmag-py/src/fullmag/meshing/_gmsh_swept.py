@@ -1876,6 +1876,12 @@ def generate_swept_tetrahedral_box_airbox_mesh(
         raise ValueError("layered tetrahedral Box requires uniform film layers")
     if airbox is None:
         raise ValueError("layered tetrahedral Box currently requires an exact-cell bbox airbox")
+    if airbox.grading_mode != "geometric":
+        raise ValueError("layered tetrahedral Box currently supports only geometric airbox grading")
+    if isinstance(n_layers, bool) or not isinstance(n_layers, int) or n_layers < 1:
+        raise ValueError("film layer count must be a positive integer")
+    if not math.isfinite(float(hmax)) or hmax <= 0:
+        raise ValueError("film lateral mesh size must be finite and positive")
     bounds = _coincident_ring_airbox_bounds(geometry, airbox)
     if bounds is None:
         raise ValueError("layered tetrahedral Box requires coincident lateral bbox airbox bounds")
