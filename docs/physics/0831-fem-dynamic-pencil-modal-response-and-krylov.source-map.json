@@ -215,6 +215,8 @@
     }
   ],
   "sources": [
+    {"id": "source-archived-potential-gradient", "path": "scripts/audit_de_bv_potential_fields.py", "symbol": "gradient_diagnostics", "responsibility": "Independent P1 Cartesian -grad(phi) consistency, not independent Poisson solve"},
+    {"id": "source-archived-potential-inspection", "path": "scripts/audit_de_bv_potential_fields.py", "symbol": "inspect", "responsibility": "Hash/identity-bound full phi, explicit Floquet pairs and geometric outer-z diagnostic"},
     {"id": "source-archived-magnetic-pair-seams", "path": "scripts/audit_de_bv_periodic_seams.py", "symbol": "magnetic_pair_seams", "responsibility": "Independent archived physical-field diagnostic on declared oriented magnetic pairs"},
     {"id": "source-archived-bound-mode-loader", "path": "scripts/compare_de_bv_mode_profiles.py", "symbol": "load_record", "responsibility": "Validate archived descriptor/payload hashes and bind final ordered mode topology"},
     {"id": "source-dense-spectrum-inventory", "path": "scripts/validate_de_smoke_rows.py", "symbol": "load_spectrum_v3_modes", "responsibility": "Strict relative and block certificates and unique sample inventory"},

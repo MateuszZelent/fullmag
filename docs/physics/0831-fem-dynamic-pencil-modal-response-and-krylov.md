@@ -1158,3 +1158,43 @@ nowego root-class-based Rust ani jego testów. Qualification NOT VERIFIED.
 |---|---|---|
 | source-archived-magnetic-pair-seams | `scripts/audit_de_bv_periodic_seams.py` | `magnetic_pair_seams` |
 | source-archived-bound-mode-loader | `scripts/compare_de_bv_mode_profiles.py` | `load_record` |
+
+
+## Archiwalne phi i H_demag: zgodność pól DE/BV
+
+Narzędzie `scripts/audit_de_bv_potential_fields.py` bada full_physical_phasor
+phi w SI A oraz elementowe H_demag w SI A/m. Wymaga pełnego pola
+na tej samej końcowej siatce, właściwego układu f64 real/imag, poprawnych
+hashy i zgodnych operator_input_signature/phase_constraint. Część
+rekonstrukcyjna eq-fem-full-bloch-demag jest sprawdzana niezależnie
+przez rozwiązanie lokalnego 3 × 3 układu na każdym tetraedrze P1.
+Nie rozwiązuje to ponownie Poissona; gradient wykorzystuje zapisane phi.
+
+| Zakres | Wynik |
+|---|---|
+| DE: 9 modów, pełne phi na 1980 węzłach | max defekt fazy 2.2887833992611187e-16 |
+| BV: 10 modów, pełne phi na 1980 węzłach | max defekt fazy 2.2887833992611187e-16 |
+| Każdy mod: 1195 jawnych par periodycznych | Wszystkie objęte pomiarem |
+| Zewnętrzne płaszczyzny z: po 10 węzłów/mod | phi dokładnie zerowe |
+| H_demag vs niezależny gradient phi, objętościowa norma L2 | max względny defekt 1.6741805960076105e-15 |
+| H_demag vs gradient, maksimum względne | max defekt 2.026141543011879e-14 |
+| Interpretowane regresje gradientu | 6 PASS |
+
+Warunki filmu/materialu są identyczne z wcześniejszą kontrolą 19 modów:
+40 × 40 × 10 nm, Ms=800000 A/m, A=13 pJ/m, gamma0=221100 m/(A·s),
+B0=0.1 T w +x, PBC x/y, padding airboxu 2 µm z obu stron,
+DE k_y/BV k_x, k=2…25 rad/µm. Publiczny Python/ProblemIR pozostaje
+bez zmian. To historyczne FEM CPU dane; brak dowodu FEM GPU lub FDM.
+
+Kontrola potwierdza spójność fazy pełnego phi i opublikowanej rekonstrukcji
+H_demag. Nie dowodzi niezależnego rozwiązania równania Poissona,
+interfejsowego weak flux, zbieżności airboxu/siatki, zgodności z COMSOL
+ani wykonania nowego Rust. Phi=0 na geometrycznych zewnętrznych
+płaszczyznach jest kontrolą danych tego benchmarku, nie uniwersalnym
+identyfikatorem Dirichlet dla dowolnego modelu. Nie zwiększa liczby
+częstotliwości; qualification NOT VERIFIED.
+
+| Source ID | Źródło | Symbol |
+|---|---|---|
+| source-archived-potential-gradient | `scripts/audit_de_bv_potential_fields.py` | `gradient_diagnostics` |
+| source-archived-potential-inspection | `scripts/audit_de_bv_potential_fields.py` | `inspect` |
