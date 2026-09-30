@@ -1,5 +1,34 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
+## Najnowszy checkpoint — 2026-09-30: produkcyjna metryka consistent P1 (WIP)
+
+Ta sekcja ma pierwszeństwo przed starszymi checkpointami poniżej.
+
+- W źródłach wdrożono exact consistent tet4 mass dla overlapu, transportu
+  podprzestrzeni i projekcji na mod jednorodny Gamma. Lokalny embedding
+  nie tworzy gęstej macierzy globalnej. Ramki wracają do nodalnych envelope.
+- Adapter zachowuje wszystkie fizyczne węzły magnetyczne, także slave PBC,
+  wiąże pole z fingerprintem pełnej siatki oraz współdzieli metrykę Arc/cache.
+  Niezgodna lub asymetryczna metryka nie przechodzi na euklidesowy fallback.
+- Niezależna kontrola formuły na 19 modach i 17 parach: max defekt normy
+  4.4343018897494473e-16, recovery 1.7245868222581087e-16, overlap
+  kwadratowego 8.881784197001252e-16. To nie wykonanie nowego Rust.
+- Rustfmt parse/check: exit 0. Przygotowano łącznie 15 regresji Rust dla
+  payload/envelope i nowej metryki; żadnej nie kompilowano/nie uruchomiono.
+  Źródła pozostają niezacommitowanym WIP. Nowy tracking_mass.rs jest untracked;
+  przed snapshot buildem wymaga explicit include-untracked.
+- S06 nadal otwarty: kompilacja, regresje i runtime wspólnej ścieżki,
+  pełna identity equilibrium oraz crossing/gap/subspace qualification.
+  S07: persisted provenance i odtwarzanie metryki przy ponownym odczycie.
+- Runtime zablokowany: runner zdrowy, bez jobów, 5 108 162 560 B wolnego
+  przy progu 8 GiB, runtime-only poza allow-list. fem-cpu-release ma SLEPc
+  OFF, więc nie zastępuje modalnego profilu. Decyzje operatora i zakaz
+  kompilacji unit tests są nadal aktualne.
+- Wyniki nadal 19 punktów; nowych częstotliwości i nowego wykresu brak.
+  Cały S00–S12, A1/COMSOL, zbieżność, UI, GPU i integracja pozostają aktywne.
+
+Dowody: [realizacja consistent mass](../../audits/2026-09-30-s06-consistent-mass-implementation.md).
+
 ## Najnowszy checkpoint — 2026-09-30: S06, payload trackingu i faza Blocha (WIP)
 
 Ta sekcja ma pierwszeństwo przed starszymi checkpointami poniżej.
