@@ -1,5 +1,25 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
+## A1 — poprawki realizacji powietrza i rozdzielczosci 2026-09-30
+
+- Naprawiono rzeczywiste stopniowanie zewnętrznego powietrza ring/A1:
+  8571183d2fc36d7c4b72a82a355d1ae05122703b (remote).
+- Rozdzielono hmax powierzchni x/y i liczbe warstw filmu:
+  4ad72fe03d3d0420a411373cf75ca56103a84c9a (remote).
+- Regresje RED/GREEN: stare powietrze 200 nm przy zadanym 50 nm;
+  stara siatka x/y zmieniala sie z n. Obie przyczyny poprawione.
+  79 testow +15 podtestow PASS; staged mapa naukowa PASS.
+- Publiczna recepta A1: 102424 wezly, 574620 Tet4, powietrze <=100 nm,
+  film <=3.33334 nm, dodatnie objetosci, objetosc komorki zgodna.
+  Jest to generacja, nie wynik eigensolve ani zgodnosc COMSOL.
+- Nowa kapsula #179 1d5451d2fee5443591a9c7f468569c43, runtime-v2, queued;
+  digest e6d33f2ab37f1d529db133f12d0d45813fd2d89721121f740e7de3402e62d0fc.
+  #178 i obserwator 45879 zachowane dla pilotow Box DE/BV.
+- Dalej: odbior runtime/receipt, szesc pilotow warstw DE/BV, niezalezny
+  Poisson/profile, Gamma i BV, zbieznosc airboxu, sciezka k i A1/COMSOL.
+  Tracking/API/UI/GPU i integracja S00-S12 nadal niezamkniete.
+- Audyt: docs/audits/2026-09-30-ring-air-layer-realization.md.
+
 ## Aktualny runtime i rozdzielczość filmu — 2026-09-30 (po #176)
 
 Ta sekcja zastępuje wcześniejsze statusy #176 oraz sesji 69118.

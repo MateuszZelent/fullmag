@@ -46,3 +46,24 @@ Zbiory x/y dla n=1 i n=3 sa identyczne, a hmax=5 nm zwieksza liczbe pozycji.
 79 testow +15 podtestow PASS, mapa naukowa PASS. Poprzedni akapit o
 zaleznosci bocznej dotyczy stanu sprzed tego uzupelnienia i pozostaje
 historycznym dowodem przyczyny. Pozostaly limit n=1/2/3 nie zostal zmieniony.
+
+
+## Rzeczywista recepta publiczna A1
+
+Po obu poprawkach zrealizowano workflow siatki z problem.py A1 i jego
+kanonicznej konfiguracji: okres 200 nm, film 10 nm, otwor r=50 nm,
+airbox 200 x 200 x 4010 nm, hmax filmu 5 nm, maksimum powietrza 100 nm,
+growth=1.3, n=3. Metoda single_geometry_geo_ring.
+102424 wezly, 574620 Tet4, 27558 magnetycznych Tet4, 5084 par wezlow PBC.
+Maksymalny span powietrza 100 nm, filmu 3.3333333333333334 nm.
+Wszystkie objetosci dodatnie (minimum 6.440494101417479e-27 m3).
+Objetosc 1.6039999999999967e-19 m3 zgadza sie z 1.604e-19 m3 komorki.
+To kosztowna siatka; przyjecie buildu przez prog 8 GiB nie dowodzi zasobow
+potrzebnych do rozwiazania jej calego widma. Nie ma wyniku solvera A1.
+Dowod JSON: a1_public_mesh_realization.json w katalogu wizualizacji tego watku.
+
+Nowy managed #179: 1d5451d2fee5443591a9c7f468569c43, runtime-v2, queued.
+Digest e6d33f2ab37f1d529db133f12d0d45813fd2d89721121f740e7de3402e62d0fc.
+Snapshot bazuje na 4ad72fe03d3d0420a411373cf75ca56103a84c9a,
+zawiera biezacy tracked WIP i tracking_mass.rs. #178 pozostaje osobna kapsula
+Box/pilotow DE-BV; nie zastapiono go ani nie zmieniono jego obserwatora.
