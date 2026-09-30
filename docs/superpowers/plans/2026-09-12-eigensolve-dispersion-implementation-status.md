@@ -1,5 +1,21 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
+## S08 — jawna prezentacja residuali modu
+
+- Poprzedni turn: postęp, b2ad1981e342ab5417d7da9267e1518cf787037e na remote;
+  dokładny join widma/CSV i osobne scope w porównaniu analitycznym.
+- Oddzielono absolute L2, relative L2 i wartość widma o nieokreślonym typie
+  w Inspectorze; scope nie jest wyprowadzany z małego residualu.
+- Siedem testów adaptera, strict typy adaptera, syntax staged panelu,
+  API/architecture hygiene PASS. React Doctor exit0, dwie wcześniejsze uwagi.
+  Pełny typecheck i browser pozostają NOT VERIFIED; bez instalacji zależności.
+- S07 nadal wymaga propagacji certyfikatu v3 do metadanych modu/API z tożsamością
+  próbki/modu. Brak opublikowanego scope pozostaje jawnie niedostępny w UI.
+- Audyt: docs/audits/2026-09-30-eigen-inspector-residual-semantics.md.
+- Sesja 66068 ponownie potwierdzona żywa; nie restartowano oczekujących pilotów.
+  Pełen zakres S00–S12, A1/COMSOL i kwalifikacja/integracja nadal otwarte.
+
+
 ## Porównanie analityczne i zakres certyfikatów — aktualny checkpoint
 
 - Poprzedni turn był postępem: commit 1f28560e4e7dae11b1808bb8278532dd6962dc32

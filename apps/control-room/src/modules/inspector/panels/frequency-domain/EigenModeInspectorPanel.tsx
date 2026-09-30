@@ -14,6 +14,7 @@ import {
   buildEigenSpectrumChartModel,
   frequencyDomainManifestPayload,
 } from "@/shared/domain/analysis/frequencyDomainChartModels";
+import { buildEigenResidualSummary } from "@/shared/domain/analysis/eigenResidualSummary";
 import { formatFrequencyHz } from "@/shared/domain/analysis/frequencyUnits";
 import { phasorAdapter } from "@/shared/domain/analysis/phasorConventionAdapter";
 import { Button } from "@/shared/ui/Button";
@@ -100,7 +101,10 @@ export function EigenModeInspectorPanel({
         <FieldRow label="Mode field" value={summary.fieldStatus} />
         <FieldRow label="Mode field resource" value={summary.fieldResource} />
         <FieldRow label="Available field views" value={summary.availableViews} />
-        <FieldRow label="Residual" value={summary.residual} />
+        <FieldRow label="Absolute residual (L2)" value={summary.residualAbsoluteL2} />
+        <FieldRow label="Relative residual (L2)" value={summary.residualRelativeL2} />
+        <FieldRow label="Residual scope" value={summary.residualScope} />
+        <FieldRow label="Spectrum residual (type unspecified)" value={summary.residualSpectrumReported} />
         <FieldRow label="Tangent leakage max" value={summary.tangentLeakageMax} />
         <FieldRow label="Dominant polarization" value={summary.dominantPolarization} />
         <FieldRow label="3D workflow" value={summary.workflow} />
@@ -307,10 +311,7 @@ function useEigenModeSummary(selection: InspectorPanelProps["selection"]) {
     spectrumPoint?.imaginaryFrequencyHz ??
     null;
   const angularFrequency = finiteNumber(modePayload?.angular_frequency_rad_per_s);
-  const residual =
-    finiteNumber(modePayload?.residual_norm) ??
-    spectrumPoint?.residualNorm ??
-    null;
+  const residual = buildEigenResidualSummary(modePayload, spectrumPoint?.residualNorm);
   const tangentLeakage =
     finiteNumber(modePayload?.tangent_leakage_max_abs) ??
     spectrumPoint?.tangentLeakageMax ??
@@ -426,7 +427,10 @@ function useEigenModeSummary(selection: InspectorPanelProps["selection"]) {
       qualityFactor == null ? "not available" : formatNumber(qualityFactor),
     modeIdentity: identity.label,
     phaseConvention,
-    residual: formatNumberOrUnavailable(residual),
+    residualAbsoluteL2: formatNumberOrUnavailable(residual.absoluteL2),
+    residualRelativeL2: formatNumberOrUnavailable(residual.relativeL2),
+    residualScope: residual.scope,
+    residualSpectrumReported: formatNumberOrUnavailable(residual.reportedSpectrumResidual),
     tangentLeakageMax: formatNumberOrUnavailable(tangentLeakage),
     valueKind: stringValue(fieldMetaRecord?.value_kind),
     workflow:
