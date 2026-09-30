@@ -2215,6 +2215,69 @@ mod tests {
         assert_eq!(entries.len(), MAX_ZIP_ENTRIES);
     }
 
+    #[test]
+    fn lazy_solution_history_preserves_stale_current_and_rejects_bad_chains() {
+        let (_directory, store, _session, _workspace, _profile, _documents) =
+            pack_fixture(SaveProfile::Solved);
+        let payload = b"history payload".to_vec();
+        let object_ref = store.cas().put(&payload).unwrap();
+        let mut first = portable_solution(object_ref.clone(), payload.len() as u64);
+        first.manifest_state = SolutionSetManifestState::Open;
+        first.execution_status = SolutionExecutionStatus::Running;
+        let mut second = first.clone();
+        second.revision = 2;
+        let directory = crate::cas::hex_sha256(first.solution_set_id.as_bytes());
+        let current_path = format!("solutions/{directory}/manifest.json");
+        let first_path = format!("solutions/{directory}/revisions/{:020}.json", 1);
+        let second_path = format!("solutions/{directory}/revisions/{:020}.json", 2);
+        let mut documents = HashMap::from([
+            (current_path.clone(), serde_json::to_vec(&first).unwrap()),
+            (first_path.clone(), serde_json::to_vec(&first).unwrap()),
+            (second_path.clone(), serde_json::to_vec(&second).unwrap()),
+        ]);
+        let check = |documents: &HashMap<String, Vec<u8>>| {
+            let mut memory = documents.clone();
+            memory.insert(format!("objects/sha256/{object_ref}"), payload.clone());
+            let memory = reachability::walk_archive_documents(&memory, ReachabilityMode::Export);
+            let mut snapshots = HashMap::new();
+            for (name, data) in documents {
+                let path = store.root().join(name);
+                fs::create_dir_all(path.parent().unwrap()).unwrap();
+                fs::write(&path, data).unwrap();
+                snapshots.insert(name.clone(), ArchiveFileSnapshot::from_bytes(data));
+            }
+            let disk = reachability::walk_export_file_documents(&snapshots, store.root());
+            (memory, disk)
+        };
+        let (memory, disk) = check(&documents);
+        let memory = memory.unwrap();
+        let disk = disk.unwrap();
+        memory.require_complete().unwrap();
+        disk.require_complete().unwrap();
+        assert_eq!(memory.file_refs, disk.file_refs);
+        assert_eq!(memory.object_refs, disk.object_refs);
+        // A lagging current pointer is accepted only when its exact revision matches.
+        let mut conflict = first.clone();
+        conflict.scientific_assessment.reason = Some("different current".to_string());
+        documents.insert(current_path.clone(), serde_json::to_vec(&conflict).unwrap());
+        let (memory, disk) = check(&documents);
+        assert!(memory.is_err() && disk.is_err());
+        documents.insert(current_path, serde_json::to_vec(&first).unwrap());
+        let removed = documents.remove(&first_path).unwrap();
+        let (memory, disk) = check(&documents);
+        assert!(memory.is_err() && disk.is_err());
+        documents.insert(first_path, removed);
+        second.run_id = "run:changed".to_string();
+        documents.insert(second_path.clone(), serde_json::to_vec(&second).unwrap());
+        let (memory, disk) = check(&documents);
+        assert!(memory.is_err() && disk.is_err());
+        second = first.clone();
+        second.revision = 3;
+        documents.insert(second_path, serde_json::to_vec(&second).unwrap());
+        let (memory, disk) = check(&documents);
+        assert!(memory.is_err() && disk.is_err());
+    }
+
     fn assert_pack_rejected_without_output(
         store: &SessionStore,
         session: &FmsSessionManifest,

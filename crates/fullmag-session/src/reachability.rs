@@ -2167,50 +2167,51 @@ impl<'a> ArchiveWalker<'a> {
                 .transpose()?;
 
             let revision_prefix = format!("solutions/{directory}/revisions/");
+            // Keep only revision paths, then validate one adjacent pair at a time.
             let mut revisions = BTreeMap::new();
-            let names = self.documents.keys().cloned().collect::<Vec<_>>();
-            for name in &names {
+            for name in self.documents.keys() {
                 let Some(file_name) = name.strip_prefix(&revision_prefix) else {
                     continue;
                 };
                 let revision = parse_solution_revision_filename(file_name)?;
-                let data = self
-                    .documents
-                    .read(name)?
-                    .context("solution-set revision disappeared during archive walk")?;
-                let solution: SolutionSet = parse_json(&data, name)?;
-                self.validate_archive_solution_identity(
-                    &solution,
-                    &directory,
-                    Some(revision),
-                    name,
-                )?;
-                self.walk_archive_solution_objects(&solution, name)?;
-                self.report.file_refs.insert(name.clone());
-                if revisions.insert(revision, solution).is_some() {
+                if revisions.insert(revision, name.clone()).is_some() {
                     bail!("duplicate solution-set revision `{revision}`")
                 }
             }
 
-            let mut previous: Option<&SolutionSet> = None;
-            for (index, (revision, solution)) in revisions.iter().enumerate() {
+            let mut previous: Option<SolutionSet> = None;
+            let mut current_matched = current.is_none();
+            for (index, (revision, name)) in revisions.iter().enumerate() {
                 let expected =
                     u64::try_from(index + 1).context("solution-set revision overflow")?;
                 if *revision != expected {
                     bail!("solution-set revision history has a gap")
                 }
-                if let Some(previous) = previous {
-                    crate::solution_set_catalog::validate_successor(previous, solution)?;
+                let solution: SolutionSet = {
+                    let data = self.documents.read(name)?
+                        .context("solution-set revision disappeared during archive walk")?;
+                    parse_json(&data, name)?
+                };
+                self.validate_archive_solution_identity(
+                    &solution, &directory, Some(*revision), name,
+                )?;
+                self.walk_archive_solution_objects(&solution, name)?;
+                self.report.file_refs.insert(name.clone());
+                if let Some(previous) = &previous {
+                    crate::solution_set_catalog::validate_successor(previous, &solution)?;
+                }
+                if let Some(current) = &current {
+                    if current.revision == *revision {
+                        if current != &solution {
+                            bail!("solution-set current manifest conflicts with immutable history")
+                        }
+                        current_matched = true;
+                    }
                 }
                 previous = Some(solution);
             }
-            if let Some(current) = current {
-                let persisted = revisions
-                    .get(&current.revision)
-                    .context("solution-set current revision is missing from immutable history")?;
-                if persisted != &current {
-                    bail!("solution-set current manifest conflicts with immutable history")
-                }
+            if !current_matched {
+                bail!("solution-set current revision is missing from immutable history")
             }
         }
         Ok(())

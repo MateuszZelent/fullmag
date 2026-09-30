@@ -129,3 +129,7 @@ pamięci i wszystkich lane'ów pozostają otwarte. P6 wynosi **52%**.
 34. [Leniwy katalog plików eksportu FMS](34-lazy-file-backed-export-documents.md)
     — run/solution jako fingerprinty, typed odczyt na żądanie i strumieniowy
     zapis; review i kontrola źródeł PASS, import oraz pomiar RAM otwarte.
+
+35. [Leniwa historia rewizji SolutionSet](35-lazy-solution-revision-history.md)
+    — katalog ścieżek i walidacja sąsiadującej pary zamiast parsed historii;
+    kontrola źródeł PASS, testy i pomiar RAM otwarte.
