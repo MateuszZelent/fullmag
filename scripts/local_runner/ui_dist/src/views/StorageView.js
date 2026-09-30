@@ -9,6 +9,8 @@ export function renderStorageView(container) {
   let volumesError = null;
   let resourcesError = null;
   let storageLoadGeneration = 0;
+  let storageLoadPromise = null;
+  let destroyed = false;
 
   container.innerHTML = `
     <div class="view-container storage-view">
@@ -104,7 +106,9 @@ export function renderStorageView(container) {
     }
   });
 
-  async function loadStorageData() {
+  function loadStorageData() {
+    if (destroyed) return Promise.resolve();
+    if (storageLoadPromise) return storageLoadPromise;
     const generation = ++storageLoadGeneration;
     volumesError = null;
     resourcesError = null;
@@ -118,7 +122,7 @@ export function renderStorageView(container) {
     // The volume endpoint is cheap and must render even when the recursive
     // resource scan is slow or unavailable. Do not await either request here:
     // each section owns its response, error state, and timeout.
-    Promise.resolve()
+    const volumesRequest = Promise.resolve()
       .then(() => api.getStorageVolumes({ timeoutMs: 5000, retries: 1 }))
       .then((value) => {
         if (generation !== storageLoadGeneration) return;
@@ -133,7 +137,7 @@ export function renderStorageView(container) {
         renderVolumes(null, volumesError);
       });
 
-    Promise.resolve()
+    const resourcesRequest = Promise.resolve()
       .then(() => api.getStorageResources({ timeoutMs: 7000, retries: 1 }))
       .then((value) => {
         if (generation !== storageLoadGeneration) return;
@@ -149,6 +153,9 @@ export function renderStorageView(container) {
         renderCategories(null, resourcesError);
         renderResourcesTable(null, resourcesError);
       });
+    storageLoadPromise = Promise.allSettled([volumesRequest, resourcesRequest])
+      .finally(() => { storageLoadPromise = null; });
+    return storageLoadPromise;
   }
 
   function renderVolumes(vols, err = null) {
@@ -452,6 +459,9 @@ export function renderStorageView(container) {
     update: () => {
       loadStorageData();
     },
-    destroy: () => {},
+    destroy: () => {
+      destroyed = true;
+      storageLoadGeneration += 1;
+    },
   };
 }

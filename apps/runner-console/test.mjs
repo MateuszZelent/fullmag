@@ -415,19 +415,45 @@ const storageMod = await import('./src/views/StorageView.js');
 
 // A slow resources scan must not hold back the fast volumes response.
 let resolveStorageResources;
+let pendingStorageRequests = 0;
 api.getStorageResources = () => new Promise(resolve => {
+  pendingStorageRequests += 1;
   resolveStorageResources = resolve;
 });
 const deferredStorageContainer = new MockElement('div');
-storageMod.renderStorageView(deferredStorageContainer);
+const deferredStorageHandle = storageMod.renderStorageView(deferredStorageContainer);
+deferredStorageHandle.update();
+deferredStorageHandle.update();
 await new Promise(r => setTimeout(r, 20));
 const deferredVolumesEl = deferredStorageContainer.querySelector('#volumes-table-container');
 const deferredCategoriesEl = deferredStorageContainer.querySelector('#categories-breakdown-container');
 assert(deferredVolumesEl.innerHTML.includes('Root Volume'), 'StorageView must render volumes before resource scan completes');
 assert(deferredCategoriesEl.innerHTML.includes('Wczytywanie podziału klas storage'), 'StorageView must keep resource sections loading independently');
+assert.strictEqual(pendingStorageRequests, 1, 'Repeated updates must share the pending storage request');
 resolveStorageResources({ total_measured_bytes: 1, categories: [], resources: [] });
 await new Promise(r => setTimeout(r, 20));
 assert(deferredCategoriesEl.innerHTML.includes('Brak danych inwentaryzacji klas storage'), 'StorageView must render resource response after deferred scan resolves');
+deferredStorageHandle.destroy();
+
+// Leaving the view must prevent a late response from writing into its old DOM.
+let resolveLateStorageResources;
+let lateStorageRequests = 0;
+api.getStorageResources = () => new Promise(resolve => {
+  lateStorageRequests += 1;
+  resolveLateStorageResources = resolve;
+});
+const lateStorageContainer = new MockElement('div');
+const lateStorageHandle = storageMod.renderStorageView(lateStorageContainer);
+await new Promise(r => setTimeout(r, 20));
+const lateCategoriesEl = lateStorageContainer.querySelector('#categories-breakdown-container');
+const beforeDestroy = lateCategoriesEl.innerHTML;
+lateStorageHandle.destroy();
+lateStorageHandle.update();
+resolveLateStorageResources({ total_measured_bytes: 1, categories: [], resources: [] });
+await new Promise(r => setTimeout(r, 20));
+assert.strictEqual(lateCategoriesEl.innerHTML, beforeDestroy, 'Destroyed StorageView must discard late resource response');
+assert.strictEqual(lateStorageRequests, 1, 'Destroyed StorageView must not start new requests');
+
 
 api.getStorageResources = async () => ({
   total_measured_bytes: 20e9,

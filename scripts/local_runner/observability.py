@@ -265,6 +265,8 @@ class ObservabilityHub:
         self._resources_cache: dict[str, Any] | None = None
         self._resources_cache_time: float = 0.0
         self._resources_cache_queue = None
+        self._resources_scan_lock = threading.Lock()
+        self._resources_generation = 0
         self._init_default_events()
         self._init_metrics_history()
 
@@ -482,7 +484,7 @@ class ObservabilityHub:
         policy_path = self.storage / "index" / "retention-policy.json"
         policy_path.parent.mkdir(parents=True, exist_ok=True)
         atomic_json(policy_path, current)
-        self._resources_cache = None
+        self._invalidate_resources_cache()
         self.record_event("INFO", "policy_updated", "Retention and storage policy updated by operator")
         return current
 
@@ -520,7 +522,7 @@ class ObservabilityHub:
             path = self._pinned_path()
             path.parent.mkdir(parents=True, exist_ok=True)
             atomic_json(path, pinned)
-            self._resources_cache = None
+            self._invalidate_resources_cache()
             return {"resource_id": resource_id, "pinned": pin, "reason": reason}
 
     # -------------------------------------------------------------------------
@@ -620,12 +622,35 @@ class ObservabilityHub:
 
         return volumes
 
+    def _invalidate_resources_cache(self):
+        with self._lock:
+            self._resources_generation += 1
+            self._resources_cache = None
+
     def get_storage_resources(self, queue=None) -> dict[str, Any]:
+        """Share one inventory scan; keep telemetry independent of disk traversal."""
+        with self._resources_scan_lock:
+            while True:
+                with self._lock:
+                    if (self._resources_cache is not None
+                            and time.monotonic() - self._resources_cache_time < 10.0
+                            and self._resources_cache_queue is queue):
+                        return self._resources_cache
+                    generation = self._resources_generation
+                result = self._scan_storage_resources(queue)
+                with self._lock:
+                    if generation != self._resources_generation:
+                        # Pin or policy changed during the scan. Re-read it
+                        # before publishing retention eligibility to the UI.
+                        continue
+                    self._resources_cache = result
+                    self._resources_cache_time = time.monotonic()
+                    self._resources_cache_queue = queue
+                    return result
+
+    def _scan_storage_resources(self, queue=None) -> dict[str, Any]:
         """Aggregate categorized storage inventory with protection rationales."""
         now = time.time()
-        if (self._resources_cache and now - self._resources_cache_time < 10.0
-                and self._resources_cache_queue is queue):
-            return self._resources_cache
 
         pinned = self.get_pinned()
         policy = self.get_retention_policy()
@@ -1002,9 +1027,6 @@ class ObservabilityHub:
             "had_errors": had_errors,
             "measured_at": _utc_now_iso(),
         }
-        self._resources_cache = result
-        self._resources_cache_time = now
-        self._resources_cache_queue = queue
         return result
 
     # -------------------------------------------------------------------------

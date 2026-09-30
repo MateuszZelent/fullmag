@@ -1,5 +1,23 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
+## Runner — ograniczenie powtarzanych skanów 2026-09-30 15:45 UTC
+
+- Poprzedni turn: postęp, commit e31b7522da61e3dee42c76031ab44d3a65423227
+  wysłany; kontrola tożsamości receiptów nie zmieniła żywych zależności pilotów.
+- #178 nadal running bez terminalnego exit code; #179 queued. Sesje 45879,
+  48887 i 83846 ponownie potwierdzono żywe. Nadal brak nowych częstotliwości.
+- Odtworzono i naprawiono nakładanie pełnych skanów storage, cache wygasający
+  jeszcze w trakcie odczytu oraz powtarzane żądania widoku StorageView.
+- 37 testów Python PASS; zestaw Runner Console JS PASS; browser fixture 8/8
+  widoków i stany błędu/recovery PASS. To źródła i fixture, nie wdrożenie.
+- Nie podmieniono aktywnego koordynatora; poprawka wymaga nowego obrazu
+  po zakończeniu aktywnego slotu, z zachowaniem profili i kolejki. Nie ma
+  dowodu, że skany są jedyną przyczyną oczekiwania #178.
+- Audyt: docs/audits/2026-09-30-runner-inventory-concurrency.md.
+- Pełny zakres S00–S12 zachowany. Dalej odbiór runtime/pilotów i certyfikatów,
+  grubość/airbox/mody, Γ/BV i k-path, A1/COMSOL, tracking/API/UI/GPU,
+  review oraz integracja/cleanup. Cel nieukończony.
+
 ## Odbiór Γ i kontrola porównania — 2026-09-30 15:25 UTC
 
 - Poprzedni turn był zweryfikowanym oczekiwaniem: ponownie potwierdzono żywe
