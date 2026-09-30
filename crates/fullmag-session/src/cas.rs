@@ -5,7 +5,7 @@
 //! and reference that hash from manifests and checkpoints.
 
 use std::fs;
-use std::io::{BufReader, Read};
+use std::io::{BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -297,12 +297,37 @@ impl CasStore {
 }
 
 pub(crate) fn verified_file_length(path: &Path, hash: &str) -> Result<u64> {
+    stream_verified_file(path, hash, None, &mut std::io::sink())
+}
+
+/// Copy the planned immutable object without allocating its full contents.
+/// A caller must discard the destination on error, including a final hash error.
+pub(crate) fn copy_verified_file(
+    path: &Path,
+    hash: &str,
+    expected_length: u64,
+    writer: &mut impl Write,
+) -> Result<()> {
+    stream_verified_file(path, hash, Some(expected_length), writer)?;
+    Ok(())
+}
+
+fn stream_verified_file(
+    path: &Path,
+    hash: &str,
+    expected_length: Option<u64>,
+    writer: &mut impl Write,
+) -> Result<u64> {
+    validate_hash(hash)?;
     let file = fs::File::open(path).with_context(|| format!("opening CAS object {hash}"))?;
     let metadata = file
         .metadata()
         .with_context(|| format!("reading metadata for CAS object {hash}"))?;
     if !metadata.is_file() {
         anyhow::bail!("CAS object {hash} is not a regular file");
+    }
+    if expected_length.is_some_and(|expected| metadata.len() != expected) {
+        anyhow::bail!("CAS object {hash} length differs from its export plan");
     }
     let mut reader = BufReader::new(file);
     let mut hasher = Sha256::new();
@@ -319,6 +344,10 @@ pub(crate) fn verified_file_length(path: &Path, hash: &str) -> Result<u64> {
         object_length = object_length
             .checked_add(count as u64)
             .context("CAS object length overflow")?;
+        if expected_length.is_some_and(|expected| object_length > expected) {
+            anyhow::bail!("CAS object {hash} grew beyond its export plan");
+        }
+        writer.write_all(&buffer[..count])?;
     }
     let actual = hex_encode(&hasher.finalize());
     if actual != hash {
@@ -359,6 +388,51 @@ fn hex_encode(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn verified_copy_streams_complete_bytes_in_bounded_writes() {
+        struct DigestSink {
+            digest: Sha256,
+            bytes: usize,
+            largest_write: usize,
+        }
+        impl Write for DigestSink {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.digest.update(bytes);
+                self.bytes += bytes.len();
+                self.largest_write = self.largest_write.max(bytes.len());
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("object");
+        let data = vec![42_u8; 2 * 1024 * 1024 + 13];
+        let hash = hex_sha256(&data);
+        fs::write(&source, &data).unwrap();
+        let mut sink = DigestSink {
+            digest: Sha256::new(),
+            bytes: 0,
+            largest_write: 0,
+        };
+        copy_verified_file(&source, &hash, data.len() as u64, &mut sink).unwrap();
+        assert_eq!(sink.bytes, data.len());
+        assert_eq!(hex_encode(&sink.digest.finalize()), hash);
+        assert!(sink.largest_write <= 64 * 1024);
+    }
+
+    #[test]
+    fn verified_copy_rejects_wrong_planned_length_before_output_and_wrong_hash() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("object");
+        fs::write(&source, b"original").unwrap();
+        let mut output = Vec::new();
+        assert!(copy_verified_file(&source, &hex_sha256(b"original"), 7, &mut output).is_err());
+        assert!(output.is_empty());
+        assert!(copy_verified_file(&source, &"0".repeat(64), 8, &mut output).is_err());
+    }
 
     #[test]
     fn put_and_get_round_trips() {

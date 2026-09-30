@@ -91,6 +91,13 @@ struct PackEntry {
     data: Vec<u8>,
 }
 
+struct CasPackEntry {
+    archive_path: String,
+    source: PathBuf,
+    object_ref: String,
+    byte_count: u64,
+}
+
 #[derive(Default)]
 struct ArchiveLimitAccounting {
     entries: u64,
@@ -222,7 +229,13 @@ pub fn pack_fms<W: Write + Seek>(
             .compression_method(CompressionMethod::Stored)
             .large_file(true);
         zip.start_file(&entry.archive_path, blob_opts)?;
-        zip.write_all(&entry.data)?;
+        validate_store_source(store.root(), &canonical_root, &entry.source, false)?;
+        crate::cas::copy_verified_file(
+            &entry.source,
+            &entry.object_ref,
+            entry.byte_count,
+            &mut zip,
+        )?;
     }
 
     zip.finish()?;
@@ -304,44 +317,44 @@ fn plan_cas_entries(
     canonical_root: &Path,
     run_entries: &[PackEntry],
     solution_entries: &[PackEntry],
-) -> Result<Vec<PackEntry>> {
+) -> Result<Vec<CasPackEntry>> {
     let mut documents = HashMap::new();
     for entry in run_entries.iter().chain(solution_entries) {
         documents.insert(entry.archive_path.clone(), entry.data.clone());
     }
 
-    // The graph walker needs the exact CAS bytes to validate descriptor
-    // digests and follow descriptor -> chunk edges.  Include the source CAS
-    // namespace in the in-memory view, then emit only the selected roots.
+    // Validate the namespace without reading unrelated CAS contents.
+    // The shared archive walker resolves only the selected graph from files.
     let objects = store_root.join("objects/sha256");
-    if objects.exists() {
+    if store_source_exists(&objects)? {
+        validate_store_source(store_root, canonical_root, &objects, true)?;
         for entry in std::fs::read_dir(&objects)? {
             let entry = entry?;
             let name = entry.file_name().to_string_lossy().into_owned();
             let relative = format!("objects/sha256/{name}");
-            documents.insert(
-                relative,
-                read_store_file(store_root, canonical_root, &entry.path())?,
-            );
+            validate_portable_namespace_path(&relative)?;
+            reachability::validate_object_ref(&name)?;
+            validate_store_source(store_root, canonical_root, &entry.path(), false)?;
         }
     }
-    let report = reachability::walk_archive_documents(&documents, ReachabilityMode::Export)?;
+    let report = reachability::walk_export_documents(&documents, canonical_root)?;
     report.require_complete()?;
 
     let mut entries = Vec::new();
-    for hash in report.object_refs {
+    let mut object_refs = report.object_refs.into_iter().collect::<Vec<_>>();
+    object_refs.sort_unstable();
+    for hash in object_refs {
         let archive_path = format!("objects/sha256/{hash}");
         validate_portable_namespace_path(&archive_path)?;
         let source = store_root.join(&archive_path);
-        if let Some(data) = read_store_file_if_exists(store_root, canonical_root, &source)? {
-            let actual = crate::cas::hex_sha256(&data);
-            if actual != hash {
-                anyhow::bail!(
-                    "CAS SHA-256 mismatch for `{archive_path}`: expected {hash}, got {actual}"
-                );
-            }
-            entries.push(PackEntry { archive_path, data });
-        }
+        validate_store_source(store_root, canonical_root, &source, false)?;
+        let byte_count = crate::cas::verified_file_length(&source, &hash)?;
+        entries.push(CasPackEntry {
+            archive_path,
+            source,
+            object_ref: hash,
+            byte_count,
+        });
     }
     Ok(entries)
 }
@@ -1231,7 +1244,7 @@ fn validate_export_plan(
     documents: &HashMap<String, Vec<u8>>,
     run_entries: &[PackEntry],
     solution_entries: &[PackEntry],
-    cas_entries: &[PackEntry],
+    cas_entries: &[CasPackEntry],
 ) -> Result<()> {
     let mut entries = vec![
         (
@@ -1268,8 +1281,7 @@ fn validate_export_plan(
     entries.extend(
         cas_entries
             .iter()
-            .map(|entry| Ok((entry.archive_path.clone(), archive_entry_size(&entry.data)?)))
-            .collect::<Result<Vec<_>>>()?,
+            .map(|entry| (entry.archive_path.clone(), entry.byte_count)),
     );
     validate_export_entry_metadata(entries)
 }
@@ -2103,6 +2115,44 @@ mod tests {
             Some(solution)
         );
         assert_eq!(restored.cas().get(&object_ref).unwrap().unwrap(), payload);
+    }
+
+    #[test]
+    fn file_backed_export_preserves_graph_and_rejects_corrupt_reachable_bytes() {
+        let (_directory, store, _session, _workspace, profile, _documents) =
+            pack_fixture(SaveProfile::Solved);
+        let payload = vec![23_u8; 2 * 1024 * 1024 + 17];
+        let object_ref = store.cas().put(&payload).unwrap();
+        store
+            .publish_solution_set(&portable_solution(object_ref.clone(), payload.len() as u64))
+            .unwrap();
+        let unused_ref = store.cas().put(b"unused").unwrap();
+        // An unreachable object is not an input to this export graph.
+        fs::write(
+            store.root().join("objects/sha256").join(&unused_ref),
+            b"changed unused",
+        )
+        .unwrap();
+        let canonical_root = canonical_store_root(store.root()).unwrap();
+        let entries = plan_solution_entries(store.root(), &canonical_root, &profile).unwrap();
+        let mut documents = entries
+            .iter()
+            .map(|entry| (entry.archive_path.clone(), entry.data.clone()))
+            .collect::<HashMap<_, _>>();
+        let disk = reachability::walk_export_documents(&documents, &canonical_root).unwrap();
+        disk.require_complete().unwrap();
+        documents.insert(format!("objects/sha256/{object_ref}"), payload.clone());
+        let memory =
+            reachability::walk_archive_documents(&documents, ReachabilityMode::Export).unwrap();
+        memory.require_complete().unwrap();
+        assert_eq!(disk.object_refs, memory.object_refs);
+        assert_eq!(disk.file_refs, memory.file_refs);
+        assert!(!disk.object_refs.contains(&unused_ref));
+        let plan = plan_cas_entries(store.root(), &canonical_root, &[], &entries).unwrap();
+        assert_eq!(plan.len(), 1);
+        assert_eq!(plan[0].byte_count, payload.len() as u64);
+        fs::write(&plan[0].source, vec![24_u8; payload.len()]).unwrap();
+        assert!(plan_cas_entries(store.root(), &canonical_root, &[], &entries).is_err());
     }
 
     fn assert_pack_rejected_without_output(

@@ -174,7 +174,28 @@ pub fn walk_archive_documents(
 ) -> Result<ReachabilityReport> {
     let mut walker = ArchiveWalker {
         documents,
+        cas_root: None,
         mode,
+        report: ReachabilityReport::new(),
+        seen_checkpoints: HashSet::new(),
+    };
+    walker.walk_archive()
+}
+
+/// Traverse exactly the documents selected for export, resolving CAS lazily.
+/// Binary objects are hashed with a fixed buffer; only structural JSON is read.
+pub(crate) fn walk_export_documents(
+    documents: &HashMap<String, Vec<u8>>,
+    root: &Path,
+) -> Result<ReachabilityReport> {
+    if documents.keys().any(|name| name.starts_with("objects/")) {
+        bail!("file-backed export documents cannot shadow CAS objects");
+    }
+    let root = fs::canonicalize(root)?;
+    let mut walker = ArchiveWalker {
+        documents,
+        cas_root: Some(&root),
+        mode: ReachabilityMode::Export,
         report: ReachabilityReport::new(),
         seen_checkpoints: HashSet::new(),
     };
@@ -1810,12 +1831,59 @@ enum ReferenceKind {
 
 struct ArchiveWalker<'a> {
     documents: &'a HashMap<String, Vec<u8>>,
+    cas_root: Option<&'a Path>,
     mode: ReachabilityMode,
     report: ReachabilityReport,
     seen_checkpoints: HashSet<String>,
 }
 
 impl<'a> ArchiveWalker<'a> {
+    fn object_length(&self, object_ref: &str) -> Result<Option<u64>> {
+        validate_object_ref(object_ref)?;
+        let relative = format!("objects/sha256/{object_ref}");
+        if let Some(root) = self.cas_root {
+            reject_link_chain(root, &relative)?;
+            let path = root.join(&relative);
+            match fs::symlink_metadata(&path) {
+                Ok(_) => {
+                    return crate::cas::verified_file_length(&path, object_ref)
+                        .with_context(|| format!("CAS SHA-256 verification failed for `{relative}`"))
+                        .map(Some);
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+                Err(error) => return Err(error.into()),
+            }
+        }
+        let Some(data) = self.documents.get(&relative) else {
+            return Ok(None);
+        };
+        if crate::cas::hex_sha256(data) != object_ref {
+            bail!("CAS SHA-256 mismatch for `{relative}`");
+        }
+        Ok(Some(u64::try_from(data.len())?))
+    }
+
+    fn object_document(&self, object_ref: &str) -> Result<Vec<u8>> {
+        let relative = format!("objects/sha256/{object_ref}");
+        if let Some(root) = self.cas_root {
+            use std::io::Read;
+            const MAX_EXPORT_OBJECT_DOCUMENT_BYTES: u64 = 16 * 1024 * 1024;
+            reject_link_chain(root, &relative)?;
+            let mut data = Vec::new();
+            fs::File::open(root.join(&relative))?
+                .take(MAX_EXPORT_OBJECT_DOCUMENT_BYTES + 1)
+                .read_to_end(&mut data)?;
+            if data.len() as u64 > MAX_EXPORT_OBJECT_DOCUMENT_BYTES {
+                bail!("structural CAS document `{object_ref}` exceeds export metadata budget");
+            }
+            if crate::cas::hex_sha256(&data) != object_ref {
+                bail!("CAS SHA-256 mismatch for `{relative}`");
+            }
+            return Ok(data);
+        }
+        self.documents.get(&relative).cloned().context("validated archive object disappeared")
+    }
+
     fn walk_archive(&mut self) -> Result<ReachabilityReport> {
         self.validate_archive_namespace()?;
         self.walk_archive_solutions()?;
@@ -2197,18 +2265,12 @@ impl<'a> ArchiveWalker<'a> {
         validate_object_ref(object_ref)
             .with_context(|| format!("invalid solution object reference in `{source}`"))?;
         self.report.object_refs.insert(object_ref.to_string());
-        let archive_path = format!("objects/sha256/{object_ref}");
-        let Some(data) = self.documents.get(&archive_path) else {
+        let Some(length) = self.object_length(object_ref)? else {
             return self.report.missing(format!(
                 "solution set `{source}` references missing object `{object_ref}`"
             ));
         };
-        if crate::cas::hex_sha256(data) != object_ref {
-            bail!("CAS SHA-256 mismatch for `{archive_path}`")
-        }
-        if u64::try_from(data.len()).context("solution object length exceeds u64")?
-            != expected_length
-        {
+        if length != expected_length {
             bail!(
                 "solution set `{source}` object `{object_ref}` length does not match its manifest"
             )
@@ -2914,12 +2976,10 @@ impl<'a> ArchiveWalker<'a> {
     ) -> Result<()> {
         if is_object_ref(reference) {
             if self.add_archive_payload(reference, source, None)? {
-                let archive_path = format!("objects/sha256/{reference}");
-                let data = self
-                    .documents
-                    .get(&archive_path)
-                    .cloned()
-                    .context("validated archive object disappeared")?;
+                if matches!(kind, ReferenceKind::Unknown) {
+                    return self.follow_archive_payload(&[], source, kind);
+                }
+                let data = self.object_document(reference)?;
                 self.follow_archive_payload(&data, source, kind)?;
             }
             return Ok(());
@@ -3004,16 +3064,14 @@ impl<'a> ArchiveWalker<'a> {
             .with_context(|| format!("invalid object ref in `{source}`"))?;
         self.report.object_refs.insert(object_ref.to_string());
         let archive_path = format!("objects/sha256/{object_ref}");
-        let Some(data) = self.documents.get(&archive_path) else {
+        let Some(_) = self.object_length(object_ref)? else {
             self.report.missing(format!(
                 "`{source}` references missing object `{object_ref}`"
             ))?;
             return Ok(false);
         };
-        if crate::cas::hex_sha256(data) != object_ref {
-            bail!("CAS SHA-256 mismatch for `{archive_path}`")
-        }
-        let descriptor: TensorDescriptor = parse_json(data, &archive_path)?;
+        let data = self.object_document(object_ref)?;
+        let descriptor: TensorDescriptor = parse_json(&data, &archive_path)?;
         validate_descriptor(&descriptor, object_ref, source)?;
         for chunk in descriptor.chunks {
             if !self.add_archive_payload(&chunk.object_ref, source, Some(chunk.length))? {
@@ -3032,17 +3090,13 @@ impl<'a> ArchiveWalker<'a> {
         validate_object_ref(object_ref)
             .with_context(|| format!("invalid object ref in `{source}`"))?;
         self.report.object_refs.insert(object_ref.to_string());
-        let archive_path = format!("objects/sha256/{object_ref}");
-        let Some(data) = self.documents.get(&archive_path) else {
+        let Some(length) = self.object_length(object_ref)? else {
             self.report.missing(format!(
                 "`{source}` references missing object `{object_ref}`"
             ))?;
             return Ok(false);
         };
-        if crate::cas::hex_sha256(data) != object_ref {
-            bail!("CAS SHA-256 mismatch for `{archive_path}`")
-        }
-        if expected_length.is_some_and(|length| data.len() != length) {
+        if expected_length.is_some_and(|expected| u64::try_from(expected).ok() != Some(length)) {
             bail!("tensor chunk `{object_ref}` length does not match its descriptor range")
         }
         Ok(true)
