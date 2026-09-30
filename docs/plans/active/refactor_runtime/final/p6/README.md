@@ -177,3 +177,11 @@ pamięci i wszystkich lane'ów pozostają otwarte. P6 wynosi **52%**.
 46. [Zgodność opisu pola z regionami runtime FEM](46-fem-field-runtime-support-parity.md)
     — pełna bramka geometrii, wspólna normalizacja markerów i maska bez kopii
     topologii; runtime, RAM i trwały manifest datasetu nadal otwarte.
+
+47. [Trwały manifest MaterializedDataset](47-durable-materialized-dataset-manifest.md)
+    — typowany artefakt CAS w tej samej rewizji SolutionSet, exact owner i
+    graf publication/recovery/FMS; source check/review PASS, API/UI i runtime otwarte.
+
+48. [Audyt markerów regionów native FEM](48-native-region-marker-followup-audit.md)
+    — potwierdzona podwójna normalizacja i granice raw IDs / binary mask;
+    audyt źródłowy, implementacja i runtime pozostają otwarte.

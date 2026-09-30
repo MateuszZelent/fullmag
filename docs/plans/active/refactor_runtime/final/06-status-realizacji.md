@@ -1,8 +1,17 @@
 # Status realizacji całego planu refaktoryzacji
 
-Data ostatniego przyrostu: 29.09.2026. Bazą bieżącego przyrostu był
-`master@4b280693e2ba0f0e9ee68f7dd841cba8015a7d62`. Receipt'y i starsze smoke'y
-zachowują własną przypiętą tożsamość źródła.
+Data ostatniego przyrostu: 01.10.2026. Przyrost P6-47:
+`master@a67d220c31f6d3cfb68b6bec7db15b7aba439ff4`, opublikowany na remote.
+Trwały manifest datasetu jest artefaktem tego samego SolutionSet, z exact
+ownerem i typed grafem publication/recovery/GC/FMS. Końcowy source check
+PASS: receipt `9cba2da8dd7d4baeadb9d2c1bd44b1b0`, exit 0, stabilne źródła;
+review PASS bez pozostałych P0/P1. Regresje jednostkowe NOT COMPILED / NOT RUN,
+a runtime, FMS round-trip, RAM i release NOT VERIFIED. P6 pozostaje **52%**;
+cel P0–P8 nadal aktywny. Szczegóły: [przyrost 47](p6/47-durable-materialized-dataset-manifest.md)
+i [audyt markerów FEM](p6/48-native-region-marker-followup-audit.md).
+
+Starsze receipt'y, smoke'y i opisy poniżej zachowują własną przypiętą
+tożsamość źródła. Ich wyniki nie są ponowną kwalifikacją zmienionych źródeł.
 
 Procenty poniżej opisują **zakres implementacyjny planu**, a nie gotowość
 produkcyjną. Etap liczę jako wykonany tylko wtedy, gdy istnieje odpowiadający
