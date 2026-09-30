@@ -13,10 +13,10 @@ import os
 import fullmag as fm
 
 SAMPLING = os.environ.get("FULLMAG_DE_SMOKE_SAMPLING", "two")
-if SAMPLING not in ("two", "five", "k0", "k2", "k25", "bv-k25", "k-25", "bv-k-25", "k5", "k10", "k15", "k20", "bv-k2", "bv-k5", "bv-k10", "bv-k15", "bv-k20", "positive-six", "bv-positive-six", "signed-eleven"):
+if SAMPLING not in ("two", "five", "k0", "k2", "k25", "bv-k25", "k-25", "bv-k-25", "k5", "k7", "k10", "k12", "k15", "k17", "k20", "k22", "bv-k2", "bv-k5", "bv-k7", "bv-k10", "bv-k12", "bv-k15", "bv-k17", "bv-k20", "bv-k22", "positive-six", "bv-positive-six", "signed-eleven"):
     raise ValueError(f"Unsupported FULLMAG_DE_SMOKE_SAMPLING: {SAMPLING}")
 _single_k_name = SAMPLING.removeprefix("bv-")
-IS_SINGLE = _single_k_name in ("k0", "k2", "k5", "k10", "k15", "k20", "k25", "k-25")
+IS_SINGLE = _single_k_name in ("k0", "k2", "k5", "k7", "k10", "k12", "k15", "k17", "k20", "k22", "k25", "k-25")
 KY = ((float(_single_k_name[1:]) * 1e6,) if IS_SINGLE else
       (2e6, 5e6, 10e6, 15e6, 20e6, 25e6) if SAMPLING in ("positive-six", "bv-positive-six") else
       (0.0, 2e6) if SAMPLING == "two" else
