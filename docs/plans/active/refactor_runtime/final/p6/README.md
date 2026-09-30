@@ -87,8 +87,8 @@ bounded data plane oraz jeden frontend analityczny oparty o pinned source.
     testy NOT RUN, produkcyjni callerzy i runtime pozostają otwarte.
 26. [Trwały manifest FMR bez odnośników current](26-fmr-durable-manifest-without-current-routes.md)
     — dokładny writer zachowuje ścieżki artefaktów i pomija zależne od
-    aktywnej sesji odnośniki transportowe; etapy buildu PASS, finalizacja
-    kolejki trwa, testy NOT RUN.
+    aktywnej sesji odnośniki transportowe; managed build i commit/push PASS,
+    testy NOT RUN, runtime pozostaje otwarty.
 
 Pozostałe resource keys w `runner/eigen/artifacts`, przeprowadzenie identity z
 głównego runner context, FEM artifact writers i migracja legacy copy-on-write,

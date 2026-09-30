@@ -2,7 +2,7 @@
 
 Data: 30.09.2026
 
-Status: **SOURCE PARSE PASS / BUILD STAGES PASS / QUEUE FINALIZATION PENDING / TESTS NOT RUN / RUNTIME NOT VERIFIED**.
+Status: **SOURCE PARSE PASS / MANAGED BUILD PASS / COMMIT + PUSH PASS / TESTS NOT RUN / RUNTIME NOT VERIFIED**.
 
 ## Zmiana
 
@@ -34,8 +34,9 @@ sweepu o brak mutable URL oraz zachowanie ścieżki sweepu i liczby punktów.
   Receipt w logu odpowiada jobowi, profilowi i digestowi: state=succeeded,
   112 wpisów artefaktów; native-build, frontend-dependencies i frontend-build
   mają exit 0. Kontener wykonawcy zakończył pracę z exit 0 o 10:19:36 UTC.
-  Stan kolejki pozostaje **running**; terminalna walidacja i zwolnienie lease
-  nie są jeszcze potwierdzone. Nie utożsamiać sukcesu etapów z końcem kolejki.
+  Odczyt przez zgodny klient potwierdził terminalny
+  **succeeded / exit 0** z tym samym digestem. Aktywna lista kolejki nie
+  zawiera tego joba. Koordynator zakończył kontrolę receipt i kapsuły źródeł.
 
 ## Integracja i dalszy zakres
 
@@ -43,16 +44,22 @@ Poprzedni przyrost runner context jest na `master` i `origin/master` jako
 `334a42969d0e224eb5026803b838c9aa7b7b7a41`. Jego managed build ma terminalny
 sukces, trzy etapy z exit 0 i receipt z 112 wpisami artefaktów.
 
-Etapy kompilacji zakończyły się poprawnie; przyrost może otrzymać scoped
-commit na podstawie tych dowodów. Finalizacja kolejki pozostaje osobną,
-otwartą kontrolą; nie zaliczono runtime ani kwalifikacji. Zachować
+Etapy kompilacji i finalizacja kolejki zakończyły się poprawnie.
+Nie zaliczono runtime ani kwalifikacji. Zachować
 dwie zastane linie `rotated_interfacial_dmi: None` i pozostałe cudze zmiany.
 Nie usuwano cache, snapshotów ani wyników.
 
-Koordynator został ponownie uruchomiony o 10:27:24 UTC. Kolejny odczyt
-zatwierdzonego klienta został odrzucony: `Container profile allow-list mismatch`.
-Nie zmieniano listy profili ani konfiguracji operatora i nie używano
-alternatywnego klienta. Końcowy stan joba i lease pozostają **NOT VERIFIED**.
+Po restarcie koordynatora stary klient zgłosił `Container profile allow-list mismatch`.
+Dostęp odzyskano przez istniejącego, wersjonowanego klienta w worktree
+`C:\git\fullmag\worktrees\eigensolve-dispersion-plan-20260912` (commit
+`f60fc7e3f796bd434dcae90cd4cd428dd451624d`). Rozpoznaje on wdrożony profil
+`fem-cpu-slepc-runtime-v2`. Użyto go z jawnym `--worktree C:\git\fullmag\fullmag`
+bez zmiany konfiguracji lub profilu żądanego buildu. Health potwierdził
+worker_alive=true, accepting_jobs=true, worker_error=null, stop_requested=false.
+Końcowy sukces joba został potwierdzony tym odczytem.
+
+Przyrost zapisano i wysłano na `master`/`origin/master` jako
+`7189af5a98af65dbd1957411484112066be16bfa`.
 
 Otwarte pozostają modal/native writers, API historycznych wykonań, migracja
 copy-on-write i runtime. P6 pozostaje **52%**; ten przyrost nie zamyka bramki
