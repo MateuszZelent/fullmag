@@ -1443,3 +1443,24 @@ jakosci i zbieznosci widma na nowej siatce pozostaje odrebna bramka runtime.
 | ID | Plik | Symbol |
 |---|---|---|
 | source-ring-lateral-regression | `scripts/test_box_layered_airbox_mesh.py` | `test_ring_lateral_resolution_is_independent_of_film_layers` |
+
+
+## Odbior porownania warstw DE/BV
+
+Porownanie szesciu pilotow musi odczytywac t, Ms, A, gamma i pole z ich
+metadata.json oraz orientacje M0=x,k=y (DE) albo M0=x,k=x (BV).
+Referencja Kalinikos-Slavin n=0 jest przyblizeniem otwartego filmu;
+nie stanowi dokladnego rozwiazania pelnego widma w skonczonym airboxie.
+Nie wolno zastepowac odrzuconych modow wartosciami analitycznymi.
+Kolektor wymaga zgodnych tozsamosci request/result/job/model, terminalnego
+completed_unqualified, pelnych certyfikatow residualu <=1e-8, weryfikacji
+rzeczywistych warstw, CSV/native spectrum i topologii fizycznego modu.
+Wykorzystuje istniejaca mase P1 do diagnostyki profilu jednorodnego.
+Dla zestawu n=3/6/9 w obu geometriach kontroluje stale parametry, airbox,
+hmax i rzeczywiste pozycje x/y. Wyjscie pozostaje NOT VERIFIED: zbieznosc
+warstw i airboxu oraz pokrycie widma wymagaja osobnej oceny.
+
+| ID | Plik | Symbol |
+|---|---|---|
+| source-thickness-collector | `scripts/collect_de_bv_thickness_comparison.py` | `collect_record` |
+| source-thickness-collector-regression | `scripts/test_collect_de_bv_thickness_comparison.py` | `test_rejects_wrong_receipt_before_field_loading` |

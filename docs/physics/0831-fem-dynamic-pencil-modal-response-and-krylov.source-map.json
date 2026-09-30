@@ -337,7 +337,9 @@
       "responsibility": "Independent mesh refinement, volume, oriented translation and Floquet phase regression"
     },
     {"id": "source-ring-air-layer-regression", "path": "scripts/test_box_layered_airbox_mesh.py", "symbol": "test_ring_air_realizes_graded_vertical_resolution", "responsibility": "Verify actual graded exterior air planes, positive Tet4 volumes and full periodic sides for the antidot cell."},
-    {"id": "source-ring-lateral-regression", "path": "scripts/test_box_layered_airbox_mesh.py", "symbol": "test_ring_lateral_resolution_is_independent_of_film_layers", "responsibility": "Verify independent lateral and thickness refinement of the exact-cell antidot mesh."}
+    {"id": "source-ring-lateral-regression", "path": "scripts/test_box_layered_airbox_mesh.py", "symbol": "test_ring_lateral_resolution_is_independent_of_film_layers", "responsibility": "Verify independent lateral and thickness refinement of the exact-cell antidot mesh."},
+    {"id": "source-thickness-collector", "path": "scripts/collect_de_bv_thickness_comparison.py", "symbol": "collect_record", "responsibility": "Collect original certified modes and actual SI metadata for the six thickness pilots."},
+    {"id": "source-thickness-collector-regression", "path": "scripts/test_collect_de_bv_thickness_comparison.py", "symbol": "test_rejects_wrong_receipt_before_field_loading", "responsibility": "Reject failed, mismatched source identity and incorrect thickness receipts."}
   ],
   "public_api": {
     "parameters": [
