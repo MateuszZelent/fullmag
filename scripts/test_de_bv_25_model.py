@@ -7,6 +7,7 @@ sys.path.insert(0, str(ROOT / "packages/fullmag-py/src"))
 import fullmag as fm
 
 @pytest.mark.parametrize("sampling,vector,window", [
+    ("k0", [0,0,0], (8.5e9,12e9)),
     ("k25", [0,25e6,0], (12e9,16e9)),
     ("bv-k25", [25e6,0,0], (8.5e9,12e9)),
     ("k-25", [0,-25e6,0], (12e9,16e9)),
@@ -29,7 +30,9 @@ def test_same_physics_and_explicit_propagation(monkeypatch,sampling,vector,windo
     assert study["operator"]=={"kind":"full_2x2","include_demag":True}
     assert study["count"]==1
     assert study["target"]=={"kind":"frequency_window","frequency_min_hz":window[0],"frequency_max_hz":window[1]}
-    assert study["magnetostatic_bc"]=="floquet_airbox"
+    assert study["magnetostatic_bc"]==("periodic_airbox_k0" if sampling=="k0" else "floquet_airbox")
+    if sampling=="k0":
+        assert study["spin_wave_bc"]=={"kind":"periodic","pair_ids":["x_faces","y_faces"]}
     assert next(t for t in ir["energy_terms"] if t["kind"]=="zeeman")["B"]==[0.1,0,0]
     assert ir["materials"][0]["saturation_magnetisation"]==800000
     assert ir["materials"][0]["exchange_stiffness"]==13e-12

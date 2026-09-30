@@ -138,7 +138,8 @@ study.stages.add_eigenmodes(
                    for k, vector in zip(KY, K_VECTORS)],
            samples_per_segment=[1] * (len(KY) - 1),
        )}),
-    bc=fm.FloquetBC(["x_faces", "y_faces"],
-                    phase_convention="exp_minus_i_k_dot_delta_r"),
-    magnetostatic_bc="floquet_airbox",
+    bc=(fm.PeriodicBC(["x_faces", "y_faces"]) if SAMPLING == "k0" else
+        fm.FloquetBC(["x_faces", "y_faces"],
+                     phase_convention="exp_minus_i_k_dot_delta_r")),
+    magnetostatic_bc="periodic_airbox_k0" if SAMPLING == "k0" else "floquet_airbox",
 )
