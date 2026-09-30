@@ -260,6 +260,88 @@ pub fn parse_materialized_dataset_artifact(
     Ok(manifest)
 }
 
+/// A materialized dataset resolved from one exact containing SolutionSet
+/// revision. The `owner` may be an older immutable revision when the manifest
+/// is carried forward by a later SolutionSet revision.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResolvedMaterializedDataset {
+    pub manifest: MaterializedDatasetManifest,
+    pub manifest_artifact: SolutionArtifactRef,
+    pub containing_solution_revision: u64,
+    pub owner: SolutionSet,
+}
+
+/// Read and verify one materialized dataset from an exact SolutionSet
+/// revision. Missing members or artifacts are absence (`Ok(None)`); a found
+/// artifact with the wrong schema or kind is a corrupt/unsupported record and
+/// fails closed.
+pub fn read_materialized_dataset_artifact(
+    store: &SessionStore,
+    containing: &SolutionSet,
+    member_id: &str,
+    artifact_id: &str,
+) -> Result<Option<ResolvedMaterializedDataset>> {
+    containing
+        .validate()
+        .map_err(|error| anyhow::anyhow!(error.to_string()))
+        .context("validating containing SolutionSet for materialized dataset read")?;
+
+    let Some(member) = containing
+        .members
+        .iter()
+        .find(|member| member.member_id == member_id)
+    else {
+        return Ok(None);
+    };
+    let Some(manifest_artifact) = member
+        .artifacts
+        .iter()
+        .find(|artifact| artifact.artifact_id == artifact_id)
+    else {
+        return Ok(None);
+    };
+    if manifest_artifact.kind != SolutionArtifactKind::Other
+        || manifest_artifact.schema_id != MATERIALIZED_DATASET_SCHEMA
+    {
+        bail!("selected materialized dataset artifact has unsupported schema or kind");
+    }
+
+    // Resolve the durable run owner before opening any CAS payload. This
+    // protects the reader from accepting a structurally valid artifact whose
+    // SolutionSet has lost its immutable accepted-submit provenance.
+    crate::solution_tensor_source::verify_solution_tensor_run_owner(store.root(), containing)?;
+
+    let manifest = read_materialized_dataset_manifest(store.cas(), manifest_artifact)?;
+    validate_containing_dataset_manifest(containing, member, &manifest)?;
+
+    let owner = if manifest.field.source.solution_revision == containing.revision {
+        containing.clone()
+    } else {
+        let owner = store
+            .solution_sets()
+            .read_revision(
+                &manifest.field.source.solution_set_id,
+                manifest.field.source.solution_revision,
+            )?
+            .context("materialized dataset pinned owner revision is missing")?;
+        owner
+    };
+    validate_materialized_dataset_owner(&manifest, &owner)?;
+
+    // Source and owner identity are fenced before opening any tensor chunk.
+    // A corrupt payload must not hide that the selected historical owner is
+    // not the one named by the containing revision.
+    let tensor = verify_solution_tensor_payload(store.cas(), &manifest.field.tensor_artifact)?;
+    validate_materialized_dataset_tensor(&manifest, &tensor)?;
+
+    Ok(Some(ResolvedMaterializedDataset {
+        manifest,
+        manifest_artifact: manifest_artifact.clone(),
+        containing_solution_revision: containing.revision,
+        owner,
+    }))
+}
+
 /// Verify that a manifest points at one exact SolutionSet revision/member/artifact.
 pub fn validate_materialized_dataset_owner(
     manifest: &MaterializedDatasetManifest,
@@ -371,6 +453,16 @@ pub fn verify_materialized_dataset_payload(
     cas: &CasStore,
     artifact: &SolutionArtifactRef,
 ) -> Result<MaterializedDatasetManifest> {
+    let manifest = read_materialized_dataset_manifest(cas, artifact)?;
+    let tensor = verify_solution_tensor_payload(cas, &manifest.field.tensor_artifact)?;
+    validate_materialized_dataset_tensor(&manifest, &tensor)?;
+    Ok(manifest)
+}
+
+fn read_materialized_dataset_manifest(
+    cas: &CasStore,
+    artifact: &SolutionArtifactRef,
+) -> Result<MaterializedDatasetManifest> {
     validate_manifest_artifact_metadata(artifact)?;
     let range = cas
         .get_verified_range(
@@ -383,10 +475,7 @@ pub fn verify_materialized_dataset_payload(
     if range.object_length != artifact.byte_length {
         bail!("materialized dataset manifest CAS length differs from its artifact");
     }
-    let manifest = parse_materialized_dataset_artifact(&range.bytes, artifact)?;
-    let tensor = verify_solution_tensor_payload(cas, &manifest.field.tensor_artifact)?;
-    validate_materialized_dataset_tensor(&manifest, &tensor)?;
-    Ok(manifest)
+    parse_materialized_dataset_artifact(&range.bytes, artifact)
 }
 
 /// Verify every recognized dataset artifact carried by one SolutionSet.
@@ -410,39 +499,49 @@ pub(crate) fn verify_materialized_datasets_for_solution(
             }
             let manifest = verify_materialized_dataset_payload(cas, artifact)?;
             register_dataset_revision(&mut dataset_revisions, &manifest)?;
-            let source = &manifest.field.source;
-            if source.member_id != member.member_id {
-                bail!("materialized dataset member binding differs from its containing member");
-            }
-            let current_tensor = member
-                .artifacts
-                .iter()
-                .find(|candidate| {
-                    candidate.artifact_id == manifest.field.tensor_artifact.artifact_id
-                })
-                .context(
-                    "materialized dataset tensor artifact is missing from its containing revision",
-                )?;
-            if current_tensor != &manifest.field.tensor_artifact {
-                bail!("materialized dataset tensor artifact changed in its containing revision");
-            }
-            if source.run_id != solution.run_id
-                || source.solution_set_id != solution.solution_set_id
-                || source.solution_revision > solution.revision
-            {
-                bail!("materialized dataset owner is outside the containing SolutionSet");
-            }
-            if source.solution_revision == solution.revision {
+            validate_containing_dataset_manifest(solution, member, &manifest)?;
+            if manifest.field.source.solution_revision == solution.revision {
                 validate_materialized_dataset_owner(&manifest, solution)?;
             } else {
                 let historical_store = SessionStore::open_existing(root)?;
                 let historical = historical_store
                     .solution_sets()
-                    .read_revision(&source.solution_set_id, source.solution_revision)?
+                    .read_revision(
+                        &manifest.field.source.solution_set_id,
+                        manifest.field.source.solution_revision,
+                    )?
                     .context("historical materialized dataset owner revision is missing")?;
                 validate_materialized_dataset_owner(&manifest, &historical)?;
             }
         }
+    }
+    Ok(())
+}
+
+fn validate_containing_dataset_manifest(
+    containing: &SolutionSet,
+    member: &fullmag_quantities::SolutionMember,
+    manifest: &MaterializedDatasetManifest,
+) -> Result<()> {
+    let source = &manifest.field.source;
+    if source.member_id != member.member_id {
+        bail!("materialized dataset member binding differs from its containing member");
+    }
+    let current_tensor = member
+        .artifacts
+        .iter()
+        .find(|candidate| candidate.artifact_id == manifest.field.tensor_artifact.artifact_id)
+        .context("materialized dataset tensor artifact is missing from its containing revision")?;
+    if current_tensor != &manifest.field.tensor_artifact {
+        bail!("materialized dataset tensor artifact changed in its containing revision");
+    }
+    if source.run_id != containing.run_id
+        || source.solution_set_id != containing.solution_set_id
+        || source.run_spec_digest != containing.provenance.run_spec_digest
+        || source.solution_revision == 0
+        || source.solution_revision > containing.revision
+    {
+        bail!("materialized dataset owner is outside the containing SolutionSet");
     }
     Ok(())
 }
@@ -736,13 +835,15 @@ fn coverage_from_tensor(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{TensorChunk, TensorDescriptor};
+    use crate::solution_tensor_field::TensorFieldBinding;
+    use crate::{FmsRunIntent, TensorChunk, TensorDescriptor};
     use fullmag_quantities::{
         ActiveSupportDescriptor, DatasetFieldDescriptor, FieldAxisDescriptor, FieldFrameDescriptor,
         FieldFrameKind, FieldNormalization, FieldResolution, FieldSampleLocation,
-        FieldValueRepresentation, FunctionSpaceDescriptor, FunctionSpaceOrdering, QuantityId,
-        ScientificAssessment, ScientificAssessmentStatus, SolutionExecutionStatus, SolutionMember,
-        SolutionSetManifestState, SolutionSetProvenance, SOLUTION_SET_SCHEMA_VERSION,
+        FieldValueRepresentation, FunctionSpaceDescriptor, FunctionSpaceOrdering,
+        MaterializedDatasetRef, QuantityId, ScientificAssessment, ScientificAssessmentStatus,
+        SolutionExecutionStatus, SolutionMember, SolutionSetManifestState, SolutionSetProvenance,
+        SOLUTION_SET_SCHEMA_VERSION,
     };
 
     fn digest(letter: char) -> String {
@@ -1045,5 +1146,296 @@ mod tests {
         let mut cross_member = manifest();
         cross_member.field.source.member_id = "other-member".to_string();
         assert!(validate_materialized_dataset_owner(&cross_member, &owner).is_err());
+    }
+
+    fn tensor_descriptor_for_store(chunk_ref: &str) -> TensorDescriptor {
+        let tensor = TensorDescriptor {
+            format: SOLUTION_TENSOR_SCHEMA.to_string(),
+            name: "magnetization".to_string(),
+            dtype: TensorDtype::F64,
+            shape: vec![2, 3],
+            logical_axes: vec!["node".to_string(), "component".to_string()],
+            endian: "little".to_string(),
+            field_binding: Some(TensorFieldBinding {
+                format: TENSOR_FIELD_BINDING_SCHEMA.to_string(),
+                dataset: MaterializedDatasetRef {
+                    dataset_id: "dataset:test".to_string(),
+                    revision: 1,
+                },
+                sample_id: "sample".to_string(),
+                item_id: "item".to_string(),
+                field_id: "field:m".to_string(),
+                group_id: "group:test".to_string(),
+                producer_id: "producer:test".to_string(),
+                producer_version: "1".to_string(),
+                plane: fullmag_quantities::DatasetSlicePlane::Values,
+                descriptor: descriptor(),
+            }),
+            chunks: vec![TensorChunk {
+                object_ref: chunk_ref.to_string(),
+                offset: 0,
+                length: 48,
+                sha256: Some(chunk_ref.to_string()),
+            }],
+        };
+        validate_solution_tensor_descriptor(&tensor).expect("test tensor descriptor is valid");
+        tensor
+    }
+
+    struct ReaderFixture {
+        _directory: tempfile::TempDir,
+        store: SessionStore,
+        containing: SolutionSet,
+        manifest_artifact_id: String,
+    }
+
+    fn reader_fixture(historical_owner: bool) -> ReaderFixture {
+        let directory = tempfile::tempdir().expect("temporary materialized dataset store");
+        let store = SessionStore::open(directory.path().join("store")).expect("open store");
+        let intent = FmsRunIntent::new(
+            "run",
+            "submit-materialized-dataset",
+            serde_json::json!({"run_id": "run", "study": "test"}),
+        );
+        store
+            .commit_run_intent(&intent)
+            .expect("publish durable run intent");
+
+        let mut owner = solution();
+        owner.manifest_state = SolutionSetManifestState::Open;
+        owner.execution_status = SolutionExecutionStatus::Running;
+        owner.members[0].execution_status = SolutionExecutionStatus::Running;
+        owner.provenance.run_spec_digest = format!("sha256:{}", intent.payload_sha256);
+
+        let chunk_ref = store
+            .cas()
+            .put(&vec![0_u8; 48])
+            .expect("publish tensor payload chunk");
+        let descriptor = tensor_descriptor_for_store(&chunk_ref);
+        let descriptor_bytes = serde_json::to_vec(&descriptor).expect("serialize tensor root");
+        let tensor_object_ref = store
+            .cas()
+            .put(&descriptor_bytes)
+            .expect("publish tensor root");
+        let tensor_artifact = SolutionArtifactRef {
+            artifact_id: "tensor".to_string(),
+            kind: SolutionArtifactKind::State,
+            schema_id: SOLUTION_TENSOR_SCHEMA.to_string(),
+            object_ref: tensor_object_ref,
+            byte_length: descriptor_bytes.len() as u64,
+            accepted_state: None,
+        };
+        owner.members[0].artifacts = vec![tensor_artifact.clone()];
+        let manifest_artifact =
+            build_materialized_dataset_artifact(store.cas(), &owner, "member", &tensor_artifact)
+                .expect("build materialized dataset manifest")
+                .expect("typed real tensor should produce materialized dataset");
+
+        let containing = if historical_owner {
+            store
+                .publish_solution_set(&owner)
+                .expect("publish historical tensor owner");
+            let mut containing = owner.clone();
+            containing.revision = 2;
+            containing.members[0]
+                .artifacts
+                .push(manifest_artifact.clone());
+            store
+                .publish_solution_set(&containing)
+                .expect("publish containing revision");
+            containing
+        } else {
+            owner.members[0].artifacts.push(manifest_artifact.clone());
+            store
+                .publish_solution_set(&owner)
+                .expect("publish current materialized dataset owner");
+            owner
+        };
+        ReaderFixture {
+            _directory: directory,
+            store,
+            containing,
+            manifest_artifact_id: manifest_artifact.artifact_id,
+        }
+    }
+
+    fn manual_manifest_artifact(
+        store: &SessionStore,
+        solution: &SolutionSet,
+        tensor_artifact: &SolutionArtifactRef,
+        tensor: &TensorDescriptor,
+        run_spec_digest: String,
+    ) -> SolutionArtifactRef {
+        let mut manifest = MaterializedDatasetManifest::from_recorded_tensor(
+            solution,
+            "member",
+            tensor_artifact,
+            tensor,
+        )
+        .expect("build manual materialized dataset manifest");
+        manifest.field.source.run_spec_digest = run_spec_digest;
+        let bytes = serde_json::to_vec_pretty(&manifest).expect("serialize manual manifest");
+        let object_ref = store.cas().put(&bytes).expect("publish manual manifest");
+        SolutionArtifactRef {
+            artifact_id: format!("materialized-dataset-{object_ref}"),
+            kind: SolutionArtifactKind::Other,
+            schema_id: MATERIALIZED_DATASET_SCHEMA.to_string(),
+            object_ref,
+            byte_length: bytes.len() as u64,
+            accepted_state: None,
+        }
+    }
+
+    #[test]
+    fn reader_resolves_current_and_historical_exact_owner_revisions() {
+        let current = reader_fixture(false);
+        let resolved = read_materialized_dataset_artifact(
+            &current.store,
+            &current.containing,
+            "member",
+            &current.manifest_artifact_id,
+        )
+        .expect("read current materialized dataset")
+        .expect("current materialized dataset is present");
+        assert_eq!(resolved.containing_solution_revision, 1);
+        assert_eq!(resolved.owner.revision, 1);
+        assert_eq!(
+            resolved.manifest_artifact.artifact_id,
+            current.manifest_artifact_id
+        );
+
+        let historical = reader_fixture(true);
+        let resolved = read_materialized_dataset_artifact(
+            &historical.store,
+            &historical.containing,
+            "member",
+            &historical.manifest_artifact_id,
+        )
+        .expect("read historical materialized dataset")
+        .expect("historical materialized dataset is present");
+        assert_eq!(resolved.containing_solution_revision, 2);
+        assert_eq!(resolved.owner.revision, 1);
+        assert_eq!(
+            resolved.owner.solution_set_id,
+            historical.containing.solution_set_id
+        );
+    }
+
+    #[test]
+    fn reader_returns_none_only_for_missing_records_and_rejects_owner_mismatches() {
+        let fixture = reader_fixture(false);
+        assert!(read_materialized_dataset_artifact(
+            &fixture.store,
+            &fixture.containing,
+            "missing-member",
+            &fixture.manifest_artifact_id,
+        )
+        .expect("missing member is an absent resource")
+        .is_none());
+        assert!(read_materialized_dataset_artifact(
+            &fixture.store,
+            &fixture.containing,
+            "member",
+            "missing-artifact",
+        )
+        .expect("missing artifact is an absent resource")
+        .is_none());
+
+        let mut wrong_schema = fixture.containing.clone();
+        wrong_schema.members[0].artifacts.push(SolutionArtifactRef {
+            artifact_id: "wrong-schema".to_string(),
+            kind: SolutionArtifactKind::State,
+            schema_id: SOLUTION_TENSOR_SCHEMA.to_string(),
+            object_ref: "c".repeat(64),
+            byte_length: 1,
+            accepted_state: None,
+        });
+        assert!(read_materialized_dataset_artifact(
+            &fixture.store,
+            &wrong_schema,
+            "member",
+            "wrong-schema",
+        )
+        .is_err());
+
+        let mut changed_tensor = fixture.containing.clone();
+        changed_tensor.members[0].artifacts[0].object_ref = "d".repeat(64);
+        assert!(read_materialized_dataset_artifact(
+            &fixture.store,
+            &changed_tensor,
+            "member",
+            &fixture.manifest_artifact_id,
+        )
+        .is_err());
+
+        let mut wrong_owner = fixture.containing.clone();
+        wrong_owner.provenance.run_spec_digest = digest('e');
+        assert!(read_materialized_dataset_artifact(
+            &fixture.store,
+            &wrong_owner,
+            "member",
+            &fixture.manifest_artifact_id,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn reader_fences_invalid_owner_before_missing_tensor_chunk() {
+        let fixture = reader_fixture(false);
+        let mut containing = fixture.containing.clone();
+        let missing_chunk_ref = "f".repeat(64);
+        let tensor = tensor_descriptor_for_store(&missing_chunk_ref);
+        let tensor_bytes = serde_json::to_vec(&tensor).expect("serialize missing-chunk root");
+        let tensor_object_ref = fixture
+            .store
+            .cas()
+            .put(&tensor_bytes)
+            .expect("publish missing-chunk tensor root");
+        let tensor_artifact = SolutionArtifactRef {
+            artifact_id: "missing-tensor".to_string(),
+            kind: SolutionArtifactKind::State,
+            schema_id: SOLUTION_TENSOR_SCHEMA.to_string(),
+            object_ref: tensor_object_ref,
+            byte_length: tensor_bytes.len() as u64,
+            accepted_state: None,
+        };
+        containing.members[0]
+            .artifacts
+            .push(tensor_artifact.clone());
+        let invalid_owner = manual_manifest_artifact(
+            &fixture.store,
+            &containing,
+            &tensor_artifact,
+            &tensor,
+            digest('e'),
+        );
+        containing.members[0].artifacts.push(invalid_owner.clone());
+        let owner_error = read_materialized_dataset_artifact(
+            &fixture.store,
+            &containing,
+            "member",
+            &invalid_owner.artifact_id,
+        )
+        .unwrap_err();
+        assert!(owner_error
+            .to_string()
+            .contains("outside the containing SolutionSet"));
+
+        let valid_owner = manual_manifest_artifact(
+            &fixture.store,
+            &containing,
+            &tensor_artifact,
+            &tensor,
+            containing.provenance.run_spec_digest.clone(),
+        );
+        containing.members[0].artifacts.push(valid_owner.clone());
+        let payload_error = read_materialized_dataset_artifact(
+            &fixture.store,
+            &containing,
+            "member",
+            &valid_owner.artifact_id,
+        )
+        .unwrap_err();
+        assert!(payload_error.to_string().contains("missing"));
     }
 }

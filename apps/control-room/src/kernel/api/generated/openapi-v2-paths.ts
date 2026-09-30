@@ -10,6 +10,7 @@ export const openApiV2PathLiterals = [
   "/v2/persistence/projects/{project_id}/runs/{run_id}/solution-sets/{solution_set_id}/revisions/{revision}",
   "/v2/persistence/projects/{project_id}/runs/{run_id}/solution-sets/{solution_set_id}/revisions/{revision}/members",
   "/v2/persistence/projects/{project_id}/runs/{run_id}/solution-sets/{solution_set_id}/revisions/{revision}/members/{member_id}/artifacts",
+  "/v2/persistence/projects/{project_id}/runs/{run_id}/solution-sets/{solution_set_id}/revisions/{revision}/members/{member_id}/artifacts/{artifact_id}/materialized-dataset",
   "/v2/persistence/projects/{project_id}/runs/{run_id}/tasks/{task_id}/cancellation",
   "/v2/platform/asyncapi.json",
   "/v2/platform/capabilities",

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  assertMaterializedDatasetPathId,
   assertSolutionSetLogicalId,
   assertSolutionSetMemberId,
   assertSolutionSetProjectId,
@@ -8,12 +9,15 @@ import {
   assertSolutionSetRunId,
 } from "../api/ControlRoomApi";
 import type {
+  MaterializedDatasetResource,
   SolutionSetArtifactPageResource,
   SolutionSetResource,
 } from "../api/apiTypes";
 
 import {
   SOLUTION_SET_SCHEMA_VERSION,
+  materializedDatasetResourceKey,
+  validateMaterializedDatasetEnvelope,
   solutionSetArtifactsResourceKey,
   solutionSetMembersResourceKey,
   solutionSetResourceKey,
@@ -21,6 +25,60 @@ import {
 } from "./solutionSetResources";
 
 describe("durable SolutionSet resource identity", () => {
+  it("bounds dataset lookup IDs in UTF-8 bytes", () => {
+    expect(assertMaterializedDatasetPathId("member id", "ą".repeat(512))).toHaveLength(512);
+    expect(() => assertMaterializedDatasetPathId("artifact id", "ą".repeat(513))).toThrow();
+  });
+  it("fences dataset metadata while preserving a Running/Unassessed historical owner", () => {
+    const data = datasetFixture();
+    const expected = {
+      projectId: data.project_id,
+      runId: data.run_id,
+      solutionSetId: data.solution_set_id,
+      revision: data.containing_solution_revision,
+      memberId: data.member_id,
+      artifactId: data.artifact_id,
+    };
+    expect(validateMaterializedDatasetEnvelope(data, expected)).toBe(data);
+    expect(data.owner_execution_status).toBe("running");
+    expect(data.owner_scientific_assessment.status).toBe("unassessed");
+    for (const field of ["project_id", "run_id", "solution_set_id", "member_id", "artifact_id"] as const) {
+      expect(() => validateMaterializedDatasetEnvelope({ ...data, [field]: "other" }, expected)).toThrow();
+    }
+    expect(() => validateMaterializedDatasetEnvelope({ ...data, owner_solution_revision: "9007199254740994" }, expected)).toThrow();
+    expect(() => validateMaterializedDatasetEnvelope({ ...data, manifest_byte_length: "4194305" }, expected)).toThrow();
+    expect(() => validateMaterializedDatasetEnvelope({ ...data, source: { ...data.source, solution_revision: "1" } }, expected)).toThrow();
+    expect(() => validateMaterializedDatasetEnvelope({ ...data, dataset: { ...data.dataset, source: { ...data.source, run_id: "other" } } }, expected)).toThrow();
+    expect(() => validateMaterializedDatasetEnvelope({ ...data, field: { ...data.field, tensor_artifact: { ...data.field.tensor_artifact, object_ref: "d".repeat(64) } } }, expected)).toThrow();
+    expect(() => validateMaterializedDatasetEnvelope({ ...data, manifest_object_ref: "bad" }, expected)).toThrow();
+    expect(() => validateMaterializedDatasetEnvelope(JSON.parse(JSON.stringify({ ...data, integrity: "not_verified" })), expected)).toThrow();
+    expect(() => validateMaterializedDatasetEnvelope({ ...data, definition: { ...data.definition, revision: "01" } }, expected)).toThrow();
+  });
+  it("separates every pinned dataset owner and preserves u64 revisions", () => {
+    const identity = {
+      projectId: "project-a",
+      runId: "run-a",
+      solutionSetId: "solution/żółć",
+      revision: "9007199254740993",
+      memberId: "member:a/b",
+      artifactId: "artifact:a/b",
+    };
+    const key = materializedDatasetResourceKey(identity);
+    expect(key).toContain("9007199254740993");
+    expect(key).toContain("solution%2F%C5%BC%C3%B3%C5%82%C4%87");
+    expect(key).toContain("member%3Aa%2Fb");
+    expect(key).toContain("artifact%3Aa%2Fb");
+    for (const [field, value] of Object.entries({
+      projectId: "project-b",
+      runId: "run-b",
+      solutionSetId: "other-solution",
+      revision: "9007199254740992",
+      memberId: "other-member",
+      artifactId: "other-artifact",
+    })) {
+      expect(materializedDatasetResourceKey({ ...identity, [field]: value })).not.toBe(key);
+    }
+  });
   it("keeps the exact decimal revision in every project-scoped cache key", () => {
     const revision = "9007199254740993";
 
@@ -164,3 +222,87 @@ describe("durable SolutionSet resource identity", () => {
     ).toThrow();
   });
 });
+
+function datasetFixture(): MaterializedDatasetResource {
+  const source = {
+    run_id: "run",
+    solution_set_id: "set",
+    solution_revision: "9007199254740992",
+    member_id: "member",
+    artifact_id: "tensor:m",
+    tensor_object_ref: "b".repeat(64),
+    run_spec_digest: `sha256:${"c".repeat(64)}`,
+  };
+  return {
+    schema_version: "fullmag.analysis.materialized_dataset.v1",
+    project_id: "project",
+    run_id: source.run_id,
+    solution_set_id: source.solution_set_id,
+    containing_solution_revision: "9007199254740993",
+    owner_solution_revision: source.solution_revision,
+    member_id: source.member_id,
+    artifact_id: `materialized-dataset-${"a".repeat(64)}`,
+    manifest_object_ref: "a".repeat(64),
+    manifest_byte_length: "4096",
+    integrity: "verified",
+    source,
+    owner_execution_status: "running",
+    owner_scientific_assessment: { status: "unassessed", reason: null, evidence_artifact_count: 0 },
+    sample_id: "sample",
+    item_id: "item",
+    field_id: "field:m",
+    dataset: {
+      schema_version: "1.0.0",
+      dataset_id: "dataset:m",
+      revision: "1",
+      definition_id: "definition:m",
+      definition_revision: "1",
+      source,
+      status: { availability: "ready", reason: null, actions: [] },
+    },
+    definition: {
+      schema_version: "1.0.0",
+      definition_id: "definition:m",
+      revision: "1",
+      source,
+      domain_selection: { selection_id: `sha256:${"d".repeat(64)}`, selection_revision: "1" },
+      axes: [],
+      transforms: [],
+      evaluation_policy: { precision: "f64", approximation: "exact_only", unavailable_data: "fail" },
+    },
+    field: {
+      sample_id: "sample",
+      item_id: "item",
+      field_id: "field:m",
+      group_id: "group:m",
+      producer_id: "producer:fem-p1",
+      producer_version: "1",
+      tensor_schema_id: "fullmag.tensor.v1",
+      tensor_byte_length: "2048",
+      plane: "values",
+      accepted_state: null,
+      tensor_artifact: { artifact_id: source.artifact_id, schema_id: "fullmag.tensor.v1", object_ref: source.tensor_object_ref, byte_length: "2048", accepted_state: null },
+      coverage: { total_elements: "6", component_count: "3", dtype: "f64", endian: "little", total_bytes: "48", chunk_count: "1" },
+      descriptor: {
+        quantity_id: "m",
+        unit: "1",
+        tensor_rank: "1",
+        frame: { kind: "laboratory", frame_id: "frame:global" },
+        sample_location: "node",
+        active_support: { support_fingerprint: `sha256:${"d".repeat(64)}`, selection: null },
+        function_space: { space_id: "space:h1", family: "H1", order: "1", vector_dimension: "3", ordering: "by_node", basis_id: "basis:h1", constraints_fingerprint: null, partition_fingerprint: null, orientation_mapping_ref: null },
+        topology_id: `sha256:${"e".repeat(64)}`,
+        carrier_id: "carrier:mesh",
+        layout_digest: `sha256:${"f".repeat(64)}`,
+        axes: [{ axis_id: "node", unit: "1", length: "2" }, { axis_id: "component", unit: "1", length: "3" }],
+        component_axis: "component",
+        complex_encoding: "real",
+        harmonic_convention: null,
+        normalization: "unit_vector",
+        value_representation: "physical_field",
+        modal_semantics: null,
+        resolution: "quantitative",
+      },
+    },
+  };
+}

@@ -164,6 +164,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/persistence/projects/{project_id}/runs/{run_id}/solution-sets/{solution_set_id}/revisions/{revision}/members/{member_id}/artifacts/{artifact_id}/materialized-dataset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["persistence_get_persistence_projects_project_id_runs_run_id_solution_sets_solution_set_id_revisions_revision_members_member_id_artifacts_artifact_id_materialized_dataset"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/persistence/projects/{project_id}/runs/{run_id}/tasks/{task_id}/cancellation": {
         parameters: {
             query?: never;
@@ -8118,6 +8134,233 @@ export interface components {
             /** Format: int64 */
             scene_revision: number;
         };
+        MaterializedDatasetActiveSupportResource: {
+            selection?: null | components["schemas"]["MaterializedDatasetSelectionResource"];
+            support_fingerprint: string;
+        };
+        /** @enum {string} */
+        MaterializedDatasetApproximationResource: "exact_only" | "allow_declared_approximation";
+        /** @enum {string} */
+        MaterializedDatasetAvailabilityResource: "ready" | "not_recorded" | "not_applicable" | "not_yet_computed" | "unsupported" | "missing" | "corrupt";
+        /** @enum {string} */
+        MaterializedDatasetAxisKindResource: "time" | "frequency" | "wave_vector" | "mode" | "parameter";
+        MaterializedDatasetAxisResource: {
+            axis_id: string;
+            length: string;
+            unit: string;
+        };
+        MaterializedDatasetAxisSelectionResource: {
+            axis_id: string;
+            coordinate_ids: string[];
+            kind: components["schemas"]["MaterializedDatasetAxisKindResource"];
+        };
+        /** @enum {string} */
+        MaterializedDatasetComplexEncodingResource: "real" | "real_imag_pair";
+        MaterializedDatasetCoverageResource: {
+            chunk_count: string;
+            component_count: string;
+            dtype: components["schemas"]["MaterializedDatasetDtypeResource"];
+            endian: string;
+            total_bytes: string;
+            total_elements: string;
+        };
+        MaterializedDatasetDefinitionResource: {
+            axes: components["schemas"]["MaterializedDatasetAxisSelectionResource"][];
+            definition_id: string;
+            domain_selection: components["schemas"]["MaterializedDatasetSelectionResource"];
+            evaluation_policy: components["schemas"]["MaterializedDatasetEvaluationPolicyResource"];
+            revision: string;
+            schema_version: string;
+            source: components["schemas"]["MaterializedDatasetPinnedSourceResource"];
+            transforms: components["schemas"]["MaterializedDatasetTransformResource"][];
+        };
+        /** @enum {string} */
+        MaterializedDatasetDtypeResource: "u8" | "i32" | "u32" | "f32" | "f64";
+        MaterializedDatasetEvaluationPolicyResource: {
+            approximation: components["schemas"]["MaterializedDatasetApproximationResource"];
+            precision: components["schemas"]["MaterializedDatasetEvaluationPrecisionResource"];
+            unavailable_data: components["schemas"]["MaterializedDatasetUnavailableDataResource"];
+        };
+        /** @enum {string} */
+        MaterializedDatasetEvaluationPrecisionResource: "f32" | "f64";
+        MaterializedDatasetFieldDescriptorResource: {
+            active_support: components["schemas"]["MaterializedDatasetActiveSupportResource"];
+            axes: components["schemas"]["MaterializedDatasetAxisResource"][];
+            carrier_id: string;
+            complex_encoding: components["schemas"]["MaterializedDatasetComplexEncodingResource"];
+            component_axis?: string | null;
+            frame: components["schemas"]["MaterializedDatasetFrameResource"];
+            function_space?: null | components["schemas"]["MaterializedDatasetFunctionSpaceResource"];
+            harmonic_convention?: null | components["schemas"]["MaterializedDatasetHarmonicConventionResource"];
+            layout_digest: string;
+            modal_semantics?: null | components["schemas"]["MaterializedDatasetModalSemanticsResource"];
+            normalization: components["schemas"]["MaterializedDatasetNormalizationResource"];
+            quantity_id: components["schemas"]["MaterializedDatasetQuantityResource"];
+            resolution: components["schemas"]["MaterializedDatasetResolutionResource"];
+            sample_location: components["schemas"]["MaterializedDatasetSampleLocationResource"];
+            tensor_rank: string;
+            topology_id: string;
+            unit: string;
+            value_representation: components["schemas"]["MaterializedDatasetValueRepresentationResource"];
+        };
+        MaterializedDatasetFieldProjectionResource: {
+            method: components["schemas"]["MaterializedDatasetProjectionMethodResource"];
+            producer_version: string;
+            target_space_id: string;
+        };
+        MaterializedDatasetFieldResource: {
+            accepted_state?: null | components["schemas"]["SolutionAcceptedStateIdResource"];
+            coverage: components["schemas"]["MaterializedDatasetCoverageResource"];
+            descriptor: components["schemas"]["MaterializedDatasetFieldDescriptorResource"];
+            field_id: string;
+            group_id: string;
+            item_id: string;
+            plane: components["schemas"]["MaterializedDatasetPlaneResource"];
+            producer_id: string;
+            producer_version: string;
+            sample_id: string;
+            tensor_artifact: components["schemas"]["MaterializedDatasetTensorArtifactResource"];
+            tensor_byte_length: string;
+            tensor_schema_id: string;
+        };
+        /** @enum {string} */
+        MaterializedDatasetFrameKindResource: "laboratory" | "object" | "material" | "local_basis";
+        MaterializedDatasetFrameResource: {
+            frame_id: string;
+            kind: components["schemas"]["MaterializedDatasetFrameKindResource"];
+        };
+        /** @enum {string} */
+        MaterializedDatasetFunctionSpaceOrderingResource: "by_node" | "by_component" | "lexicographic" | "native_with_mapping";
+        MaterializedDatasetFunctionSpaceResource: {
+            basis_id: string;
+            constraints_fingerprint?: string | null;
+            family: string;
+            order: string;
+            ordering: components["schemas"]["MaterializedDatasetFunctionSpaceOrderingResource"];
+            orientation_mapping_ref?: string | null;
+            partition_fingerprint?: string | null;
+            space_id: string;
+            vector_dimension: string;
+        };
+        /** @enum {string} */
+        MaterializedDatasetHarmonicConventionResource: "exp_positive_i_omega_t" | "exp_negative_i_omega_t";
+        MaterializedDatasetIdentityResource: {
+            dataset_id: string;
+            definition_id: string;
+            definition_revision: string;
+            revision: string;
+            schema_version: string;
+            source: components["schemas"]["MaterializedDatasetPinnedSourceResource"];
+            status: components["schemas"]["MaterializedDatasetStatusResource"];
+        };
+        /** @enum {string} */
+        MaterializedDatasetIntegrityResource: "verified";
+        /** @enum {string} */
+        MaterializedDatasetModalAmplitudeResource: "relative_eigenvector" | "physical_driven_response";
+        /** @enum {string} */
+        MaterializedDatasetModalNormalizationKindResource: "l2" | "max_abs" | "energy" | "biorthogonal";
+        MaterializedDatasetModalNormalizationResource: {
+            kind: components["schemas"]["MaterializedDatasetModalNormalizationKindResource"];
+            scale: string;
+            unit: string;
+        };
+        /** @enum {string} */
+        MaterializedDatasetModalReconstructionResource: "physical_components" | "function_space_basis_expansion" | "local_tangent_basis_to_cartesian";
+        MaterializedDatasetModalSemanticsResource: {
+            amplitude_semantics: components["schemas"]["MaterializedDatasetModalAmplitudeResource"];
+            equilibrium_state: components["schemas"]["SolutionAcceptedStateIdResource"];
+            linearization_id: string;
+            modal_basis_id: string;
+            normalization: components["schemas"]["MaterializedDatasetModalNormalizationResource"];
+            phase_reference_id: string;
+            producer_version: string;
+            reconstruction: components["schemas"]["MaterializedDatasetModalReconstructionResource"];
+        };
+        /** @enum {string} */
+        MaterializedDatasetNormalizationResource: "none" | "unit_vector" | "max_abs" | "l2" | "modal" | "physical_amplitude";
+        MaterializedDatasetPinnedSourceResource: {
+            artifact_id: string;
+            member_id: string;
+            run_id: string;
+            run_spec_digest: string;
+            solution_revision: string;
+            solution_set_id: string;
+            tensor_object_ref: string;
+        };
+        /** @enum {string} */
+        MaterializedDatasetPlaneResource: "values" | "real" | "imaginary";
+        /** @enum {string} */
+        MaterializedDatasetProjectionMethodResource: "nearest" | "linear" | "conservative" | "l2";
+        /** @enum {string} */
+        MaterializedDatasetQuantityResource: "m" | "frozen_spins" | "H_ex" | "H_demag" | "H_ext" | "H_ant" | "H_drive" | "H_eff" | "torque" | "H_ani" | "H_dmi" | "H_rotated_dmi" | "H_mel" | "u" | "eps" | "sigma" | "H_ani_cubic" | "H_dmi_bulk" | "H_oe" | "H_therm" | "E_ex" | "E_demag" | "E_ext" | "E_drive" | "E_ani" | "E_dmi" | "E_rotated_dmi" | "E_el" | "E_kin_el" | "elastic_residual_norm" | "E_total" | "mode_amplitude" | "mode_real" | "mode_imag" | "mode_phase" | "eden_ex" | "eden_demag" | "demag_phi" | "eden_ext" | "eden_drive" | "eden_ani" | "eden_dmi" | "eden_rotated_dmi" | "eden_total" | "mat_ms" | "mat_aex" | "mat_alpha" | "mat_dind" | "mat_dbulk" | "dm_dt" | "V_electric" | "J_charge" | "spin_potential" | "spin_current_tensor" | "torque_stt" | "torque_sot";
+        /** @enum {string} */
+        MaterializedDatasetResolutionResource: "quantitative" | "preview_only";
+        MaterializedDatasetResource: {
+            artifact_id: string;
+            containing_solution_revision: string;
+            dataset: components["schemas"]["MaterializedDatasetIdentityResource"];
+            definition: components["schemas"]["MaterializedDatasetDefinitionResource"];
+            field: components["schemas"]["MaterializedDatasetFieldResource"];
+            field_id: string;
+            integrity: components["schemas"]["MaterializedDatasetIntegrityResource"];
+            item_id: string;
+            manifest_byte_length: string;
+            manifest_object_ref: string;
+            member_id: string;
+            owner_execution_status: components["schemas"]["SolutionExecutionStatusResource"];
+            owner_scientific_assessment: components["schemas"]["SolutionScientificAssessmentResource"];
+            owner_solution_revision: string;
+            project_id: string;
+            run_id: string;
+            sample_id: string;
+            schema_version: string;
+            solution_set_id: string;
+            source: components["schemas"]["MaterializedDatasetPinnedSourceResource"];
+        };
+        /** @enum {string} */
+        MaterializedDatasetSampleLocationResource: "node" | "cell" | "degree_of_freedom" | "integration_point" | "global";
+        MaterializedDatasetSelectionResource: {
+            selection_id: string;
+            selection_revision: string;
+        };
+        MaterializedDatasetStatusResource: {
+            actions: components["schemas"]["MaterializedDatasetUnavailableActionResource"][];
+            availability: components["schemas"]["MaterializedDatasetAvailabilityResource"];
+            reason?: string | null;
+        };
+        MaterializedDatasetTensorArtifactResource: {
+            accepted_state?: null | components["schemas"]["SolutionAcceptedStateIdResource"];
+            artifact_id: string;
+            byte_length: string;
+            object_ref: string;
+            schema_id: string;
+        };
+        MaterializedDatasetTransformResource: {
+            /** @enum {string} */
+            kind: "projection";
+            method: components["schemas"]["MaterializedDatasetProjectionMethodResource"];
+            producer_version: string;
+            target_space_id: string;
+        } | {
+            /** @enum {string} */
+            kind: "cut";
+            selection: components["schemas"]["MaterializedDatasetSelectionResource"];
+        } | {
+            component: string;
+            /** @enum {string} */
+            kind: "composition";
+        } | {
+            /** @enum {string} */
+            kind: "difference";
+            projection?: null | components["schemas"]["MaterializedDatasetFieldProjectionResource"];
+            rhs_dataset_id: string;
+        };
+        /** @enum {string} */
+        MaterializedDatasetUnavailableActionResource: "select_available_quantity" | "recompute_from_recorded_state" | "create_new_run" | "repair_or_restore_artifact";
+        /** @enum {string} */
+        MaterializedDatasetUnavailableDataResource: "fail" | "preserve_unavailable";
+        /** @enum {string} */
+        MaterializedDatasetValueRepresentationResource: "physical_field" | "modal_physical_components" | "modal_function_space_coefficients" | "modal_local_tangent_coefficients";
         MeshActiveBuildResource: {
             /** @description Current active build descriptor and progress metadata. */
             active_build?: Record<string, never> | null;
@@ -13734,6 +13977,62 @@ export interface operations {
             };
             /** @description Ownership mismatch */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    persistence_get_persistence_projects_project_id_runs_run_id_solution_sets_solution_set_id_revisions_revision_members_member_id_artifacts_artifact_id_materialized_dataset: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                run_id: string;
+                solution_set_id: string;
+                /** @description Canonical positive decimal u64 */
+                revision: string;
+                member_id: string;
+                artifact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Verified typed materialized dataset manifest */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MaterializedDatasetResource"];
+                };
+            };
+            /** @description Invalid identity or revision */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing run, solution revision, member, or artifact */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Ownership mismatch */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid or oversized manifest */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };

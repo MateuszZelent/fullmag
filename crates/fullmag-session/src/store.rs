@@ -18,6 +18,7 @@
 
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -383,6 +384,10 @@ impl SessionStore {
         limit: Option<std::num::NonZeroUsize>,
     ) -> Result<RunIntentCommitDisposition> {
         intent.validate()?;
+        let json = serde_json::to_vec_pretty(intent)?;
+        if json.len() as u64 > crate::archive_document::MAX_CONTROL_DOCUMENT_BYTES {
+            anyhow::bail!("run intent exceeds metadata budget");
+        }
         let _lease = self.write_transaction()?;
         if let Some(object_ref) = intent.definition_object_ref.as_deref() {
             self.cas
@@ -438,7 +443,6 @@ impl SessionStore {
             }
         }
         let path = create_parent(&self.root, &relative_path)?;
-        let json = serde_json::to_vec_pretty(intent)?;
         atomic_write(&path, &json)?;
         Ok(RunIntentCommitDisposition::Accepted)
     }
@@ -477,7 +481,13 @@ impl SessionStore {
         if !path.exists() {
             return Ok(None);
         }
-        let data = fs::read(&path)?;
+        let mut data = Vec::new();
+        fs::File::open(&path)?
+            .take(crate::archive_document::MAX_CONTROL_DOCUMENT_BYTES + 1)
+            .read_to_end(&mut data)?;
+        if data.len() as u64 > crate::archive_document::MAX_CONTROL_DOCUMENT_BYTES {
+            anyhow::bail!("run intent exceeds metadata budget");
+        }
         let intent: FmsRunIntent = serde_json::from_slice(&data)?;
         intent.validate()?;
         if intent.run_id != run_id {
@@ -4937,6 +4947,46 @@ mod tests {
             .insert("asset-1".into(), "d".repeat(64));
         assert!(store.commit_run_intent(&missing_asset).is_err());
         assert!(store.read_run_intent("run-7").unwrap().is_none());
+    }
+
+    #[test]
+    fn durable_run_intent_read_rejects_oversized_control_documents() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("store");
+        let store = SessionStore::open(&root).unwrap();
+        let run_dir = root.join("runs").join("run-budget");
+        std::fs::create_dir_all(&run_dir).unwrap();
+        std::fs::write(
+            run_dir.join("run_intent.json"),
+            vec![b' '; (crate::archive_document::MAX_CONTROL_DOCUMENT_BYTES + 1) as usize],
+        )
+        .unwrap();
+
+        let error = store.read_run_intent("run-budget").unwrap_err();
+        assert!(error.to_string().contains("metadata budget"));
+    }
+
+    #[test]
+    fn durable_run_intent_commit_rejects_oversized_serialized_control_documents() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("store");
+        let store = SessionStore::open(&root).unwrap();
+        let run_id = "run-budget-commit";
+        let intent = FmsRunIntent::new(
+            run_id,
+            "submit-budget-commit",
+            serde_json::json!({
+                "run_id": run_id,
+                "payload": "x".repeat(
+                    (crate::archive_document::MAX_CONTROL_DOCUMENT_BYTES + 1) as usize
+                )
+            }),
+        );
+
+        let error = store.commit_run_intent(&intent).unwrap_err();
+        assert!(error.to_string().contains("metadata budget"));
+        assert!(store.read_run_intent(run_id).unwrap().is_none());
+        assert!(!root.join("runs").join(run_id).join("run_intent.json").exists());
     }
 
     #[test]

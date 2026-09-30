@@ -188,7 +188,7 @@ pub struct SolutionCoverageSummaryResource {
     pub segment_count: u64,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct SolutionAcceptedStateIdResource {
     pub run_id: String,
     pub stage_id: Option<String>,

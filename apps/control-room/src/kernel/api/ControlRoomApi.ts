@@ -186,6 +186,7 @@ import {
   PERSISTENCE_IMPORTS_PATH,
   PERSISTENCE_PROJECT_OPEN_PATH,
   PERSISTENCE_PROJECTS_PATH,
+  PROJECT_MATERIALIZED_DATASET_PATH,
   PROJECT_SOLUTION_SET_ARTIFACTS_PATH,
   PROJECT_SOLUTION_SET_MEMBERS_PATH,
   PROJECT_SOLUTION_SET_PATH,
@@ -465,6 +466,7 @@ import type {
   SolutionSetMemberPageQuery,
   SolutionSetMemberPageResource,
   SolutionSetResource,
+  MaterializedDatasetResource,
   SolutionSetRevision,
   ObservationFrameListQuery,
   ObservationFrameListResource,
@@ -830,6 +832,14 @@ export function assertSolutionSetRevision(
     throw new Error("SolutionSet revision must be a positive canonical u64 string.");
   }
   return revision;
+}
+
+export function assertMaterializedDatasetPathId(label: string, value: string): string {
+  assertSolutionSetMemberId(label, value);
+  if (utf8ByteLength(value) > 1024) {
+    throw new Error(`Invalid ${label}.`);
+  }
+  return value;
 }
 
 function normalizeSolutionSetPageQuery<
@@ -2850,6 +2860,29 @@ export class ControlRoomApi {
               solution_set_id: assertSolutionSetLogicalId(solutionSetId),
             },
             query: normalizeSolutionSetPageQuery(query),
+          },
+        ),
+      materializedDataset: (
+        projectId: string,
+        runId: string,
+        solutionSetId: string,
+        revision: SolutionSetRevision,
+        memberId: string,
+        artifactId: string,
+        options?: RequestOptions,
+      ) =>
+        this.requestJson<MaterializedDatasetResource>(
+          PROJECT_MATERIALIZED_DATASET_PATH,
+          options,
+          {
+            path: {
+              project_id: assertSolutionSetProjectId(projectId),
+              run_id: assertSolutionSetRunId(runId),
+              solution_set_id: assertSolutionSetLogicalId(solutionSetId),
+              revision: assertSolutionSetRevision(revision),
+              member_id: assertMaterializedDatasetPathId("member id", memberId),
+              artifact_id: assertMaterializedDatasetPathId("artifact id", artifactId),
+            },
           },
         ),
       create: (request: ProjectCreateRequest, options?: RequestOptions) =>

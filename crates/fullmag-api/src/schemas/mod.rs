@@ -13,6 +13,7 @@ pub mod frozen_spins;
 pub mod hysteresis;
 pub mod logs;
 pub mod mesh;
+pub mod materialized_dataset;
 pub mod mode_composition;
 pub mod observations;
 pub mod planar_fields;

@@ -1,5 +1,9 @@
 //! Read-only project-owned historical results, independent of active runtime.
-use crate::{error::ApiError, schemas::solutions::*, types::AppState};
+use crate::{
+    error::ApiError,
+    schemas::{materialized_dataset::MaterializedDatasetResource, solutions::*},
+    types::AppState,
+};
 use axum::{
     extract::{Path, Query, State},
     Json,
@@ -25,7 +29,7 @@ pub async fn get_solution_revision(
         run_id,
         solution_id,
         revision,
-        move |solution| {
+        move |_store, solution| {
             Ok(SolutionSetResource {
                 schema_version: SOLUTION_RESOURCE_SCHEMA.to_string(),
                 project_id,
@@ -65,7 +69,7 @@ pub async fn get_solution_members(
         run_id,
         solution_id,
         revision,
-        move |solution| {
+        move |_store, solution| {
             let mut members = solution.members.iter().collect::<Vec<_>>();
             members.sort_unstable_by(|left, right| left.member_id.cmp(&right.member_id));
             let start = page_start(&members, query.after_member_id.as_deref(), |member| {
@@ -115,7 +119,7 @@ pub async fn get_solution_artifacts(
         run_id,
         solution_id,
         revision,
-        move |solution| {
+        move |_store, solution| {
             let member = solution
                 .members
                 .iter()
@@ -189,13 +193,57 @@ pub async fn get_solution_artifacts(
     )
     .await
 }
+
+#[utoipa::path(get,
+    path = "/v2/persistence/projects/{project_id}/runs/{run_id}/solution-sets/{solution_set_id}/revisions/{revision}/members/{member_id}/artifacts/{artifact_id}/materialized-dataset",
+    params(("project_id" = String, Path), ("run_id" = String, Path), ("solution_set_id" = String, Path), ("revision" = String, Path, description = "Canonical positive decimal u64"), ("member_id" = String, Path), ("artifact_id" = String, Path)),
+    responses((status = 200, body = MaterializedDatasetResource, description = "Verified typed materialized dataset manifest"), (status = 400, description = "Invalid identity or revision"), (status = 404, description = "Missing run, solution revision, member, or artifact"), (status = 409, description = "Ownership mismatch"), (status = 500, description = "Invalid or oversized manifest")), tag = "persistence")]
+pub async fn get_materialized_dataset(
+    State(state): State<Arc<AppState>>,
+    Path((project_id, run_id, solution_id, revision, member_id, artifact_id)): Path<(
+        String,
+        String,
+        String,
+        String,
+        String,
+        String,
+    )>,
+) -> Result<Json<MaterializedDatasetResource>, ApiError> {
+    validate_lookup_id(&member_id, "member")?;
+    validate_lookup_id(&artifact_id, "artifact")?;
+    let response_run_id = run_id.clone();
+    with_revision(
+        state,
+        project_id.clone(),
+        run_id,
+        solution_id,
+        revision,
+        move |store, solution| {
+            let resolved =
+                fullmag_session::materialized_dataset::read_materialized_dataset_artifact(
+                    store,
+                    &solution,
+                    &member_id,
+                    &artifact_id,
+                )
+                .map_err(|error| ApiError::internal(error.to_string()))?
+                .ok_or_else(|| ApiError::not_found("materialized dataset artifact is missing"))?;
+            MaterializedDatasetResource::from_resolved(project_id, response_run_id, &resolved)
+                .map_err(|error| ApiError::internal(error.to_string()))
+        },
+    )
+    .await
+}
+
 async fn with_revision<T: Serialize + Send + 'static>(
     state: Arc<AppState>,
     project: String,
     run: String,
     solution_id: String,
     revision: String,
-    build: impl FnOnce(SolutionSet) -> Result<T, ApiError> + Send + 'static,
+    build: impl FnOnce(&fullmag_session::SessionStore, SolutionSet) -> Result<T, ApiError>
+        + Send
+        + 'static,
 ) -> Result<Json<T>, ApiError> {
     let project =
         ProjectId::parse(project).map_err(|error| ApiError::bad_request(error.to_string()))?;
@@ -241,7 +289,7 @@ async fn with_revision<T: Serialize + Send + 'static>(
             .map_err(|error| ApiError::internal(error.to_string()))?
             .ok_or_else(|| ApiError::not_found("solution revision is missing"))?;
         validate_solution_owner(&solution, run.as_str(), &intent.payload_sha256)?;
-        bounded_json(build(solution)?)
+        bounded_json(build(&store, solution)?)
     })
     .await
     .map_err(|error| ApiError::internal(format!("solution read task failed: {error}")))?
@@ -264,8 +312,12 @@ fn validate_solution_owner(
 }
 
 fn validate_solution_id(value: &str) -> Result<(), ApiError> {
+    validate_lookup_id(value, "solution-set")
+}
+
+fn validate_lookup_id(value: &str, kind: &str) -> Result<(), ApiError> {
     if value.trim().is_empty() || value.len() > 1024 || value.chars().any(char::is_control) {
-        return Err(ApiError::bad_request("invalid solution-set identity"));
+        return Err(ApiError::bad_request(format!("invalid {kind} identity")));
     }
     Ok(())
 }
@@ -352,6 +404,22 @@ mod tests {
         assert!(validate_solution_id(&"x".repeat(1025)).is_err());
         assert!(validate_solution_id(&"ą".repeat(513)).is_err());
         assert!(validate_solution_id("solution:opaque/with\\separator").is_ok());
+    }
+
+    #[test]
+    fn materialized_dataset_lookup_ids_are_fenced_before_storage_access() {
+        for value in ["", " ", "member:\n", "artifact:\u{0085}"] {
+            assert_eq!(
+                validate_lookup_id(value, "member").unwrap_err().status,
+                axum::http::StatusCode::BAD_REQUEST
+            );
+            assert_eq!(
+                validate_lookup_id(value, "artifact").unwrap_err().status,
+                axum::http::StatusCode::BAD_REQUEST
+            );
+        }
+        assert!(validate_lookup_id("member:opaque/with\\separator", "member").is_ok());
+        assert!(validate_lookup_id(&"x".repeat(1025), "artifact").is_err());
     }
     #[test]
     fn oversized_metadata_is_an_error_not_a_truncated_success() {

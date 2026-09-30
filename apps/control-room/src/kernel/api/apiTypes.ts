@@ -849,6 +849,8 @@ export type SolutionSetMemberPageQuery =
 export type SolutionSetArtifactPageQuery =
   components["schemas"]["SolutionSetArtifactPageQuery"];
 export type SolutionSetRevision = Extract<SolutionSetResource["revision"], string>;
+export type MaterializedDatasetResource =
+  components["schemas"]["MaterializedDatasetResource"];
 export type ObservationFrameListQuery =
   components["schemas"]["ObservationFrameListQuery"];
 export type ObservationFrameListResource =

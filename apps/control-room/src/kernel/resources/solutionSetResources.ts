@@ -3,6 +3,7 @@
 import { useCallback, useMemo } from "react";
 
 import {
+  assertMaterializedDatasetPathId,
   assertSolutionSetLogicalId,
   assertSolutionSetMemberId,
   assertSolutionSetProjectId,
@@ -10,6 +11,7 @@ import {
   assertSolutionSetRunId,
 } from "../api/ControlRoomApi";
 import type {
+  MaterializedDatasetResource,
   SolutionSetArtifactPageQuery,
   SolutionSetArtifactPageResource,
   SolutionSetMemberPageQuery,
@@ -108,6 +110,137 @@ export function solutionSetArtifactsResourceKey(
     query.after_artifact_id,
     query.limit,
   )}`;
+}
+
+export function materializedDatasetResourceKey(
+  identity: SolutionSetRequestIdentity & { memberId: string; artifactId: string },
+): string {
+  return `${solutionSetResourceKey(
+    identity.projectId,
+    identity.runId,
+    identity.solutionSetId,
+    identity.revision,
+  )}:member:${encodeURIComponent(identity.memberId)}:artifact:${encodeURIComponent(
+    identity.artifactId,
+  )}:materialized-dataset`;
+}
+
+export function useMaterializedDatasetResource(
+  projectId: string | null | undefined,
+  runId: string | null | undefined,
+  solutionSetId: string | null | undefined,
+  revision: SolutionSetRevision | null | undefined,
+  memberId: string | null | undefined,
+  artifactId: string | null | undefined,
+  options: SolutionSetResourceOptions = {},
+): ResourceResult<MaterializedDatasetResource | null> {
+  const { api } = useKernel();
+  const identity = useMemo(() => {
+    const solution = resolveIdentity(projectId, runId, solutionSetId, revision);
+    const member = resolveMaterializedDatasetPathId(memberId);
+    const artifact = resolveMaterializedDatasetPathId(artifactId);
+    return solution && member && artifact
+      ? { ...solution, memberId: member, artifactId: artifact }
+      : null;
+  }, [projectId, runId, solutionSetId, revision, memberId, artifactId]);
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) => {
+      if (!identity) return Promise.resolve(null);
+      return api.persistence.projects
+        .materializedDataset(
+          identity.projectId,
+          identity.runId,
+          identity.solutionSetId,
+          identity.revision,
+          identity.memberId,
+          identity.artifactId,
+          { signal },
+        )
+        .then((data) => validateMaterializedDatasetEnvelope(data, identity));
+    },
+    [api, identity],
+  );
+  return useResource<MaterializedDatasetResource | null>({
+    abortStaleInflight: true,
+    enabled: identity !== null && options.enabled !== false,
+    load,
+    resolveRevision: (data) => data?.manifest_object_ref ?? null,
+    resourceKey: identity ? materializedDatasetResourceKey(identity) : EMPTY_RESOURCE_KEY,
+  });
+}
+
+export function validateMaterializedDatasetEnvelope(
+  data: MaterializedDatasetResource,
+  expected: SolutionSetRequestIdentity & { memberId: string; artifactId: string },
+): MaterializedDatasetResource {
+  if (
+    data.schema_version !== "fullmag.analysis.materialized_dataset.v1" ||
+    data.project_id !== expected.projectId ||
+    data.run_id !== expected.runId ||
+    data.solution_set_id !== expected.solutionSetId ||
+    data.containing_solution_revision !== expected.revision ||
+    data.member_id !== expected.memberId ||
+    data.artifact_id !== expected.artifactId ||
+    data.integrity !== "verified" ||
+    !/^[a-f0-9]{64}$/.test(data.manifest_object_ref) ||
+    data.artifact_id !== `materialized-dataset-${data.manifest_object_ref}`
+  ) {
+    throw new Error("Dataset response identity does not match the pinned request.");
+  }
+  const ownerRevision = assertSolutionSetRevision(data.owner_solution_revision);
+  const containingRevision = assertSolutionSetRevision(data.containing_solution_revision);
+  const manifestLength = assertSolutionSetRevision(data.manifest_byte_length);
+  if (
+    BigInt(ownerRevision) > BigInt(containingRevision) ||
+    BigInt(manifestLength) > BigInt(4 * 1024 * 1024)
+  ) {
+    throw new Error("Dataset response owner or manifest budget is invalid.");
+  }
+  const source = data.source;
+  const tensor = data.field.tensor_artifact;
+  const sameSource = (candidate: MaterializedDatasetResource["source"]) =>
+    candidate.run_id === source.run_id &&
+    candidate.solution_set_id === source.solution_set_id &&
+    candidate.solution_revision === source.solution_revision &&
+    candidate.member_id === source.member_id &&
+    candidate.artifact_id === source.artifact_id &&
+    candidate.tensor_object_ref === source.tensor_object_ref &&
+    candidate.run_spec_digest === source.run_spec_digest;
+  if (
+    source.run_id !== expected.runId ||
+    source.solution_set_id !== expected.solutionSetId ||
+    source.member_id !== expected.memberId ||
+    source.solution_revision !== ownerRevision ||
+    !SOLUTION_SET_MANIFEST_DIGEST_PATTERN.test(source.run_spec_digest) ||
+    !/^[a-f0-9]{64}$/.test(source.tensor_object_ref) ||
+    source.tensor_object_ref !== tensor.object_ref ||
+    source.artifact_id !== tensor.artifact_id ||
+    data.field.tensor_schema_id !== "fullmag.tensor.v1" ||
+    tensor.schema_id !== data.field.tensor_schema_id ||
+    tensor.byte_length !== data.field.tensor_byte_length ||
+    data.field.sample_id !== data.sample_id ||
+    data.field.item_id !== data.item_id ||
+    data.field.field_id !== data.field_id ||
+    !sameSource(data.dataset.source) ||
+    !sameSource(data.definition.source) ||
+    data.dataset.schema_version !== "1.0.0" ||
+    data.definition.schema_version !== "1.0.0" ||
+    data.dataset.definition_id !== data.definition.definition_id ||
+    data.dataset.definition_revision !== data.definition.revision ||
+    data.dataset.revision !== data.definition.revision ||
+    data.dataset.status.availability !== "ready" ||
+    data.field.plane !== "values" ||
+    data.field.descriptor.complex_encoding !== "real" ||
+    data.dataset.dataset_id.trim().length === 0 ||
+    data.definition.definition_id.trim().length === 0 ||
+    tensor.artifact_id.trim().length === 0
+  ) {
+    throw new Error("Dataset response field source differs from its pinned owner.");
+  }
+  assertSolutionSetRevision(data.dataset.revision);
+  assertSolutionSetRevision(data.definition.revision);
+  assertSolutionSetRevision(tensor.byte_length);
+  return data;
 }
 
 export function useSolutionSetResource(
@@ -327,6 +460,15 @@ function resolvePathId(value: string | null | undefined): string | null {
   if (value === null || value === undefined) return null;
   try {
     return assertSolutionSetMemberId("member id", value);
+  } catch {
+    return null;
+  }
+}
+
+function resolveMaterializedDatasetPathId(value: string | null | undefined): string | null {
+  if (value === null || value === undefined) return null;
+  try {
+    return assertMaterializedDatasetPathId("dataset path id", value);
   } catch {
     return null;
   }
