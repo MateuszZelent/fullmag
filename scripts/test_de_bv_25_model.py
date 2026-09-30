@@ -62,7 +62,7 @@ def test_six_point_path_preserves_equilibrium_and_direction(monkeypatch,sampling
     assert study["equilibrium"]=={"kind":"relaxed_initial_state"}
 
 @pytest.mark.parametrize("sampling",["k25","bv-k25"])
-@pytest.mark.parametrize("level,hmax",[("L0",10e-9),("L1",7.5e-9),("L2",5e-9)])
+@pytest.mark.parametrize("level,hmax",[("L0",10e-9),("L1",7.5e-9),("L2",5e-9),("L3",3.75e-9)])
 def test_mesh_convergence_preserves_physics(monkeypatch,sampling,level,hmax):
     monkeypatch.setenv("FULLMAG_DE_SMOKE_SAMPLING",sampling)
     monkeypatch.setenv("FULLMAG_DE_SMOKE_MESH_LEVEL",level)
