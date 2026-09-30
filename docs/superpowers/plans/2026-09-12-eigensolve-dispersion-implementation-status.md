@@ -1,5 +1,28 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
+## Najnowszy checkpoint — 2026-09-30: S06, payload trackingu i faza Blocha (WIP)
+
+Ta sekcja ma pierwszeństwo przed starszymi checkpointami poniżej.
+
+- W roboczych źródłach adapter trackingu nie usuwa już wadliwych wierszy
+  real/imag ani nie zastępuje brakujących komponentów zerami. Wiąże pełną
+  długość pól z siatką oraz raw ID/k z punktem ścieżki; sprawdza selekcję węzłów.
+- Dla Floqueta odfazowuje przestrzenny mod do nodalnego envelope przez
+  exp(+i k·r). Publikowane pola i temporalny phasor pozostają oddzielne.
+- Sprawdzono struktury i tożsamości 19 historycznych modów (1980 węzłów).
+  Legacy JSON i bound binary po odfazowaniu mają defekt względny 0.0.
+  To kontrola rzeczywistych danych wejściowych, nie wykonanie zmienionego Rust.
+- Rustfmt parse/check trzech plików: exit 0. Osiem regresji Rust dodano,
+  ale ich nie kompilowano ani nie uruchamiano. Źródła pozostają WIP,
+  niezacommitowane; wymagają builda i regresji/runtime przed zaliczeniem.
+- S06 nadal wymaga consistent P1 mass zamiast diagonalnych wag, pełnej
+  mesh/equilibrium identity, kontroli podprzestrzeni/crossingów i runu multi-k.
+- Stan liczb: 19 punktów; żadnych nowych. Cały S00–S12 pozostaje aktywny.
+  Kolejny runtime blokują wcześniej odnotowane miejsce oraz runtime-only;
+  decyzje operatora i zakaz kompilacji unit tests pozostają aktualne.
+
+Dowody: [S06 envelope preflight](../../audits/2026-09-30-s06-tracking-envelope-preflight.md).
+
 ## Najnowszy checkpoint — 2026-09-30: gęsta ścieżka DE/BV i kontrola certyfikatów
 
 Ta sekcja ma pierwszeństwo przed starszymi checkpointami poniżej.
