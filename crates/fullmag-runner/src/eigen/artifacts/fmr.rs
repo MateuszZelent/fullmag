@@ -1308,6 +1308,7 @@ fn write_frequency_domain_response_manifest(
         .unwrap_or_else(|_| "unix:0".to_string());
     let response_field_resources = frequency_point_artifacts
         .iter()
+        .filter(|_| identity.is_none())
         .enumerate()
         .map(|(index, _)| {
             format!("/v2/sessions/current/analysis/frequency-domain/response/field/{index}/meta")
@@ -1328,7 +1329,7 @@ fn write_frequency_domain_response_manifest(
             "frequency-response",
             "runtime:not_provided",
         ));
-    let manifest = FrequencyDomainArtifactManifest {
+    let mut manifest = FrequencyDomainArtifactManifest {
         schema_version: "frequency_domain_manifest.v1",
         analysis_family: "magnetic_frequency_domain",
         study_product: "driven_response",
@@ -1494,6 +1495,11 @@ fn write_frequency_domain_response_manifest(
         linearization_state_sha256: None,
         periodic_mesh_certificate_sha256: None,
     };
+    if identity.is_some() {
+        // Durable manifests retain artifact-relative paths. Transport routes
+        // belong to API projection, not to persisted execution ownership.
+        manifest.resources = FrequencyDomainResourceIndex::default();
+    }
     fs::write(
         manifest_dir.join("manifest.v1.json"),
         serde_json::to_vec_pretty(&manifest).unwrap(),

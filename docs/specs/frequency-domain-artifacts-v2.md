@@ -27,6 +27,22 @@ artifacts/response/field_payloads.zarr/
 artifacts/mesh/periodic_pairs.v1.json
 ```
 
+### Trwały manifest FMR a transport
+
+Bezpośredni writer FMR z jawnym `FrequencyDomainArtifactIdentity` zapisuje
+dokładnego właściciela oraz względne ścieżki w `artifacts`. Nie utrwala
+odnośników HTTP do aktywnej sesji: opcjonalne klucze transportowe w `resources`
+mają wartość `null`, a listy odnośników transportowych są puste. Kształt
+`frequency_domain_manifest.v1` pozostaje niezmieniony. Dostępność sweepu
+wynika z `artifacts.response_sweep_v1_path` lub `response_sweep_v2_path`,
+a zapisane punkty pozostają w `artifacts.frequency_point_paths`.
+
+Adapter API jest miejscem projekcji transportu po rozwiązaniu właściciela;
+usunięcie odnośników nie jest dowodem gotowej obsługi historycznych runów.
+Stare wejścia writera bez identity zachowują odnośniki legacy i nie stanowią
+dowodu nowej publikacji. Natywny writer FEM i writer modal-eigen wymagają
+osobnej migracji swoich odnośników.
+
 ## A1S — typed server-side analysis artifacts (schema freeze)
 
 Poniższy kontrakt jest właścicielem serwerowych danych używanych przez późniejszą

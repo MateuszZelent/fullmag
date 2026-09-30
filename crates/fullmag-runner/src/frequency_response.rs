@@ -6103,6 +6103,21 @@ mod tests {
             assert_eq!(manifest["run_id"], identity.run_id);
             assert_eq!(manifest["stage_id"], identity.stage_id);
             assert_eq!(manifest["runtime_id"], identity.runtime_id);
+            assert!(
+                !manifest.to_string().contains("/v2/sessions/current"),
+                "exact artifact ownership must not persist a mutable session route"
+            );
+            assert_eq!(
+                manifest["artifacts"]["response_sweep_v1_path"],
+                "response/magnetic_response_sweep.v1.json"
+            );
+            assert_eq!(
+                manifest["artifacts"]["frequency_point_paths"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                if stop { 1 } else { 2 }
+            );
             std::fs::remove_dir_all(output_dir).unwrap();
         }
     }

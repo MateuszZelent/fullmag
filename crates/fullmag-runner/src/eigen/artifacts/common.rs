@@ -289,7 +289,7 @@ pub(super) struct FrequencyDomainArtifactIndex {
     pub(super) frequency_point_paths: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub(super) struct FrequencyDomainResourceIndex {
     pub(super) spectrum_resource_key: Option<&'static str>,
     pub(super) branches_resource_key: Option<&'static str>,

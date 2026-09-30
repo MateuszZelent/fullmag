@@ -85,6 +85,10 @@ bounded data plane oraz jeden frontend analityczny oparty o pinned source.
     — trzy wejścia dla jawnego `dense_reference`, walidacja przed zapisem
     i odmowa nieobsługiwanej tożsamości writera natywnego; managed build PASS,
     testy NOT RUN, produkcyjni callerzy i runtime pozostają otwarte.
+26. [Trwały manifest FMR bez odnośników current](26-fmr-durable-manifest-without-current-routes.md)
+    — dokładny writer zachowuje ścieżki artefaktów i pomija zależne od
+    aktywnej sesji odnośniki transportowe; etapy buildu PASS, finalizacja
+    kolejki trwa, testy NOT RUN.
 
 Pozostałe resource keys w `runner/eigen/artifacts`, przeprowadzenie identity z
 głównego runner context, FEM artifact writers i migracja legacy copy-on-write,
