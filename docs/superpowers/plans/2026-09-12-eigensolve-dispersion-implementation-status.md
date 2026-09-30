@@ -1,5 +1,12 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
+## S12 — zgodność odbioru siedmiu przypadków kontrolera
+
+- Kolektor obsługuje rzeczywisty raport kontrolera Γ+DE/BV, nie tylko wcześniejszy format sześciu przypadków. Wymaga pełnej serii exit0, tożsamości job/digest/config/model i wyjść w tym samym batch; częściowy raport pozostaje błędem.
+- Γ ma osobny odbiór receiptów, k0 i pełnych pól/potencjałów; wynik wiąże hash konfiguracji oraz danych kontrolnych. RED brak adaptera; GREEN 24 lekkie testy Python PASS. Audyt: docs/audits/2026-09-30-seven-case-controller-collection.md.
+- #185 i kontrolera 3576 nie restartowano. Kapsuła verify_source PASS, 0 .pyc; job running, bez dowodu kompilacji w chwili odczytu. Kolektor po wynikach uruchamiany z aktualnego worktree, runtime nadal capsule-bound.
+- Następnie terminalne rzeczywiste siedem wrapperów → kolektor → N32/P00 i zbieżność. Pełny S00–S12 nadal otwarty; fixture nie jest dowodem nowych częstotliwości.
+
 ## #185 running po odtworzeniu nightly
 
 - Job #185 / a5aaa693ed3f4f3db64bf7823445097f, fem-cpu-slepc-runtime-v2: kontroler 3576 potwierdził running. Source digest 2a08f6022a6c5f32e68bbc46e5cc39534aa6f3f28ff501120b74ccb31888886c; kapsuła runs/eigensolve-dispersion-plan-20260-c5dfad6d7f548079/1e65a3d16374417193d39f07597bba71/source.

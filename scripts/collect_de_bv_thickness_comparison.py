@@ -5,10 +5,11 @@ import csv
 import hashlib
 import json
 import math
+import re
 from pathlib import Path
 import numpy as np
 from compare_de_bv_mode_profiles import load_record, sha256
-from run_de_100nm_pilot import validate_thickness_layers_metadata
+from run_de_100nm_pilot import validate_thickness_layers_metadata, validate_smoke_potential_fields
 from validate_de_smoke_rows import validate_rows
 from verify_fem_frequency_domain_eigen_artifacts import kalinikos_slab_n0_frequency_hz
 
@@ -111,12 +112,71 @@ def collect_batch(records):
             "records":records}
 
 
+def normalize_controller_report(path, control):
+    """Adapt the pinned seven-case controller without treating partial runs as terminal."""
+    if "results" not in control:
+        return control
+    root = Path(path).resolve().parent
+    config = read_json(root / "controller-config.json")
+    for key, length in (("job_id", 32), ("source_digest", 64)):
+        value = control.get(key)
+        if (not isinstance(value, str) or re.fullmatch(r"[a-f0-9]{%d}" % length, value) is None
+                or value != config.get(key)):
+            raise ValueError("controller/config identity mismatch: " + key)
+    model_ref = config.get("model_ref")
+    if not isinstance(model_ref, str) or re.fullmatch(r"[a-f0-9]{40}", model_ref) is None:
+        raise ValueError("controller model ref must be a full commit")
+    expected = ["gamma-t3", "de-t3", "bv-t3", "de-t6", "bv-t6", "de-t9", "bv-t9"]
+    results = control.get("results")
+    if not isinstance(results, list) or len(results) != len(expected):
+        raise ValueError("seven-case controller is incomplete")
+    cases = []
+    for row, name in zip(results, expected):
+        if (not isinstance(row, dict) or row.get("case") != name
+                or type(row.get("wrapper_exit")) is not int or row["wrapper_exit"] != 0):
+            raise ValueError("controller has an unsuccessful or duplicate case")
+        output = row.get("output")
+        if (not isinstance(output, str) or not Path(output).is_absolute()
+                or Path(output).resolve() != root / name):
+            raise ValueError("controller case output is outside its declared batch")
+        cases.append({"output_dir": output, "wrapper_exit_code": 0,
+                      "layers": int(name[-1])})
+    return {"status": "wrappers_terminal_requires_scientific_review",
+            "job_id": control["job_id"], "expected_source_digest": control["source_digest"],
+            "model_ref": model_ref, "cases": cases[1:], "gamma_control": cases[0],
+            "controller_config_sha256": sha256(root / "controller-config.json")}
+
+
+def validate_gamma_control(run, job, model_source):
+    """Bind Gamma to the same successful managed build and versioned model."""
+    run = Path(run)
+    request, result = read_json(run / "run-request.json"), read_json(run / "run-result.json")
+    if (request.get("schema") != "fullmag.de-smoke.request.v1"
+            or result.get("schema") != "fullmag.de-smoke.result.v1"
+            or result.get("pilot") != "de-smoke-k0" or result.get("status") != "completed_unqualified"
+            or type(result.get("return_code")) is not int or result["return_code"] != 0
+            or request.get("job") != job or result.get("job") != job
+            or request.get("model_source") != model_source):
+        raise ValueError("Gamma control receipt or source identity mismatch")
+    for key in ("source", "model_source", "model_sha256"):
+        if not request.get(key) or request[key] != result.get(key):
+            raise ValueError("Gamma receipt identity mismatch: " + key)
+    case = run / "de-smoke-k0"
+    rows = validate_rows(case / "eigen/dispersion.csv", "k0",
+                         case / "eigen/diagnostics/solver.v1.json", case / "metadata.json")
+    fields = validate_smoke_potential_fields(case, rows["sample_count"])
+    return {"row_preflight": rows, "potential_reconstruction": fields,
+            "artifact_sha256": {name: sha256(run / name) for name in (
+                "run-request.json", "run-result.json", "de-smoke-k0/metadata.json",
+                "de-smoke-k0/eigen/dispersion.csv", "de-smoke-k0/eigen/diagnostics/solver.v1.json")}}
+
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument("control",type=Path)
     parser.add_argument("output",type=Path)
     args=parser.parse_args()
-    control=read_json(args.control)
+    control=normalize_controller_report(args.control, read_json(args.control))
     if control.get("status")!="wrappers_terminal_requires_scientific_review":
         raise ValueError("batch is not terminal")
     cases=control["cases"]
@@ -130,6 +190,11 @@ def main():
         raise ValueError("batch model identity mismatch")
     output=collect_batch(records)
     output.update(control_sha256=sha256(args.control),producer_sha256=sha256(Path(__file__)))
+    if "controller_config_sha256" in control:
+        output["controller_config_sha256"] = control["controller_config_sha256"]
+    if "gamma_control" in control:
+        output["gamma_control"] = {**control["gamma_control"], **validate_gamma_control(
+            control["gamma_control"]["output_dir"], job, records[0]["model_source"])}
     with args.output.open("x",encoding="utf-8") as stream:
         json.dump(output,stream,indent=2);stream.write("\n")
     print(json.dumps({"records":len(records),"qualification":output["qualification"]}))

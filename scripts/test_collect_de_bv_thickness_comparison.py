@@ -84,3 +84,45 @@ def test_invalid_full_residual_is_rejected(tmp_path,residual):
     mode.write_text(json.dumps({"frequency_hz":10e9,"block_residuals":{"eps_full":residual}}))
     with patch("collect_de_bv_thickness_comparison.validate_rows"), patch("collect_de_bv_thickness_comparison.validate_thickness_layers_metadata"):
         with pytest.raises(ValueError,match="full residual"):collect_record(tmp_path,3,job)
+
+
+def test_current_controller_report_is_normalized_without_restarting_runs(tmp_path):
+    from collect_de_bv_thickness_comparison import normalize_controller_report
+    job_id, digest, model_ref = "a"*32, "b"*64, "c"*40
+    config={"job_id":job_id,"source_digest":digest,"model_ref":model_ref}
+    (tmp_path/"controller-config.json").write_text(json.dumps(config))
+    names=["gamma-t3","de-t3","bv-t3","de-t6","bv-t6","de-t9","bv-t9"]
+    report={"qualification":"NOT VERIFIED","job_id":job_id,"source_digest":digest,
+            "results":[{"case":name,"wrapper_exit":0,"output":str(tmp_path/name)} for name in names]}
+    normalized=normalize_controller_report(tmp_path/"controller-results.json",report)
+    assert normalized["status"]=="wrappers_terminal_requires_scientific_review"
+    assert len(normalized["cases"])==6
+    assert normalized["model_ref"]==model_ref
+    assert normalized["gamma_control"]["output_dir"]==str(tmp_path/"gamma-t3")
+    for mutation in ("incomplete","failure","identity","path","duplicate"):
+        from copy import deepcopy
+        bad=deepcopy(report)
+        if mutation=="incomplete":bad["results"].pop()
+        if mutation=="failure":bad["results"][0]["wrapper_exit"]=1
+        if mutation=="identity":bad["source_digest"]="d"*64
+        if mutation=="path":bad["results"][-1]["output"]=str(tmp_path.parent/"foreign")
+        if mutation=="duplicate":bad["results"][-1]["case"]="de-t9"
+        with pytest.raises(ValueError):normalize_controller_report(tmp_path/"controller-results.json",bad)
+
+
+@pytest.mark.parametrize("mutation",["failed","foreign_job","model","source","hash"])
+def test_gamma_control_rejects_bad_receipt_before_reading_fields(tmp_path,mutation):
+    from collect_de_bv_thickness_comparison import validate_gamma_control
+    job,result=fixture_run(tmp_path)
+    result["pilot"]="de-smoke-k0"
+    model_source=result["model_source"]
+    if mutation=="failed":result["status"]="failed"
+    if mutation=="foreign_job":result["job"]={**job,"job_id":"d"*32}
+    if mutation=="model":result["model_source"]={"commit":"d"*40}
+    if mutation=="source":result["source"]={"snapshot":"a"*64}
+    if mutation=="hash":result["model_sha256"]="a"*64
+    (tmp_path/"run-result.json").write_text(json.dumps(result))
+    with patch("collect_de_bv_thickness_comparison.validate_smoke_potential_fields") as fields:
+        with pytest.raises(ValueError,match="Gamma"):
+            validate_gamma_control(tmp_path,job,model_source)
+        fields.assert_not_called()
