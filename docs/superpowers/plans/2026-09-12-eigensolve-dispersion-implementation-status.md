@@ -1,5 +1,15 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
+## #183 running — poprawiony kontroler i integralność kapsuły
+
+- Job #183: 57615a161f6d4db5bd475a3499b6c5ef, runtime-v2, running. Nowa kapsuła c0bc3613dc2f41d4a6ab24be7ca09bff/source.
+- Source digest: 0eb811dfd3ce7672348ef882d6718390c038ce1923b6aa44b68ff635239988b7; native snapshot SHA-256: b333c864fd02ee3a72b72098988f864ce21bca082125bbd1d8490767ec803585.
+- Snapshot bazuje na 60021c3b3daa7dda7fc9704f18ebafb00b6c611f oraz WIP z jawnym tracking_mass.rs. Nowe kontrole modu i rzeczywistej siatki są w kapsule #183.
+- verify_source pełnej kapsuły PASS, 0 .pyc; kontroler 42767 żywy, build_state=running. Obserwuje przez klienta worktree z -B, zachowując niezmienne źródła.
+- Seria po buildzie: Γ L2/t3; DE/BV k25 L2/t3/t6/t9. Pierwszy błąd zatrzyma serię. #182 terminalny blocked i zachowany; nie jest aktywnym buildem.
+- 37 testów pól/pilota i 4 kontrolera PASS; 9/9 historycznych artefaktów #173 zgodnych również z przeliczoną topologią. Nie oznacza Poissona, zbieżności ani nowych częstotliwości.
+- Następny krok: receipt #183 → seria → residual/provenance/topologia/demag → porównanie oracle i zbieżność. Pełny S00–S12 pozostaje otwarty.
+
 ## S12 — naprawa obserwatora niezmiennej kapsuły
 
 - #182 terminalny blocked przed buildem; zachowano kapsułę. Przyczyna: 8 wygenerowanych .pyc, bez zmian/braków wersjonowanych plików.
