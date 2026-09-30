@@ -2,6 +2,7 @@
 
 ## #186 — nowy snapshot z transportem pola statycznego
 
+- Poprawka źródła: commit 916cb24f8f3cb4cef9dc43859371708b04a7c1c9, selektywnie siedem plików bez pozostałego WIP. Dokładna nota/mapa/źródła tego commita PASS; kapsuła #186 verify_source PASS. Test natywny nieuruchomiony; nowe częstotliwości nadal niedostępne.
 - Job eb75817e0ad74168a26fcf11627b5e68, profil fem-cpu-slepc-runtime-v2, source digest 753ada8e017bd50bf741fc16898155560b17350b38196ca0a35bf290ad483450. Snapshot HEAD e3bc8ec448f3b02088c1ff4d8b45a0e4aa5a359d + tracked WIP i jawny tracking_mass.rs; kapsuła 6e783cba58c044e8b84b8485acef23c5/source.
 - Zgłoszenie 4643 terminalne exit0, status koordynatora running. Kontroler 48901 potwierdzony żywy; konfiguracja tylko scientific-batches/nonzero-k-validation/eb75817e0ad74168a26fcf11627b5e68. Brak jeszcze dowodu kompilacji i nowych częstotliwości.
 - #185 i kontroler 3576 terminalne failed/exit1. #186 jest osobnym buildem zmienionego źródła po diagnostycznym PASS toolchain list, nie restartem obserwacji. Przyczyna wcześniejszego opóźnienia nadal niepotwierdzona.
