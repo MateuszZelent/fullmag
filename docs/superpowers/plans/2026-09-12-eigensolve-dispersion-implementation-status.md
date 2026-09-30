@@ -1,5 +1,12 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
+## S12 — #184 terminalny; nightly odtworzony offline
+
+- #184 failed/exit2 przed kompilacją: pusty montowany cache rustup; nightly obecny w obrazie nie był dostępny pod RUSTUP_HOME workera. Kontroler 18780 terminalny exit1. Nie ma nowych częstotliwości.
+- Kapsuła integralna, 0 .pyc, poprawna własność katalogu koordynatora. Dane joba zachowane. Cache odtworzono wyłącznie do wcześniej pustego canonical FEM CPU root z przypiętego image f12e618dce9e212fc7f1be5947fa1e92acbb9736d4820eca892b5b7dbc2eebcc, bez pobierania toolchainu.
+- Odczyt rustc jako użytkownik workera, bez sieci i z read-only cache: exit0, nightly 1.100.0, commit cea272fa356e94bd2ee2cadf376630aa0683867a. To dostępność narzędzia, nie build/solver. Audyt: docs/audits/2026-09-30-runner-nightly-cache-recovery.md.
+- Następnie nowe zgłoszenie runtime-v2 po naprawie tej konkretnej przyczyny; Γ/DE/BV i odbiór aktualnego kompletu pól. Pełne S00–S12 i wszystkie bramki nauki oraz integracji pozostają otwarte.
+
 ## S04/S07 — kompletność publikacji pól modów
 
 - Usunięto lukę odbioru: znalezione pola nie dowodziły obecności pól wszystkich opublikowanych modów w tej samej próbce. Obecnie wymagane identyczne zbiory sample/raw mode; brakujące i nieopublikowane pola są odrzucane przed rekonstrukcją.
