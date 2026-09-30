@@ -1,5 +1,38 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
+## Aktualny runtime i rozdzielczość filmu — 2026-09-30 (po #176)
+
+Ta sekcja zastępuje wcześniejsze statusy #176 oraz sesji 69118.
+
+- Rzeczywista generacja warstw i szwów: commity 61a53f4a, d050d46f,
+  11155c55e76f321ec0bb62399e7a0494655003f9; wszystkie wysłane na remote.
+- 75 interpretowanych testów + 15 subtests PASS. Mapy źródeł i dokładnie
+  staged dokument naukowy przeszły walidację. Nie kompilowano unit tests.
+- Wariant bez lokalnych pól: przed poprawką 5/5 pozycji x/y dla hmax 10/5 nm;
+  po poprawce 31/99. Warstwy 3/6/9 mają zgodne płaszczyzny, dodatnie objętości,
+  kompletną periodyczność także w powietrzu i orientowane fazy +/-25 rad/µm.
+- #176: f1b0ffd6a64c4202864fbcb92f9cb8fd.
+  Jest terminalnie blocked przed kontenerem. Obserwator agenta utworzył run_root
+  za wcześnie; nie jest to awaria fizyki ani storage admission. Żaden pilot
+  nie ruszył. Sesja 69118 zakończona; źródła i diagnostyka zachowane.
+- Nowy #178: d3584c72f1d74300834aaca396902df6, runtime-v2, queued.
+  Digest: 92baf77db14db593e4aaf0d268bde62b4f26e4e0933e7423fb2eda3315ae5e62.
+  Snapshot bazuje na 11155c55e; zawiera bieżący WIP i tracking_mass.rs.
+- Poprawiony obserwator: sesja 45879; działa i czeka na #178. Kontrolę zapisuje
+  w runs/<worktree-id>/scientific-batches/thickness-l2-<job-id>, poza managed
+  run_root. Potwierdzono brak przedwczesnego utworzenia katalogu #178.
+  Po succeeded/exit 0: sześć pilotów DE/BV k25 L2, warstwy 3/6/9, każdy przez
+  run_de_100nm_pilot.py i istniejące pełne kontrole. Finalny residual 1e-8
+  pozostaje bez zmiany. Wyniki dopiero po receipt/ABI/hash i odbiorze artefaktów.
+- Nadal wymagane: niezależny Poisson, profile, zbieżność warstw/airboxu,
+  Γ i BV, ścieżka k, A1/COMSOL, tracking/API/UI/GPU i integracja S00–S12.
+  Ring ma historyczne pojedyncze zewnętrzne slaby powietrza; przed A1 należy
+  sprawdzić i poprawić realizację stopniowania z, nie przyjmować samego pola
+  rozmiaru Gmsh za dowód rozdzielczości strukturalnej ekstruzji.
+- Audyt: docs/audits/2026-09-30-box-film-layer-realization.md.
+  Nie ma jeszcze częstotliwości z nowej siatki; cały cel nieukończony.
+
+
 ## Najnowszy checkpoint — 2026-09-30: produkcyjna metryka consistent P1 (WIP)
 
 Ta sekcja ma pierwszeństwo przed starszymi checkpointami poniżej.
