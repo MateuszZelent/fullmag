@@ -36,3 +36,24 @@ Kolektor korzysta tylko z load_record i indywidualnej projekcji profilu.
 #178 i #179 pozostaja queued; obserwator 45879 zyje. API zdrowe, worker
 aktywny, accepting_jobs=true, slot zajmuje #177. Nie restartowano procesow,
 nie zmieniono profili, nie kasowano storage. Jeszcze brak nowych czestotliwosci.
+
+
+## Wykres i kontrola jego wejsc
+
+plot_de_bv_thickness_comparison.py ponownie zbiera kazdy record z oryginalnych
+runow i wymaga dokladnej zgodnosci z JSON kolektora. Zmiana wartosci analityki,
+czestotliwosci, residualu albo profilu blokuje rysowanie.
+Rysunek: 2 kolumny DE/BV, f(n_z) i roznica procentowa od n=0.
+Nie jest dyspersja f(k), nie ma dopasowania ani ekstrapolacji.
+PNG i PDF maja receipt z hashami wejsc, producenta i plikow wyjsciowych.
+Nowy katalog wyjsciowy jest wymagany; istniejace wyniki nie sa nadpisywane.
+46 testow +38 podtestow kolektor/wykres/profil/wrapper PASS.
+Testy prezentacji sa syntetyczne. QA rzeczywistego wykresu pozostaje otwarte
+do zakonczenia pilotow; nie opublikowano wykresu udajacego wynik FEM.
+
+Komenda po uzyskaniu comparison.json:
+python scripts/plot_de_bv_thickness_comparison.py <comparison.json> <nowy-katalog>
+
+Kontener #177 zakonczyl sie kodem 0 o 14:02:10 UTC. O 14:22:54 UTC
+kolejka nadal raportowala running, a koordynator byl aktywny (CPU ok. 86%).
+Nie uznano tego za zakonczenie managed gate ani powod do restartu.

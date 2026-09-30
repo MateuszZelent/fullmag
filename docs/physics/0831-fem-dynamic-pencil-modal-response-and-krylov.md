@@ -1464,3 +1464,20 @@ warstw i airboxu oraz pokrycie widma wymagaja osobnej oceny.
 |---|---|---|
 | source-thickness-collector | `scripts/collect_de_bv_thickness_comparison.py` | `collect_record` |
 | source-thickness-collector-regression | `scripts/test_collect_de_bv_thickness_comparison.py` | `test_rejects_wrong_receipt_before_field_loading` |
+
+
+## Wykres kontroli grubosci przy stalym k
+
+Wykres szesciu pilotow pokazuje f(n_z) i 100*(f_FEM-f_n0)/f_n0 osobno
+w DE i BV. Nie jest krzywa dyspersji f(k), poniewaz wszystkie punkty maja
+jednakowy k=25 rad/um. Nie wykonuje ekstrapolacji ani dopasowania do analityki.
+Rysowanie wymaga ponownego zgodnego odczytu rekordow przez kolektor;
+nie przyjmuje zmienionych wartosci odniesienia, residualow i profili.
+Podpis zachowuje NOT VERIFIED i ograniczenie otwartego filmu n=0.
+Artefakty PNG/PDF otrzymuja receipt z hashami danych i producenta.
+Test renderowania jest syntetyczna kontrola prezentacji, nie wynikiem FEM.
+
+| ID | Plik | Symbol |
+|---|---|---|
+| source-thickness-plot | `scripts/plot_de_bv_thickness_comparison.py` | `validate_comparison` |
+| source-thickness-plot-regression | `scripts/test_plot_de_bv_thickness_comparison.py` | `test_modified_record_is_rejected_before_plotting` |
