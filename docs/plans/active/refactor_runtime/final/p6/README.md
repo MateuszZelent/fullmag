@@ -103,6 +103,20 @@ bounded data plane oraz jeden frontend analityczny oparty o pinned source.
 
 
 
+31. [Niezmienne artefakty terminalnego membera](31-terminal-solution-member-artifact-fence.md)
+    — blokada late append w nadal otwartym SolutionSet; review i kontrola
+    kompilacji źródeł API/session PASS, testy NOT RUN, runtime NOT VERIFIED;
+    commit `a5b775b9ba789d8b250d8353de2526064a6d6616` na remote master.
+
+32. [Integracja migracji z rzeczywistym wykonaniem](32-migration-publication-integration-contract.md)
+    — audyt producenta i przejrzana kolejność integracji; brakujący trwały
+    runtime ID oraz importer pozostają NOT IMPLEMENTED.
+33. [Strumieniowy eksport osiągalnych CAS](33-streaming-cas-export.md)
+    — file-backed typed traversal i kopiowanie z weryfikacją hash/length;
+    review i kompilacja źródeł PASS, testy NOT RUN, pomiar pamięci otwarty;
+    commit `dbdd2f3f0be61bb1ced7af61ed23243d9ef8d824` na remote master.
+    Dokumenty i import pozostają otwarte.
+
 Pozostałe resource keys w `runner/eigen/artifacts`, przeprowadzenie identity z
 głównego runner context, FEM artifact writers i migracja legacy copy-on-write,
 materializator/evaluator
