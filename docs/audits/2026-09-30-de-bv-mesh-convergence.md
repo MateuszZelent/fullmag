@@ -79,3 +79,47 @@ przez samo zaostrzenie tolerancji wewnętrznej.
 
 Wykres i dane kontrolne: folder de-bv-mesh-20260930 w katalogu
 wizualizacji tego wątku, pliki mesh-convergence.png/PDF i comparison.json.
+
+## Diagnostyka jednorodnego profilu modu
+
+Odczytano opublikowany vector.bin: node-major xyz, pary float64
+real/imag little-endian, zgodnie z
+crates/fullmag-runner/src/eigen/artifacts/mode_bundle.rs +
+write_complex_vector_field_payload. Wektor zawiera fizyczne fazy Blocha,
+odtworzone przez eigen_projection.rs +
+project_complex_2x2_mode_to_tangent_basis_with_periodic_map.
+
+Dla konwencji exp_minus_i_k_dot_delta_r usunięto fazę przez
+$\mathbf u_i=\exp(+\mathrm{i}\mathbf k\cdot\mathbf r_i)\mathbf m_i$.
+Wagi $w_i$ to suma $V_T/4$ po tetraedrach filmu przyległych do węzła.
+Wyznaczono $\bar{\mathbf u}=\sum_iw_i\mathbf u_i/\sum_iw_i$ oraz
+
+$$
+C=\frac{(\sum_iw_i)\|\bar{\mathbf u}\|^2}
+        {\sum_iw_i\|\mathbf u_i\|^2},\qquad
+d=\sqrt{\frac{\sum_iw_i\|\mathbf u_i-\bar{\mathbf u}\|^2}
+                   {\sum_iw_i\|\mathbf u_i\|^2}}.
+$$
+
+$C$ i $d$ są bezwymiarowe, $w_i$ ma jednostkę m3. To masa lumped,
+nie dokładna norma consistent-mass FEM. Sprawdzono tożsamość
+$C+d^2=1$ z błędem poniżej 1e-12. Metryki są niezależne od
+globalnej zespolonej normalizacji i fazy modu.
+
+| Mod / poziom | Nakładanie ze stałym wektorem C | Względne odchylenie RMS d |
+| --- | ---: | ---: |
+| DE L0 | 0.999830147 | 0.013032779 |
+| DE L1 | 0.999804063 | 0.013997766 |
+| DE L2 | 0.999842103 | 0.012565723 |
+| BV L0 | 0.999965043 | 0.005912447 |
+| BV L2 | 0.999998972 | 0.001013664 |
+
+Wynik wspiera niemal jednorodny profil po usunięciu fazy Blocha,
+zgodny z założeniem odniesienia n0. Nie dowodzi kolejności modów,
+pokrycia okna widmowego ani identyfikacji najniższej gałęzi.
+Nie zamyka zbieżności siatki/airboxu i nie zastępuje bezpośredniego
+porównania COMSOL.
+
+Zapisano mesh-mode-profile-diagnostic-20260930.json przy manifeście
+runów, z SHA-256 czterech wejściowych artefaktów każdego runu.
+Kwalifikacja pozostaje NOT VERIFIED.
