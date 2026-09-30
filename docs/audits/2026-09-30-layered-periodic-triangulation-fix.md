@@ -45,3 +45,26 @@ klasyfikację. Starej kapsuły #179 nie modyfikować; brak podmiany PYTHONPATH
 pod istniejącym receipt. Oczekiwany pierwszy rezultat: przejście v6 przed
 wyborem modów; potem mała seria Γ/DE/BV oraz kontrola potencjału fizycznego.
 Storage był poniżej progu admission 8 GiB; nie usuwać danych bez autoryzacji.
+
+
+## Zgłoszenie managed i kontroler
+
+- Commit poprawki na remote: `494443d64655b7f65e19bd79bc12b5ad19d26cd8`.
+- Working i exact-staged page validator: zero błędów; 35 testów validatora PASS;
+  changed-scientific-docs dla tego commita względem edf682970 PASS.
+- Job #182: `116603d0835d4309b03b7981d23d89f8`, profil runtime-v2, `queued`.
+- Source digest: `6265144754cfa99cc704b8df2517ac77cb7407063efd01d37e2048d2cd5dcc72`.
+- Native snapshot: `3111f4966a08a0e031c0f763216dbb400991e4fb4d6abc202aa33539ac0c9425`.
+- Capture: `f8513d92772a43508f885c6de3f439e5/source`; snapshot obejmuje wcześniejsze
+  tracked WIP oraz jawny untracked `crates/fullmag-runner/src/eigen/tracking_mass.rs`.
+  Nie utożsamiać snapshotu z czystym HEAD. Pierwsza próba bez tego wejścia została
+  odrzucona przed submit; odczyt request key potwierdził brak joba przed retry.
+- Dwa wcześniejsze joby FIFO zachowane. Nie wymieniano koordynatora.
+- Kontroler pod `runs/<worktree-id>/<job-id>/comsol-dispersion/periodic-fix-smoke-20260930`:
+  żywa sesja 31729, odczyt `build_state=queued`. Po `succeeded`/exit0 uruchomi
+  wersjonowany model z 494443d64: Gamma L2/t3, potem DE/BV k25 L2/t3/t6/t9.
+  Wrappery pochodzą z niezmiennej kapsuły, runtime jest związany z #182.
+  Pierwszy niezerowy exit zatrzymuje serię. Własne wyniki i logi per przypadek.
+- Kapsuły #179 nie zmieniono. Kolejka i żywy kontroler nie są dowodem runtime
+  ani wyniku naukowego. Brak nowych częstotliwości z poprawionej realizacji.
+- Registry worktree zaktualizowany; pełny zakres S00–S12 pozostaje aktywny.

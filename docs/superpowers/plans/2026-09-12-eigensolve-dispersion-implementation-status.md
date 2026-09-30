@@ -1,5 +1,17 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
+## #182 queued — snapshot poprawionej siatki i kontroler Γ/DE/BV
+
+- Commit 494443d64655b7f65e19bd79bc12b5ad19d26cd8 jest na remote.
+- Job #182 / 116603d0835d4309b03b7981d23d89f8 / runtime-v2: queued za dwoma
+  wcześniejszymi jobami. Digest 6265144754cfa99cc704b8df2517ac77cb7407063efd01d37e2048d2cd5dcc72.
+- Snapshot zawiera wymagany untracked tracking_mass.rs; pełna tożsamość w audycie
+  2026-09-30-layered-periodic-triangulation-fix.md. Kapsuły #179 nie zmieniano.
+- Kontroler 31729 żywy, build_state=queued; po sukcesie wykona Γ L2/t3, następnie
+  DE/BV k25 L2/t3/t6/t9; zatrzyma się przy pierwszym błędzie.
+- Scientific page working/exact-staged/changed-revision PASS; validator 35 PASS.
+  Runtime poprawionej siatki, nowe częstotliwości i pełne S00–S12: nadal otwarte.
+
 ## S04 — naprawa periodycznych przekątnych i granicy airboxu
 
 - Seria #179 jest terminalna: sześć DE/BV 3/6/9 zakończyło się przed solverem
