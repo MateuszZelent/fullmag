@@ -172,7 +172,7 @@ function decodePayloads(
   if (error?.status === "error") {
     return { kind: "error", error: error.error ?? new Error("binary request failed") };
   }
-  if (resources.some((resource) => resource.status === "idle" || resource.status === "loading")) {
+  if (resources.some((resource) => resource.status === "idle" || resource.status === "loading" || resource.status === "stale")) {
     return { kind: "pending" };
   }
   if (resources.some((resource) => !resource.data)) {

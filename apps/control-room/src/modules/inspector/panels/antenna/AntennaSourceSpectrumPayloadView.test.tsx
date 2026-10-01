@@ -128,6 +128,28 @@ describe("AntennaSourceSpectrumPayloadView", () => {
     }
   });
 
+  it("does not render retained binary data while one payload is stale", async () => {
+    mocks.payloads = {
+      k_u_rad_per_m: readyPayload([0, 1], "etag-ku"),
+      k_v_rad_per_m: readyPayload([0, 2], "etag-kv"),
+      amplitudes_re_im: readyPayload([1, 0, 1, 2, Math.SQRT2, 0, Math.sqrt(3), 0], "etag-amplitudes"),
+      power: { ...readyPayload([1, 5, 2, 3], "etag-power"), status: "stale" },
+    };
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => root.render(
+        <AntennaSourceSpectrumPayloadView outputId="spectrum-1" spectrum={spectrumFixture()} />,
+      ));
+      expect(container.textContent).toContain("Loading binary FFT payloads");
+      expect(countByRole(container as unknown as TestNode, "gridcell")).toBe(0);
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
   it.each([
     ["k_u_rad_per_m", [Number.NaN, 1], "wave-vector payload contains a non-finite value"],
     ["amplitudes_re_im", [1, 0, Number.POSITIVE_INFINITY, 2, Math.SQRT2, 0, Math.sqrt(3), 0], "amplitude payload contains a non-finite value"],
