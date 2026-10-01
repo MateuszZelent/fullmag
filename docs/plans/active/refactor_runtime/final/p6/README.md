@@ -208,3 +208,7 @@ pamięci i wszystkich lane'ów pozostają otwarte. P6 wynosi **52%**.
 54. [Niezmienna geometria zapisanego pola](54-immutable-saved-field-geometry.md)
     — exact owner, canonical mesh/support CAS i publication/recovery/GC/FMS
     closure; native representation, runtime, transport i renderer otwarte.
+
+55. [Receipt finalnego snapshotu FEM](55-native-final-snapshot-receipt.md)
+    — actual handle, exact endpoint i F64LE digest w immutable source;
+    default źródła PASS, native build/map/runtime/renderer otwarte.

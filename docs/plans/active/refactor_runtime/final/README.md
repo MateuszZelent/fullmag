@@ -15,6 +15,12 @@ dlatego nie podnosi procentów P3/P5.
 
 ## Dokumenty finalne
 
+Checkpoint 01.10.2026: [P6-55 — receipt finalnego snapshotu FEM](p6/55-native-final-snapshot-receipt.md)
+wiąże actual handle receipt z endpointem i hashem wartości w source CAS,
+oddzielnie od layout fingerprint. Default źródła PASS; zgodny klient runnera
+odnaleziony, native build/map/renderer/runtime pozostają otwarte.
+P6 około 52%, cały plan około 49%.
+
 Checkpoint 01.10.2026: [P6-54 — niezmienna geometria zapisanego pola](p6/54-immutable-saved-field-geometry.md)
 wiąże geometry/support CAS z dokładnym tensorem i historycznym ownerem,
 rozszerzając publication, recovery i live/archive retencję. Źródła PASS;
