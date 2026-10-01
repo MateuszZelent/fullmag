@@ -41,8 +41,8 @@ function ValuesPage({ dataset, pageSize, total }: {
           Component index
           <input aria-label="Saved field component index" className="min-w-0 border border-fm-border bg-fm-raised text-fm-primary" type="number" min={0} max={components - 1} value={component}
             onChange={(event) => {
-              const value = Number(event.target.value);
-              if (Number.isInteger(value) && value >= 0 && value < components) setComponent(value);
+              const value = event.currentTarget.valueAsNumber;
+              if (Number.isFinite(value) && Number.isInteger(value) && value >= 0 && value < components) setComponent(value);
             }} />
         </label>
         {error && <p role="alert" className="m-0 text-fm-xs text-fm-danger">Could not verify saved field values: {error.message}</p>}
@@ -51,7 +51,7 @@ function ValuesPage({ dataset, pageSize, total }: {
           <table aria-label="Saved field values" className="w-full text-fm-xs">
             <thead><tr><th scope="col" className="text-left">Element index</th><th scope="col" className="text-right">Component {component} [{dataset.field.descriptor.unit}]</th></tr></thead>
             <tbody>{Array.from({ length: Number(count) }, (_, index) => (
-              <tr key={index}><th scope="row" className="text-left font-normal">{(offset + BigInt(index)).toString()}</th><td className="text-right font-mono">{resource.data!.values[index * components + component].toPrecision(8)}</td></tr>
+              <tr key={(offset + BigInt(index)).toString()}><th scope="row" className="text-left font-normal">{(offset + BigInt(index)).toString()}</th><td className="text-right font-mono">{resource.data!.values[index * components + component].toPrecision(8)}</td></tr>
             ))}</tbody>
           </table>
         )}
