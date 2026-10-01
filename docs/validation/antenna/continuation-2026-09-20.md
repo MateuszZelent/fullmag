@@ -1,11 +1,27 @@
 # Anteny mikrofalowe — stan i przekazanie do dalszej pracy
 
-Data bazowego przekazania: 2026-09-20; aktualizacja: 2026-09-30. Status całości:
+Data bazowego przekazania: 2026-09-20; aktualizacja: 2026-10-01. Status całości:
 **częściowa implementacja, odbiór produkcyjny otwarty**.
 
 ## 1. Punkt wznowienia i zakres tego dokumentu
 
-### Najnowszy checkpoint — algebraiczna para PBC, 2026-09-30
+### Najnowszy checkpoint — zgodność składowej widma Python–IR, 2026-10-01
+
+Commit `a96054d28ffb7020087cfc80abca13dffc9b1eda` odrzuca w publicznym
+`AntennaSpectrumRequest` nazwy `component`, których nie akceptują kanoniczny
+IR i obliczenia widma. Test obejmuje poprawną składową osi płaszczyzny `u`
+oraz literówkę `amplitude`; 24 testy Python w grupach stage-workflow i
+composition-contract przeszły, podobnie `git diff --check`. Jest to bramka
+authoringu, nie dowód numerycznej poprawności FFT ani runtime FEM/FDM.
+
+Pozostały niezatwierdzony WIP obejmuje m.in. kontrolę aktualności manifestu
+przed wczytaniem pola i atomowe rozwiązywanie referencji T08 oraz korektę
+statusu starego przykładu w notatce 0950. Testów jednostkowych Rust nie
+kompilowano zgodnie z obowiązującym zakazem. `just runner-container-status`
+z poprawnie rozpoznanym `D:\git\fullmag\storage` zwrócił
+`Container configuration is missing`; konfiguracji runnera nie odtwarzano.
+
+### Wcześniejszy checkpoint — algebraiczna para PBC, 2026-09-30
 
 `just verify-fem-antenna-mixed-pbc-cpu` przeszła dla czterech explicit RK
 na mieszanej siatce CPU FP64. Węzły magnetyczne pary $(1,2)$ zachowały
