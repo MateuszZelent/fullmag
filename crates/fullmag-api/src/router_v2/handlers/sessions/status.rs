@@ -246,7 +246,9 @@ pub(crate) fn build_live_status(
     });
 
     let ls = snapshot.live_state.as_ref();
-    let latest = ls.map(|l| &l.latest_step);
+    let latest = ls
+        .map(|l| &l.latest_step)
+        .filter(|step| !step.per_object_scalars.contains_key("fem_eigen_progress"));
     let max_torque_apm = latest.and_then(|step| canonical_torque_apm(step.max_torque_Apm));
     let completion = snapshot
         .stage_execution

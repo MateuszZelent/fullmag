@@ -2627,6 +2627,12 @@ fn fem_eigen_progress_update(
     fem_mesh_generation_id: Option<String>,
 ) -> StepUpdate {
     let mut progress_scalars = std::collections::HashMap::new();
+    // Preserve categorical solver/phase identity in the existing scalar envelope.
+    // These flags carry identity only; they are not measured physical fields.
+    if !progress.solver_kind.is_empty() {
+        progress_scalars.insert(format!("solver_kind:{}", progress.solver_kind), 1.0);
+    }
+    progress_scalars.insert(format!("phase_kind:{}", progress.phase), 1.0);
     progress_scalars.insert("phase_code".to_string(), f64::from(progress.phase_index));
     progress_scalars.insert("phase_count".to_string(), f64::from(progress.phase_count));
     progress_scalars.insert("percent".to_string(), progress.percent);
@@ -2719,7 +2725,6 @@ fn fem_eigen_progress_update(
                 .iteration
                 .map(u64::from)
                 .unwrap_or(u64::from(progress.phase_index)),
-            max_h_eff: progress.residual.unwrap_or(0.0),
             per_object_scalars,
             ..StepStats::default()
         },
@@ -5146,6 +5151,32 @@ pub fn run_reference_fem_eigen(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn eigen_progress_keeps_residual_separate_from_physical_field() {
+        let update = fem_eigen_progress_update(
+            fem_eigen::FemEigenProgress {
+                phase: "solving_native_frequency_window_base",
+                solver_kind: "slepc_multi_shift_invert_production_cpu_dense",
+                residual: Some(2.5e-7),
+                ..Default::default()
+            },
+            None,
+        );
+        let progress = &update.stats.per_object_scalars["fem_eigen_progress"];
+        assert_eq!(progress["residual"], 2.5e-7);
+        assert_eq!(
+            progress["solver_kind:slepc_multi_shift_invert_production_cpu_dense"],
+            1.0
+        );
+        assert_eq!(
+            progress["phase_kind:solving_native_frequency_window_base"],
+            1.0
+        );
+        assert_eq!(update.stats.max_h_eff, 0.0);
+        assert!(!update.scalar_row_due);
+    }
+
     use fullmag_ir::{
         CurrentModuleIR, CurrentTransportModelIR, ExchangeBoundaryCondition, ExecutionPrecision,
         FdmMaterialIR, GridDimensions, IntegratorChoice, MeshIR,

@@ -1,6 +1,17 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
 
+## S08/S12 — modalny postęp bez fikcyjnych pomiarów, 2026-10-01
+
+- Potwierdzono residual wpisywany do max_h_eff i cichy dense fallback w etykiecie algorytmu. Nowe źródła zachowują residual jako diagnostykę i dokładny solver/phase; brak tożsamości daje unknown.
+- CLI modal/heartbeat nie pokazuje domyślnych zer fizycznych. Scalar history pomija modalne callbacki także force/terminal; run manifest nie przypisuje im energii/czasu; status/energy resource nie tworzy fizycznego fallbacku z modalnego latest_step. Historia rzeczywistych pomiarów zachowana; current/catalog nie pokazują jej jako bieżącego pomiaru podczas callbacku modalnego.
+- 13 plików Rust parser PASS, mapa źródeł PASS; regresje Rust przygotowane, niekompilowane. Existing OpenAPI dopuszcza brak wartości statusu; schematy i generated types bez zmian. Końcowe review i managed runtime/browser wymagane.
+- Realtime wymaga wzrostu scalar_revision po akceptacji; historyczne scalars/tables JSON/binary/energy filtrują markery przed limit bez przepisywania archiwum. Wykres de-bv-updated-job188:27archiwalnych rekordów, brak nowych punktów i ujemnych k.
+- Audyt: docs/audits/2026-10-01-eigensolve-progress-physical-metrics.md. Nie zmieniono macierzy, tolerancji ani selekcji modów.
+- #188 pozostaje aktywny: kontener7df4be7c5ace około212%CPU, Γ refinement24/50; brak nowej terminalnej częstotliwości. Kapsuła nie zawiera tej poprawki ani migracji Ku. Nie restartowano obliczeń.
+- Po zwolnieniu lease: managed build aktualnego pełnego SHA -> runtime/artefakty/status/browser; pełny cel signed DE/BV, zbieżność, COMSOL A1, interakcje, waveguide, GPU i integracja nadal otwarty.
+
+
 ## S10/S12 — zatwierdzona migracja canonical/raw Ku, 2026-10-01
 
 - Jawna zgoda użytkownika na equilibrium_artifact.v8 / LinearizationState.v7. Ku-free zachowuje v7/v6; historyczne dane i kapsuła #188 nie są przepisywane.
@@ -4389,3 +4400,5 @@ zbierania testów; próba z lokalnym `sys.path` przeszła 8/9, lecz subprocess
 nadal nie widział pakietu. Ostateczny poprawny przebieg nie zmienia
 źródeł. Dowód obejmuje authoring/eksport Python, nie managed FEM runtime,
 fizykę dyspersji ani kwalifikację S02 jako całości.
+
+Końcowe review wskazało dalsze obejścia P2: kolejka CLI mogła przyjąć bezpośrednio przypisany marker, opóźniony realtime sample mógł przeżyć wejście w tryb modalny, a licznik iteracji trafiał do physical total_steps. Dodano centralne filtry candidate/enqueue, anulowanie pending QoS pod wspólną blokadą przejścia oraz total_steps=0 dla callbacku bez fizycznych kroków. Historia pozostaje zachowana. Legacy completed z końcowym markerem pozostaje fail-closed; odzyskanie pomiaru wymaga jawnej tożsamości obserwacji, nie fallbacku do niesprawdzonego final_e_*.

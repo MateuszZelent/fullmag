@@ -1265,6 +1265,20 @@ driven requests consume it without hidden recomputation. Failed or interrupted
 runs retain the requested/resolved plan, solver phase, latest true residual,
 stop reason, partial progress, and available diagnostics.
 
+Modal solver progress is diagnostic telemetry, not a physical observation.
+A dimensionless solver residual must never populate `max_h_eff` (A/m), torque,
+energy or magnetization. CLI modal/heartbeat lines expose phase, exact solver
+identity, subwindow counters and solver residual separately. Missing solver
+identity remains `unknown`; absence of a LOBPCG flag is not evidence for a dense
+algorithm or any CPU/GPU lane. Progress identity flags in `fem_eigen_progress`
+are not physics values or a terminal mode-residual certificate. Physical scalar
+rows remain governed by their existing observation cadence. Current physical
+resources report absence during a modal callback instead of relabeling a
+previous observation as current. Historical scalar/table views retain true
+measurements and filter diagnostic-only rows without rewriting archived input
+or renumbering source cursors. Realtime scalar samples require an accepted
+scalar revision change.
+
 ### 4.5 Artifact requirements
 
 Artifacts bind git/build/run identity and the equilibrium, mesh/topology,
@@ -1866,6 +1880,8 @@ visibility into runtime qualification.
 
 | Equation/claim | Lane | Repository path + stable symbol | Responsibility | Tests/evidence | Evidence status | Immutable link |
 |---|---|---|---|---|---|---|
+| Modal progress units | FEM CPU/GPU host telemetry | `crates/fullmag-runner/src/lib.rs` + `fem_eigen_progress_update` | Keep numerical residual outside physical field metrics; retain exact categorical identity. | `eigen_progress_keeps_residual_separate_from_physical_field` | Rust regression prepared, not compiled; runtime pending | Pending scoped commit |
+| Modal progress display | CLI / stage resource | `crates/fullmag-cli/src/orchestrator.rs` + `format_stage_progress_line` | Show modal diagnostics without invented physical measurements or dense solver fallback. | `terminal_stage_line_includes_fem_eigen_window_progress`, `modal_solver_identity_never_infers_dense_from_missing_or_ambiguous_flags` | Rust regressions prepared, not compiled; runtime/browser pending | Pending scoped commit |
 | Canonical/raw material artifacts | FEM CPU orchestration | `crates/fullmag-runner/src/fem/eigen_shared_domain.rs` + `shared_domain_artifact_material_identity` | Shared canonical Ku signature and preserved raw plan provenance; legacy semantics retained. | `shared_domain_material_identity_preserves_raw_legacy_and_canonical_ku` | Rust regression prepared, not compiled; managed runtime pending | [799be85d3](https://github.com/MateuszZelent/fullmag/blob/799be85d3e1c40ee1d7790797d6f81536e9d9ce9/crates/fullmag-runner/src/fem/eigen_shared_domain.rs) |
 | Versioned equilibrium reader | FEM CPU orchestration | `crates/fullmag-runner/src/fem/eigen_equilibrium.rs` + `load_certified_equilibrium_artifact` | Accept certified v7/v8 only and reject missing or masqueraded material identity. | `equilibrium_artifact_loader_requires_certified_v7_contract` and extended v8 cases | Source-only Rust regression; managed runtime pending | [799be85d3](https://github.com/MateuszZelent/fullmag/blob/799be85d3e1c40ee1d7790797d6f81536e9d9ce9/crates/fullmag-runner/src/fem/eigen_equilibrium.rs) |
 | Zero-field stationary state | FEM CPU scope / mathematical diagnostic | `crates/fullmag-runner/src/fem/eigen_shared_domain.rs` + `validate_shared_domain_modal_scope` | Admit zero field without asserting zero curvature or modal success; reject invalid amplitudes. | `shared_domain_modal_scope_accepts_zero_static_field`; `scripts/test_uniaxial_constrained_energy_hessian.py` + `test_zero_static_field_retains_easy_plane_and_exchange_curvature` | Rust regression prepared, not executed; independent energy test only | [ab64bac46](https://github.com/MateuszZelent/fullmag/commit/ab64bac46b7ceda295812da93244b2eba81174e4) |

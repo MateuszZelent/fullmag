@@ -787,6 +787,14 @@ impl LocalLiveWorkspace {
 fn scalar_candidate_from_workspace_state(
     state: &LocalLiveWorkspaceState,
 ) -> Option<(ScalarSequenceKey, CurrentLiveScalarRow, bool)> {
+    if state
+        .live_state
+        .latest_step
+        .per_object_scalars
+        .contains_key("fem_eigen_progress")
+    {
+        return None;
+    }
     let finished = state.live_state.latest_step.finished
         || state.live_state.status == "completed"
         || state.run.status == "completed"
@@ -805,7 +813,10 @@ fn scalar_candidate_from_workspace_state(
     state
         .latest_scalar_row
         .clone()
-        .filter(|row| row.step == state.live_state.latest_step.step)
+        .filter(|row| {
+            row.step == state.live_state.latest_step.step
+                && !row.per_object_scalars.contains_key("fem_eigen_progress")
+        })
         .map(|row| {
             (
                 ScalarSequenceKey {
@@ -1498,6 +1509,9 @@ impl PendingScalarRows {
         finished: bool,
         gate: &mut LiveTelemetryPublishGate,
     ) {
+        if row.per_object_scalars.contains_key("fem_eigen_progress") {
+            return;
+        }
         {
             let cursor = self.latest_by_sequence.entry(sequence.clone()).or_default();
             let same_step = cursor.latest_seen_step == Some(row.step);
@@ -3257,6 +3271,28 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![1.0e-12, 1.1e-12],
         );
+    }
+
+    #[test]
+    fn scalar_candidate_rejects_modal_state_even_with_matching_physical_row() {
+        let mut state = workspace_with_domain_mesh().snapshot();
+        state.live_state.latest_step.step = 1;
+        state.latest_scalar_row = Some(scalar_row(1));
+        assert!(scalar_candidate_from_workspace_state(&state).is_some());
+        state
+            .live_state
+            .latest_step
+            .per_object_scalars
+            .insert("fem_eigen_progress".into(), Default::default());
+        assert!(scalar_candidate_from_workspace_state(&state).is_none());
+        state.live_state.latest_step.per_object_scalars.clear();
+        state
+            .latest_scalar_row
+            .as_mut()
+            .unwrap()
+            .per_object_scalars
+            .insert("fem_eigen_progress".into(), Default::default());
+        assert!(scalar_candidate_from_workspace_state(&state).is_none());
     }
 
     #[test]
@@ -5707,6 +5743,15 @@ fn set_latest_scalar_row(
     update: &fullmag_runner::StepUpdate,
     force: bool,
 ) {
+    // A modal solver callback has no measured physical scalar row, even
+    // when a terminal/forced publication is requested.
+    if update
+        .stats
+        .per_object_scalars
+        .contains_key("fem_eigen_progress")
+    {
+        return;
+    }
     // Skip scalar row accumulation if charts are disabled (benchmark mode)
     if feature_flags().disable_charts {
         return;

@@ -1024,6 +1024,18 @@
   ],
   "sources": [
     {
+      "id": "source-modal-progress-units",
+      "path": "crates/fullmag-runner/src/lib.rs",
+      "symbol": "fem_eigen_progress_update",
+      "responsibility": "Separate dimensionless solver progress from physical field metrics and expose exact solver identity"
+    },
+    {
+      "id": "source-modal-progress-display",
+      "path": "crates/fullmag-cli/src/orchestrator.rs",
+      "symbol": "format_stage_progress_line",
+      "responsibility": "Render modal diagnostics separately from physical measurements and preserve missing identity as unknown"
+    },
+    {
       "id": "source-canonical-material-artifact-identity",
       "path": "crates/fullmag-runner/src/fem/eigen_shared_domain.rs",
       "symbol": "shared_domain_artifact_material_identity",

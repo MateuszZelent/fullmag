@@ -1906,14 +1906,7 @@ fn apply_fem_eigen_progress_to_stage_execution(
     };
 
     let phase = fem_eigen_progress_phase(progress);
-    let solver = if progress
-        .get("solver_cpu_sparse_lobpcg")
-        .is_some_and(|value| *value > 0.0)
-    {
-        "cpu_sparse_lobpcg"
-    } else {
-        "cpu_dense_symmetric_eigen"
-    };
+    let solver = fem_eigen_progress_solver(progress);
     let percent = progress
         .get("percent")
         .copied()
@@ -1927,7 +1920,40 @@ fn apply_fem_eigen_progress_to_stage_execution(
     stage.last_progress_unix_ms = Some(current_unix_millis_u64());
 }
 
+fn fem_eigen_progress_solver(progress: &std::collections::HashMap<String, f64>) -> &str {
+    let mut kinds = progress.iter().filter_map(|(key, value)| {
+        key.strip_prefix("solver_kind:")
+            .filter(|kind| !kind.is_empty() && *value == 1.0)
+    });
+    if let Some(kind) = kinds.next() {
+        return if kinds.next().is_none() {
+            kind
+        } else {
+            "unknown"
+        };
+    }
+    // Older producers explicitly exposed only LOBPCG. Absence of that flag
+    // cannot prove a dense solver, a device lane, or an execution algorithm.
+    if progress.get("solver_cpu_sparse_lobpcg") == Some(&1.0) {
+        "cpu_sparse_lobpcg"
+    } else {
+        "unknown"
+    }
+}
+
 fn fem_eigen_progress_phase(progress: &std::collections::HashMap<String, f64>) -> &'static str {
+    if progress.get("window_phase_base") == Some(&1.0) {
+        return "solving native frequency window base";
+    }
+    if progress.get("window_phase_refinement") == Some(&1.0) {
+        return "solving native frequency window refinement";
+    }
+    if progress.get("phase_kind:solving_native_shift_invert") == Some(&1.0) {
+        return "solving native shift-invert";
+    }
+    if progress.get("phase_kind:solving_native_contour_interval") == Some(&1.0) {
+        return "solving native contour interval";
+    }
     if progress
         .get("phase_materializing_equilibrium")
         .is_some_and(|value| *value > 0.0)
@@ -2298,6 +2324,19 @@ fn format_stage_progress_line(
             .unwrap_or_default();
         return format!("{prefix}  frequency sweep  {progress}{heartbeat}  [{wall_ms:.0}ms]");
     }
+    if let Some(progress) = stats.per_object_scalars.get("fem_eigen_progress") {
+        let detail = fem_eigen_progress_detail(
+            progress,
+            fem_eigen_progress_phase(progress),
+            fem_eigen_progress_solver(progress),
+        );
+        let heartbeat = heartbeat_age
+            .map(|age| format!("  heartbeat idle={:.1}s", age.as_secs_f64()))
+            .unwrap_or_default();
+        let mut line = format!("{prefix}  modal eigen  {detail}{heartbeat}  [{wall_ms:.0}ms]");
+        append_fem_eigen_step_progress(&mut line, stats);
+        return line;
+    }
     let torque_t = if stats.max_torque_T > 0.0 {
         stats.max_torque_T
     } else {
@@ -2320,7 +2359,6 @@ fn format_stage_progress_line(
             wall_ms,
         );
         append_frequency_response_step_progress(&mut line, stats);
-        append_fem_eigen_step_progress(&mut line, stats);
         append_detailed_fem_step_profile(&mut line, stats);
         line
     } else {
@@ -2335,7 +2373,6 @@ fn format_stage_progress_line(
             wall_ms,
         );
         append_frequency_response_step_progress(&mut line, stats);
-        append_fem_eigen_step_progress(&mut line, stats);
         append_detailed_fem_step_profile(&mut line, stats);
         line
     }
@@ -9314,7 +9351,9 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         let next_continuation_completion = stage_result.completion.clone();
         let native_equilibrium_artifact_paths = match &execution_plan.backend_plan {
             BackendPlanIR::Fem(plan) => Some(
-                fullmag_runner::CertifiedFemEquilibriumFields::artifact_paths_for_material(&plan.material),
+                fullmag_runner::CertifiedFemEquilibriumFields::artifact_paths_for_material(
+                    &plan.material,
+                ),
             ),
             _ => None,
         };
@@ -13194,8 +13233,14 @@ mod tests {
         });
         let mut progress = std::collections::HashMap::new();
         progress.insert("percent".to_string(), 48.0);
-        progress.insert("phase_solving_sparse_lobpcg".to_string(), 1.0);
-        progress.insert("solver_cpu_sparse_lobpcg".to_string(), 1.0);
+        progress.insert(
+            "phase_kind:solving_native_frequency_window_base".to_string(),
+            1.0,
+        );
+        progress.insert(
+            "solver_kind:slepc_multi_shift_invert_production_cpu_dense".to_string(),
+            1.0,
+        );
         progress.insert("active_nodes".to_string(), 1931.0);
         progress.insert("effective_dof".to_string(), 3862.0);
         progress.insert("requested_modes".to_string(), 20.0);
@@ -13227,10 +13272,10 @@ mod tests {
         assert_eq!(stage.progress_percent, Some(48.0));
         assert_eq!(
             stage.progress_label.as_deref(),
-            Some("solving sparse LOBPCG")
+            Some("solving native frequency window base")
         );
         let detail = stage.progress_detail.as_deref().unwrap_or_default();
-        assert!(detail.contains("solver=cpu_sparse_lobpcg"));
+        assert!(detail.contains("solver=slepc_multi_shift_invert_production_cpu_dense"));
         assert!(detail.contains("effective_dof=3862"));
         assert!(detail.contains("iteration=37/5000"));
         assert!(detail.contains("residual=1.200e-5"));
@@ -13242,8 +13287,64 @@ mod tests {
     }
 
     #[test]
+    fn modal_progress_does_not_replace_physical_scalar_history_or_run_energy() {
+        let mut state = test_workspace_state();
+        let mut measured = test_step_update(3);
+        measured.stats.e_total = -1.25e-18;
+        state.latest_scalar_row = Some(crate::live_workspace::scalar_row_from_stats(
+            &measured.stats,
+        ));
+        let mut modal = test_step_update(4);
+        modal.stats.per_object_scalars.insert(
+            "fem_eigen_progress".into(),
+            std::collections::HashMap::new(),
+        );
+        modal.finished = true;
+        crate::live_workspace::set_latest_scalar_row_for_terminal_update(&mut state, &modal);
+        assert_eq!(state.latest_scalar_row.as_ref().unwrap().e_total, -1.25e-18);
+        assert_eq!(state.latest_scalar_row.as_ref().unwrap().step, 3);
+        let run = crate::step_utils::running_run_manifest_from_update(
+            "run",
+            "session",
+            PathBuf::from("/tmp/artifacts").as_path(),
+            &modal,
+        );
+        assert_eq!(run.final_e_total, None);
+        assert_eq!(run.final_time, None);
+        assert_eq!(run.total_steps, 0);
+        let physical = crate::step_utils::running_run_manifest_from_update(
+            "run",
+            "session",
+            PathBuf::from("/tmp/artifacts").as_path(),
+            &measured,
+        );
+        assert_eq!(physical.final_e_total, Some(-1.25e-18));
+    }
+
+    #[test]
+    fn modal_solver_identity_never_infers_dense_from_missing_or_ambiguous_flags() {
+        let mut progress = std::collections::HashMap::new();
+        assert_eq!(super::fem_eigen_progress_solver(&progress), "unknown");
+        for kind in [
+            "slepc_multi_shift_invert_production_cpu_dense",
+            "gpu_modal_device_krylov",
+            "cpu_full_2x2_symmetric",
+        ] {
+            progress.clear();
+            progress.insert(format!("solver_kind:{kind}"), 1.0);
+            assert_eq!(super::fem_eigen_progress_solver(&progress), kind);
+        }
+        progress.insert("solver_kind:other".into(), 1.0);
+        assert_eq!(super::fem_eigen_progress_solver(&progress), "unknown");
+    }
+
+    #[test]
     fn terminal_stage_line_includes_fem_eigen_window_progress() {
         let mut progress = std::collections::HashMap::new();
+        progress.insert(
+            "solver_kind:slepc_multi_shift_invert_production_cpu_dense".to_string(),
+            1.0,
+        );
         progress.insert("window_phase_refinement".to_string(), 1.0);
         progress.insert("current_subwindow".to_string(), 17.0);
         progress.insert("total_subwindows".to_string(), 34.0);
@@ -13266,6 +13367,10 @@ mod tests {
             None,
         );
 
+        for forbidden in ["|H_eff|", "max_torque", "E_total", "m_avg", " t=", " dt="] {
+            assert!(!line.contains(forbidden), "{line}");
+        }
+        assert!(line.contains("solver=slepc_multi_shift_invert_production_cpu_dense"));
         assert!(line.contains("modal window phase=refinement"), "{line}");
         assert!(line.contains("subwindow=17/34"), "{line}");
         assert!(line.contains("subwindow_s=4.2"), "{line}");

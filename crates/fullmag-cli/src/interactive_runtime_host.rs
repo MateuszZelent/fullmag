@@ -1186,6 +1186,12 @@ fn apply_step_stats_to_idle_live_state(
     state: &mut LocalLiveWorkspaceState,
     step_stats: &fullmag_runner::StepStats,
 ) {
+    if step_stats
+        .per_object_scalars
+        .contains_key("fem_eigen_progress")
+    {
+        return;
+    }
     if step_stats.step < state.live_state.latest_step.step {
         return;
     }
