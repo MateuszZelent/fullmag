@@ -44,6 +44,23 @@ OPERATOR_INPUT_PREIMAGE_SCHEMA = "nonshared_floquet_operator_input_preimage.v1"
 MATRIX_PENCIL_PREIMAGE_SCHEMA = "nonshared_floquet_matrix_pencil_preimage.v1"
 MESH_PAYLOAD_PREIMAGE_SCHEMA = "nonshared_floquet_mesh_payload.v1"
 PHYSICAL_SOURCE_PREIMAGE_SCHEMA = "nonshared_floquet_physical_source_preimage.v1"
+NATIVE_INPUT_DIAGNOSTICS_SCHEMA = "nonshared_floquet_native_input_diagnostics.v1"
+NATIVE_INPUT_DIAGNOSTICS_PREIMAGE_SCHEMA = (
+    "nonshared_floquet_native_input_diagnostics_preimage.v1"
+)
+NATIVE_INPUT_DIAGNOSTICS_REFS_SCHEMA = (
+    "nonshared_floquet_native_input_diagnostics_refs.v1"
+)
+NATIVE_INPUT_DIAGNOSTICS_DIGEST_FIELD = (
+    "nonshared_floquet_native_input_diagnostics_sha256"
+)
+NATIVE_INPUT_DIAGNOSTICS_FILENAME = "native_input_operator_diagnostics.v1.json"
+NATIVE_INPUT_DIAGNOSTICS_PREIMAGE_FILENAME = (
+    "native_input_operator_diagnostics_preimage.v1.json"
+)
+NATIVE_INPUT_DIAGNOSTICS_REFS_FIELD = (
+    "nonshared_floquet_native_input_diagnostics_exact_refs"
+)
 
 _SHA256_RE = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _MAX_JSON_DEPTH = 128
@@ -421,6 +438,17 @@ def _read_relative(root: Path, relative: Any, label: str) -> tuple[bytes, str]:
     return raw, normalized
 
 
+def _read_optional_relative(root: Path, relative: Any, label: str) -> tuple[bytes, str] | None:
+    path, normalized = _safe_relative_path(root, relative, label)
+    if not path.exists():
+        return None
+    try:
+        raw = path.read_bytes()
+    except OSError as error:
+        raise NonSharedReplayError(f"{label}: cannot read {normalized}") from error
+    return raw, normalized
+
+
 def _check_ref_shape(ref: Any, label: str, *, namespace_required: bool = False) -> Mapping[str, Any]:
     if not isinstance(ref, Mapping):
         _fail(f"{label}: expected object")
@@ -772,6 +800,12 @@ def _validate_operator_input(
     damping_policy = operator_input["damping_policy"]
     if type(damping_policy) is not str or damping_policy not in {"ignore", "include"}:
         _fail("operator input: unsupported damping_policy")
+    _digest(
+        operator_input["operator_diagnostics_sha256"],
+        "operator input.operator_diagnostics_sha256",
+    )
+    if operator_input["operator_diagnostics_schema"] != "frequency_domain_operator_diagnostics.v1":
+        _fail("operator input: unsupported operator diagnostics schema")
     matrix_ref_signature = matrix_ref.get("semantic_signature")
     _digest(operator_input["matrix_pencil_sha256"], "operator input.matrix_pencil_sha256")
     if matrix_ref_signature != operator_input["matrix_pencil_sha256"]:
@@ -1035,19 +1069,39 @@ def replay_nonshared_operator(
     gaps: list[str] = [gap for gap in (mesh_payload_ref_gap,) if gap]
     if not source_qualified:
         gaps.append("source_replay_not_qualified")
+    native_input_diagnostics_verified = False
     if operator_diagnostics is None:
-        gaps.append("operator_diagnostics_exact_payload_not_published")
+        operator_diagnostics = _load_and_validate_native_input_diagnostics(
+            root,
+            sample_index=sample_index,
+            identity=identity,
+            operator_input=operator_input,
+            embedding=embedding,
+        )
+        if operator_diagnostics is None:
+            gaps.append("native_input_diagnostics_not_published")
+            # Keep the historical diagnostic for callers and reports that
+            # predate the exact final-input sidecar.
+            gaps.append("operator_diagnostics_exact_payload_not_published")
+        else:
+            # The final input JSON is now bound to its exact preimage and to
+            # the external raw-byte reference.  Native matrix assembly and
+            # solver residuals remain a separate, unresolved gate.
+            native_input_diagnostics_verified = True
         gaps.append("native_actual_matrix_pencil_not_replayed")
     else:
         if not isinstance(operator_diagnostics, Mapping):
             _fail("operator_diagnostics: expected object")
         _validate_diagnostics(operator_diagnostics, embedding)
         gaps.append("operator_diagnostics_exact_digest_unbound")
+        gaps.append("native_actual_matrix_pencil_not_replayed")
     if metrics["gyrotropic_skew_structure"] != "verified":
         gaps.append("direct_tangent_mass_not_symmetric")
     gaps.append("native_solver_residual_and_frequency_not_replayed")
     status = "operator_replayable" if not source_qualified else "operator_and_source_replayable"
     exact_refs_verified = ["source_state", "operator_input", "matrix_pencil"]
+    if native_input_diagnostics_verified:
+        exact_refs_verified.append("native_input_diagnostics")
     if mesh_payload_ref is not None:
         exact_refs_verified.append("mesh_payload")
     if physical_verified:
@@ -1085,6 +1139,266 @@ def _validate_diagnostics(diagnostics: Mapping[str, Any], embedding: str) -> Non
     )
     if diagnostics.get("gyrotropic_form") != expected_form:
         _fail("operator diagnostics: gyrotropic form mismatch")
+
+
+def _validate_native_input_diagnostics_ref(
+    ref: Any,
+    *,
+    expected_schema: str,
+    expected_path: str,
+    expected_raw: bytes,
+    sample_index: int,
+    label: str,
+) -> None:
+    _check_ref_shape(ref, label)
+    if ref["schema_version"] != expected_schema:
+        _fail(f"{label}: unsupported schema")
+    if ref["path"] != expected_path:
+        _fail(f"{label}: path is not the canonical sample path")
+    if "sample_index" not in ref:
+        _fail(f"{label}: sample_index is required")
+    _integer(ref["sample_index"], f"{label}.sample_index")
+    if ref["sample_index"] != sample_index:
+        _fail(f"{label}: sample_index mismatch")
+    if ref["byte_length"] != len(expected_raw):
+        _fail(f"{label}: byte length does not describe exact sidecar")
+    expected_raw_digest = raw_sha256(expected_raw)
+    if ref["raw_sha256"] != expected_raw_digest:
+        _fail(f"{label}: raw SHA-256 does not describe exact sidecar")
+    if ref.get("semantic_signature") != expected_raw_digest:
+        _fail(f"{label}: semantic signature does not describe exact sidecar")
+
+
+def _solver_diagnostics_candidates(
+    solver_payload: Mapping[str, Any], sample_index: int
+) -> list[Mapping[str, Any]]:
+    candidates: list[Mapping[str, Any]] = []
+
+    def add_candidate(value: Any) -> None:
+        if not isinstance(value, Mapping) or NATIVE_INPUT_DIAGNOSTICS_REFS_FIELD not in value:
+            return
+        refs = value[NATIVE_INPUT_DIAGNOSTICS_REFS_FIELD]
+        if not isinstance(refs, Mapping):
+            _fail("native input diagnostics external references: expected object")
+        declared_sample = refs.get("sample_index")
+        if type(declared_sample) is not int or declared_sample < 0:
+            _fail(
+                "native input diagnostics external references.sample_index: "
+                "expected non-negative integer"
+            )
+        if declared_sample == sample_index:
+            candidates.append(value)
+
+    add_candidate(solver_payload)
+    nested = solver_payload.get("solver_diagnostics")
+    add_candidate(nested)
+    for container in (solver_payload, nested):
+        if not isinstance(container, Mapping):
+            continue
+        rows = container.get("sample_solver_diagnostics")
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if not isinstance(row, Mapping):
+                continue
+            if type(row.get("sample_index")) is int and row["sample_index"] == sample_index:
+                add_candidate(row.get("diagnostics"))
+    return candidates
+
+
+def _validate_native_input_diagnostics_external_refs(
+    root: Path,
+    *,
+    sample_index: int,
+    final_path: str,
+    preimage_path: str,
+    final_raw: bytes,
+    preimage_raw: bytes,
+) -> None:
+    solver_path = "eigen/diagnostics/solver.v1.json"
+    solver_read = _read_optional_relative(root, solver_path, "solver diagnostics path")
+    if solver_read is None:
+        _fail("native input diagnostics: external raw reference is not published")
+    solver_raw, _ = solver_read
+    solver_payload = _json_object(solver_raw, "solver diagnostics")
+    candidates = _solver_diagnostics_candidates(solver_payload, sample_index)
+    if not candidates:
+        _fail("native input diagnostics: external raw reference is not bound to sample")
+    if len(candidates) > 1:
+        first = candidates[0][NATIVE_INPUT_DIAGNOSTICS_REFS_FIELD]
+        for candidate in candidates[1:]:
+            _same_typed_json(
+                first,
+                candidate[NATIVE_INPUT_DIAGNOSTICS_REFS_FIELD],
+                "native input diagnostics external reference duplicates",
+            )
+    refs = candidates[0][NATIVE_INPUT_DIAGNOSTICS_REFS_FIELD]
+    if not isinstance(refs, Mapping):
+        _fail("native input diagnostics external references: expected object")
+    _fields(
+        refs,
+        frozenset({"schema_version", "sample_index", "payload", "preimage"}),
+        "native input diagnostics external references",
+    )
+    if refs["schema_version"] != NATIVE_INPUT_DIAGNOSTICS_REFS_SCHEMA:
+        _fail("native input diagnostics external references: unsupported schema")
+    _integer(refs["sample_index"], "native input diagnostics external references.sample_index")
+    if refs["sample_index"] != sample_index:
+        _fail("native input diagnostics external references: sample_index mismatch")
+    _validate_native_input_diagnostics_ref(
+        refs["payload"],
+        expected_schema=NATIVE_INPUT_DIAGNOSTICS_SCHEMA,
+        expected_path=final_path,
+        expected_raw=final_raw,
+        sample_index=sample_index,
+        label="native input diagnostics external payload",
+    )
+    _validate_native_input_diagnostics_ref(
+        refs["preimage"],
+        expected_schema=NATIVE_INPUT_DIAGNOSTICS_PREIMAGE_SCHEMA,
+        expected_path=preimage_path,
+        expected_raw=preimage_raw,
+        sample_index=sample_index,
+        label="native input diagnostics external preimage",
+    )
+
+
+def _load_and_validate_native_input_diagnostics(
+    root: Path,
+    *,
+    sample_index: int,
+    identity: Mapping[str, Any],
+    operator_input: Mapping[str, Any],
+    embedding: str,
+) -> dict[str, Any] | None:
+    prefix = _sample_prefix(sample_index) + "nonshared_source/"
+    final_path = prefix + NATIVE_INPUT_DIAGNOSTICS_FILENAME
+    preimage_path = prefix + NATIVE_INPUT_DIAGNOSTICS_PREIMAGE_FILENAME
+    final_read = _read_optional_relative(root, final_path, "native input diagnostics path")
+    if final_read is None:
+        preimage_read = _read_optional_relative(
+            root,
+            preimage_path,
+            "native input diagnostics preimage path",
+        )
+        if preimage_read is not None:
+            _fail(
+                "native input diagnostics: final payload is missing while its preimage is published"
+            )
+        solver_read = _read_optional_relative(
+            root,
+            "eigen/diagnostics/solver.v1.json",
+            "solver diagnostics path",
+        )
+        if solver_read is not None:
+            solver_payload = _json_object(solver_read[0], "solver diagnostics")
+            if _solver_diagnostics_candidates(solver_payload, sample_index):
+                _fail(
+                    "native input diagnostics: final payload is missing while an external "
+                    "reference is published"
+                )
+        return None
+    final_raw, _ = final_read
+    final = _json_object(final_raw, "native input diagnostics")
+    _fields(
+        final,
+        frozenset(
+            {
+                "schema_version",
+                "stiffness_units",
+                "gyrotropic_form",
+                "operator_diagnostics_sha256",
+                "operator_diagnostics_schema",
+                "nonshared_floquet_native_input_diagnostics_schema",
+                "nonshared_floquet_native_input_diagnostics_sample_index",
+                "nonshared_floquet_native_input_diagnostics_path",
+                "nonshared_floquet_native_input_diagnostics_preimage_path",
+                NATIVE_INPUT_DIAGNOSTICS_DIGEST_FIELD,
+                "nonshared_floquet_operator_identity_sha256",
+                "nonshared_floquet_source_state_sha256",
+                "nonshared_floquet_matrix_pencil_sha256",
+                "nonshared_floquet_mesh_payload_sha256",
+                "nonshared_floquet_exact_replay_refs",
+                "nonshared_floquet_operator_identity",
+            }
+        ),
+        "native input diagnostics",
+    )
+    if final["nonshared_floquet_native_input_diagnostics_schema"] != NATIVE_INPUT_DIAGNOSTICS_SCHEMA:
+        _fail("native input diagnostics: unsupported sidecar schema")
+    _integer(
+        final["nonshared_floquet_native_input_diagnostics_sample_index"],
+        "native input diagnostics.sample_index",
+    )
+    if final["nonshared_floquet_native_input_diagnostics_sample_index"] != sample_index:
+        _fail("native input diagnostics: sample_index mismatch")
+    if final["nonshared_floquet_native_input_diagnostics_path"] != final_path:
+        _fail("native input diagnostics: final path mismatch")
+    if final["nonshared_floquet_native_input_diagnostics_preimage_path"] != preimage_path:
+        _fail("native input diagnostics: preimage path mismatch")
+    preimage_digest = _digest(
+        final[NATIVE_INPUT_DIAGNOSTICS_DIGEST_FIELD],
+        "native input diagnostics.preimage_sha256",
+    )
+    preimage_read = _read_relative(root, preimage_path, "native input diagnostics preimage path")
+    preimage_raw, _ = preimage_read
+    preimage = _json_object(preimage_raw, "native input diagnostics preimage")
+    _same_typed_json(
+        preimage,
+        _replace_empty_digest(final, NATIVE_INPUT_DIAGNOSTICS_DIGEST_FIELD, "native input diagnostics"),
+        "native input diagnostics preimage",
+    )
+    if raw_sha256(preimage_raw) != preimage_digest:
+        _fail("native input diagnostics: preimage raw SHA-256 mismatch")
+    _validate_diagnostics(final, embedding)
+    _digest(
+        final["operator_diagnostics_sha256"],
+        "native input diagnostics.operator_diagnostics_sha256",
+    )
+    if final["operator_diagnostics_schema"] != "frequency_domain_operator_diagnostics.v1":
+        _fail("native input diagnostics: unsupported operator diagnostics schema")
+    if final["operator_diagnostics_sha256"] != operator_input["operator_diagnostics_sha256"]:
+        _fail("native input diagnostics: base diagnostics digest is not bound to operator input")
+    if final["operator_diagnostics_schema"] != operator_input["operator_diagnostics_schema"]:
+        _fail("native input diagnostics: base diagnostics schema is not bound to operator input")
+    expected_bindings = {
+        "nonshared_floquet_operator_identity_sha256": identity["content_sha256"],
+        "nonshared_floquet_source_state_sha256": identity["source_state_sha256"],
+        "nonshared_floquet_matrix_pencil_sha256": identity["matrix_pencil_sha256"],
+        "nonshared_floquet_mesh_payload_sha256": identity["mesh_payload_sha256"],
+    }
+    for key, expected in expected_bindings.items():
+        if final[key] != expected:
+            _fail(f"native input diagnostics: {key} is not bound to identity")
+    _same_typed_json(
+        final["nonshared_floquet_exact_replay_refs"],
+        identity["exact_replay_refs"],
+        "native input diagnostics exact replay refs",
+    )
+    nested_identity = _mapping(
+        final["nonshared_floquet_operator_identity"],
+        "native input diagnostics.operator_identity",
+    )
+    nested_bindings = {
+        "schema_version": identity["schema_version"],
+        "content_sha256": identity["content_sha256"],
+        "sample_index": sample_index,
+        "operator_input_signature_sha256": identity["operator_input_signature_sha256"],
+        "source_state_sha256": identity["source_state_sha256"],
+        "matrix_pencil_sha256": identity["matrix_pencil_sha256"],
+    }
+    for key, expected in nested_bindings.items():
+        if nested_identity.get(key) != expected:
+            _fail(f"native input diagnostics: nested identity {key} is not bound")
+    _validate_native_input_diagnostics_external_refs(
+        root,
+        sample_index=sample_index,
+        final_path=final_path,
+        preimage_path=preimage_path,
+        final_raw=final_raw,
+        preimage_raw=preimage_raw,
+    )
+    return final
 
 
 def _cli() -> int:

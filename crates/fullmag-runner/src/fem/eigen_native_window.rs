@@ -218,7 +218,7 @@ pub(super) fn execute_native_modal_window(
     // record is intentionally scoped to the actual Floquet boundary kind;
     // otherwise those lanes would publish a false Floquet identity while
     // their solver path remains valid.
-    let nonshared_floquet_provenance = runner_operator
+    let mut nonshared_floquet_provenance = runner_operator
         .filter(|_| {
             matches!(
                 plan.spin_wave_bc.kind(),
@@ -251,7 +251,15 @@ pub(super) fn execute_native_modal_window(
             }
         }
     }
-    let operator_diagnostics_json = operator_diagnostics_value.to_string();
+    let operator_diagnostics_json = if let Some(provenance) = nonshared_floquet_provenance.as_mut()
+    {
+        provenance.finalize_native_input_diagnostics(
+            &mut operator_diagnostics_value,
+            artifact_sample_index,
+        )?
+    } else {
+        operator_diagnostics_value.to_string()
+    };
     let shared_domain_identity = shared_domain_problem
         .as_ref()
         .map(|problem| -> Result<serde_json::Value, RunError> {
@@ -1062,6 +1070,19 @@ pub(super) fn execute_native_cpu_modal_window_from_bloch_floquet_complex(
     )
 }
 
+fn complex_bloch_floquet_operator_diagnostics() -> serde_json::Value {
+    serde_json::json!({
+        "schema_version": "frequency_domain_operator_diagnostics.v1",
+        "payload_kind": "bloch_floquet_tangent_operator",
+        "stiffness_field_units": "A_per_m_mass_weighted",
+        "stiffness_omega_units": "rad_s_inv",
+        "native_stiffness_input_units": "rad_s_inv",
+        "stiffness_units": "rad_s_inv",
+        "gyrotropic_form": "pencil_B=-G=[[0,-M],[M,0]]",
+        "operator_embedding": "complex_bloch_floquet_to_real_gyrotropic_pencil",
+    })
+}
+
 /// Prepare the provenance object needed by the complex Bloch/Floquet entry
 /// point.  The execution owner calls this before invoking the `_with_provenance`
 /// variant; keeping conversion here avoids a second, potentially different,
@@ -1093,15 +1114,7 @@ pub(super) fn build_nonshared_floquet_provenance_from_complex(
     // the MFEM payload below; passing an already scaled matrix here would make
     // the provenance matrix pencil carry gamma^2.
     let stiffness = payload.stiffness;
-    let diagnostics = serde_json::json!({
-        "schema_version": "frequency_domain_operator_diagnostics.v1",
-        "payload_kind": "bloch_floquet_tangent_operator",
-        "stiffness_field_units": "A_per_m_mass_weighted",
-        "stiffness_omega_units": "rad_s_inv",
-        "native_stiffness_input_units": "rad_s_inv",
-        "gyrotropic_form": "pencil_B=-G=[[0,-M],[M,0]]",
-        "operator_embedding": "complex_bloch_floquet_to_real_gyrotropic_pencil",
-    });
+    let diagnostics = complex_bloch_floquet_operator_diagnostics();
     build_nonshared_floquet_provenance(
         plan,
         topology,
@@ -1139,7 +1152,7 @@ pub(super) fn execute_native_cpu_modal_window_from_bloch_floquet_complex_with_pr
     state_artifact_sample_index: Option<usize>,
     planned_execution: Option<PlannedFemEigenExecution<'_>>,
     shared_domain_problem: Option<native_fem::NativeModalEigenSharedDomainProblem<'_>>,
-    nonshared_floquet_provenance: Option<NonSharedFloquetProvenance>,
+    mut nonshared_floquet_provenance: Option<NonSharedFloquetProvenance>,
 ) -> Result<ExecutedRun, RunError> {
     emit_fem_eigen_progress(
         &mut progress,
@@ -1187,13 +1200,7 @@ pub(super) fn execute_native_cpu_modal_window_from_bloch_floquet_complex_with_pr
         &tangent_mass_row_major,
         &native_floquet_periodic_pairs,
     );
-    let mut operator_diagnostics_value = serde_json::json!({
-        "schema_version": "frequency_domain_operator_diagnostics.v1",
-        "payload_kind": "bloch_floquet_tangent_operator",
-        "stiffness_units": "rad_s_inv",
-        "gyrotropic_form": "pencil_B=-G=[[0,-M],[M,0]]",
-        "operator_embedding": "complex_bloch_floquet_to_real_gyrotropic_pencil",
-    });
+    let mut operator_diagnostics_value = complex_bloch_floquet_operator_diagnostics();
     if let Some(provenance) = nonshared_floquet_provenance.as_ref() {
         if let Some(fields) = provenance.native_input_diagnostics().as_object() {
             if let Some(object) = operator_diagnostics_value.as_object_mut() {
@@ -1203,7 +1210,15 @@ pub(super) fn execute_native_cpu_modal_window_from_bloch_floquet_complex_with_pr
             }
         }
     }
-    let operator_diagnostics_json = operator_diagnostics_value.to_string();
+    let operator_diagnostics_json = if let Some(provenance) = nonshared_floquet_provenance.as_mut()
+    {
+        provenance.finalize_native_input_diagnostics(
+            &mut operator_diagnostics_value,
+            artifact_sample_index,
+        )?
+    } else {
+        operator_diagnostics_value.to_string()
+    };
     let stop_requested = AtomicBool::new(false);
     // Keep the phase-reduced Floquet path interruptible for the same two
     // control sources as the shared-domain native path: runtime callbacks and

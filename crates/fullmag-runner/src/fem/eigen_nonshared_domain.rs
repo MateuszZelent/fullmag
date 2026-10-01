@@ -37,6 +37,14 @@ const NONSHARED_FLOQUET_MESH_PAYLOAD_PREIMAGE_SCHEMA: &str =
     "nonshared_floquet_mesh_payload.v1";
 const NONSHARED_FLOQUET_PHYSICAL_SOURCE_PREIMAGE_SCHEMA: &str =
     "nonshared_floquet_physical_source_preimage.v1";
+const NONSHARED_FLOQUET_NATIVE_INPUT_DIAGNOSTICS_SCHEMA: &str =
+    "nonshared_floquet_native_input_diagnostics.v1";
+const NONSHARED_FLOQUET_NATIVE_INPUT_DIAGNOSTICS_PREIMAGE_SCHEMA: &str =
+    "nonshared_floquet_native_input_diagnostics_preimage.v1";
+const NONSHARED_FLOQUET_NATIVE_INPUT_DIAGNOSTICS_REFS_SCHEMA: &str =
+    "nonshared_floquet_native_input_diagnostics_refs.v1";
+const NONSHARED_FLOQUET_NATIVE_INPUT_DIAGNOSTICS_DIGEST_FIELD: &str =
+    "nonshared_floquet_native_input_diagnostics_sha256";
 
 #[derive(Debug, Clone)]
 pub(super) struct NonSharedFloquetSidecar {
@@ -52,6 +60,8 @@ pub(super) struct NonSharedFloquetProvenance {
     pub(super) operator_identity_sha256: String,
     pub(super) operator_identity_preimage_json: Vec<u8>,
     pub(super) matrix_pencil_sha256: String,
+    pub(super) operator_diagnostics_sha256: String,
+    pub(super) operator_diagnostics_schema: String,
     pub(super) source_replay_qualified: bool,
     pub(super) mesh_payload_kind: String,
     pub(super) mesh_payload_sha256: String,
@@ -60,6 +70,7 @@ pub(super) struct NonSharedFloquetProvenance {
     pub(super) exact_replay_refs: Value,
     pub(super) exact_replay_sidecars: Vec<NonSharedFloquetSidecar>,
     pub(super) sidecars: Vec<NonSharedFloquetSidecar>,
+    pub(super) native_input_diagnostics_refs: Option<Value>,
 }
 
 impl NonSharedFloquetProvenance {
@@ -127,7 +138,152 @@ impl NonSharedFloquetProvenance {
                 "source_replay_status"
             ],
             "nonshared_floquet_source_replay_qualified": self.source_replay_qualified,
+            "nonshared_floquet_native_input_diagnostics_status": if self.native_input_diagnostics_refs.is_some() {
+                "published_exact"
+            } else {
+                "NOT_VERIFIED"
+            },
+            "nonshared_floquet_native_input_diagnostics_exact_refs": self
+                .native_input_diagnostics_refs
+                .clone()
+                .unwrap_or(Value::Null),
         })
+    }
+
+    /// Publish the exact JSON bytes sent through the native C ABI.
+    ///
+    /// The historical `operator_diagnostics_sha256` is intentionally left
+    /// untouched: it names the base diagnostics object used while building
+    /// the operator-input digest.  This additive sidecar binds the final
+    /// post-provenance JSON without putting a self-reference into
+    /// `exact_replay_refs`, which is itself part of that C ABI payload.
+    pub(super) fn finalize_native_input_diagnostics(
+        &mut self,
+        operator_diagnostics: &mut Value,
+        sample_index: usize,
+    ) -> Result<String, RunError> {
+        if !operator_diagnostics.is_object() {
+            return Err(RunError {
+                message: "nonshared_floquet_native_input_diagnostics_requires_json_object"
+                    .to_string(),
+            });
+        }
+        let final_path = format!(
+            "eigen/metadata/sample_{sample_index:04}/nonshared_source/native_input_operator_diagnostics.v1.json"
+        );
+        let preimage_path = format!(
+            "eigen/metadata/sample_{sample_index:04}/nonshared_source/native_input_operator_diagnostics_preimage.v1.json"
+        );
+        if self
+            .sidecars
+            .iter()
+            .any(|sidecar| sidecar.relative_path == final_path || sidecar.relative_path == preimage_path)
+        {
+            return Err(RunError {
+                message: "nonshared_floquet_native_input_diagnostics_sidecar_already_published"
+                    .to_string(),
+            });
+        }
+        {
+            let object = operator_diagnostics
+                .as_object_mut()
+                .ok_or_else(|| RunError {
+                    message: "nonshared_floquet_native_input_diagnostics_requires_json_object"
+                        .to_string(),
+                })?;
+            if object.contains_key(NONSHARED_FLOQUET_NATIVE_INPUT_DIAGNOSTICS_DIGEST_FIELD) {
+                return Err(RunError {
+                    message: "nonshared_floquet_native_input_diagnostics_digest_already_present"
+                        .to_string(),
+                });
+            }
+            object.insert(
+                "nonshared_floquet_native_input_diagnostics_schema".to_string(),
+                json!(NONSHARED_FLOQUET_NATIVE_INPUT_DIAGNOSTICS_SCHEMA),
+            );
+            object.insert(
+                "nonshared_floquet_native_input_diagnostics_sample_index".to_string(),
+                json!(sample_index),
+            );
+            object.insert(
+                "nonshared_floquet_native_input_diagnostics_path".to_string(),
+                json!(&final_path),
+            );
+            object.insert(
+                "nonshared_floquet_native_input_diagnostics_preimage_path".to_string(),
+                json!(&preimage_path),
+            );
+            object.insert(
+                "operator_diagnostics_sha256".to_string(),
+                json!(&self.operator_diagnostics_sha256),
+            );
+            object.insert(
+                "operator_diagnostics_schema".to_string(),
+                json!(&self.operator_diagnostics_schema),
+            );
+            object.insert(
+                NONSHARED_FLOQUET_NATIVE_INPUT_DIAGNOSTICS_DIGEST_FIELD.to_string(),
+                json!(""),
+            );
+        }
+
+        let preimage_bytes = serde_json::to_vec(&*operator_diagnostics).map_err(|error| RunError {
+            message: format!(
+                "nonshared_floquet_native_input_diagnostics_preimage_serialization_failed: {error}"
+            ),
+        })?;
+        let preimage_sha256 = raw_sha256(&preimage_bytes);
+        operator_diagnostics
+            .as_object_mut()
+            .ok_or_else(|| RunError {
+                message: "nonshared_floquet_native_input_diagnostics_requires_json_object"
+                    .to_string(),
+            })?
+            .insert(
+                NONSHARED_FLOQUET_NATIVE_INPUT_DIAGNOSTICS_DIGEST_FIELD.to_string(),
+                json!(&preimage_sha256),
+            );
+        let final_bytes = serde_json::to_vec(&*operator_diagnostics).map_err(|error| RunError {
+            message: format!(
+                "nonshared_floquet_native_input_diagnostics_serialization_failed: {error}"
+            ),
+        })?;
+        let final_json = String::from_utf8(final_bytes.clone()).map_err(|error| RunError {
+            message: format!(
+                "nonshared_floquet_native_input_diagnostics_not_utf8: {error}"
+            ),
+        })?;
+        let final_sha256 = raw_sha256(&final_bytes);
+
+        self.native_input_diagnostics_refs = Some(json!({
+            "schema_version": NONSHARED_FLOQUET_NATIVE_INPUT_DIAGNOSTICS_REFS_SCHEMA,
+            "sample_index": sample_index,
+            "payload": exact_preimage_ref_with_sample(
+                NONSHARED_FLOQUET_NATIVE_INPUT_DIAGNOSTICS_SCHEMA,
+                &final_path,
+                &final_bytes,
+                Some(&final_sha256),
+                sample_index,
+            ),
+            "preimage": exact_preimage_ref_with_sample(
+                NONSHARED_FLOQUET_NATIVE_INPUT_DIAGNOSTICS_PREIMAGE_SCHEMA,
+                &preimage_path,
+                &preimage_bytes,
+                Some(&preimage_sha256),
+                sample_index,
+            ),
+        }));
+        self.sidecars.extend([
+            NonSharedFloquetSidecar {
+                relative_path: final_path,
+                bytes: final_bytes,
+            },
+            NonSharedFloquetSidecar {
+                relative_path: preimage_path,
+                bytes: preimage_bytes,
+            },
+        ]);
+        Ok(final_json)
     }
 
     fn operator_replay_qualified(&self) -> bool {
@@ -600,6 +756,14 @@ pub(super) fn build_nonshared_floquet_provenance(
     }
     let operator_diagnostics_sha256 =
         shared_domain_content_digest("nonshared_operator_diagnostics", operator_diagnostics)?;
+    let operator_diagnostics_schema = operator_diagnostics
+        .get("schema_version")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| RunError {
+            message: "nonshared_floquet_operator_diagnostics_schema_missing".to_string(),
+        })?
+        .to_string();
     let floquet_pairs = floquet_pair_values(plan, topology)?;
     let operator_input = json!({
         "schema_version": "nonshared_floquet_operator_input.v1",
@@ -854,6 +1018,8 @@ pub(super) fn build_nonshared_floquet_provenance(
         operator_identity_sha256,
         operator_identity_preimage_json,
         matrix_pencil_sha256,
+        operator_diagnostics_sha256,
+        operator_diagnostics_schema,
         source_replay_qualified,
         mesh_payload_kind,
         mesh_payload_sha256,
@@ -862,6 +1028,7 @@ pub(super) fn build_nonshared_floquet_provenance(
         exact_replay_refs: final_exact_replay_refs,
         exact_replay_sidecars,
         sidecars: Vec::new(),
+        native_input_diagnostics_refs: None,
     };
     provenance.sidecars = provenance.identity_sidecars(sample_index)?;
     if let Some((_, plan_bytes, _, _, _)) = producer_plan_snapshot {

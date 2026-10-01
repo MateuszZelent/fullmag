@@ -115,6 +115,50 @@ pod `mesh_payload_path`; `semantic_signature` i surowy SHA muszą być równe
 historycznych artefaktów. Jego brak pozostaje jawną luką
 `mesh_payload_not_in_exact_replay_refs` i nie podnosi kwalifikacji naukowej.
 
+### Finalna diagnostyka wejściowa C ABI
+
+Po scaleniu provenance producent tworzy dokładny, finalny JSON
+`operator_diagnostics_json`, który jest przekazywany do `solve_native_modal_eigen`.
+Historyczny `operator_diagnostics_sha256` pozostaje digestem bazowego obiektu
+diagnostycznego użytego przy budowie `operator_input`; nie jest zmieniany ani
+przemianowywany. Finalny JSON jest publikowany jako surowe bajty w:
+
+```text
+eigen/metadata/sample_NNNN/nonshared_source/native_input_operator_diagnostics.v1.json
+eigen/metadata/sample_NNNN/nonshared_source/native_input_operator_diagnostics_preimage.v1.json
+```
+
+Finalny obiekt ma addytywne pola `sample_index`, ścieżkę finalnego payloadu,
+ścieżkę preimage oraz `nonshared_floquet_native_input_diagnostics_sha256`.
+Zawiera także `operator_diagnostics_sha256` i `operator_diagnostics_schema`,
+przeniesione z bazowego obiektu diagnostycznego. Dzięki temu Python może
+sprawdzić, że finalny JSON C ABI wskazuje ten sam digest i schemat, które
+zostały związane z `operator_input`, zamiast ufać polom dopisanym przez
+konsumenta.
+W ścieżce zespolonej ten obiekt bazowy jest tworzony przez wspólny konstruktor
+używany zarówno przy wyliczaniu digestu provenance, jak i bezpośrednio przed
+wywołaniem C ABI; zapobiega to związaniu digestu z innym zestawem pól jednostek
+lub inną konwencją bloku żyrotropowego.
+Ten digest jest SHA-256 dokładnych bajtów preimage, w którym jego własna
+wartość jest pusta. Referencja artefaktowa publikuje osobno długość i surowy
+SHA-256 finalnych bajtów oraz preimage w
+`nonshared_floquet_native_input_diagnostics_exact_refs`. Referencja nie jest
+dodawana do `exact_replay_refs`, ponieważ ten obiekt jest częścią finalnego
+wejścia C ABI i wprowadziłby cykl hashy. Zewnętrzny obiekt referencji ma
+schemat `nonshared_floquet_native_input_diagnostics_refs.v1` i jest wybierany
+po `sample_index`; deklaracja innej próbki jest filtrowana, a deklaracja
+częściowa lub brakująca kończy replay błędem.
+
+Pythonowy replay automatycznie odczytuje finalny sidecar, porównuje go z
+preimage po wyzerowaniu tylko pola digestu, sprawdza oba surowe SHA i wiąże
+diagnostykę z identity, source state, matrix pencil, `operator_input` oraz
+`exact_replay_refs`. Brak sidecaru zachowuje jawną lukę
+`native_input_diagnostics_not_published`; jego obecność nie dowodzi jeszcze
+rekonstrukcji native matrix pencil, residualu ani zgodności z COMSOL/TetraX.
+Ten etap nie rozszerza tablic strukturalnego manifestu trzech podstawowych
+sidecarów non-shared; dokładne referencje są transportowane przez istniejące
+`provenance.sidecars` i diagnostykę artefaktu.
+
 (python-api)=
 ## 5. Python API
 
@@ -234,13 +278,19 @@ być identyczne w identity, operator input i nested source mesh record.
 
 - `scripts/fem_nonshared_operator_replay.py` — parser fail-closed, resolver
   exact refs, replay preimage i kontrola `K_field/K_omega/B/M_t`, tłumienia,
-  faz, source IDs oraz opcjonalnej referencji exact mesh payloadu;
+  faz, source IDs, exact finalnego wejścia C ABI oraz opcjonalnej referencji
+  exact mesh payloadu;
 - `scripts/test_fem_nonshared_operator_replay.py` — frozen literal SHA,
   pozytywny replay, mutacje digestu/skali gamma/fazy/mesh ref oraz zgodność
   z historycznym bundle bez mesh ref;
+- `scripts/test_fem_nonshared_native_input_diagnostics.py` — exact finalny
+  payload C ABI, preimage, zewnętrzne raw refs i mutacje fail-closed;
+- `scripts/test_nonshared_native_input_diagnostics_source.py` — source-only
+  kontrola finalizera przed obiema ścieżkami C ABI i zachowania starego digestu;
 - `crates/fullmag-runner/src/fem/eigen_nonshared_domain.rs` — producent
   sidecarów i schemat referencji, w tym exact `mesh_payload` ref wiążący
-  rzeczywiste bajty meshu z próbką;
+  rzeczywiste bajty meshu z próbką oraz finalizer dokładnych bajtów
+  `operator_diagnostics_json`;
 - `crates/fullmag-runner/src/fem/eigen_native_window.rs` — źródło konwencji
   jednostek, masy i bloków żyrotropowych;
 - `crates/fullmag-runner/src/fem/eigen_output.rs` —
@@ -261,8 +311,8 @@ być identyczne w identity, operator input i nested source mesh record.
 Uruchomiona bramka interpretowana:
 
 ```text
-python -B -m unittest scripts.test_fem_nonshared_operator_replay -v
-18 tests: PASS
+python -B -m unittest -v scripts.test_fem_nonshared_native_input_diagnostics scripts.test_nonshared_native_input_diagnostics_source scripts.test_fem_nonshared_operator_replay
+33 tests: PASS
 ```
 
 Dodano przygotowane regresje Rust dla historycznego braku, pełnego single-/
@@ -275,17 +325,19 @@ rzeczywistego artefaktu z wykonania FEM.
 (limitations)=
 ## 11. Ograniczenia i jawne luki
 
-Replay sidecarów nie odtwarza assembly MFEM/PETSc, nie ma exact payloadu
-`operator_diagnostics`, nie porównuje digestu actual native magnetic pencil,
-nie rozwiązuje wartości własnych i nie mierzy residualu. Z tego powodu każdy
+Replay sidecarów nie odtwarza assembly MFEM/PETSc, nie porównuje digestu actual
+native magnetic pencil, nie rozwiązuje wartości własnych i nie mierzy residualu.
+Dokładny finalny payload `operator_diagnostics` jest już publikowany i wiązany
+z preimage oraz zewnętrznym raw SHA, ale nie zamyka to bramki wykonania native.
+Z tego powodu każdy
 raport zwraca `scientific_qualification = NOT_VERIFIED`, nawet gdy wszystkie
 czytane preimage i relacje algebraiczne są spójne.
 
 Nowe sidecary udostępniają niezależnemu Pythonowi exact referencję mesh payloadu
-z sample, length, encoding i SHA; historyczne sidecary bez tego wpisu są
-jawnie oznaczane jako niepełne. Nadal brakuje pełnych bajtów diagnostyki native
-i niezależnej rekonstrukcji actual native matrix pencil; te luki nie są
-uzupełniane z bieżącego źródła.
+z sample, length, encoding i SHA oraz exact finalne bajty diagnostyki C ABI;
+historyczne sidecary bez tych wpisów są jawnie oznaczane jako niepełne. Nadal
+brakuje niezależnej rekonstrukcji actual native matrix pencil; ta luka nie jest
+uzupełniana z bieżącego źródła.
 
 (scientific-bibliography)=
 ## 12. Bibliografia naukowa
@@ -304,12 +356,15 @@ uzupełniane z bieżącego źródła.
 |---|---|---|
 | `scripts/fem_nonshared_operator_replay.py` | `replay_nonshared_operator` | niezależny odczyt i kontrola algebraiczna |
 | `scripts/test_fem_nonshared_operator_replay.py` | `class NonSharedOperatorReplayTests` | frozen literal i mutacyjne regresje |
+| `scripts/test_fem_nonshared_native_input_diagnostics.py` | `class NonSharedNativeInputDiagnosticsTests` | exact finalny payload C ABI, preimage, zewnętrzne raw refs i mutacje |
+| `scripts/test_nonshared_native_input_diagnostics_source.py` | `class NonSharedNativeInputDiagnosticsSourceTests` | source-only kolejność finalizacji przed C ABI |
 | `scripts/fem_nonshared_operator_replay.py` | `_matrix_close` | porównanie względne bez wymiarowej tolerancji absolutnej |
 | `scripts/test_fem_nonshared_scaled_matrix_replay.py` | `class NonsharedScaledMatrixReplayTests` | małe poprawne macierze i podmiany po pełnym rehash |
 | `scripts/test_fem_nonshared_canonical_paths.py` | `class NonsharedCanonicalPathTests` | odrzucanie aliasów przed normalizacją ścieżki |
 | `scripts/verify_fem_frequency_domain_eigen_artifacts.py` | `validate_nonshared_operator_replay` | routing manifestu i kompletność policzonych próbek |
 | `scripts/test_fem_nonshared_operator_routing.py` | `class NonsharedOperatorRoutingTests` | rzeczywisty fixture bez mocka, coverage i odrzucenie podmian |
 | `crates/fullmag-runner/src/fem/eigen_nonshared_domain.rs` | `build_nonshared_floquet_provenance` | producent exact refs/preimage |
+| `crates/fullmag-runner/src/fem/eigen_nonshared_domain.rs` | `finalize_native_input_diagnostics` | acykliczna publikacja exact finalnych bajtów C ABI i preimage |
 | `crates/fullmag-runner/src/fem/eigen_native_window.rs` | `gyrotropic_matrix_row_major_from_tangent_mass` | jednostki i blok `G` |
 | `crates/fullmag-runner/src/fem/eigen_output.rs` | `inspect_nonshared_floquet_sidecars` | osobna strukturalna kontrola coverage i manifest single-k |
 | `crates/fullmag-runner/src/fem/eigen_path_manifest.rs` | `build_eigen_path_frequency_domain_manifest` | plural arrays i aliasy multi-k |

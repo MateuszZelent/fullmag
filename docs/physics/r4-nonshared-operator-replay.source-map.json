@@ -38,9 +38,12 @@
     {"id": "nonshared-remap", "path": "crates/fullmag-runner/src/fem/eigen_path_artifacts.rs", "symbol": "remap_single_k_mode_artifacts", "responsibility": "Exact bytes retained with canonical sample paths and traversal rejection."},
     {"id": "nonshared-routing", "path": "scripts/verify_fem_frequency_domain_eigen_artifacts.py", "symbol": "validate_nonshared_operator_replay", "responsibility": "Manifest paths, computed sample coverage and unqualified algebraic replay routing."},
     {"id": "nonshared-routing-tests", "path": "scripts/test_fem_nonshared_operator_routing.py", "symbol": "class NonsharedOperatorRoutingTests", "responsibility": "Real interpreted fixture routing without mocks and without scientific promotion."},
-    {"id": "nonshared-replay", "path": "scripts/fem_nonshared_operator_replay.py", "symbol": "replay_nonshared_operator", "responsibility": "Exact refs, raw bytes, mesh sample/path/length/encoding/SHA binding, matrix relations, alpha, gamma and seam phase."},
+    {"id": "nonshared-replay", "path": "scripts/fem_nonshared_operator_replay.py", "symbol": "replay_nonshared_operator", "responsibility": "Exact refs, raw bytes, mesh sample/path/length/encoding/SHA binding, final C ABI diagnostics, matrix relations, alpha, gamma and seam phase."},
     {"id": "nonshared-replay-tests", "path": "scripts/test_fem_nonshared_operator_replay.py", "symbol": "class NonSharedOperatorReplayTests", "responsibility": "Frozen literal, mesh-ref mutation, legacy absence and fail-closed interpreted regressions."},
-    {"id": "eigen-nonshared-domain", "path": "crates/fullmag-runner/src/fem/eigen_nonshared_domain.rs", "symbol": "build_nonshared_floquet_provenance", "responsibility": "Producer schema, exact operator/matrix/mesh refs and identity/source sidecars."},
+    {"id": "nonshared-native-input-tests", "path": "scripts/test_fem_nonshared_native_input_diagnostics.py", "symbol": "class NonSharedNativeInputDiagnosticsTests", "responsibility": "Exact final C ABI payload, preimage, external raw refs and fail-closed mutation regressions."},
+    {"id": "nonshared-native-input-source-tests", "path": "scripts/test_nonshared_native_input_diagnostics_source.py", "symbol": "class NonSharedNativeInputDiagnosticsSourceTests", "responsibility": "Source-only ordering check for finalization before both native C ABI calls."},
+    {"id": "eigen-nonshared-domain", "path": "crates/fullmag-runner/src/fem/eigen_nonshared_domain.rs", "symbol": "build_nonshared_floquet_provenance", "responsibility": "Producer schema, exact operator/matrix/mesh refs, identity/source sidecars and final C ABI diagnostic bytes."},
+    {"id": "eigen-native-input-finalizer", "path": "crates/fullmag-runner/src/fem/eigen_nonshared_domain.rs", "symbol": "finalize_native_input_diagnostics", "responsibility": "Acyclic preimage/raw digest publication for the exact final operator_diagnostics_json."},
     {"id": "eigen-native-window", "path": "crates/fullmag-runner/src/fem/eigen_native_window.rs", "symbol": "gyrotropic_matrix_row_major_from_tangent_mass", "responsibility": "Native units and direct tangent-mass block convention."},
     {"id": "eigen-output-nonshared-manifest", "path": "crates/fullmag-runner/src/fem/eigen_output.rs", "symbol": "inspect_nonshared_floquet_sidecars", "responsibility": "Canonical non-shared sidecar discovery, full computed-sample coverage and NOT_VERIFIED diagnostics."},
     {"id": "eigen-path-manifest-nonshared", "path": "crates/fullmag-runner/src/fem/eigen_path_manifest.rs", "symbol": "build_eigen_path_frequency_domain_manifest", "responsibility": "Multi-k transport of non-shared plural arrays and single-sample aliases."},
@@ -51,8 +54,8 @@
     "note": "Brak zmian publicznego Python API i ProblemIR; adapter jest narzędziem weryfikacji artefaktów."
   },
   "validation": {
-    "command": "python -B -m unittest scripts.test_fem_nonshared_operator_replay -v",
-    "result": "18 tests PASS",
+    "command": "python -B -m unittest -v scripts.test_fem_nonshared_native_input_diagnostics scripts.test_nonshared_native_input_diagnostics_source scripts.test_fem_nonshared_operator_replay",
+    "result": "33 tests PASS",
     "runtime": "NOT VERIFIED"
   }
 }
