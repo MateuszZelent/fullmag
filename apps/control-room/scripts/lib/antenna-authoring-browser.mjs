@@ -53,6 +53,14 @@ export function assertAntennaScene(scene) {
   }
   const stage = stages[0];
   const stageId = requiredString(stage?.id, "the antenna stage id");
+  if (
+    stage?.current_transport_id !== ports[0]?.current_transport_id ||
+    !Array.isArray(stage?.port_mode_ids) ||
+    stage.port_mode_ids.length !== 1 ||
+    stage.port_mode_ids[0] !== portId
+  ) {
+    throw new Error(`Antenna field-solve stage ${stageId} is not linked to its port and transport.`);
+  }
   const output = sceneArray(stage, "outputs").find(
     (candidate) => candidate?.quantity === "H_ant_basis",
   );

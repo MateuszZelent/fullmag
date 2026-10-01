@@ -24,6 +24,7 @@ test("assertAntennaScene resolves the authored conductor composition", () => {
       id: "antenna-1:solve-field",
       source_object_id: "antenna-1",
       current_transport_id: "antenna-1:current",
+      port_mode_ids: ["antenna-1:port:common"],
       outputs: [{ id: "antenna-1:field-solution", quantity: "H_ant_basis" }],
     }],
   });
@@ -67,6 +68,7 @@ test("assertAntennaScene rejects a stage without an H_ant_basis output", () => {
           id: "solve-1",
           source_object_id: "antenna-1",
           current_transport_id: "current-1",
+          port_mode_ids: ["port-1"],
           outputs: [{ id: "other", quantity: "H_demag" }],
         }],
         current_transports: [{ id: "current-1" }],
@@ -90,5 +92,31 @@ test("assertAntennaScene rejects an unbalanced microstrip preset", () => {
       }],
     }),
     /balanced microstrip preset/,
+  );
+});
+
+test("assertAntennaScene rejects a field solve linked to a different port", () => {
+  assert.throws(
+    () => assertAntennaScene({
+      objects: [{ id: "antenna-1", role: "antenna" }],
+      antenna_port_modes: [{
+        schema_version: "antenna_port_mode.v2",
+        id: "port-1",
+        source_object_id: "antenna-1",
+        current_transport_id: "current-1",
+        branches: [
+          { id: "signal", inlet_terminal_ref: "signal_in", outlet_terminal_ref: "signal_out", signed_weight: 1 },
+          { id: "return", inlet_terminal_ref: "return_in", outlet_terminal_ref: "return_out", signed_weight: -1 },
+        ],
+      }],
+      antenna_field_solve_stages: [{
+        id: "solve-1",
+        source_object_id: "antenna-1",
+        current_transport_id: "current-1",
+        port_mode_ids: ["other-port"],
+        outputs: [{ id: "field-1", quantity: "H_ant_basis" }],
+      }],
+    }),
+    /not linked to its port and transport/,
   );
 });
