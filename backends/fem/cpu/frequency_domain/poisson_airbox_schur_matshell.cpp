@@ -97,6 +97,46 @@ void copy_message(char *destination, std::size_t destination_size, const char *m
     destination[destination_size - 1] = '\0';
 }
 
+void format_nullable_u64_json(
+    char *destination,
+    std::size_t destination_size,
+    bool available,
+    std::uint64_t value) noexcept
+{
+    if (destination == nullptr || destination_size == 0u) {
+        return;
+    }
+    const int written = available
+        ? std::snprintf(
+              destination,
+              destination_size,
+              "%llu",
+              static_cast<unsigned long long>(value))
+        : std::snprintf(destination, destination_size, "%s", "null");
+    if (written < 0 || static_cast<std::size_t>(written) >= destination_size) {
+        copy_message(destination, destination_size, "null");
+    }
+}
+
+void format_nullable_double_json(
+    char *destination,
+    std::size_t destination_size,
+    bool available,
+    double value) noexcept
+{
+    if (destination == nullptr || destination_size == 0u) {
+        return;
+    }
+    if (!available || !std::isfinite(value)) {
+        copy_message(destination, destination_size, "null");
+        return;
+    }
+    const int written = std::snprintf(destination, destination_size, "%.17g", value);
+    if (written < 0 || static_cast<std::size_t>(written) >= destination_size) {
+        copy_message(destination, destination_size, "null");
+    }
+}
+
 bool production_string_equals(const char *actual, const char *expected) noexcept
 {
     return actual != nullptr && expected != nullptr && std::strcmp(actual, expected) == 0;
@@ -2249,6 +2289,14 @@ struct ProductionCpuOperatorContext {
     std::uint32_t operator_context_setup_count = 0;
     std::uint32_t poisson_factorization_setup_count = 0;
     std::uint32_t shift_solver_setup_count = 0;
+    bool exact_cache_construction_attempted = false;
+    bool exact_cache_construction_succeeded = false;
+    bool exact_cache_shift_failure_observed = false;
+    char exact_cache_status[64]{};
+    std::uint64_t exact_cache_dimension = 0;
+    std::uint64_t exact_cache_column_count = 0;
+    std::uint64_t exact_cache_construction_poisson_solve_count = 0;
+    double exact_cache_construction_seconds = 0.0;
     bool k0_demag_probe_completed = false;
     PoissonAirboxK0DemagProbeResult k0_demag_operator_probe{};
     bool ready = false;
@@ -2259,6 +2307,28 @@ struct ProductionCpuOperatorContext {
     ProductionCpuOperatorContext(ProductionCpuOperatorContext &&) = delete;
     ProductionCpuOperatorContext &operator=(ProductionCpuOperatorContext &&) = delete;
 };
+
+void copy_exact_cache_observability(
+    const ProductionCpuOperatorContext &context,
+    PoissonAirboxModalEigenResult *out_result) noexcept
+{
+    if (out_result == nullptr) {
+        return;
+    }
+    out_result->exact_preconditioner_shift_failure_observed =
+        context.exact_cache_shift_failure_observed;
+    if (context.exact_cache_construction_attempted) {
+        out_result->exact_preconditioner_column_count_available = true;
+        out_result->exact_preconditioner_column_count =
+            context.exact_cache_column_count;
+        out_result->exact_preconditioner_construction_metrics_available = true;
+        out_result->exact_preconditioner_construction_poisson_solve_count =
+            context.exact_cache_construction_poisson_solve_count;
+        out_result->exact_preconditioner_construction_timing_available = true;
+        out_result->exact_preconditioner_construction_seconds =
+            context.exact_cache_construction_seconds;
+    }
+}
 
 bool run_k0_demag_operator_probe(
     const PoissonAirboxEigenBlockProblem &problem,
@@ -2455,6 +2525,8 @@ struct ProductionCpuWindowOperatorScope {
     }
 };
 
+constexpr PetscInt kProductionExactPreconditionerMaxDimension = 8192;
+
 // For the bounded CPU qualification scope, materialize only the shifted
 // Schur *preconditioner* by applying the production MatShell to basis
 // vectors.  The eigensolver operator itself remains the persistent MatShell;
@@ -2467,15 +2539,19 @@ bool create_production_exact_shift_preconditioner(
     PetscInt dimension,
     double shift,
     Mat *matrix,
-    ProductionCpuSolveControl *solve_control)
+    ProductionCpuSolveControl *solve_control,
+    std::uint64_t *completed_column_count)
 {
+    if (completed_column_count != nullptr) {
+        *completed_column_count = 0u;
+    }
     // This bounded exact materialization is used for a single selected shift
     // (nearest_frequency) as a qualification/reference path.  A frequency
     // window uses this helper only once at zero shift for its bounded cache;
     // larger windows retain the scalable magnetic preconditioner.
-    constexpr PetscInt kMaximumDimension = 8192;
     if (matrix == nullptr || schur_shell == nullptr || split_mass == nullptr ||
-        dimension <= 0 || dimension > kMaximumDimension || !std::isfinite(shift)) {
+        dimension <= 0 || dimension > kProductionExactPreconditionerMaxDimension ||
+        !std::isfinite(shift)) {
         return false;
     }
     if (MatCreateSeqAIJ(
@@ -2563,6 +2639,9 @@ bool create_production_exact_shift_preconditioner(
         VecRestoreArrayRead(schur_action, &schur_values);
         schur_values = nullptr;
         mass_values = nullptr;
+        if (ok && completed_column_count != nullptr) {
+            *completed_column_count = static_cast<std::uint64_t>(column + 1);
+        }
     }
     if (basis_values != nullptr) {
         VecRestoreArray(basis, &basis_values);
@@ -2585,35 +2664,94 @@ constexpr PetscInt kProductionWindowExactPreconditionerMaxDimension = 512;
 bool create_production_cached_window_preconditioner(
     ProductionCpuOperatorContext *context,
     double shift,
-    Mat *matrix)
+    Mat *matrix,
+    double *shift_setup_seconds,
+    bool *shift_setup_timing_available)
 {
+    if (shift_setup_seconds != nullptr) {
+        *shift_setup_seconds = 0.0;
+    }
+    if (shift_setup_timing_available != nullptr) {
+        *shift_setup_timing_available = false;
+    }
     if (context == nullptr || matrix == nullptr || *matrix != nullptr ||
         context->split_count <= 0 ||
         context->split_count > kProductionWindowExactPreconditionerMaxDimension ||
         !std::isfinite(shift)) {
         return false;
     }
-    if (context->cached_window_schur == nullptr &&
-        !create_production_exact_shift_preconditioner(
+    bool constructed_now = false;
+    // Preserve the pre-observability retry semantics: if materialization did
+    // not produce a cache, the next caller may try the same production path
+    // again.  The failed attempt is still reported through the latest
+    // execution metrics; never pass a null cache to MatDuplicate.
+    if (context->cached_window_schur == nullptr) {
+        constructed_now = true;
+        context->exact_cache_construction_attempted = true;
+        context->exact_cache_dimension = static_cast<std::uint64_t>(
+            context->split_count);
+        context->exact_cache_column_count = static_cast<std::uint64_t>(
+            context->split_count);
+        const std::uint64_t poisson_solve_count_before =
+            context->schur.poisson_solve_count;
+        const auto construction_started_at = std::chrono::steady_clock::now();
+        const bool constructed = create_production_exact_shift_preconditioner(
             context->schur_shell,
             context->split_mass,
             context->split_count,
             0.0,
             &context->cached_window_schur,
-            &context->solve_control)) {
-        return false;
+            &context->solve_control,
+            &context->exact_cache_column_count);
+        context->exact_cache_construction_seconds =
+            std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - construction_started_at)
+                .count();
+        context->exact_cache_construction_poisson_solve_count =
+            context->schur.poisson_solve_count - poisson_solve_count_before;
+        context->exact_cache_construction_succeeded = constructed;
+        copy_message(
+            context->exact_cache_status,
+            sizeof(context->exact_cache_status),
+            constructed ? "cache_built" : "cache_construction_failed");
+        if (!constructed) {
+            return false;
+        }
     }
-    if (MatDuplicate(context->cached_window_schur, MAT_COPY_VALUES, matrix) != 0 ||
-        MatAXPY(
+    const auto shift_setup_started_at = std::chrono::steady_clock::now();
+    bool shift_matrix_ok =
+        MatDuplicate(context->cached_window_schur, MAT_COPY_VALUES, matrix) == 0;
+    if (shift_matrix_ok) {
+        shift_matrix_ok = MatAXPY(
             *matrix,
             static_cast<PetscScalar>(-shift),
             context->split_mass,
-            DIFFERENT_NONZERO_PATTERN) != 0) {
+            DIFFERENT_NONZERO_PATTERN) == 0;
+    }
+    if (!shift_matrix_ok) {
         if (*matrix != nullptr) {
             MatDestroy(matrix);
         }
+        context->exact_cache_shift_failure_observed = true;
+        copy_message(
+            context->exact_cache_status,
+            sizeof(context->exact_cache_status),
+            "cache_shift_matrix_failed");
         return false;
     }
+    if (shift_setup_seconds != nullptr) {
+        *shift_setup_seconds = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - shift_setup_started_at).count();
+    }
+    if (shift_setup_timing_available != nullptr) {
+        *shift_setup_timing_available = true;
+    }
+    copy_message(
+        context->exact_cache_status,
+        sizeof(context->exact_cache_status),
+        context->exact_cache_shift_failure_observed
+            ? "cache_reused_after_shift_failure"
+            : (constructed_now ? "cache_built" : "cache_reused"));
     return true;
 }
 
@@ -3128,7 +3266,49 @@ void write_production_schur_diagnostics(
     if (out == nullptr) {
         return;
     }
-    std::snprintf(
+    char exact_preconditioner_dimension_json[32]{};
+    char exact_preconditioner_column_count_json[32]{};
+    char exact_preconditioner_poisson_solve_count_json[32]{};
+    char split_dof_count_json[32]{};
+    char exact_preconditioner_construction_seconds_json[64]{};
+    char shifted_preconditioner_setup_seconds_json[64]{};
+    char eps_solve_seconds_json[64]{};
+    format_nullable_u64_json(
+        exact_preconditioner_dimension_json,
+        sizeof(exact_preconditioner_dimension_json),
+        result.exact_preconditioner_dimension_available,
+        result.exact_preconditioner_dimension);
+    format_nullable_u64_json(
+        exact_preconditioner_column_count_json,
+        sizeof(exact_preconditioner_column_count_json),
+        result.exact_preconditioner_column_count_available,
+        result.exact_preconditioner_column_count);
+    format_nullable_u64_json(
+        exact_preconditioner_poisson_solve_count_json,
+        sizeof(exact_preconditioner_poisson_solve_count_json),
+        result.exact_preconditioner_construction_metrics_available,
+        result.exact_preconditioner_construction_poisson_solve_count);
+    format_nullable_u64_json(
+        split_dof_count_json,
+        sizeof(split_dof_count_json),
+        result.split_dof_count_available,
+        result.split_dof_count);
+    format_nullable_double_json(
+        exact_preconditioner_construction_seconds_json,
+        sizeof(exact_preconditioner_construction_seconds_json),
+        result.exact_preconditioner_construction_timing_available,
+        result.exact_preconditioner_construction_seconds);
+    format_nullable_double_json(
+        shifted_preconditioner_setup_seconds_json,
+        sizeof(shifted_preconditioner_setup_seconds_json),
+        result.shifted_preconditioner_setup_timing_available,
+        result.shifted_preconditioner_setup_seconds);
+    format_nullable_double_json(
+        eps_solve_seconds_json,
+        sizeof(eps_solve_seconds_json),
+        result.eps_solve_timing_available,
+        result.eps_solve_seconds);
+    const int diagnostics_written = std::snprintf(
         out->diagnostics_json,
         sizeof(out->diagnostics_json),
         "{"
@@ -3155,6 +3335,12 @@ void write_production_schur_diagnostics(
         "\"operator_context_setup_count\":%u,"
         "\"poisson_factorization_setup_count\":%u,"
         "\"shift_solver_setup_count\":%u,"
+        "\"exact_preconditioner\":{\"enabled\":%s,\"status\":\"%s\","
+        "\"shift_failure_observed\":%s,"
+        "\"dimension\":%s,\"column_count\":%s,"
+        "\"construction_poisson_solve_count\":%s,"
+        "\"construction_seconds\":%s,"
+        "\"shifted_setup_seconds\":%s,\"eps_solve_seconds\":%s},"
         "\"gpu_device_resident_modal_eigensolver\":false,"
         "\"per_iteration_h2d_transfer_count\":0,"
         "\"per_iteration_d2h_transfer_count\":0,"
@@ -3211,7 +3397,8 @@ void write_production_schur_diagnostics(
         "\"refinement_failed_count\":%u,"
         "\"refinement_linear_iteration_count\":%llu,"
         "\"refinement_last_ksp_reason_code\":%d,"
-        "\"q_dof_count\":%llu,\"phi_dof_count\":%llu,\"augmented_dof_count\":%llu,"
+        "\"q_dof_count\":%llu,\"split_dof_count\":%s,"
+        "\"phi_dof_count\":%llu,\"augmented_dof_count\":%llu,"
         "\"periodic_mesh_certificate\":{\"schema_version\":\"%s\","
         "\"magnetic_pair_count\":%llu,\"airbox_pair_count\":%llu},"
         "\"metrics\":{\"full_residual_reconstruction_relative_error\":%.17g,"
@@ -3275,6 +3462,17 @@ void write_production_schur_diagnostics(
         result.operator_context_setup_count,
         result.poisson_factorization_setup_count,
         result.shift_solver_setup_count,
+        result.exact_preconditioner_enabled ? "true" : "false",
+        result.exact_preconditioner_status[0] != '\0'
+            ? result.exact_preconditioner_status
+            : "not_available",
+        result.exact_preconditioner_shift_failure_observed ? "true" : "false",
+        exact_preconditioner_dimension_json,
+        exact_preconditioner_column_count_json,
+        exact_preconditioner_poisson_solve_count_json,
+        exact_preconditioner_construction_seconds_json,
+        shifted_preconditioner_setup_seconds_json,
+        eps_solve_seconds_json,
         problem.demag_kind != nullptr ? problem.demag_kind : "",
         problem.assembly_kind != nullptr ? problem.assembly_kind : "",
         problem.outer_boundary_kind != nullptr ? problem.outer_boundary_kind : "",
@@ -3334,6 +3532,7 @@ void write_production_schur_diagnostics(
         static_cast<unsigned long long>(result.refinement_linear_iteration_count),
         result.refinement_last_ksp_reason_code,
         static_cast<unsigned long long>(result.q_dof_count),
+        split_dof_count_json,
         static_cast<unsigned long long>(result.phi_dof_count),
         static_cast<unsigned long long>(result.augmented_dof_count),
         problem.periodic_mesh_certificate_schema != nullptr
@@ -3394,6 +3593,23 @@ void write_production_schur_diagnostics(
         result.window_certificate_json[0] != '\0'
             ? result.window_certificate_json
             : "null");
+    if (diagnostics_written < 0 ||
+        static_cast<std::size_t>(diagnostics_written) >=
+            sizeof(out->diagnostics_json)) {
+        constexpr char kDiagnosticsTruncatedJson[] =
+            "{\"schema_version\":\"poisson_airbox_modal_eigen_schur_slepc.v1\","
+            "\"status\":\"unavailable\",\"complete\":false,"
+            "\"solve_succeeded\":false,\"fields_available\":false,"
+            "\"reason\":\"diagnostics_json_truncated\","
+            "\"diagnostics_json_truncated\":true}";
+        static_assert(
+            sizeof(kDiagnosticsTruncatedJson) <= sizeof(out->diagnostics_json),
+            "diagnostics truncation fallback must fit the result buffer");
+        std::memcpy(
+            out->diagnostics_json,
+            kDiagnosticsTruncatedJson,
+            sizeof(kDiagnosticsTruncatedJson));
+    }
 }
 
 FrequencyDomainStatus fail_production_schur(
@@ -4077,6 +4293,48 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                     resolved_nev(subwindow_requested_mode_count);
                 const std::uint64_t resolved_subwindow_ncv =
                     resolved_ncv(resolved_subwindow_nev);
+                char subwindow_exact_dimension_json[32]{};
+                char subwindow_exact_column_count_json[32]{};
+                char subwindow_exact_poisson_solve_count_json[32]{};
+                char subwindow_split_dof_count_json[32]{};
+                char subwindow_exact_construction_seconds_json[64]{};
+                char subwindow_shifted_setup_seconds_json[64]{};
+                char subwindow_eps_solve_seconds_json[64]{};
+                format_nullable_u64_json(
+                    subwindow_exact_dimension_json,
+                    sizeof(subwindow_exact_dimension_json),
+                    shifted_result.exact_preconditioner_dimension_available,
+                    shifted_result.exact_preconditioner_dimension);
+                format_nullable_u64_json(
+                    subwindow_exact_column_count_json,
+                    sizeof(subwindow_exact_column_count_json),
+                    shifted_result.exact_preconditioner_column_count_available,
+                    shifted_result.exact_preconditioner_column_count);
+                format_nullable_u64_json(
+                    subwindow_exact_poisson_solve_count_json,
+                    sizeof(subwindow_exact_poisson_solve_count_json),
+                    shifted_result.exact_preconditioner_construction_metrics_available,
+                    shifted_result.exact_preconditioner_construction_poisson_solve_count);
+                format_nullable_u64_json(
+                    subwindow_split_dof_count_json,
+                    sizeof(subwindow_split_dof_count_json),
+                    shifted_result.split_dof_count_available,
+                    shifted_result.split_dof_count);
+                format_nullable_double_json(
+                    subwindow_exact_construction_seconds_json,
+                    sizeof(subwindow_exact_construction_seconds_json),
+                    shifted_result.exact_preconditioner_construction_timing_available,
+                    shifted_result.exact_preconditioner_construction_seconds);
+                format_nullable_double_json(
+                    subwindow_shifted_setup_seconds_json,
+                    sizeof(subwindow_shifted_setup_seconds_json),
+                    shifted_result.shifted_preconditioner_setup_timing_available,
+                    shifted_result.shifted_preconditioner_setup_seconds);
+                format_nullable_double_json(
+                    subwindow_eps_solve_seconds_json,
+                    sizeof(subwindow_eps_solve_seconds_json),
+                    shifted_result.eps_solve_timing_available,
+                    shifted_result.eps_solve_seconds);
                 append_subwindow_json(
                     "%s{\"pass\":\"%s\",\"subwindow_index\":%u,"
                     "\"shift_frequency_hz\":%.17g,\"requested_nev\":%llu,"
@@ -4121,6 +4379,17 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                     "\"requested_mode_count\":%u,"
                     "\"retry_count\":%u,"
                     "\"elapsed_seconds\":%.17g,"
+                    "\"q_dof_count\":%llu,\"split_dof_count\":%s,"
+                    "\"phi_dof_count\":%llu,"
+                    "\"augmented_dof_count\":%llu,"
+                    "\"exact_preconditioner\":{\"enabled\":%s,"
+                    "\"shift_failure_observed\":%s,"
+                    "\"status\":\"%s\",\"dimension\":%s,"
+                    "\"column_count\":%s,"
+                    "\"construction_poisson_solve_count\":%s,"
+                    "\"construction_seconds\":%s,"
+                    "\"shifted_setup_seconds\":%s,"
+                    "\"eps_solve_seconds\":%s},"
                     "\"stop_reason\":\"%s\",\"raw_ritz_classification\":%s,"
                     "\"accepted_frequencies_hz\":[",
                     pass_index == 0u && subwindow_index == 0u ? "" : ",",
@@ -4175,6 +4444,23 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                     subwindow_requested_mode_count,
                     subwindow_retry_count,
                     subwindow_elapsed_seconds,
+                    static_cast<unsigned long long>(shifted_result.q_dof_count),
+                    subwindow_split_dof_count_json,
+                    static_cast<unsigned long long>(shifted_result.phi_dof_count),
+                    static_cast<unsigned long long>(shifted_result.augmented_dof_count),
+                    shifted_result.exact_preconditioner_enabled ? "true" : "false",
+                    shifted_result.exact_preconditioner_shift_failure_observed
+                        ? "true"
+                        : "false",
+                    shifted_result.exact_preconditioner_status[0] != '\0'
+                        ? shifted_result.exact_preconditioner_status
+                        : "not_available",
+                    subwindow_exact_dimension_json,
+                    subwindow_exact_column_count_json,
+                    subwindow_exact_poisson_solve_count_json,
+                    subwindow_exact_construction_seconds_json,
+                    subwindow_shifted_setup_seconds_json,
+                    subwindow_eps_solve_seconds_json,
                     subwindow_coverage_failed
                         ? "frequency_window_local_coverage_not_certified"
                         : coverage_deferred_to_refinement
@@ -4925,6 +5211,59 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
             window_operator_context.poisson_factorization_setup_count;
         aggregate.shift_solver_setup_count =
             window_operator_context.shift_solver_setup_count;
+        aggregate.q_dof_count = static_cast<std::uint64_t>(
+            std::max<PetscInt>(window_operator_context.schur.q_count, 0));
+        aggregate.phi_dof_count = static_cast<std::uint64_t>(
+            std::max<PetscInt>(window_operator_context.schur.phi_count, 0));
+        aggregate.augmented_dof_count = aggregate.q_dof_count +
+            aggregate.phi_dof_count +
+            (window_operator_context.schur.gauge_augmented ? 1u : 0u);
+        aggregate.split_dof_count_available =
+            window_operator_context.split_count > 0;
+        aggregate.split_dof_count = aggregate.split_dof_count_available
+            ? static_cast<std::uint64_t>(window_operator_context.split_count)
+            : 0u;
+        aggregate.exact_preconditioner_shift_failure_observed =
+            window_operator_context.exact_cache_shift_failure_observed;
+        aggregate.exact_preconditioner_enabled =
+            window_operator_context.cached_window_schur != nullptr &&
+            window_operator_context.exact_cache_construction_succeeded &&
+            !window_operator_context.exact_cache_shift_failure_observed;
+        aggregate.exact_preconditioner_dimension_available =
+            aggregate.exact_preconditioner_enabled;
+        aggregate.exact_preconditioner_dimension =
+            aggregate.exact_preconditioner_enabled
+                ? aggregate.split_dof_count
+                : 0u;
+        if (window_operator_context.exact_cache_construction_attempted) {
+            copy_exact_cache_observability(window_operator_context, &aggregate);
+            copy_message(
+                aggregate.exact_preconditioner_status,
+                sizeof(aggregate.exact_preconditioner_status),
+                window_operator_context.exact_cache_status[0] != '\0'
+                    ? window_operator_context.exact_cache_status
+                    : (window_operator_context.exact_cache_shift_failure_observed
+                           ? "cache_shift_matrix_failed"
+                           : (aggregate.exact_preconditioner_enabled
+                                  ? "cache_available"
+                                  : "cache_construction_failed")));
+        } else {
+            copy_message(
+                aggregate.exact_preconditioner_status,
+                sizeof(aggregate.exact_preconditioner_status),
+                aggregate.split_dof_count_available &&
+                        window_operator_context.split_count <=
+                            kProductionWindowExactPreconditionerMaxDimension
+                    ? "cache_not_attempted"
+                    : "disabled_dimension_cap");
+        }
+        // Aggregate diagnostics describe the whole window; per-shift timing
+        // stays in executed_subwindows_json and is intentionally unavailable
+        // here rather than being mistaken for a sum or an average.
+        aggregate.shifted_preconditioner_setup_timing_available = false;
+        aggregate.shifted_preconditioner_setup_seconds = 0.0;
+        aggregate.eps_solve_timing_available = false;
+        aggregate.eps_solve_seconds = 0.0;
         const bool refinement_local_coverage_complete =
             pass_local_coverage_uncertified_count[1] == 0u;
         aggregate.window_complete =
@@ -5140,6 +5479,10 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
     Mat split_mass = operator_context->split_mass;
     const PetscInt base_count = context.q_count;
     const PetscInt split_count = operator_context->split_count;
+    out_result->split_dof_count_available = split_count > 0;
+    out_result->split_dof_count = split_count > 0
+        ? static_cast<std::uint64_t>(split_count)
+        : 0u;
     const double mass_norm = operator_context->descriptor_mass_norm;
     const double operator_norm = operator_context->descriptor_operator_norm;
     const double angular_frequency_scale =
@@ -5173,6 +5516,26 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
         operator_context->poisson_factorization_setup_count;
     out_result->shift_solver_setup_count =
         operator_context->shift_solver_setup_count;
+    // split_dof_count is always a resolved operator dimension.  The exact
+    // preconditioner dimension remains null until its matrix is actually
+    // materialized and usable for this shift.
+    out_result->exact_preconditioner_dimension_available = false;
+    out_result->exact_preconditioner_dimension = 0u;
+    if (borrowed_window_operator) {
+        copy_message(
+            out_result->exact_preconditioner_status,
+            sizeof(out_result->exact_preconditioner_status),
+            split_count <= kProductionWindowExactPreconditionerMaxDimension
+                ? "pending_window_cache"
+                : "disabled_dimension_cap");
+    } else {
+        copy_message(
+            out_result->exact_preconditioner_status,
+            sizeof(out_result->exact_preconditioner_status),
+            split_count <= kProductionExactPreconditionerMaxDimension
+                ? "pending_single_shift"
+                : "disabled_dimension_limit");
+    }
     // A standalone positive target needs the two-vector J-equivalence class.
     // Window subcalls use the same target enum but retain four-vector coverage.
     const std::uint64_t requested_pairs =
@@ -5204,17 +5567,75 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
     const bool bounded_window_preconditioner =
         borrowed_window_operator &&
         split_count <= kProductionWindowExactPreconditionerMaxDimension;
-    bool exact_shifted_preconditioner = bounded_window_preconditioner
-        ? create_production_cached_window_preconditioner(
-              operator_context, target_eigenvalue, &shifted_preconditioner)
-        : (!borrowed_window_operator &&
-           create_production_exact_shift_preconditioner(
-                schur_shell,
-                split_mass,
-                split_count,
+    const bool exact_preconditioner_eligible =
+        borrowed_window_operator
+            ? bounded_window_preconditioner
+            : split_count <= kProductionExactPreconditionerMaxDimension;
+    const std::uint64_t preconditioner_poisson_solve_count_before =
+        context.poisson_solve_count;
+    double window_shift_setup_seconds = 0.0;
+    bool window_shift_setup_timing_available = false;
+    bool exact_shifted_preconditioner = false;
+    if (bounded_window_preconditioner) {
+        exact_shifted_preconditioner =
+            create_production_cached_window_preconditioner(
+                operator_context,
                 target_eigenvalue,
                 &shifted_preconditioner,
-                &operator_context->solve_control));
+                &window_shift_setup_seconds,
+                &window_shift_setup_timing_available);
+        out_result->shifted_preconditioner_setup_timing_available =
+            window_shift_setup_timing_available;
+        out_result->shifted_preconditioner_setup_seconds =
+            window_shift_setup_seconds;
+    } else if (!borrowed_window_operator) {
+        const auto exact_construction_started_at = std::chrono::steady_clock::now();
+        exact_shifted_preconditioner = create_production_exact_shift_preconditioner(
+            schur_shell,
+            split_mass,
+            split_count,
+            target_eigenvalue,
+            &shifted_preconditioner,
+            &operator_context->solve_control,
+            &out_result->exact_preconditioner_column_count);
+        const double exact_construction_seconds = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - exact_construction_started_at).count();
+        if (exact_preconditioner_eligible) {
+            out_result->exact_preconditioner_construction_timing_available = true;
+            out_result->exact_preconditioner_construction_seconds =
+                exact_construction_seconds;
+        }
+    }
+    if (borrowed_window_operator) {
+        copy_exact_cache_observability(*operator_context, out_result);
+        if (operator_context->exact_cache_construction_attempted) {
+            copy_message(
+                out_result->exact_preconditioner_status,
+                sizeof(out_result->exact_preconditioner_status),
+                operator_context->exact_cache_status[0] != '\0'
+                    ? operator_context->exact_cache_status
+                    : (exact_shifted_preconditioner
+                           ? "cache_reused"
+                           : "cache_failed"));
+        }
+    } else if (exact_preconditioner_eligible) {
+        out_result->exact_preconditioner_column_count_available = true;
+        out_result->exact_preconditioner_construction_metrics_available = true;
+        out_result->exact_preconditioner_construction_poisson_solve_count =
+            context.poisson_solve_count - preconditioner_poisson_solve_count_before;
+        copy_message(
+            out_result->exact_preconditioner_status,
+            sizeof(out_result->exact_preconditioner_status),
+            exact_shifted_preconditioner
+                ? "single_shift_materialized"
+                : "single_shift_materialization_failed");
+    }
+    out_result->exact_preconditioner_enabled = exact_shifted_preconditioner;
+    if (exact_shifted_preconditioner) {
+        out_result->exact_preconditioner_dimension_available = true;
+        out_result->exact_preconditioner_dimension =
+            static_cast<std::uint64_t>(split_count);
+    }
     if (!exact_shifted_preconditioner &&
         (operator_context->solve_control.cancellation_observed ||
          poisson_airbox_modal_cancel_requested(problem))) {
@@ -5238,12 +5659,19 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
     }
     if (!exact_shifted_preconditioner) {
         exact_shifted_preconditioner = false;
-        if (!create_production_shift_preconditioner(
+        const auto fallback_setup_started_at = std::chrono::steady_clock::now();
+        const bool fallback_setup_succeeded = create_production_shift_preconditioner(
                 problem.A_qq,
                 problem.B_qq,
                 target_omega,
                 operator_scale,
-                &shifted_preconditioner)) {
+                &shifted_preconditioner);
+        out_result->shifted_preconditioner_setup_timing_available = true;
+        out_result->shifted_preconditioner_setup_seconds =
+            std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - fallback_setup_started_at)
+                .count();
+        if (!fallback_setup_succeeded) {
             destroy_slepc_objects(&eps, &xr, &xi, nullptr, nullptr);
             if (shifted_preconditioner != nullptr) {
                 MatDestroy(&shifted_preconditioner);
@@ -5255,6 +5683,13 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                 "production shared-domain K0 Schur shifted preconditioner setup failed",
                 "shifted_preconditioner_setup_failed");
         }
+    }
+    if (!exact_shifted_preconditioner &&
+        !borrowed_window_operator && exact_preconditioner_eligible) {
+        copy_message(
+            out_result->exact_preconditioner_status,
+            sizeof(out_result->exact_preconditioner_status),
+            "single_shift_materialization_failed_fallback");
     }
     std::snprintf(
         out_result->shifted_preconditioner_kind,
@@ -5365,7 +5800,13 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
 
     PetscInt outer_iterations = 0;
     PetscInt converged = 0;
+    const auto eps_started_at = std::chrono::steady_clock::now();
     const PetscErrorCode eps_solve_status = EPSSolve(eps);
+    out_result->eps_solve_timing_available = true;
+    out_result->eps_solve_seconds =
+        std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - eps_started_at)
+            .count();
     bool solve_interrupted =
         operator_context->solve_control.cancellation_observed ||
         poisson_airbox_modal_cancel_requested(problem);

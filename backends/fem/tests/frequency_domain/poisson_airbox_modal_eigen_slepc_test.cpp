@@ -1431,6 +1431,39 @@ void FrequencyWindowPublishesCompleteCertificateForSyntheticFixture()
               result.diagnostics_json,
               "\"operator_context_setup_count\":") == 1.0,
           "a complete CPU window must configure one persistent operator context");
+    check(result.split_dof_count_available &&
+              result.split_dof_count == 2u * result.q_dof_count,
+          "CPU Schur diagnostics must expose the actual real-split dimension");
+    check(result.exact_preconditioner_dimension_available &&
+              result.exact_preconditioner_dimension == result.split_dof_count,
+          "a materialized frequency-window cache must expose its exact dimension");
+    check(!result.exact_preconditioner_shift_failure_observed,
+          "a clean synthetic frequency window must not report a cache-shift failure");
+    check(contains(result.diagnostics_json, "\"q_dof_count\":"),
+          "CPU Schur diagnostics must publish q degrees of freedom");
+    check(contains(result.diagnostics_json, "\"split_dof_count\":"),
+          "CPU Schur diagnostics must publish split degrees of freedom");
+    check(contains(result.diagnostics_json, "\"phi_dof_count\":"),
+          "CPU Schur diagnostics must publish phi degrees of freedom");
+    check(contains(result.diagnostics_json, "\"augmented_dof_count\":"),
+          "CPU Schur diagnostics must publish augmented degrees of freedom");
+    check(contains(result.diagnostics_json, "\"exact_preconditioner\":{"),
+          "CPU Schur diagnostics must publish exact-preconditioner observability");
+    check(contains(result.diagnostics_json,
+                   "\"shift_failure_observed\":"),
+          "CPU Schur diagnostics must publish preserved cache-shift failure state");
+    check(contains(result.diagnostics_json,
+                   "\"construction_poisson_solve_count\":"),
+          "CPU Schur diagnostics must publish exact-cache Poisson work");
+    check(contains(result.diagnostics_json, "\"construction_seconds\":"),
+          "CPU Schur diagnostics must publish exact-cache construction timing");
+    check(contains(result.diagnostics_json, "\"shifted_setup_seconds\":"),
+          "CPU Schur diagnostics must publish per-shift setup timing");
+    check(contains(result.diagnostics_json, "\"eps_solve_seconds\":"),
+          "CPU Schur diagnostics must publish per-shift EPS timing");
+    check(contains(result.diagnostics_json,
+                   "\"subwindows\":[{"),
+          "CPU frequency-window diagnostics must retain per-shift telemetry");
     check(json_number_after(
               result.diagnostics_json,
               "\"poisson_factorization_setup_count\":") == 1.0,
@@ -2456,6 +2489,23 @@ void solve_shared_domain_cpu_schur_fixture_above_exact_preconditioner_cap(
           "dimensionless CPU scaling must preserve the physical two-gigahertz mode");
     check(contains(result.diagnostics_json, "\"ksp_type\":\"gmres\""),
           "fixture above the exact-preconditioner cap must exercise GMRES convergence");
+    check(result.split_dof_count_available &&
+              result.split_dof_count == 2u * result.q_dof_count,
+          "above-cap fixture must publish the configured real-split dimension");
+    check(!result.exact_preconditioner_dimension_available,
+          "above-cap fixture must report unavailable exact dimension");
+    check(contains(result.diagnostics_json,
+                   "\"exact_preconditioner\":{\"enabled\":false"),
+          "above-cap fixture must report that exact materialization was disabled");
+    check(contains(result.diagnostics_json,
+                   "\"shift_failure_observed\":false"),
+          "above-cap fixture must report no attempted cache-shift failure");
+    check(contains(result.diagnostics_json, "\"column_count\":null"),
+          "above-cap fixture must report unavailable exact columns as null");
+    check(contains(result.diagnostics_json, "\"dimension\":null"),
+          "above-cap fixture must report unavailable exact dimension as null");
+    check(contains(result.diagnostics_json, "\"construction_seconds\":null"),
+          "above-cap fixture must report unavailable construction time as null");
     check(contains(result.diagnostics_json, "\"refinement_attempted_count\":"),
           "shared-domain CPU Schur diagnostics must publish Ritz refinement attempts");
     check(contains(result.diagnostics_json, "\"refinement_succeeded_count\":"),

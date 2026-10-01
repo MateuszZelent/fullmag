@@ -201,6 +201,8 @@ struct PoissonAirboxModalEigenResult {
     char error_message[256]{};
 
     std::uint64_t q_dof_count = 0;
+    bool split_dof_count_available = false;
+    std::uint64_t split_dof_count = 0;
     std::uint64_t phi_dof_count = 0;
     std::uint64_t augmented_dof_count = 0;
     std::uint64_t magnetic_pair_count = 0;
@@ -279,6 +281,28 @@ struct PoissonAirboxModalEigenResult {
     // shifted-system preconditioner selected for the outer SLEPc transform.
     char shifted_preconditioner_kind[64]{};
     char operator_context_scope[32]{};
+    // Execution-only observability for the bounded shifted preconditioner.
+    // These fields are intentionally outside the request ABI and do not enter
+    // any operator or dependency digest.  The boolean availability fields are
+    // required because zero is a valid counter for a phase that was measured,
+    // while an unexecuted phase must serialize as JSON null.
+    bool exact_preconditioner_enabled = false;
+    char exact_preconditioner_status[64]{};
+    // A failed per-shift clone/AXPY remains observable even when a later
+    // shift reuses the successfully materialized base cache.
+    bool exact_preconditioner_shift_failure_observed = false;
+    bool exact_preconditioner_dimension_available = false;
+    std::uint64_t exact_preconditioner_dimension = 0;
+    bool exact_preconditioner_column_count_available = false;
+    std::uint64_t exact_preconditioner_column_count = 0;
+    bool exact_preconditioner_construction_metrics_available = false;
+    std::uint64_t exact_preconditioner_construction_poisson_solve_count = 0;
+    bool exact_preconditioner_construction_timing_available = false;
+    double exact_preconditioner_construction_seconds = 0.0;
+    bool shifted_preconditioner_setup_timing_available = false;
+    double shifted_preconditioner_setup_seconds = 0.0;
+    bool eps_solve_timing_available = false;
+    double eps_solve_seconds = 0.0;
     char raw_ritz_classification_json[2048]{};
     // Exact provenance for every shift executed by a frequency-window solve.
     // Kept separate so the common diagnostics writer can embed it verbatim.

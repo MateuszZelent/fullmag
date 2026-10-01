@@ -1,6 +1,13 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
-## Aktualny stan — 2026-10-01, po commicie dc98052f6
+## Aktualny stan — 2026-10-01, po commicie 206a684b4
+
+Checkpoint exact mesh replay, małych macierzy i kanonicznych ścieżek:
+`206a684b4f21d1439e7dcb57cce7408006e42312` — commit i push potwierdzone;
+pełne lokalne HEAD i origin brancha są zgodne. Zakres: 8 plików, 28
+interpretowanych regresji nonshared PASS, 13 kontraktów nonshared PASS,
+parser Rust i pełny validator noty PASS. Review zamknęło P2 aliasów ścieżek.
+Native build/runtime tego SHA: NOT VERIFIED.
 
 Checkpoint consumer-plan i nonshared replay:
 `dc98052f6dfc0336f0fd098b2d327822692f8515` — commit i push potwierdzone,
@@ -12,8 +19,11 @@ tego checkpointu nie został jeszcze zbudowany. Lokalna diagnostyka czasu
 Schur/EPS jest osobnym przyrostem w review; błędy jej noty naukowej zostały
 poprawione i pełny validator przeszedł. Korekty semantyki timerów,
 agregacji błędów preconditionera i ochrony końcowego JSON przed obcięciem
-są zaimplementowane i przechodzą source contract; niezależne review korekt
-pozostaje otwarte. JSON parse nie zastępuje pełnej bramki dokumentacyjnej.
+są zaimplementowane i przechodzą source contract; niezależne review przyjęło
+wszystkie cztery korekty. Nota rozróżnia bezwymiarowy EPS pencil/target po
+normalizacji od fizycznej częstotliwości odtwarzanej przez angular_frequency_scale.
+JSON parse nie zastępuje pełnej bramki dokumentacyjnej. Native runtime
+telemetrii pozostaje NOT VERIFIED.
 
 Kolejny przyrost source: exact mesh ref wiąże próbkę, ścieżkę, kodowanie,
 długość i SHA rzeczywistych bajtów meshu. Historyczny brak ref zachowuje
