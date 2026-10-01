@@ -35,6 +35,9 @@ ANTENNA_OERSTED_REALIZATIONS = frozenset(
 ANTENNA_SPECTRUM_TRANSFORMS = frozenset({"spatial_fft", "nonuniform_spatial_fft"})
 ANTENNA_SPECTRUM_WINDOWS = frozenset({"rectangular", "hann", "hamming", "blackman"})
 ANTENNA_SPECTRUM_NORMALIZATIONS = frozenset({"integral_si", "unitary_discrete"})
+ANTENNA_SPECTRUM_COMPONENTS = frozenset(
+    {"x", "y", "z", "u", "v", "normal", "vector_power", "transverse"}
+)
 ANTENNA_SPECTRUM_OUTSIDE_POLICIES = frozenset({"error", "zero"})
 ANTENNA_SPECTRUM_INTERPOLATIONS = frozenset({"fem_element", "fdm_trilinear"})
 ANTENNA_PORT_MODE_SCHEMA_VERSION = "antenna_port_mode.v2"
@@ -554,6 +557,10 @@ class AntennaSpectrumRequest:
                 self,
                 name,
                 require_non_empty(getattr(self, name), f"antenna_spectrum.{name}"),
+            )
+        if self.component not in ANTENNA_SPECTRUM_COMPONENTS:
+            raise ValueError(
+                f"component must be one of {sorted(ANTENNA_SPECTRUM_COMPONENTS)}"
             )
         if not isinstance(self.solution_ref, (AntennaStageOutputRef, AntennaFieldSolutionRef)):
             raise TypeError("solution_ref must be an AntennaStageOutputRef or AntennaFieldSolutionRef")

@@ -45,6 +45,35 @@ def test_antenna_solve_rejects_multiple_ports_in_one_executable_stage() -> None:
         raise AssertionError("multi-port solve must use separate executable stages")
 
 
+def test_spectrum_component_matches_the_canonical_ir_allow_list() -> None:
+    request = fm.AntennaSpectrumRequest(
+        id="source_k",
+        solution_ref=fm.AntennaStageOutputRef("solve_1", "basis"),
+        target=fm.FieldTarget.global_domain(),
+        transform="spatial_fft",
+        sampling_plane=fm.AntennaSpectrumSamplingPlane(
+            origin_m=(0.0, 0.0, 0.0),
+            axis_u=(1.0, 0.0, 0.0),
+            axis_v=(0.0, 1.0, 0.0),
+            extent_u_m=1e-6,
+            extent_v_m=1e-6,
+            sample_count_u=8,
+            sample_count_v=8,
+        ),
+        window="rectangular",
+        normalization="integral_si",
+        component="u",
+        output_id="spectrum",
+    )
+    assert request.to_ir()["component"] == "u"
+    try:
+        replace(request, component="amplitude")
+    except ValueError as exc:
+        assert "component must be one of" in str(exc)
+    else:
+        raise AssertionError("unsupported spectrum component must fail in Python authoring")
+
+
 def test_study_registers_port_mode_in_canonical_problem() -> None:
     fm.reset()
     study = _configure_study()
