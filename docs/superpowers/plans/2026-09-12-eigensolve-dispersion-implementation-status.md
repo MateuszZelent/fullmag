@@ -1,6 +1,6 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
-## Aktualny stan — 2026-10-01, checkpoint nearest bf25a30d7
+## Aktualny stan — 2026-10-02, checkpoint nearest bf25a30d7
 
 Spójny checkpoint natywny `bf25a30d7d8b26406bdbfc99d6412b10e4a15ae9`
 jest na origin brancha zadania. Zawiera naprawy kompilacji, provenance
@@ -11,8 +11,11 @@ Submission zakończony exit0, przyjęty job #195:
 Source digest `a10753dbee8313170b2a721716824496ebfbf1c255e01dc67ee446e96d89073f`,
 snapshot SHA `b6511df906eb213ffe5f820985c202cfc6cc5364c68becd569611de8bad506a5`,
 kapsuła `ab76858f0c0c475d898e79b71f864354/source`. Źródło czyste, commit mode.
-Ostatni status API running; kontener workera jeszcze nie istnieje, więc
-nie ma dowodu kompilacji. Koordynator żywy; nie ponawiać submission po
+Ostatni status API running; kontener `fullmag-worker-5a281e74772d4976a9d09ccc8d5c7be9`
+istnieje i działa. Odczyt procesów potwierdza aktywny `python3`; nie ma
+jeszcze logu native-build ani receipt, więc sukces kompilacji pozostaje
+NOT VERIFIED. Sesja sterownika 95215 nadal żywa i czeka na ten sam job.
+Koordynator żywy; nie ponawiać submission po
 samym timeout obserwacji. Runner preflight:
 worker_alive=true, accepting_jobs=true, brak aktywnych jobów, 13 653 528 576 B
 wolnego; runtime-v2 dopuszczony. To nie dowodzi sukcesu przyszłego buildu.
@@ -68,7 +71,7 @@ Etap native-build trwał 718 228,649 ms. Log wykazuje cztery przyczyny Rust:
 import MeshTopology z niewłaściwego modułu, brak reexportu funkcji CPU
 z producer identity, brak exact certificate preimage w replay payload
 oraz porównanie podwójnej referencji do komponentu ścieżki (dwa E0277).
-Poprawki są w toku; parser i testy interpretowane nie wykrywały tych
+Poprawki źródłowe zapisano poniżej; parser i testy interpretowane nie wykrywały tych
 błędów typów. Kolejny build dopiero ze spójnego checkpointu napraw.
 Receipt `artifacts/build-receipt.json` potwierdza failed, runtime_only=true
 i unit_test_targets=[]; SHA256 stderr:
@@ -93,7 +96,8 @@ i nie dostarcza dowodu kompletności okna lub zbieżności. Kontrole sterownika:
 bajtów i swojej kopii w kapsule; zmiana którejkolwiek blokuje uruchomienie
 pilotów. Niezależne review sterownika PASS; naprawiono także kontrolowane
 odrzucenie przepełnienia bardzo dużego integera celu. Kolektor i wykres
-w review; runtime NOT VERIFIED.
+przeszły końcowe review i są zapisane w `75721ba74de947cc4e00a1311f9aa84bb35d8e3d`;
+runtime NOT VERIFIED. Ten commit nie zmienia kapsuły ani źródeł buildu #195.
 
 Zapisano i wysłano dwa kolejne checkpointy:
 `c9f10a1d41780f88cdee2a36f21a430612343932` (terminalny audyt Γ) oraz
