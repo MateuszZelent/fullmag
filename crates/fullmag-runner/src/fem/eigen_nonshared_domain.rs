@@ -33,6 +33,8 @@ const NONSHARED_FLOQUET_OPERATOR_INPUT_PREIMAGE_SCHEMA: &str =
     "nonshared_floquet_operator_input_preimage.v1";
 const NONSHARED_FLOQUET_MATRIX_PENCIL_PREIMAGE_SCHEMA: &str =
     "nonshared_floquet_matrix_pencil_preimage.v1";
+const NONSHARED_FLOQUET_MESH_PAYLOAD_PREIMAGE_SCHEMA: &str =
+    "nonshared_floquet_mesh_payload.v1";
 const NONSHARED_FLOQUET_PHYSICAL_SOURCE_PREIMAGE_SCHEMA: &str =
     "nonshared_floquet_physical_source_preimage.v1";
 
@@ -658,6 +660,13 @@ pub(super) fn build_nonshared_floquet_provenance(
             message: "nonshared_floquet_operator_input_digest_preimage_mismatch".to_string(),
         });
     }
+    let mesh_payload_ref = exact_preimage_ref_with_sample(
+        NONSHARED_FLOQUET_MESH_PAYLOAD_PREIMAGE_SCHEMA,
+        &mesh_payload_path,
+        &mesh_payload_json,
+        Some(&mesh_payload_sha256),
+        sample_index,
+    );
     let exact_replay_refs = json!({
         "schema_version": NONSHARED_FLOQUET_EXACT_REPLAY_REFS_SCHEMA,
         "operator_input": exact_preimage_ref(
@@ -672,6 +681,7 @@ pub(super) fn build_nonshared_floquet_provenance(
             &matrix_pencil_preimage_json,
             Some(&matrix_pencil_sha256),
         ),
+        "mesh_payload": mesh_payload_ref,
         "physical_source": physical_source_preimage_refs,
     });
 
@@ -1078,6 +1088,20 @@ fn exact_preimage_ref(
         reference.insert("semantic_signature".to_string(), json!(signature));
     }
     Value::Object(reference)
+}
+
+fn exact_preimage_ref_with_sample(
+    schema: &str,
+    path: &str,
+    bytes: &[u8],
+    semantic_signature: Option<&str>,
+    sample_index: usize,
+) -> Value {
+    let mut reference = exact_preimage_ref(schema, path, bytes, semantic_signature);
+    if let Some(object) = reference.as_object_mut() {
+        object.insert("sample_index".to_string(), json!(sample_index));
+    }
+    reference
 }
 
 fn exact_preimage_ref_with_namespace(

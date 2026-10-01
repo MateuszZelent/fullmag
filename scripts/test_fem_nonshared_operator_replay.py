@@ -91,6 +91,12 @@ def _ref(schema: str, path: str, data: bytes) -> dict[str, object]:
     }
 
 
+def _mesh_ref(path: str, data: bytes, sample_index: int) -> dict[str, object]:
+    ref = _ref("nonshared_floquet_mesh_payload.v1", path, data)
+    ref["sample_index"] = sample_index
+    return ref
+
+
 def _bundle(root: Path, matrix_raw: bytes = MATRIX_PENCIL_RAW, phase: float = -2.0) -> None:
     sample = "eigen/metadata/sample_0003"
     source = f"{sample}/nonshared_source"
@@ -111,6 +117,7 @@ def _bundle(root: Path, matrix_raw: bytes = MATRIX_PENCIL_RAW, phase: float = -2
         "schema_version": "nonshared_floquet_exact_replay_refs.v1",
         "operator_input": operator_ref,
         "matrix_pencil": matrix_ref,
+        "mesh_payload": _mesh_ref(f"{source}/source_mesh.json", MESH_RAW, 3),
         "physical_source": None,
     }
     source_state = {
@@ -271,6 +278,50 @@ def _rewrite_identity(root: Path, mutate: object) -> None:
     sidecar_path.write_bytes(_raw(sidecar))
 
 
+def _rewrite_legacy_without_mesh_ref(root: Path) -> None:
+    """Remove the additive mesh ref while keeping the old bundle self-consistent."""
+
+    sample = root / "eigen/metadata/sample_0003"
+    identity_path = sample / "nonshared_floquet_operator_identity.v1.json"
+    identity_preimage_path = sample / "nonshared_floquet_operator_identity_preimage.v1.json"
+    source_state_path = sample / "nonshared_floquet_source_state.v1.json"
+    identity = json.loads(identity_path.read_text(encoding="utf-8"))
+    source_state = json.loads(source_state_path.read_text(encoding="utf-8"))
+    identity["exact_replay_refs"].pop("mesh_payload", None)
+    source_state["exact_replay_refs"].pop("mesh_payload", None)
+
+    source_preimage = dict(source_state)
+    source_preimage["content_sha256"] = ""
+    source_preimage_raw = _raw(source_preimage)
+    source_digest = raw_sha256(source_preimage_raw)
+    source_state["content_sha256"] = source_digest
+    source_state_path.write_bytes(_raw(source_state))
+    source_ref = identity["exact_replay_refs"]["source_state"]
+    source_ref["byte_length"] = len(source_preimage_raw)
+    source_ref["raw_sha256"] = source_digest
+    source_ref["semantic_signature"] = source_digest
+    (root / Path(source_ref["path"])).write_bytes(source_preimage_raw)
+    identity["source_state_sha256"] = source_digest
+
+    identity_preimage = dict(identity)
+    identity_preimage["content_sha256"] = ""
+    identity_preimage_raw = _raw(identity_preimage)
+    identity_digest = raw_sha256(identity_preimage_raw)
+    identity["content_sha256"] = identity_digest
+    identity_path.write_bytes(_raw(identity))
+    identity_preimage_path.write_bytes(
+        _raw(
+            {
+                "schema_version": "nonshared_floquet_operator_identity_preimage.v1",
+                "identity_schema": "nonshared_floquet_operator_identity.v1",
+                "identity_preimage_json": identity_preimage_raw.decode("utf-8"),
+                "identity_preimage_sha256": identity_digest,
+                "identity_content_sha256": identity_digest,
+            }
+        )
+    )
+
+
 def _refresh_ref(ref: dict[str, object], raw: bytes) -> None:
     digest = raw_sha256(raw)
     ref["byte_length"] = len(raw)
@@ -385,11 +436,46 @@ class NonSharedOperatorReplayTests(unittest.TestCase):
             self.assertEqual(report.relation_metrics["gamma_relation"], "verified")
             self.assertIn("native_actual_matrix_pencil_not_replayed", report.gaps)
             self.assertIn("source_replay_not_qualified", report.gaps)
+            self.assertNotIn("mesh_payload_not_in_exact_replay_refs", report.gaps)
             self.assertEqual(
                 report.exact_refs_verified,
-                ("source_state", "operator_input", "matrix_pencil"),
+                ("source_state", "operator_input", "matrix_pencil", "mesh_payload"),
             )
             self.assertNotIn("", report.as_dict()["exact_refs_verified"])
+
+    def test_mesh_payload_ref_binds_exact_raw_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _bundle(root)
+            mesh_path = root / "eigen/metadata/sample_0003/nonshared_source/source_mesh.json"
+            mesh_path.write_bytes(MESH_RAW.replace(b"[1,0,0]", b"[2,0,0]"))
+            with self.assertRaises(NonSharedReplayError) as context:
+                replay_nonshared_operator(root, sample_index=3)
+            self.assertIn("mesh_payload", str(context.exception))
+
+    def test_mesh_payload_ref_binds_sample_and_declared_path(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _bundle(root)
+            _rewrite_identity(
+                root,
+                lambda identity: identity["exact_replay_refs"]["mesh_payload"].update(
+                    {"sample_index": 4}
+                ),
+            )
+            with self.assertRaises(NonSharedReplayError) as context:
+                replay_nonshared_operator(root, sample_index=3)
+            self.assertIn("mesh_payload", str(context.exception))
+
+    def test_legacy_mesh_payload_without_exact_ref_remains_explicit_gap(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _bundle(root)
+            _rewrite_legacy_without_mesh_ref(root)
+            report = replay_nonshared_operator(root, sample_index=3)
+            self.assertIn("mesh_payload_not_in_exact_replay_refs", report.gaps)
+            self.assertNotIn("mesh_payload", report.exact_refs_verified)
+            self.assertEqual(report.scientific_qualification, "NOT_VERIFIED")
 
     def test_malformed_embedding_with_consistent_rehash_stays_custom_error(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

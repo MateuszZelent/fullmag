@@ -30,14 +30,17 @@
     {"id": "G", "latex": "G", "meaning": "blok żyrotropowy z masy stycznej", "si_unit": "zależna od normalizacji FEM"}
   ],
   "sources": [
+    {"id": "nonshared-canonical-path-tests", "path": "scripts/test_fem_nonshared_canonical_paths.py", "symbol": "class NonsharedCanonicalPathTests", "responsibility": "Reject dot and empty POSIX components before path normalization."},
+    {"id": "nonshared-matrix-tolerance", "path": "scripts/fem_nonshared_operator_replay.py", "symbol": "_matrix_close", "responsibility": "Scale-aware matrix comparisons without a unit-sized absolute floor."},
+    {"id": "nonshared-scaled-tests", "path": "scripts/test_fem_nonshared_scaled_matrix_replay.py", "symbol": "class NonsharedScaledMatrixReplayTests", "responsibility": "Reject relative corruption of small mass-weighted FEM matrices after exact preimage rehash."},
     {"id": "nonshared-coverage", "path": "crates/fullmag-runner/src/fem/eigen_output.rs", "symbol": "inspect_nonshared_floquet_sidecars", "responsibility": "Separate structural coverage and single-k manifest declarations without scientific qualification."},
     {"id": "nonshared-path-manifest", "path": "crates/fullmag-runner/src/fem/eigen_path_manifest.rs", "symbol": "build_eigen_path_frequency_domain_manifest", "responsibility": "Multi-k sample arrays and single-sample aliases."},
     {"id": "nonshared-remap", "path": "crates/fullmag-runner/src/fem/eigen_path_artifacts.rs", "symbol": "remap_single_k_mode_artifacts", "responsibility": "Exact bytes retained with canonical sample paths and traversal rejection."},
     {"id": "nonshared-routing", "path": "scripts/verify_fem_frequency_domain_eigen_artifacts.py", "symbol": "validate_nonshared_operator_replay", "responsibility": "Manifest paths, computed sample coverage and unqualified algebraic replay routing."},
     {"id": "nonshared-routing-tests", "path": "scripts/test_fem_nonshared_operator_routing.py", "symbol": "class NonsharedOperatorRoutingTests", "responsibility": "Real interpreted fixture routing without mocks and without scientific promotion."},
-    {"id": "nonshared-replay", "path": "scripts/fem_nonshared_operator_replay.py", "symbol": "replay_nonshared_operator", "responsibility": "Exact refs, raw bytes, digest binding, matrix relations, alpha, gamma and seam phase."},
-    {"id": "nonshared-replay-tests", "path": "scripts/test_fem_nonshared_operator_replay.py", "symbol": "class NonSharedOperatorReplayTests", "responsibility": "Frozen literal and fail-closed interpreted regressions."},
-    {"id": "eigen-nonshared-domain", "path": "crates/fullmag-runner/src/fem/eigen_nonshared_domain.rs", "symbol": "build_nonshared_floquet_provenance", "responsibility": "Producer schema, exact preimage refs and identity/source sidecars."},
+    {"id": "nonshared-replay", "path": "scripts/fem_nonshared_operator_replay.py", "symbol": "replay_nonshared_operator", "responsibility": "Exact refs, raw bytes, mesh sample/path/length/encoding/SHA binding, matrix relations, alpha, gamma and seam phase."},
+    {"id": "nonshared-replay-tests", "path": "scripts/test_fem_nonshared_operator_replay.py", "symbol": "class NonSharedOperatorReplayTests", "responsibility": "Frozen literal, mesh-ref mutation, legacy absence and fail-closed interpreted regressions."},
+    {"id": "eigen-nonshared-domain", "path": "crates/fullmag-runner/src/fem/eigen_nonshared_domain.rs", "symbol": "build_nonshared_floquet_provenance", "responsibility": "Producer schema, exact operator/matrix/mesh refs and identity/source sidecars."},
     {"id": "eigen-native-window", "path": "crates/fullmag-runner/src/fem/eigen_native_window.rs", "symbol": "gyrotropic_matrix_row_major_from_tangent_mass", "responsibility": "Native units and direct tangent-mass block convention."},
     {"id": "eigen-output-nonshared-manifest", "path": "crates/fullmag-runner/src/fem/eigen_output.rs", "symbol": "inspect_nonshared_floquet_sidecars", "responsibility": "Canonical non-shared sidecar discovery, full computed-sample coverage and NOT_VERIFIED diagnostics."},
     {"id": "eigen-path-manifest-nonshared", "path": "crates/fullmag-runner/src/fem/eigen_path_manifest.rs", "symbol": "build_eigen_path_frequency_domain_manifest", "responsibility": "Multi-k transport of non-shared plural arrays and single-sample aliases."},
@@ -49,7 +52,7 @@
   },
   "validation": {
     "command": "python -B -m unittest scripts.test_fem_nonshared_operator_replay -v",
-    "result": "15 tests PASS",
+    "result": "18 tests PASS",
     "runtime": "NOT VERIFIED"
   }
 }

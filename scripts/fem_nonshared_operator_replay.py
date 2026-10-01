@@ -42,6 +42,7 @@ EXACT_REFS_SCHEMA = "nonshared_floquet_exact_replay_refs.v1"
 SOURCE_STATE_PREIMAGE_SCHEMA = "nonshared_floquet_source_state_preimage.v1"
 OPERATOR_INPUT_PREIMAGE_SCHEMA = "nonshared_floquet_operator_input_preimage.v1"
 MATRIX_PENCIL_PREIMAGE_SCHEMA = "nonshared_floquet_matrix_pencil_preimage.v1"
+MESH_PAYLOAD_PREIMAGE_SCHEMA = "nonshared_floquet_mesh_payload.v1"
 PHYSICAL_SOURCE_PREIMAGE_SCHEMA = "nonshared_floquet_physical_source_preimage.v1"
 
 _SHA256_RE = re.compile(r"sha256:[0-9a-f]{64}\Z")
@@ -389,6 +390,10 @@ def _digest_or_null(value: Any, label: str) -> str | None:
 def _safe_relative_path(root: Path, relative: Any, label: str) -> tuple[Path, str]:
     if type(relative) is not str or not relative or "\\" in relative:
         _fail(f"{label}: expected non-empty POSIX relative path")
+    # Path normalizes '.' and empty components before we can inspect them.
+    # Validate the signed spelling first so one sidecar has one path identity.
+    if any(part in ("", ".", "..") for part in relative.split("/")):
+        _fail(f"{label}: noncanonical POSIX path component")
     candidate_relative = Path(relative)
     if candidate_relative.is_absolute() or ".." in candidate_relative.parts:
         _fail(f"{label}: path traversal or absolute path")
@@ -496,6 +501,10 @@ def _validate_refs_object(
         _fail(f"{label}.schema_version: unsupported schema")
     _check_ref_shape(refs["operator_input"], f"{label}.operator_input")
     _check_ref_shape(refs["matrix_pencil"], f"{label}.matrix_pencil")
+    if "mesh_payload" in refs:
+        mesh_ref = _check_ref_shape(refs["mesh_payload"], f"{label}.mesh_payload")
+        if mesh_ref["schema_version"] != MESH_PAYLOAD_PREIMAGE_SCHEMA:
+            _fail(f"{label}.mesh_payload: unsupported schema")
     physical = refs["physical_source"]
     if physical is not None:
         if not isinstance(physical, Mapping):
@@ -514,6 +523,46 @@ def _validate_source_ref_subset(source_refs: Mapping[str, Any], identity_refs: M
         if key not in source_refs or key not in identity_refs:
             _fail(f"exact replay refs: missing {key}")
         _same_typed_json(source_refs[key], identity_refs[key], f"exact replay refs.{key}")
+    source_has_mesh = "mesh_payload" in source_refs
+    identity_has_mesh = "mesh_payload" in identity_refs
+    if source_has_mesh != identity_has_mesh:
+        _fail("exact replay refs: mesh_payload presence mismatch")
+    if source_has_mesh:
+        _same_typed_json(
+            source_refs["mesh_payload"],
+            identity_refs["mesh_payload"],
+            "exact replay refs.mesh_payload",
+        )
+
+
+def _validate_mesh_payload_ref(
+    root: Path,
+    ref: Mapping[str, Any],
+    identity: Mapping[str, Any],
+    sample_index: int,
+    label: str,
+) -> bytes:
+    """Validate the exact mesh bytes and their binding to one computed sample."""
+
+    _check_ref_shape(ref, label)
+    if ref["schema_version"] != MESH_PAYLOAD_PREIMAGE_SCHEMA:
+        _fail(f"{label}: unsupported schema")
+    _integer(ref.get("sample_index"), f"{label}.sample_index")
+    if ref["sample_index"] != sample_index:
+        _fail(f"{label}.sample_index: mismatch")
+    ref_path = _require_sample_path(ref["path"], sample_index, f"{label}.path")
+    identity_path = _require_sample_path(
+        identity["mesh_payload_path"], sample_index, "identity.mesh_payload_path"
+    )
+    if ref_path != identity_path:
+        _fail(f"{label}.path: does not match identity.mesh_payload_path")
+    expected_sha = _digest(identity["mesh_payload_sha256"], "identity.mesh_payload_sha256")
+    if ref.get("semantic_signature") != expected_sha:
+        _fail(f"{label}.semantic_signature: does not match identity.mesh_payload_sha256")
+    raw, _ = _read_ref(root, ref, label)
+    if raw_sha256(raw) != expected_sha:
+        _fail(f"{label}: raw SHA-256 does not match identity.mesh_payload_sha256")
+    return raw
 
 
 def _validate_build_identity(value: Any, label: str) -> Mapping[str, Any]:
@@ -571,6 +620,12 @@ def _close(left: float, right: float) -> bool:
     return math.isclose(left, right, rel_tol=_REL_TOL, abs_tol=_ABS_TOL)
 
 
+def _matrix_close(left: float, right: float) -> bool:
+    # Mass-weighted FEM entries may be far below unity in SI. A fixed
+    # unit-sized absolute floor would certify an arbitrarily wrong pencil.
+    return math.isclose(left, right, rel_tol=_REL_TOL, abs_tol=0.0)
+
+
 def _validate_matrix(
     matrix: Mapping[str, Any],
     source_state: Mapping[str, Any],
@@ -608,7 +663,7 @@ def _validate_matrix(
     if gamma is not None:
         expected_omega = [value * gamma for value in field]
         omega_error = max((abs(actual - expected) for actual, expected in zip(omega, expected_omega)), default=0.0)
-        if not all(_close(actual, expected) for actual, expected in zip(omega, expected_omega)):
+        if not all(_matrix_close(actual, expected) for actual, expected in zip(omega, expected_omega)):
             _fail(f"matrix pencil: K_omega != gamma*K_field (max_abs={omega_error})")
         gamma_status = "verified"
     if operator_input.get("tangent_dof_count") != dimension:
@@ -625,7 +680,7 @@ def _validate_matrix(
                       for row in range(dimension) for col in range(dimension)), default=0.0)
     scale = max((abs(value) for value in b), default=0.0)
     skew_verified = all(
-        _close(b[row * dimension + col], -b[col * dimension + row])
+        _matrix_close(b[row * dimension + col], -b[col * dimension + row])
         for row in range(dimension)
         for col in range(dimension)
     )
@@ -635,16 +690,18 @@ def _validate_matrix(
             _fail("matrix pencil: direct embedding dimension must be 2*active_node_count")
         n = active_nodes
         mass = arrays["tangent_mass"]
-        tol = max(_ABS_TOL, _REL_TOL * max((abs(value) for value in mass), default=0.0))
+        tol = _REL_TOL * max((abs(value) for value in mass), default=0.0)
         for row in range(n):
             for col in range(n):
                 if abs(mass[row * dimension + col + n]) > tol or abs(mass[(row + n) * dimension + col]) > tol:
                     _fail("matrix pencil: tangent mass has a nonzero cross-component block")
                 if abs(mass[row * dimension + col] - mass[(row + n) * dimension + col + n]) > tol:
                     _fail("matrix pencil: tangent mass diagonal blocks differ")
+                if abs(b[row * dimension + col]) > tol or abs(b[(row + n) * dimension + col + n]) > tol:
+                    _fail("matrix pencil: direct gyrotropic diagonal blocks must be zero")
                 expected_upper = mass[row * dimension + col]
                 expected_lower = -expected_upper
-                if not _close(b[row * dimension + col + n], expected_upper) or not _close(b[(row + n) * dimension + col], expected_lower):
+                if not _matrix_close(b[row * dimension + col + n], expected_upper) or not _matrix_close(b[(row + n) * dimension + col], expected_lower):
                     _fail("matrix pencil: direct gyrotropic block does not match tangent mass")
         block_status = "direct_G_equals_0_M_minus_M_0_verified"
     else:
@@ -818,6 +875,16 @@ def replay_nonshared_operator(
         _require_sample_path(
             identity_refs[ref_name]["path"], sample_index, f"identity.exact_replay_refs.{ref_name}.path"
         )
+    mesh_payload_ref = identity_refs.get("mesh_payload")
+    mesh_payload_ref_raw: bytes | None = None
+    if mesh_payload_ref is not None:
+        mesh_payload_ref_raw = _validate_mesh_payload_ref(
+            root,
+            mesh_payload_ref,
+            identity,
+            sample_index,
+            "identity.exact_replay_refs.mesh_payload",
+        )
     if identity_refs["physical_source"] is not None:
         for ref_name, ref in identity_refs["physical_source"].items():
             _require_sample_path(
@@ -934,14 +1001,20 @@ def replay_nonshared_operator(
         }[key]):
             _fail(f"mesh/source identity mismatch for {key}")
 
-    # Mesh payload is published beside the exact refs but is not itself a ref
-    # in the current Rust schema.  Verify its bytes and expose that missing
-    # ref as a deliberate limitation instead of silently calling it exact.
+    # The mesh sidecar is always checked against the identity path and digest.
+    # New bundles additionally carry the same bytes as an exact replay ref;
+    # historical bundles retain an explicit gap for that missing binding.
     _require_sample_path(identity["mesh_payload_path"], sample_index, "mesh payload")
-    mesh_raw, _ = _read_relative(root, identity["mesh_payload_path"], "mesh payload")
-    if raw_sha256(mesh_raw) != identity["mesh_payload_sha256"]:
+    expected_mesh_sha = _digest(identity["mesh_payload_sha256"], "identity.mesh_payload_sha256")
+    if mesh_payload_ref_raw is None:
+        mesh_raw, _ = _read_relative(root, identity["mesh_payload_path"], "mesh payload")
+    else:
+        mesh_raw = mesh_payload_ref_raw
+    if raw_sha256(mesh_raw) != expected_mesh_sha:
         _fail("mesh payload: raw SHA-256 mismatch")
-    mesh_payload_ref_gap = "mesh_payload_not_in_exact_replay_refs"
+    mesh_payload_ref_gap = (
+        None if mesh_payload_ref is not None else "mesh_payload_not_in_exact_replay_refs"
+    )
 
     physical_verified = _validate_physical_refs(root, identity_refs["physical_source"])
     source_qualified = bool(identity["source_replay_qualified"])
@@ -959,7 +1032,7 @@ def replay_nonshared_operator(
         ):
             if operator_input[operator_key] != physical_refs[physical_key].get("semantic_signature"):
                 _fail(f"operator input: {operator_key} is not bound to physical source preimage")
-    gaps: list[str] = [mesh_payload_ref_gap]
+    gaps: list[str] = [gap for gap in (mesh_payload_ref_gap,) if gap]
     if not source_qualified:
         gaps.append("source_replay_not_qualified")
     if operator_diagnostics is None:
@@ -975,6 +1048,8 @@ def replay_nonshared_operator(
     gaps.append("native_solver_residual_and_frequency_not_replayed")
     status = "operator_replayable" if not source_qualified else "operator_and_source_replayable"
     exact_refs_verified = ["source_state", "operator_input", "matrix_pencil"]
+    if mesh_payload_ref is not None:
+        exact_refs_verified.append("mesh_payload")
     if physical_verified:
         exact_refs_verified.append("physical_source")
     return NonSharedOperatorReplayReport(

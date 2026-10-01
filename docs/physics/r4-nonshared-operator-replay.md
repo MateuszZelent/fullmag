@@ -106,6 +106,15 @@ zgłasza `source_replay_not_qualified`. Brak preimage fizycznych (`material`,
 statyczna fizyka, granica, raw material provenance) nie jest zastępowany
 bieżącym planem modalnym.
 
+Nowe bundle producenta mogą dodatkowo publikować w `exact_replay_refs` wpis
+`mesh_payload` o schemacie `nonshared_floquet_mesh_payload.v1`. Wpis wiąże
+`sample_index`, kanoniczną ścieżkę próbki, `encoding`, `byte_length`,
+`raw_sha256` i `semantic_signature` z tymi samymi bajtami, które są zapisane
+pod `mesh_payload_path`; `semantic_signature` i surowy SHA muszą być równe
+`identity.mesh_payload_sha256`. Wpis jest addytywny i opcjonalny dla odczytu
+historycznych artefaktów. Jego brak pozostaje jawną luką
+`mesh_payload_not_in_exact_replay_refs` i nie podnosi kwalifikacji naukowej.
+
 (python-api)=
 ## 5. Python API
 
@@ -166,14 +175,22 @@ nie zasila rodziny shared R4 i nie tworzy `SharedDomainLinearizationState`.
    `content_sha256`; digest źródła musi wiązać identity i operator.
 3. Referencje operatora i macierzy muszą mieć `utf-8-json-bytes`, poprawną
    długość, surowy SHA oraz zgodny `semantic_signature`.
-4. Preimage fizycznych źródeł są sprawdzane przez ich właściwy namespace.
-5. Błąd ścieżki, digestu, schema, fazy, wymiaru, `K_omega`, `B` lub masy
+4. Jeśli obecna jest referencja `mesh_payload`, jej sample, ścieżka, długość,
+   kodowanie, surowy SHA i `semantic_signature` są sprawdzane względem
+   rzeczywistych bajtów meshu oraz `identity.mesh_payload_sha256`.
+5. Preimage fizycznych źródeł są sprawdzane przez ich właściwy namespace.
+6. Błąd ścieżki, digestu, schema, fazy, wymiaru, `K_omega`, `B` lub masy
    kończy się `NonSharedReplayError`.
 
-Brakujące sidecary nie są raportowane jako częściowy sukces. Renderowany mesh
-payload jest kontrolowany przez swój SHA, lecz obecna produkcyjna schema nie
-umieszcza go w `exact_replay_refs`; dlatego raport zachowuje lukę
+Brakujące sidecary nie są raportowane jako częściowy sukces. Nowe bundle’y
+wiążą mesh także przez exact ref. Historyczny bundle bez tego wpisu nadal może
+sprawdzić bajty przez `mesh_payload_path`, lecz raport zachowuje lukę
 `mesh_payload_not_in_exact_replay_refs`.
+
+Ścieżki POSIX są sprawdzane w surowej postaci przed normalizacją przez
+`Path`: komponenty puste, `.` i `..` są odrzucane. Dzięki temu podpisany
+sidecar nie może używać aliasu `./` lub podwójnego separatora `//` dla tego
+samego pliku. Kontrola containment po rozwiązaniu ścieżki nadal obowiązuje.
 
 Niepoprawny artefakt zwraca `validation errors` przez wyjątek
 `NonSharedReplayError`. Niezgodne lub nieobsługiwane kombinacje zapisuje jako
@@ -196,6 +213,17 @@ W obu wariantach `stiffness_field_a_per_m` i
 każdego elementu. `alpha` musi być identyczne w operator input i stanie
 źródłowym oraz ma jednostkę `1`.
 
+Porównania elementów macierzy mają względną tolerancję
+$5\cdot10^{-11}$ i zerową tolerancję absolutną. Stały próg absolutny
+`1e-12` jest niepoprawny dla małych, masowo ważonych wpisów FEM: mógłby
+zaakceptować nawet wyzerowanie całej niezerowej macierzy częstotliwościowej.
+Kontrola zerowych bloków i powtarzalnych bloków masy używa tej samej
+względnej tolerancji pomnożonej przez największy moduł wpisu macierzy masy.
+Wariant direct wymaga również zerowych diagonalnych bloków macierzy
+żyrotropowej. Te progi dotyczą algebraicznego replayu artefaktów, nie
+residuali ani tolerancji produkcyjnego solvera. Dla faz i bezwymiarowego
+tłumienia zachowano dotychczasową tolerancję skalarną.
+
 Weryfikacja seam obejmuje `pair_id`, `node_a`, `node_b`, translację, konwencję
 fazy i `phase_rad`. Identyfikatory `mesh_topology_sha256`,
 `source_mesh_topology_sha256`, `mesh_payload_sha256` i ścieżka payloadu muszą
@@ -206,11 +234,13 @@ być identyczne w identity, operator input i nested source mesh record.
 
 - `scripts/fem_nonshared_operator_replay.py` — parser fail-closed, resolver
   exact refs, replay preimage i kontrola `K_field/K_omega/B/M_t`, tłumienia,
-  faz oraz source IDs;
+  faz, source IDs oraz opcjonalnej referencji exact mesh payloadu;
 - `scripts/test_fem_nonshared_operator_replay.py` — frozen literal SHA,
-  pozytywny replay oraz mutacje digestu, skali gamma, fazy i ścieżki;
+  pozytywny replay, mutacje digestu/skali gamma/fazy/mesh ref oraz zgodność
+  z historycznym bundle bez mesh ref;
 - `crates/fullmag-runner/src/fem/eigen_nonshared_domain.rs` — producent
-  sidecarów i schemat referencji, źródło bieżącego kontraktu;
+  sidecarów i schemat referencji, w tym exact `mesh_payload` ref wiążący
+  rzeczywiste bajty meshu z próbką;
 - `crates/fullmag-runner/src/fem/eigen_native_window.rs` — źródło konwencji
   jednostek, masy i bloków żyrotropowych;
 - `crates/fullmag-runner/src/fem/eigen_output.rs` —
@@ -232,7 +262,7 @@ Uruchomiona bramka interpretowana:
 
 ```text
 python -B -m unittest scripts.test_fem_nonshared_operator_replay -v
-15 tests: PASS
+18 tests: PASS
 ```
 
 Dodano przygotowane regresje Rust dla historycznego braku, pełnego single-/
@@ -251,9 +281,11 @@ nie rozwiązuje wartości własnych i nie mierzy residualu. Z tego powodu każdy
 raport zwraca `scientific_qualification = NOT_VERIFIED`, nawet gdy wszystkie
 czytane preimage i relacje algebraiczne są spójne.
 
-Obecny sidecar nie udostępnia jeszcze niezależnemu Pythonowi pełnych bajtów
-diagnostyki native ani osobnej referencji mesh payloadu z length/encoding;
-pozostają one zapisaną luką kontraktu, a nie są uzupełniane z bieżącego źródła.
+Nowe sidecary udostępniają niezależnemu Pythonowi exact referencję mesh payloadu
+z sample, length, encoding i SHA; historyczne sidecary bez tego wpisu są
+jawnie oznaczane jako niepełne. Nadal brakuje pełnych bajtów diagnostyki native
+i niezależnej rekonstrukcji actual native matrix pencil; te luki nie są
+uzupełniane z bieżącego źródła.
 
 (scientific-bibliography)=
 ## 12. Bibliografia naukowa
@@ -272,6 +304,9 @@ pozostają one zapisaną luką kontraktu, a nie są uzupełniane z bieżącego �
 |---|---|---|
 | `scripts/fem_nonshared_operator_replay.py` | `replay_nonshared_operator` | niezależny odczyt i kontrola algebraiczna |
 | `scripts/test_fem_nonshared_operator_replay.py` | `class NonSharedOperatorReplayTests` | frozen literal i mutacyjne regresje |
+| `scripts/fem_nonshared_operator_replay.py` | `_matrix_close` | porównanie względne bez wymiarowej tolerancji absolutnej |
+| `scripts/test_fem_nonshared_scaled_matrix_replay.py` | `class NonsharedScaledMatrixReplayTests` | małe poprawne macierze i podmiany po pełnym rehash |
+| `scripts/test_fem_nonshared_canonical_paths.py` | `class NonsharedCanonicalPathTests` | odrzucanie aliasów przed normalizacją ścieżki |
 | `scripts/verify_fem_frequency_domain_eigen_artifacts.py` | `validate_nonshared_operator_replay` | routing manifestu i kompletność policzonych próbek |
 | `scripts/test_fem_nonshared_operator_routing.py` | `class NonsharedOperatorRoutingTests` | rzeczywisty fixture bez mocka, coverage i odrzucenie podmian |
 | `crates/fullmag-runner/src/fem/eigen_nonshared_domain.rs` | `build_nonshared_floquet_provenance` | producent exact refs/preimage |

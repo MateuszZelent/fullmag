@@ -1,8 +1,36 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
-## Aktualny stan — 2026-10-01, po commicie 09aa7e5bc
+## Aktualny stan — 2026-10-01, po commicie dc98052f6
 
-Bieżący przyrost lokalny: native publisher zachowuje dokładne bajty planu
+Checkpoint consumer-plan i nonshared replay:
+`dc98052f6dfc0336f0fd098b2d327822692f8515` — commit i push potwierdzone,
+lokalny HEAD i origin brancha są zgodne. Zakres: 23 pliki, exact consumer
+bytes, osobna publikacja/coverage nonshared, niezależny replay, kontrolowane
+błędy JSON oraz regresje. 48 interpretowanych testów i 213 testów głównego
+verifiera PASS; parser Rust i cztery walidatory not PASS. Native runtime
+tego checkpointu nie został jeszcze zbudowany. Lokalna diagnostyka czasu
+Schur/EPS jest osobnym przyrostem w review; błędy jej noty naukowej zostały
+poprawione i pełny validator przeszedł. Korekty semantyki timerów,
+agregacji błędów preconditionera i ochrony końcowego JSON przed obcięciem
+są zaimplementowane i przechodzą source contract; niezależne review korekt
+pozostaje otwarte. JSON parse nie zastępuje pełnej bramki dokumentacyjnej.
+
+Kolejny przyrost source: exact mesh ref wiąże próbkę, ścieżkę, kodowanie,
+długość i SHA rzeczywistych bajtów meshu. Historyczny brak ref zachowuje
+jawną lukę i NOT VERIFIED. Naprawiono również algebraiczny replay małych
+macierzy masowo ważonych: usunięto stałą tolerancję absolutną z porównań
+macierzowych oraz dodano kontrolę zerowych bloków diagonalnych G.
+Regresje odrzucają pięć podmian po samospójnym rehash przy skali 1e-24;
+poprawny mały pencil pozostaje akceptowany. 21 testów helpera/skali,
+5 testów routingu, 13 testów głównego kontraktu nonshared, parser Rust oraz
+pełny validator noty nonshared PASS.
+Ta poprawka nie zmienia progów residualu ani ustawień trwającego solvera.
+Native runtime tego przyrostu pozostaje NOT VERIFIED. Niezależne review
+nie wykryło P1; wskazało P2 aliasów ścieżek `./` i `//`, który naprawiono
+walidacją surowych komponentów przed `Path`. Dwie nowe regresje ścieżek
+przechodzą; pełny zestaw nonshared ma teraz 28 testów PASS.
+
+Bieżący przyrost na remote: native publisher zachowuje dokładne bajty planu
 konsumenta w `consumer_plan_snapshot.v1.json`; verifier wiąże raw SHA z
 identity i pełnym zbiorem policzonych próbek. Niezależne review Rust nie
 wykryło P1/P2; przygotowano pozytywne regresje pełnego pakietu single-/multi-k
@@ -22,7 +50,7 @@ Pełne walidatory trzech not naukowych PASS; kontrola parsera nie zastępuje
 kompilacji ani uruchomienia natywnego solvera.
 Nie kompilowano testów native. Obserwator session 42033 został ponownie
 odpytany i nadal jest running; proces pilota PID 168336 jest aktywny,
-log Γ t3 przeszedł do refinement 27/50, computed_modes=0. Brak nowego
+log Γ t3 przeszedł do refinement 38/50, computed_modes=0. Brak nowego
 terminalnego wyniku częstotliwości, widma i CSV dyspersji; wykres nie został
 zaktualizowany o nowe punkty tej serii.
 Niezależny odczyt Docker potwierdził kontener `21c61a91ee6f` jako running:
