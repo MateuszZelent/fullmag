@@ -5397,6 +5397,15 @@ class StudyBuilder:
         name(problem_name)
         return self
 
+    def add_antenna_port_mode(self, *, port_mode: AntennaPortMode) -> AntennaPortMode:
+        """Register one authored, signed antenna current-port mode."""
+        if not isinstance(port_mode, AntennaPortMode):
+            raise TypeError("port_mode must be an AntennaPortMode")
+        if any(mode.id == port_mode.id for mode in _state._antenna_port_modes):
+            raise ValueError(f"duplicate antenna port mode id {port_mode.id!r}")
+        _state._antenna_port_modes.append(port_mode)
+        return port_mode
+
     def add_solved_antenna_drive(
         self,
         *,
@@ -5412,7 +5421,7 @@ class StudyBuilder:
             raise ValueError(
                 "drive.projection_ref must match the supplied projection.id"
             )
-        if isinstance(projection.solution, AntennaStageOutputRef):
+        if isinstance(projection.solution, (AntennaStageOutputRef, AntennaFieldSolutionRef)):
             solve = next(
                 (
                     stage
@@ -5427,14 +5436,21 @@ class StudyBuilder:
                     f"{projection.solution.stage_id!r}"
                 )
             if not any(
-                output.id == projection.solution.output_id for output in solve.outputs
+                output.id == projection.solution.output_id
+                and output.quantity == "H_ant_basis"
+                for output in solve.outputs
             ):
                 raise ValueError(
-                    f"projection.solution references unknown output "
+                    f"projection.solution must reference an H_ant_basis output "
                     f"{projection.solution.output_id!r} on solve "
                     f"{projection.solution.stage_id!r}"
                 )
-        elif not isinstance(projection.solution, AntennaFieldSolutionRef):
+            if drive.port_mode_id not in solve.port_mode_ids:
+                raise ValueError(
+                    f"drive.port_mode_id {drive.port_mode_id!r} is not in antenna "
+                    f"field solve {solve.id!r}"
+                )
+        else:
             raise TypeError(
                 "projection.solution must be an AntennaStageOutputRef or "
                 "AntennaFieldSolutionRef"
@@ -5443,9 +5459,74 @@ class StudyBuilder:
             raise ValueError(f"duplicate antenna projection id {projection.id!r}")
         if any(item.id == drive.id for item in _state._solved_antenna_drives):
             raise ValueError(f"duplicate solved antenna drive id {drive.id!r}")
+        if any(
+            stage.stage_id == drive.id
+            for stage in _state._declared_stages
+            if stage.stage_id is not None
+        ):
+            raise ValueError(f"duplicate stage_id {drive.id!r}")
+        problem_before_action = _build_problem()
         _state._antenna_target_projections.append(projection)
         _state._solved_antenna_drives.append(drive)
+        _state._declared_stages.append(
+            CapturedStage(
+                problem=problem_before_action,
+                entrypoint_kind="flat_add_solved_antenna_drive",
+                action={
+                    "kind": "add_solved_antenna_drive",
+                    "projection": projection.to_ir(),
+                    "drive": drive.to_ir(),
+                },
+                stage_id=drive.id,
+            )
+        )
         return drive
+
+    def add_antenna_spectrum_request(
+        self,
+        *,
+        request: AntennaSpectrumRequest,
+    ) -> AntennaSpectrumRequest:
+        """Register a source-field spectrum for a declared antenna solve output."""
+        if not isinstance(request, AntennaSpectrumRequest):
+            raise TypeError("request must be an AntennaSpectrumRequest")
+        if any(item.id == request.id for item in _state._antenna_spectrum_requests):
+            raise ValueError(f"duplicate antenna spectrum request id {request.id!r}")
+        if any(item.output_id == request.output_id for item in _state._antenna_spectrum_requests):
+            raise ValueError(f"duplicate antenna spectrum output_id {request.output_id!r}")
+        solve = next(
+            (
+                stage
+                for stage in _state._antenna_field_solve_stages
+                if stage.id == request.solution_ref.stage_id
+            ),
+            None,
+        )
+        if solve is None or not any(
+            output.id == request.solution_ref.output_id
+            and output.quantity == "H_ant_basis"
+            for output in solve.outputs
+        ):
+            raise ValueError("antenna spectrum request must reference an H_ant_basis solve output")
+        if request.port_mode_id is not None and request.port_mode_id not in solve.port_mode_ids:
+            raise ValueError("antenna spectrum request port_mode_id is not in its solve stage")
+        if any(
+            stage.stage_id == request.id
+            for stage in _state._declared_stages
+            if stage.stage_id is not None
+        ):
+            raise ValueError(f"duplicate stage_id {request.id!r}")
+        problem_before_action = _build_problem()
+        _state._antenna_spectrum_requests.append(request)
+        _state._declared_stages.append(
+            CapturedStage(
+                problem=problem_before_action,
+                entrypoint_kind="flat_antenna_source_spectrum",
+                action={"kind": "antenna_source_spectrum", "request": request.to_ir()},
+                stage_id=request.id,
+            )
+        )
+        return request
 
     def load(
         self,

@@ -171,6 +171,8 @@ def test_field_solve_projection_and_spectrum_are_typed_thin_references() -> None
         {"id": "solution_1", "quantity": "H_ant_basis"}
     ]
     assert projection.to_ir()["solution"]["asset_id"] == "afs_01"
+    assert projection.to_ir()["solution"]["kind"] == "resolved_asset"
+    assert spectrum.to_ir()["solution_ref"]["kind"] == "resolved_asset"
     assert spectrum.to_ir()["transform"] == "nonuniform_spatial_fft"
     assert spectrum.to_ir()["port_mode_id"] == "cpw_common"
     assert spectrum.to_ir()["sampling_plane"]["sample_count_u"] == 65

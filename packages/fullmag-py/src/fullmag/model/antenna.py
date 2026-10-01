@@ -376,8 +376,8 @@ class AntennaFieldSolveStage:
         ):
             object.__setattr__(self, name, require_non_empty(value, f"antenna_field_solve.{name}"))
         ports = tuple(require_non_empty(value, "antenna_field_solve.port_mode_id") for value in port_mode_ids)
-        if not ports or len(set(ports)) != len(ports):
-            raise ValueError("antenna field solve requires unique, non-empty port_mode_ids")
+        if len(ports) != 1:
+            raise ValueError("antenna field solve requires exactly one port_mode_id per executable stage")
         if not isinstance(field_sampling_domain, FieldTarget):
             raise TypeError("field_sampling_domain must be a FieldTarget")
         targets = tuple(target_refs)
@@ -441,9 +441,12 @@ class AntennaTargetProjection:
             raise TypeError("target must be a FieldTarget")
 
     def to_ir(self) -> dict[str, object]:
+        solution = self.solution.to_ir()
+        if isinstance(self.solution, AntennaFieldSolutionRef):
+            solution = {"kind": "resolved_asset", **solution}
         return {
             "id": self.id,
-            "solution": self.solution.to_ir(),
+            "solution": solution,
             "target": self.target.to_ir(),
             "output_id": self.output_id,
         }
@@ -532,7 +535,7 @@ class AntennaSpectrumKGrid:
 @dataclass(frozen=True, slots=True)
 class AntennaSpectrumRequest:
     id: str
-    solution_ref: AntennaFieldSolutionRef
+    solution_ref: AntennaStageOutputRef | AntennaFieldSolutionRef
     target: FieldTarget
     transform: str
     sampling_plane: AntennaSpectrumSamplingPlane
@@ -552,8 +555,8 @@ class AntennaSpectrumRequest:
                 name,
                 require_non_empty(getattr(self, name), f"antenna_spectrum.{name}"),
             )
-        if not isinstance(self.solution_ref, AntennaFieldSolutionRef):
-            raise TypeError("solution_ref must be an AntennaFieldSolutionRef")
+        if not isinstance(self.solution_ref, (AntennaStageOutputRef, AntennaFieldSolutionRef)):
+            raise TypeError("solution_ref must be an AntennaStageOutputRef or AntennaFieldSolutionRef")
         if not isinstance(self.target, FieldTarget):
             raise TypeError("target must be a FieldTarget")
         if not isinstance(self.sampling_plane, AntennaSpectrumSamplingPlane):
@@ -595,9 +598,12 @@ class AntennaSpectrumRequest:
         object.__setattr__(self, "normalization", normalization)
 
     def to_ir(self) -> dict[str, object]:
+        solution_ref = self.solution_ref.to_ir()
+        if isinstance(self.solution_ref, AntennaFieldSolutionRef):
+            solution_ref = {"kind": "resolved_asset", **solution_ref}
         payload: dict[str, object] = {
             "id": self.id,
-            "solution_ref": self.solution_ref.to_ir(),
+            "solution_ref": solution_ref,
             "target": self.target.to_ir(),
             "transform": self.transform,
             "sampling_plane": self.sampling_plane.to_ir(),

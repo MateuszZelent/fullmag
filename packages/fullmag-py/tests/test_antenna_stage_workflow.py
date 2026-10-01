@@ -1,14 +1,16 @@
 from pathlib import Path
+from dataclasses import replace
+from tempfile import TemporaryDirectory
 
 import fullmag as fm
 import fullmag.world as flat_world
-from fullmag.runtime.loader import LoadedProblem, LoadedStage
+from fullmag.runtime.loader import LoadedProblem, LoadedStage, load_problem_from_script
 from fullmag.runtime.scene_document import (
     build_builder_from_scene_document,
     build_scene_document_from_builder,
     builder_overrides_from_scene_document,
 )
-from fullmag.runtime.script_builder import export_builder_draft
+from fullmag.runtime.script_builder import export_builder_draft, render_loaded_problem_as_script
 
 
 def _configure_study() -> fm.StudyBuilder:
@@ -32,6 +34,54 @@ def _field_solve_definition() -> fm.AntennaFieldSolveStage:
         target_refs=(fm.FieldTarget.object("magnet_1"),),
         outputs=(fm.AntennaNamedOutput("basis", "H_ant_basis"),),
     )
+
+
+def test_antenna_solve_rejects_multiple_ports_in_one_executable_stage() -> None:
+    try:
+        replace(_field_solve_definition(), port_mode_ids=("port_1", "port_2"))
+    except ValueError as exc:
+        assert "exactly one port_mode_id" in str(exc)
+    else:
+        raise AssertionError("multi-port solve must use separate executable stages")
+
+
+def test_study_registers_port_mode_in_canonical_problem() -> None:
+    fm.reset()
+    study = _configure_study()
+    port_mode = fm.AntennaPortMode(
+        id="port_1",
+        source_object_id="antenna_1",
+        current_transport_id="transport_1",
+        branches=(
+            fm.AntennaPortBranch("signal", "signal_in", "signal_out", 1.0),
+            fm.AntennaPortBranch("return", "return_in", "return_out", -1.0),
+        ),
+    )
+    assert study.add_antenna_port_mode(port_mode=port_mode) is port_mode
+    assert flat_world._build_problem().to_ir(include_geometry_assets=False)[
+        "antenna_port_modes"
+    ] == [port_mode.to_ir()]
+    loaded = LoadedProblem(
+        problem=flat_world._build_problem(),
+        source_path=Path("antenna_port_workflow.py"),
+        script_source="",
+        entrypoint_kind="flat_sequence",
+        default_until_seconds=1e-12,
+    )
+    rendered = render_loaded_problem_as_script(loaded)
+    assert "study.add_antenna_port_mode(" in rendered
+    compile(rendered, "antenna_port_export.py", "exec")
+    fm.reset()
+    exec(rendered, {})
+    assert flat_world._build_problem().to_ir(include_geometry_assets=False)[
+        "antenna_port_modes"
+    ] == [port_mode.to_ir()]
+    try:
+        study.add_antenna_port_mode(port_mode=port_mode)
+    except ValueError as exc:
+        assert "duplicate antenna port mode id" in str(exc)
+    else:
+        raise AssertionError("duplicate port mode must be rejected")
 
 
 def test_antenna_solve_returns_symbolic_output_and_preserves_authoring_intent() -> None:
@@ -70,6 +120,487 @@ def test_antenna_solve_returns_symbolic_output_and_preserves_authoring_intent() 
         "output_id": "basis",
     }
     assert payload["solved_antenna_drives"][0]["projection_ref"] == "projection_1"
+    scene = build_scene_document_from_builder(
+        {"antenna_target_projections": payload["antenna_target_projections"]}
+    )
+    rebuilt = build_builder_from_scene_document(scene)
+    assert rebuilt["antenna_target_projections"][0]["solution"] == {
+        "kind": "stage_output",
+        "stage_id": "solve_antenna_1",
+        "output_id": "basis",
+    }
+    captured = tuple(
+        LoadedStage(
+            problem=stage.problem,
+            entrypoint_kind=stage.entrypoint_kind,
+            action=stage.action,
+            stage_id=stage.stage_id,
+        )
+        for stage in flat_world._state._declared_stages
+    )
+    loaded = LoadedProblem(
+        problem=flat_world._build_problem(),
+        source_path=Path("antenna_drive_workflow.py"),
+        script_source="",
+        entrypoint_kind="flat_sequence",
+        stages=captured,
+    )
+    assert [node["stage_kind"] for node in loaded.study_pipeline_document()["nodes"]] == [
+        "antenna_field_solve",
+        "add_solved_antenna_drive",
+    ]
+    base_ir = loaded.pipeline_base_problem().to_ir(include_geometry_assets=False)
+    assert base_ir["antenna_target_projections"] == []
+    assert base_ir["solved_antenna_drives"] == []
+    draft = export_builder_draft(loaded)
+    assert draft["antenna_target_projections"] == payload["antenna_target_projections"]
+    assert draft["solved_antenna_drives"] == payload["solved_antenna_drives"]
+    rendered = render_loaded_problem_as_script(loaded)
+    compile(rendered, "antenna_drive_export.py", "exec")
+    fm.reset()
+    exec(rendered, {})
+    round_trip = flat_world._build_problem().to_ir(include_geometry_assets=False)
+    assert round_trip["antenna_target_projections"] == payload["antenna_target_projections"]
+    assert round_trip["solved_antenna_drives"] == payload["solved_antenna_drives"]
+    with TemporaryDirectory() as directory:
+        script_path = Path(directory) / "antenna_drive_round_trip.py"
+        script_path.write_text(rendered, encoding="utf-8")
+        reloaded = load_problem_from_script(script_path)
+        assert [node["stage_kind"] for node in reloaded.study_pipeline_document()["nodes"]] == [
+            "antenna_field_solve",
+            "add_solved_antenna_drive",
+        ]
+        assert reloaded.pipeline_base_problem().antenna_target_projections == ()
+        lowered = reloaded.to_ir(
+            requested_backend="fdm",
+            execution_mode="strict",
+            execution_precision="double",
+            include_geometry_assets=False,
+        )
+        assert lowered["antenna_target_projections"] == []
+        assert lowered["solved_antenna_drives"] == []
+        assert [
+            node["stage_kind"]
+            for node in lowered["problem_meta"]["runtime_metadata"]["study_pipeline"]["nodes"]
+        ] == [
+            "antenna_field_solve",
+            "add_solved_antenna_drive",
+        ]
+
+
+def test_relax_then_solved_antenna_drive_preserves_stage_order() -> None:
+    fm.reset()
+    study = _configure_study()
+    output = study.stages.add_antenna_field_solve(
+        id="solve_antenna_1", definition=_field_solve_definition()
+    )
+    study.stages.add_relax(stage_id="relax", dt=1e-13)
+    projection = fm.AntennaTargetProjection(
+        id="projection_1",
+        solution=output,
+        target=fm.FieldTarget.object("magnet_1"),
+        output_id="projected",
+    )
+    drive = fm.SolvedAntennaDrive(
+        id="drive_1",
+        name="RF after relaxation",
+        projection_ref=projection.id,
+        port_mode_id="port_1",
+        peak_current_a=0.01,
+        waveform=fm.Sinusoidal(frequency_hz=1e9),
+    )
+    study.add_solved_antenna_drive(drive=drive, projection=projection)
+    study.stages.add_run(1e-12, stage_id="run")
+    captured = tuple(
+        LoadedStage(
+            problem=stage.problem,
+            entrypoint_kind=stage.entrypoint_kind,
+            default_until_seconds=stage.default_until_seconds,
+            action=stage.action,
+            stage_id=stage.stage_id,
+        )
+        for stage in flat_world._state._declared_stages
+    )
+    loaded = LoadedProblem(
+        problem=flat_world._build_problem(),
+        source_path=Path("antenna_relax_run.py"),
+        script_source="",
+        entrypoint_kind="flat_sequence",
+        stages=captured,
+    )
+    expected = ["antenna_field_solve", "relax", "add_solved_antenna_drive", "run"]
+    assert [node["stage_kind"] for node in loaded.study_pipeline_document()["nodes"]] == expected
+    assert captured[1].problem.solved_antenna_drives == ()
+    assert loaded.pipeline_base_problem().solved_antenna_drives == ()
+    rendered = render_loaded_problem_as_script(loaded)
+    with TemporaryDirectory() as directory:
+        script_path = Path(directory) / "antenna_relax_run_round_trip.py"
+        script_path.write_text(rendered, encoding="utf-8")
+        reloaded = load_problem_from_script(script_path)
+        assert [
+            node["stage_kind"] for node in reloaded.study_pipeline_document()["nodes"]
+        ] == expected
+        assert reloaded.stages[1].problem.solved_antenna_drives == ()
+        lowered = reloaded.to_ir(
+            requested_backend="fdm",
+            execution_mode="strict",
+            execution_precision="double",
+            include_geometry_assets=False,
+        )
+        assert lowered["solved_antenna_drives"] == []
+        assert [
+            node["stage_kind"]
+            for node in lowered["problem_meta"]["runtime_metadata"]["study_pipeline"]["nodes"]
+        ] == expected
+
+
+def test_relax_before_antenna_solve_does_not_require_future_drive() -> None:
+    fm.reset()
+    study = _configure_study()
+    study.stages.add_relax(stage_id="relax", dt=1e-13)
+    output = study.stages.add_antenna_field_solve(
+        id="solve_antenna_1", definition=_field_solve_definition()
+    )
+    projection = fm.AntennaTargetProjection(
+        id="projection_1",
+        solution=output,
+        target=fm.FieldTarget.object("magnet_1"),
+        output_id="projected",
+    )
+    drive = fm.SolvedAntennaDrive(
+        id="drive_1",
+        name="RF after precompute",
+        projection_ref=projection.id,
+        port_mode_id="port_1",
+        peak_current_a=0.01,
+        waveform=fm.Sinusoidal(frequency_hz=1e9),
+    )
+    study.add_solved_antenna_drive(drive=drive, projection=projection)
+    study.stages.add_run(1e-12, stage_id="run")
+    captured = tuple(
+        LoadedStage(
+            problem=stage.problem,
+            entrypoint_kind=stage.entrypoint_kind,
+            default_until_seconds=stage.default_until_seconds,
+            action=stage.action,
+            stage_id=stage.stage_id,
+        )
+        for stage in flat_world._state._declared_stages
+    )
+    loaded = LoadedProblem(
+        problem=flat_world._build_problem(),
+        source_path=Path("antenna_relax_first.py"),
+        script_source="",
+        entrypoint_kind="flat_sequence",
+        stages=captured,
+    )
+    expected = ["relax", "antenna_field_solve", "add_solved_antenna_drive", "run"]
+    assert [node["stage_kind"] for node in loaded.study_pipeline_document()["nodes"]] == expected
+    assert captured[0].problem.solved_antenna_drives == ()
+    assert captured[0].problem.antenna_field_solve_stages == ()
+    with TemporaryDirectory() as directory:
+        script_path = Path(directory) / "antenna_relax_first_round_trip.py"
+        script_path.write_text(render_loaded_problem_as_script(loaded), encoding="utf-8")
+        reloaded = load_problem_from_script(script_path)
+        assert [
+            node["stage_kind"] for node in reloaded.study_pipeline_document()["nodes"]
+        ] == expected
+        assert reloaded.stages[0].problem.solved_antenna_drives == ()
+        assert reloaded.stages[0].problem.antenna_field_solve_stages == ()
+        lowered = reloaded.to_ir(
+            requested_backend="fdm",
+            execution_mode="strict",
+            execution_precision="double",
+            include_geometry_assets=False,
+        )
+        assert lowered["solved_antenna_drives"] == []
+        assert [
+            node["stage_kind"]
+            for node in lowered["problem_meta"]["runtime_metadata"]["study_pipeline"]["nodes"]
+        ] == expected
+
+
+def test_imported_antenna_asset_keeps_explicit_reference_kind_in_scene() -> None:
+    projection = fm.AntennaTargetProjection(
+        id="imported_projection",
+        solution=fm.AntennaFieldSolutionRef(
+            stage_id="solve_antenna_1",
+            output_id="basis",
+            asset_id="asset-1",
+            content_digest="sha256:valid",
+        ),
+        target=fm.FieldTarget.global_domain(),
+        output_id="projected",
+    )
+    scene = build_scene_document_from_builder(
+        {"antenna_target_projections": [projection.to_ir()]}
+    )
+    rebuilt = build_builder_from_scene_document(scene)
+    assert rebuilt["antenna_target_projections"][0]["solution"] == {
+        "kind": "resolved_asset",
+        "stage_id": "solve_antenna_1",
+        "output_id": "basis",
+        "asset_id": "asset-1",
+        "content_digest": "sha256:valid",
+    }
+
+
+def test_imported_antenna_asset_keeps_digest_through_script_round_trip() -> None:
+    fm.reset()
+    study = _configure_study()
+    study.stages.add_antenna_field_solve(
+        id="solve_antenna_1", definition=_field_solve_definition()
+    )
+    projection = fm.AntennaTargetProjection(
+        id="projection_1",
+        solution=fm.AntennaFieldSolutionRef(
+            stage_id="solve_antenna_1",
+            output_id="basis",
+            asset_id="asset-1",
+            content_digest="sha256:valid",
+        ),
+        target=fm.FieldTarget.object("magnet_1"),
+        output_id="projected",
+    )
+    drive = fm.SolvedAntennaDrive(
+        id="drive_1",
+        name="Imported antenna basis",
+        projection_ref=projection.id,
+        port_mode_id="port_1",
+        peak_current_a=0.01,
+        waveform=fm.Sinusoidal(frequency_hz=1e9),
+    )
+    study.add_solved_antenna_drive(drive=drive, projection=projection)
+    request = fm.AntennaSpectrumRequest(
+        id="imported_source_k",
+        solution_ref=projection.solution,
+        target=fm.FieldTarget.global_domain(),
+        transform="spatial_fft",
+        sampling_plane=fm.AntennaSpectrumSamplingPlane(
+            origin_m=(0.0, 0.0, 0.0),
+            axis_u=(1.0, 0.0, 0.0),
+            axis_v=(0.0, 1.0, 0.0),
+            extent_u_m=1e-6,
+            extent_v_m=1e-6,
+            sample_count_u=8,
+            sample_count_v=8,
+        ),
+        window="rectangular",
+        normalization="integral_si",
+        component="x",
+        output_id="imported_spectrum",
+    )
+    study.add_antenna_spectrum_request(request=request)
+    captured = tuple(
+        LoadedStage(
+            problem=stage.problem,
+            entrypoint_kind=stage.entrypoint_kind,
+            action=stage.action,
+            stage_id=stage.stage_id,
+        )
+        for stage in flat_world._state._declared_stages
+    )
+    loaded = LoadedProblem(
+        problem=flat_world._build_problem(),
+        source_path=Path("imported_antenna_basis.py"),
+        script_source="",
+        entrypoint_kind="flat_sequence",
+        stages=captured,
+    )
+    expected = projection.to_ir()["solution"]
+    assert expected["kind"] == "resolved_asset"
+    with TemporaryDirectory() as directory:
+        script_path = Path(directory) / "imported_antenna_basis_round_trip.py"
+        script_path.write_text(render_loaded_problem_as_script(loaded), encoding="utf-8")
+        reloaded = load_problem_from_script(script_path)
+        actual = reloaded.problem.to_ir(include_geometry_assets=False)[
+            "antenna_target_projections"
+        ][0]["solution"]
+        assert actual == expected
+        assert reloaded.problem.to_ir(include_geometry_assets=False)[
+            "antenna_spectrum_requests"
+        ][0]["solution_ref"] == expected
+
+
+def test_antenna_spectrum_can_reference_a_future_stage_output() -> None:
+    fm.reset()
+    study = _configure_study()
+    output_ref = study.stages.add_antenna_field_solve(
+        id="solve_antenna_1", definition=_field_solve_definition()
+    )
+    request = fm.AntennaSpectrumRequest(
+        id="source_k",
+        solution_ref=output_ref,
+        target=fm.FieldTarget.global_domain(),
+        transform="spatial_fft",
+        sampling_plane=fm.AntennaSpectrumSamplingPlane(
+            origin_m=(0.0, 0.0, 0.0),
+            axis_u=(1.0, 0.0, 0.0),
+            axis_v=(0.0, 1.0, 0.0),
+            extent_u_m=1e-6,
+            extent_v_m=1e-6,
+            sample_count_u=8,
+            sample_count_v=8,
+        ),
+        window="rectangular",
+        normalization="integral_si",
+        component="x",
+        output_id="spectrum",
+    )
+    assert request.to_ir()["solution_ref"] == {
+        "kind": "stage_output",
+        "stage_id": "solve_antenna_1",
+        "output_id": "basis",
+    }
+    assert study.add_antenna_spectrum_request(request=request) is request
+    payload = flat_world._build_problem().to_ir(include_geometry_assets=False)
+    scene = build_scene_document_from_builder(
+        {"antenna_spectrum_requests": payload["antenna_spectrum_requests"]}
+    )
+    rebuilt = build_builder_from_scene_document(scene)
+    assert rebuilt["antenna_spectrum_requests"][0]["solution_ref"] == request.to_ir()[
+        "solution_ref"
+    ]
+    captured = tuple(
+        LoadedStage(
+            problem=stage.problem,
+            entrypoint_kind=stage.entrypoint_kind,
+            action=stage.action,
+            stage_id=stage.stage_id,
+        )
+        for stage in flat_world._state._declared_stages
+    )
+    loaded = LoadedProblem(
+        problem=flat_world._build_problem(),
+        source_path=Path("antenna_spectrum_workflow.py"),
+        script_source="",
+        entrypoint_kind="flat_sequence",
+        stages=captured,
+    )
+    nodes = loaded.study_pipeline_document()["nodes"]
+    assert [node["stage_kind"] for node in nodes] == [
+        "antenna_field_solve",
+        "antenna_source_spectrum",
+    ]
+    assert nodes[1]["payload"]["request"] == request.to_ir()
+    assert export_builder_draft(loaded)["antenna_spectrum_requests"][0] == request.to_ir()
+    assert loaded.pipeline_base_problem().to_ir(include_geometry_assets=False)[
+        "antenna_spectrum_requests"
+    ] == []
+    rendered = render_loaded_problem_as_script(loaded)
+    assert "study.add_antenna_spectrum_request(" in rendered
+    compile(rendered, "antenna_spectrum_export.py", "exec")
+    try:
+        study.add_antenna_spectrum_request(request=request)
+    except ValueError as exc:
+        assert "duplicate antenna spectrum request id" in str(exc)
+    else:
+        raise AssertionError("duplicate spectrum request must be rejected")
+    fm.reset()
+    exec(rendered, {})
+    assert flat_world._build_problem().to_ir(include_geometry_assets=False)[
+        "antenna_spectrum_requests"
+    ] == [request.to_ir()]
+    with TemporaryDirectory() as directory:
+        script_path = Path(directory) / "antenna_spectrum_round_trip.py"
+        script_path.write_text(rendered, encoding="utf-8")
+        reloaded = load_problem_from_script(script_path)
+        assert [node["stage_kind"] for node in reloaded.study_pipeline_document()["nodes"]] == [
+            "antenna_field_solve",
+            "antenna_source_spectrum",
+        ]
+        assert reloaded.pipeline_base_problem().antenna_spectrum_requests == ()
+        lowered = reloaded.to_ir(
+            requested_backend="fdm",
+            execution_mode="strict",
+            execution_precision="double",
+            include_geometry_assets=False,
+        )
+        assert lowered["antenna_spectrum_requests"] == []
+        lowered_nodes = lowered["problem_meta"]["runtime_metadata"]["study_pipeline"]["nodes"]
+        assert [node["stage_kind"] for node in lowered_nodes] == [
+            "antenna_field_solve",
+            "antenna_source_spectrum",
+        ]
+        assert lowered_nodes[1]["payload"]["request"] == request.to_ir()
+
+
+def test_antenna_spectrum_rejects_non_basis_solve_output() -> None:
+    fm.reset()
+    study = _configure_study()
+    definition = replace(
+        _field_solve_definition(),
+        outputs=(
+            fm.AntennaNamedOutput("basis", "H_ant_basis"),
+            fm.AntennaNamedOutput("diagnostic", "H_ant"),
+        ),
+    )
+    study.stages.add_antenna_field_solve(id="solve_antenna_1", definition=definition)
+    request = fm.AntennaSpectrumRequest(
+        id="source_k",
+        solution_ref=fm.AntennaStageOutputRef(
+            stage_id="solve_antenna_1", output_id="diagnostic"
+        ),
+        target=fm.FieldTarget.global_domain(),
+        transform="spatial_fft",
+        sampling_plane=fm.AntennaSpectrumSamplingPlane(
+            origin_m=(0.0, 0.0, 0.0),
+            axis_u=(1.0, 0.0, 0.0),
+            axis_v=(0.0, 1.0, 0.0),
+            extent_u_m=1e-6,
+            extent_v_m=1e-6,
+            sample_count_u=8,
+            sample_count_v=8,
+        ),
+        window="rectangular",
+        normalization="integral_si",
+        component="x",
+        output_id="spectrum",
+    )
+    try:
+        study.add_antenna_spectrum_request(request=request)
+    except ValueError as exc:
+        assert "H_ant_basis solve output" in str(exc)
+    else:
+        raise AssertionError("source spectrum must not consume a non-basis output")
+    assert flat_world._build_problem().antenna_spectrum_requests == ()
+
+
+def test_antenna_drive_rejects_non_basis_solve_output() -> None:
+    fm.reset()
+    study = _configure_study()
+    definition = replace(
+        _field_solve_definition(),
+        outputs=(
+            fm.AntennaNamedOutput("basis", "H_ant_basis"),
+            fm.AntennaNamedOutput("diagnostic", "H_ant"),
+        ),
+    )
+    study.stages.add_antenna_field_solve(id="solve_antenna_1", definition=definition)
+    projection = fm.AntennaTargetProjection(
+        id="projection_1",
+        solution=fm.AntennaStageOutputRef(
+            stage_id="solve_antenna_1", output_id="diagnostic"
+        ),
+        target=fm.FieldTarget.object("magnet_1"),
+        output_id="projected",
+    )
+    drive = fm.SolvedAntennaDrive(
+        id="drive_1",
+        name="Wrong basis output",
+        projection_ref=projection.id,
+        port_mode_id="port_1",
+        peak_current_a=0.01,
+        waveform=fm.Sinusoidal(frequency_hz=1e9),
+    )
+    try:
+        study.add_solved_antenna_drive(drive=drive, projection=projection)
+    except ValueError as exc:
+        assert "must reference an H_ant_basis output" in str(exc)
+    else:
+        raise AssertionError("solved drive must not consume a non-basis output")
+    assert flat_world._build_problem().antenna_target_projections == ()
+    assert flat_world._build_problem().solved_antenna_drives == ()
 
 
 def test_antenna_solve_is_exported_as_one_pipeline_node() -> None:
@@ -116,6 +647,14 @@ def test_antenna_solve_is_exported_as_one_pipeline_node() -> None:
     assert loaded.pipeline_base_problem().to_ir(include_geometry_assets=False)[
         "antenna_field_solve_stages"
     ][0]["id"] == node["payload"]["stage_id"]
+    rendered = render_loaded_problem_as_script(loaded)
+    assert "study.stages.add_antenna_field_solve(" in rendered
+    compile(rendered, "antenna_field_solve_export.py", "exec")
+    fm.reset()
+    exec(rendered, {})
+    assert flat_world._build_problem().to_ir(include_geometry_assets=False)[
+        "antenna_field_solve_stages"
+    ][0]["id"] == "solve_antenna_1"
 
 
 def test_antenna_stage_ids_share_the_flat_pipeline_namespace() -> None:
@@ -156,6 +695,73 @@ def test_antenna_projection_rejects_unknown_symbolic_output() -> None:
         assert "unknown antenna field solve" in str(exc)
     else:
         raise AssertionError("dangling symbolic projection must be rejected")
+
+
+def test_antenna_drive_rejects_port_not_in_symbolic_solve() -> None:
+    fm.reset()
+    study = _configure_study()
+    output = study.stages.add_antenna_field_solve(
+        id="solve_antenna_1", definition=_field_solve_definition()
+    )
+    projection = fm.AntennaTargetProjection(
+        id="projection_1",
+        solution=output,
+        target=fm.FieldTarget.object("magnet_1"),
+        output_id="projected",
+    )
+    drive = fm.SolvedAntennaDrive(
+        id="drive_1",
+        name="Wrong port",
+        projection_ref=projection.id,
+        port_mode_id="port_2",
+        peak_current_a=0.01,
+        waveform=fm.Sinusoidal(frequency_hz=1e9),
+    )
+    try:
+        study.add_solved_antenna_drive(drive=drive, projection=projection)
+    except ValueError as exc:
+        assert "drive.port_mode_id 'port_2' is not in antenna field solve" in str(exc)
+    else:
+        raise AssertionError("drive with a port outside its solve must be rejected")
+    problem = flat_world._build_problem()
+    assert problem.antenna_target_projections == ()
+    assert problem.solved_antenna_drives == ()
+
+
+def test_imported_antenna_drive_rejects_port_not_in_declared_solve() -> None:
+    fm.reset()
+    study = _configure_study()
+    study.stages.add_antenna_field_solve(
+        id="solve_antenna_1", definition=_field_solve_definition()
+    )
+    projection = fm.AntennaTargetProjection(
+        id="projection_1",
+        solution=fm.AntennaFieldSolutionRef(
+            stage_id="solve_antenna_1",
+            output_id="basis",
+            asset_id="asset-1",
+            content_digest="sha256:valid",
+        ),
+        target=fm.FieldTarget.object("magnet_1"),
+        output_id="projected",
+    )
+    drive = fm.SolvedAntennaDrive(
+        id="drive_1",
+        name="Wrong imported port",
+        projection_ref=projection.id,
+        port_mode_id="port_2",
+        peak_current_a=0.01,
+        waveform=fm.Sinusoidal(frequency_hz=1e9),
+    )
+    try:
+        study.add_solved_antenna_drive(drive=drive, projection=projection)
+    except ValueError as exc:
+        assert "drive.port_mode_id 'port_2' is not in antenna field solve" in str(exc)
+    else:
+        raise AssertionError("imported drive with a port outside its solve must be rejected")
+    problem = flat_world._build_problem()
+    assert problem.antenna_target_projections == ()
+    assert problem.solved_antenna_drives == ()
 
 
 def test_scene_document_adapters_preserve_all_antenna_collections() -> None:

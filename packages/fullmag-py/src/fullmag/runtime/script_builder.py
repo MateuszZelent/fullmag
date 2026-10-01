@@ -235,6 +235,7 @@ def _builder_base_problem(loaded: LoadedProblem) -> Problem:
 
 def export_builder_draft(loaded: LoadedProblem) -> dict[str, object]:
     base_problem = _builder_base_problem(loaded)
+    authored_problem = loaded.workspace_problem or loaded.problem
     relax_stage = _first_relax_stage(loaded)
     source_root = loaded.source_path.parent
     base_dynamics = getattr(base_problem.study, "dynamics", None)
@@ -343,13 +344,13 @@ def export_builder_draft(loaded: LoadedProblem) -> dict[str, object]:
             stage.to_ir() for stage in base_problem.antenna_field_solve_stages
         ],
         "antenna_target_projections": [
-            projection.to_ir() for projection in base_problem.antenna_target_projections
+            projection.to_ir() for projection in authored_problem.antenna_target_projections
         ],
         "solved_antenna_drives": [
-            drive.to_ir() for drive in base_problem.solved_antenna_drives
+            drive.to_ir() for drive in authored_problem.solved_antenna_drives
         ],
         "antenna_spectrum_requests": [
-            request.to_ir() for request in base_problem.antenna_spectrum_requests
+            request.to_ir() for request in authored_problem.antenna_spectrum_requests
         ],
         "spin_transports": [
             _export_spin_transport_entry(base_problem, module)
@@ -491,6 +492,11 @@ def render_loaded_problem_as_script(
     if current_module_lines:
         lines.append("")
         lines.extend(current_module_lines)
+
+    antenna_port_lines = _render_antenna_port_modes(base_problem, surface=surface)
+    if antenna_port_lines:
+        lines.append("")
+        lines.extend(antenna_port_lines)
 
     spin_transport_lines = _render_spin_transports(
         base_problem, surface=surface, overrides=overrides
@@ -1171,6 +1177,8 @@ def _infer_pipeline_stage_kind(stage_draft: dict[str, object]) -> str:
         "change_device",
         "add_field_drive",
         "antenna_field_solve",
+        "antenna_source_spectrum",
+        "add_solved_antenna_drive",
         "remove_field_drive",
         "table_autosave",
         "autosave",
@@ -1203,6 +1211,8 @@ def _study_pipeline_stage_label(
     kind_label = {
         "add_field_drive": "Add Antenna",
         "antenna_field_solve": "Antenna Field Solve",
+        "antenna_source_spectrum": "Antenna Source Spectrum",
+        "add_solved_antenna_drive": "Add Solved Antenna Drive",
         "autosave": "Autosave",
         "change_device": "Change Device",
         "eigenmodes": "Eigenmodes",
@@ -1308,6 +1318,26 @@ def _export_stage_draft(stage: LoadedStage) -> dict[str, object]:
                 "kind": "antenna_field_solve",
                 "entrypoint_kind": stage.entrypoint_kind,
                 "definition": copy.deepcopy(definition),
+            }
+        if action_kind == "antenna_source_spectrum":
+            request = action.get("request")
+            if not isinstance(request, dict):
+                raise TypeError("antenna_source_spectrum action requires a serialized request")
+            return {
+                "kind": "antenna_source_spectrum",
+                "entrypoint_kind": stage.entrypoint_kind,
+                "request": copy.deepcopy(request),
+            }
+        if action_kind == "add_solved_antenna_drive":
+            projection = action.get("projection")
+            drive = action.get("drive")
+            if not isinstance(projection, dict) or not isinstance(drive, dict):
+                raise TypeError("add_solved_antenna_drive requires projection and drive")
+            return {
+                "kind": "add_solved_antenna_drive",
+                "entrypoint_kind": stage.entrypoint_kind,
+                "projection": copy.deepcopy(projection),
+                "drive": copy.deepcopy(drive),
             }
         if action_kind == "remove_field_drive":
             drive_id = _text_value(action.get("drive_id"))
@@ -3564,6 +3594,147 @@ def _render_field_target_expr(target: FieldTarget) -> str:
     )
 
 
+def _render_antenna_port_modes(problem: Problem, *, surface: str) -> list[str]:
+    if not problem.antenna_port_modes:
+        return []
+    if surface != "study":
+        raise ValueError("antenna port modes require the study API surface")
+    lines = ["# Antenna port modes"]
+    for mode in problem.antenna_port_modes:
+        branches = ", ".join(
+            "fm.AntennaPortBranch("
+            f"id={_py_repr(branch.id)}, "
+            f"inlet_terminal_ref={_py_repr(branch.inlet_terminal_ref)}, "
+            f"outlet_terminal_ref={_py_repr(branch.outlet_terminal_ref)}, "
+            f"signed_weight={_py_number(branch.signed_weight)})"
+            for branch in mode.branches
+        )
+        lines.append(
+            "study.add_antenna_port_mode(port_mode=fm.AntennaPortMode("
+            f"id={_py_repr(mode.id)}, "
+            f"source_object_id={_py_repr(mode.source_object_id)}, "
+            f"current_transport_id={_py_repr(mode.current_transport_id)}, "
+            f"branches=({branches},), "
+            f"normalization_current_a={_py_number(mode.normalization_current_a)}))"
+        )
+    return lines
+
+
+def _render_field_target_payload_expr(value: object) -> str:
+    target = _normalize_mapping(value)
+    if target.get("kind") not in {"global", "object", "region"}:
+        raise ValueError("antenna target must have a supported kind")
+    if set(target) - {"kind", "object_id", "region_id"}:
+        raise ValueError("antenna target contains unsupported fields")
+    return f"fm.FieldTarget(**{_py_literal(target)})"
+
+
+def _render_antenna_field_solve_definition_expr(definition: dict[str, object]) -> str:
+    scalar_fields = (
+        "id", "source_object_id", "current_transport_id", "port_mode_ids",
+        "conservative_current_view_ref", "model", "oersted_realization",
+        "conductor_mesh_policy", "solver_policy",
+    )
+    args = [f"{field}={_py_literal(definition[field])}" for field in scalar_fields]
+    args.append(
+        "field_sampling_domain="
+        + _render_field_target_payload_expr(definition["field_sampling_domain"])
+    )
+    targets = definition.get("target_refs")
+    outputs = definition.get("outputs")
+    if not isinstance(targets, list) or not isinstance(outputs, list):
+        raise ValueError("antenna solve definition requires target_refs and outputs")
+    args.append(
+        "target_refs=["
+        + ", ".join(_render_field_target_payload_expr(target) for target in targets)
+        + "]"
+    )
+    args.append(
+        "outputs=["
+        + ", ".join(
+            f"fm.AntennaNamedOutput(**{_py_literal(_normalize_mapping(output))})"
+            for output in outputs
+        )
+        + "]"
+    )
+    return f"fm.AntennaFieldSolveStage({', '.join(args)})"
+
+
+def _render_antenna_solution_ref_expr(value: object) -> str:
+    reference = _normalize_mapping(value)
+    kind = reference.get("kind")
+    if kind == "stage_output":
+        return (
+            "fm.AntennaStageOutputRef("
+            f"stage_id={_py_literal(reference['stage_id'])}, "
+            f"output_id={_py_literal(reference['output_id'])})"
+        )
+    if kind in {None, "resolved_asset"}:
+        args = ", ".join(
+            f"{field}={_py_literal(reference[field])}"
+            for field in ("stage_id", "output_id", "asset_id", "content_digest")
+        )
+        return f"fm.AntennaFieldSolutionRef({args})"
+    raise ValueError(f"unsupported antenna solution reference kind: {kind}")
+
+
+def _render_antenna_spectrum_request_expr(request: dict[str, object]) -> str:
+    args = [
+        f"id={_py_literal(request['id'])}",
+        f"solution_ref={_render_antenna_solution_ref_expr(request['solution_ref'])}",
+        f"target={_render_field_target_payload_expr(request['target'])}",
+        f"sampling_plane=fm.AntennaSpectrumSamplingPlane(**{_py_literal(_normalize_mapping(request['sampling_plane']))})",
+    ]
+    for field in ("transform", "window", "normalization", "component", "output_id"):
+        args.append(f"{field}={_py_literal(request[field])}")
+    if "nonuniform_k_grid" in request:
+        args.append(
+            "nonuniform_k_grid=fm.AntennaSpectrumKGrid(**"
+            + _py_literal(_normalize_mapping(request["nonuniform_k_grid"]))
+            + ")"
+        )
+    for field in ("port_mode_id", "equilibrium_ref", "mode_basis_ref"):
+        if field in request:
+            args.append(f"{field}={_py_literal(request[field])}")
+    return f"fm.AntennaSpectrumRequest({', '.join(args)})"
+
+
+def _render_antenna_projection_expr(projection: dict[str, object]) -> str:
+    return (
+        "fm.AntennaTargetProjection("
+        f"id={_py_literal(projection['id'])}, "
+        f"solution={_render_antenna_solution_ref_expr(projection['solution'])}, "
+        f"target={_render_field_target_payload_expr(projection['target'])}, "
+        f"output_id={_py_literal(projection['output_id'])})"
+    )
+
+
+def _render_solved_antenna_drive_expr(drive: dict[str, object]) -> str:
+    args = [
+        f"{field}={_py_literal(drive[field])}"
+        for field in ("id", "name", "projection_ref", "port_mode_id", "peak_current_a", "time_origin")
+    ]
+    args.append(f"waveform={_render_waveform_override(_normalize_mapping(drive['waveform']))}")
+    activation = _normalize_mapping(drive.get("activation"))
+    if activation.get("kind") == "all_time_evolution":
+        args.append("activation=fm.DriveActivation.all_time_evolution()")
+    elif activation.get("kind") == "stage_ids":
+        args.append(
+            "activation=fm.DriveActivation.stage_ids("
+            + _py_literal(activation["stage_ids"])
+            + ")"
+        )
+    else:
+        raise ValueError("unsupported solved antenna drive activation")
+    if "bandwidth_declaration" in drive:
+        bandwidth = _normalize_mapping(drive["bandwidth_declaration"])
+        args.append(
+            "bandwidth_declaration=fm.AntennaWaveformBandwidthDeclaration("
+            f"f_max_hz={_py_literal(bandwidth['f_max_hz'])})"
+        )
+    return f"fm.SolvedAntennaDrive({', '.join(args)})"
+
+
 def _render_spatial_profile_expr(profile: object) -> str:
     if isinstance(profile, UniformFieldProfile):
         return "fm.UniformFieldProfile()"
@@ -5711,6 +5882,42 @@ def _render_stages(
     for index, stage in enumerate(stages):
         if stage.action is not None:
             action_kind = str(stage.action.get("kind") if isinstance(stage.action, dict) else "").strip().lower()
+            if action_kind == "antenna_field_solve":
+                if not is_study_surface:
+                    raise ValueError("antenna_field_solve action requires the study API surface")
+                definition = _normalize_mapping(stage.action.get("definition"))
+                if not definition:
+                    raise ValueError("antenna_field_solve action requires its definition")
+                lines.append(
+                    "study.stages.add_antenna_field_solve("
+                    f"id={_py_literal(definition['id'])}, "
+                    f"definition={_render_antenna_field_solve_definition_expr(definition)})"
+                )
+                continue
+            if action_kind == "antenna_source_spectrum":
+                if not is_study_surface:
+                    raise ValueError("antenna_source_spectrum action requires the study API surface")
+                request = _normalize_mapping(stage.action.get("request"))
+                if not request:
+                    raise ValueError("antenna_source_spectrum action requires its request")
+                lines.append(
+                    "study.add_antenna_spectrum_request("
+                    f"request={_render_antenna_spectrum_request_expr(request)})"
+                )
+                continue
+            if action_kind == "add_solved_antenna_drive":
+                if not is_study_surface:
+                    raise ValueError("add_solved_antenna_drive requires the study API surface")
+                projection = _normalize_mapping(stage.action.get("projection"))
+                drive = _normalize_mapping(stage.action.get("drive"))
+                if not projection or not drive:
+                    raise ValueError("add_solved_antenna_drive requires projection and drive")
+                lines.append(
+                    "study.add_solved_antenna_drive("
+                    f"drive={_render_solved_antenna_drive_expr(drive)}, "
+                    f"projection={_render_antenna_projection_expr(projection)})"
+                )
+                continue
             if action_kind == "save_state":
                 artifact_name = str(stage.action.get("artifact_name") or "state_snapshot")
                 call_parts = [f"artifact_name={_py_repr(artifact_name)}"]
@@ -6581,6 +6788,8 @@ def _stage_override_for(
             "change_device",
             "add_field_drive",
             "antenna_field_solve",
+            "antenna_source_spectrum",
+            "add_solved_antenna_drive",
             "remove_field_drive",
             "table_autosave",
             "autosave",

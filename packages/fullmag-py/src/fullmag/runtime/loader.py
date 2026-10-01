@@ -148,16 +148,32 @@ class LoadedProblem:
         """Return persistent problem state before ordered action stages run."""
         candidate = problem or self.problem
         introduced_ids: set[str] = set()
+        introduced_antenna_drive_ids: set[str] = set()
+        introduced_projection_ids: set[str] = set()
+        introduced_spectrum_ids: set[str] = set()
         for stage in self.stages:
             action = stage.action
-            if not isinstance(action, dict) or action.get("kind") != "add_field_drive":
+            if not isinstance(action, dict):
                 continue
-            drive = action.get("drive")
-            drive_id = getattr(drive, "id", None)
-            if drive_id is None and isinstance(drive, dict):
-                drive_id = drive.get("id")
-            if isinstance(drive_id, str):
-                introduced_ids.add(drive_id)
+            kind = action.get("kind")
+            if kind == "add_field_drive":
+                drive = action.get("drive")
+                drive_id = getattr(drive, "id", None)
+                if drive_id is None and isinstance(drive, dict):
+                    drive_id = drive.get("id")
+                if isinstance(drive_id, str):
+                    introduced_ids.add(drive_id)
+            elif kind == "add_solved_antenna_drive":
+                drive = action.get("drive")
+                projection = action.get("projection")
+                if isinstance(drive, dict) and isinstance(drive.get("id"), str):
+                    introduced_antenna_drive_ids.add(drive["id"])
+                if isinstance(projection, dict) and isinstance(projection.get("id"), str):
+                    introduced_projection_ids.add(projection["id"])
+            elif kind == "antenna_source_spectrum":
+                request = action.get("request")
+                if isinstance(request, dict) and isinstance(request.get("id"), str):
+                    introduced_spectrum_ids.add(request["id"])
         base_stage_problem = self.stages[0].problem if self.stages else None
         study = candidate.study
         runtime_metadata = dict(candidate.runtime_metadata)
@@ -182,6 +198,18 @@ class LoadedProblem:
             candidate,
             field_drives=tuple(
                 drive for drive in candidate.field_drives if drive.id not in introduced_ids
+            ),
+            antenna_target_projections=tuple(
+                projection for projection in candidate.antenna_target_projections
+                if projection.id not in introduced_projection_ids
+            ),
+            solved_antenna_drives=tuple(
+                drive for drive in candidate.solved_antenna_drives
+                if drive.id not in introduced_antenna_drive_ids
+            ),
+            antenna_spectrum_requests=tuple(
+                request for request in candidate.antenna_spectrum_requests
+                if request.id not in introduced_spectrum_ids
             ),
             runtime_metadata=runtime_metadata,
             study=study,
