@@ -113,7 +113,9 @@ pub(crate) const R4_SIDECAR_DEFINITIONS: [(&str, &str, Option<&str>); 9] = [
 /// Non-shared Floquet sidecars are a separate provenance family.  They must
 /// never be folded into the shared R4 identity/certification gate: a complete
 /// non-shared path set only proves that the producer published the three
-/// immutable payloads for every computed sample.
+/// historical identity/source payloads for every computed sample.  The final
+/// native-input diagnostic payloads have a separate structural family below
+/// so historical three-sidecar coverage remains byte-for-byte compatible.
 pub(crate) const NONSHARED_FLOQUET_SIDECAR_DEFINITIONS: [(&str, &str, &str); 3] = [
     (
         "nonshared_floquet_operator_identity_v1_paths",
@@ -132,6 +134,24 @@ pub(crate) const NONSHARED_FLOQUET_SIDECAR_DEFINITIONS: [(&str, &str, &str); 3] 
     ),
 ];
 
+/// Final native-input diagnostic sidecars are structural evidence only.  Keep
+/// them independent from the historical three-sidecar coverage so an old
+/// bundle does not change status or lose its singular aliases merely because
+/// this additive family was introduced.
+pub(crate) const NONSHARED_FLOQUET_NATIVE_INPUT_DIAGNOSTICS_SIDECAR_DEFINITIONS:
+    [(&str, &str, &str); 2] = [
+    (
+        "nonshared_floquet_native_input_diagnostics_v1_paths",
+        "native_input_operator_diagnostics.v1.json",
+        "nonshared_floquet_native_input_diagnostics_v1_path",
+    ),
+    (
+        "nonshared_floquet_native_input_diagnostics_preimage_v1_paths",
+        "native_input_operator_diagnostics_preimage.v1.json",
+        "nonshared_floquet_native_input_diagnostics_preimage_v1_path",
+    ),
+];
+
 /// Parse exactly the canonical `eigen/metadata/sample_NNNN/<filename>` path.
 /// The width is a minimum width, matching Rust `format!("{index:04}")` and
 /// allowing `sample_10000` without inventing a second five-digit convention.
@@ -141,6 +161,32 @@ pub(crate) fn canonical_sample_scoped_index(
 ) -> Option<usize> {
     let prefix = "eigen/metadata/sample_";
     let suffix = format!("/{filename}");
+    if relative_path.contains('\\')
+        || !relative_path.starts_with(prefix)
+        || !relative_path.ends_with(&suffix)
+    {
+        return None;
+    }
+    let token = &relative_path[prefix.len()..relative_path.len() - suffix.len()];
+    if token.is_empty() || !token.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    let sample_index = token.parse::<usize>().ok()?;
+    (token == format!("{sample_index:04}")).then_some(sample_index)
+}
+
+/// Parse exactly the nested path used by the native-input diagnostic producer:
+/// `eigen/metadata/sample_NNNN/nonshared_source/<filename>`.
+///
+/// This is intentionally separate from `canonical_sample_scoped_index`:
+/// historical three-sidecar files live directly below the sample directory,
+/// while the final C ABI diagnostic pair is emitted below `nonshared_source`.
+fn canonical_native_input_diagnostics_sample_scoped_index(
+    relative_path: &str,
+    filename: &str,
+) -> Option<usize> {
+    let prefix = "eigen/metadata/sample_";
+    let suffix = format!("/nonshared_source/{filename}");
     if relative_path.contains('\\')
         || !relative_path.starts_with(prefix)
         || !relative_path.ends_with(&suffix)
@@ -197,6 +243,17 @@ pub(crate) struct NonSharedFloquetSidecarCoverage {
     pub(crate) structural_complete: bool,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct NonSharedFloquetNativeInputDiagnosticsCoverage {
+    pub(crate) status: String,
+    pub(crate) reason: String,
+    pub(crate) computed_sample_indices: BTreeSet<usize>,
+    pub(crate) missing_keys: Vec<String>,
+    pub(crate) paths_by_key: BTreeMap<String, Vec<String>>,
+    pub(crate) has_any_sidecars: bool,
+    pub(crate) structural_complete: bool,
+}
+
 impl NonSharedFloquetSidecarCoverage {
     pub(crate) fn manifest_value(&self) -> serde_json::Value {
         serde_json::json!({
@@ -207,6 +264,22 @@ impl NonSharedFloquetSidecarCoverage {
             "missing_keys": self.missing_keys,
             "structural_complete": self.structural_complete,
             "operator_replay": "NOT_VERIFIED",
+            "scientific_qualification": "NOT_VERIFIED",
+        })
+    }
+}
+
+impl NonSharedFloquetNativeInputDiagnosticsCoverage {
+    pub(crate) fn manifest_value(&self) -> serde_json::Value {
+        serde_json::json!({
+            "status": self.status,
+            "qualification": "NOT_VERIFIED",
+            "reason": self.reason,
+            "computed_sample_indices": self.computed_sample_indices.iter().copied().collect::<Vec<_>>(),
+            "missing_keys": self.missing_keys,
+            "sidecar_paths_by_key": self.paths_by_key,
+            "structural_complete": self.structural_complete,
+            "native_operator_replay": "NOT_VERIFIED",
             "scientific_qualification": "NOT_VERIFIED",
         })
     }
@@ -315,6 +388,73 @@ fn nonshared_floquet_path_set(
         .collect()
 }
 
+fn nonshared_floquet_native_input_diagnostics_sidecar_path_sets(
+    artifacts: &[AuxiliaryArtifact],
+) -> (
+    BTreeMap<String, Vec<String>>,
+    Vec<String>,
+) {
+    let mut paths_by_key = BTreeMap::new();
+    let mut invalid_paths = Vec::new();
+    for (key, filename, _) in
+        NONSHARED_FLOQUET_NATIVE_INPUT_DIAGNOSTICS_SIDECAR_DEFINITIONS
+    {
+        let mut paths = Vec::new();
+        let mut seen_paths = BTreeSet::new();
+        for artifact in artifacts {
+            if !is_sample_scoped_sidecar_candidate(&artifact.relative_path, filename) {
+                continue;
+            }
+            if canonical_native_input_diagnostics_sample_scoped_index(
+                &artifact.relative_path,
+                filename,
+            )
+            .is_none()
+            {
+                invalid_paths.push(artifact.relative_path.clone());
+                continue;
+            }
+            if !seen_paths.insert(artifact.relative_path.clone()) {
+                invalid_paths.push(format!(
+                    "{} (duplicate non-shared Floquet native-input sidecar path)",
+                    artifact.relative_path
+                ));
+                continue;
+            }
+            paths.push(artifact.relative_path.clone());
+        }
+        paths.sort_by_key(|path| {
+            canonical_native_input_diagnostics_sample_scoped_index(path, filename)
+                .unwrap_or(usize::MAX)
+        });
+        paths_by_key.insert(key.to_string(), paths);
+    }
+    invalid_paths.sort();
+    invalid_paths.dedup();
+    (paths_by_key, invalid_paths)
+}
+
+fn nonshared_floquet_native_input_diagnostics_path_set(
+    paths_by_key: &BTreeMap<String, Vec<String>>,
+    key: &str,
+) -> BTreeSet<usize> {
+    let filename = NONSHARED_FLOQUET_NATIVE_INPUT_DIAGNOSTICS_SIDECAR_DEFINITIONS
+        .iter()
+        .find(|(candidate, _, _)| *candidate == key)
+        .map(|(_, filename, _)| *filename);
+    let Some(filename) = filename else {
+        return BTreeSet::new();
+    };
+    paths_by_key
+        .get(key)
+        .into_iter()
+        .flatten()
+        .filter_map(|path| {
+            canonical_native_input_diagnostics_sample_scoped_index(path, filename)
+        })
+        .collect()
+}
+
 /// Discover non-shared Floquet sidecars and require a complete per-sample
 /// path set.  This is deliberately structural only: it does not parse or
 /// certify the operator, source state, or physical preimages.
@@ -387,6 +527,88 @@ pub(crate) fn inspect_nonshared_floquet_sidecars(
     NonSharedFloquetSidecarCoverage {
         status: "path_coverage_complete".to_string(),
         reason: "non-shared Floquet sidecar paths cover every computed sample; operator replay remains separate".to_string(),
+        computed_sample_indices,
+        missing_keys,
+        paths_by_key,
+        has_any_sidecars,
+        structural_complete: true,
+    }
+}
+
+/// Discover only the two final native-input diagnostic sidecars.  This gate
+/// is deliberately independent from the historical three-sidecar coverage:
+/// old bundles keep their old status and aliases, while a new partial pair is
+/// visible as a structural gap without becoming native or scientific proof.
+pub(crate) fn inspect_nonshared_floquet_native_input_diagnostics_sidecars(
+    artifacts: &[AuxiliaryArtifact],
+    computed_sample_indices: &[usize],
+) -> NonSharedFloquetNativeInputDiagnosticsCoverage {
+    let computed_sample_count = computed_sample_indices.len();
+    let computed_sample_indices = computed_sample_indices.iter().copied().collect::<BTreeSet<_>>();
+    let (paths_by_key, invalid_paths) =
+        nonshared_floquet_native_input_diagnostics_sidecar_path_sets(artifacts);
+    let has_any_sidecars = paths_by_key.values().any(|paths| !paths.is_empty())
+        || !invalid_paths.is_empty();
+    let empty = || NonSharedFloquetNativeInputDiagnosticsCoverage {
+        status: "historical".to_string(),
+        reason: "native-input diagnostic sidecars are absent from this manifest".to_string(),
+        computed_sample_indices: computed_sample_indices.clone(),
+        missing_keys: Vec::new(),
+        paths_by_key: paths_by_key.clone(),
+        has_any_sidecars,
+        structural_complete: false,
+    };
+    if !has_any_sidecars {
+        return empty();
+    }
+    if computed_sample_indices.len() != computed_sample_count {
+        return NonSharedFloquetNativeInputDiagnosticsCoverage {
+            status: "invalid".to_string(),
+            reason: "computed path samples contain duplicate sample_index values".to_string(),
+            ..empty()
+        };
+    }
+    if !invalid_paths.is_empty() {
+        return NonSharedFloquetNativeInputDiagnosticsCoverage {
+            status: "invalid".to_string(),
+            reason: format!(
+                "non-canonical or duplicate native-input diagnostic sidecar paths: {}",
+                invalid_paths.join(", ")
+            ),
+            ..empty()
+        };
+    }
+
+    let mut missing_keys = Vec::new();
+    for (key, _, _) in NONSHARED_FLOQUET_NATIVE_INPUT_DIAGNOSTICS_SIDECAR_DEFINITIONS {
+        let samples = nonshared_floquet_native_input_diagnostics_path_set(&paths_by_key, key);
+        if !samples.is_subset(&computed_sample_indices) {
+            return NonSharedFloquetNativeInputDiagnosticsCoverage {
+                status: "invalid".to_string(),
+                reason: format!(
+                    "native-input diagnostic sidecar {key} contains samples outside computed samples"
+                ),
+                ..empty()
+            };
+        }
+        if samples != computed_sample_indices {
+            missing_keys.push(key.to_string());
+        }
+    }
+    if !missing_keys.is_empty() {
+        return NonSharedFloquetNativeInputDiagnosticsCoverage {
+            status: "missing_sidecars".to_string(),
+            reason: format!(
+                "native-input diagnostic sidecar arrays do not cover every computed sample: {}",
+                missing_keys.join(", ")
+            ),
+            missing_keys,
+            ..empty()
+        };
+    }
+    NonSharedFloquetNativeInputDiagnosticsCoverage {
+        status: "path_coverage_complete".to_string(),
+        reason: "native-input diagnostic sidecar paths cover every computed sample; native replay remains separate".to_string(),
         computed_sample_indices,
         missing_keys,
         paths_by_key,
@@ -2584,6 +2806,11 @@ pub(super) fn write_eigen_v2_bundle(
     let r4_coverage = inspect_r4_sidecars(auxiliary_artifacts, &[sample_index]);
     let nonshared_floquet_coverage =
         inspect_nonshared_floquet_sidecars(auxiliary_artifacts, &[sample_index]);
+    let nonshared_floquet_native_input_diagnostics_coverage =
+        inspect_nonshared_floquet_native_input_diagnostics_sidecars(
+            auxiliary_artifacts,
+            &[sample_index],
+        );
 
     let has_mode_fields = !mode_metadata_paths.is_empty();
     let spectrum_revision = spectrum_v2_revision;
@@ -2748,6 +2975,7 @@ pub(super) fn write_eigen_v2_bundle(
             .get_mut("artifacts")
             .and_then(serde_json::Value::as_object_mut)
         {
+            // Preserve the historical three-sidecar selector and aliases.
             for (key, _, alias) in NONSHARED_FLOQUET_SIDECAR_DEFINITIONS {
                 let paths = nonshared_floquet_coverage
                     .paths_by_key
@@ -2767,6 +2995,36 @@ pub(super) fn write_eigen_v2_bundle(
             }
         }
     }
+    if nonshared_floquet_native_input_diagnostics_coverage.has_any_sidecars {
+        if let Some(artifacts) = manifest
+            .get_mut("artifacts")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            // The final C ABI diagnostic pair is additive structural evidence;
+            // it is kept separate from historical three-sidecar coverage.
+            for (key, _, alias) in
+                NONSHARED_FLOQUET_NATIVE_INPUT_DIAGNOSTICS_SIDECAR_DEFINITIONS
+            {
+                let paths = nonshared_floquet_native_input_diagnostics_coverage
+                    .paths_by_key
+                    .get(key)
+                    .cloned()
+                    .unwrap_or_default();
+                artifacts.insert(key.to_string(), serde_json::json!(paths));
+                artifacts.insert(
+                    alias.to_string(),
+                    paths
+                        .first()
+                        .filter(|_| {
+                            nonshared_floquet_native_input_diagnostics_coverage
+                                .structural_complete
+                                && paths.len() == 1
+                        })
+                        .map_or(serde_json::Value::Null, |path| serde_json::json!(path)),
+                );
+            }
+        }
+    }
     if let Some(diagnostics) = manifest
         .get_mut("diagnostics")
         .and_then(serde_json::Value::as_object_mut)
@@ -2775,6 +3033,10 @@ pub(super) fn write_eigen_v2_bundle(
         diagnostics.insert(
             "nonshared_floquet_replay".to_string(),
             nonshared_floquet_coverage.manifest_value(),
+        );
+        diagnostics.insert(
+            "nonshared_floquet_native_input_diagnostics_replay".to_string(),
+            nonshared_floquet_native_input_diagnostics_coverage.manifest_value(),
         );
     }
     if let (Some(manifest_object), Some(diagnostics_object)) = (
@@ -4004,6 +4266,30 @@ mod linearization_identity_sidecar_tests {
             coverage.computed_sample_indices,
             BTreeSet::from([0_usize, 2_usize])
         );
+        let native_artifacts = NONSHARED_FLOQUET_NATIVE_INPUT_DIAGNOSTICS_SIDECAR_DEFINITIONS
+            .into_iter()
+            .flat_map(|(_, filename, _)| {
+                [0_usize, 2_usize].into_iter().map(move |sample_index| {
+                    AuxiliaryArtifact {
+                        relative_path: format!(
+                            "eigen/metadata/sample_{sample_index:04}/nonshared_source/{filename}"
+                        ),
+                        bytes: b"native-input".to_vec(),
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        let native_coverage =
+            inspect_nonshared_floquet_native_input_diagnostics_sidecars(&native_artifacts, &[0, 2]);
+        assert_eq!(native_coverage.status, "path_coverage_complete");
+        assert!(native_coverage.structural_complete);
+        assert_eq!(
+            native_coverage
+                .paths_by_key
+                .get("nonshared_floquet_native_input_diagnostics_v1_paths")
+                .map(Vec::len),
+            Some(2)
+        );
         assert_eq!(
             inspect_r4_sidecars(&artifacts, &[0, 2]).status,
             "historical"
@@ -4022,6 +4308,36 @@ mod linearization_identity_sidecar_tests {
             .missing_keys
             .contains(&"nonshared_floquet_source_state_v1_paths".to_string()));
         assert!(!partial_coverage.structural_complete);
+    }
+
+    #[test]
+    fn nonshared_floquet_legacy_three_sidecar_bundle_stays_unverified() {
+        let artifacts = NONSHARED_FLOQUET_SIDECAR_DEFINITIONS
+            .into_iter()
+            .take(3)
+            .flat_map(|(_, filename, _)| {
+                [0_usize, 2_usize].into_iter().map(move |sample_index| {
+                    AuxiliaryArtifact {
+                        relative_path: format!(
+                            "eigen/metadata/sample_{sample_index:04}/{filename}"
+                        ),
+                        bytes: b"legacy".to_vec(),
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let coverage = inspect_nonshared_floquet_sidecars(&artifacts, &[0, 2]);
+        assert_eq!(coverage.status, "path_coverage_complete");
+        assert!(coverage.structural_complete);
+        let native_coverage =
+            inspect_nonshared_floquet_native_input_diagnostics_sidecars(&artifacts, &[0, 2]);
+        assert_eq!(native_coverage.status, "historical");
+        assert!(!native_coverage.structural_complete);
+        assert_eq!(
+            native_coverage.manifest_value()["qualification"],
+            "NOT_VERIFIED"
+        );
     }
 
     #[test]
@@ -4048,6 +4364,66 @@ mod linearization_identity_sidecar_tests {
         let extra = inspect_nonshared_floquet_sidecars(&artifacts, &[0]);
         assert_eq!(extra.status, "invalid");
         assert!(extra.reason.contains("outside computed samples"));
+    }
+
+    #[test]
+    fn nonshared_floquet_coverage_rejects_duplicate_paths() {
+        let artifact = AuxiliaryArtifact {
+            relative_path:
+                "eigen/metadata/sample_0000/nonshared_source/native_input_operator_diagnostics.v1.json"
+                    .to_string(),
+            bytes: b"diagnostics".to_vec(),
+        };
+        let duplicate = AuxiliaryArtifact {
+            relative_path: artifact.relative_path.clone(),
+            bytes: b"different".to_vec(),
+        };
+        let coverage = inspect_nonshared_floquet_native_input_diagnostics_sidecars(
+            &[artifact, duplicate],
+            &[0],
+        );
+        assert_eq!(coverage.status, "invalid");
+        assert!(coverage.reason.contains("duplicate"));
+        assert!(!coverage.structural_complete);
+
+        let flattened = AuxiliaryArtifact {
+            relative_path:
+                "eigen/metadata/sample_0000/native_input_operator_diagnostics.v1.json"
+                    .to_string(),
+            bytes: b"flattened".to_vec(),
+        };
+        let flattened_coverage = inspect_nonshared_floquet_native_input_diagnostics_sidecars(
+            &[flattened],
+            &[0],
+        );
+        assert_eq!(flattened_coverage.status, "invalid");
+        assert!(flattened_coverage.reason.contains("non-canonical"));
+
+        let traversed = AuxiliaryArtifact {
+            relative_path:
+                "eigen/metadata/sample_0000/nonshared_source/../native_input_operator_diagnostics.v1.json"
+                    .to_string(),
+            bytes: b"traversed".to_vec(),
+        };
+        let traversed_coverage = inspect_nonshared_floquet_native_input_diagnostics_sidecars(
+            &[traversed],
+            &[0],
+        );
+        assert_eq!(traversed_coverage.status, "invalid");
+        assert!(traversed_coverage.reason.contains("non-canonical"));
+
+        let extra = AuxiliaryArtifact {
+            relative_path:
+                "eigen/metadata/sample_0007/nonshared_source/native_input_operator_diagnostics.v1.json"
+                    .to_string(),
+            bytes: b"extra".to_vec(),
+        };
+        let extra_coverage = inspect_nonshared_floquet_native_input_diagnostics_sidecars(
+            &[extra],
+            &[0],
+        );
+        assert_eq!(extra_coverage.status, "invalid");
+        assert!(extra_coverage.reason.contains("outside computed samples"));
     }
 
     #[test]

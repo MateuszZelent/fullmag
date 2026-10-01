@@ -53,6 +53,11 @@ pub(super) fn build_eigen_path_frequency_domain_manifest(
             mode_artifacts,
             &computed_sample_indices,
         );
+    let nonshared_floquet_native_input_diagnostics_coverage =
+        crate::fem::eigen_output::inspect_nonshared_floquet_native_input_diagnostics_sidecars(
+            mode_artifacts,
+            &computed_sample_indices,
+        );
     let producer_provenance_v1_paths =
         crate::fem::eigen_output::sample_scoped_producer_provenance_paths(mode_artifacts);
     let producer_provenance_v1_path =
@@ -395,6 +400,7 @@ pub(super) fn build_eigen_path_frequency_domain_manifest(
             "interrupted": false,
             "r4_replay": r4_coverage.manifest_value(),
             "nonshared_floquet_replay": nonshared_floquet_coverage.manifest_value(),
+            "nonshared_floquet_native_input_diagnostics_replay": nonshared_floquet_native_input_diagnostics_coverage.manifest_value(),
         },
         "capabilities": {
             "driven_response_artifact_available": false,
@@ -444,6 +450,7 @@ pub(super) fn build_eigen_path_frequency_domain_manifest(
             );
         }
         if nonshared_floquet_coverage.has_any_sidecars {
+            // Preserve the historical three-sidecar selector and aliases.
             for (key, _, alias) in
                 crate::fem::eigen_output::NONSHARED_FLOQUET_SIDECAR_DEFINITIONS
             {
@@ -459,6 +466,31 @@ pub(super) fn build_eigen_path_frequency_domain_manifest(
                         .first()
                         .filter(|_| {
                             nonshared_floquet_coverage.structural_complete && paths.len() == 1
+                        })
+                        .map_or(serde_json::Value::Null, |path| serde_json::json!(path)),
+                );
+            }
+        }
+        if nonshared_floquet_native_input_diagnostics_coverage.has_any_sidecars {
+            // The final C ABI diagnostic pair is additive structural evidence;
+            // it is kept separate from historical three-sidecar coverage.
+            for (key, _, alias) in crate::fem::eigen_output::
+                NONSHARED_FLOQUET_NATIVE_INPUT_DIAGNOSTICS_SIDECAR_DEFINITIONS
+            {
+                let paths = nonshared_floquet_native_input_diagnostics_coverage
+                    .paths_by_key
+                    .get(key)
+                    .cloned()
+                    .unwrap_or_default();
+                artifacts.insert(key.to_string(), serde_json::json!(paths));
+                artifacts.insert(
+                    alias.to_string(),
+                    paths
+                        .first()
+                        .filter(|_| {
+                            nonshared_floquet_native_input_diagnostics_coverage
+                                .structural_complete
+                                && paths.len() == 1
                         })
                         .map_or(serde_json::Value::Null, |path| serde_json::json!(path)),
                 );

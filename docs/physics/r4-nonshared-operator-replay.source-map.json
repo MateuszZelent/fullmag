@@ -33,11 +33,11 @@
     {"id": "nonshared-canonical-path-tests", "path": "scripts/test_fem_nonshared_canonical_paths.py", "symbol": "class NonsharedCanonicalPathTests", "responsibility": "Reject dot and empty POSIX components before path normalization."},
     {"id": "nonshared-matrix-tolerance", "path": "scripts/fem_nonshared_operator_replay.py", "symbol": "_matrix_close", "responsibility": "Scale-aware matrix comparisons without a unit-sized absolute floor."},
     {"id": "nonshared-scaled-tests", "path": "scripts/test_fem_nonshared_scaled_matrix_replay.py", "symbol": "class NonsharedScaledMatrixReplayTests", "responsibility": "Reject relative corruption of small mass-weighted FEM matrices after exact preimage rehash."},
-    {"id": "nonshared-coverage", "path": "crates/fullmag-runner/src/fem/eigen_output.rs", "symbol": "inspect_nonshared_floquet_sidecars", "responsibility": "Separate structural coverage and single-k manifest declarations without scientific qualification."},
-    {"id": "nonshared-path-manifest", "path": "crates/fullmag-runner/src/fem/eigen_path_manifest.rs", "symbol": "build_eigen_path_frequency_domain_manifest", "responsibility": "Multi-k sample arrays and single-sample aliases."},
+    {"id": "nonshared-coverage", "path": "crates/fullmag-runner/src/fem/eigen_output.rs", "symbol": "inspect_nonshared_floquet_sidecars", "responsibility": "Separate historical flat three-sidecar coverage from nested native-input pair coverage and single-k manifest declarations without scientific qualification."},
+    {"id": "nonshared-path-manifest", "path": "crates/fullmag-runner/src/fem/eigen_path_manifest.rs", "symbol": "build_eigen_path_frequency_domain_manifest", "responsibility": "Multi-k sample arrays and single-sample aliases for both historical flat and nested native-input families."},
     {"id": "nonshared-remap", "path": "crates/fullmag-runner/src/fem/eigen_path_artifacts.rs", "symbol": "remap_single_k_mode_artifacts", "responsibility": "Exact bytes retained with canonical sample paths and traversal rejection."},
-    {"id": "nonshared-routing", "path": "scripts/verify_fem_frequency_domain_eigen_artifacts.py", "symbol": "validate_nonshared_operator_replay", "responsibility": "Manifest paths, computed sample coverage and unqualified algebraic replay routing."},
-    {"id": "nonshared-routing-tests", "path": "scripts/test_fem_nonshared_operator_routing.py", "symbol": "class NonsharedOperatorRoutingTests", "responsibility": "Real interpreted fixture routing without mocks and without scientific promotion."},
+    {"id": "nonshared-routing", "path": "scripts/verify_fem_frequency_domain_eigen_artifacts.py", "symbol": "validate_nonshared_operator_replay", "responsibility": "Separate historical three-sidecar and nested native-input pair arrays, bind actual sample/path fields, and route unqualified algebraic replay."},
+    {"id": "nonshared-routing-tests", "path": "scripts/test_fem_nonshared_operator_routing.py", "symbol": "class NonsharedOperatorRoutingTests", "responsibility": "Real interpreted fixture routing, nested/flattened path and boolean sample-binding regressions without scientific promotion."},
     {"id": "nonshared-replay", "path": "scripts/fem_nonshared_operator_replay.py", "symbol": "replay_nonshared_operator", "responsibility": "Exact refs, raw bytes, mesh sample/path/length/encoding/SHA binding, final C ABI diagnostics, matrix relations, alpha, gamma and seam phase."},
     {"id": "nonshared-replay-tests", "path": "scripts/test_fem_nonshared_operator_replay.py", "symbol": "class NonSharedOperatorReplayTests", "responsibility": "Frozen literal, mesh-ref mutation, legacy absence and fail-closed interpreted regressions."},
     {"id": "nonshared-native-input-tests", "path": "scripts/test_fem_nonshared_native_input_diagnostics.py", "symbol": "class NonSharedNativeInputDiagnosticsTests", "responsibility": "Exact final C ABI payload, preimage, external raw refs and fail-closed mutation regressions."},
@@ -45,8 +45,9 @@
     {"id": "eigen-nonshared-domain", "path": "crates/fullmag-runner/src/fem/eigen_nonshared_domain.rs", "symbol": "build_nonshared_floquet_provenance", "responsibility": "Producer schema, exact operator/matrix/mesh refs, identity/source sidecars and final C ABI diagnostic bytes."},
     {"id": "eigen-native-input-finalizer", "path": "crates/fullmag-runner/src/fem/eigen_nonshared_domain.rs", "symbol": "finalize_native_input_diagnostics", "responsibility": "Acyclic preimage/raw digest publication for the exact final operator_diagnostics_json."},
     {"id": "eigen-native-window", "path": "crates/fullmag-runner/src/fem/eigen_native_window.rs", "symbol": "gyrotropic_matrix_row_major_from_tangent_mass", "responsibility": "Native units and direct tangent-mass block convention."},
-    {"id": "eigen-output-nonshared-manifest", "path": "crates/fullmag-runner/src/fem/eigen_output.rs", "symbol": "inspect_nonshared_floquet_sidecars", "responsibility": "Canonical non-shared sidecar discovery, full computed-sample coverage and NOT_VERIFIED diagnostics."},
-    {"id": "eigen-path-manifest-nonshared", "path": "crates/fullmag-runner/src/fem/eigen_path_manifest.rs", "symbol": "build_eigen_path_frequency_domain_manifest", "responsibility": "Multi-k transport of non-shared plural arrays and single-sample aliases."},
+    {"id": "eigen-output-nonshared-manifest", "path": "crates/fullmag-runner/src/fem/eigen_output.rs", "symbol": "inspect_nonshared_floquet_sidecars", "responsibility": "Canonical three-family coverage, separate native-input diagnostic coverage, duplicate-path rejection and NOT_VERIFIED diagnostics."},
+    {"id": "eigen-path-manifest-nonshared", "path": "crates/fullmag-runner/src/fem/eigen_path_manifest.rs", "symbol": "build_eigen_path_frequency_domain_manifest", "responsibility": "Multi-k transport of historical arrays plus the additive native-input diagnostic pair and single-sample aliases."},
+    {"id": "nonshared-manifest-source-tests", "path": "scripts/test_nonshared_floquet_manifest_contract_source.py", "symbol": "class NonsharedFloquetManifestContractSourceTests", "responsibility": "Source-only selector, nested naming, duplicate and legacy-coverage regressions."},
     {"id": "eigen-path-artifacts-nonshared", "path": "crates/fullmag-runner/src/fem/eigen_path_artifacts.rs", "symbol": "single_k_signed_state_artifact", "responsibility": "Retain and remap immutable non-shared sidecar bytes."}
   ],
   "public_api": {
@@ -54,8 +55,8 @@
     "note": "Brak zmian publicznego Python API i ProblemIR; adapter jest narzędziem weryfikacji artefaktów."
   },
   "validation": {
-    "command": "python -B -m unittest -v scripts.test_fem_nonshared_native_input_diagnostics scripts.test_nonshared_native_input_diagnostics_source scripts.test_fem_nonshared_operator_replay",
-    "result": "33 tests PASS",
+    "command": "python -B -m unittest -v scripts.test_fem_nonshared_native_input_diagnostics scripts.test_nonshared_native_input_diagnostics_source scripts.test_fem_nonshared_operator_replay scripts.test_fem_nonshared_operator_routing scripts.test_nonshared_floquet_manifest_contract_source",
+    "result": "44 tests PASS; legacy main verifier 213 tests PASS",
     "runtime": "NOT VERIFIED"
   }
 }

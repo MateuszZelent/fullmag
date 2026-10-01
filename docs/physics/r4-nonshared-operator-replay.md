@@ -155,9 +155,10 @@ diagnostykę z identity, source state, matrix pencil, `operator_input` oraz
 `exact_replay_refs`. Brak sidecaru zachowuje jawną lukę
 `native_input_diagnostics_not_published`; jego obecność nie dowodzi jeszcze
 rekonstrukcji native matrix pencil, residualu ani zgodności z COMSOL/TetraX.
-Ten etap nie rozszerza tablic strukturalnego manifestu trzech podstawowych
-sidecarów non-shared; dokładne referencje są transportowane przez istniejące
-`provenance.sidecars` i diagnostykę artefaktu.
+Manifesty single-k i multi-k mają teraz także jawne, pluralne tablice ścieżek
+dla obu tych finalnych sidecarów. Są one osobną bramką strukturalnego pokrycia
+artefaktów, a nie dowodem fizycznego operatora; `qualification` i
+`scientific_qualification` pozostają `NOT_VERIFIED`.
 
 (python-api)=
 ## 5. Python API
@@ -189,24 +190,35 @@ artefaktu runnera; replay nie dopisuje żadnego z tych pól.
 
 ### Transport manifestu dla single-k i multi-k
 
-Producent publikuje trzy immutable sidecary w każdym obliczonym próbkowym
-katalogu `eigen/metadata/sample_NNNN/`:
+Producent publikuje trzy historyczne immutable sidecary bezpośrednio w każdym
+obliczonym katalogu `eigen/metadata/sample_NNNN/` oraz, gdy finalny input C ABI
+został zapisany, dwa addytywne sidecary diagnostyczne w jego kanonicznym
+podkatalogu `nonshared_source/`:
 
 | Plik | Tablica manifestu | Alias single-sample |
 |---|---|---|
 | `nonshared_floquet_operator_identity.v1.json` | `nonshared_floquet_operator_identity_v1_paths` | `nonshared_floquet_operator_identity_v1_path` |
 | `nonshared_floquet_operator_identity_preimage.v1.json` | `nonshared_floquet_operator_identity_preimage_v1_paths` | `nonshared_floquet_operator_identity_preimage_v1_path` |
 | `nonshared_floquet_source_state.v1.json` | `nonshared_floquet_source_state_v1_paths` | `nonshared_floquet_source_state_v1_path` |
+| `nonshared_source/native_input_operator_diagnostics.v1.json` | `nonshared_floquet_native_input_diagnostics_v1_paths` | `nonshared_floquet_native_input_diagnostics_v1_path` |
+| `nonshared_source/native_input_operator_diagnostics_preimage.v1.json` | `nonshared_floquet_native_input_diagnostics_preimage_v1_paths` | `nonshared_floquet_native_input_diagnostics_preimage_v1_path` |
 
-W single-k i multi-k tablice są porządkowane numerycznie po `sample_index`.
-Alias jest ścieżką tylko wtedy, gdy dana tablica zawiera dokładnie jeden wpis;
-w przeciwnym razie ma wartość `null`. Coverage porównuje zbiór ścieżek z
-rzeczywistym zbiorem obliczonych próbek. Brak wszystkich trzech plików dla
-którejkolwiek próbki, próbka spoza wyniku lub niekanoniczny zapis
-`sample_NNNN` daje stan `NOT_VERIFIED` i nie jest częściowym sukcesem.
+W single-k i multi-k każda rodzina ma tablicę porządkowaną numerycznie po
+`sample_index`. Alias jest ścieżką tylko wtedy, gdy dana tablica zawiera
+dokładnie jeden wpis; w przeciwnym razie ma wartość `null`. Historyczna
+coverage porównuje trzy ścieżki z rzeczywistym zbiorem obliczonych próbek.
+Oddzielna coverage diagnostyki porównuje dwie nowe ścieżki. Brak sidecara w
+rodzinie, próbka spoza wyniku lub niekanoniczny zapis `sample_NNNN` daje
+`missing_sidecars` albo `invalid` dla odpowiedniej rodziny. Nowa coverage
+diagnostyczna dodatkowo odrzuca zduplikowaną ścieżkę, a zachowanie historycznej
+rodziny trzech sidecarów pozostaje bez migracji; status jednej rodziny nie
+zmienia statusu drugiej.
 
-Nieobecność sidecarów jest oznaczona jako `historical`. Obecność pełnego zbioru
-przenosi jedynie diagnostykę do `path_coverage_complete`; pole
+Nieobecność wszystkich sidecarów jest oznaczona jako `historical`. Historyczny
+pakiet zawierający tylko trzy podstawowe rodziny zachowuje dotychczasowy
+`path_coverage_complete` i swoje aliasy; brak dwóch addytywnych diagnostyk jest
+raportowany osobno jako `historical`, bez migracji w locie. Obecność obu nowych
+rodzin przenosi ich osobną diagnostykę do `path_coverage_complete`; pole
 `qualification` oraz `scientific_qualification` pozostają `NOT_VERIFIED`, a
 `operator_replay` wymaga niezależnego adaptera tego dokumentu. Ten transport
 nie zasila rodziny shared R4 i nie tworzy `SharedDomainLinearizationState`.
@@ -287,6 +299,15 @@ być identyczne w identity, operator input i nested source mesh record.
   payload C ABI, preimage, zewnętrzne raw refs i mutacje fail-closed;
 - `scripts/test_nonshared_native_input_diagnostics_source.py` — source-only
   kontrola finalizera przed obiema ścieżkami C ABI i zachowania starego digestu;
+- `scripts/test_nonshared_floquet_manifest_contract_source.py` — source-only
+  kontrola wspólnych selektorów historycznych i diagnostycznych dla
+  single-k/multi-k, nazw tablic,
+  aliasów, kanonicznego `nonshared_source` i fail-closed dla
+  duplikatów/historycznych luk;
+- `scripts/verify_fem_frequency_domain_eigen_artifacts.py` — walidator
+  konsumencki rozdziela historyczne trzy rodziny od nowej pary, sprawdza
+  rzeczywiste pola `sample_index`/path/preimage sidecara i nie podnosi
+  kwalifikacji fizycznej;
 - `crates/fullmag-runner/src/fem/eigen_nonshared_domain.rs` — producent
   sidecarów i schemat referencji, w tym exact `mesh_payload` ref wiążący
   rzeczywiste bajty meshu z próbką oraz finalizer dokładnych bajtów
@@ -295,7 +316,9 @@ być identyczne w identity, operator input i nested source mesh record.
   jednostek, masy i bloków żyrotropowych;
 - `crates/fullmag-runner/src/fem/eigen_output.rs` —
   `inspect_nonshared_floquet_sidecars` sprawdza kanoniczne ścieżki i pełne
-  pokrycie próbek, a `write_eigen_v2_bundle` publikuje tablice oraz aliasy;
+  pokrycie trzech historycznych rodzin, a osobna coverage diagnostyczna
+  odrzuca zduplikowane ścieżki; `write_eigen_v2_bundle` publikuje trzy stare
+  tablice oraz opcjonalne dwie tablice diagnostyczne i ich aliasy;
 - `crates/fullmag-runner/src/fem/eigen_path_manifest.rs` —
   `build_eigen_path_frequency_domain_manifest` przenosi ten sam kontrakt do
   manifestu multi-k;
@@ -311,12 +334,13 @@ być identyczne w identity, operator input i nested source mesh record.
 Uruchomiona bramka interpretowana:
 
 ```text
-python -B -m unittest -v scripts.test_fem_nonshared_native_input_diagnostics scripts.test_nonshared_native_input_diagnostics_source scripts.test_fem_nonshared_operator_replay
-33 tests: PASS
+python -B -m unittest -v scripts.test_fem_nonshared_native_input_diagnostics scripts.test_nonshared_native_input_diagnostics_source scripts.test_fem_nonshared_operator_replay scripts.test_fem_nonshared_operator_routing scripts.test_nonshared_floquet_manifest_contract_source
+43 tests: PASS
 ```
 
 Dodano przygotowane regresje Rust dla historycznego braku, pełnego single-/
-multi-k coverage, częściowej tablicy i niekanonicznej/obcej próbki. Z powodu
+multi-k coverage, osobnej coverage obu nowych rodzin diagnostycznych,
+częściowej tablicy, duplikatu i niekanonicznej/obcej próbki. Z powodu
 obowiązującego zakazu kompilacji testów jednostkowych nie uruchamiano tych
 testów natywnie. Sprawdzono także parser AST nowego modułu. Są to dowody source/interpreted;
 nie uruchamiano natywnego testu jednostkowego, managed builda, runnera ani
@@ -335,7 +359,9 @@ czytane preimage i relacje algebraiczne są spójne.
 
 Nowe sidecary udostępniają niezależnemu Pythonowi exact referencję mesh payloadu
 z sample, length, encoding i SHA oraz exact finalne bajty diagnostyki C ABI;
-historyczne sidecary bez tych wpisów są jawnie oznaczane jako niepełne. Nadal
+manifest deklaruje ich obecność osobnymi tablicami strukturalnymi. Historyczne
+pakiety bez tych wpisów zachowują trzyrodzinny status, a osobna coverage
+diagnostyczna pozostaje `historical`; nie ma migracji w locie. Nadal
 brakuje niezależnej rekonstrukcji actual native matrix pencil; ta luka nie jest
 uzupełniana z bieżącego źródła.
 
@@ -358,6 +384,7 @@ uzupełniana z bieżącego źródła.
 | `scripts/test_fem_nonshared_operator_replay.py` | `class NonSharedOperatorReplayTests` | frozen literal i mutacyjne regresje |
 | `scripts/test_fem_nonshared_native_input_diagnostics.py` | `class NonSharedNativeInputDiagnosticsTests` | exact finalny payload C ABI, preimage, zewnętrzne raw refs i mutacje |
 | `scripts/test_nonshared_native_input_diagnostics_source.py` | `class NonSharedNativeInputDiagnosticsSourceTests` | source-only kolejność finalizacji przed C ABI |
+| `scripts/test_nonshared_floquet_manifest_contract_source.py` | `class NonsharedFloquetManifestContractSourceTests` | source-only rodziny tablic manifestu single-k/multi-k i fail-closed coverage |
 | `scripts/fem_nonshared_operator_replay.py` | `_matrix_close` | porównanie względne bez wymiarowej tolerancji absolutnej |
 | `scripts/test_fem_nonshared_scaled_matrix_replay.py` | `class NonsharedScaledMatrixReplayTests` | małe poprawne macierze i podmiany po pełnym rehash |
 | `scripts/test_fem_nonshared_canonical_paths.py` | `class NonsharedCanonicalPathTests` | odrzucanie aliasów przed normalizacją ścieżki |
@@ -378,12 +405,15 @@ Status `interpreted_source_only` oznacza, że wynik jest użytecznym dowodem
 integralności artefaktów i relacji danych, ale nie zamyka walidacji runtime ani
 kwalifikacji naukowej dyspersji.
 
-Główny verifier odczytuje trzy plural arrays `nonshared_floquet_*_v1_paths`
-dla identity, identity preimage oraz source state. Wszystkie muszą zawierać
-ten sam uporządkowany zbiór policzonych próbek; singular alias jest dozwolony
-wyłącznie dla jednej próbki i musi wskazywać tę samą ścieżkę. Brak deklaracji
-w historycznym pakiecie pozostaje `NOT_VERIFIED`; jawnie zadeklarowane puste
-lub niekompletne tablice powodują błąd walidacji. Obecny routing nie dopisuje
-shared identity i nie awansuje statusu natywnego operatora ani kwalifikacji
-naukowej po poprawnym replayu algebraicznym. Pięć regresji routingu przeszło
-na rzeczywistym interpretowanym fixture bez mocka; nie jest to wykonanie FEM.
+Manifest producenta deklaruje trzy historyczne plural arrays
+`nonshared_floquet_*_v1_paths` dla identity, identity preimage i source state.
+Gdy finalne wejście C ABI istnieje, deklaruje osobną parę tablic
+`nonshared_floquet_native_input_diagnostics*_v1_paths`. Każda rodzina musi
+zawierać własny, uporządkowany zbiór policzonych próbek, a singular alias jest
+dozwolony wyłącznie dla jednej próbki i musi wskazywać tę samą ścieżkę. Brak
+nowej pary w historycznym pakiecie nie jest błędem odczytu trzech rodzin;
+diagnostyka nowej pary pozostaje `historical`/`NOT_VERIFIED` i nie podnosi
+operatora ani kwalifikacji naukowej. Obecny routing algebraiczny nadal rozdziela
+obie kontrole strukturalne od odczytu finalnego C ABI.
+Regresje routingu i source-contract przeszły na interpretowanych fixture bez
+mocka; nie jest to wykonanie FEM.

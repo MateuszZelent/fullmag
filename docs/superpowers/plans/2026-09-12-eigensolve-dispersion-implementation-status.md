@@ -2,6 +2,34 @@
 
 ## Aktualny stan — 2026-10-02, checkpoint nearest bf25a30d7
 
+Przyrost S07 uzupełnia strukturalne referencje finalnej diagnostyki C ABI
+w manifestach single-k i multi-k. Nowa para ma oddzielną coverage i właściwe
+ścieżki `sample_NNNN/nonshared_source/...`; historyczne trzy płaskie sidecary
+zachowują własny kontrakt. Python consumer sprawdza parę, ścieżki, aliasy,
+typ indeksu i kolejność próbek. Review zamknęło P1 złego podkatalogu oraz P2
+sortowania i kruchych asercji komentarzy. 44 testy przyrostu PASS; 213
+istniejących regresji verifiera PASS. To nie jest native ani physical replay;
+kompilacja/runtime nowych writerów pozostają NOT VERIFIED. Kapsuła #195
+pozostaje przypięta do bf25 i nie zawiera tego późniejszego przyrostu.
+
+Review S05 ponownie rozdzieliło zakres dowodu #193: był to `de-smoke-k0`
+z `periodic_airbox_k0`, nie wykonanie operatora Floqueta dla nonzero-k.
+14 kosztownych podokien miało `slepc_diverged`; nie są certyfikowanymi
+pustymi przedziałami. Ich udział 98,8176% czasu uzasadnia analizę kosztu
+nierozstrzygniętych shiftów, ale nie dowodzi jeszcze kosztu nonzero-k.
+Następny przyrost S05 musi sprawdzić faktyczny zakres ponownego użycia
+operatora i faktoryzacji; samo istnienie `borrowed_window_operator` nie
+dowodzi ponownego użycia kontekstu PETSc. Limit lub pominięcie próby musi
+pozostawiać przedział nierozstrzygnięty, nigdy automatycznie kompletny.
+
+Wyprowadzenie finite-Dirichlet n0 wskazuje różnicę modeli analitycznych:
+przy Γ finite airbox daje około 9,299249697 GHz, open film 9,309813711 GHz.
+Dla |k|=2e6 rad/m zmiana referencji DE wynosi około -321 kHz, więc sama
+nie wyjaśnia całej historycznej różnicy około -2,388 MHz. Trwa dodawanie
+obu jawnych referencji z parametrów resolved metadata, wraz z niezależną
+kontrolą funkcji Greena. Model jednorodny n0 nie zastępuje identyfikacji
+profilu modu ani zbieżności FEM.
+
 Spójny checkpoint natywny `bf25a30d7d8b26406bdbfc99d6412b10e4a15ae9`
 jest na origin brancha zadania. Zawiera naprawy kompilacji, provenance
 K0/Floquet, status nearest oraz sterownik sześciu rzeczywistych pilotów.
@@ -17,8 +45,24 @@ oraz logi native-build; etap kompilacji rozpoczął się. Przygotowanie kapsuły
 wewnątrz workera zajęło około 14 minut (7584 pliki, 301 172 237 B).
 Proces w trakcie przygotowania wykonywał odczyty przez system plików p9;
 to obserwacja infrastruktury, nie pomiar solvera ani dowód całej przyczyny
-kosztu. Nie ma jeszcze terminalnego receipt, więc sukces kompilacji pozostaje
-NOT VERIFIED. Sesja sterownika 95215 nadal żywa i czeka na ten sam job.
+kosztu. Worker zakończył się exit=0 i opublikował receipt `succeeded`;
+native-build exit=0, duration_ms=1 783 616,963. Root sprawdził wszystkie
+14 artefaktów receipt (rozmiary/SHA256), source digest i commit bf25,
+CPU/double oraz runtime_contract.unit_test_targets=[]: PASS.
+Dependency attestation potwierdza PETSc 3.24.6, SLEPc 3.24.3 i ten sam
+snapshot źródeł; CMake attestation wiąże MFEM 4.10.0 z hash ABI.
+Ostatni status API nadal running: koordynator nie opublikował jeszcze
+końcowego statusu. Recepta wymaga kontroli receipt i niezmienionej kapsuły
+przed zamknięciem joba. Sesja sterownika 95215
+nadal żywa i czeka na terminalny status tego samego joba. Punkty i
+kwalifikacja fizyczna nadal NOT VERIFIED.
+Log potwierdził `Finished release profile ... in 14m 29s` dla pierwszej
+kompilacji CLI z FEM. API zakończyło się w 9m 03s, Python core w 4m 01s.
+Nie jest to jeszcze terminalny sukces koordynatora ani wynik fizyczny.
+Świeży health runnera:
+worker_alive=true, worker_error=null, accepting_jobs=true, aktywny #195,
+storage_free_bytes=10 284 400 640. Ten odczyt nie jest gwarancją pojemności
+dla kolejnych przebiegów ani kwalifikacją naukową.
 Koordynator żywy; nie ponawiać submission po
 samym timeout obserwacji. Runner preflight:
 worker_alive=true, accepting_jobs=true, brak aktywnych jobów, 13 653 528 576 B
@@ -112,7 +156,9 @@ integracji ma 213 testów PASS (67,88 s). Zachowuje dokładne bajty C ABI,
 acykliczny preimage i referencje per próbka; native runtime pozostaje NOT VERIFIED.
 Przygotowaną regresję preserve/remap nowych sidecarów rozszerzono w
 `eigen_path_artifacts.rs`; parser PASS, wykonanie natywnego testu NOT VERIFIED.
-Follow-up: jawne strukturalne tablice ich referencji w manifestach nonshared.
+Follow-up source zrealizowany: jawne strukturalne tablice ich referencji
+w manifestach nonshared wraz z odbiornikiem Python; managed publikacja
+nowych referencji i pełny native/physical replay nadal wymagają dowodów.
 
 Nearest Γ/±DE/±BV jest przygotowany źródłowo: rzeczywisty adapter CPU
 publikuje selected-only, planner i executor używają wspólnego capability,
@@ -2367,7 +2413,7 @@ Realizacja [planu S00–S12](2026-09-12-eigensolve-dispersion-nonzero-k-plan.md)
 | S04 — dynamiczny demag-k CPU | W TRAKCIE | Sparse Schur/SLEPc i MFEM blocks są źródłowo zaimplementowane. Pozostają residual pełnego deskryptora/gauge/szwów, zbieżność airboxu i siatki oraz kwalifikacja nowego źródła; archiwalne punkty nie zastępują tych bramek. |
 | S05 — natywny solver spektralny | W TRAKCIE | #193: 14/50 podokien rozbieżnych, niekompletne okno; pojedynczy mod Γ zaakceptowany. #194 failed: pięć błędów Rust z czterech przyczyn; naprawy source zapisane i zreviewowane. #195 przyjęty, ostatni status running, sterownik sześciu punktów żywy. Nadal wymagane świeży runtime nearest, naprawa pełnego okna, certyfikat pokrycia/residuali i wznowienia; nearest nie zastępuje tej bramki. |
 | S06 — śledzenie gałęzi | W TRAKCIE | Hungarian/gaps i metryka masy FE są gotowe; pozostają fizyczne podprzestrzenie zdegenerowane |
-| S07 — artefakty i API | W TRAKCIE | Exact producer/consumer/mesh/native input replay zapisano i zreviewowano; 56 regresji nonshared i 213 głównego verifiera PASS. P1 oznaczania nonzero-k jako K0 naprawiony źródłowo i przyjęty w niezależnym review. Nadal potrzebne pełne native matrix/physical replay, strukturalne refs diagnostyki, aktualne binary fields/selektory i managed evidence. |
+| S07 — artefakty i API | W TRAKCIE | Exact producer/consumer/mesh/native input replay zapisano i zreviewowano. Nowe refs diagnostyki mają odrębny writer/consumer i coverage, 44 regresje przyrostu oraz 213 głównego verifiera PASS; historyczne 56 regresji nonshared pozostają osobnym dowodem. P1 oznaczania nonzero-k jako K0 naprawiony w źródłach bf25. Nadal potrzebne pełne native matrix/physical replay, managed publikacja nowych refs, aktualne binary fields/selektory i managed evidence. |
 | S08 — Control Room | W TRAKCIE | Źródła authoring/scatterplot, selekcji k/pola i linewidth zostały poprawione. Wymagane są bieżący managed frontend/runtime, browser/WebGL, FMS round-trip, dostępność pól i stabilność Inspectora. Historyczny #119 nie jest aktualnym buildem. |
 | S09 — falowód 2.5D | W TRAKCIE | Bounded provider i deterministyczny P1 assembler przekroju są zapisane; pozostają typed realization/routing, managed/MFEM owner, open-boundary convergence i porównania TetraX/3D |
 | S10 — interakcje | W TRAKCIE | Ku tangent terms i canonical/raw artifact v8/v7 mają implementację źródłową; guard/runtime i pełna kwalifikacja nadal otwarte. DMI, surface terms, niejednorodność, seam transport i damping `include` wymagają odpowiednich implementacji i walidacji bez osłabiania capability guards. |

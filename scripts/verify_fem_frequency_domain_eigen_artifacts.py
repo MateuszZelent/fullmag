@@ -888,6 +888,191 @@ def _declared_r4_sidecar_paths(
     return result
 
 
+def _native_input_diagnostics_sample_index(
+    relative_path: str, filename: str, name: str
+) -> int:
+    """Return the sample index from the nested native-input sidecar path."""
+    normalized = Path(relative_path).as_posix()
+    if relative_path != normalized:
+        fail(f"{name} must use canonical forward-slash separators")
+    prefix = "eigen/metadata/sample_"
+    suffix = f"/nonshared_source/{filename}"
+    if not normalized.startswith(prefix) or not normalized.endswith(suffix):
+        fail(
+            f"{name} must use "
+            f"eigen/metadata/sample_NNNN/nonshared_source/{filename}"
+        )
+    token = normalized[len(prefix) : -len(suffix)]
+    if not token.isdigit():
+        fail(f"{name} has an invalid sample index")
+    sample_index = int(token)
+    if token != f"{sample_index:04d}":
+        fail(f"{name} must use the canonical sample_{sample_index:04d} directory")
+    return sample_index
+
+
+def _declared_nonshared_native_input_diagnostics_paths(
+    root: Path,
+    artifacts: dict,
+    computed_sample_indices: set[int] | None,
+) -> dict[str, object]:
+    """Validate the additive final-C-ABI pair independently of old sidecars.
+
+    The three historical non-shared sidecar arrays are intentionally not
+    consulted here.  This keeps old manifests readable while making any
+    explicitly declared native-input pair fail closed on partial coverage,
+    wrong nesting, duplicate paths, or a sidecar whose own binding fields do
+    not name the manifest path and sample.
+    """
+    definitions = (
+        (
+            "nonshared_floquet_native_input_diagnostics_v1_paths",
+            "native_input_operator_diagnostics.v1.json",
+            "nonshared_floquet_native_input_diagnostics_v1_path",
+        ),
+        (
+            "nonshared_floquet_native_input_diagnostics_preimage_v1_paths",
+            "native_input_operator_diagnostics_preimage.v1.json",
+            "nonshared_floquet_native_input_diagnostics_preimage_v1_path",
+        ),
+    )
+    present = [key in artifacts for key, _, _ in definitions]
+    aliases_present = [alias in artifacts for _, _, alias in definitions]
+    if not any(present) and not any(aliases_present):
+        return {
+            "status": "historical",
+            "reason": "native-input diagnostic path arrays are absent",
+            "sample_indices": [],
+            "structural_complete": False,
+            "qualification": "NOT_VERIFIED",
+        }
+    if present != [True, True]:
+        fail(
+            "manifest.artifacts native-input diagnostic path arrays must "
+            "declare both final and preimage families together"
+        )
+    paths_by_key: dict[str, dict[int, tuple[str, Path]]] = {}
+    for key, filename, alias in definitions:
+        declared = artifacts[key]
+        if not isinstance(declared, list):
+            fail(f"manifest.artifacts.{key} must be a list")
+        if any(not isinstance(item, str) for item in declared):
+            fail(f"manifest.artifacts.{key} must be a list of paths")
+        if len(set(declared)) != len(declared):
+            fail(f"manifest.artifacts.{key} must not contain duplicate paths")
+        paths: dict[int, tuple[str, Path]] = {}
+        for position, item in enumerate(declared):
+            relative, artifact_path = require_bundle_path(
+                root, item, f"manifest.artifacts.{key}[{position}]"
+            )
+            sample_index = _native_input_diagnostics_sample_index(
+                relative, filename, f"manifest.artifacts.{key}[{position}]"
+            )
+            if sample_index in paths:
+                fail(
+                    f"manifest.artifacts.{key} contains duplicate sample index "
+                    f"{sample_index}"
+                )
+            paths[sample_index] = (relative, artifact_path)
+        if list(paths) != sorted(paths):
+            fail(f"manifest.artifacts.{key} must be ordered by sample index")
+        paths_by_key[key] = paths
+        alias_value = artifacts.get(alias)
+        if alias not in artifacts:
+            if len(paths) == 1:
+                fail(
+                    f"manifest.artifacts.{alias} is required for a complete "
+                    "single-sample native-input pair"
+                )
+        elif alias_value is not None:
+            alias_relative, alias_path = require_bundle_path(
+                root, alias_value, f"manifest.artifacts.{alias}"
+            )
+            alias_sample = _native_input_diagnostics_sample_index(
+                alias_relative, filename, f"manifest.artifacts.{alias}"
+            )
+            if len(paths) != 1 or alias_sample not in paths:
+                fail(
+                    f"manifest.artifacts.{alias} must be null unless its "
+                    "plural family contains exactly one sample"
+                )
+            if paths[alias_sample][0] != alias_relative or paths[alias_sample][1] != alias_path:
+                fail(
+                    f"manifest.artifacts.{alias} differs from its plural "
+                    "sample set"
+                )
+        elif len(paths) == 1:
+            fail(
+                f"manifest.artifacts.{alias} cannot be null for a complete "
+                "single-sample native-input pair"
+            )
+
+    final_key, preimage_key = (definitions[0][0], definitions[1][0])
+    final_paths = paths_by_key[final_key]
+    preimage_paths = paths_by_key[preimage_key]
+    if set(final_paths) != set(preimage_paths):
+        fail(
+            "manifest.artifacts native-input final and preimage sample "
+            "index sets must match"
+        )
+    sample_indices = set(final_paths)
+    if computed_sample_indices is not None and sample_indices != computed_sample_indices:
+        fail(
+            "manifest.artifacts native-input diagnostic sample index set "
+            "must match computed spectrum samples"
+        )
+    if not sample_indices:
+        return {
+            "status": "historical",
+            "reason": "native-input diagnostic path arrays are explicitly empty",
+            "sample_indices": [],
+            "structural_complete": False,
+            "qualification": "NOT_VERIFIED",
+        }
+
+    for sample_index in sorted(sample_indices):
+        final_relative, final_path = final_paths[sample_index]
+        preimage_relative, _preimage_path = preimage_paths[sample_index]
+        try:
+            final = strict_json_object(
+                final_path.read_bytes(), "native-input diagnostic manifest sidecar"
+            )
+        except (IdentityReplayError, OSError) as error:
+            fail(f"native-input diagnostic manifest sidecar is invalid: {error}")
+        require_equal(
+            final.get("nonshared_floquet_native_input_diagnostics_schema"),
+            "nonshared_floquet_native_input_diagnostics.v1",
+            "native-input diagnostic sidecar schema",
+        )
+        final_sample_index = final.get(
+            "nonshared_floquet_native_input_diagnostics_sample_index"
+        )
+        if type(final_sample_index) is not int:
+            fail("native-input diagnostic sidecar sample_index must be an integer")
+        require_equal(
+            final_sample_index,
+            sample_index,
+            "native-input diagnostic sidecar sample_index",
+        )
+        require_equal(
+            final.get("nonshared_floquet_native_input_diagnostics_path"),
+            final_relative,
+            "native-input diagnostic sidecar path binding",
+        )
+        require_equal(
+            final.get("nonshared_floquet_native_input_diagnostics_preimage_path"),
+            preimage_relative,
+            "native-input diagnostic sidecar preimage binding",
+        )
+    return {
+        "status": "path_coverage_complete",
+        "reason": "native-input diagnostic arrays and sidecar bindings cover every computed sample",
+        "sample_indices": sorted(sample_indices),
+        "structural_complete": True,
+        "qualification": "NOT_VERIFIED",
+    }
+
+
 def _legacy_state_sample_indices(
     root: Path, artifacts: dict, schema: str
 ) -> set[int]:
@@ -1327,6 +1512,10 @@ def validate_nonshared_operator_replay(
     """Replay declared nonshared samples without qualifying native FEM assembly."""
     from fem_nonshared_operator_replay import NonSharedReplayError, replay_nonshared_operator
 
+    native_input_coverage = _declared_nonshared_native_input_diagnostics_paths(
+        root, artifacts, computed_sample_indices
+    )
+
     families = (
         "nonshared_floquet_operator_identity",
         "nonshared_floquet_operator_identity_preimage",
@@ -1345,12 +1534,22 @@ def validate_nonshared_operator_replay(
     if not any(paths.values()):
         if any(f"{family}_v1_paths" in artifacts for family in families):
             fail("explicit nonshared operator replay arrays must cover computed samples")
-        return {"status": "NOT_VERIFIED", "reason": "nonshared exact sidecar declarations absent"}
+        return {
+            "status": "NOT_VERIFIED",
+            "reason": "nonshared exact sidecar declarations absent",
+            "native_input_diagnostics": native_input_coverage,
+        }
     indices = set(paths[families[0]])
     if not indices or any(set(paths[family]) != indices for family in families):
         fail("nonshared operator replay sidecars have incomplete sample coverage")
     if computed_sample_indices is not None and indices != computed_sample_indices:
         fail("nonshared operator replay sidecars differ from computed sample coverage")
+    native_indices = set(native_input_coverage["sample_indices"])
+    if native_input_coverage["structural_complete"] and native_indices != indices:
+        fail(
+            "manifest.artifacts native-input diagnostic sample index set must "
+            "match nonshared operator replay samples"
+        )
     reports = {}
     for index in sorted(indices):
         try:
@@ -1363,9 +1562,15 @@ def validate_nonshared_operator_replay(
         except NonSharedReplayError as error:
             fail(f"nonshared operator replay sample {index}: {error}")
         reports[str(index)] = report.as_dict()
+        if native_input_coverage["structural_complete"] and "native_input_diagnostics" not in report.exact_refs_verified:
+            fail(
+                f"nonshared operator replay sample {index} did not verify the "
+                "declared native-input diagnostic sidecar"
+            )
     return {
         "status": "nonshared_exact_operator_relations_replayed",
         "reports_by_sample": reports,
+        "native_input_diagnostics": native_input_coverage,
         "native_operator_replay_status": "NOT_VERIFIED",
         "scientific_qualification": "NOT_VERIFIED",
     }
