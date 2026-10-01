@@ -117,6 +117,17 @@ approximation and renamed in provenance to
 | $\mathbf m$ | normalized magnetization | $1$ |
 | $\mathbf k$ | spin-wave wave vector | $\mathrm{rad\,m^{-1}}$ |
 | $\omega$ | angular frequency | $\mathrm{rad\,s^{-1}}$ |
+| $\varphi_i$ | scalar P1 basis function for degree of freedom $i$ | $1$ |
+| $K_{ij}$ | assembled charge-diffusion stiffness entry | $\mathrm{A\,V^{-1}}$ |
+| $b_i$ | assembled charge right-hand-side entry | $\mathrm A$ |
+| $V_i$ | nodal electric potential | $\mathrm V$ |
+| $R_i$ | uneliminated discrete charge reaction | $\mathrm A$ |
+| $\mathcal D_t$ | essential degrees of freedom owned by terminal $t$ | $1$ |
+| $F_t$ | signed outward terminal current | $\mathrm A$ |
+| $F_t^{\mathrm{requested}}$ | prescribed signed outward terminal current | $\mathrm A$ |
+| $G_{ts}$ | terminal conductance response | $\mathrm{A\,V^{-1}}$ |
+| $U_s$ | equipotential value on terminal $s$ | $\mathrm V$ |
+| $V^{(s)}$ | solution for unit potential on terminal $s$ | $\mathrm V$ |
 
 ### 3.1 Conductor domain and electric potential
 
@@ -186,6 +197,44 @@ each connected metal body; the authored port-mode weights determine how the
 total source current is divided between disconnected return bodies. Automatic
 RF return splitting requires a harmonic circuit/field model and belongs to
 Tier 2 or 3.
+
+(antenna-terminal-weak-reaction)=
+The production terminal-current solve must measure each terminal with the
+**uneliminated discrete reaction of the same H1 operator** used to solve the
+potential. For the assembled P1 charge form and its right-hand side, define
+
+```{math}
+:label: antenna-terminal-weak-reaction
+K_{ij}=\int_{\Omega_c}\sigma\nabla\varphi_i\cdot\nabla\varphi_j\,d\Omega,
+\qquad R_i=\sum_jK_{ij}V_j-b_i,
+\qquad F_t=-\sum_{i\in\mathcal D_t}R_i.
+```
+
+The minus sign follows from $\mathbf J=-\sigma\nabla V$: a high-potential
+terminal on a straight bar has negative outward conventional-current flux.
+Terminal sets must be disjoint at the essential-DOF level; touching terminal
+selectors are invalid rather than double-counted. The historical face
+quadrature of the recovered gradient is only a diagnostic and must not define
+the terminal response or a current certificate.
+
+For each electrically connected component, one terminal is the gauge. Solve
+one H1 problem per non-gauge unit terminal potential, with all other terminal
+potentials zero, to obtain the response matrix. The prescribed signed-current
+vector must have zero sum on that component. Remove the gauge row and column,
+check the reduced matrix rank without regularization, solve for the remaining
+terminal voltages, and reconstruct the field from the same H1 operator:
+
+```{math}
+:label: antenna-terminal-response
+G_{ts}=F_t[V^{(s)}]/(1\,\mathrm V),
+\qquad \sum_sG_{ts}U_s=F_t^{\mathrm{requested}},
+\qquad \sum_tF_t^{\mathrm{requested}}=0.
+```
+
+The final solve must verify every signed $F_t$ against the authored current,
+including the gauge terminal; equality of magnitudes is insufficient. This
+discrete-reaction contract is not yet implemented by the current charge-only
+ABI.
 
 ### 3.2 Per-ampere normalization
 
@@ -1177,6 +1226,8 @@ evidence and cannot promote a capability lane.
 | Path | Symbol | Responsibility |
 |---|---|---|
 | `docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md` | `DOC-ANCHOR:antenna-separable-field-basis` | planned separable per-port field-basis contract; not executable evidence |
+| `docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md` | `DOC-ANCHOR:antenna-terminal-weak-reaction` | planned signed weak-reaction/terminal-response contract; not executable evidence |
+| `backends/fem/cpu/mfem/transport/steady_transport.cpp` | `SteadyTransportOracle::solve_charge` | existing H1 charge operator; terminal reactions and current-constrained solve remain to be added |
 | `crates/fullmag-ir/src/spin_transport.rs` | `ResolvedChargeTransportPlanIR` | standalone resolved charge-only contract without synthetic spin transport |
 | `crates/fullmag-plan/src/spin_transport.rs` | `resolve_fem_charge_only_transport` | FEM CPU/double charge-only planning and conservative-current-view binding |
 | `crates/fullmag-runner/src/native_fem/charge_transport.rs` | `execute_native_fem_charge_transport_plans` | pre-LLG execution, field publication and Oersted delegation |

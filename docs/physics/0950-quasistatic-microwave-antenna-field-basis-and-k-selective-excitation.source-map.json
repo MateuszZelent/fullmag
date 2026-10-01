@@ -43,13 +43,34 @@
     {"id": "r_prime", "latex": "$\\mathbf r'$", "meaning": "source position", "si_unit": "$\\mathrm m$"},
     {"id": "m", "latex": "$\\mathbf m$", "meaning": "normalized magnetization", "si_unit": "$1$"},
     {"id": "k", "latex": "$\\mathbf k$", "meaning": "spin-wave wave vector", "si_unit": "$\\mathrm{rad\\,m^{-1}}$"},
-    {"id": "omega", "latex": "$\\omega$", "meaning": "angular frequency", "si_unit": "$\\mathrm{rad\\,s^{-1}}$"}
+    {"id": "omega", "latex": "$\\omega$", "meaning": "angular frequency", "si_unit": "$\\mathrm{rad\\,s^{-1}}$"},
+    {"id": "phi_i", "latex": "$\\varphi_i$", "meaning": "scalar P1 basis function", "si_unit": "$1$"},
+    {"id": "K_ij", "latex": "$K_{ij}$", "meaning": "assembled charge-diffusion stiffness entry", "si_unit": "$\\mathrm{A\\,V^{-1}}$"},
+    {"id": "b_i", "latex": "$b_i$", "meaning": "charge right-hand-side entry", "si_unit": "$\\mathrm A$"},
+    {"id": "V_i", "latex": "$V_i$", "meaning": "nodal electric potential", "si_unit": "$\\mathrm V$"},
+    {"id": "R_i", "latex": "$R_i$", "meaning": "uneliminated discrete charge reaction", "si_unit": "$\\mathrm A$"},
+    {"id": "D_t", "latex": "$\\mathcal D_t$", "meaning": "essential degrees of freedom owned by terminal $t$", "si_unit": "$1$"},
+    {"id": "F_t", "latex": "$F_t$", "meaning": "signed outward terminal current", "si_unit": "$\\mathrm A$"},
+    {"id": "F_requested", "latex": "$F_t^{\\mathrm{requested}}$", "meaning": "prescribed signed outward terminal current", "si_unit": "$\\mathrm A$"},
+    {"id": "G_ts", "latex": "$G_{ts}$", "meaning": "terminal conductance response", "si_unit": "$\\mathrm{A\\,V^{-1}}$"},
+    {"id": "U_s", "latex": "$U_s$", "meaning": "equipotential value on terminal $s$", "si_unit": "$\\mathrm V$"},
+    {"id": "V_response", "latex": "$V^{(s)}$", "meaning": "solution for unit potential on terminal $s$", "si_unit": "$\\mathrm V$"}
   ],
   "equations": [
     {
       "id": "antenna-separable-field-basis",
       "symbols": ["H_ant", "H_basis", "I_p", "r"],
       "sources": ["separable-basis-planned-contract", "charge-only-runner", "charge-only-native-contract"]
+    },
+    {
+      "id": "antenna-terminal-weak-reaction",
+      "symbols": ["K_ij", "sigma", "Omega_c", "phi_i", "R_i", "V_i", "b_i", "F_t", "D_t"],
+      "sources": ["terminal-reaction-planned-contract", "charge-only-steady-native"]
+    },
+    {
+      "id": "antenna-terminal-response",
+      "symbols": ["G_ts", "F_t", "V_response", "U_s", "F_requested"],
+      "sources": ["terminal-reaction-planned-contract", "charge-only-steady-native"]
     }
   ],
   "sources": [
@@ -59,6 +80,20 @@
       "symbol": "DOC-ANCHOR:antenna-separable-field-basis",
       "responsibility": "Freeze the planned per-port separable field-basis equation without claiming executable solved-drive evidence.",
       "evidence_status": "planned_contract"
+    },
+    {
+      "id": "terminal-reaction-planned-contract",
+      "path": "docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md",
+      "symbol": "DOC-ANCHOR:antenna-terminal-weak-reaction",
+      "responsibility": "Define the signed weak-reaction and terminal-response equations before implementing the current-constrained solve.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "charge-only-steady-native",
+      "path": "backends/fem/cpu/mfem/transport/steady_transport.cpp",
+      "symbol": "SteadyTransportOracle::solve_charge",
+      "responsibility": "Identify the existing H1 charge operator to be reused for terminal response; current boundary-current diagnostics are not yet weak reactions.",
+      "evidence_status": "partial_implementation"
     },
     {
       "id": "charge-only-resolved-contract",
