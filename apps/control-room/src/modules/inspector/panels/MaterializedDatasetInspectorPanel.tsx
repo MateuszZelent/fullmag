@@ -8,6 +8,7 @@ import { Badge } from "@/shared/ui/Badge";
 
 import { InspectorGroup } from "../primitives/InspectorGroup";
 import type { InspectorPanelProps } from "../inspectorTypes";
+import { MaterializedDatasetValues } from "./MaterializedDatasetValues";
 
 export function MaterializedDatasetInspectorPanel({ selection }: InspectorPanelProps) {
   const ref = materializedDatasetSelection(selection);
@@ -122,9 +123,7 @@ export function MaterializedDatasetInspectorPanel({ selection }: InspectorPanelP
         />
       </InspectorGroup>
 
-      <p className="m-0 border-t border-fm-subtle pt-2 text-fm-xs text-fm-muted" role="status">
-        Field preview is not available yet. Metadata and provenance are available above.
-      </p>
+      <MaterializedDatasetValues key={JSON.stringify(ref)} dataset={data} />
     </div>
   );
 }

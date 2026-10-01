@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 
@@ -76,6 +77,9 @@ async function main() {
     }
   });
   page.on("pageerror", (error) => errors.push(error.message));
+  page.on("requestfailed", (request) => {
+    if (new URL(request.url()).pathname.endsWith("/materialized-dataset/slice")) state.sliceAborts = (state.sliceAborts ?? 0) + 1;
+  });
   page.on("websocket", (socket) => {
     if (new URL(socket.url()).pathname.startsWith("/v2/sessions/current/")) errors.push("Unexpected current-session WebSocket.");
   });
@@ -147,6 +151,7 @@ async function main() {
       runId: TARGET_RUN_ID,
     });
     assertPositivePinnedInspector(positive.inspectorText);
+    await assertBoundedValues(page, state);
     await page.getByRole("button", { name: "Apply", exact: true }).isDisabled().then((disabled) => assertCondition(disabled, "Pinned readonly dataset exposed Apply."));
     await page.getByRole("button", { name: "Focus", exact: true }).isDisabled().then((disabled) => assertCondition(disabled, "Project Inspector exposed runtime Focus."));
     await page.getByRole("button", { name: "Hide Inspector", exact: true }).click();
@@ -246,7 +251,8 @@ async function main() {
       positive_owner_execution_status: "running",
       positive_owner_scientific_assessment: "unassessed",
       forged_manifest_rejected: true,
-      binary_field_rendering: "not_attempted; metadata fixture has no field payload",
+      binary_field_rendering: "bounded readonly numeric table verified from FMDS fixture; spatial renderer not attempted",
+      bounded_slice: state.sliceProof,
       runtime_solver_or_model_mutation: "none observed",
       saved_run_switch_preserves_explicit_pinned_selection:
         savedRunSwitchInspectorRetained,
@@ -446,8 +452,57 @@ function assertPositivePinnedInspector(text) {
   assert.match(text, /Execution running/);
   assert.match(text, /Assessment unassessed/);
   assert.match(text, new RegExp(MANIFEST_OBJECT_REF));
-  assert.match(text, /Field preview is not available yet/);
-  assert.doesNotMatch(text, /Plot field|field values|numeric payload/i);
+  assert.match(text, /Saved field values/);
+}
+
+async function assertBoundedValues(page, state) {
+  const table = page.getByRole("table", { name: "Saved field values", exact: true });
+  await table.waitFor({ state: "visible", timeout: timeoutMs });
+  assert.equal(await table.locator("tbody tr").count(), 32);
+  assert.match(await table.innerText(), /0\.25000000/);
+  await page.getByLabel("Saved field component index", { exact: true }).fill("2");
+  assert.match(await table.innerText(), /2\.2500000/);
+  await page.getByRole("button", { name: "Next values", exact: true }).click();
+  await page.waitForFunction(() => document.querySelector('table[aria-label="Saved field values"] tbody th')?.textContent === "32");
+  assert.match(await table.innerText(), /98\.250000/);
+  await page.getByRole("button", { name: "Next values", exact: true }).click();
+  await page.waitForFunction(() => document.querySelector('table[aria-label="Saved field values"] tbody th')?.textContent === "64");
+  assert.equal(await table.locator("tbody tr").count(), 6);
+  assert.equal(await page.getByRole("button", { name: "Next values", exact: true }).isDisabled(), true);
+  await page.getByRole("button", { name: "Previous values", exact: true }).click();
+  await page.waitForFunction(() => document.querySelector('table[aria-label="Saved field values"] tbody th')?.textContent === "32");
+  state.corruptSlice = true;
+  await page.getByRole("button", { name: "Reload values", exact: true }).click();
+  await page.getByRole("alert").filter({ hasText: "checksum mismatch" }).waitFor({ state: "visible", timeout: timeoutMs });
+  assert.equal(await table.count(), 0, "Corrupted reload retained a visible quantitative table.");
+  state.corruptSlice = false;
+  await page.getByRole("button", { name: "Reload values", exact: true }).click();
+  await table.waitFor({ state: "visible", timeout: timeoutMs });
+  await table.scrollIntoViewIfNeeded();
+  await captureScreenshot(page, state, "pinned-materialized-dataset-values.png");
+  state.sliceProof = { pages: [32, 32, 6], componentSelection: true, checksumRejected: true, reloadRecovered: true };
+  state.holdSlice = true;
+  await page.getByRole("button", { name: "Reload values", exact: true }).click();
+  await waitForCondition(() => typeof state.releaseSlice === "function", "Delayed slice was not requested.");
+  const previousAborts = state.sliceAborts ?? 0;
+  await page.getByRole("button", { name: "Hide Inspector", exact: true }).click();
+  await waitForCondition(() => (state.sliceAborts ?? 0) > previousAborts, "Closing the last consumer did not abort its slice request.");
+  state.holdSlice = false;
+  state.releaseSlice();
+  state.releaseSlice = null;
+  await page.getByRole("button", { name: "Show Inspector", exact: true }).click();
+  await table.waitFor({ state: "visible", timeout: timeoutMs });
+  await page.waitForFunction(() => document.querySelector('table[aria-label="Saved field values"] tbody th')?.textContent === "0");
+  state.sliceProof.lastConsumerAbort = true;
+  state.sliceProof.reopenStartsFresh = true;
+}
+
+async function waitForCondition(condition, message) {
+  const deadline = Date.now() + timeoutMs;
+  while (!condition()) {
+    if (Date.now() >= deadline) throw new Error(message);
+    await new Promise((resolveWait) => setTimeout(resolveWait, 25));
+  }
 }
 
 function assertForgedManifestRejected(result) {
@@ -607,6 +662,25 @@ async function installFixtureRoutes(page, state) {
     );
     if (method === "GET" && artifactsMatch) {
       await fulfillJson(route, solutionSetArtifactsPage());
+      return;
+    }
+
+    const sliceMatch = path.match(
+      /^\/v2\/persistence\/projects\/([^/]+)\/runs\/([^/]+)\/solution-sets\/([^/]+)\/revisions\/([^/]+)\/members\/([^/]+)\/artifacts\/([^/]+)\/materialized-dataset\/slice$/,
+    );
+    if (method === "GET" && sliceMatch) {
+      assert.equal(decodeURIComponent(sliceMatch[1]), "project-pinned-materialized-dataset-1");
+      assert.equal(decodeURIComponent(sliceMatch[2]), TARGET_RUN_ID);
+      assert.equal(decodeURIComponent(sliceMatch[4]), SOLUTION_REVISION);
+      assert.equal(decodeURIComponent(sliceMatch[6]), POSITIVE_ARTIFACT_ID);
+      const held = state.holdSlice;
+      if (held) await new Promise((release) => { state.releaseSlice = release; });
+      try {
+        await route.fulfill({ status: 200, contentType: "application/octet-stream", body: datasetSliceBody(url.searchParams, state.corruptSlice) });
+      } catch (error) {
+        if (!held) throw error;
+        assert.match(String(error), /closed|intercept|cancel|abort|Invalid|Target/i);
+      }
       return;
     }
 
@@ -884,11 +958,11 @@ function materializedDatasetResource(forged) {
         accepted_state: null,
       },
       coverage: {
-        total_elements: "6",
+        total_elements: "70",
         component_count: "3",
         dtype: "f64",
         endian: "little",
-        total_bytes: "48",
+        total_bytes: "1680",
         chunk_count: 1,
       },
       descriptor: {
@@ -916,7 +990,7 @@ function materializedDatasetResource(forged) {
         carrier_id: "carrier:mesh",
         layout_digest: `sha256:${"2".repeat(64)}`,
         axes: [
-          { axis_id: "node", unit: "1", length: "2" },
+          { axis_id: "node", unit: "1", length: "70" },
           { axis_id: "component", unit: "1", length: "3" },
         ],
         component_axis: "component",
@@ -929,6 +1003,40 @@ function materializedDatasetResource(forged) {
       },
     },
   };
+}
+
+function datasetSliceBody(query, corrupt) {
+  const dataset = materializedDatasetResource(false);
+  assert.equal(query.get("expected_manifest_object_ref"), MANIFEST_OBJECT_REF);
+  assert.equal(query.get("max_response_bytes"), "65536");
+  const offset = Number(query.get("element_offset"));
+  const count = Number(query.get("element_count"));
+  assert.ok(Number.isSafeInteger(offset) && Number.isSafeInteger(count) && count > 0 && count <= 32 && offset + count <= 70);
+  const payload = Buffer.alloc(count * 3 * 8);
+  for (let index = 0; index < count * 3; index++) payload.writeDoubleLE(offset * 3 + index + 0.25, index * 8);
+  const metadata = {
+    schema_version: "fullmag.binary.materialized_dataset_slice.v1",
+    project_id: dataset.project_id, run_id: dataset.run_id, solution_set_id: dataset.solution_set_id,
+    containing_solution_revision: dataset.containing_solution_revision,
+    member_id: dataset.member_id, artifact_id: dataset.artifact_id,
+    manifest_object_ref: dataset.manifest_object_ref, manifest_byte_length: dataset.manifest_byte_length,
+    source: dataset.source, descriptor: dataset.field.descriptor, integrity: "verified_returned_ranges",
+    slice: {
+      schema_version: "1.0.0", dataset_id: dataset.dataset.dataset_id, dataset_revision: dataset.dataset.revision,
+      sample_id: dataset.sample_id, item_id: dataset.item_id, field_id: dataset.field_id,
+      field_layout_digest: dataset.field.descriptor.layout_digest,
+      element_offset: String(offset), element_count: String(count), total_elements: "70", component_count: "3",
+      precision: "f64", byte_order: "little_endian", payload_bytes: String(payload.length),
+      parts: [{ plane: "values", plane_offset_bytes: "0", object_offset_bytes: String(offset * 24),
+        object_ref: "c".repeat(64), byte_length: String(payload.length),
+        range_sha256: `sha256:${createHash("sha256").update(payload).digest("hex")}` }],
+    },
+  };
+  const json = Buffer.from(JSON.stringify(metadata));
+  const header = Buffer.alloc(12);
+  header.write("FMDS"); header.writeUInt16LE(1, 4); header.writeUInt32LE(json.length, 8);
+  if (corrupt) payload[0] ^= 1;
+  return Buffer.concat([header, json, payload]);
 }
 
 function solutionProvenance() {
@@ -1010,6 +1118,7 @@ async function writeReport({
     requests: state.requests,
     responses: state.responses,
     metadata_requests: state.metadataRequests,
+    slice_proof: state.sliceProof ?? null,
     forbidden_runtime_requests: state.forbiddenRuntimeRequests,
     browser_errors: errors,
     shell_startup_warnings: state.startupWarnings,
