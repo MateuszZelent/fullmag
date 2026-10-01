@@ -4537,3 +4537,28 @@ obrazie; nie nadpisano go ani nie uruchomiono równoległego ciężkiego buildu.
 R4 exact-preimage foundation opublikowano jako
 `2c9ed3c5836ffff9e574271a7c39afd07590b5e5`; full accepted replay nadal OPEN.
 Zakres S00–S12 nie został zawężony ani uznany za ukończony.
+
+
+## R4 — evidence multi-k niezależny od wyboru pól modów
+
+WIP źródłowy w eigen_path_artifacts/eigen_path_manifest: accepted fieldsV1/V2
+i linearization identityV2 otrzymują sample metadata paths i manifest arrays.
+Podpisane equilibrium/state/identity dokumenty zachowują dokładne bajty,
+zamiast recursive sample string rewriting. Certyfikaty policzonych próbek
+pozostają dla spectrum-only i przy selekcji pól z innego sample.
+Przygotowana regresja sprawdza whitespace/preimage strings oraz sample0/2/7,
+empty mode selection i indeksowanie paths. Parser2Rust PASS,10docs PASS,
+source-map PASS po naprawie czterech wymaganych wpisów indeksu.
+Natywne wykonanie nadal NOT VERIFIED, review w toku, nie jest to zamknięcieR4.
+Szczegółowe pozostałe P1/P2 i kroki A1:
+`docs/audits/2026-10-01-r4-replay-and-comsol-a1-gates.md`.
+F01 opublikowany; #188 nadal live refinement27/50, bez końcowej częstotliwości.
+
+Review R4 path wykryło dodatkowy P1: spectrum-only deklarował binary mode
+exports bez payloadu. Poprawiono wybór format none/zarr/binary na podstawie
+rzeczywistych niepustych artefaktów i przygotowano regresję. Uzupełniono spec
+frequency-domain-artifacts-v2 o nowe tablice ścieżek i scope replay.
+Parser2Rust/10docs/source-map PASS; końcowe review w toku, runtime NOT VERIFIED.
+Brama zdeformowanego prism6: przygotowany niezależny GL4/5/7 oracle używa
+4/5/7 punktów na osi, nie MFEM orders4/5/7; dokumentacja korygowana,
+produkcyjna zbieżność kwadratury i native execution nadal OPEN.

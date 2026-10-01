@@ -630,6 +630,19 @@ inputs, not a substitute for accepted/recomputed field certificates or a new
 published artifact schema. End-to-end replay and managed qualification remain
 pending; adding preimages alone does not certify equilibrium provenance.
 
+Kontrakt agregacji multi-k R4: podpisane sidecars accepted fields V1/V2 i
+linearization identity V2 otrzymują ścieżkę `eigen/metadata/sample_NNNN/`.
+Relokacja musi zachować dokładne bajty payloadu, w tym preimages i tożsamość
+źródłowej siatki; nie wolno przepisywać napisów `sample_0000` wewnątrz
+podpisanego dokumentu. To samo dotyczy istniejących equilibrium/state sidecars.
+Manifest wiąże próbkę przez ścieżkę, a nie przez mutację dokumentu.
+Evidence wszystkich policzonych próbek pozostaje także dla spectrum-only oraz
+przy selekcji mode fields tylko z części próbek. Selekcja pól nie usuwa dowodu
+stanu równowagi ani tożsamości operatora.
+Publikowane tablice ścieżek muszą odpowiadać rzeczywiście obecnym sidecars,
+bez syntetycznych plików dla nieobliczonych próbek. Runtime i pełny accepted
+replay pozostają osobnymi, jeszcze niezweryfikowanymi bramkami.
+
 
 The equilibrium observer registers Ku as a typed anisotropy interaction, never
 as a frozen per-node external field. This keeps Zeeman and anisotropy energies
@@ -1996,6 +2009,10 @@ visibility into runtime qualification.
 | Failed EPS diagnostic regression | FEM CPU test source | `backends/fem/tests/frequency_domain/poisson_airbox_modal_eigen_slepc_test.cpp` + `void PreservesFailedSchurEpsCountersWithoutPublishingModes` | Preserve performed work without publishing stale or partial modes. | Native unit compilation prohibited; prepared only | NOT VERIFIED | working tree |
 | R4 exact identity preimages | FEM Rust source | `crates/fullmag-runner/src/fem/equilibrium_identity.rs` + `signature_digest_and_preimage` | Preserve namespace/byte-length/exact JSON replay with legacy and canonical Ku identities. | Parser PASS; native regressions prepared | Complete R4/runtime NOT VERIFIED | working tree |
 | R4 all-family replay regression | FEM Rust test source | `crates/fullmag-runner/src/fem/eigen_tests.rs` + `equilibrium_and_modal_preimages_replay_all_identity_families` | Independent byte replay and mutation checks for all five identities. | Parser PASS; prepared only | Native execution NOT VERIFIED | working tree |
+| source-r4-remap-single-k-mode-artifacts | FEM Rust source | `crates/fullmag-runner/src/fem/eigen_path_artifacts.rs` + `remap_single_k_mode_artifacts` | Signed sample evidence without payload mutation or field-selection loss. | Parser PASS; native regression prepared | Runtime NOT VERIFIED | working tree |
+| source-r4-retain-selected-eigen-path-mode-artifacts | FEM Rust source | `crates/fullmag-runner/src/fem/eigen_path_artifacts.rs` + `retain_selected_eigen_path_mode_artifacts` | Signed sample evidence without payload mutation or field-selection loss. | Parser PASS; native regression prepared | Runtime NOT VERIFIED | working tree |
+| source-r4-signed-sidecars-preserve-exact-bytes-across-samples | FEM Rust source | `crates/fullmag-runner/src/fem/eigen_path_artifacts.rs` + `signed_sidecars_preserve_exact_bytes_across_samples` | Signed sample evidence without payload mutation or field-selection loss. | Parser PASS; native regression prepared | Runtime NOT VERIFIED | working tree |
+| source-r4-build-eigen-path-frequency-domain-manifest | FEM Rust source | `crates/fullmag-runner/src/fem/eigen_path_manifest.rs` + `build_eigen_path_frequency_domain_manifest` | Signed sample evidence without payload mutation or field-selection loss. | Parser PASS; native regression prepared | Runtime NOT VERIFIED | working tree |
 | Coupled cached-window regression | FEM CPU | `backends/fem/tests/frequency_domain/poisson_airbox_modal_eigen_slepc_test.cpp` + `void FrequencyWindowRetainsDemagInBoundedCachedPreconditioner` | Known Schur frequency across shifts and fresh windows. | Native compilation prohibited; pending | source-visible / unvalidated | working tree |
 
 ### Anulowanie podczas materializacji preconditionera K0

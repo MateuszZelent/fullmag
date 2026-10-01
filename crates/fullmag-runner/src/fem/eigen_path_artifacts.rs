@@ -49,6 +49,11 @@ pub(super) fn retain_selected_eigen_path_mode_artifacts(
         .map(|id| id.sample_index)
         .collect::<BTreeSet<_>>();
     artifacts.retain(|artifact| {
+        // Equilibrium/identity evidence belongs to the solved sample, not
+        // the optional selection of mode field payloads.
+        if eigen_path_signed_state_artifact(&artifact.relative_path) {
+            return true;
+        }
         if let Some(id) = eigen_path_artifact_mode_id(&artifact.relative_path) {
             return selected.contains(&id);
         }
@@ -561,11 +566,12 @@ mod output_publication_tests {
             .collect::<Vec<_>>();
         assert_eq!(
             kept,
-            vec![paths[0], paths[1], paths[2], paths[3], paths[5], paths[7], paths[8], paths[9]]
+            vec![paths[0], paths[1], paths[2], paths[3], paths[5], paths[7], paths[8], paths[9], paths[10]]
         );
         assert!(artifacts.iter().all(|artifact| artifact.bytes == [17]));
         retain_selected_eigen_path_mode_artifacts(&mut artifacts, &BTreeSet::new());
-        assert!(artifacts.is_empty());
+        assert_eq!(artifacts.len(), 2);
+        assert!(artifacts.iter().all(|artifact| eigen_path_signed_state_artifact(&artifact.relative_path)));
     }
 
     #[test]
@@ -596,10 +602,75 @@ mod output_publication_tests {
                 &mut artifacts,
                 &BTreeSet::from([SampleModeId::new(7, 3)]),
             );
-            assert_eq!(artifacts.len(), 1);
+            assert_eq!(artifacts.len(), 2);
             assert_eq!(artifacts[0].relative_path, target);
             assert_eq!(artifacts[0].bytes, vec![17]);
+            assert_eq!(artifacts[1].bytes, vec![18]);
         }
+    }
+
+    #[test]
+    fn signed_sidecars_preserve_exact_bytes_across_samples() {
+        let filenames = [
+            ("equilibrium", "accepted_fem_equilibrium_fields.v1.json"),
+            ("equilibrium", "accepted_fem_equilibrium_fields.v2.json"),
+            ("eigen/metadata", "linearization_identity.v2.json"),
+            ("eigen/metadata", "equilibrium_artifact.v7.json"),
+            ("eigen/metadata", "equilibrium_artifact.v8.json"),
+            ("eigen/metadata", "linearization_state.v6.json"),
+            ("eigen/metadata", "linearization_state.v7.json"),
+            ("eigen/metadata", "accepted_fem_equilibrium_fields.v1.json"),
+            ("eigen/metadata", "accepted_fem_equilibrium_fields.v2.json"),
+        ];
+        // Deliberate whitespace and sample-looking preimage strings prove
+        // that neither JSON reserialization nor recursive rewriting is allowed.
+        let payload = br#"{ "sample_index": 0, "preimage": "sample_0000", "path": "sample-0000" }"#;
+        for sample_index in [0, 2, 7] {
+            for (prefix, filename) in filenames {
+                let artifacts = vec![AuxiliaryArtifact {
+                    relative_path: format!("{prefix}/{filename}"),
+                    bytes: payload.to_vec(),
+                }];
+                let remapped = remap_single_k_mode_artifacts(
+                    &artifacts, sample_index, &BTreeSet::from([3_u32])).unwrap();
+                assert_eq!(remapped.len(), 1);
+                assert_eq!(remapped[0].relative_path,
+                    format!("eigen/metadata/sample_{sample_index:04}/{filename}"));
+                assert_eq!(remapped[0].bytes, payload.to_vec());
+                let mut spectrum_only = remap_single_k_mode_artifacts(
+                    &artifacts, sample_index, &BTreeSet::new()).unwrap();
+                retain_selected_eigen_path_mode_artifacts(&mut spectrum_only, &BTreeSet::new());
+                assert_eq!(spectrum_only.len(), 1);
+                assert_eq!(spectrum_only[0].bytes, payload.to_vec());
+                assert_eq!(eigen_path_state_metadata_paths(&spectrum_only, filename),
+                    vec![spectrum_only[0].relative_path.clone()]);
+            }
+        }
+    }
+
+    #[test]
+    fn state_evidence_does_not_claim_mode_field_storage() {
+        let mut artifacts = vec![AuxiliaryArtifact {
+            relative_path: "eigen/metadata/sample_0007/accepted_fem_equilibrium_fields.v2.json".into(),
+            bytes: b"{}".to_vec(),
+        }];
+        assert_eq!(eigen_path_mode_field_storage_format(&artifacts), "none");
+        artifacts.push(AuxiliaryArtifact {
+            relative_path: "eigen/modes/sample_0007/mode_0003.json".into(),
+            bytes: b"{}".to_vec(),
+        });
+        assert_eq!(eigen_path_mode_field_storage_format(&artifacts), "none");
+        artifacts.push(AuxiliaryArtifact {
+            relative_path: "eigen/mode_fields/sample_0007/mode_0003/vector.bin".into(),
+            bytes: vec![],
+        });
+        assert_eq!(eigen_path_mode_field_storage_format(&artifacts), "none");
+        artifacts.last_mut().unwrap().bytes = vec![1; 48];
+        assert_eq!(eigen_path_mode_field_storage_format(&artifacts), "binary_compatibility_exports");
+        artifacts.push(AuxiliaryArtifact {
+            relative_path: "eigen/mode_fields.zarr/.zgroup".into(), bytes: b"{}".to_vec(),
+        });
+        assert_eq!(eigen_path_mode_field_storage_format(&artifacts), "zarr");
     }
 
     #[test]
@@ -1961,7 +2032,11 @@ pub(super) fn remap_single_k_mode_artifacts(
         ) else {
             continue;
         };
-        let bytes = if single_k_mode_artifact_is_json(&relative_path) {
+        // Signed state sidecars are relocated without altering their payload:
+        // a source name or preimage may legitimately contain "sample_0000".
+        let bytes = if single_k_signed_state_artifact(&artifact.relative_path) {
+            artifact.bytes.clone()
+        } else if single_k_mode_artifact_is_json(&relative_path) {
             remap_single_k_mode_json_bytes(&artifact.bytes, sample_index)?
         } else {
             artifact.bytes.clone()
@@ -1974,29 +2049,48 @@ pub(super) fn remap_single_k_mode_artifacts(
     Ok(remapped)
 }
 
+fn eigen_path_signed_state_artifact(relative_path: &str) -> bool {
+    let Some(rest) = relative_path.strip_prefix("eigen/metadata/") else {
+        return false;
+    };
+    let Some((sample, filename)) = rest.split_once('/') else {
+        return false;
+    };
+    sample.strip_prefix("sample_").is_some_and(|index| {
+        !index.is_empty() && index.bytes().all(|byte| byte.is_ascii_digit())
+    }) && single_k_signed_state_artifact(&format!("eigen/metadata/{filename}"))
+}
+
+fn single_k_signed_state_artifact(relative_path: &str) -> bool {
+    matches!(relative_path,
+        "eigen/metadata/equilibrium_artifact.v7.json"
+        | "eigen/metadata/linearization_state.v6.json"
+        | "eigen/metadata/equilibrium_artifact.v8.json"
+        | "eigen/metadata/linearization_state.v7.json"
+        | "eigen/metadata/linearization_identity.v2.json"
+        | "eigen/metadata/accepted_fem_equilibrium_fields.v1.json"
+        | "eigen/metadata/accepted_fem_equilibrium_fields.v2.json"
+        | "equilibrium/accepted_fem_equilibrium_fields.v1.json"
+        | "equilibrium/accepted_fem_equilibrium_fields.v2.json")
+}
+
 pub(super) fn remap_single_k_mode_artifact_path(
     relative_path: &str,
     sample_index: usize,
     published_mode_indices: &BTreeSet<u32>,
 ) -> Option<String> {
+    let sample_path = format!("sample_{sample_index:04}");
+    if single_k_signed_state_artifact(relative_path) {
+        let filename = relative_path.rsplit('/').next()?;
+        return Some(format!("eigen/metadata/{sample_path}/{filename}"));
+    }
     if published_mode_indices.is_empty() {
         return None;
     }
-    let sample_path = format!("sample_{sample_index:04}");
     if relative_path == "eigen/mode_fields.zarr/.zgroup"
         || relative_path == "eigen/mode_fields.zarr/.zattrs"
     {
         return Some(relative_path.to_string());
-    }
-    for state_name in [
-        "equilibrium_artifact.v7.json",
-        "linearization_state.v6.json",
-        "equilibrium_artifact.v8.json",
-        "linearization_state.v7.json",
-    ] {
-        if relative_path == format!("eigen/metadata/{state_name}") {
-            return Some(format!("eigen/metadata/{sample_path}/{state_name}"));
-        }
     }
     if matches!(
         relative_path,

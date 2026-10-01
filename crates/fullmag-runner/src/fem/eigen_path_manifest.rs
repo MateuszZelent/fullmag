@@ -47,6 +47,12 @@ pub(super) fn build_eigen_path_frequency_domain_manifest(
         eigen_path_state_metadata_paths(mode_artifacts, "equilibrium_artifact.v8.json");
     let linearization_state_v7_paths =
         eigen_path_state_metadata_paths(mode_artifacts, "linearization_state.v7.json");
+    let accepted_fem_equilibrium_fields_v1_paths = eigen_path_state_metadata_paths(
+        mode_artifacts, "accepted_fem_equilibrium_fields.v1.json");
+    let accepted_fem_equilibrium_fields_v2_paths = eigen_path_state_metadata_paths(
+        mode_artifacts, "accepted_fem_equilibrium_fields.v2.json");
+    let linearization_identity_v2_paths = eigen_path_state_metadata_paths(
+        mode_artifacts, "linearization_identity.v2.json");
     let mode_field_resources = mode_metadata_paths
         .iter()
         .filter_map(|path| parse_eigen_path_mode_metadata_path(path))
@@ -65,14 +71,8 @@ pub(super) fn build_eigen_path_frequency_domain_manifest(
     } else {
         serde_json::json!("mode_vectors_not_carried_by_multi_k_orchestrator")
     };
-    let mode_zarr_available = mode_artifacts
-        .iter()
-        .any(|artifact| artifact.relative_path == "eigen/mode_fields.zarr/.zgroup");
-    let mode_field_storage_format = if mode_zarr_available {
-        "zarr"
-    } else {
-        "binary_compatibility_exports"
-    };
+    let mode_field_storage_format = eigen_path_mode_field_storage_format(mode_artifacts);
+    let mode_zarr_available = mode_field_storage_format == "zarr";
     let mode_field_zarr_store_path = if mode_zarr_available {
         serde_json::json!("eigen/mode_fields.zarr")
     } else {
@@ -314,6 +314,9 @@ pub(super) fn build_eigen_path_frequency_domain_manifest(
             "mode_metadata_paths": mode_metadata_paths,
             "equilibrium_artifact_v7_paths": equilibrium_artifact_v7_paths,
             "linearization_state_v6_paths": linearization_state_v6_paths,
+            "accepted_fem_equilibrium_fields_v1_paths": accepted_fem_equilibrium_fields_v1_paths,
+            "accepted_fem_equilibrium_fields_v2_paths": accepted_fem_equilibrium_fields_v2_paths,
+            "linearization_identity_v2_paths": linearization_identity_v2_paths,
             "frequency_point_paths": [],
         },
         "resources": {
@@ -753,6 +756,24 @@ pub(super) fn eigen_path_dispersion_capabilities(
         "k_path": eigen_path_capability("reference_executable", "runner FEM eigen path emits dispersion.csv"),
         "branch_tracking": eigen_path_capability("reference_executable", "runner FEM eigen path emits branches.v2 artifacts"),
     })
+}
+
+pub(super) fn eigen_path_mode_field_storage_format(
+    artifacts: &[crate::types::AuxiliaryArtifact],
+) -> &'static str {
+    if artifacts.iter().any(|artifact| {
+        artifact.relative_path == "eigen/mode_fields.zarr/.zgroup" && !artifact.bytes.is_empty()
+    }) {
+        "zarr"
+    } else if artifacts.iter().any(|artifact| {
+        artifact.relative_path.starts_with("eigen/mode_fields/sample_")
+            && artifact.relative_path.ends_with("/vector.bin")
+            && !artifact.bytes.is_empty()
+    }) {
+        "binary_compatibility_exports"
+    } else {
+        "none"
+    }
 }
 
 pub(super) fn eigen_path_mode_metadata_paths(

@@ -1319,6 +1319,17 @@ Native Ku handoffs use `equilibrium_artifact.v8` and `LinearizationState.v7`.
 Their singular manifest keys are `equilibrium_artifact_v8_path` and
 `linearization_state_v7_path`; multi-sample keys are
 `equilibrium_artifact_v8_paths[]` and `linearization_state_v7_paths[]`.
+Kontrakt R4 dodaje tablice `accepted_fem_equilibrium_fields_v1_paths[]`,
+`accepted_fem_equilibrium_fields_v2_paths[]` i `linearization_identity_v2_paths[]`.
+Wskazują rzeczywiście obecne immutable sidecars w `eigen/metadata/sample_NNNN/`.
+Relokacja zachowuje dokładne bajty dokumentu, preimages i source identity;
+selekcja pól modów nie usuwa dowodów stanu równowagi policzonych próbek.
+Dla spectrum-only `mode_field_storage_format = "none"`; dokumenty stanu
+nie stanowią payloadów pól modów. Accepted fields są dowodami naukowymi,
+nie dowolnym opaque JSON: wymagają replay obu rodzin V1/V2 oraz związania
+z certificate i identity. Walidacja tych tablic w odbiorniku Python pozostaje
+otwartą bramką pełnego R4; sama obecność list nie kwalifikuje wyniku.
+
 Each pair belongs to the same sample; mixed versions for one sample are invalid.
 Empty legacy path arrays do not declare another handoff. Ku-free writers retain
 `equilibrium_artifact.v7` / `LinearizationState.v6`, their filenames, digest

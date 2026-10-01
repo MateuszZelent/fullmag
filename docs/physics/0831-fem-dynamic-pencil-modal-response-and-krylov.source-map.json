@@ -1840,6 +1840,34 @@
       "symbol": "equilibrium_and_modal_preimages_replay_all_identity_families",
       "responsibility": "Prepare exact-byte replay and mutation rejection for material/static/boundary/operator/dynamic-boundary identity families.",
       "evidence_status": "Rust parser PASS; native compilation/execution NOT VERIFIED"
+    },
+    {
+      "id": "source-r4-remap-single-k-mode-artifacts",
+      "path": "crates/fullmag-runner/src/fem/eigen_path_artifacts.rs",
+      "symbol": "remap_single_k_mode_artifacts",
+      "evidence_status": "source_visible",
+      "responsibility": "Relocate signed accepted/state/identity sidecars without changing exact payload bytes; mode payloads keep sample remapping."
+    },
+    {
+      "id": "source-r4-retain-selected-eigen-path-mode-artifacts",
+      "path": "crates/fullmag-runner/src/fem/eigen_path_artifacts.rs",
+      "symbol": "retain_selected_eigen_path_mode_artifacts",
+      "evidence_status": "source_visible",
+      "responsibility": "Keep solved-sample identity evidence independently of optional mode-field selection."
+    },
+    {
+      "id": "source-r4-signed-sidecars-preserve-exact-bytes-across-samples",
+      "path": "crates/fullmag-runner/src/fem/eigen_path_artifacts.rs",
+      "symbol": "signed_sidecars_preserve_exact_bytes_across_samples",
+      "evidence_status": "source_visible",
+      "responsibility": "Prepared native regression for exact signed bytes, spectrum-only retention and metadata paths across three sample IDs."
+    },
+    {
+      "id": "source-r4-build-eigen-path-frequency-domain-manifest",
+      "path": "crates/fullmag-runner/src/fem/eigen_path_manifest.rs",
+      "symbol": "build_eigen_path_frequency_domain_manifest",
+      "evidence_status": "source_visible",
+      "responsibility": "List only present accepted fields v1/v2 and linearization identity v2 sidecars in the multi-k manifest."
     }
   ],
   "public_api": {
