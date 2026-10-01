@@ -7,7 +7,10 @@ import type {
   BinaryResourceResult,
 } from "@/kernel/api/apiTypes";
 import { ControlRoomApiError } from "@/kernel/api/ControlRoomApi";
-import { useAntennaSourceSpectrumPayloadResource } from "@/kernel/resources/antennaResources";
+import {
+  antennaSpectrumPayloadEtag,
+  useAntennaSourceSpectrumPayloadResource,
+} from "@/kernel/resources/antennaResources";
 import type { ResourceResult } from "@/kernel/resources/resourceTypes";
 
 const MAX_AXIS_CELLS = 64;
@@ -39,13 +42,20 @@ export function AntennaSourceSpectrumPayloadView({
   outputId,
   spectrum,
 }: SpectrumPayloadViewProps) {
-  const kU = useAntennaSourceSpectrumPayloadResource(outputId, "k_u_rad_per_m");
-  const kV = useAntennaSourceSpectrumPayloadResource(outputId, "k_v_rad_per_m");
+  const kU = useAntennaSourceSpectrumPayloadResource(outputId, "k_u_rad_per_m", {
+    expectedEtag: antennaSpectrumPayloadEtag(spectrum, "k_u_rad_per_m"),
+  });
+  const kV = useAntennaSourceSpectrumPayloadResource(outputId, "k_v_rad_per_m", {
+    expectedEtag: antennaSpectrumPayloadEtag(spectrum, "k_v_rad_per_m"),
+  });
   const amplitudes = useAntennaSourceSpectrumPayloadResource(
     outputId,
     "amplitudes_re_im",
+    { expectedEtag: antennaSpectrumPayloadEtag(spectrum, "amplitudes_re_im") },
   );
-  const power = useAntennaSourceSpectrumPayloadResource(outputId, "power");
+  const power = useAntennaSourceSpectrumPayloadResource(outputId, "power", {
+    expectedEtag: antennaSpectrumPayloadEtag(spectrum, "power"),
+  });
   const payloads = useMemo(
     () => decodePayloads(kU, kV, amplitudes, power),
     [amplitudes, kU, kV, power],

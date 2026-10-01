@@ -20,7 +20,8 @@ const mocks = vi.hoisted(() => ({
   payloads: {} as Record<string, PayloadResource>,
 }));
 
-vi.mock("@/kernel/resources/antennaResources", () => ({
+vi.mock("@/kernel/resources/antennaResources", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/kernel/resources/antennaResources")>(),
   useAntennaSourceSpectrumPayloadResource: (
     _outputId: string,
     payloadKind: string,
