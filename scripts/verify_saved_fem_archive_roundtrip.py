@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Cold archive qualification using an existing managed production CLI.
+"""Cold archive integrity gate using an existing managed production CLI.
 
-No build or solver launch. The original store is read only; export, import and
-deliberate corruption operate on private copies retained beside the receipt.
+No build is performed. Linux executes the exact ELF artifact directly; Windows
+executes that same artifact inside the pinned FEM CPU Compose image. The
+original store is read only; export, import and deliberate corruption operate
+on private copies retained beside the receipt.
 """
 from __future__ import annotations
 
@@ -12,7 +14,9 @@ import hashlib
 import json
 import os
 from pathlib import Path
+from pathlib import PurePosixPath
 import re
+import shlex
 import shutil
 import stat
 import subprocess
@@ -31,6 +35,34 @@ MAX_FILES = 50_000
 OPERATIONAL_FILES = {"WRITER.lock", "WRITER.owner.json"}
 ARCHIVE_PROJECT_LEAFS = {"main.py", "problem_ir.json", "scene_document.json",
                          "script_builder.json", "model_builder_graph.json", "ui_state.json"}
+WINDOWS_FEM_CPU_SERVICE = "fullmag-windows-fem-cpu"
+CONTAINER_ROUNDTRIP_ROOT = PurePosixPath("/workspace/.fullmag-roundtrip")
+CONTAINER_BUILD_ROOT = PurePosixPath("/workspace/.fullmag/pinned-build")
+CONTAINER_PATH_RE = re.compile(r"^/[A-Za-z0-9._/-]+$")
+IMAGE_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9./:_@-]{0,255}$")
+CONTAINER_ID_RE = re.compile(r"^[0-9a-f]{64}$")
+WINDOWS_CONTAINER_LAUNCH_TIMEOUT_SECONDS = 30
+WINDOWS_DOCKER_CONTROL_TIMEOUT_SECONDS = 30
+WINDOWS_SYSTEM_MOUNT_TARGETS = frozenset({
+    "/etc/hosts",
+    "/etc/hostname",
+    "/etc/resolv.conf",
+})
+OBSERVATION_PENDING_COMMAND_STATES = frozenset({
+    "observation_timeout_process_retained",
+    "observation_timeout_container_retained",
+    "wait_failed_container_retained",
+    "wait_error_container_retained",
+    "wait_ambiguous_container_retained",
+    "container_attestation_failed_container_retained",
+    "terminal_cleanup_failed_container_retained",
+    "launch_timeout_container_unknown",
+    "launch_error_container_unknown",
+    "launch_nonzero_container_unknown",
+    "launch_ambiguous_container_unknown",
+    "terminal_missing_output_container_retained",
+    "terminal_output_decode_failed_container_retained",
+})
 
 
 @contextmanager
@@ -124,6 +156,647 @@ def digest(path: Path) -> str:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             result.update(chunk)
     return result.hexdigest()
+
+
+def container_roundtrip_path(path: Path, run_root: Path) -> str:
+    """Translate one run-owned host path into the fixed container mount."""
+    candidate = Path(path).resolve(strict=False)
+    base = Path(run_root).resolve(strict=False)
+    try:
+        relative = candidate.relative_to(base)
+    except ValueError as error:
+        raise ValueError(f"path escapes the roundtrip mount: {candidate}") from error
+    translated = PurePosixPath(CONTAINER_ROUNDTRIP_ROOT, *relative.parts).as_posix()
+    if not CONTAINER_PATH_RE.fullmatch(translated):
+        raise ValueError(f"invalid translated roundtrip path: {translated}")
+    return translated
+
+
+def _compose_host_path(path: Path) -> str:
+    candidate = Path(path).resolve(strict=False)
+    if not candidate.is_absolute():
+        raise ValueError(f"Docker bind source must be absolute: {candidate}")
+    return candidate.as_posix()
+
+
+def _normalized_host_path(value: object) -> str:
+    raw = str(value or "")
+    if os.name == "nt":
+        raw = raw.replace("/", "\\")
+        host_alias = re.fullmatch(r"\\host_mnt\\([A-Za-z])\\(.*)", raw)
+        desktop_alias = re.fullmatch(r"\\run\\desktop\\mnt\\host\\([A-Za-z])\\(.*)", raw)
+        if host_alias or desktop_alias:
+            alias = host_alias or desktop_alias
+            raw = f"{alias.group(1).upper()}:\\{alias.group(2)}"
+        if raw.startswith("\\\\?\\"):
+            raw = raw[4:]
+    return os.path.normcase(os.path.abspath(raw))
+
+
+def _network_settings_are_isolated(networks: object) -> bool:
+    """Accept Docker's empty or explicit none-network representation only."""
+    if networks == {}:
+        return True
+    if not isinstance(networks, dict) or set(networks) != {"none"}:
+        return False
+    none_network = networks.get("none")
+    if not isinstance(none_network, dict):
+        return False
+    for field in (
+        "IPAddress",
+        "GlobalIPv6Address",
+        "Gateway",
+        "IPv6Gateway",
+        "EndpointID",
+        "MacAddress",
+        "LinkLocalIPv6Address",
+    ):
+        if none_network.get(field, "") not in ("", None):
+            return False
+    for field in ("IPPrefixLen", "GlobalIPv6PrefixLen", "IPv6PrefixLen"):
+        if none_network.get(field, 0) not in (0, None):
+            return False
+    return True
+
+
+def attest_windows_container_image(image_ref: str, expected_image_digest: str) -> dict:
+    """Require the existing Windows Docker image to match the build receipt."""
+    if not IMAGE_REF_RE.fullmatch(image_ref):
+        raise ValueError("Windows FEM image reference is invalid")
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", expected_image_digest):
+        raise ValueError("Windows FEM image digest is invalid")
+    if image_ref != expected_image_digest:
+        raise ValueError("Windows FEM image must use the verified immutable digest")
+    result = subprocess.run(
+        ["docker", "image", "inspect", image_ref],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=WINDOWS_DOCKER_CONTROL_TIMEOUT_SECONDS,
+    )
+    if result.returncode != 0:
+        raise ValueError(f"Windows FEM image is unavailable: {image_ref}")
+    try:
+        inspected = json.loads(result.stdout)
+    except (TypeError, ValueError) as error:
+        raise ValueError("Docker image inspection returned invalid JSON") from error
+    if not isinstance(inspected, list) or len(inspected) != 1:
+        raise ValueError("Docker image inspection returned an ambiguous image")
+    image = inspected[0]
+    if image.get("Id") != expected_image_digest:
+        raise ValueError("Windows FEM image identity differs from the build receipt")
+    if image.get("Config", {}).get("Volumes"):
+        raise ValueError("Windows FEM image declares anonymous volumes")
+    return image
+
+
+def build_windows_container_command(
+    *,
+    repo_root: Path,
+    run_root: Path,
+    artifact_root: Path,
+    state_root: Path,
+    args: list[object],
+    output_path: Path,
+    error_path: Path,
+    image_ref: str,
+    expected_image_digest: str,
+    compose_mount_root: Path,
+    compose_override_path: Path,
+    project_name: str,
+    container_name: str,
+) -> tuple[list[str], dict[str, str], dict]:
+    """Build the immutable-artifact command for the existing Windows Compose lane."""
+    repo_root = Path(repo_root).resolve(strict=False)
+    run_root = Path(run_root).resolve(strict=False)
+    artifact_root = Path(artifact_root).resolve(strict=False)
+    compose_mount_root = Path(compose_mount_root).resolve(strict=False)
+    compose_override_path = Path(compose_override_path).resolve(strict=False)
+    if not IMAGE_REF_RE.fullmatch(image_ref):
+        raise ValueError("Windows FEM image reference is invalid")
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", expected_image_digest):
+        raise ValueError("Windows FEM image digest is invalid")
+    if image_ref != expected_image_digest:
+        raise ValueError("Windows FEM image must use the verified immutable digest")
+
+    translated_args = []
+    for value in args:
+        if isinstance(value, (Path, os.PathLike)):
+            translated_args.append(container_roundtrip_path(Path(value), run_root))
+        else:
+            translated_args.append(str(value))
+    translated_state = container_roundtrip_path(Path(state_root), run_root)
+    mesh_cache = container_roundtrip_path(run_root / "mesh-cache", run_root)
+    translated_output = container_roundtrip_path(Path(output_path), run_root)
+    translated_error = container_roundtrip_path(Path(error_path), run_root)
+    binary = (CONTAINER_BUILD_ROOT / "bin" / "fullmag-bin").as_posix()
+    shell_command = "exec " + shlex.join([binary, *translated_args])
+    shell_command += " > " + shlex.quote(translated_output)
+    shell_command += " 2> " + shlex.quote(translated_error)
+
+    mount_root = compose_mount_root
+    runtime_root = mount_root / "runtime"
+    build_root = mount_root / "build"
+    cache_root = mount_root / "cache"
+    temp_root = mount_root / "temp"
+    frontend_root = mount_root / "frontend"
+    cargo_home = cache_root / "cargo"
+    rustup_home = cache_root / "rustup"
+    pnpm_root = cache_root / "pnpm"
+    node_modules = frontend_root / "node_modules"
+    control_room_node_modules = frontend_root / "apps" / "control-room" / "node_modules"
+    compose_env = dict(os.environ)
+    compose_env.update({
+        "COMPOSE_PROJECT_NAME": project_name,
+        "COMPOSE_PROFILES": "",
+        "FULLMAG_WINDOWS_REPO": _compose_host_path(repo_root),
+        "FULLMAG_WINDOWS_STATE_ROOT": _compose_host_path(runtime_root),
+        "FULLMAG_WINDOWS_BUILD_ROOT": _compose_host_path(build_root),
+        "FULLMAG_WINDOWS_CACHE_ROOT": _compose_host_path(cache_root),
+        "FULLMAG_WINDOWS_TEMP_ROOT": _compose_host_path(temp_root),
+        "FULLMAG_WINDOWS_CARGO_HOME": _compose_host_path(cargo_home),
+        "FULLMAG_WINDOWS_RUSTUP_HOME": _compose_host_path(rustup_home),
+        "FULLMAG_WINDOWS_PNPM_ROOT": _compose_host_path(pnpm_root),
+        "FULLMAG_WINDOWS_NODE_MODULES_ROOT": _compose_host_path(node_modules),
+        "FULLMAG_WINDOWS_CONTROL_ROOM_NODE_MODULES_ROOT": _compose_host_path(control_room_node_modules),
+        "FULLMAG_WINDOWS_FRONTEND_ROOT": _compose_host_path(frontend_root),
+        "FULLMAG_WINDOWS_FEM_CPU_IMAGE": image_ref,
+        "FULLMAG_WINDOWS_WEB_PORT": "0",
+    })
+    container_env = {
+        "FULLMAG_REPO_ROOT": "/workspace",
+        "FULLMAG_STATE_ROOT": translated_state,
+        "FULLMAG_FEM_MESH_CACHE_DIR": mesh_cache,
+        "FULLMAG_RUNTIME_ROOT": "/workspace/.fullmag",
+        "FULLMAG_DISABLE_MANAGED_FEM_GPU_RUNTIME": "1",
+        "FULLMAG_FORCE_LOCAL_FEM_CPU": "1",
+        "FULLMAG_FEM_EXECUTION": "cpu",
+        "FULLMAG_FEM_MFEM_DEVICE": "cpu",
+        "FULLMAG_MANAGED_FEM_DEVICE": "cpu",
+        "FULLMAG_FEM_REQUIRE_GPU": "0",
+        "FULLMAG_FEM_REQUIRE_CEED": "0",
+        "FULLMAG_FEM_WITH_SLEPC": "OFF",
+        "FULLMAG_FDM_EXECUTION": "cpu",
+        "FULLMAG_API_PORT": "0",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "PYTHONPATH": "/workspace/packages/fullmag-py/src:/workspace/.fullmag/pinned-build",
+        "LD_LIBRARY_PATH": "/workspace/.fullmag/pinned-build/lib:/opt/fullmag-deps/lib",
+    }
+    compose_file = repo_root / "compose.windows.yaml"
+    if not compose_file.is_file():
+        raise ValueError(f"Windows FEM Compose file is missing: {compose_file}")
+    if not compose_override_path.is_file():
+        raise ValueError(f"Windows FEM Compose network override is missing: {compose_override_path}")
+    command = [
+        "docker", "compose", "-f", str(compose_file), "-f", str(compose_override_path),
+        "--project-name", project_name,
+        "run", "--no-deps", "--detach", "-T", "--name", container_name,
+    ]
+    for key, value in container_env.items():
+        command.extend(("-e", f"{key}={value}"))
+    command.extend((
+        "-v", f"{_compose_host_path(repo_root)}:/workspace:ro",
+        "-v", f"{_compose_host_path(run_root)}:{CONTAINER_ROUNDTRIP_ROOT.as_posix()}:rw",
+        "-v", f"{_compose_host_path(artifact_root)}:{CONTAINER_BUILD_ROOT.as_posix()}:ro",
+        WINDOWS_FEM_CPU_SERVICE, "bash", "-lc", shell_command,
+    ))
+    evidence = {
+        "service": WINDOWS_FEM_CPU_SERVICE,
+        "compose_override": str(compose_override_path),
+        "image_ref": image_ref,
+        "expected_image_digest": expected_image_digest,
+        "artifact_mount_source": _compose_host_path(artifact_root),
+        "artifact_mount_target": CONTAINER_BUILD_ROOT.as_posix(),
+        "artifact_mount_read_only": True,
+        "repository_mount_target": "/workspace",
+        "repository_mount_read_only": True,
+        "roundtrip_mount_source": _compose_host_path(run_root),
+        "roundtrip_mount_target": CONTAINER_ROUNDTRIP_ROOT.as_posix(),
+        "roundtrip_mount_read_write": True,
+        "container_name": container_name,
+    }
+    return command, compose_env, evidence
+
+
+def _container_id_from_launch(output: str) -> str:
+    candidates = [line.strip() for line in output.splitlines() if line.strip()]
+    container_id = candidates[-1] if candidates else ""
+    if not CONTAINER_ID_RE.fullmatch(container_id):
+        raise ValueError("Docker Compose did not return a full container ID")
+    return container_id
+
+
+def has_pending_observation(command_records: list[dict]) -> bool:
+    return any(
+        command.get("state") in OBSERVATION_PENDING_COMMAND_STATES
+        for command in command_records
+    )
+
+
+def observe_windows_container_launch(
+    *,
+    command: list[str],
+    compose_env: dict[str, str],
+    launch_stdout_path: Path,
+    launch_stderr_path: Path,
+    container_name: str,
+    command_record: dict,
+    receipt: dict,
+    receipt_path: Path,
+) -> str:
+    """Observe Compose launch without guessing whether the daemon created a container."""
+    with launch_stdout_path.open("wb") as launch_stdout, launch_stderr_path.open("wb") as launch_stderr:
+        try:
+            launch = subprocess.run(
+                command,
+                env=compose_env,
+                stdout=launch_stdout,
+                stderr=launch_stderr,
+                check=False,
+                timeout=WINDOWS_CONTAINER_LAUNCH_TIMEOUT_SECONDS,
+            )
+        except subprocess.TimeoutExpired as error:
+            command_record["state"] = "launch_timeout_container_unknown"
+            command_record["launch_timeout_seconds"] = WINDOWS_CONTAINER_LAUNCH_TIMEOUT_SECONDS
+            command_record["launch_stdout_sha256"] = digest(launch_stdout_path)
+            command_record["launch_stderr_sha256"] = digest(launch_stderr_path)
+            storage.atomic_json(receipt_path, receipt)
+            raise ValueError(
+                "Docker Compose launch observation timed out; container identity is unknown "
+                f"and deterministic name is retained for reconciliation: {container_name}"
+            ) from error
+        except OSError as error:
+            command_record["state"] = "launch_error_container_unknown"
+            command_record["launch_stdout_sha256"] = digest(launch_stdout_path)
+            command_record["launch_stderr_sha256"] = digest(launch_stderr_path)
+            storage.atomic_json(receipt_path, receipt)
+            raise ValueError(
+                "Docker Compose launch failed before its outcome was observable; "
+                f"container identity is unknown: {container_name}"
+            ) from error
+
+    command_record["launch_exit_code"] = launch.returncode
+    command_record["launch_stdout_sha256"] = digest(launch_stdout_path)
+    command_record["launch_stderr_sha256"] = digest(launch_stderr_path)
+    if launch.returncode != 0:
+        command_record["state"] = "launch_nonzero_container_unknown"
+        storage.atomic_json(receipt_path, receipt)
+        raise ValueError(
+            f"Docker Compose launch returned {launch.returncode}; container identity is unknown: "
+            f"{container_name}"
+        )
+    try:
+        launch_output = launch_stdout_path.read_text(encoding="utf-8")
+        if not launch_output.strip():
+            launch_output = launch_stderr_path.read_text(encoding="utf-8")
+        container_id = _container_id_from_launch(launch_output)
+    except (OSError, UnicodeError, ValueError) as error:
+        command_record["state"] = "launch_ambiguous_container_unknown"
+        storage.atomic_json(receipt_path, receipt)
+        raise ValueError(
+            "Docker Compose launch did not yield a full container ID; container identity is "
+            f"unknown and deterministic name is retained for reconciliation: {container_name}"
+        ) from error
+    command_record["container_id"] = container_id
+    storage.atomic_json(receipt_path, receipt)
+    return container_id
+
+
+def attest_windows_container(
+    container_id: str,
+    expected_image_digest: str,
+    repo_root: Path,
+    artifact_root: Path,
+    run_root: Path,
+    compose_mount_root: Path,
+) -> dict:
+    if not CONTAINER_ID_RE.fullmatch(container_id):
+        raise ValueError("Docker returned an invalid container ID")
+    result = subprocess.run(
+        ["docker", "inspect", container_id],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=WINDOWS_DOCKER_CONTROL_TIMEOUT_SECONDS,
+    )
+    if result.returncode != 0:
+        raise ValueError("Docker container inspection failed")
+    try:
+        inspected = json.loads(result.stdout)
+    except (TypeError, ValueError) as error:
+        raise ValueError("Docker container inspection returned invalid JSON") from error
+    if not isinstance(inspected, list) or len(inspected) != 1:
+        raise ValueError("Docker container inspection returned an ambiguous container")
+    container = inspected[0]
+    if container.get("Image") != expected_image_digest:
+        raise ValueError("Runtime container image differs from the build receipt")
+    mount_root = Path(compose_mount_root).resolve(strict=False)
+    expected_mounts = {
+        "/workspace": (Path(repo_root).resolve(strict=False), False),
+        "/workspace/.fullmag": (mount_root / "runtime", True),
+        "/workspace/.fullmag-build": (mount_root / "build", True),
+        "/workspace/.fullmag-cache": (mount_root / "cache", True),
+        "/workspace/.fullmag-cargo": (mount_root / "cache" / "cargo", True),
+        "/workspace/.fullmag-rustup": (mount_root / "cache" / "rustup", True),
+        "/pnpm": (mount_root / "cache" / "pnpm", True),
+        "/workspace/node_modules": (mount_root / "frontend" / "node_modules", True),
+        "/workspace/apps/control-room/node_modules": (
+            mount_root / "frontend" / "apps" / "control-room" / "node_modules", True
+        ),
+        "/fullmag-frontend": (mount_root / "frontend", True),
+        "/tmp/fullmag-windows": (mount_root / "temp", True),
+        CONTAINER_ROUNDTRIP_ROOT.as_posix(): (Path(run_root).resolve(strict=False), True),
+        CONTAINER_BUILD_ROOT.as_posix(): (Path(artifact_root).resolve(strict=False), False),
+    }
+    mounts = container.get("Mounts", [])
+    if not isinstance(mounts, list):
+        raise ValueError("Runtime container mount inspection is invalid")
+    actual_mounts = {}
+    for mount in mounts:
+        if not isinstance(mount, dict) or not isinstance(mount.get("Destination"), str):
+            raise ValueError("Runtime container has an invalid mount record")
+        destination = mount["Destination"]
+        if destination in actual_mounts:
+            raise ValueError(f"Runtime container has duplicate mount target: {destination}")
+        actual_mounts[destination] = mount
+    unexpected = set(actual_mounts) - set(expected_mounts) - WINDOWS_SYSTEM_MOUNT_TARGETS
+    missing = set(expected_mounts) - set(actual_mounts)
+    if unexpected:
+        raise ValueError(f"Runtime container has unexpected mounts: {sorted(unexpected)}")
+    if missing:
+        raise ValueError(f"Runtime container is missing expected mounts: {sorted(missing)}")
+    for destination, (expected_source, expected_rw) in expected_mounts.items():
+        mount = actual_mounts[destination]
+        if mount.get("Type") != "bind":
+            raise ValueError(f"Runtime container mount is not a bind: {destination}")
+        observed_source = _normalized_host_path(mount.get("Source", ""))
+        if observed_source != _normalized_host_path(expected_source):
+            raise ValueError(f"Runtime container mount source differs: {destination}")
+        if mount.get("RW") is not expected_rw:
+            raise ValueError(f"Runtime container mount read/write mode differs: {destination}")
+    system_mounts = {}
+    for destination in sorted(WINDOWS_SYSTEM_MOUNT_TARGETS.intersection(actual_mounts)):
+        mount = actual_mounts[destination]
+        if mount.get("Type") != "bind" or not mount.get("Source"):
+            raise ValueError(f"Runtime container system mount is invalid: {destination}")
+        system_mounts[destination] = {
+            "source": mount.get("Source"),
+            "read_write": mount.get("RW") is True,
+        }
+    network_mode = container.get("HostConfig", {}).get("NetworkMode")
+    networks = container.get("NetworkSettings", {}).get("Networks")
+    if network_mode != "none" or not _network_settings_are_isolated(networks):
+        raise ValueError("Runtime container has network access")
+    artifact_mount = actual_mounts[CONTAINER_BUILD_ROOT.as_posix()]
+    roundtrip_mount = actual_mounts[CONTAINER_ROUNDTRIP_ROOT.as_posix()]
+    return {
+        "container_id": container_id,
+        "container_image_digest": container.get("Image"),
+        "network_mode": network_mode,
+        "network_settings_isolated": True,
+        "unexpected_mounts_rejected": True,
+        "system_mounts": system_mounts,
+        "artifact_mount": {
+            "source": artifact_mount.get("Source"),
+            "target": artifact_mount.get("Destination"),
+            "read_only": artifact_mount.get("RW") is False,
+        },
+        "roundtrip_mount": {
+            "source": roundtrip_mount.get("Source"),
+            "target": roundtrip_mount.get("Destination"),
+            "read_write": roundtrip_mount.get("RW") is True,
+        },
+        "writable_mounts": sorted(
+            destination for destination, (_, expected_rw) in expected_mounts.items() if expected_rw
+        ),
+    }
+
+
+def prepare_windows_container_mounts(run_root: Path, layout: dict) -> Path:
+    """Create only private Compose mount roots below the resolved storage run."""
+    build_storage = Path(layout["build_storage_root"]).resolve(strict=False)
+    mount_root = storage.validate_path(Path(run_root) / "container-mounts", build_storage,
+                                       "Windows FEM container mount root")
+    paths = (
+        mount_root,
+        mount_root / "runtime",
+        mount_root / "build",
+        mount_root / "cache",
+        mount_root / "cache" / "cargo",
+        mount_root / "cache" / "rustup",
+        mount_root / "cache" / "pnpm",
+        mount_root / "temp",
+        mount_root / "frontend",
+        mount_root / "frontend" / "node_modules",
+        mount_root / "frontend" / "apps" / "control-room" / "node_modules",
+    )
+    for path in paths:
+        storage.validate_path(path, build_storage, "Windows FEM container mount")
+        path.mkdir(parents=True, exist_ok=True)
+    return mount_root
+
+
+def write_windows_network_override(run_root: Path) -> Path:
+    """Create a private Compose override that gives the verification container no network."""
+    override = storage.validate_path(
+        Path(run_root) / "compose.network-none.yaml",
+        Path(run_root),
+        "Windows FEM Compose network override",
+    )
+    override.write_text(
+        "services:\n"
+        "  fullmag-windows-fem-gpu:\n"
+        "    profiles: [\"disabled\"]\n"
+        f"  {WINDOWS_FEM_CPU_SERVICE}:\n"
+        "    network_mode: \"none\"\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    return override
+
+
+def execute_windows_container(
+    *,
+    label: str,
+    state_root: Path,
+    args: list[object],
+    reject_corruption: bool,
+    run_root: Path,
+    repo_root: Path,
+    binary: Path,
+    entry: dict,
+    expected_image_digest: str,
+    layout: dict,
+    command_records: list[dict],
+    receipt: dict,
+    receipt_path: Path,
+    expected_commit: str,
+    expected_snapshot: str,
+) -> str:
+    """Run one archive command in the pinned Windows FEM CPU image."""
+    # Compose accepts the immutable image ID directly (the managed exporter
+    # uses the same pattern); never resolve this execution through a mutable
+    # Windows image tag.
+    image_ref = expected_image_digest
+    image = attest_windows_container_image(image_ref, expected_image_digest)
+    if Path(binary).stat().st_size != entry.get("size") or digest(Path(binary)) != entry.get("sha256"):
+        raise ValueError("pinned FEM binary changed after managed receipt validation")
+    artifact_root = Path(binary).resolve(strict=False).parent.parent
+    artifact_root = storage.validate_path(
+        artifact_root, Path(layout["build_storage_root"]), "pinned FEM build artifact"
+    )
+    mount_root = prepare_windows_container_mounts(run_root, layout)
+    compose_override = write_windows_network_override(run_root)
+    safe_label = re.sub(r"[^A-Za-z0-9_.-]", "-", label)
+    project_name = f"fullmag-saved-fem-{Path(run_root).name}"
+    container_name = f"{project_name}-{safe_label}"
+    out = Path(run_root) / f"{label}.stdout.log"
+    err = Path(run_root) / f"{label}.stderr.log"
+    launch_out = Path(run_root) / f"{label}.compose.stdout.log"
+    launch_err = Path(run_root) / f"{label}.compose.stderr.log"
+    (Path(run_root) / "mesh-cache").mkdir(parents=True, exist_ok=True)
+    out.touch(exist_ok=False)
+    err.touch(exist_ok=False)
+    launch_out.touch(exist_ok=False)
+    launch_err.touch(exist_ok=False)
+    command, compose_env, evidence = build_windows_container_command(
+        repo_root=repo_root,
+        run_root=run_root,
+        artifact_root=artifact_root,
+        state_root=state_root,
+        args=args,
+        output_path=out,
+        error_path=err,
+        image_ref=image_ref,
+        expected_image_digest=expected_image_digest,
+        compose_mount_root=mount_root,
+        compose_override_path=compose_override,
+        project_name=project_name,
+        container_name=container_name,
+    )
+    record = {
+        "label": label,
+        "state": "observing",
+        "stdout": str(out),
+        "stderr": str(err),
+        "launch_stdout": str(launch_out),
+        "launch_stderr": str(launch_err),
+        "execution": "windows-docker-compose-exact-artifact",
+        "image_id": image.get("Id"),
+        **evidence,
+    }
+    command_records.append(record)
+    storage.atomic_json(receipt_path, receipt)
+    container_id = observe_windows_container_launch(
+        command=command,
+        compose_env=compose_env,
+        launch_stdout_path=launch_out,
+        launch_stderr_path=launch_err,
+        container_name=container_name,
+        command_record=record,
+        receipt=receipt,
+        receipt_path=receipt_path,
+    )
+    try:
+        waited = subprocess.run(
+            ["docker", "wait", container_id],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=300,
+        )
+    except subprocess.TimeoutExpired as error:
+        record["state"] = "observation_timeout_container_retained"
+        storage.atomic_json(receipt_path, receipt)
+        raise ValueError(
+            f"observation timeout; container retained id={container_id}; see {err}"
+        ) from error
+    except OSError as error:
+        record["state"] = "wait_error_container_retained"
+        storage.atomic_json(receipt_path, receipt)
+        raise ValueError(
+            f"Docker wait failed before its outcome was observable; container retained id={container_id}"
+        ) from error
+    if waited.returncode != 0:
+        record["state"] = "wait_failed_container_retained"
+        storage.atomic_json(receipt_path, receipt)
+        raise ValueError(f"Docker wait failed for container {container_id}")
+    raw_exit = waited.stdout.strip()
+    if not re.fullmatch(r"[0-9]+", raw_exit):
+        record["state"] = "wait_ambiguous_container_retained"
+        storage.atomic_json(receipt_path, receipt)
+        raise ValueError(f"Docker wait returned an invalid exit code for {container_id}")
+    exit_code = int(raw_exit)
+    try:
+        container_evidence = attest_windows_container(
+            container_id, expected_image_digest, repo_root, artifact_root, run_root, mount_root
+        )
+    except Exception:
+        record["state"] = "container_attestation_failed_container_retained"
+        storage.atomic_json(receipt_path, receipt)
+        raise
+    record.update(container_evidence)
+    if not out.is_file() or not err.is_file():
+        record["state"] = "terminal_missing_output_container_retained"
+        storage.atomic_json(receipt_path, receipt)
+        raise ValueError(
+            f"Windows FEM container did not produce command logs; container retained: {label}"
+        )
+    try:
+        stdout_text = out.read_text(encoding="utf-8")
+        stderr_text = err.read_text(encoding="utf-8")
+        record.update(
+            state="terminal",
+            exit_code=exit_code,
+            stdout_sha256=digest(out),
+            stderr_sha256=digest(err),
+        )
+    except (OSError, UnicodeError) as error:
+        record["state"] = "terminal_output_decode_failed_container_retained"
+        storage.atomic_json(receipt_path, receipt)
+        raise ValueError(
+            f"Windows FEM container produced unreadable command logs; container retained: {label}"
+        ) from error
+    storage.atomic_json(receipt_path, receipt)
+    failure = None
+    try:
+        check_stamp(stderr_text, expected_commit, expected_snapshot)
+        if reject_corruption:
+            if exit_code == 0 or "CAS integrity error" not in stderr_text:
+                raise ValueError("corrupt CAS field chunk was not rejected for integrity failure")
+        elif exit_code != 0:
+            raise ValueError(f"qualification command failed: {label}, see {err}")
+    except Exception as error:  # Preserve container evidence before propagating validation failure.
+        failure = error
+    try:
+        cleanup = subprocess.run(
+            ["docker", "rm", container_id],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=WINDOWS_DOCKER_CONTROL_TIMEOUT_SECONDS,
+        )
+    except (subprocess.TimeoutExpired, OSError) as error:
+        record["state"] = "terminal_cleanup_failed_container_retained"
+        record["cleanup_error"] = f"{type(error).__name__}: {error}"
+        storage.atomic_json(receipt_path, receipt)
+        if failure is None:
+            failure = ValueError(f"Docker container cleanup failed; container retained: {container_id}")
+        cleanup = None
+    if cleanup is None:
+        pass
+    elif cleanup.returncode != 0:
+        record["state"] = "terminal_cleanup_failed_container_retained"
+        record["cleanup_stderr_sha256"] = hashlib.sha256(cleanup.stderr.encode("utf-8")).hexdigest()
+        storage.atomic_json(receipt_path, receipt)
+        if failure is None:
+            failure = ValueError(f"Docker container cleanup failed: {container_id}")
+    else:
+        record["container_cleanup"] = "removed"
+        storage.atomic_json(receipt_path, receipt)
+    if failure is not None:
+        raise failure
+    return stdout_text
 
 
 def driver_identity() -> dict:
@@ -283,6 +956,24 @@ def run(repo_root: Path, config_path: Path) -> tuple[int, dict]:
             env["LD_LIBRARY_PATH"] = str(library_root) + os.pathsep + env.get("LD_LIBRARY_PATH", "")
             env["PYTHONDONTWRITEBYTECODE"] = "1"
             def execute(label, state_root, args, *, reject_corruption=False):
+                if os.name == "nt":
+                    return execute_windows_container(
+                        label=label,
+                        state_root=state_root,
+                        args=list(args),
+                        reject_corruption=reject_corruption,
+                        run_root=run_root,
+                        repo_root=repo_root,
+                        binary=binary,
+                        entry=entry,
+                        expected_image_digest=context["image_digest"],
+                        layout=layout,
+                        command_records=command_records,
+                        receipt=receipt,
+                        receipt_path=receipt_path,
+                        expected_commit=config["expected_commit"],
+                        expected_snapshot=config["expected_native_source_snapshot_sha256"],
+                    )
                 command_env = dict(env, FULLMAG_STATE_ROOT=str(state_root))
                 out = run_root / f"{label}.stdout.log"
                 err = run_root / f"{label}.stderr.log"
@@ -356,7 +1047,7 @@ def run(repo_root: Path, config_path: Path) -> tuple[int, dict]:
                            qualification="archive_integrity_only", scientific_qualification="NOT VERIFIED")
             result_code = 0
     except Exception as error:
-        pending = any(command.get("state") == "observation_timeout_process_retained" for command in command_records)
+        pending = has_pending_observation(command_records)
         receipt.update(state="observation_pending" if pending else "failed", exit_code=2,
                        error=f"{type(error).__name__}: {error}")
     finally:

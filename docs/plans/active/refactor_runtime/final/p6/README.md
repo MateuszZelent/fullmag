@@ -248,3 +248,7 @@ pamięci i wszystkich lane'ów pozostają otwarte. P6 wynosi **52%**.
 64. [Przypięty transport geometrii i supportu](64-pinned-saved-geometry-transport.md)
     — dokładny dataset owner, FMMT v2/FMSP v1, integralność body i centralne
     resource hooks; źródła/codegen/API hygiene PASS, runtime/viewport otwarte.
+
+64a. [Adapter archiwum Windows z dokładnymi artefaktami](64a-windows-exact-artifact-archive-adapter.md)
+    — izolowany FEM CPU, attestation obrazu/mountów/sieci, zachowanie
+    nieznanego wyniku; 31 regresji Python i review PASS, runtime otwarty.
