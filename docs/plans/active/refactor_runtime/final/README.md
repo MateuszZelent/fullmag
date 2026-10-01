@@ -15,7 +15,14 @@ dlatego nie podnosi procentów P3/P5.
 
 ## Dokumenty finalne
 
-Checkpoint 01.10.2026: [P6-52 — binarny odczyt fragmentów trwałego datasetu](p6/52-bounded-materialized-dataset-binary-slices.md)
+Checkpoint 01.10.2026: [P6-53 — ograniczony podgląd wartości w Inspectorze](p6/53-bounded-saved-field-values-inspector.md)
+podłącza binarny slice do resource hooka i readonly tabeli z paginacją,
+limitem 64 KiB/32 elementów, wyborem komponentu i anulowaniem po zamknięciu.
+Przebiegi browser fixture potwierdzają checksum, reload i zwolnienie odbiorcy;
+backend HTTP, przestrzenny renderer, nauka i release pozostają NOT VERIFIED.
+P6 nadal około 52%, cały plan około 49%.
+
+Poprzedni checkpoint: [P6-52 — binarny odczyt fragmentów trwałego datasetu](p6/52-bounded-materialized-dataset-binary-slices.md)
 obejmuje exact pinned source, bounded FMDS transport, range checksums,
 F32/F64, odrzucanie NaN/Infinity i jawny limit metadata. Produkcyjna kompilacja
 przy codegen, TypeScript, API hygiene i review przeszły; testy jednostkowe,

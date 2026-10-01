@@ -200,3 +200,7 @@ pamięci i wszystkich lane'ów pozostają otwarte. P6 wynosi **52%**.
 52. [Binarny odczyt fragmentów trwałego datasetu](52-bounded-materialized-dataset-binary-slices.md)
     — bounded FMDS, exact range integrity, F32/F64 i publiczny kontrakt;
     source/codegen/review PASS, unit/HTTP/resource hook/renderer otwarte.
+
+53. [Ograniczony podgląd wartości w Inspectorze](53-bounded-saved-field-values-inspector.md)
+    — resource-owned numeric window, 64 KiB/32 elementy, checksum, readonly
+    pagination i anulowanie ostatniego odbiorcy; HTTP/renderer/nauka otwarte.
