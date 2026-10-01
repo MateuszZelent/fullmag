@@ -1,10 +1,18 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
+## S10/S12 — zerowe H_eff, kolejny przyrost źródeł
+
+- `validate_shared_domain_modal_scope` dopuszcza skończone zerowe pole: brak pola statycznego nie dowodzi braku krzywizny. Ujemne/NaN/Inf amplitudy odrzucane; publiczny Ku guard zachowany.
+- Niezależny rachunek energii:4testy+12podprzypadkówPASS. Dwie regresje Rust przygotowane, nie uruchomione;2pliki parserPASS. Nota/source-map i public examples guardPASS. Runtime tej poprawki NOT VERIFIED, bo kapsuła188 jej nie zawiera.
+- Ten sam kontroler90201 i solver7df4be7c5ace nadal liczą Gamma, base subwindow4/50; aktywnośćCPU potwierdzona. Bez nowej zaakceptowanej częstotliwości, bez restartu.
+- Audyt: docs/audits/2026-10-01-zero-field-modal-scope.md. Następnie canonical/raw material artifact migration oraz cały S00–S12: aktualne±k, zbieżność, COMSOL A1, interakcje, waveguide, GPU, browser i integracja.
+
+
 ## S02/S12 — odbiór review signed-k i aktualny Γ
 
 - #188 terminalny succeeded/exit0, source digest b2edf2fbc0295c83f6d768ad8bd3391904017c5f871d0244afe15c4b3a1a4a46;14artefaktów receipt size/SHA PASS. Receipt SHA0bf0ea60b99b550767331c6bd231a0979a79d49fe15ead150eeb06c31c70daae.
 - Kontroler90201/145d8503bba24dc3abfaec6aaaf72819 wykonuje Gamma. Kontener7df4be7c5ace potwierdzony mountami i pracąCPU; min-root mapa nie blokuje już wejścia do SLEPc. Brak terminalnego wyniku i nowej częstotliwości w chwili checkpointu.
-- Po review odbiór signed wymaga hasha kontrolera z kapsuły, wspólnego capsule_relative w receipcie, canonical batch/job root i pełnej niezależnej walidacji6przypadków zbieżności+Γ; k używa tolerancjiCSV.64lekkie testyPythonPASS. Zmiana postprocessingu nie wymaga nowego solver builda.
+- Po review odbiór signed wymaga hasha kontrolera z kapsuły, wspólnego capsule_relative w receipcie, canonical batch/job root i pełnej niezależnej walidacji6przypadków zbieżności+Γ; k używa tolerancjiCSV.65lekkich testówPythonPASS. Zmiana postprocessingu nie wymaga nowego solver builda.
 - Dalej: ten sam pilotΓ -> signed26punktów+4kontrole -> pełne pola/residuale/profile/seam/branch -> wykres i zbieżność. Pełny cel S00–S12, Ku canonical/raw identity, COMSOL A1, inne interakcje, waveguide, GPU, browser i integracja pozostają otwarte.
 
 

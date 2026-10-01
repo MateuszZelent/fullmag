@@ -550,6 +550,15 @@ curvature above, which uses the **total** accepted effective field, including
 anisotropy. The curvature must also be assembled for an anisotropy-only
 request without a Zeeman term. Positive and negative finite coefficients are
 both permitted; stability is determined by the total constrained Hessian.
+A zero accepted effective field is a stationary state, not a certificate of
+zero energy curvature. The shared-domain scope gate accepts finite nonnegative
+field and torque amplitudes, including zero; the Hessian and spectral gates
+still decide whether a usable mode exists. For example, an easy-plane Ku
+with its axis perpendicular to m0 has H_K(m0)=0 and a nonzero transverse
+second derivative. At nonzero k, exchange adds curvature in both tangent
+directions. This does not remove the public Ku guard or certify the native
+execution of that model.
+
 The existing C ABI stores the axis at every scalar node (`3*node_count`) and
 one field coefficient in A/m. The first increment normalizes finite nonzero
 nodal axes and requires their rank-one axes to agree within `1e-12`; a
@@ -1001,6 +1010,7 @@ study.stages.add_frequency_response(
 
 | Python parameter | Type | Default | SI unit | Validation domain and validation errors | Physical meaning | Backend support | ProblemIR destination and normalization |
 |---|---|---|---|---|---|---|
+| Zero-field stationary state | FEM CPU scope / mathematical diagnostic | `crates/fullmag-runner/src/fem/eigen_shared_domain.rs` + `validate_shared_domain_modal_scope` | Admit zero field without asserting zero curvature or modal success; reject invalid amplitudes. | `shared_domain_modal_scope_accepts_zero_static_field`; `scripts/test_uniaxial_constrained_energy_hessian.py` + `test_zero_static_field_retains_easy_plane_and_exchange_curvature` | Rust regression prepared, not executed; independent energy test only | Pending scoped commit |
 | `add_eigenmodes.count` | `int` | `10` | $1$ | Positive; non-positive values raise `ValueError`. | Maximum requested mode count. | FEM CPU/GPU authoring; runtime capability-gated | `study.count` as an integer. |
 | `add_eigenmodes.target` | `str` | `"lowest"` | $1$ | One of `lowest`, `nearest`, `frequency_window`; other values raise `ValueError`. | Spectral selection policy. | FEM CPU/GPU authoring; runtime capability-gated | `study.target.kind`. |
 | `add_eigenmodes.target_frequency` | `float \| None` | `None` | $\mathrm{Hz}$ | Required and positive for `nearest`; positive if supplied. With `frequency_window` it is currently accepted but not serialized and therefore must not be relied on. | Nearest-frequency target. | FEM CPU/GPU authoring; runtime capability-gated | `study.target.frequency_hz` only for `target="nearest"`; absent for `frequency_window`. |

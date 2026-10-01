@@ -46,6 +46,29 @@ class ConstrainedUniaxialEnergyTests(unittest.TestCase):
             physical_derivative = (field(m0 + eps*axis)-field(m0 - eps*axis))/(2*eps)
             np.testing.assert_allclose(physical_derivative, ha*axis, rtol=1e-10, atol=1e-10)
 
+    def test_zero_static_field_retains_easy_plane_and_exchange_curvature(self):
+        # m0=z lies in the easy plane with u=x and signed Ha<0. The static
+        # anisotropy field vanishes, but its derivative does not. Exchange
+        # contributes H_ex(k)>0 to both directions of a Fourier perturbation.
+        axis, m0, ha = np.array([1., 0., 0.]), np.array([0., 0., 1.]), -3.
+        np.testing.assert_array_equal(ha*np.dot(axis, m0)*axis, np.zeros(3))
+        for exchange_curvature in (0., 2.):
+            energy = lambda q: (sphere_energy(np.asarray(q), axis, ha, 0.)
+                                + .5*exchange_curvature*np.dot(q, q))
+            eps = 2e-4
+            gradient = np.array([(energy(eps*e)-energy(-eps*e))/(2*eps)
+                                 for e in np.eye(2)])
+            np.testing.assert_allclose(gradient, np.zeros(2), atol=1e-12)
+            actual = np.array([(energy(eps*e)-2*energy([0., 0.])+energy(-eps*e))/eps**2
+                               for e in np.eye(2)])
+            expected = np.array([exchange_curvature-ha, exchange_curvature])
+            np.testing.assert_allclose(actual, expected, rtol=1e-10, atol=1e-10)
+            self.assertGreater(actual[0], 0.)
+            if exchange_curvature > 0.:
+                self.assertGreater(np.prod(actual), 0.)
+            else:
+                self.assertEqual(actual[1], 0.)  # Gamma retains a Goldstone direction.
+
     def test_easy_axis_has_curvature_without_external_field(self):
         eps, ha = 2e-4, 3.
         axis = np.array([0., 0., 1.])

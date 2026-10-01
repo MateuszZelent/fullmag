@@ -6047,6 +6047,44 @@ fn shared_domain_modal_scope_allows_normalized_texture_inside_the_unit_cell() {
 }
 
 #[test]
+fn shared_domain_modal_scope_accepts_zero_static_field() {
+    let plan = minimal_native_modal_plan();
+    let topology = MeshTopology::from_ir(&plan.mesh).expect("minimal FEM mesh is valid");
+    let mut observables = scope_observables(plan.mesh.nodes.len(), 0.0);
+    observables.external_field.fill([0.0; 3]);
+    observables.effective_field.fill([0.0; 3]);
+    observables.max_effective_field_amplitude = 0.0;
+    validate_shared_domain_modal_scope(
+        &plan, &topology, &plan.equilibrium_magnetization, &observables,
+    ).expect("zero static field must not imply zero modal curvature");
+
+    let mut unsupported_ku = plan.clone();
+    unsupported_ku.material.uniaxial_anisotropy = Some(-1.0e3);
+    let error = validate_shared_domain_modal_scope(
+        &unsupported_ku, &topology, &plan.equilibrium_magnetization, &observables,
+    ).expect_err("zero field must not bypass the uncertified Ku scope guard");
+    assert!(error.message.contains("tangent terms are not yet certified"));
+}
+
+#[test]
+fn shared_domain_modal_scope_rejects_invalid_diagnostic_amplitudes() {
+    let plan = minimal_native_modal_plan();
+    let topology = MeshTopology::from_ir(&plan.mesh).expect("minimal FEM mesh is valid");
+    for invalid in [-1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        let mut observables = scope_observables(plan.mesh.nodes.len(), 0.0);
+        observables.max_effective_field_amplitude = invalid;
+        assert!(validate_shared_domain_modal_scope(
+            &plan, &topology, &plan.equilibrium_magnetization, &observables,
+        ).is_err(), "invalid field amplitude must be rejected");
+        observables.max_effective_field_amplitude = 0.0;
+        observables.max_torque_Apm = invalid;
+        assert!(validate_shared_domain_modal_scope(
+            &plan, &topology, &plan.equilibrium_magnetization, &observables,
+        ).is_err(), "invalid torque amplitude must be rejected");
+    }
+}
+
+#[test]
 fn shared_domain_full2x2_guard_accepts_tangent_frame_reference_axis_jump() {
     let mut plan = bounded_k0_execution_plan();
     add_x_floquet_pair_to_plan(&mut plan);

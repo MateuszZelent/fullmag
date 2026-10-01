@@ -1190,8 +1190,12 @@ pub(super) fn validate_shared_domain_modal_scope(
                 .to_string(),
         });
     }
-    if observables.max_effective_field_amplitude <= 0.0
+    // A stationary state may have zero effective field and nonzero energy
+    // curvature. Spectral admission must use the assembled tangent operator,
+    // not a strictly positive static-field diagnostic.
+    if observables.max_effective_field_amplitude < 0.0
         || !observables.max_effective_field_amplitude.is_finite()
+        || observables.max_torque_Apm < 0.0
         || !observables.max_torque_Apm.is_finite()
     {
         return Err(RunError {
