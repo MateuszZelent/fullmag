@@ -2448,7 +2448,7 @@ fn sample_scoped_nonshared_provenance_artifact_index(relative_path: &str) -> Opt
     let payload_components = components.collect::<Vec<_>>();
     if payload_components.is_empty()
         || payload_components.iter().any(|component| {
-        component.is_empty() || component == "." || component == ".."
+        component.is_empty() || *component == "." || *component == ".."
     })
     {
         return None;

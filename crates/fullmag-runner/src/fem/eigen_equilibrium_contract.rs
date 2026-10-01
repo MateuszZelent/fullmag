@@ -530,6 +530,11 @@ pub(super) struct AcceptedFemRelaxStageReplayPayload {
     pub(super) accepted_fields_json: Vec<u8>,
     pub(super) certified_fields_json: Vec<u8>,
     pub(super) recomputed_certificate_json: Vec<u8>,
+    /// Exact UTF-8 JSON bytes used as the certificate digest preimage. Keep
+    /// this beside the typed certificate so downstream non-shared replay can
+    /// publish the producer preimage without substituting the certificate
+    /// body or reserializing it independently.
+    pub(super) recomputed_certificate_preimage_json: String,
     pub(super) producer_provenance: FemRelaxationProducerProvenance,
     /// Bytes read from the producer sidecar.  Keep these separate from the
     /// typed value: serde round-tripping can change whitespace and object
@@ -719,6 +724,18 @@ impl AcceptedFemRelaxStageReplayPayload {
             )?;
         let (material_provenance_signature, material_provenance_preimage_json) =
             raw_material_provenance(source_plan)?;
+        let recomputed_certificate_preimage_bytes =
+            crate::types::recomputed_fem_linearization_certificate_preimage_bytes(
+                &recomputed_certificate,
+            )?;
+        let recomputed_certificate_preimage_json =
+            String::from_utf8(recomputed_certificate_preimage_bytes).map_err(|error| {
+                RunError {
+                    message: format!(
+                        "relax_stage_handoff_recomputed_certificate_preimage_not_utf8: {error}"
+                    ),
+                }
+            })?;
         Ok(Self {
             accepted_fields,
             certified_fields,
@@ -726,6 +743,7 @@ impl AcceptedFemRelaxStageReplayPayload {
             accepted_fields_json: exact_artifacts.accepted_fields_json,
             certified_fields_json: exact_artifacts.certified_fields_json,
             recomputed_certificate_json: exact_artifacts.recomputed_certificate_json,
+            recomputed_certificate_preimage_json,
             producer_provenance,
             producer_provenance_json,
             producer_build_identity,
@@ -1592,19 +1610,12 @@ impl AcceptedFemRelaxStageHandoff {
         }
         let (consumer_plan_snapshot_bytes, consumer_plan_snapshot_sha256) =
             consumer_plan_snapshot_bytes_and_sha256(plan)?;
-        let recomputed_preimage_bytes =
-            crate::types::recomputed_fem_linearization_certificate_preimage_bytes(
-                &replay.recomputed_certificate,
-            )?;
+        let recomputed_preimage_bytes = replay.recomputed_certificate_preimage_json.as_bytes();
         let recomputed_certificate_preimage_json =
-            String::from_utf8(recomputed_preimage_bytes.clone()).map_err(|error| RunError {
-                message: format!(
-                    "linearization_identity_recomputed_certificate_preimage_not_utf8: {error}"
-                ),
-            })?;
+            replay.recomputed_certificate_preimage_json.clone();
         let recomputed_certificate_preimage_sha256 = format!(
             "sha256:{:x}",
-            Sha256::digest(&recomputed_preimage_bytes)
+            Sha256::digest(recomputed_preimage_bytes)
         );
         if replay.recomputed_certificate.content_sha256
             != crate::types::recomputed_fem_linearization_certificate_sha256(

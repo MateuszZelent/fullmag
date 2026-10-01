@@ -14,7 +14,8 @@ use super::eigen_policy::{
 };
 use crate::artifacts::build_identity_json;
 use crate::types::RunError;
-use fullmag_engine::{EffectiveFieldObservables, MeshTopology, Vector3};
+use fullmag_engine::fem::MeshTopology;
+use fullmag_engine::{EffectiveFieldObservables, Vector3};
 use fullmag_ir::{FemEigenPlanIR, KSamplingIR, SpinWaveBoundaryKindIR};
 use nalgebra::DMatrix;
 use serde_json::{json, Value};

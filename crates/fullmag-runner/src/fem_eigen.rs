@@ -26,6 +26,7 @@ pub(crate) use crate::fem::eigen_equilibrium_contract::{
 };
 pub(crate) use crate::fem::eigen_execution::{
     execute_baseline_fem_eigen, execute_baseline_fem_eigen_with_progress, execute_cpu_fem_eigen,
+    execute_cpu_fem_eigen_with_producer_identity,
     execute_cpu_fem_eigen_with_handoff_and_progress_and_producer_identity,
     execute_cpu_fem_eigen_with_handoff, execute_cpu_fem_eigen_with_handoff_and_progress,
     execute_cpu_fem_eigen_with_progress_and_producer_identity,
