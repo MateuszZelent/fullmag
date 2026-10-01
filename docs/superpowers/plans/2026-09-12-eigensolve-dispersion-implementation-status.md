@@ -2,6 +2,11 @@
 
 ## Odbiór GPT PRO ab64bac, 2026-10-01
 
+- Commit/push odbioru audytu:434b16d498feea5087957d604776bc683bafebfb; HEAD/remote zgodne, worktree czysty przed próbą builda.
+- Managed runtime-v2 dla tego SHA, request-key modal-telemetry-audit-434b16d498feea50, odrzucony przed utworzeniem joba: exit1 Storage is busy, lease eigensolve-dispersion-plan-20260-c5dfad6d7f548079. Runner worker_alive/accepting_jobs=true, błędy=null, profil dostępny i43876155392B wolnego. Nie obchodzono lease; brak nowego receipt/runtime.
+- Ten sam kontroler90201 pozostaje live, solver7df4be7c5ace running; najnowsze obserwowane Gamma refinement24/50 bez końcowej nowej częstotliwości. Następnie F02→F03→F01 oraz pełne bramki zgodnie z odbiorem audytu.
+
+
 - Oryginał zachowany w docs/audits/2026-10-01-gpt-pro-eigensolve-ab64bac-original.md; pełny odbiór i kolejność napraw: docs/audits/2026-10-01-gpt-pro-eigensolve-remediation.md.
 - F01 prism6 exchange quadrature,P1; F02 explicit-sample legacy fallback,P1; F03 Hz/axis linewidth mismatch,P2 potwierdzone w aktualnych źródłach i otwarte. Najpierw F02/F03, następnie F01 z polityką transformacji i kontrolą nullspace. Pilot tetrahedral nie korzysta z prism6.
 - Dodano G04: Gamma finite-Dirichlet reference9.299249694GHz kontra open-film9.309813709GHz; porównanie po weryfikacji rzeczywistych BC i osobnej zbieżności airboxu, bez zmiany residual gate.
