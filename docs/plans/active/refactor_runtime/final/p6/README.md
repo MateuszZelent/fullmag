@@ -244,3 +244,7 @@ pamięci i wszystkich lane'ów pozostają otwarte. P6 wynosi **52%**.
 57. [Natywna mapa indeksów lokalnych FEM](57-native-local-node-index-map.md)
     — actual vertex DOF guard i handle-bound MFEM/core map w source CAS;
     native compilation/runtime, geometry/API/renderer otwarte.
+
+64. [Przypięty transport geometrii i supportu](64-pinned-saved-geometry-transport.md)
+    — dokładny dataset owner, FMMT v2/FMSP v1, integralność body i centralne
+    resource hooks; źródła/codegen/API hygiene PASS, runtime/viewport otwarte.

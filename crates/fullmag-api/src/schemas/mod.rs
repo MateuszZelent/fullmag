@@ -26,6 +26,7 @@ pub mod realtime;
 pub mod relaxation;
 pub mod runtime;
 pub mod scalars;
+pub mod saved_field_geometry;
 #[allow(dead_code)]
 pub mod sessions;
 pub mod status;

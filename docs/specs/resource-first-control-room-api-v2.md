@@ -1161,3 +1161,34 @@ mapowanie indeksów także wymagają przypiętych artefaktów; bieżąca topolog
 sesji nie jest zamiennikiem. Bounded transport nie oznacza jeszcze montowanego
 resource hooka lub renderera w workspace. Decyzję i dalsze bramki opisuje
 [ADR 0040](../adr/0040-bounded-materialized-dataset-binary-slices.md).
+
+### Historyczna geometria i support zapisanego pola
+
+`GET .../artifacts/{artifact_id}/saved-field-geometry` jest adresem geometrii
+wybranego MaterializedDataset. Pełna ścieżka zawiera project/run/SolutionSet,
+containing revision i member. Odpowiedź rozróżnia containing i exact owner
+revision, podaje source, descriptor, geometry binding/payload CAS refs,
+topology/support fingerprints, liczności oraz hashe i długości projekcji.
+Nie zawiera arrays topologii ani wartości pola. Brak geometrii daje 404;
+obcy lub zmieniony binding daje konflikt, uszkodzenie CAS błąd integralności.
+
+`/saved-field-geometry/topology` zwraca istniejący FMMT v2;
+`/saved-field-geometry/support` zwraca FMSP v1 w canonical-node order.
+FMSP ma 24-bajtowy header: magic, u16 LE wersja 1, u16 LE flags 0,
+u64 LE liczba węzłów i u64 LE liczba bajtów bitsetu. Dalej znajdują się
+bity LSB-first, z zerowym paddingiem. Support pozostaje oddzielony od
+frozen-spin constraints i nie jest wywodzony z nazw ani markerów materiałów.
+
+Query wymaga `expected_dataset_manifest_object_ref`,
+`expected_geometry_manifest_object_ref`, `expected_geometry_object_ref`
+(bare lowercase SHA-256) oraz `max_response_bytes` (canonical decimal u64).
+Limit pełnego body wynosi 64 MiB dla FMMT i 1 MiB dla FMSP. API wspiera
+single byte Range i immutable ETag, bez zmiany ownership source.
+Klient domyślnie odbiera pełne bounded body i kontroluje jego SHA-256,
+długość, zakres headera i liczności przed publikacją zasobu.
+
+FMMT jest projekcją MeshIR, bez pełnej semantyki periodic pairs. Nie wolno
+łączyć tego zasobu z geometry/data-plane aktywnej sesji. Status naukowy
+oraz `representation_evidence=not_verified` pozostają jawne. Kontrakt,
+ograniczenia cold decode i wymagane dalsze bramki opisuje
+[ADR 0041](../adr/0041-saved-field-geometry-root.md#transport-przypiętej-geometrii).

@@ -45,5 +45,7 @@ resource hook, codec i jeden viewport wymagają odrębnych kontroli zakresu,
 supportu, pamięci, anulowania i rzeczywistego browser/WebGL proof.
 Nie wolno zastąpić tych bramek samym czytnikiem. Native compilation,
 accepted FEM snapshot, archive roundtrip, nauka, GPU i release pozostają
-otwarte. Runner jest nadal zatrzymany po jawnym graceful stop operatora;
-brak zgody na wznowienie nie blokuje tej pracy źródłowej.
+otwarte. Runner był zatrzymany po jawnym graceful stop operatora; kolejny
+odczyt health potwierdził zewnętrzne wznowienie i działający build 192.
+Job zakończył się 01.10.2026 o 14:40 UTC z exit 0 dla źródeł P6-60;
+walidacja jego artefaktów i wykonanie runtime pozostają osobnymi bramkami.

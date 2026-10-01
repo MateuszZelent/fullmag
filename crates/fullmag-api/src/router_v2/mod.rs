@@ -1092,6 +1092,18 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             get(handlers::persistence::solutions::get_materialized_dataset_slice),
         )
         .route(
+            "/v2/persistence/projects/:project_id/runs/:run_id/solution-sets/:solution_set_id/revisions/:revision/members/:member_id/artifacts/:artifact_id/saved-field-geometry",
+            get(handlers::persistence::solutions::get_saved_field_geometry),
+        )
+        .route(
+            "/v2/persistence/projects/:project_id/runs/:run_id/solution-sets/:solution_set_id/revisions/:revision/members/:member_id/artifacts/:artifact_id/saved-field-geometry/topology",
+            get(handlers::persistence::solutions::get_saved_field_geometry_topology),
+        )
+        .route(
+            "/v2/persistence/projects/:project_id/runs/:run_id/solution-sets/:solution_set_id/revisions/:revision/members/:member_id/artifacts/:artifact_id/saved-field-geometry/support",
+            get(handlers::persistence::solutions::get_saved_field_geometry_support),
+        )
+        .route(
             "/v2/persistence/projects/:project_id/runs/:run_id/materialization",
             post(handlers::persistence::projects::materialize_run),
         )

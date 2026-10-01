@@ -212,6 +212,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/persistence/projects/{project_id}/runs/{run_id}/solution-sets/{solution_set_id}/revisions/{revision}/members/{member_id}/artifacts/{artifact_id}/saved-field-geometry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["persistence_get_persistence_projects_project_id_runs_run_id_solution_sets_solution_set_id_revisions_revision_members_member_id_artifacts_artifact_id_saved_field_geometry"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/persistence/projects/{project_id}/runs/{run_id}/solution-sets/{solution_set_id}/revisions/{revision}/members/{member_id}/artifacts/{artifact_id}/saved-field-geometry/support": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["persistence_get_persistence_projects_project_id_runs_run_id_solution_sets_solution_set_id_revisions_revision_members_member_id_artifacts_artifact_id_saved_field_geometry_support"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/persistence/projects/{project_id}/runs/{run_id}/solution-sets/{solution_set_id}/revisions/{revision}/members/{member_id}/artifacts/{artifact_id}/saved-field-geometry/topology": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["persistence_get_persistence_projects_project_id_runs_run_id_solution_sets_solution_set_id_revisions_revision_members_member_id_artifacts_artifact_id_saved_field_geometry_topology"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/persistence/projects/{project_id}/runs/{run_id}/tasks/{task_id}/cancellation": {
         parameters: {
             query?: never;
@@ -10704,6 +10752,94 @@ export interface components {
          * @enum {string}
          */
         SaveProfile: "compact" | "solved" | "resume" | "archive" | "recovery";
+        SavedFieldGeometryArtifactResource: {
+            accepted_state?: null | components["schemas"]["SolutionAcceptedStateIdResource"];
+            artifact_id: string;
+            /** @description Canonical decimal u64. */
+            byte_length: string;
+            kind: components["schemas"]["SolutionArtifactKindResource"];
+            object_ref: string;
+            schema_id: string;
+        };
+        /** @enum {string} */
+        SavedFieldGeometryBinaryIntegrityResource: "verified_returned_body";
+        SavedFieldGeometryDatasetResource: {
+            dataset_id: string;
+            descriptor: components["schemas"]["MaterializedDatasetFieldDescriptorResource"];
+            field_id: string;
+            group_id: string;
+            item_id: string;
+            /** @description Canonical decimal u64. */
+            revision: string;
+            sample_id: string;
+        };
+        /**
+         * @description CAS-only geometry payload identity.  The payload is referenced by the
+         *     saved geometry manifest but is not a separate SolutionSet artifact.
+         */
+        SavedFieldGeometryPayloadResource: {
+            /** @description Canonical decimal u64. */
+            byte_length: string;
+            object_ref: string;
+            schema_id: string;
+        };
+        SavedFieldGeometryPinnedSourceResource: {
+            member_id: string;
+            run_id: string;
+            run_spec_digest: string;
+            /** @description Canonical decimal u64. */
+            solution_revision: string;
+            solution_set_id: string;
+            tensor_artifact_id: string;
+            tensor_object_ref: string;
+        };
+        /** @enum {string} */
+        SavedFieldGeometryRepresentationEvidenceResource: "not_verified";
+        SavedFieldGeometryResource: {
+            active_node_count: string;
+            cell_count: string;
+            /** @description Revision selected by the containing route. */
+            containing_solution_revision: string;
+            coordinate_unit: string;
+            dataset: components["schemas"]["SavedFieldGeometryDatasetResource"];
+            dataset_manifest: components["schemas"]["SavedFieldGeometryArtifactResource"];
+            facet_count: string;
+            /** @description Existing cold reader limit.  Peak RAM is not certified by this value. */
+            geometry_decode_budget_bytes: string;
+            geometry_manifest: components["schemas"]["SavedFieldGeometryArtifactResource"];
+            geometry_payload: components["schemas"]["SavedFieldGeometryPayloadResource"];
+            geometry_schema_version: string;
+            layout_digest: string;
+            member_id: string;
+            /** @description Canonical decimal u64 counts. */
+            node_count: string;
+            /** @description Exact historical revision that owns the pinned tensor and geometry. */
+            owner_solution_revision: string;
+            producer_id: string;
+            producer_version: string;
+            project_id: string;
+            representation_evidence: components["schemas"]["SavedFieldGeometryRepresentationEvidenceResource"];
+            run_id: string;
+            schema_version: string;
+            solution_set_id: string;
+            source: components["schemas"]["SavedFieldGeometryPinnedSourceResource"];
+            /** @description Complete FMSP body length, including its 24-byte header. */
+            support_binary_byte_length: string;
+            support_binary_schema: string;
+            /**
+             * @description SHA-256 of the complete FMSP body.  Absent when the support body is
+             *     over the bounded support transport budget.
+             */
+            support_binary_sha256?: string | null;
+            support_fingerprint: string;
+            tensor_artifact: components["schemas"]["SavedFieldGeometryArtifactResource"];
+            /** @description Complete FMMT v2 body length, when it fits the bounded transport. */
+            topology_binary_byte_length?: string | null;
+            topology_binary_schema: string;
+            /** @description SHA-256 of the complete FMMT v2 body, when it fits the bounded transport. */
+            topology_binary_sha256?: string | null;
+            topology_fingerprint: string;
+        };
         ScalarWindow: {
             columns: string[];
             observation_frames: components["schemas"]["AcceptedObservationFrameRef"][];
@@ -14255,6 +14391,241 @@ export interface operations {
             };
             /** @description Corrupt, nonfinite or unsupported persisted field */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    persistence_get_persistence_projects_project_id_runs_run_id_solution_sets_solution_set_id_revisions_revision_members_member_id_artifacts_artifact_id_saved_field_geometry: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                run_id: string;
+                solution_set_id: string;
+                /** @description Canonical positive decimal u64 */
+                revision: string;
+                member_id: string;
+                /** @description Selected materialized dataset artifact ID */
+                artifact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Exact immutable saved FEM geometry metadata; no active-runtime fallback */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SavedFieldGeometryResource"];
+                };
+            };
+            /** @description Invalid identity or revision */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Pinned geometry or dataset manifest is missing */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Pinned owner, dataset, geometry, or tensor identity mismatch */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Corrupt or oversized persisted geometry */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    persistence_get_persistence_projects_project_id_runs_run_id_solution_sets_solution_set_id_revisions_revision_members_member_id_artifacts_artifact_id_saved_field_geometry_support: {
+        parameters: {
+            query: {
+                /** @description Bare lowercase SHA-256 of the exact materialized dataset manifest. */
+                expected_dataset_manifest_object_ref: string;
+                /** @description Bare lowercase SHA-256 of the exact saved geometry binding manifest. */
+                expected_geometry_manifest_object_ref: string;
+                /** @description Bare lowercase SHA-256 of the exact saved geometry payload. */
+                expected_geometry_object_ref: string;
+                /** @description Maximum complete binary body size, including its fixed header. */
+                max_response_bytes: string;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+                run_id: string;
+                solution_set_id: string;
+                /** @description Canonical positive decimal u64 */
+                revision: string;
+                member_id: string;
+                /** @description Selected materialized dataset artifact ID */
+                artifact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Pinned saved FEM active-node support in FMSP v1 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
+                };
+            };
+            /** @description Partial FMSP body for a single byte Range */
+            206: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
+                };
+            };
+            /** @description Pinned support is unchanged */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid identity, hash, or byte budget */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Pinned geometry or dataset manifest is missing */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Expected pinned identity differs from the immutable artifact */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Requested byte Range is not satisfiable */
+            416: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description FMSP body exceeds the bounded support transport budget */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    persistence_get_persistence_projects_project_id_runs_run_id_solution_sets_solution_set_id_revisions_revision_members_member_id_artifacts_artifact_id_saved_field_geometry_topology: {
+        parameters: {
+            query: {
+                /** @description Bare lowercase SHA-256 of the exact materialized dataset manifest. */
+                expected_dataset_manifest_object_ref: string;
+                /** @description Bare lowercase SHA-256 of the exact saved geometry binding manifest. */
+                expected_geometry_manifest_object_ref: string;
+                /** @description Bare lowercase SHA-256 of the exact saved geometry payload. */
+                expected_geometry_object_ref: string;
+                /** @description Maximum complete binary body size, including its fixed header. */
+                max_response_bytes: string;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+                run_id: string;
+                solution_set_id: string;
+                /** @description Canonical positive decimal u64 */
+                revision: string;
+                member_id: string;
+                /** @description Selected materialized dataset artifact ID */
+                artifact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Pinned saved FEM topology in the existing FMMT v2 binary format */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
+                };
+            };
+            /** @description Partial FMMT v2 body for a single byte Range */
+            206: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
+                };
+            };
+            /** @description Pinned topology is unchanged */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid identity, hash, or byte budget */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Pinned geometry or dataset manifest is missing */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Expected pinned identity differs from the immutable artifact */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Requested byte Range is not satisfiable */
+            416: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description FMMT v2 body exceeds the bounded geometry transport budget */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };

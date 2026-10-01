@@ -26413,6 +26413,298 @@
         ],
         "type": "string"
       },
+      "SavedFieldGeometryArtifactResource": {
+        "properties": {
+          "accepted_state": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SolutionAcceptedStateIdResource"
+              }
+            ]
+          },
+          "artifact_id": {
+            "type": "string"
+          },
+          "byte_length": {
+            "description": "Canonical decimal u64.",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/SolutionArtifactKindResource"
+          },
+          "object_ref": {
+            "type": "string"
+          },
+          "schema_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "artifact_id",
+          "kind",
+          "schema_id",
+          "object_ref",
+          "byte_length"
+        ],
+        "type": "object"
+      },
+      "SavedFieldGeometryBinaryIntegrityResource": {
+        "enum": [
+          "verified_returned_body"
+        ],
+        "type": "string"
+      },
+      "SavedFieldGeometryDatasetResource": {
+        "properties": {
+          "dataset_id": {
+            "type": "string"
+          },
+          "descriptor": {
+            "$ref": "#/components/schemas/MaterializedDatasetFieldDescriptorResource"
+          },
+          "field_id": {
+            "type": "string"
+          },
+          "group_id": {
+            "type": "string"
+          },
+          "item_id": {
+            "type": "string"
+          },
+          "revision": {
+            "description": "Canonical decimal u64.",
+            "type": "string"
+          },
+          "sample_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "dataset_id",
+          "revision",
+          "sample_id",
+          "item_id",
+          "field_id",
+          "group_id",
+          "descriptor"
+        ],
+        "type": "object"
+      },
+      "SavedFieldGeometryPayloadResource": {
+        "description": "CAS-only geometry payload identity.  The payload is referenced by the\nsaved geometry manifest but is not a separate SolutionSet artifact.",
+        "properties": {
+          "byte_length": {
+            "description": "Canonical decimal u64.",
+            "type": "string"
+          },
+          "object_ref": {
+            "type": "string"
+          },
+          "schema_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_id",
+          "object_ref",
+          "byte_length"
+        ],
+        "type": "object"
+      },
+      "SavedFieldGeometryPinnedSourceResource": {
+        "properties": {
+          "member_id": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "run_spec_digest": {
+            "type": "string"
+          },
+          "solution_revision": {
+            "description": "Canonical decimal u64.",
+            "type": "string"
+          },
+          "solution_set_id": {
+            "type": "string"
+          },
+          "tensor_artifact_id": {
+            "type": "string"
+          },
+          "tensor_object_ref": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "solution_set_id",
+          "solution_revision",
+          "member_id",
+          "tensor_artifact_id",
+          "tensor_object_ref",
+          "run_spec_digest"
+        ],
+        "type": "object"
+      },
+      "SavedFieldGeometryRepresentationEvidenceResource": {
+        "enum": [
+          "not_verified"
+        ],
+        "type": "string"
+      },
+      "SavedFieldGeometryResource": {
+        "properties": {
+          "active_node_count": {
+            "type": "string"
+          },
+          "cell_count": {
+            "type": "string"
+          },
+          "containing_solution_revision": {
+            "description": "Revision selected by the containing route.",
+            "type": "string"
+          },
+          "coordinate_unit": {
+            "type": "string"
+          },
+          "dataset": {
+            "$ref": "#/components/schemas/SavedFieldGeometryDatasetResource"
+          },
+          "dataset_manifest": {
+            "$ref": "#/components/schemas/SavedFieldGeometryArtifactResource"
+          },
+          "facet_count": {
+            "type": "string"
+          },
+          "geometry_decode_budget_bytes": {
+            "description": "Existing cold reader limit.  Peak RAM is not certified by this value.",
+            "type": "string"
+          },
+          "geometry_manifest": {
+            "$ref": "#/components/schemas/SavedFieldGeometryArtifactResource"
+          },
+          "geometry_payload": {
+            "$ref": "#/components/schemas/SavedFieldGeometryPayloadResource"
+          },
+          "geometry_schema_version": {
+            "type": "string"
+          },
+          "layout_digest": {
+            "type": "string"
+          },
+          "member_id": {
+            "type": "string"
+          },
+          "node_count": {
+            "description": "Canonical decimal u64 counts.",
+            "type": "string"
+          },
+          "owner_solution_revision": {
+            "description": "Exact historical revision that owns the pinned tensor and geometry.",
+            "type": "string"
+          },
+          "producer_id": {
+            "type": "string"
+          },
+          "producer_version": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "representation_evidence": {
+            "$ref": "#/components/schemas/SavedFieldGeometryRepresentationEvidenceResource"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "solution_set_id": {
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/SavedFieldGeometryPinnedSourceResource"
+          },
+          "support_binary_byte_length": {
+            "description": "Complete FMSP body length, including its 24-byte header.",
+            "type": "string"
+          },
+          "support_binary_schema": {
+            "type": "string"
+          },
+          "support_binary_sha256": {
+            "description": "SHA-256 of the complete FMSP body.  Absent when the support body is\nover the bounded support transport budget.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "support_fingerprint": {
+            "type": "string"
+          },
+          "tensor_artifact": {
+            "$ref": "#/components/schemas/SavedFieldGeometryArtifactResource"
+          },
+          "topology_binary_byte_length": {
+            "description": "Complete FMMT v2 body length, when it fits the bounded transport.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "topology_binary_schema": {
+            "type": "string"
+          },
+          "topology_binary_sha256": {
+            "description": "SHA-256 of the complete FMMT v2 body, when it fits the bounded transport.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "topology_fingerprint": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "project_id",
+          "run_id",
+          "solution_set_id",
+          "containing_solution_revision",
+          "owner_solution_revision",
+          "member_id",
+          "source",
+          "dataset_manifest",
+          "geometry_manifest",
+          "geometry_payload",
+          "tensor_artifact",
+          "dataset",
+          "geometry_schema_version",
+          "coordinate_unit",
+          "representation_evidence",
+          "topology_fingerprint",
+          "support_fingerprint",
+          "layout_digest",
+          "producer_id",
+          "producer_version",
+          "node_count",
+          "cell_count",
+          "facet_count",
+          "active_node_count",
+          "geometry_decode_budget_bytes",
+          "topology_binary_schema",
+          "support_binary_schema",
+          "support_binary_byte_length"
+        ],
+        "type": "object"
+      },
       "ScalarWindow": {
         "properties": {
           "columns": {
@@ -39179,6 +39471,346 @@
           },
           "500": {
             "description": "Corrupt, nonfinite or unsupported persisted field"
+          }
+        },
+        "tags": [
+          "persistence"
+        ]
+      }
+    },
+    "/v2/persistence/projects/{project_id}/runs/{run_id}/solution-sets/{solution_set_id}/revisions/{revision}/members/{member_id}/artifacts/{artifact_id}/saved-field-geometry": {
+      "get": {
+        "operationId": "persistence_get_persistence_projects_project_id_runs_run_id_solution_sets_solution_set_id_revisions_revision_members_member_id_artifacts_artifact_id_saved_field_geometry",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "solution_set_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Canonical positive decimal u64",
+            "in": "path",
+            "name": "revision",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "member_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Selected materialized dataset artifact ID",
+            "in": "path",
+            "name": "artifact_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedFieldGeometryResource"
+                }
+              }
+            },
+            "description": "Exact immutable saved FEM geometry metadata; no active-runtime fallback"
+          },
+          "400": {
+            "description": "Invalid identity or revision"
+          },
+          "404": {
+            "description": "Pinned geometry or dataset manifest is missing"
+          },
+          "409": {
+            "description": "Pinned owner, dataset, geometry, or tensor identity mismatch"
+          },
+          "500": {
+            "description": "Corrupt or oversized persisted geometry"
+          }
+        },
+        "tags": [
+          "persistence"
+        ]
+      }
+    },
+    "/v2/persistence/projects/{project_id}/runs/{run_id}/solution-sets/{solution_set_id}/revisions/{revision}/members/{member_id}/artifacts/{artifact_id}/saved-field-geometry/support": {
+      "get": {
+        "operationId": "persistence_get_persistence_projects_project_id_runs_run_id_solution_sets_solution_set_id_revisions_revision_members_member_id_artifacts_artifact_id_saved_field_geometry_support",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "solution_set_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Canonical positive decimal u64",
+            "in": "path",
+            "name": "revision",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "member_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Selected materialized dataset artifact ID",
+            "in": "path",
+            "name": "artifact_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Bare lowercase SHA-256 of the exact materialized dataset manifest.",
+            "in": "query",
+            "name": "expected_dataset_manifest_object_ref",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Bare lowercase SHA-256 of the exact saved geometry binding manifest.",
+            "in": "query",
+            "name": "expected_geometry_manifest_object_ref",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Bare lowercase SHA-256 of the exact saved geometry payload.",
+            "in": "query",
+            "name": "expected_geometry_object_ref",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Maximum complete binary body size, including its fixed header.",
+            "in": "query",
+            "name": "max_response_bytes",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {}
+            },
+            "description": "Pinned saved FEM active-node support in FMSP v1"
+          },
+          "206": {
+            "content": {
+              "application/octet-stream": {}
+            },
+            "description": "Partial FMSP body for a single byte Range"
+          },
+          "304": {
+            "description": "Pinned support is unchanged"
+          },
+          "400": {
+            "description": "Invalid identity, hash, or byte budget"
+          },
+          "404": {
+            "description": "Pinned geometry or dataset manifest is missing"
+          },
+          "409": {
+            "description": "Expected pinned identity differs from the immutable artifact"
+          },
+          "416": {
+            "description": "Requested byte Range is not satisfiable"
+          },
+          "422": {
+            "description": "FMSP body exceeds the bounded support transport budget"
+          }
+        },
+        "tags": [
+          "persistence"
+        ]
+      }
+    },
+    "/v2/persistence/projects/{project_id}/runs/{run_id}/solution-sets/{solution_set_id}/revisions/{revision}/members/{member_id}/artifacts/{artifact_id}/saved-field-geometry/topology": {
+      "get": {
+        "operationId": "persistence_get_persistence_projects_project_id_runs_run_id_solution_sets_solution_set_id_revisions_revision_members_member_id_artifacts_artifact_id_saved_field_geometry_topology",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "solution_set_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Canonical positive decimal u64",
+            "in": "path",
+            "name": "revision",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "member_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Selected materialized dataset artifact ID",
+            "in": "path",
+            "name": "artifact_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Bare lowercase SHA-256 of the exact materialized dataset manifest.",
+            "in": "query",
+            "name": "expected_dataset_manifest_object_ref",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Bare lowercase SHA-256 of the exact saved geometry binding manifest.",
+            "in": "query",
+            "name": "expected_geometry_manifest_object_ref",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Bare lowercase SHA-256 of the exact saved geometry payload.",
+            "in": "query",
+            "name": "expected_geometry_object_ref",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Maximum complete binary body size, including its fixed header.",
+            "in": "query",
+            "name": "max_response_bytes",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {}
+            },
+            "description": "Pinned saved FEM topology in the existing FMMT v2 binary format"
+          },
+          "206": {
+            "content": {
+              "application/octet-stream": {}
+            },
+            "description": "Partial FMMT v2 body for a single byte Range"
+          },
+          "304": {
+            "description": "Pinned topology is unchanged"
+          },
+          "400": {
+            "description": "Invalid identity, hash, or byte budget"
+          },
+          "404": {
+            "description": "Pinned geometry or dataset manifest is missing"
+          },
+          "409": {
+            "description": "Expected pinned identity differs from the immutable artifact"
+          },
+          "416": {
+            "description": "Requested byte Range is not satisfiable"
+          },
+          "422": {
+            "description": "FMMT v2 body exceeds the bounded geometry transport budget"
           }
         },
         "tags": [

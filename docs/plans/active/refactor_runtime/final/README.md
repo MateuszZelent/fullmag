@@ -15,6 +15,12 @@ dlatego nie podnosi procentów P3/P5.
 
 ## Dokumenty finalne
 
+Checkpoint 01.10.2026: [P6-64 — transport zapisanej geometrii](p6/64-pinned-saved-geometry-transport.md)
+łączy przypięty dataset z metadanymi, topologią FMMT v2 i supportem FMSP v1.
+Źródła, codegen i API hygiene PASS; HTTP i viewport pozostają otwarte.
+Build 192 zakończony exit 0, 113/113 artefaktów zweryfikowanych; runtime osobno.
+P6 około 52%, cały plan około 49%.
+
 Checkpoint 01.10.2026: [P6-63 — czytnik historycznej geometrii](p6/63-exact-pinned-geometry-reader.md)
 centralizuje exact pinned owner/geometry/support lookup i podłącza natywną
 bramkę. Produkcyjne źródła PASS; transport i viewport nadal otwarte.
@@ -22,12 +28,14 @@ P6 około 52%, cały plan około 49%.
 
 Checkpoint 01.10.2026: [P6-62 — aktualność źródeł native buildu](p6/62-managed-native-source-freshness.md)
 usuwa wykazaną przyczynę błędu buildu 191 bez kasowania cache.
-Testy źródłowe PASS; runner zatrzymany na żądanie operatora, build 192 queued.
+Testy źródłowe PASS; po zewnętrznym wznowieniu runnera build 192 zakończył się exit 0.
+Jego źródła poprzedzają P6-62, więc nie kwalifikują tej poprawki.
 Managed build po poprawce i runtime pozostają NOT VERIFIED; procenty bez zmian.
 
 Checkpoint 01.10.2026: [P6-61 — trasa kontroli archiwum FEM](p6/61-saved-fem-archive-roundtrip-route.md)
 przygotowuje izolowany export/import bez buildu/solvera. Build 189 ma terminalny
-sukces i 113 zweryfikowanych artefaktów dla P6-55; build 191 failed, 192 czeka.
+sukces i 113 zweryfikowanych artefaktów dla P6-55; build 191 failed,
+192 ma exit 0 oraz 113/113 zweryfikowanych artefaktów dla P6-60.
 Actual roundtrip nadal NOT VERIFIED; P6 około 52%, cały plan około 49%.
 
 Checkpoint 01.10.2026: [P6-60 — bramka zapisanego snapshotu FEM](p6/60-saved-native-snapshot-integrity-gate.md)

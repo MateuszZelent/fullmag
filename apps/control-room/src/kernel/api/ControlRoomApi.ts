@@ -188,6 +188,9 @@ import {
   PERSISTENCE_PROJECTS_PATH,
   PROJECT_MATERIALIZED_DATASET_PATH,
   PROJECT_MATERIALIZED_DATASET_SLICE_PATH,
+  PROJECT_SAVED_FIELD_GEOMETRY_PATH,
+  PROJECT_SAVED_FIELD_TOPOLOGY_PATH,
+  PROJECT_SAVED_FIELD_SUPPORT_PATH,
   PROJECT_SOLUTION_SET_ARTIFACTS_PATH,
   PROJECT_SOLUTION_SET_MEMBERS_PATH,
   PROJECT_SOLUTION_SET_PATH,
@@ -471,6 +474,7 @@ import type {
   SolutionSetDiscoveryPageQuery,
   SolutionSetDiscoveryPageResource,
   MaterializedDatasetResource,
+  SavedFieldGeometryResource,
   SolutionSetRevision,
   ObservationFrameListQuery,
   ObservationFrameListResource,
@@ -669,6 +673,8 @@ import { decodeCrossSection } from "./codecs/crossSectionCodec";
 import { decodeCrossSectionQuality } from "./codecs/crossSectionQualityCodec";
 import { decodeFieldVector } from "./codecs/fieldVectorCodec";
 import { decodeMeshQualityData } from "./codecs/meshQualityDataCodec";
+import { decodeSavedSupport, savedSupportByteLimit } from "./codecs/savedSupportCodec";
+import { savedTopologyByteLimit, validateSavedGeometry, verifySavedTopologyBody } from "./savedGeometryIdentity";
 import { boundedBinaryResponse } from "./boundedBinaryResponse";
 import {
   decodeMaterializedDatasetSlice,
@@ -758,6 +764,26 @@ export interface HysteresisExecutionTreeQuery {
 }
 
 const CHUNKED_TOPOLOGY_THRESHOLD_BYTES = 16 * 1024 * 1024;
+
+function savedGeometryPath(dataset: MaterializedDatasetResource) {
+  return {
+    project_id: assertSolutionSetProjectId(dataset.project_id),
+    run_id: assertSolutionSetRunId(dataset.run_id),
+    solution_set_id: assertSolutionSetLogicalId(dataset.solution_set_id),
+    revision: assertSolutionSetRevision(dataset.containing_solution_revision),
+    member_id: assertMaterializedDatasetPathId("member id", dataset.member_id),
+    artifact_id: assertMaterializedDatasetPathId("artifact id", dataset.artifact_id),
+  };
+}
+
+function savedGeometryBinaryQuery(geometry: SavedFieldGeometryResource, limit: number) {
+  return {
+    expected_dataset_manifest_object_ref: geometry.dataset_manifest.object_ref,
+    expected_geometry_manifest_object_ref: geometry.geometry_manifest.object_ref,
+    expected_geometry_object_ref: geometry.geometry_payload.object_ref,
+    max_response_bytes: String(limit),
+  };
+}
 const TOPOLOGY_RANGE_CHUNK_BYTES = 8 * 1024 * 1024;
 export const MAX_TOPOLOGY_BYTES = 512 * 1024 * 1024;
 const FIELD_MATERIALIZATION_TIMEOUT_MS = 5_000;
@@ -2955,6 +2981,70 @@ export class ControlRoomApi {
           throw new ControlRoomApiError("Expected a complete pinned dataset slice response", 0);
         }
         return decodeMaterializedDatasetSlice(result.data, dataset, range, options?.signal);
+      },
+      savedFieldGeometry: async (dataset: MaterializedDatasetResource, options?: RequestOptions) => {
+        const geometry = await this.requestJson<SavedFieldGeometryResource>(
+          PROJECT_SAVED_FIELD_GEOMETRY_PATH, options, { path: savedGeometryPath(dataset) },
+        );
+        return validateSavedGeometry(geometry, dataset);
+      },
+      savedFieldTopology: async (
+        dataset: MaterializedDatasetResource,
+        geometry: SavedFieldGeometryResource,
+        options?: RequestOptions,
+      ) => {
+        validateSavedGeometry(geometry, dataset);
+        if (geometry.topology_binary_byte_length == null || geometry.topology_binary_sha256 == null) {
+          return null;
+        }
+        const limit = savedTopologyByteLimit(geometry);
+        const result = await this.requestBinaryBytes(
+          PROJECT_SAVED_FIELD_TOPOLOGY_PATH,
+          { signal: options?.signal, maxResponseBytes: limit },
+          savedGeometryPath(dataset), savedGeometryBinaryQuery(geometry, limit),
+        );
+        if (result.status === "not-applicable") return null;
+        if (result.status !== "ready") throw new ControlRoomApiError("Expected a complete pinned topology body", 0);
+        await verifySavedTopologyBody(result.data, geometry, options?.signal);
+        const topology = await this.binaryDecodeScheduler({
+          buffer: result.data,
+          decodeInline: decodeTopology,
+          kind: "topology",
+          path: PROJECT_SAVED_FIELD_TOPOLOGY_PATH,
+          signal: options?.signal,
+        });
+        if (topology.formatVersion !== 2 || String(topology.nodeCount) !== geometry.node_count ||
+            String(topology.cellCount) !== geometry.cell_count || String(topology.facetCount) !== geometry.facet_count) {
+          throw new ControlRoomApiError("Pinned topology extents differ from saved geometry", 0);
+        }
+        return topology;
+      },
+      savedFieldSupport: async (
+        dataset: MaterializedDatasetResource,
+        geometry: SavedFieldGeometryResource,
+        options?: RequestOptions,
+      ) => {
+        validateSavedGeometry(geometry, dataset);
+        if (geometry.support_binary_byte_length == null || geometry.support_binary_sha256 == null) {
+          return null;
+        }
+        const identity = { nodeCount: geometry.node_count, byteLength: geometry.support_binary_byte_length, sha256: geometry.support_binary_sha256 };
+        const limit = savedSupportByteLimit(identity);
+        const result = await this.requestBinaryBytes(
+          PROJECT_SAVED_FIELD_SUPPORT_PATH,
+          { signal: options?.signal, maxResponseBytes: limit },
+          savedGeometryPath(dataset), savedGeometryBinaryQuery(geometry, limit),
+        );
+        if (result.status === "not-applicable") return null;
+        if (result.status !== "ready") throw new ControlRoomApiError("Expected a complete pinned support body", 0);
+        const support = await decodeSavedSupport(result.data, identity, options?.signal);
+        let active = 0;
+        for (const byte of support.bits) {
+          let remaining = byte;
+          while (remaining !== 0) { remaining &= remaining - 1; active += 1; }
+        }
+        if (String(active) !== geometry.active_node_count) throw new ControlRoomApiError("Pinned support active count mismatch", 0);
+        return support;
       },
       create: (request: ProjectCreateRequest, options?: RequestOptions) =>
         this.postJson<ProjectDocumentResource, ProjectCreateRequest>(

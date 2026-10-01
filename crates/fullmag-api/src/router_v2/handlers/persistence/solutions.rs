@@ -1,4 +1,11 @@
 //! Read-only project-owned historical results, independent of active runtime.
+
+pub mod saved_geometry;
+pub use saved_geometry::{
+    get_saved_field_geometry, get_saved_field_geometry_support,
+    get_saved_field_geometry_topology,
+};
+
 use crate::schemas::materialized_dataset_slice::{
     MaterializedDatasetSliceBinaryBody, MaterializedDatasetSliceEnvelopeResource,
     MaterializedDatasetSliceQuery, MAX_SLICE_ENVELOPE_METADATA_BYTES,

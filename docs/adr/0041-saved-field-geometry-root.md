@@ -77,3 +77,46 @@ reprezentacja, nauka i release wymagają odrębnych dowodów.
 
 Rollback wyłącza nową produkcję, zachowując reader i traversal już zapisanych
 rootów. Usunięcie readerów przy istniejących danych naruszyłoby retencję.
+
+## Transport przypiętej geometrii
+
+Publiczny resource jest właściwością konkretnego artefaktu MaterializedDataset
+w historycznej ścieżce projektu/runu/SolutionSet/containing revision/membera:
+`.../artifacts/{artifact_id}/saved-field-geometry`. Route artifact oznacza
+wybrany manifest datasetu, nie mutable mesh i nie niezależny locator geometrii.
+Reader rozwiązuje exact source i jego historical owner. JSON zawiera tylko
+tożsamości CAS, descriptor, rewizje, liczności, jednostkę SI, fingerprinty,
+budżety oraz hashe i długości projekcji binarnych. Payload geometrii jest
+referencją CAS bez wymyślonego SolutionArtifactId.
+
+Podzasób `/topology` zachowuje istniejący FMMT v2, w tym typed cells/facets,
+markers, roles i global ordinals. To projekcja topologii: nie przenosi pełnego
+MeshIR, periodic pairs ani field supportu. Nie zmieniamy FMMT v2 przez
+dopisanie nieznanych sekcji. `/support` używa osobnego FMSP v1: 24-bajtowy
+header (`FMSP`, u16 LE version=1, u16 LE flags=0, u64 LE node count,
+u64 LE payload bytes), dalej bitset LSB-first w canonical node ordering.
+Nieaktywny węzeł nie oznacza frozen spin; padding bits muszą być zerowe.
+SHA-256 dotyczy całego body odpowiedniej projekcji, razem z headerem.
+
+Query obu binarnych odczytów wymaga oczekiwanych hashów manifestu datasetu,
+manifestu geometrii i payloadu oraz kanonicznego u64 budżetu pełnego body.
+Budżety to 64 MiB FMMT i 1 MiB FMSP. Immutable ETag, single byte Range,
+304/206/416 korzystają ze wspólnej polityki odpowiedzi binarnych API.
+Przekroczenie budżetu jest jawne; klient nie podstawia siatki aktywnej sesji.
+
+Centralna fasada kontroluje pełną tożsamość datasetu i źródła, descriptor,
+liczności, hashe body i support padding przed udostępnieniem decoded arrays.
+Resource keys obejmują containing oraz historical owner, wszystkie CAS roots,
+descriptor i digest projekcji. Dane pozostają w istniejącym resource runtime;
+odejście ostatniego odbiorcy anuluje odczyt. Nie powstaje session-global alias.
+
+Transport nie zmienia `representation_evidence=not_verified`, nie wykonuje
+solvera i nie certyfikuje MFEM/science. Cold reader nadal dekoduje do 64 MiB
+JSON; projekcja i checksum mogą wymagać pełnego odczytu. Pomiary RAM/I/O,
+streaming dużej geometrii, pinned full-field transport i jeden viewport
+z browser/WebGL proof pozostają wymaganiami P6 przed finalną kwalifikacją.
+
+Rekord rzeczywistego artefaktu transportu geometrii zawiera również `kind`
+i `accepted_state`. Manifest datasetu i geometrii mają kind `other`;
+accepted-state obu manifestów i tensora musi być zgodny z pinned datasetem.
+Geometry payload CAS pozostaje oddzielnym rekordem bez artifact ID/kind.

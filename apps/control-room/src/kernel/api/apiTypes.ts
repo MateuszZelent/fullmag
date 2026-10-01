@@ -857,6 +857,8 @@ export type MaterializedDatasetResource =
   components["schemas"]["MaterializedDatasetResource"];
 export type MaterializedDatasetSliceEnvelopeResource =
   components["schemas"]["MaterializedDatasetSliceEnvelopeResource"];
+export type SavedFieldGeometryResource =
+  components["schemas"]["SavedFieldGeometryResource"];
 export type ObservationFrameListQuery =
   components["schemas"]["ObservationFrameListQuery"];
 export type ObservationFrameListResource =
