@@ -83,6 +83,64 @@ afterEach(() => {
 });
 
 describe("AntennaCompositionPanel runtime results", () => {
+  it("authors the per-ampere source FFT from a symbolic solve output", async () => {
+    mocks.scene.data = {
+      revision: 15,
+      objects: [{ id: "antenna-1" }, { id: "magnet-1" }],
+      antenna_field_solve_stages: [{
+        id: "solve-1", source_object_id: "antenna-1", current_transport_id: "current-1",
+        port_mode_ids: ["port-1"], outputs: [{ id: "basis-1", quantity: "H_ant_basis" }],
+        field_sampling_domain: { kind: "global" }, target_refs: [],
+      }],
+      antenna_port_modes: [{ id: "port-1", source_object_id: "antenna-1", current_transport_id: "current-1" }],
+      antenna_spectrum_requests: [],
+    } as unknown as SceneResource;
+    mocks.commitTransaction.mockResolvedValue({ scene_revision: 16 });
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    const find = (tag: string, label: string): TestElement => {
+      const found: TestElement[] = [];
+      const visit = (node: TestNode) => {
+        if (node instanceof TestElement && node.tagName === tag &&
+          (node.getAttribute("aria-label") === label || node.textContent.includes(label))) found.push(node);
+        node.childNodes.forEach(visit);
+      };
+      visit(container);
+      if (!found[0]) throw new Error(`Missing ${label}`);
+      return found[0];
+    };
+    try {
+      await act(async () => root.render(<AntennaCompositionPanel kind="solution" selection={solutionSelection()} />));
+      expect(container.textContent).toContain("not the spin-wave response");
+      const target = find("SELECT", "FFT target object");
+      target.value = "magnet-1";
+      await act(async () => target.dispatchEvent(new TestEvent("change", { bubbles: true })));
+      for (const [label, value] of [
+        ["Plane origin", "0,0,0"], ["Axis u", "1,0,0"], ["Axis v", "0,1,0"],
+        ["Extent u", "2e-7"], ["Extent v", "1e-7"], ["Samples u", "33"], ["Samples v", "17"],
+      ]) {
+        const input = find("INPUT", label);
+        Object.getOwnPropertyDescriptor(TestElement.prototype, "value")?.set?.call(input, value);
+        await act(async () => input.dispatchEvent(new TestEvent("input", { bubbles: true })));
+      }
+      await act(async () => find("BUTTON", "Create source FFT request").dispatchEvent(new TestEvent("click", { bubbles: true })));
+      expect(mocks.commitTransaction).toHaveBeenCalledWith({
+        base_revision: 15, kind: "merge_patch",
+        merge_patch: { antenna_spectrum_requests: [expect.objectContaining({
+          solution_ref: { kind: "stage_output", stage_id: "solve-1", output_id: "basis-1" },
+          target: { kind: "object", object_id: "magnet-1" },
+          transform: "spatial_fft",
+          sampling_plane: expect.objectContaining({ sample_count_u: 33, sample_count_v: 17, interpolation: "fem_element" }),
+        })] },
+      });
+      await act(async () => find("BUTTON", "Create source FFT request").dispatchEvent(new TestEvent("click", { bubbles: true })));
+      expect(mocks.commitTransaction).toHaveBeenCalledTimes(1);
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
   it("creates a projection and drive atomically from the selected solve stage", async () => {
     mocks.scene.data = {
       revision: 11,
