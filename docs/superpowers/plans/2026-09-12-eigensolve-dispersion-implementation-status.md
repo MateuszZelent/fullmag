@@ -1,5 +1,16 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
+## S02/S12 — kanoniczne mapy periodyczne, 2026-10-01
+
+- #187 succeeded/exit0, ale pilot Γ zakończył się przed częstotliwościami błędem producer_reduction_map_not_canonical. DE/BV nie rozpoczęto.
+- Niezależny replay siatki6138 i rzeczywistych par runtime potwierdził48 błędów numeracji mapy magnetycznej. Minimum-root union daje0 i zachowuje kierunek/kolejność niezależne mapy;328 klas magnetycznych bez zmiany.
+- Naprawiono generator przed składaniem operatorów, bez osłabienia certyfikatu lub residuali. Trzy regresje Rust przygotowane, niekompilowane; parser i replay PASS. Audyt docs/audits/2026-10-01-modal-periodic-map-canonical-numbering.md.
+- Przyrost Ku v2 jest już commit/push813fec3948e3994551834a06721f1ac357a9ea3b. Poprzedni wpis WIP jest historyczny. Canonical/raw material artifact migration pozostaje otwarta.
+- Następny krok: nowy managed snapshot runtime-v2 -> Γ -> DE/BV k25 L2/t3/t6/t9 -> bramki pól/residuali/analizy. Pełny cel S00–S12 i wszystkie bramki nauki/integracji pozostają otwarte.
+
+
+
+
 ## S10 — certyfikaty pól Ku v2, checkpoint 2026-10-01
 
 - Dodano jawne pole anizotropii do wersjonowanego certyfikatu, kopię natywną H_ani, producenta i certyfikat ponownego przeliczenia v2. Modele bez Ku zachowują ścieżkę v1; deklarowane Ku=0 używa v2.

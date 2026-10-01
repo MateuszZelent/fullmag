@@ -425,6 +425,8 @@
     }
   ],
   "sources": [
+    {"id": "source-canonical-modal-reduction-maps", "path": "crates/fullmag-runner/src/fem/eigen_shared_domain_geometry.rs", "symbol": "modal_shared_domain_equivalence_classes", "responsibility": "Canonical minimum-member representative and dense periodic class numbering before native assembly"},
+    {"id": "source-canonical-modal-reduction-replay", "path": "scripts/replay_modal_periodic_reduction_maps.py", "symbol": "replay", "responsibility": "Independent graph-components comparison of legacy and minimum-root maps on accepted runtime pair artifacts"},
     {"id": "source-certified-field-digest", "path": "crates/fullmag-runner/src/types.rs", "symbol": "certified_equilibrium_fields_sha256", "responsibility": "Bind versioned field arrays to exact little-endian binary bytes"},
     {"id": "source-certified-field-copy", "path": "backends/fem/cpu/mfem/runtime/state_io.cpp", "symbol": "int context_copy_linearization_field_f64", "responsibility": "Export masked dynamical fields including native uniaxial field"},
     {"id": "source-certified-field-producer", "path": "crates/fullmag-runner/src/fem/relax/finalize.rs", "symbol": "copy_native_equilibrium_evaluation", "responsibility": "Capture measured native fields without replacing H_eff"},

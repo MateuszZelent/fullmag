@@ -962,6 +962,27 @@ validated_scope = bounded workload description
 A synthetic algebra oracle or a narrow K0 macrospin result cannot promote a
 Poisson-airbox, nonzero-k, or general GPU capability.
 
+### Kanoniczne klasy redukcji periodycznej FEM CPU
+
+Generator `modal_shared_domain_equivalence_classes` w
+`crates/fullmag-runner/src/fem/eigen_shared_domain_geometry.rs` musi wybierać
+najmniejszy globalny numer węzła jako reprezentanta każdej spójnej klasy
+periodycznej. Numery zredukowane są kolejnymi liczbami od zera w kolejności
+rosnących reprezentantów; klasy magnetyczne mają własną taką numerację.
+Kierunek i kolejność par nie zmieniają żadnej z map. Węzły niemagnetyczne
+zachowują sentinel `u32::MAX` w mapie magnetycznej; klasa łącząca węzły
+magnetyczne i powietrza pozostaje błędem. To indeksowanie jest bezwymiarowe.
+
+Ta reguła musi obowiązywać przed złożeniem operatorów i przed wiązaniem mapy
+z certyfikatem v6. `validate_modal_reduction_map` w
+`crates/fullmag-runner/src/fem/eigen_certificate.rs` pozostaje niezależną
+kontrolą zgodności; nie wolno go osłabiać ani permutować wyłącznie metadanych
+po złożeniu macierzy. Zmiana nie modyfikuje faz Floqueta, słabej postaci,
+jednostek SI, Python API, ProblemIR, schematu certyfikatu ani progów residualu.
+Dotyczy przygotowania map FEM CPU; nie stanowi dowodu wykonania FEM GPU,
+nie zmienia realizacji FDM CPU/GPU. Regresje źródłowe i niezależny replay
+siatki nie zastępują ponownego managed pilota Γ oraz niezerowego k.
+
 (implementation-mapping)=
 ### 4.4 Runtime lifecycle and provenance
 
@@ -1097,6 +1118,7 @@ visibility into runtime qualification.
 
 | Equation/claim | Lane | Repository path + stable symbol | Responsibility | Tests/evidence | Evidence status | Immutable link |
 |---|---|---|---|---|---|---|
+| Kanoniczna numeracja klas periodycznych | FEM CPU preparation | `crates/fullmag-runner/src/fem/eigen_shared_domain_geometry.rs` + `modal_shared_domain_equivalence_classes` | Minimum member representative; direction/order invariant magnetic and scalar maps. | `canonical_periodic_maps_are_pair_order_and_direction_invariant`; `scripts/replay_modal_periodic_reduction_maps.py` + `replay` | Source/replay only; managed runtime required | Pending scoped commit |
 | Certified static fields (source-certified-field-path-selector) | FEM CPU | `crates/fullmag-runner/src/types.rs` + `artifact_paths_for_material` | Select matching v1/v2 producer and consumer artifact paths | Source-only regressions prepared; native runtime pending | NOT VERIFIED | working tree |
 | Certified static fields (source-certified-field-bias-consumer) | FEM CPU | `crates/fullmag-runner/src/fem/eigen_execution.rs` + `execute_bias_field_sample_with_relaxation` | Consume the correct version in each independently relaxed bias-field sample | Source-only regressions prepared; native runtime pending | NOT VERIFIED | working tree |
 | Certified static fields (source-certified-field-stage-consumer) | FEM CPU | `crates/fullmag-cli/src/orchestrator.rs` + `run_script_mode` | Read material-matched field and refresh files in relax-to-eigen stage continuation | Source-only regressions prepared; native runtime pending | NOT VERIFIED | working tree |
