@@ -4661,3 +4661,20 @@ Kolejka wznowiona. Job193 / 19e798d5ff07454db64c90e63ba4f3a3 przyjęty queued
 z commita e78a25bac0f95c1190821524545803e4311b8ef9. Bez unit compilation.
 Toolchain diagnostic PASS; managed Fullmag receipt/ABI/solver jeszcze OPEN.
 Bieżące fullR4 i F01kwadratura są w lokalnym review, poza tą kapsułą.
+
+## R4/F01 — wyniki niezależnego review, 2026-10-01
+
+Audyt: `docs/audits/2026-10-01-r4-identity-and-quadrature-review.md`.
+Review potwierdziło lukę exact own identity preimage i brak kompletnego identity
+w non-shared Floquet. Otwarte są producer provenance importu, operator input
+signature oraz produkcyjne modal identity (damping/k/operator). Nie zastępujemy
+statycznego identity porównaniem raw damping relaksacji i eigen.
+
+F01: nested klucz może tłumić top-level provenance; poprawka jest w review,
+wymaga również obsługi pustego JSON z whitespace i przygotowanej regresji
+natywnej. Source-only Python nie dowodzi wykonania C++.
+
+Niezależny Python own preimage replay ma 9 grup regresji PASS, lecz pozostaje
+lokalnym przyrostem; publikacja sidecara i podłączenie pełnego replay do głównej
+bramki nadal OPEN. Runner zdrowy, aktywny #192, nasz #193 queued. Wymagany
+terminalny receipt oraz późniejszy build nowego spójnego SHA. S00–S12 zachowane.
