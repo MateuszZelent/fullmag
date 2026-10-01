@@ -245,9 +245,15 @@ istnienia wspólnej noty.
 (source-exact-oracle)=
 `independent_prism_exchange_exact_affine_oracle` is the independent affine oracle.
 
+(source-deformed-oracle)=
+`independent_deformed_prism_exchange_oracle` uses analytic prism shape gradients,
+the isoparametric Jacobian and independent Duffy/Gauss GL4/GL5/GL7 rules
+(points per axis); it is the high-order reference for warped prism6 validation.
+
 (source-native-regression)=
-The native test `main` contains MFEM positive-rule checks, the exact tetrahedral
-gradient oracle, rank, nullspace, hourglass, PSD, and frame checks.
+The native test `main` contains MFEM positive-rule checks, exact tetrahedral and
+deformed-prism gradient oracles, rank, nullspace, hourglass, PSD, Jacobian
+chain-rule, and orientation-preserving permutation checks.
 
 (source-math-proof)=
 The Python `main` runs the dependency-free rank proof.
@@ -258,11 +264,13 @@ The Python `main` runs the dependency-free rank proof.
 | exchange prism6 | `backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp` — `assemble_native_magnetic_a_qq` | transformacja gradientów i lokalny weak form |
 | digest quadrature | `backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp` — `assemble_poisson_airbox_shared_domain` | provenance operatora |
 | niezależna macierz exact | `backends/fem/tests/frequency_domain/poisson_airbox_shared_domain_test.cpp` — `independent_prism_exchange_exact_affine_oracle` | affine prism6 oracle bez MFEM rule/CalcPhysDShape |
+| zdeformowany prism oracle | `backends/fem/tests/frequency_domain/poisson_airbox_shared_domain_test.cpp` — `independent_deformed_prism_exchange_oracle` | niezależny Jacobian i Duffy/Gauss GL4/GL5/GL7, punkty na osi |
 | dowód matematyczny | `scripts/test_prism_exchange_quadrature.py` — `main` | rank, diagonal, nullspace i hourglass |
 | source-map exchange | `docs/physics/prism6-exchange-quadrature.md` — `DOC-ANCHOR:source-native-exchange` | stabilne mapowanie claimu exchange |
 | source-map quadrature | `docs/physics/prism6-exchange-quadrature.md` — `DOC-ANCHOR:source-quadrature-policy` | stabilne mapowanie polityki quadrature |
 | source-map digest | `docs/physics/prism6-exchange-quadrature.md` — `DOC-ANCHOR:source-shared-digest` | stabilne mapowanie provenance |
 | source-map oracle | `docs/physics/prism6-exchange-quadrature.md` — `DOC-ANCHOR:source-exact-oracle` | stabilne mapowanie niezależnej macierzy |
+| source-map deformed oracle | `docs/physics/prism6-exchange-quadrature.md` — `DOC-ANCHOR:source-deformed-oracle` | stabilne mapowanie niezależnej macierzy prism6 zdeformowanego |
 | source-map native regression | `docs/physics/prism6-exchange-quadrature.md` — `DOC-ANCHOR:source-native-regression` | stabilne mapowanie regresji native |
 | source-map math proof | `docs/physics/prism6-exchange-quadrature.md` — `DOC-ANCHOR:source-math-proof` | stabilne mapowanie checku Python |
 
@@ -302,13 +310,18 @@ niezależnej macierzy afinicznej i sprawdza:
 - PSD,
 - izolację węzłów powietrza,
 - zgodność po niezależnych obrotach baz stycznych.
+- dla zdeformowanego prism6: niezależne Duffy/Gauss GL4/GL5/GL7 (punkty na osi),
+  zbieżność do GL7, dodatni Jacobian, transformację `J^{-T}`, PSD, stały nullspace oraz
+  cycliczną permutację węzłów zachowującą orientację.
 
 Kompilacja i uruchomienie testu native są obecnie `NOT VERIFIED` zgodnie z
 polityką repozytorium zakazującą kompilacji testów jednostkowych.
 
 ### 9.3 Bramy pozostałe
 
-Runtime managed FEM CPU, deformed-prism order4→order5/7, zbieżność siatkowa,
+Runtime managed FEM CPU, uruchomienie przygotowanej regresji deformed-prism
+z niezależną referencją GL4→GL5→GL7, osobne porównanie produkcyjnych reguł
+MFEM order4→order5→order7 oraz zbieżność siatkowa,
 airbox convergence, porównanie z COMSOL oraz pełny nonzero-`k` eigen-solve są
 `NOT VERIFIED` i nie wynikają z tego przyrostu.
 
@@ -316,8 +329,10 @@ airbox convergence, porównanie z COMSOL oraz pełny nonzero-`k` eigen-solve są
 ## 10. Ograniczenia i prace odroczone
 
 - Nie wykonano native build/test ani runnera.
-- Nie potwierdzono zbieżności dla zdeformowanych prismów; order4 jest tylko
-  overintegration.
+- Regresja zdeformowanego prism6 i jej niezależna GL4→GL5→GL7 convergence są
+  przygotowane w źródle testu, ale nie zostały skompilowane ani uruchomione;
+  produkcyjne porównanie MFEM order4→order5→order7 pozostaje osobną bramką,
+  a MFEM order4 jest tylko overintegration.
 - Nie zmieniono i nie zwalidowano global map, nullspace gauge ani demag.
 - Nie wykonano runtime comparison z COMSOL/TetraX.
 - Jeśli w przyszłości quadrature stanie się publicznym parametrem, trzeba
@@ -353,7 +368,8 @@ airbox convergence, porównanie z COMSOL oraz pełny nonzero-`k` eigen-solve są
 | geometry-aware tet5/prism4 positive rule | `poisson_airbox_shared_domain.cpp` / `frequency_domain_p1_quadrature` | FEM CPU | źródło + digest |
 | affine rank/nullspace | `poisson_airbox_shared_domain_test.cpp` / `independent_prism_exchange_exact_affine_oracle` | FEM CPU | regresja przygotowana; native `NOT VERIFIED` |
 | rank3 vs rank5 | `scripts/test_prism_exchange_quadrature.py` / `main` | niezależny proof | wykonano, `PASS` |
-| deformed convergence | planowana brama order4/5/7 | FEM CPU | `NOT VERIFIED` |
+| deformed reference convergence | `poisson_airbox_shared_domain_test.cpp` / niezależny Duffy-Gauss GL4/GL5/GL7 | FEM CPU | przygotowane; native `NOT VERIFIED` |
+| production MFEM quadrature convergence | osobna bramka MFEM order4/5/7 względem niezależnej referencji | FEM CPU | `NOT VERIFIED` |
 | managed runtime / COMSOL | przyszły artefakt runnera | FEM CPU | `NOT VERIFIED` |
 
 Maszynowa mapa dokumentu znajduje się w

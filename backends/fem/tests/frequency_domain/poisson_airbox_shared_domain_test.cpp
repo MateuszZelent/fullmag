@@ -578,6 +578,262 @@ std::vector<double> independent_prism_exchange_exact_affine_oracle(
     return oracle;
 }
 
+struct IndependentPrismQuadraturePoint {
+    double xi;
+    double eta;
+    double zeta;
+    double weight;
+};
+
+std::vector<IndependentPrismQuadraturePoint> independent_prism_gauss_rule(
+    int point_count_per_axis)
+{
+    // Duffy map of a tensor-product Gauss-Legendre rule onto the reference
+    // triangle, then a second independent Gauss-Legendre rule on zeta.  The
+    // switch values are point counts per axis (GL4/GL5/GL7), not MFEM
+    // integration orders.  This deliberately does not consume mfem::IntRules
+    // or CalcPhysDShape.
+    static constexpr double kNodes4[] = {
+        0.06943184420297371, 0.33000947820757187,
+        0.66999052179242813, 0.93056815579702629};
+    static constexpr double kWeights4[] = {
+        0.17392742256872693, 0.32607257743127307,
+        0.32607257743127307, 0.17392742256872693};
+    static constexpr double kNodes5[] = {
+        0.04691007703066802, 0.23076534494715845, 0.5,
+        0.76923465505284155, 0.95308992296933198};
+    static constexpr double kWeights5[] = {
+        0.11846344252809454, 0.23931433524968324, 0.28444444444444444,
+        0.23931433524968324, 0.11846344252809454};
+    static constexpr double kNodes7[] = {
+        0.02544604382862074, 0.12923440720030277, 0.29707742431130138,
+        0.5, 0.70292257568869862, 0.87076559279969723,
+        0.97455395617137926};
+    static constexpr double kWeights7[] = {
+        0.06474248308443485, 0.13985269574463834, 0.19091502525255947,
+        0.20897959183673469, 0.19091502525255947, 0.13985269574463834,
+        0.06474248308443485};
+
+    const double *nodes = nullptr;
+    const double *weights = nullptr;
+    int point_count = 0;
+    switch (point_count_per_axis) {
+    case 4:
+        nodes = kNodes4;
+        weights = kWeights4;
+        point_count = 4;
+        break;
+    case 5:
+        nodes = kNodes5;
+        weights = kWeights5;
+        point_count = 5;
+        break;
+    case 7:
+        nodes = kNodes7;
+        weights = kWeights7;
+        point_count = 7;
+        break;
+    default:
+        check(false,
+              "independent prism GL reference supports only 4, 5, and 7 points per axis");
+    }
+
+    std::vector<IndependentPrismQuadraturePoint> points;
+    points.reserve(static_cast<std::size_t>(point_count * point_count * point_count));
+    for (int xi_index = 0; xi_index < point_count; ++xi_index) {
+        const double xi = nodes[xi_index];
+        for (int eta_index = 0; eta_index < point_count; ++eta_index) {
+            const double eta = (1.0 - xi) * nodes[eta_index];
+            for (int zeta_index = 0; zeta_index < point_count; ++zeta_index) {
+                points.push_back({
+                    xi,
+                    eta,
+                    nodes[zeta_index],
+                    weights[xi_index] * weights[eta_index] *
+                        weights[zeta_index] * (1.0 - xi)});
+            }
+        }
+    }
+    return points;
+}
+
+void prism_reference_shape_gradients(
+    double xi,
+    double eta,
+    double zeta,
+    double gradients[6][3])
+{
+    gradients[0][0] = -(1.0 - zeta);
+    gradients[0][1] = -(1.0 - zeta);
+    gradients[0][2] = -(1.0 - xi - eta);
+    gradients[1][0] = 1.0 - zeta;
+    gradients[1][1] = 0.0;
+    gradients[1][2] = -xi;
+    gradients[2][0] = 0.0;
+    gradients[2][1] = 1.0 - zeta;
+    gradients[2][2] = -eta;
+    gradients[3][0] = -zeta;
+    gradients[3][1] = -zeta;
+    gradients[3][2] = 1.0 - xi - eta;
+    gradients[4][0] = zeta;
+    gradients[4][1] = 0.0;
+    gradients[4][2] = xi;
+    gradients[5][0] = 0.0;
+    gradients[5][1] = zeta;
+    gradients[5][2] = eta;
+}
+
+void deformed_prism_jacobian(
+    const mfem::Mesh &mesh,
+    const mfem::Array<int> &vertices,
+    const double shape_gradients[6][3],
+    double jacobian[3][3])
+{
+    check(vertices.Size() == 6,
+          "deformed prism oracle requires six ordered wedge vertices");
+    for (int axis = 0; axis < 3; ++axis) {
+        for (int reference_axis = 0; reference_axis < 3; ++reference_axis) {
+            jacobian[axis][reference_axis] = 0.0;
+        }
+    }
+    for (int local = 0; local < 6; ++local) {
+        const double *vertex = mesh.GetVertex(vertices[local]);
+        for (int axis = 0; axis < 3; ++axis) {
+            for (int reference_axis = 0; reference_axis < 3; ++reference_axis) {
+                jacobian[axis][reference_axis] +=
+                    vertex[axis] * shape_gradients[local][reference_axis];
+            }
+        }
+    }
+}
+
+std::vector<double> independent_deformed_prism_exchange_oracle(
+    mfem::FiniteElementSpace &scalar_space,
+    const std::vector<std::uint8_t> &magnetic_elements,
+    const std::vector<double> &tangent_frames,
+    double exchange_stiffness,
+    std::uint64_t node_count,
+    int gauss_points_per_axis)
+{
+    const std::uint64_t q_count = 2u * node_count;
+    std::vector<double> oracle(static_cast<std::size_t>(q_count * q_count), 0.0);
+    mfem::Mesh *mesh = scalar_space.GetMesh();
+    check(mesh != nullptr, "deformed prism oracle requires an MFEM mesh");
+    check(magnetic_elements.size() == static_cast<std::size_t>(mesh->GetNE()),
+          "deformed prism oracle requires one mask entry per element");
+    check(tangent_frames.size() == static_cast<std::size_t>(6u * node_count),
+          "deformed prism oracle requires two three-vector frames per node");
+
+    const std::vector<IndependentPrismQuadraturePoint> quadrature =
+        independent_prism_gauss_rule(gauss_points_per_axis);
+    for (int element = 0; element < mesh->GetNE(); ++element) {
+        if (magnetic_elements[static_cast<std::size_t>(element)] == 0u) {
+            continue;
+        }
+        mfem::Array<int> dofs;
+        mfem::Array<int> vertices;
+        scalar_space.GetElementDofs(element, dofs);
+        mesh->GetElementVertices(element, vertices);
+        const mfem::FiniteElement *finite_element = scalar_space.GetFE(element);
+        check(dofs.Size() == 6 && vertices.Size() == 6 && finite_element != nullptr &&
+                  finite_element->GetGeomType() == mfem::Geometry::PRISM &&
+                  finite_element->GetOrder() == 1,
+              "deformed prism oracle requires P1 prism6 elements");
+
+        for (const IndependentPrismQuadraturePoint &point : quadrature) {
+            double reference_gradients[6][3]{};
+            prism_reference_shape_gradients(
+                point.xi, point.eta, point.zeta, reference_gradients);
+            double jacobian[3][3]{};
+            deformed_prism_jacobian(*mesh, vertices, reference_gradients, jacobian);
+            double inverse_jacobian[3][3]{};
+            double determinant = 0.0;
+            invert_3x3(jacobian, inverse_jacobian, &determinant);
+            check(std::isfinite(determinant) && determinant > 0.0,
+                  "deformed prism oracle requires positive Jacobian orientation");
+            const double physical_weight = determinant * point.weight;
+            check(std::isfinite(physical_weight) && physical_weight > 0.0,
+                  "deformed prism oracle requires a finite positive physical weight");
+
+            double physical_gradients[6][3]{};
+            for (int local = 0; local < 6; ++local) {
+                for (int axis = 0; axis < 3; ++axis) {
+                    for (int reference_axis = 0; reference_axis < 3;
+                         ++reference_axis) {
+                        physical_gradients[local][axis] +=
+                            reference_gradients[local][reference_axis] *
+                            inverse_jacobian[reference_axis][axis];
+                    }
+                }
+                for (int reference_axis = 0; reference_axis < 3; ++reference_axis) {
+                    double reconstructed = 0.0;
+                    for (int axis = 0; axis < 3; ++axis) {
+                        reconstructed += physical_gradients[local][axis] *
+                            jacobian[axis][reference_axis];
+                    }
+                    check(std::abs(reconstructed -
+                                   reference_gradients[local][reference_axis]) <= 1.0e-11,
+                          "deformed prism oracle must satisfy J-transpose gradient transform");
+                }
+            }
+
+            for (int local_row = 0; local_row < 6; ++local_row) {
+                const std::uint64_t row_node = static_cast<std::uint64_t>(
+                    dofs[local_row] >= 0 ? dofs[local_row] : -1 - dofs[local_row]);
+                const double row_sign = dofs[local_row] >= 0 ? 1.0 : -1.0;
+                check(row_node < node_count,
+                      "deformed prism oracle row dof must be in the node range");
+                for (int local_column = 0; local_column < 6; ++local_column) {
+                    const std::uint64_t column_node = static_cast<std::uint64_t>(
+                        dofs[local_column] >= 0 ? dofs[local_column] : -1 - dofs[local_column]);
+                    const double column_sign = dofs[local_column] >= 0 ? 1.0 : -1.0;
+                    check(column_node < node_count,
+                          "deformed prism oracle column dof must be in the node range");
+                    double gradient_dot = 0.0;
+                    for (int axis = 0; axis < 3; ++axis) {
+                        gradient_dot += physical_gradients[local_row][axis] *
+                            physical_gradients[local_column][axis];
+                    }
+                    const double coefficient = row_sign * column_sign * 2.0 *
+                        exchange_stiffness * gradient_dot * physical_weight;
+                    for (std::uint32_t row_component = 0; row_component < 2u;
+                         ++row_component) {
+                        const double *row_frame = &tangent_frames[
+                            static_cast<std::size_t>(
+                                6u * row_node + 3u * row_component)];
+                        for (std::uint32_t column_component = 0; column_component < 2u;
+                             ++column_component) {
+                            const double *column_frame = &tangent_frames[
+                                static_cast<std::size_t>(
+                                    6u * column_node + 3u * column_component)];
+                            const double frame_dot = row_frame[0] * column_frame[0] +
+                                row_frame[1] * column_frame[1] +
+                                row_frame[2] * column_frame[2];
+                            oracle[static_cast<std::size_t>(
+                                (2u * row_node + row_component) * q_count +
+                                2u * column_node + column_component)] +=
+                                coefficient * frame_dot;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return oracle;
+}
+
+double dense_matrix_max_difference(
+    const std::vector<double> &left,
+    const std::vector<double> &right)
+{
+    check(left.size() == right.size(), "dense matrix comparison requires equal sizes");
+    double maximum = 0.0;
+    for (std::size_t index = 0u; index < left.size(); ++index) {
+        maximum = std::max(maximum, std::abs(left[index] - right[index]));
+    }
+    return maximum;
+}
+
 } // namespace
 
 int main()
@@ -594,10 +850,11 @@ int main()
     mfem::H1_FECollection collection(1, mesh.Dimension());
     mfem::FiniteElementSpace scalar_space(&mesh, &collection);
 
-    // MFEM v4.7's tetrahedron order-4 rule is not admissible for the native
-    // exchange producer: it contains a negative weight.  Keep this explicit
-    // regression beside the independent affine-tetrahedron gradient oracle
-    // below so a future policy change cannot silently reintroduce it.
+    // MFEM v4.7's tetrahedron order-4 rule was not admissible for the native
+    // exchange producer because it contained a negative weight.  Keep both
+    // the diagnostic rule and the selected positive order5 rule available
+    // beside the independent affine-tetrahedron gradient oracle below.  Do
+    // not hardcode point counts here: MFEM 4.10 changed simplex rules.
     const mfem::IntegrationRule &tetra_order4 =
         mfem::IntRules.Get(mfem::Geometry::TETRAHEDRON, 4);
     check(tetra_order4.GetNPoints() > 0,
@@ -1190,6 +1447,210 @@ int main()
                   "air tet4 nodes remain isolated from native magnetic A_qq");
         }
     }
+
+    // A warped prism exercises the variable Jacobian of the isoparametric
+    // wedge.  The independent oracle below uses analytic prism gradients and
+    // its own Duffy/Gauss GL4/GL5/GL7 rule (points per axis); it never consumes
+    // MFEM's integration rule or CalcPhysDShape.  The producer remains MFEM
+    // order4, while GL7 is used only as a high-order independent reference.
+    const double deformed_prism_vertices[][3] = {
+        {0.0, 0.0, 0.0}, {2.0, 0.0, 0.0}, {0.2, 1.4, 0.0},
+        {0.15, 0.10, 1.0}, {2.4, 0.2, 1.15}, {0.0, 1.6, 0.85},
+    };
+    const auto make_deformed_prism_mesh = [&](bool cyclic_local_order) {
+        std::unique_ptr<mfem::Mesh> result(new mfem::Mesh(3, 6, 1, 0, 3));
+        for (const auto &vertex : deformed_prism_vertices) {
+            result->AddVertex(vertex);
+        }
+        const int standard_wedge[] = {0, 1, 2, 3, 4, 5};
+        const int cyclic_wedge[] = {1, 2, 0, 4, 5, 3};
+        result->AddWedge(cyclic_local_order ? cyclic_wedge : standard_wedge, 1);
+        result->FinalizeTopology();
+        result->Finalize(false, true);
+        return result;
+    };
+
+    std::unique_ptr<mfem::Mesh> deformed_prism_mesh = make_deformed_prism_mesh(false);
+    mfem::H1_FECollection deformed_prism_collection(1, deformed_prism_mesh->Dimension());
+    mfem::FiniteElementSpace deformed_prism_scalar_space(
+        deformed_prism_mesh.get(), &deformed_prism_collection);
+    const std::uint64_t deformed_prism_node_count =
+        static_cast<std::uint64_t>(deformed_prism_scalar_space.GetVSize());
+    check(deformed_prism_node_count == 6u,
+          "deformed prism fixture must contain six P1 scalar nodes");
+    const std::vector<std::uint8_t> deformed_prism_elements = {1u};
+    NativeExchangeDescriptorFixture deformed_prism_descriptor(
+        deformed_prism_node_count);
+    fd::PoissonAirboxSharedDomainCsrMatrix deformed_prism_a_qq{};
+    check(fd::assemble_native_magnetic_a_qq(
+              deformed_prism_descriptor.descriptor,
+              &deformed_prism_scalar_space,
+              deformed_prism_elements.data(),
+              deformed_prism_elements.size(),
+              &deformed_prism_a_qq,
+              producer_error,
+              nullptr,
+              deformed_prism_descriptor.tangent_frames.data(),
+              deformed_prism_descriptor.tangent_frames.size()) == fd::FrequencyDomainStatus::ok,
+          producer_error);
+    const std::uint64_t deformed_prism_q_count =
+        2u * deformed_prism_node_count;
+    std::vector<double> deformed_prism_native_dense(
+        static_cast<std::size_t>(deformed_prism_q_count * deformed_prism_q_count), 0.0);
+    for (std::uint64_t row = 0u; row < deformed_prism_q_count; ++row) {
+        for (std::uint64_t column = 0u; column < deformed_prism_q_count; ++column) {
+            deformed_prism_native_dense[static_cast<std::size_t>(
+                row * deformed_prism_q_count + column)] =
+                matrix_value(deformed_prism_a_qq, row, column);
+        }
+    }
+    const std::vector<double> deformed_prism_gl4 =
+        independent_deformed_prism_exchange_oracle(
+            deformed_prism_scalar_space,
+            deformed_prism_elements,
+            deformed_prism_descriptor.tangent_frame_xyz,
+            deformed_prism_descriptor.exchange_edge.stiffness,
+            deformed_prism_node_count,
+            4);
+    const std::vector<double> deformed_prism_gl5 =
+        independent_deformed_prism_exchange_oracle(
+            deformed_prism_scalar_space,
+            deformed_prism_elements,
+            deformed_prism_descriptor.tangent_frame_xyz,
+            deformed_prism_descriptor.exchange_edge.stiffness,
+            deformed_prism_node_count,
+            5);
+    const std::vector<double> deformed_prism_gl7 =
+        independent_deformed_prism_exchange_oracle(
+            deformed_prism_scalar_space,
+            deformed_prism_elements,
+            deformed_prism_descriptor.tangent_frame_xyz,
+            deformed_prism_descriptor.exchange_edge.stiffness,
+            deformed_prism_node_count,
+            7);
+
+    const auto check_deformed_prism_matrix = [&](const std::vector<double> &matrix,
+                                                 const char *label) {
+        check(matrix.size() == static_cast<std::size_t>(
+                                  deformed_prism_q_count * deformed_prism_q_count),
+              "deformed prism matrix has the expected dense dimensions");
+        double scale = 0.0;
+        double symmetry_error = 0.0;
+        for (std::uint64_t row = 0u; row < deformed_prism_q_count; ++row) {
+            for (std::uint64_t column = 0u; column < deformed_prism_q_count; ++column) {
+                const double value = matrix[static_cast<std::size_t>(
+                    row * deformed_prism_q_count + column)];
+                const double transpose = matrix[static_cast<std::size_t>(
+                    column * deformed_prism_q_count + row)];
+                check(std::isfinite(value), "deformed prism matrix must be finite");
+                scale = std::max(scale, std::abs(value));
+                symmetry_error = std::max(symmetry_error, std::abs(value - transpose));
+            }
+        }
+        check(scale > 0.0, "deformed prism matrix must be nonzero");
+        check(symmetry_error <= 1.0e-11 * scale,
+              "deformed prism exchange matrix must be symmetric");
+        check(numerical_rank(matrix, static_cast<std::size_t>(deformed_prism_q_count)) == 10u,
+              label);
+        double constant_residual = 0.0;
+        for (std::uint64_t component = 0u; component < 2u; ++component) {
+            for (std::uint64_t row = 0u; row < deformed_prism_q_count; ++row) {
+                double action = 0.0;
+                for (std::uint64_t node = 0u; node < deformed_prism_node_count; ++node) {
+                    action += matrix[static_cast<std::size_t>(
+                        row * deformed_prism_q_count + 2u * node + component)];
+                }
+                constant_residual = std::max(constant_residual, std::abs(action));
+            }
+        }
+        check(constant_residual <= 1.0e-10 * scale,
+              "deformed prism constant tangent perturbations must remain in the exchange nullspace");
+        double energy = 0.0;
+        for (std::uint64_t row = 0u; row < deformed_prism_q_count; ++row) {
+            const double row_value = std::sin(0.17 * static_cast<double>(row + 1u)) +
+                0.29 * std::cos(0.41 * static_cast<double>(row + 2u));
+            for (std::uint64_t column = 0u; column < deformed_prism_q_count; ++column) {
+                const double column_value = std::sin(0.17 * static_cast<double>(column + 1u)) +
+                    0.29 * std::cos(0.41 * static_cast<double>(column + 2u));
+                energy += row_value * matrix[static_cast<std::size_t>(
+                    row * deformed_prism_q_count + column)] * column_value;
+            }
+        }
+        check(energy >= -1.0e-10 * scale,
+              "deformed prism exchange matrix must be positive semidefinite");
+    };
+    check_deformed_prism_matrix(deformed_prism_native_dense,
+                                "native deformed prism exchange must have rank ten");
+    check_deformed_prism_matrix(deformed_prism_gl4,
+                                "independent deformed prism GL4 oracle must have rank ten");
+    check_deformed_prism_matrix(deformed_prism_gl5,
+                                "independent deformed prism GL5 oracle must have rank ten");
+    check_deformed_prism_matrix(deformed_prism_gl7,
+                                "independent deformed prism GL7 oracle must have rank ten");
+
+    const double gl4_gl5_error = dense_matrix_max_difference(
+        deformed_prism_gl4, deformed_prism_gl5);
+    const double gl5_gl7_error = dense_matrix_max_difference(
+        deformed_prism_gl5, deformed_prism_gl7);
+    const double gl7_scale = *std::max_element(
+        deformed_prism_gl7.begin(), deformed_prism_gl7.end(),
+        [](double left, double right) { return std::abs(left) < std::abs(right); });
+    check(gl4_gl5_error > 1.0e-10,
+          "deformed prism fixture must exercise non-affine quadrature sensitivity");
+    check(gl5_gl7_error < gl4_gl5_error,
+          "deformed prism reference GL quadrature must converge from GL4 through GL5 to GL7");
+    check(dense_matrix_max_difference(deformed_prism_native_dense, deformed_prism_gl7) <=
+              5.0e-5 * std::max(1.0, std::abs(gl7_scale)),
+          "native MFEM prism order4 must agree with the independent GL7 reference");
+
+    // A cyclic local permutation preserves the wedge orientation.  It must
+    // not change the global matrix because the global vertex IDs and physical
+    // coordinates are unchanged; a reversed permutation is deliberately not
+    // admitted because it would create a negative physical Jacobian.
+    std::unique_ptr<mfem::Mesh> permuted_deformed_prism_mesh =
+        make_deformed_prism_mesh(true);
+    mfem::H1_FECollection permuted_deformed_prism_collection(
+        1, permuted_deformed_prism_mesh->Dimension());
+    mfem::FiniteElementSpace permuted_deformed_prism_scalar_space(
+        permuted_deformed_prism_mesh.get(), &permuted_deformed_prism_collection);
+    NativeExchangeDescriptorFixture permuted_deformed_prism_descriptor(
+        deformed_prism_node_count);
+    fd::PoissonAirboxSharedDomainCsrMatrix permuted_deformed_prism_a_qq{};
+    check(fd::assemble_native_magnetic_a_qq(
+              permuted_deformed_prism_descriptor.descriptor,
+              &permuted_deformed_prism_scalar_space,
+              deformed_prism_elements.data(),
+              deformed_prism_elements.size(),
+              &permuted_deformed_prism_a_qq,
+              producer_error,
+              nullptr,
+              permuted_deformed_prism_descriptor.tangent_frames.data(),
+              permuted_deformed_prism_descriptor.tangent_frames.size()) ==
+              fd::FrequencyDomainStatus::ok,
+          producer_error);
+    std::vector<double> permuted_deformed_prism_dense(
+        static_cast<std::size_t>(deformed_prism_q_count * deformed_prism_q_count), 0.0);
+    for (std::uint64_t row = 0u; row < deformed_prism_q_count; ++row) {
+        for (std::uint64_t column = 0u; column < deformed_prism_q_count; ++column) {
+            permuted_deformed_prism_dense[static_cast<std::size_t>(
+                row * deformed_prism_q_count + column)] =
+                matrix_value(permuted_deformed_prism_a_qq, row, column);
+        }
+    }
+    check(dense_matrix_max_difference(
+              deformed_prism_native_dense, permuted_deformed_prism_dense) <= 1.0e-11,
+          "orientation-preserving prism vertex permutation must preserve the global exchange matrix");
+    const std::vector<double> permuted_deformed_prism_gl7 =
+        independent_deformed_prism_exchange_oracle(
+            permuted_deformed_prism_scalar_space,
+            deformed_prism_elements,
+            permuted_deformed_prism_descriptor.tangent_frame_xyz,
+            permuted_deformed_prism_descriptor.exchange_edge.stiffness,
+            deformed_prism_node_count,
+            7);
+    check(dense_matrix_max_difference(deformed_prism_gl7,
+                                      permuted_deformed_prism_gl7) <= 1.0e-11,
+          "independent GL7 oracle must preserve an orientation-safe prism permutation");
 
     // Magnetic P1 pyramid5 and every non-P1 magnetic geometry are outside
     // the bounded N1a exchange scope and must reject without conversion.

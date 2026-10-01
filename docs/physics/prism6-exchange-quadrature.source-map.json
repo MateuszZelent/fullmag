@@ -31,12 +31,12 @@
     {
       "id": "eq-prism6-exchange-energy",
       "symbols": ["Eex", "Aex", "m"],
-      "sources": ["source-native-exchange", "source-exact-oracle"]
+      "sources": ["source-native-exchange", "source-exact-oracle", "source-deformed-oracle"]
     },
     {
       "id": "eq-prism6-exchange-local",
       "symbols": ["Kijcd", "Aex", "ec", "Ni", "K"],
-      "sources": ["source-native-exchange", "source-exact-oracle"]
+      "sources": ["source-native-exchange", "source-exact-oracle", "source-deformed-oracle"]
     },
     {
       "id": "eq-prism6-gradient-transform",
@@ -159,11 +159,18 @@
       "responsibility": "Build an independent affine prism6 matrix from analytic gradients and a six-point rule."
     },
     {
+      "id": "source-deformed-oracle",
+      "path": "docs/physics/prism6-exchange-quadrature.md",
+      "symbol": "DOC-ANCHOR:source-deformed-oracle",
+      "evidence_status": "planned_contract",
+      "responsibility": "Build an independent warped-prism matrix from analytic isoparametric gradients and Duffy/Gauss GL4/GL5/GL7 rules, where the number denotes points per axis rather than MFEM integration order."
+    },
+    {
       "id": "source-native-regression",
       "path": "docs/physics/prism6-exchange-quadrature.md",
       "symbol": "DOC-ANCHOR:source-native-regression",
       "evidence_status": "planned_contract",
-      "responsibility": "Prepare MFEM positive-rule, exact tetra-gradient, rank, nullspace, hourglass, PSD, air-isolation, and tangent-basis regression checks."
+      "responsibility": "Prepare MFEM positive-rule, exact tetra-gradient, independent deformed-prism Duffy/Gauss GL4/GL5/GL7, Jacobian-chain, rank, nullspace, hourglass, PSD, air-isolation, permutation, and tangent-basis regression checks; production MFEM order4/5/7 convergence remains a separate gate."
     },
     {
       "id": "source-math-proof",
