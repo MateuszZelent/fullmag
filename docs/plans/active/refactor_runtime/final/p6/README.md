@@ -216,3 +216,7 @@ pamięci i wszystkich lane'ów pozostają otwarte. P6 wynosi **52%**.
 56. [Exact source reader zapisanego snapshotu](56-exact-saved-snapshot-reader.md)
     — historyczny owner/source i pełny hash tensora względem native receiptu;
     źródła PASS, runtime/map/API/renderer otwarte.
+
+57. [Natywna mapa indeksów lokalnych FEM](57-native-local-node-index-map.md)
+    — actual vertex DOF guard i handle-bound MFEM/core map w source CAS;
+    native compilation/runtime, geometry/API/renderer otwarte.

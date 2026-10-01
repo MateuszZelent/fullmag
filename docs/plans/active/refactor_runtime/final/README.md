@@ -15,6 +15,11 @@ dlatego nie podnosi procentów P3/P5.
 
 ## Dokumenty finalne
 
+Checkpoint 01.10.2026: [P6-57 — natywna mapa lokalnych indeksów](p6/57-native-local-node-index-map.md)
+rozdziela MFEM local/true DOF i core periodic classes; source CAS zachowuje
+actual map powiązaną z finalnym polem. Native compilation/runtime i renderer
+pozostają otwarte. P6 około 52%, cały plan około 49%.
+
 Checkpoint 01.10.2026: [P6-56 — exact reader zapisanego snapshotu](p6/56-exact-saved-snapshot-reader.md)
 wiąże historyczny source CAS z pełnym hashem tensora. Produkcyjne źródła PASS;
 native build 189 czeka na zakończenie aktywnego kontenera dyspersji.

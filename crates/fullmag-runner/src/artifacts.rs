@@ -1996,6 +1996,7 @@ pub(crate) fn write_artifacts(
         executed,
         &mut final_stats,
     )?;
+    let final_node_map = final_native_node_map(executed, final_snapshot_receipt.as_ref())?;
     write_field_file_with_native_snapshot(
         &output_dir.join("m_final.json"),
         &field_context,
@@ -2006,6 +2007,7 @@ pub(crate) fn write_artifacts(
         final_stats.dt,
         &executed.result.final_magnetization,
         final_snapshot_receipt.as_ref(),
+        final_node_map.as_ref(),
     )?;
 
     if streamed.is_none() {
@@ -4438,6 +4440,36 @@ fn final_native_snapshot_receipt(
     stats.dt = receipt.snapshot_solver_dt_s;
     Ok(Some(receipt))
 }
+fn final_native_node_map(
+    executed: &ExecutedRun,
+    receipt: Option<&fullmag_quantities::fem_state_snapshot_receipt::FemLocalNodeSnapshotReceipt>,
+) -> std::io::Result<Option<fullmag_quantities::fem_local_node_map::FemLocalNodeIndexMap>> {
+    use fullmag_quantities::fem_local_node_map::{
+        parse_fem_local_node_map, FEM_FINAL_NODE_MAP_ARTIFACT,
+    };
+    let mut artifacts = executed
+        .auxiliary_artifacts
+        .iter()
+        .filter(|artifact| artifact.relative_path == FEM_FINAL_NODE_MAP_ARTIFACT);
+    let map = artifacts
+        .next()
+        .map(|artifact| parse_fem_local_node_map(&artifact.bytes))
+        .transpose()
+        .map_err(|message| Error::new(ErrorKind::InvalidData, message))?;
+    if artifacts.next().is_some() || (map.is_some() && receipt.is_none()) {
+        return Err(Error::new(
+            ErrorKind::InvalidData,
+            "ambiguous or unbound final FEM node map",
+        ));
+    }
+    if let Some(receipt) = receipt {
+        receipt
+            .validate_node_map(map.as_ref())
+            .map_err(|message| Error::new(ErrorKind::InvalidData, message))?;
+    }
+    Ok(map)
+}
+
 pub(crate) fn write_field_file(
     path: &Path,
     context: &FieldArtifactContext,
@@ -4448,7 +4480,7 @@ pub(crate) fn write_field_file(
     solver_dt: f64,
     values: &[[f64; 3]],
 ) -> std::io::Result<()> {
-    write_field_file_with_native_snapshot(path, context, provenance, observable, step, time, solver_dt, values, None)
+    write_field_file_with_native_snapshot(path, context, provenance, observable, step, time, solver_dt, values, None, None)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -4461,7 +4493,10 @@ fn write_field_file_with_native_snapshot(
     time: f64,
     solver_dt: f64,
     values: &[[f64; 3]],
-    snapshot_receipt: Option<&fullmag_quantities::fem_state_snapshot_receipt::FemLocalNodeSnapshotReceipt>,
+    snapshot_receipt: Option<
+        &fullmag_quantities::fem_state_snapshot_receipt::FemLocalNodeSnapshotReceipt,
+    >,
+    node_map: Option<&fullmag_quantities::fem_local_node_map::FemLocalNodeIndexMap>,
 ) -> std::io::Result<()> {
     let mut layout = context.layout.clone();
     if observable == "m" {
@@ -4518,15 +4553,46 @@ fn write_field_file_with_native_snapshot(
     });
     if let Some(receipt) = snapshot_receipt {
         if observable != "m"
-            || context.layout.get("backend").and_then(serde_json::Value::as_str) != Some("fem")
-            || !matches!(provenance.execution_engine.as_str(), "fem_cpu_native" | "fem_native_gpu")
+            || context
+                .layout
+                .get("backend")
+                .and_then(serde_json::Value::as_str)
+                != Some("fem")
+            || !matches!(
+                provenance.execution_engine.as_str(),
+                "fem_cpu_native" | "fem_native_gpu"
+            )
         {
-            return Err(Error::new(ErrorKind::InvalidData, "native state receipt requires native FEM m output"));
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                "native state receipt requires native FEM m output",
+            ));
         }
-        receipt.validate_snapshot(step, time, solver_dt, values)
+        receipt
+            .validate_snapshot(step, time, solver_dt, values)
             .map_err(|message| Error::new(ErrorKind::InvalidData, message))?;
-        field_json.as_object_mut().expect("field artifact is an object")
-            .insert("native_state_snapshot".into(), serde_json::to_value(receipt)?);
+        receipt
+            .validate_node_map(node_map)
+            .map_err(|message| Error::new(ErrorKind::InvalidData, message))?;
+        field_json
+            .as_object_mut()
+            .expect("field artifact is an object")
+            .insert(
+                "native_state_snapshot".into(),
+                serde_json::to_value(receipt)?,
+            );
+    }
+    if let Some(map) = node_map {
+        if snapshot_receipt.is_none() {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                "native node map requires snapshot receipt",
+            ));
+        }
+        field_json
+            .as_object_mut()
+            .expect("field artifact is an object")
+            .insert("native_node_map".into(), serde_json::to_value(map)?);
     }
     if observable == "m" {
         let layout = field_json.get("layout").ok_or_else(|| {
@@ -4561,7 +4627,40 @@ fn write_field_file_with_native_snapshot(
                 }),
             );
     }
+    if node_map.is_some() {
+        validate_mapped_state_byte_budget(
+            &field_json,
+            fullmag_quantities::fem_local_node_map::MAX_FEM_MAPPED_STATE_JSON_BYTES,
+        )?;
+    }
     fs::write(path, serde_json::to_string_pretty(&field_json).unwrap())
+}
+
+fn validate_mapped_state_byte_budget(
+    value: &serde_json::Value,
+    max_bytes: usize,
+) -> std::io::Result<()> {
+    struct Budget {
+        used: usize,
+        max_bytes: usize,
+    }
+    impl std::io::Write for Budget {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            if bytes.len() > self.max_bytes.saturating_sub(self.used) {
+                return Err(Error::new(
+                    ErrorKind::InvalidData,
+                    "mapped native FEM state exceeds the shared source JSON budget",
+                ));
+            }
+            self.used += bytes.len();
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    serde_json::to_writer_pretty(Budget { used: 0, max_bytes }, value)
+        .map_err(|error| Error::new(ErrorKind::InvalidData, error))
 }
 
 #[derive(Debug, Clone)]
@@ -6882,6 +6981,25 @@ mod tests {
         assert_eq!((stats.step, stats.time, stats.dt), (9, 0.9, 0.1));
         assert!(context.layout.get("native_state_snapshot").is_none());
         assert_eq!(captured.unwrap(), receipt);
+        {
+            use fullmag_quantities::fem_local_node_map::{FemLocalNodeIndexMap, FEM_LOCAL_NODE_MAP_SCHEMA, FEM_FINAL_NODE_MAP_ARTIFACT};
+            let map = FemLocalNodeIndexMap { schema_version: FEM_LOCAL_NODE_MAP_SCHEMA.into(), local_node_count: 4,
+                mfem_local_dof_count: 4, mfem_true_dof_count: 4, core_periodic_class_count: 2,
+                core_periodic_map_revision: 13, canonical_node_to_mfem_local_dof: vec![0,1,2,3],
+                local_node_to_core_class: vec![0,1,0,1], core_class_representatives: vec![0,1] };
+            let mut bound_receipt = receipt.clone();
+            bound_receipt.native_node_map_sha256 = Some(map.content_sha256().unwrap());
+            assert!(final_native_node_map(&executed, Some(&bound_receipt)).is_err());
+            let mut mapped = executed.clone();
+            mapped.auxiliary_artifacts.push(crate::types::AuxiliaryArtifact {
+                relative_path: FEM_FINAL_NODE_MAP_ARTIFACT.into(), bytes: serde_json::to_vec(&map).unwrap(),
+            });
+            assert_eq!(final_native_node_map(&mapped, Some(&bound_receipt)).unwrap(), Some(map));
+            assert!(final_native_node_map(&mapped, None).is_err());
+            assert!(final_native_node_map(&mapped, Some(&receipt)).is_err());
+            mapped.auxiliary_artifacts.push(mapped.auxiliary_artifacts.last().unwrap().clone());
+            assert!(final_native_node_map(&mapped, Some(&bound_receipt)).is_err());
+        }
         let mut invalid = executed.clone();
         invalid.result.final_magnetization[0][0] = 0.5;
         assert!(final_native_snapshot_receipt(&context, &invalid, &mut stats).is_err());
@@ -6897,6 +7015,18 @@ mod tests {
         invalid.auxiliary_artifacts.clear();
         let legacy = final_native_snapshot_receipt(&context, &invalid, &mut stats).unwrap();
         assert!(legacy.is_none());
+    }
+
+    #[test]
+    fn mapped_source_budget_covers_values_map_and_metadata_together() {
+        let value = serde_json::json!({ "values": [[1.0, 0.0, 0.0]],
+            "native_node_map": { "canonical_node_to_mfem_local_dof": [0] },
+            "state_identity": { "backend": "fem" } });
+        let length = serde_json::to_vec_pretty(&value).unwrap().len();
+        validate_mapped_state_byte_budget(&value, length).unwrap();
+        assert!(validate_mapped_state_byte_budget(&value, length - 1).is_err());
+        assert!(serde_json::to_vec_pretty(&value["values"]).unwrap().len() < length - 1);
+        assert!(serde_json::to_vec_pretty(&value["native_node_map"]).unwrap().len() < length - 1);
     }
 
     fn write_final_execution_test_metadata(

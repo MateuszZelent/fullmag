@@ -22,9 +22,28 @@ pub struct FemLocalNodeSnapshotReceipt {
     /// This is also the byte ordering used by the derived durable tensor.
     pub values_sha256: String,
     pub representation: FemRepresentationReceipt,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_node_map_sha256: Option<String>,
 }
 
 impl FemLocalNodeSnapshotReceipt {
+    pub fn validate_node_map(
+        &self,
+        map: Option<&crate::fem_local_node_map::FemLocalNodeIndexMap>,
+    ) -> Result<(), String> {
+        match (&self.native_node_map_sha256, map) {
+            (None, None) => Ok(()),
+            (Some(expected), Some(map)) => {
+                map.validate_representation(&self.representation)?;
+                if &map.content_sha256()? != expected {
+                    return Err("native FEM node map digest differs from snapshot receipt".into());
+                }
+                Ok(())
+            }
+            _ => Err("native FEM snapshot receipt and node map must be present together".into()),
+        }
+    }
+
     pub fn capture(
         step: u64,
         time_s: f64,
@@ -39,6 +58,7 @@ impl FemLocalNodeSnapshotReceipt {
             snapshot_solver_dt_s: solver_dt_s,
             values_sha256: local_node_values_sha256(values)?,
             representation,
+            native_node_map_sha256: None,
         };
         receipt.validate(values.len())?;
         Ok(receipt)
@@ -48,6 +68,10 @@ impl FemLocalNodeSnapshotReceipt {
         let representation = &self.representation;
         if self.schema_version != FEM_LOCAL_NODE_SNAPSHOT_RECEIPT_SCHEMA
             || !is_canonical_sha256(&self.values_sha256)
+            || self
+                .native_node_map_sha256
+                .as_ref()
+                .is_some_and(|hash| !is_canonical_sha256(hash))
             || !self.snapshot_time_s.is_finite()
             || self.snapshot_time_s < 0.0
             || !self.snapshot_solver_dt_s.is_finite()

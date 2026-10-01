@@ -34,6 +34,7 @@ pub struct MagnetizationStateArtifact {
     pub values: Vec<[f64; 3]>,
     pub native_state_snapshot:
         Option<fullmag_quantities::fem_state_snapshot_receipt::FemLocalNodeSnapshotReceipt>,
+    pub native_node_map: Option<fullmag_quantities::fem_local_node_map::FemLocalNodeIndexMap>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -62,6 +63,18 @@ struct MagnetizationFieldArtifactV1 {
     #[serde(default, deserialize_with = "deserialize_native_snapshot_receipt")]
     native_state_snapshot:
         Option<fullmag_quantities::fem_state_snapshot_receipt::FemLocalNodeSnapshotReceipt>,
+    #[serde(default, deserialize_with = "deserialize_native_node_map")]
+    native_node_map: Option<fullmag_quantities::fem_local_node_map::FemLocalNodeIndexMap>,
+}
+
+fn deserialize_native_node_map<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<fullmag_quantities::fem_local_node_map::FemLocalNodeIndexMap>, D::Error> {
+    // Missing is legacy None; present null is not a valid native map.
+    let map =
+        fullmag_quantities::fem_local_node_map::FemLocalNodeIndexMap::deserialize(deserializer)?;
+    map.validate().map_err(serde::de::Error::custom)?;
+    Ok(Some(map))
 }
 
 fn deserialize_native_snapshot_receipt<'de, D: serde::Deserializer<'de>>(
@@ -274,7 +287,15 @@ fn decode_magnetization_state(bytes: &[u8]) -> Result<MagnetizationStateArtifact
         provenance: payload.provenance,
         values: payload.values,
         native_state_snapshot: payload.native_state_snapshot,
+        native_node_map: payload.native_node_map,
     };
+    if state.native_node_map.is_some()
+        && bytes.len() > fullmag_quantities::fem_local_node_map::MAX_FEM_MAPPED_STATE_JSON_BYTES
+    {
+        return Err(invalid(
+            "mapped native FEM state exceeds the shared source JSON budget",
+        ));
+    }
     decode_magnetization_field_semantics(&state)?;
     validate_native_magnetization_snapshot(&state)?;
     Ok(state)
@@ -284,6 +305,9 @@ fn validate_native_magnetization_snapshot(
     state: &MagnetizationStateArtifact,
 ) -> Result<(), ExecutionError> {
     let Some(receipt) = state.native_state_snapshot.as_ref() else {
+        if state.native_node_map.is_some() {
+            return Err(invalid("native FEM node map requires snapshot receipt"));
+        }
         return Ok(());
     };
     if state.layout.get("backend").and_then(Value::as_str) != Some("fem")
@@ -301,6 +325,9 @@ fn validate_native_magnetization_snapshot(
     }
     receipt
         .validate_snapshot(state.step, state.time_s, state.solver_dt_s, &state.values)
+        .map_err(invalid)?;
+    receipt
+        .validate_node_map(state.native_node_map.as_ref())
         .map_err(invalid)
 }
 
@@ -536,6 +563,7 @@ mod tests {
             provenance: json!({"execution_resolution": {"requested": "fem"}}),
             values: vec![[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
             native_state_snapshot: None,
+            native_node_map: None,
         }
     }
 
@@ -598,6 +626,44 @@ mod tests {
                 .space_fingerprint,
             state.space_fingerprint
         );
+        let map = fullmag_quantities::fem_local_node_map::FemLocalNodeIndexMap {
+            schema_version: fullmag_quantities::fem_local_node_map::FEM_LOCAL_NODE_MAP_SCHEMA
+                .into(),
+            local_node_count: 2,
+            mfem_local_dof_count: 2,
+            mfem_true_dof_count: 2,
+            core_periodic_class_count: 1,
+            core_periodic_map_revision: 123,
+            canonical_node_to_mfem_local_dof: vec![0, 1],
+            local_node_to_core_class: vec![0, 0],
+            core_class_representatives: vec![0],
+        };
+        let mut mapped = state.clone();
+        mapped
+            .native_state_snapshot
+            .as_mut()
+            .unwrap()
+            .native_node_map_sha256 = Some(map.content_sha256().unwrap());
+        mapped.native_node_map = Some(map.clone());
+        validate_native_magnetization_snapshot(&mapped).unwrap();
+        let mut document: Value = serde_json::from_slice(&bytes).unwrap();
+        document["native_state_snapshot"] =
+            serde_json::to_value(&mapped.native_state_snapshot).unwrap();
+        document["native_node_map"] = serde_json::to_value(&map).unwrap();
+        let decoded = decode_magnetization_state(&serde_json::to_vec(&document).unwrap()).unwrap();
+        assert_eq!(decoded.native_node_map, Some(map));
+        assert_eq!(decoded.space_fingerprint, state.space_fingerprint);
+        let mut changed_map = document.clone();
+        changed_map["native_node_map"]["mfem_true_dof_count"] = json!(1);
+        assert!(decode_magnetization_state(&serde_json::to_vec(&changed_map).unwrap()).is_err());
+        changed_map = document.clone();
+        changed_map
+            .as_object_mut()
+            .unwrap()
+            .remove("native_node_map");
+        assert!(decode_magnetization_state(&serde_json::to_vec(&changed_map).unwrap()).is_err());
+        document["native_node_map"] = Value::Null;
+        assert!(decode_magnetization_state(&serde_json::to_vec(&document).unwrap()).is_err());
     }
 
     fn decode_bytes(

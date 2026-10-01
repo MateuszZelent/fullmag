@@ -1268,6 +1268,26 @@ typedef struct {
     uint64_t hot_loop_gather_scatter_bytes;
 } fullmag_fem_representation_receipt_v1;
 
+/*
+ * Append-only native local-node index map.  The MFEM true-DOF extent is
+ * reported separately from the core periodic-class extent; this ABI does not
+ * claim that either numbering is the other one.  The map-copy entrypoint
+ * returns caller-owned u32 arrays with exact lengths declared by the receipt.
+ */
+#define FULLMAG_FEM_LOCAL_NODE_MAP_V1_ABI_VERSION 1u
+
+typedef struct {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    uint32_t state_space;
+    uint32_t reserved0;
+    uint64_t local_node_count;
+    uint64_t mfem_local_dof_count;
+    uint64_t mfem_true_dof_count;
+    uint64_t core_periodic_class_count;
+    uint64_t core_periodic_map_revision;
+} fullmag_fem_local_node_map_v1;
+
 #define FULLMAG_FEM_ACCEPTED_ENERGY_PROOF_V1_ABI_VERSION 1u
 
 typedef struct {
@@ -3393,6 +3413,36 @@ int fullmag_fem_backend_snapshot_endpoint_cache_telemetry_v1(
 int fullmag_fem_backend_snapshot_representation_receipt_v1(
     fullmag_fem_backend *handle,
     fullmag_fem_representation_receipt_v1 *out_receipt
+);
+
+/*
+ * Snapshot the complete native local-node index map metadata from one live
+ * backend handle.  The caller must initialize abi_version and struct_size;
+ * the function writes the output only after the MFEM and periodic maps have
+ * both passed their fail-closed validation.
+ */
+int fullmag_fem_backend_snapshot_local_node_map_v1(
+    fullmag_fem_backend *handle,
+    fullmag_fem_local_node_map_v1 *out_map
+);
+
+/*
+ * Copy the complete native local-node index maps.  Every length must exactly
+ * match the metadata from the same handle and expected_revision must equal
+ * core_periodic_map_revision.  No output array is written when validation
+ * fails.  Arrays are respectively canonical-node -> MFEM local DOF,
+ * local-node -> core periodic class, and core class -> representative node;
+ * the caller must provide distinct non-overlapping output buffers.
+ */
+int fullmag_fem_backend_copy_local_node_map_v1(
+    fullmag_fem_backend *handle,
+    uint64_t expected_revision,
+    uint32_t *local_to_mfem_dof,
+    uint64_t local_to_mfem_dof_len,
+    uint32_t *local_to_core_class,
+    uint64_t local_to_core_class_len,
+    uint32_t *class_representatives,
+    uint64_t class_representatives_len
 );
 
 int fullmag_fem_backend_solver_attempt_count_v1(

@@ -283,8 +283,7 @@ bool context_initialize_mfem(Context &ctx, std::string &error)
         auto fes = std::make_unique<mfem::FiniteElementSpace>(mesh, fec.get());
         debug_checkpoint("context_initialize_mfem:fes_ready");
 
-        if (fes->GetNDofs() != static_cast<int>(ctx.mesh.n_nodes)) {
-            error = "MFEM H1 P1 space DOF count does not match node count";
+        if (!verify_mfem_local_node_ordering(ctx.mesh, *fes, error)) {
             return false;
         }
 

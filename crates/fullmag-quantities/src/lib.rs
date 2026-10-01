@@ -23,6 +23,7 @@ pub mod descriptor;
 pub mod eval;
 pub mod fem_state_field;
 pub mod fem_state_snapshot_receipt;
+pub mod fem_local_node_map;
 pub mod id;
 pub mod provider;
 pub mod reduction;

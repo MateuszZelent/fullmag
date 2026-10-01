@@ -397,6 +397,9 @@ bool produce_evidence(
     auto fec = std::make_unique<mfem::H1_FECollection>(
         static_cast<int>(request.fe_order), mesh->Dimension());
     auto fes = std::make_unique<mfem::FiniteElementSpace>(mesh.get(), fec.get());
+    if (!fullmag::fem::verify_mfem_local_node_ordering(source, *fes, error)) {
+        return false;
+    }
     const int local_dofs = fes->GetNDofs();
     const int true_dofs = fes->GetTrueVSize();
     if (local_dofs <= 0 || true_dofs <= 0 || true_dofs > local_dofs) {

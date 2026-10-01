@@ -616,7 +616,11 @@ pub(crate) fn finalize_native_fem_relaxation(
         &accepted_native_equilibrium,
         &recomputed_native_equilibrium,
     )?;
-    let final_snapshot_receipt =
+    let final_node_map = backend.local_node_index_map()?;
+    final_node_map
+        .validate_representation(&recomputed_native_equilibrium.representation)
+        .map_err(|message| RunError { message })?;
+    let mut final_snapshot_receipt =
         fullmag_quantities::fem_state_snapshot_receipt::FemLocalNodeSnapshotReceipt::capture(
             final_stats.step,
             final_stats.time,
@@ -625,6 +629,11 @@ pub(crate) fn finalize_native_fem_relaxation(
             recomputed_native_equilibrium.representation,
         )
         .map_err(|message| RunError { message })?;
+    final_snapshot_receipt.native_node_map_sha256 = Some(
+        final_node_map
+            .content_sha256()
+            .map_err(|message| RunError { message })?,
+    );
     let final_magnetization = recomputed_native_equilibrium.magnetization;
     let certified_fem_equilibrium_fields = recomputed_native_equilibrium.fields;
     finalization_field_copy_wall_time_ns =
@@ -634,6 +643,18 @@ pub(crate) fn finalize_native_fem_relaxation(
     let mut diagnostic_steps = artifacts.take_solver_steps();
     let (mut field_snapshots, field_snapshot_count, provenance) = artifacts.finish();
     let mut auxiliary_artifacts = Vec::new();
+    let node_map_bytes = serde_json::to_vec(&final_node_map).map_err(|error| RunError {
+        message: format!("failed to encode final FEM local-node map: {error}"),
+    })?;
+    if node_map_bytes.len() > fullmag_quantities::fem_local_node_map::MAX_FEM_LOCAL_NODE_MAP_BYTES {
+        return Err(RunError {
+            message: "final FEM local-node map exceeds serialized byte budget".into(),
+        });
+    }
+    auxiliary_artifacts.push(AuxiliaryArtifact {
+        relative_path: fullmag_quantities::fem_local_node_map::FEM_FINAL_NODE_MAP_ARTIFACT.into(),
+        bytes: node_map_bytes,
+    });
     auxiliary_artifacts.push(AuxiliaryArtifact {
         relative_path:
             fullmag_quantities::fem_state_snapshot_receipt::FEM_FINAL_SNAPSHOT_RECEIPT_ARTIFACT

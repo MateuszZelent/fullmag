@@ -1,4 +1,6 @@
 #include "fullmag_fem.h"
+#include "core/fem_mesh.hpp"
+#include "cpu/mfem/runtime/mfem_mesh_builder.hpp"
 
 #include <mfem.hpp>
 
@@ -112,6 +114,33 @@ int main()
         evidence.boundary_element_count == 4u, "evidence records actual MFEM mesh cardinalities");
     check(evidence.local_dof_count == 4u && evidence.true_dof_count == 4u,
         "evidence records actual local and true H1 DOFs");
+
+#if FULLMAG_HAS_MFEM_STACK
+    fullmag::fem::FemMeshRuntimeState imported;
+    std::string ordering_error;
+    check(fullmag::fem::import_mesh_descriptor(mesh, imported, ordering_error),
+        "ordering fixture imports canonical topology");
+    std::unique_ptr<mfem::Mesh> realized_mesh;
+    check(fullmag::fem::build_mfem_mesh(imported, realized_mesh, ordering_error),
+        "ordering fixture realizes canonical vertices");
+    if (realized_mesh) {
+        mfem::H1_FECollection p1(1, 3);
+        mfem::FiniteElementSpace scalar(realized_mesh.get(), &p1);
+        check(fullmag::fem::verify_mfem_local_node_ordering(imported, scalar, ordering_error),
+            "actual scalar P1 vertex DOFs preserve canonical local indices");
+        mfem::FiniteElementSpace vector(realized_mesh.get(), &p1, 3);
+        check(!fullmag::fem::verify_mfem_local_node_ordering(imported, vector, ordering_error),
+            "vector space cannot masquerade as scalar node ordering");
+        mfem::H1_FECollection p2(2, 3);
+        mfem::FiniteElementSpace higher_order(realized_mesh.get(), &p2);
+        check(!fullmag::fem::verify_mfem_local_node_ordering(imported, higher_order, ordering_error),
+            "higher-order space cannot masquerade as local P1 node ordering");
+        auto wrong_extent = imported;
+        wrong_extent.n_nodes = 3u;
+        check(!fullmag::fem::verify_mfem_local_node_ordering(wrong_extent, scalar, ordering_error),
+            "matching space must retain canonical vertex extent");
+    }
+#endif
     check(evidence.quality_sample_count > 0u && evidence.invalid_cell_count == 0u &&
         evidence.min_jacobian_determinant > 0.0 &&
         evidence.max_jacobian_determinant >= evidence.min_jacobian_determinant,

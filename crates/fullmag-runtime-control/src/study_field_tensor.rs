@@ -22,7 +22,8 @@ use fullmag_session::{
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
-const MAX_SOURCE_STATE_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_SOURCE_STATE_BYTES: u64 =
+    fullmag_quantities::fem_local_node_map::MAX_FEM_MAPPED_STATE_JSON_BYTES as u64;
 const NODES_PER_CHUNK: usize = 8_192;
 const BYTES_PER_NODE: usize = 3 * std::mem::size_of::<f64>();
 const FIELD_ID: &str = "field:m";
@@ -78,6 +79,7 @@ pub fn read_pinned_study_tensor_snapshot(
     };
     // No source field or chunk-sized duplicate is retained during tensor IO.
     drop(state.values);
+    drop(state.native_node_map);
     verify_snapshot_tensor_bytes(store.cas(), &resolved.tensor, &receipt.values_sha256)?;
     Ok(Some(receipt))
 }

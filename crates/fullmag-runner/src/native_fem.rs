@@ -3396,6 +3396,68 @@ impl NativeFemBackend {
         representation_receipt_from_ffi(&raw)
     }
 
+    pub(crate) fn local_node_index_map(
+        &self,
+    ) -> Result<fullmag_quantities::fem_local_node_map::FemLocalNodeIndexMap, RunError> {
+        use ffi::node_map::*;
+        use fullmag_quantities::fem_local_node_map::{
+            FemLocalNodeIndexMap, FEM_LOCAL_NODE_MAP_SCHEMA, MAX_FEM_LOCAL_NODE_MAP_NODES,
+        };
+        let mut raw = fullmag_fem_local_node_map_v1::default();
+        raw.abi_version = FULLMAG_FEM_LOCAL_NODE_MAP_V1_ABI_VERSION;
+        raw.struct_size = std::mem::size_of::<fullmag_fem_local_node_map_v1>() as u32;
+        let rc = unsafe { fullmag_fem_backend_snapshot_local_node_map_v1(self.handle, &mut raw) };
+        if rc != ffi::FULLMAG_FEM_OK {
+            return Err(self.last_error_or("FEM local-node map read failed"));
+        }
+        if raw.abi_version != FULLMAG_FEM_LOCAL_NODE_MAP_V1_ABI_VERSION
+            || raw.struct_size as usize != std::mem::size_of::<fullmag_fem_local_node_map_v1>()
+            || raw.state_space != ffi::FULLMAG_FEM_REPRESENTATION_SPACE_LOCAL_NODE_AOS
+            || raw.reserved0 != 0
+            || raw.local_node_count == 0
+            || raw.local_node_count > MAX_FEM_LOCAL_NODE_MAP_NODES as u64
+            || raw.mfem_local_dof_count != raw.local_node_count
+            || raw.mfem_true_dof_count == 0
+            || raw.mfem_true_dof_count > raw.local_node_count
+            || raw.core_periodic_class_count == 0
+            || raw.core_periodic_class_count > raw.local_node_count
+        {
+            return Err(RunError {
+                message: "invalid native FEM local-node map ABI or extents".into(),
+            });
+        }
+        let n = raw.local_node_count as usize;
+        let classes = raw.core_periodic_class_count as usize;
+        let mut map = FemLocalNodeIndexMap {
+            schema_version: FEM_LOCAL_NODE_MAP_SCHEMA.into(),
+            local_node_count: raw.local_node_count,
+            mfem_local_dof_count: raw.mfem_local_dof_count,
+            mfem_true_dof_count: raw.mfem_true_dof_count,
+            core_periodic_class_count: raw.core_periodic_class_count,
+            core_periodic_map_revision: raw.core_periodic_map_revision,
+            canonical_node_to_mfem_local_dof: vec![0; n],
+            local_node_to_core_class: vec![0; n],
+            core_class_representatives: vec![0; classes],
+        };
+        let rc = unsafe {
+            fullmag_fem_backend_copy_local_node_map_v1(
+                self.handle,
+                raw.core_periodic_map_revision,
+                map.canonical_node_to_mfem_local_dof.as_mut_ptr(),
+                raw.local_node_count,
+                map.local_node_to_core_class.as_mut_ptr(),
+                raw.local_node_count,
+                map.core_class_representatives.as_mut_ptr(),
+                raw.core_periodic_class_count,
+            )
+        };
+        if rc != ffi::FULLMAG_FEM_OK {
+            return Err(self.last_error_or("FEM local-node map copy failed"));
+        }
+        map.validate().map_err(|message| RunError { message })?;
+        Ok(map)
+    }
+
     fn average_m_for_nodes(&self, node_indices: &[u32]) -> Result<Option<[f64; 3]>, RunError> {
         if node_indices.is_empty() {
             return Ok(None);

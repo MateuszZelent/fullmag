@@ -438,6 +438,30 @@ bool verify_finalized_mesh(
 
 } // namespace
 
+bool verify_mfem_local_node_ordering(
+    const FemMeshRuntimeState &source,
+    const mfem::FiniteElementSpace &space,
+    std::string &error)
+{
+    const auto *mesh = space.GetMesh();
+    if (source.n_nodes == 0u ||
+        source.n_nodes > static_cast<uint32_t>(std::numeric_limits<int>::max()) ||
+        mesh == nullptr || mesh->GetNV() != static_cast<int>(source.n_nodes) ||
+        space.GetVDim() != 1 || space.GetNDofs() != static_cast<int>(source.n_nodes)) {
+        error = "MFEM local-node adapter requires one scalar DOF per canonical vertex";
+        return false;
+    }
+    mfem::Array<int> dofs;
+    for (uint32_t node = 0; node < source.n_nodes; ++node) {
+        space.GetVertexDofs(static_cast<int>(node), dofs);
+        if (dofs.Size() != 1 || dofs[0] != static_cast<int>(node)) {
+            error = "MFEM local vertex DOF ordering differs from canonical node ordering";
+            return false;
+        }
+    }
+    return true;
+}
+
 bool build_mfem_mesh(
     const FemMeshRuntimeState &source,
     std::unique_ptr<mfem::Mesh> &mesh,

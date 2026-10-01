@@ -5,6 +5,8 @@
 
 #![allow(non_camel_case_types)]
 
+pub mod node_map;
+
 use std::ffi::c_void;
 use std::os::raw::c_char;
 
