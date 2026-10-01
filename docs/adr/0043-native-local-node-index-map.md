@@ -52,6 +52,13 @@ w tożsamości ownera tensora; nie powstaje nowy luźny CAS root.
 
 ## Zgodność i ograniczenia
 
+Exact saved snapshot reader dla mapowanego źródła wymaga jednego geometry
+bindingu w dokładnym historycznym owner/member i zgodnego tensor descriptor.
+Porównuje actual core class arrays oraz compatibility revision z klasami
+odtworzonymi z canonical MeshIR periodic node pairs. Porównanie partycji
+nie certyfikuje live native coordinates/connectivity i nie zmienia
+`representation_evidence`. Legacy źródło bez mapy zachowuje dawny odczyt.
+
 Legacy bez mapy/hasza pozostaje czytelne. Present null, mapa bez hasza lub
 hash bez mapy są błędem. Nowe dane wymagają zachowania nowego readera po
 rollback writera. Nie zmieniamy schematu `representation_receipt_v1` ani

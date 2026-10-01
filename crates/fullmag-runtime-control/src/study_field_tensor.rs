@@ -22,6 +22,8 @@ use fullmag_session::{
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
+mod native_map_geometry;
+
 const MAX_SOURCE_STATE_BYTES: u64 =
     fullmag_quantities::fem_local_node_map::MAX_FEM_MAPPED_STATE_JSON_BYTES as u64;
 const NODES_PER_CHUNK: usize = 8_192;
@@ -31,6 +33,8 @@ const FIELD_ID: &str = "field:m";
 /// Verify a saved native snapshot against its exact historical source and all
 /// derived F64 tensor bytes. This is an explicit full-field integrity read,
 /// not a viewport slice or a certificate of native mesh-index correspondence.
+/// Mapped sources additionally require their exact saved geometry owner and
+/// canonical periodic classes; live native coordinates remain unqualified.
 /// Legacy sources without a receipt return None after their binding is checked.
 pub fn read_pinned_study_tensor_snapshot(
     store: &SessionStore,
@@ -79,6 +83,11 @@ pub fn read_pinned_study_tensor_snapshot(
     };
     // No source field or chunk-sized duplicate is retained during tensor IO.
     drop(state.values);
+    if let Some(map) = &state.native_node_map {
+        native_map_geometry::validate_saved_native_map_geometry(
+            store, &owner, pinned, &resolved.tensor, map,
+        )?;
+    }
     drop(state.native_node_map);
     verify_snapshot_tensor_bytes(store.cas(), &resolved.tensor, &receipt.values_sha256)?;
     Ok(Some(receipt))

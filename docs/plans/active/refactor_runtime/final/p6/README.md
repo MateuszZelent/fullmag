@@ -7,6 +7,10 @@ bounded data plane oraz jeden frontend analityczny oparty o pinned source.
 
 ## Przyrosty
 
+[P6-58 — dokładne powiązanie mapy z geometrią](58-exact-saved-map-geometry-binding.md)
+— exact historical binding, tensor semantics i pełna canonical periodic
+partition; status native representation pozostaje `not_verified`.
+
 1. [Resource hooks trwałych ramek obserwacji](01-observation-frame-resources.md)
    — session-scoped katalog, descriptor i historyczne `m` z exact source oraz
    field generation identity.
