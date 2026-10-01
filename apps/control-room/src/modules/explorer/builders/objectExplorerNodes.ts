@@ -9,7 +9,7 @@ import type {
   FrozenSpinsDefinition,
   FrozenSpinsSelectionExpression,
 } from "@/kernel/api/apiTypes";
-import { antennaPortStatus } from "@/modules/antenna/antennaPortValidation";
+import { antennaPortStatus } from "@/shared/domain/physics/antennaPortValidation";
 
 import { buildPhysicsGraphObjectNode } from "./physicsGraphTree";
 import {

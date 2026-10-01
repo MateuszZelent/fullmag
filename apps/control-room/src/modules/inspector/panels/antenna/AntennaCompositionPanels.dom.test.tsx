@@ -12,10 +12,13 @@ import type { Selection } from "@/kernel/selection/selectionTypes";
 import {
   installSimulationPreparationTestDom,
   TestElement,
+  TestEvent,
   TestNode,
 } from "@/kernel/layout/simulationPreparationTestDom.test-support";
 
 const mocks = vi.hoisted(() => ({
+  commitTransaction: vi.fn(),
+  invalidate: vi.fn(),
   fieldSolution: {
     data: null as AntennaFieldSolutionResource | null,
     error: null as Error | null,
@@ -46,6 +49,13 @@ const mocks = vi.hoisted(() => ({
   },
 }));
 
+vi.mock("@/kernel/KernelContext", () => ({
+  useKernel: () => ({
+    api: { model: { commitTransaction: mocks.commitTransaction } },
+    resources: { invalidate: mocks.invalidate },
+  }),
+}));
+
 vi.mock("@/kernel/resources/geometryLifecycleResources", () => ({
   useSceneResource: () => mocks.scene,
 }));
@@ -59,6 +69,8 @@ vi.mock("@/kernel/resources/antennaResources", () => ({
 import { AntennaCompositionPanel } from "./AntennaCompositionPanels";
 
 afterEach(() => {
+  mocks.commitTransaction.mockReset();
+  mocks.invalidate.mockReset();
   mocks.fieldSolution.data = null;
   mocks.fieldSolution.status = "idle";
   mocks.sourceSpectrum.data = null;
@@ -66,9 +78,274 @@ afterEach(() => {
   mocks.stageOutputCatalog.data = null;
   mocks.stageOutputCatalog.status = "idle";
   mocks.scene.data = null;
+  mocks.scene.status = "ready";
+  mocks.scene.refetch.mockReset();
 });
 
 describe("AntennaCompositionPanel runtime results", () => {
+  it("creates a projection and drive atomically from the selected solve stage", async () => {
+    mocks.scene.data = {
+      revision: 11,
+      objects: [{ id: "antenna-1", name: "Conductor" }, { id: "magnet-1", name: "Magnet" }],
+      study: { stages: [{ kind: "run", stage_id: "run-1" }] },
+      antenna_field_solve_stages: [{
+        id: "solve-1", source_object_id: "antenna-1", current_transport_id: "current-1",
+        port_mode_ids: ["port-1"], outputs: [{ id: "basis-1", quantity: "H_ant_basis" }],
+        field_sampling_domain: { kind: "global" }, target_refs: [],
+      }],
+      antenna_port_modes: [{ id: "port-1", source_object_id: "antenna-1", current_transport_id: "current-1" }],
+      antenna_target_projections: [], solved_antenna_drives: [],
+    } as unknown as SceneResource;
+    mocks.commitTransaction.mockResolvedValue({ scene_revision: 12 });
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    const find = (tag: string, label: string): TestElement => {
+      const found: TestElement[] = [];
+      const visit = (node: TestNode) => {
+        if (node instanceof TestElement && node.tagName === tag &&
+          (node.getAttribute("aria-label") === label || node.textContent.includes(label))) found.push(node);
+        node.childNodes.forEach(visit);
+      };
+      visit(container);
+      if (!found[0]) throw new Error(`Missing ${label}`);
+      return found[0];
+    };
+    try {
+      await act(async () => root.render(<AntennaCompositionPanel kind="solution" selection={solutionSelection()} />));
+      await act(async () => find("BUTTON", "Create projection and drive").dispatchEvent(new TestEvent("click", { bubbles: true })));
+      expect(mocks.commitTransaction).not.toHaveBeenCalled();
+      const target = find("SELECT", "Target object");
+      target.value = "magnet-1";
+      await act(async () => target.dispatchEvent(new TestEvent("change", { bubbles: true })));
+      const run = find("SELECT", "Run stage");
+      run.value = "run-1";
+      await act(async () => run.dispatchEvent(new TestEvent("change", { bubbles: true })));
+      for (const [label, value] of [["Peak current", "0.01"], ["Frequency", "1e9"]]) {
+        const input = find("INPUT", label);
+        Object.getOwnPropertyDescriptor(TestElement.prototype, "value")?.set?.call(input, value);
+        await act(async () => input.dispatchEvent(new TestEvent("input", { bubbles: true })));
+      }
+      await act(async () => find("BUTTON", "Create projection and drive").dispatchEvent(new TestEvent("click", { bubbles: true })));
+      expect(mocks.commitTransaction).toHaveBeenCalledWith({
+        base_revision: 11, kind: "merge_patch",
+        merge_patch: {
+          antenna_target_projections: [expect.objectContaining({
+            solution: { kind: "stage_output", stage_id: "solve-1", output_id: "basis-1" },
+            target: { kind: "object", object_id: "magnet-1" },
+          })],
+          solved_antenna_drives: [expect.objectContaining({
+            port_mode_id: "port-1", peak_current_a: 0.01,
+            activation: { kind: "stage_ids", stage_ids: ["run-1"] },
+          })],
+        },
+      });
+      await act(async () => find("BUTTON", "Create projection and drive").dispatchEvent(new TestEvent("click", { bubbles: true })));
+      expect(mocks.commitTransaction).toHaveBeenCalledTimes(1);
+      mocks.scene.data = { ...mocks.scene.data!, revision: 12 } as SceneResource;
+      mocks.commitTransaction.mockRejectedValueOnce({ status: 409 });
+      await act(async () => root.render(<AntennaCompositionPanel kind="solution" selection={solutionSelection()} />));
+      await act(async () => find("BUTTON", "Create projection and drive").dispatchEvent(new TestEvent("click", { bubbles: true })));
+      expect(container.textContent).toContain("Scene revision conflict");
+      await act(async () => find("BUTTON", "Create projection and drive").dispatchEvent(new TestEvent("click", { bubbles: true })));
+      expect(mocks.commitTransaction).toHaveBeenCalledTimes(2);
+      await act(async () => find("BUTTON", "Refetch Scene").dispatchEvent(new TestEvent("click", { bubbles: true })));
+      expect(mocks.scene.refetch).toHaveBeenCalledTimes(1);
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+  it("rejects activation on a Relax stage before the scene transaction", async () => {
+    mocks.scene.data = {
+      revision: 3,
+      study: { stages: [{ kind: "relax", stage_id: "relax-1" }, { kind: "run", stage_id: "run-1" }] },
+      solved_antenna_drives: [{
+        id: "drive-1", name: "RF", peak_current_a: 1, port_mode_id: "port-1",
+        projection_ref: "projection-1", time_origin: "stage_local",
+        waveform: { kind: "constant" },
+        activation: { kind: "stage_ids", stage_ids: ["relax-1"] },
+      }],
+    } as unknown as SceneResource;
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    const buttons: TestElement[] = [];
+    const visit = (node: TestNode) => {
+      if (node instanceof TestElement && node.tagName === "BUTTON" && node.textContent.includes("Save drive")) buttons.push(node);
+      node.childNodes.forEach(visit);
+    };
+    try {
+      await act(async () => root.render(<AntennaCompositionPanel kind="drive" selection={driveSelection()} />));
+      visit(container);
+      expect(container.textContent).toContain("Run run-1");
+      expect(container.textContent).not.toContain("Run relax-1");
+      await act(async () => buttons[0]?.dispatchEvent(new TestEvent("click", { bubbles: true })));
+      expect(container.textContent).toContain("not a Run stage");
+      expect(mocks.commitTransaction).not.toHaveBeenCalled();
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+  it("commits the edited drive with the scene revision and preserves other drives", async () => {
+    mocks.scene.data = {
+      revision: 7,
+      solved_antenna_drives: [
+        { id: "drive-1", name: "RF", peak_current_a: 1, port_mode_id: "port-1", projection_ref: "projection-1", time_origin: "stage_local", waveform: { kind: "constant" }, activation: { kind: "all_time_evolution" } },
+        { id: "drive-2", name: "Other", peak_current_a: 2, port_mode_id: "port-2", projection_ref: "projection-2", time_origin: "stage_local", waveform: { kind: "constant" }, activation: { kind: "all_time_evolution" } },
+      ],
+    } as unknown as SceneResource;
+    mocks.commitTransaction.mockResolvedValue({ scene_revision: 8 });
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => root.render(<AntennaCompositionPanel kind="drive" selection={driveSelection()} />));
+      const inputs: TestElement[] = [];
+      const buttons: TestElement[] = [];
+      const visit = (node: TestNode) => {
+        if (node instanceof TestElement && node.tagName === "INPUT" && node.getAttribute("aria-label") === "Peak current") inputs.push(node);
+        if (node instanceof TestElement && node.tagName === "BUTTON" && node.textContent.includes("Save drive")) buttons.push(node);
+        node.childNodes.forEach(visit);
+      };
+      visit(container);
+      const input = inputs[0];
+      if (!input) throw new Error("Missing peak current input");
+      Object.getOwnPropertyDescriptor(TestElement.prototype, "value")?.set?.call(input, "3");
+      await act(async () => input.dispatchEvent(new TestEvent("input", { bubbles: true })));
+      expect(buttons).toHaveLength(1);
+      await act(async () => buttons[0]?.dispatchEvent(new TestEvent("click", { bubbles: true })));
+      expect(mocks.commitTransaction).toHaveBeenCalledWith({
+        base_revision: 7,
+        kind: "merge_patch",
+        merge_patch: { solved_antenna_drives: [
+          expect.objectContaining({ id: "drive-1", peak_current_a: 3 }),
+          expect.objectContaining({ id: "drive-2", peak_current_a: 2 }),
+        ] },
+      });
+      expect(mocks.invalidate).toHaveBeenCalled();
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("keeps the drive draft and blocks another save after a scene revision conflict", async () => {
+    mocks.scene.data = {
+      revision: 4,
+      solved_antenna_drives: [{
+        id: "drive-1", name: "RF", peak_current_a: 1, port_mode_id: "port-1",
+        projection_ref: "projection-1", time_origin: "stage_local",
+        waveform: { kind: "constant" }, activation: { kind: "all_time_evolution" },
+      }],
+    } as unknown as SceneResource;
+    mocks.commitTransaction.mockRejectedValue({ status: 409 });
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    const controls: TestElement[] = [];
+    const visit = (node: TestNode) => {
+      if (node instanceof TestElement && (
+        node.getAttribute("aria-label") === "Peak current" ||
+        (node.tagName === "BUTTON" && node.textContent.includes("Save drive"))
+      )) controls.push(node);
+      node.childNodes.forEach(visit);
+    };
+    try {
+      await act(async () => root.render(<AntennaCompositionPanel kind="drive" selection={driveSelection()} />));
+      visit(container);
+      const input = controls.find((item) => item.tagName === "INPUT");
+      const save = controls.find((item) => item.tagName === "BUTTON");
+      if (!input || !save) throw new Error("Missing drive controls");
+      Object.getOwnPropertyDescriptor(TestElement.prototype, "value")?.set?.call(input, "3");
+      await act(async () => input.dispatchEvent(new TestEvent("input", { bubbles: true })));
+      await act(async () => save.dispatchEvent(new TestEvent("click", { bubbles: true })));
+      expect(container.textContent).toContain("Your draft is preserved");
+      expect(input.value).toBe("3");
+      await act(async () => save.dispatchEvent(new TestEvent("click", { bubbles: true })));
+      expect(mocks.commitTransaction).toHaveBeenCalledTimes(1);
+      const findButton = (text: string) => {
+        const buttons: TestElement[] = [];
+        const visitButton = (node: TestNode) => {
+          if (node instanceof TestElement && node.tagName === "BUTTON" && node.textContent.includes(text)) buttons.push(node);
+          node.childNodes.forEach(visitButton);
+        };
+        visitButton(container);
+        if (!buttons[0]) throw new Error(`Missing ${text}`);
+        return buttons[0];
+      };
+      await act(async () => findButton("Refetch Scene").dispatchEvent(new TestEvent("click", { bubbles: true })));
+      mocks.scene.status = "error";
+      await act(async () => root.render(<AntennaCompositionPanel kind="drive" selection={driveSelection()} />));
+      expect(container.textContent).toContain("refresh-error");
+      await act(async () => findButton("Refetch Scene").dispatchEvent(new TestEvent("click", { bubbles: true })));
+      expect(mocks.scene.refetch).toHaveBeenCalledTimes(2);
+      expect(input.value).toBe("3");
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("rebases only edited drive fields after refetch and retries with the new revision", async () => {
+    mocks.scene.data = {
+      revision: 4,
+      solved_antenna_drives: [{
+        id: "drive-1", name: "RF", peak_current_a: 1, port_mode_id: "port-1",
+        projection_ref: "projection-1", time_origin: "stage_local",
+        waveform: { kind: "constant" }, activation: { kind: "all_time_evolution" },
+      }],
+    } as unknown as SceneResource;
+    mocks.commitTransaction.mockRejectedValueOnce({ status: 409 }).mockResolvedValueOnce({ scene_revision: 6 });
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    const find = (tag: string, label: string): TestElement => {
+      const found: TestElement[] = [];
+      const visit = (node: TestNode) => {
+        if (node instanceof TestElement && node.tagName === tag &&
+          (node.getAttribute("aria-label") === label || node.textContent.includes(label))) found.push(node);
+        node.childNodes.forEach(visit);
+      };
+      visit(container);
+      if (!found[0]) throw new Error(`Missing ${label}`);
+      return found[0];
+    };
+    try {
+      await act(async () => root.render(<AntennaCompositionPanel kind="drive" selection={driveSelection()} />));
+      const input = find("INPUT", "Peak current");
+      Object.getOwnPropertyDescriptor(TestElement.prototype, "value")?.set?.call(input, "3");
+      await act(async () => input.dispatchEvent(new TestEvent("input", { bubbles: true })));
+      await act(async () => find("BUTTON", "Save drive").dispatchEvent(new TestEvent("click", { bubbles: true })));
+      await act(async () => find("BUTTON", "Refetch Scene").dispatchEvent(new TestEvent("click", { bubbles: true })));
+      expect(mocks.scene.refetch).toHaveBeenCalled();
+      mocks.scene.data = {
+        ...mocks.scene.data!, revision: 5,
+        solved_antenna_drives: [{
+          ...mocks.scene.data!.solved_antenna_drives![0],
+          peak_current_a: 2,
+          waveform: { kind: "sinusoidal", frequency_hz: 1e9, phase_rad: 0.7, offset: 0.2 },
+        }],
+      } as SceneResource;
+      await act(async () => root.render(<AntennaCompositionPanel kind="drive" selection={driveSelection()} />));
+      expect(container.textContent).toContain("Server peakCurrentA2");
+      expect(container.textContent).toContain("Draft peakCurrentA3");
+      await act(async () => find("BUTTON", "Rebase Draft").dispatchEvent(new TestEvent("click", { bubbles: true })));
+      await act(async () => find("BUTTON", "Retry Save").dispatchEvent(new TestEvent("click", { bubbles: true })));
+      expect(mocks.commitTransaction).toHaveBeenNthCalledWith(2, {
+        base_revision: 5,
+        kind: "merge_patch",
+        merge_patch: { solved_antenna_drives: [expect.objectContaining({
+          peak_current_a: 3,
+          waveform: { kind: "sinusoidal", frequency_hz: 1e9, phase_rad: 0.7, offset: 0.2 },
+        })] },
+      });
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
   it("shows missing transport and port references for an incomplete solve stage", async () => {
     mocks.scene.data = {
       antenna_field_solve_stages: [{
@@ -131,7 +408,39 @@ describe("AntennaCompositionPanel runtime results", () => {
     }
   });
 
-  it("shows missing port, projection, and activation references for a drive", async () => {
+  it("accepts a symbolic stage output without requiring a published asset", async () => {
+    mocks.scene.data = {
+      antenna_target_projections: [{
+        id: "projection-1",
+        output_id: "field-1",
+        solution: { kind: "stage_output", stage_id: "solve-1", output_id: "field-1" },
+        target: { kind: "global" },
+      }],
+      antenna_field_solve_stages: [{
+        id: "solve-1",
+        outputs: [{ id: "field-1", quantity: "H_ant_basis" }],
+      }],
+    } as unknown as SceneResource;
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () =>
+        root.render(
+          <AntennaCompositionPanel kind="projection" selection={projectionSelection()} />,
+        ),
+      );
+      expect(container.textContent).toContain("Stage output (awaiting publication)");
+      expect(container.textContent).not.toContain("missing solution asset");
+      expect(container.textContent).not.toContain("missing solution content digest");
+      expect(findGroupBadge(container, "configured · result pending")).toBeDefined();
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("shows missing references and invalid drive parameters without inventing a stage catalog", async () => {
     mocks.scene.data = {
       solved_antenna_drives: [{
         id: "drive-1",
@@ -140,8 +449,8 @@ describe("AntennaCompositionPanel runtime results", () => {
         port_mode_id: "missing-port",
         projection_ref: "missing-projection",
         time_origin: "stage_local",
-        waveform: { kind: "constant" },
-        activation: { kind: "stage_ids", stage_ids: ["missing-stage"] },
+        waveform: { kind: "sinusoidal", frequency_hz: -1, phase_rad: 0, offset: 0 },
+        activation: { kind: "stage_ids", stage_ids: [] },
       }],
       antenna_port_modes: [],
       antenna_target_projections: [],
@@ -159,7 +468,9 @@ describe("AntennaCompositionPanel runtime results", () => {
       expect(container.textContent).toContain("Validation");
       expect(container.textContent).toContain("missing port mode");
       expect(container.textContent).toContain("missing projection");
-      expect(container.textContent).toContain("missing activation stage");
+      expect(container.textContent).toContain("sinusoidal frequency must be finite and > 0 Hz");
+      expect(container.textContent).toContain("activation stage ids must be non-empty and unique");
+      expect(container.textContent).not.toContain("missing activation stage");
       expect(findGroupBadge(container, "invalid · result pending")).toBeDefined();
     } finally {
       await act(async () => root.unmount());
@@ -229,6 +540,7 @@ describe("AntennaCompositionPanel runtime results", () => {
         component: "x",
         output_id: "fft-1",
         solution_ref: {
+          kind: "resolved_asset",
           stage_id: "solve-1",
           output_id: "h-ant-1",
           asset_id: "asset-1",
@@ -269,7 +581,76 @@ describe("AntennaCompositionPanel runtime results", () => {
         ),
       );
       expect(container.textContent).toContain("Validationready");
+      expect(container.textContent).not.toContain("Stage catalog result");
       expect(findGroupBadge(container, "configured · result pending")).toBeDefined();
+      mocks.sourceSpectrum.status = "ready";
+      mocks.sourceSpectrum.data = {
+        output_id: "fft-1",
+        request_id: "spectrum-1",
+        solution_id: "h-ant-1",
+        solution_content_digest: "other-digest",
+        sampling: { solution_id: "h-ant-1" },
+      } as AntennaSourceSpectrumResource;
+      await act(async () => root.render(
+        <AntennaCompositionPanel kind="spectrum" selection={spectrumSelection()} />,
+      ));
+      expect(container.textContent).toContain("Runtime resultidentity mismatch");
+      expect(container.textContent).not.toContain("Published outputfft-1");
+      expect(findGroupBadge(container, "stale result")).toBeDefined();
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("marks unsupported transverse and modal spectra invalid before execution", async () => {
+    mocks.scene.data = {
+      antenna_spectrum_requests: [{
+        id: "spectrum-1",
+        component: "transverse",
+        equilibrium_ref: "equilibrium-1",
+        mode_basis_ref: "modes-1",
+        output_id: "fft-1",
+        solution_ref: { kind: "stage_output", stage_id: "solve-1", output_id: "basis" },
+        target: { kind: "global" },
+        transform: "spatial_fft",
+        window: "rectangular",
+        normalization: "integral_si",
+        sampling_plane: {
+          axis_u: [1, 0, 0], axis_v: [0, 1, 0], origin_m: [0, 0, 0],
+          extent_u_m: 1, extent_v_m: 1, sample_count_u: 4, sample_count_v: 4,
+          interpolation: "fem_element", outside_policy: "error",
+        },
+      }],
+      antenna_field_solve_stages: [{
+        id: "solve-1", port_mode_ids: ["port-1"],
+        outputs: [{ id: "basis", quantity: "H_ant_basis" }],
+      }],
+      antenna_port_modes: [{ id: "port-1" }],
+    } as unknown as SceneResource;
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => root.render(
+        <AntennaCompositionPanel kind="spectrum" selection={spectrumSelection()} />,
+      ));
+      expect(container.textContent).toContain("transverse spectrum is unsupported");
+      expect(container.textContent).toContain("mode_basis_ref is unsupported");
+      expect(findGroupBadge(container, "invalid · result pending")).toBeDefined();
+      const scene = mocks.scene.data as unknown as { antenna_spectrum_requests: Array<Record<string, unknown>> };
+      mocks.scene.data = {
+        ...scene,
+        antenna_spectrum_requests: [{
+          ...scene.antenna_spectrum_requests[0],
+          equilibrium_ref: null,
+          mode_basis_ref: null,
+        }],
+      } as unknown as SceneResource;
+      await act(async () => root.render(
+        <AntennaCompositionPanel kind="spectrum" selection={spectrumSelection()} />,
+      ));
+      expect(container.textContent).toContain("transverse spectrum requires equilibrium_ref");
     } finally {
       await act(async () => root.unmount());
       dom.restore();
@@ -363,6 +744,21 @@ describe("AntennaCompositionPanel runtime results", () => {
       expect(container.textContent).toContain("Stage reusesolution-1: published");
       expect(container.textContent).toContain("Stage manifestsmanifest.json");
       expect(findGroupBadge(container, "ready")).toBeDefined();
+      mocks.fieldSolution.data = { ...fieldSolutionFixture(), content_digest: "sha256:other" };
+      await act(async () => root.render(
+        <AntennaCompositionPanel kind="solution" selection={solutionSelection()} />,
+      ));
+      expect(container.textContent).toContain("Runtime resultidentity mismatch");
+      expect(container.textContent).not.toContain("Published solutionsolution-1");
+      expect(findGroupBadge(container, "stale result")).toBeDefined();
+      mocks.fieldSolution.data = fieldSolutionFixture();
+      mocks.stageOutputCatalog.status = "loading";
+      mocks.stageOutputCatalog.data = null;
+      await act(async () => root.render(
+        <AntennaCompositionPanel kind="solution" selection={solutionSelection()} />,
+      ));
+      expect(container.textContent).toContain("Runtime resultawaiting stage catalog");
+      expect(container.textContent).not.toContain("Published solutionsolution-1");
     } finally {
       await act(async () => root.unmount());
       dom.restore();

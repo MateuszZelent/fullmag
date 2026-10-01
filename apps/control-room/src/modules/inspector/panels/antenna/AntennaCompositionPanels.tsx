@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 
 import type { SceneResource } from "@/kernel/api/apiTypes";
-import { antennaPortValidationMessages } from "@/modules/antenna/antennaPortValidation";
+import { antennaPortValidationMessages } from "@/shared/domain/physics/antennaPortValidation";
 import {
   useAntennaFieldSolutionResource,
   useAntennaStageOutputCatalogResource,
@@ -14,8 +14,12 @@ import { FeedbackBanner } from "../../primitives/FeedbackBanner";
 import { FieldRow } from "../../primitives/FieldRow";
 import { InspectorGroup } from "../../primitives/InspectorGroup";
 import { AntennaSourceSpectrumPayloadView } from "./AntennaSourceSpectrumPayloadView";
+import { AntennaProjectionDriveComposer } from "./AntennaProjectionDriveComposer";
+import { SolvedAntennaDriveEditor } from "./SolvedAntennaDriveEditor";
 import { antennaWaveformBandwidthValue } from "./AntennaCompositionModel";
 import {
+  antennaFieldSolutionIdentityStatus,
+  antennaSpectrumIdentityStatus,
   resolveAntennaRuntimeIds,
   type AntennaCompositionKind,
   type AntennaRuntimeIds,
@@ -274,6 +278,9 @@ function antennaSolutionReferenceValidationMessages(
       }
     }
   }
+  if ("kind" in solution && solution.kind === "stage_output") {
+    return messages;
+  }
   if (typeof solution.asset_id !== "string" || !solution.asset_id.trim()) {
     messages.push("missing solution asset");
   }
@@ -344,8 +351,9 @@ function projectionDetails(
       { label: "ID", value: projection.id, mono: true },
       { label: "Output", value: projection.output_id, mono: true },
       { label: "Solve stage", value: projection.solution.stage_id, mono: true },
-      { label: "Asset", value: projection.solution.asset_id, mono: true },
-      { label: "Content digest", value: projection.solution.content_digest, mono: true },
+      { label: "Reference", value: "kind" in projection.solution && projection.solution.kind === "stage_output" ? "Stage output (awaiting publication)" : "Published asset" },
+      { label: "Asset", value: "asset_id" in projection.solution ? projection.solution.asset_id : "pending", mono: true },
+      { label: "Content digest", value: "content_digest" in projection.solution ? projection.solution.content_digest : "pending", mono: true },
       { label: "Target", value: targetValue(projection.target) },
       { label: "Publication", value: "Projection awaits a verified field-solution asset." },
     ],
@@ -357,6 +365,48 @@ function antennaDriveValidationMessages(
   scene: SceneResource | null,
 ): string[] {
   const messages: string[] = [];
+  if (!Number.isFinite(drive.peak_current_a)) {
+    messages.push("peak current must be finite");
+  }
+  const waveform = drive.waveform;
+  switch (waveform.kind) {
+    case "sinusoidal":
+      if (!Number.isFinite(waveform.frequency_hz) || waveform.frequency_hz <= 0) {
+        messages.push("sinusoidal frequency must be finite and > 0 Hz");
+      }
+      if (!Number.isFinite(waveform.phase_rad ?? 0) || !Number.isFinite(waveform.offset ?? 0)) {
+        messages.push("sinusoidal phase and offset must be finite");
+      }
+      break;
+    case "sinc_pulse":
+      if (!Number.isFinite(waveform.cutoff_hz) || waveform.cutoff_hz <= 0) {
+        messages.push("sinc cutoff must be finite and > 0 Hz");
+      }
+      if (!Number.isFinite(waveform.t0 ?? 0) || (waveform.t0 ?? 0) < 0 || !Number.isFinite(waveform.amplitude ?? 1)) {
+        messages.push("sinc t0 must be finite and >= 0 s; amplitude must be finite");
+      }
+      break;
+    case "pulse":
+      if (!Number.isFinite(waveform.t_on) || !Number.isFinite(waveform.t_off) || waveform.t_off <= waveform.t_on) {
+        messages.push("pulse requires finite t_off > t_on");
+      }
+      break;
+    case "piecewise_linear":
+      if (
+        waveform.points.length < 2 ||
+        waveform.points.some((point) => point.length !== 2 || point.some((value) => !Number.isFinite(value))) ||
+        waveform.points.some((point, index) => index > 0 && point[0] <= waveform.points[index - 1][0])
+      ) {
+        messages.push("piecewise-linear points must be finite pairs with strictly increasing times");
+      }
+      break;
+  }
+  if (drive.activation.kind === "stage_ids") {
+    const stageIds = drive.activation.stage_ids;
+    if (stageIds.length === 0 || stageIds.some((id) => !id.trim()) || new Set(stageIds).size !== stageIds.length) {
+      messages.push("activation stage ids must be non-empty and unique");
+    }
+  }
   if (scene?.antenna_port_modes) {
     const hasPort = scene.antenna_port_modes.some(
       (candidate) => candidate.id === drive.port_mode_id,
@@ -374,16 +424,6 @@ function antennaDriveValidationMessages(
     } else {
       for (const message of antennaProjectionValidationMessages(projection, scene)) {
         messages.push(`projection '${projection.id}': ${message}`);
-      }
-    }
-  }
-  if (drive.activation.kind === "stage_ids" && scene?.antenna_field_solve_stages) {
-    const stageIds = new Set(
-      scene.antenna_field_solve_stages.map((candidate) => candidate.id),
-    );
-    for (const stageId of drive.activation.stage_ids) {
-      if (!stageIds.has(stageId)) {
-        messages.push(`missing activation stage '${stageId}'`);
       }
     }
   }
@@ -480,6 +520,18 @@ function antennaSpectrumValidationMessages(
   ].includes(request.component)) {
     messages.push(`unsupported spectrum component '${request.component}'`);
   }
+  if (request.component === "transverse") {
+    if (!request.equilibrium_ref?.trim()) {
+      messages.push("transverse spectrum requires equilibrium_ref");
+    } else {
+      messages.push("transverse spectrum is unsupported until equilibrium projection is implemented");
+    }
+  }
+  if (request.mode_basis_ref !== null && request.mode_basis_ref !== undefined) {
+    messages.push(request.mode_basis_ref.trim()
+      ? "mode_basis_ref is unsupported until verified modal analysis is implemented"
+      : "mode_basis_ref must be non-empty when specified");
+  }
   if (!request.output_id.trim()) messages.push("missing spectrum output id");
   return messages;
 }
@@ -535,6 +587,8 @@ function spectrumDetails(
       { label: "Solve stage", value: request.solution_ref.stage_id, mono: true },
       { label: "Transform", value: request.transform },
       { label: "Component", value: request.component },
+      { label: "Equilibrium", value: request.equilibrium_ref || "none", mono: true },
+      { label: "Modal basis", value: request.mode_basis_ref || "none", mono: true },
       { label: "Target", value: targetValue(request.target) },
       { label: "Plane", value: `${plane.sample_count_u} × ${plane.sample_count_v}, ${plane.interpolation}` },
       { label: "Outside policy", value: plane.outside_policy },
@@ -582,10 +636,9 @@ function runtimeStatus<T>(
 
 function runtimeBadge(
   baseBadge: string,
-  resourceId: string | null,
-  result: { data: unknown; error: Error | null; status: string },
+  status: string,
 ): string {
-  switch (runtimeStatus(resourceId, result)) {
+  switch (status) {
     case "ready":
       return "ready";
     case "missing":
@@ -596,22 +649,23 @@ function runtimeBadge(
       return "stale result";
     case "error":
       return "result error";
+    case "identity mismatch":
+      return "stale result";
     default:
       return baseBadge;
   }
 }
 
 function fieldSolutionRuntimeRows(
-  resourceId: string | null,
   result: AntennaFieldSolutionResult,
+  verifiedStatus: string,
 ): DetailRow[] {
-  const status = runtimeStatus(resourceId, result);
   const data = result.data;
-  const rows: DetailRow[] = [{ label: "Runtime result", value: status }];
+  const rows: DetailRow[] = [{ label: "Runtime result", value: verifiedStatus }];
   if (result.error) {
     rows.push({ label: "Runtime error", value: result.error.message });
   }
-  if (!data) return rows;
+  if (!data || verifiedStatus !== "ready") return rows;
   rows.push(
     { label: "Published solution", value: data.solution_id, mono: true },
     { label: "Asset", value: data.asset_id, mono: true },
@@ -636,16 +690,15 @@ function fieldSolutionRuntimeRows(
 }
 
 function sourceSpectrumRuntimeRows(
-  resourceId: string | null,
   result: AntennaSourceSpectrumResult,
+  verifiedStatus: string,
 ): DetailRow[] {
-  const status = runtimeStatus(resourceId, result);
   const data = result.data;
-  const rows: DetailRow[] = [{ label: "Runtime result", value: status }];
+  const rows: DetailRow[] = [{ label: "Runtime result", value: verifiedStatus }];
   if (result.error) {
     rows.push({ label: "Runtime error", value: result.error.message });
   }
-  if (!data) return rows;
+  if (!data || verifiedStatus !== "ready") return rows;
   rows.push(
     { label: "Published output", value: data.output_id, mono: true },
     { label: "Content digest", value: data.content_digest, mono: true },
@@ -731,37 +784,33 @@ function enrichRuntimeModel(
   stageOutputCatalog: AntennaStageOutputCatalogResult,
   sourceSpectrum: AntennaSourceSpectrumResult,
 ): DetailModel {
-  const fieldStatus = runtimeStatus(ids.solutionId, fieldSolution);
+  const fieldStatus = antennaFieldSolutionIdentityStatus(ids, fieldSolution, stageOutputCatalog);
   const rows = [...model.rows];
 
-  if (
-    kind === "solution" ||
-    kind === "projection" ||
-    kind === "drive" ||
-    kind === "spectrum"
-  ) {
+  if (ids.stageId) {
     rows.push(...stageOutputCatalogRuntimeRows(ids.stageId, stageOutputCatalog));
   }
 
   if (kind === "solution") {
-    rows.push(...fieldSolutionRuntimeRows(ids.solutionId, fieldSolution));
+    rows.push(...fieldSolutionRuntimeRows(fieldSolution, fieldStatus));
     return {
       ...model,
-      badge: runtimeBadge(model.badge, ids.solutionId, fieldSolution),
+      badge: runtimeBadge(model.badge, fieldStatus),
       rows,
     };
   }
   if (kind === "spectrum") {
-    rows.push(...sourceSpectrumRuntimeRows(ids.spectrumOutputId, sourceSpectrum));
+    const spectrumStatus = antennaSpectrumIdentityStatus(ids, sourceSpectrum, stageOutputCatalog);
+    rows.push(...sourceSpectrumRuntimeRows(sourceSpectrum, spectrumStatus));
     return {
       ...model,
-      badge: runtimeBadge(model.badge, ids.spectrumOutputId, sourceSpectrum),
+      badge: runtimeBadge(model.badge, spectrumStatus),
       rows,
     };
   }
   if (kind === "projection" || kind === "drive") {
     rows.push({ label: "Field solution result", value: fieldStatus });
-    if (fieldSolution.data) {
+    if (fieldSolution.data && fieldStatus === "ready") {
       rows.push({
         label: "Published field digest",
         value: fieldSolution.data.content_digest,
@@ -769,7 +818,11 @@ function enrichRuntimeModel(
       });
     }
   }
-  return { ...model, rows };
+  return {
+    ...model,
+    badge: fieldStatus === "identity mismatch" ? "stale result" : model.badge,
+    rows,
+  };
 }
 
 export function AntennaCompositionPanel({
@@ -785,8 +838,7 @@ export function AntennaCompositionPanel({
     enabled:
       kind === "solution" ||
       kind === "projection" ||
-      kind === "drive" ||
-      kind === "spectrum",
+      kind === "drive",
   });
   const sourceSpectrum = useAntennaSourceSpectrumResource(ids.spectrumOutputId, {
     enabled: kind === "spectrum",
@@ -826,6 +878,8 @@ export function AntennaCompositionPanel({
           />
         ) : null}
       </InspectorGroup>
+      {kind === "solution" && resourceId ? <AntennaProjectionDriveComposer key={resourceId} stageId={resourceId} scene={scene.data} status={scene.status} refetch={scene.refetch} /> : null}
+      {kind === "drive" && resourceId ? <SolvedAntennaDriveEditor driveId={resourceId} scene={scene.data} status={scene.status} refetch={scene.refetch} /> : null}
       {kind === "spectrum" &&
       ids.spectrumOutputId &&
       sourceSpectrum.data?.payloads ? (

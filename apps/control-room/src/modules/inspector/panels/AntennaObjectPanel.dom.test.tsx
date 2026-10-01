@@ -194,6 +194,42 @@ describe("AntennaObjectPanel authoring stability", () => {
     }
   });
 
+  it("uses explicit defaults each time the waveform kind changes", async () => {
+    mocks.replaceFieldDrive.mockResolvedValue({ scene_revision: 13 });
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const { createRoot } = await import("react-dom/client");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => root.render(<AntennaObjectPanel selection={selection} />));
+      await act(async () => changeInput(container, "Frequency", "2000000000"));
+      await act(async () => changeSelect(container, "Waveform", "sinc_pulse"));
+      expect(findElement(container, "Waveform amplitude").value).toBe("1");
+      await act(async () => changeInput(container, "Waveform amplitude", "0.4"));
+      await act(async () => changeSelect(container, "Waveform", "sinusoidal"));
+      expect(findElement(container, "Frequency").value).toBe("10000000000");
+      expect(findElement(container, "Phase").value).toBe("0");
+      expect(findElement(container, "Offset").value).toBe("0");
+      await act(async () => findButton(container, "Save field drive").click());
+      expect(mocks.replaceFieldDrive).toHaveBeenCalledWith(
+        "antenna-drive",
+        expect.objectContaining({
+          drive: expect.objectContaining({
+            waveform: {
+              kind: "sinusoidal",
+              frequency_hz: 1e10,
+              phase_rad: 0,
+              offset: 0,
+            },
+          }),
+        }),
+      );
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
   it("fails closed when the scene revision is unavailable", async () => {
     mocks.sceneResource.data = {
       field_drives: {
@@ -321,10 +357,10 @@ describe("AntennaObjectPanel authoring stability", () => {
               kind: "regional",
               spatial_profile: { kind: "geometry_mask", object_id: "antenna" },
               waveform: {
-                frequency_hz: 1e9,
+                frequency_hz: 1.5e9,
                 kind: "sinusoidal",
-                offset: 0.2,
-                phase_rad: 0.7,
+                offset: 0.3,
+                phase_rad: 0.8,
               },
             },
           ],
@@ -337,6 +373,11 @@ describe("AntennaObjectPanel authoring stability", () => {
       expect(container.textContent).toContain("Server amplitude");
       expect(container.textContent).toContain("0.002");
       expect(container.textContent).toContain("0.001");
+      expect(container.textContent).toContain("Draft frequency");
+      expect(container.textContent).toContain("Server frequency");
+      expect(container.textContent).toContain("1500000000");
+      expect(container.textContent).toContain("Server phase");
+      expect(container.textContent).toContain("0.8");
       expect(findButton(container, "Rebase Draft").disabled).toBe(false);
 
       await act(async () => findButton(container, "Rebase Draft").click());
@@ -346,7 +387,15 @@ describe("AntennaObjectPanel authoring stability", () => {
         "antenna-drive",
         expect.objectContaining({
           base_revision: 13,
-          drive: expect.objectContaining({ amplitude_B_T: 0.002 }),
+          drive: expect.objectContaining({
+            amplitude_B_T: 0.002,
+            waveform: {
+              frequency_hz: 1.5e9,
+              kind: "sinusoidal",
+              offset: 0.3,
+              phase_rad: 0.8,
+            },
+          }),
         }),
       );
     } finally {
@@ -365,6 +414,12 @@ function changeInput(root: TestNode, label: string, value: string): void {
   if (!nativeValueSetter) throw new Error("Missing native test input value setter");
   nativeValueSetter.call(input, value);
   input.dispatchEvent(new TestEvent("input", { bubbles: true }));
+}
+
+function changeSelect(root: TestNode, label: string, value: string): void {
+  const select = findElement(root, label);
+  select.value = value;
+  select.dispatchEvent(new TestEvent("change", { bubbles: true }));
 }
 
 function findButton(root: TestNode, text: string): TestElement {

@@ -14,6 +14,7 @@ import { InspectorGroup } from "../primitives/InspectorGroup";
 import {
   buildAntennaCanonicalFieldDrive,
   buildAntennaLegacyMigrationPatch,
+  antennaWaveformDefaults,
   antennaObjectDraftKey,
   isAntennaObjectRevisionConflict,
   resolveAntennaObjectDraft,
@@ -28,6 +29,7 @@ type Feedback = {
 
 interface DraftState {
   draft: AntennaObjectDraft;
+  dirtyKeys: Array<keyof AntennaObjectDraft>;
   key: string;
 }
 
@@ -78,6 +80,7 @@ export function AntennaObjectPanel({ selection }: InspectorPanelProps) {
   const draftKey = antennaObjectDraftKey(selection, scene.data);
   const [draftState, setDraftState] = useState<DraftState>({
     draft: baseDraft,
+    dirtyKeys: [],
     key: draftKey,
   });
   const [feedbackState, setFeedbackState] = useState<FeedbackState>({
@@ -110,10 +113,14 @@ export function AntennaObjectPanel({ selection }: InspectorPanelProps) {
       : conflictPhase;
 
   function updateDraft(patch: Partial<AntennaObjectDraft>): void {
-    setDraftState((current) => ({
-      draft: { ...(current.key === draftKey ? current.draft : baseDraft), ...patch },
-      key: draftKey,
-    }));
+    setDraftState((current) => {
+      const dirtyKeys = current.key === draftKey ? current.dirtyKeys : [];
+      return {
+        draft: { ...(current.key === draftKey ? current.draft : baseDraft), ...patch },
+        dirtyKeys: [...new Set([...dirtyKeys, ...(Object.keys(patch) as Array<keyof AntennaObjectDraft>)])],
+        key: draftKey,
+      };
+    });
   }
 
   function setFeedback(feedbackValue: Feedback | null): void {
@@ -175,6 +182,17 @@ export function AntennaObjectPanel({ selection }: InspectorPanelProps) {
 
   function rebaseAfterRevisionConflict(): void {
     if (!revisionConflict || conflictViewPhase !== "refetched") return;
+    setDraftState((current) => {
+      if (current.key !== draftKey) return { draft: baseDraft, dirtyKeys: [], key: draftKey };
+      const edited = Object.fromEntries(
+        current.dirtyKeys.map((key) => [key, current.draft[key]]),
+      ) as Partial<AntennaObjectDraft>;
+      return {
+        draft: { ...baseDraft, ...edited },
+        dirtyKeys: current.dirtyKeys,
+        key: draftKey,
+      };
+    });
     setRevisionConflictState({
       ...revisionConflict,
       phase: "rebased",
@@ -236,11 +254,12 @@ export function AntennaObjectPanel({ selection }: InspectorPanelProps) {
           label="Waveform"
           type="select"
           value={draft.waveformKind}
-          onChange={(event) =>
-            updateDraft({
-              waveformKind: event.target.value as AntennaObjectDraft["waveformKind"],
-            })
-          }
+          onChange={(event) => {
+            const waveformKind = event.target.value as AntennaObjectDraft["waveformKind"];
+            if (waveformKind !== draft.waveformKind) {
+              updateDraft({ waveformKind, ...antennaWaveformDefaults[waveformKind] });
+            }
+          }}
         >
           <option value="constant">Constant</option>
           <option value="sinc_pulse">Sinc pulse</option>
@@ -323,6 +342,34 @@ export function AntennaObjectPanel({ selection }: InspectorPanelProps) {
             <FieldRow label="Server direction" value={baseDraft.direction} />
             <FieldRow label="Draft waveform" value={draft.waveformKind} />
             <FieldRow label="Server waveform" value={baseDraft.waveformKind} />
+            {draft.waveformKind === "sinusoidal" ? (
+              <>
+                <FieldRow label="Draft frequency" value={draft.sinusoidalFrequencyHz} unit="Hz" />
+                <FieldRow label="Draft phase" value={draft.sinusoidalPhaseRad} unit="rad" />
+                <FieldRow label="Draft offset" value={draft.sinusoidalOffset} />
+              </>
+            ) : null}
+            {baseDraft.waveformKind === "sinusoidal" ? (
+              <>
+                <FieldRow label="Server frequency" value={baseDraft.sinusoidalFrequencyHz} unit="Hz" />
+                <FieldRow label="Server phase" value={baseDraft.sinusoidalPhaseRad} unit="rad" />
+                <FieldRow label="Server offset" value={baseDraft.sinusoidalOffset} />
+              </>
+            ) : null}
+            {draft.waveformKind === "sinc_pulse" ? (
+              <>
+                <FieldRow label="Draft waveform amplitude" value={draft.sincAmplitude} />
+                <FieldRow label="Draft cutoff" value={draft.sincCutoffHz} unit="Hz" />
+                <FieldRow label="Draft t0" value={draft.sincT0} unit="s" />
+              </>
+            ) : null}
+            {baseDraft.waveformKind === "sinc_pulse" ? (
+              <>
+                <FieldRow label="Server waveform amplitude" value={baseDraft.sincAmplitude} />
+                <FieldRow label="Server cutoff" value={baseDraft.sincCutoffHz} unit="Hz" />
+                <FieldRow label="Server t0" value={baseDraft.sincT0} unit="s" />
+              </>
+            ) : null}
             <div className="fm-inspector-toolbar">
               <Button
                 disabled={pending || conflictViewPhase === "refreshing"}

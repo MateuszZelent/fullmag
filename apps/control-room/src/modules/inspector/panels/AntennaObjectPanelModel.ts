@@ -24,6 +24,20 @@ export interface AntennaObjectDraft {
   sinusoidalPhaseRad: string;
 }
 
+export const antennaWaveformDefaults = {
+  constant: {},
+  sinc_pulse: {
+    sincAmplitude: "1",
+    sincCutoffHz: "20000000000",
+    sincT0: "5e-11",
+  },
+  sinusoidal: {
+    sinusoidalFrequencyHz: "10000000000",
+    sinusoidalOffset: "0",
+    sinusoidalPhaseRad: "0",
+  },
+} as const;
+
 export interface AntennaObjectDraftPatchResult {
   error: string | null;
   modules: JsonRecord[] | null;
@@ -210,12 +224,12 @@ export function resolveAntennaObjectDraft(
       waveformKind === "sinc_pulse" || waveformKind === "sinusoidal"
         ? waveformKind
         : "constant",
-    sincAmplitude: compactNumber(waveform?.amplitude, "1"),
-    sincCutoffHz: compactNumber(waveform?.cutoff_hz, "20000000000"),
-    sincT0: compactNumber(waveform?.t0, "5e-11"),
-    sinusoidalFrequencyHz: compactNumber(waveform?.frequency_hz, "10000000000"),
-    sinusoidalOffset: compactNumber(waveform?.offset, "0"),
-    sinusoidalPhaseRad: compactNumber(waveform?.phase_rad, "0"),
+    sincAmplitude: compactNumber(waveform?.amplitude, antennaWaveformDefaults.sinc_pulse.sincAmplitude),
+    sincCutoffHz: compactNumber(waveform?.cutoff_hz, antennaWaveformDefaults.sinc_pulse.sincCutoffHz),
+    sincT0: compactNumber(waveform?.t0, antennaWaveformDefaults.sinc_pulse.sincT0),
+    sinusoidalFrequencyHz: compactNumber(waveform?.frequency_hz, antennaWaveformDefaults.sinusoidal.sinusoidalFrequencyHz),
+    sinusoidalOffset: compactNumber(waveform?.offset, antennaWaveformDefaults.sinusoidal.sinusoidalOffset),
+    sinusoidalPhaseRad: compactNumber(waveform?.phase_rad, antennaWaveformDefaults.sinusoidal.sinusoidalPhaseRad),
   };
 }
 
