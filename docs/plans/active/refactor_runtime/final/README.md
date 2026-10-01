@@ -15,6 +15,12 @@ dlatego nie podnosi procentów P3/P5.
 
 ## Dokumenty finalne
 
+Checkpoint 01.10.2026: [P6-54 — niezmienna geometria zapisanego pola](p6/54-immutable-saved-field-geometry.md)
+wiąże geometry/support CAS z dokładnym tensorem i historycznym ownerem,
+rozszerzając publication, recovery i live/archive retencję. Źródła PASS;
+native representation, runtime/FMS, transport i renderer pozostają otwarte.
+P6 około 52%, cały plan około 49%.
+
 Checkpoint 01.10.2026: [P6-53 — ograniczony podgląd wartości w Inspectorze](p6/53-bounded-saved-field-values-inspector.md)
 podłącza binarny slice do resource hooka i readonly tabeli z paginacją,
 limitem 64 KiB/32 elementów, wyborem komponentu i anulowaniem po zamknięciu.

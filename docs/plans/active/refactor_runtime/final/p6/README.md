@@ -204,3 +204,7 @@ pamięci i wszystkich lane'ów pozostają otwarte. P6 wynosi **52%**.
 53. [Ograniczony podgląd wartości w Inspectorze](53-bounded-saved-field-values-inspector.md)
     — resource-owned numeric window, 64 KiB/32 elementy, checksum, readonly
     pagination i anulowanie ostatniego odbiorcy; HTTP/renderer/nauka otwarte.
+
+54. [Niezmienna geometria zapisanego pola](54-immutable-saved-field-geometry.md)
+    — exact owner, canonical mesh/support CAS i publication/recovery/GC/FMS
+    closure; native representation, runtime, transport i renderer otwarte.
