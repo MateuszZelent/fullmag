@@ -81,6 +81,15 @@ def test_complete_antenna_authoring_round_trips_through_stage_script() -> None:
     study.device("cpu", precision="double")
     study.mode("strict")
     study.antenna_object(fm.Box(200e-9, 20e-9, 10e-9), name="antenna_1")
+    study.field_drives.add(fm.RegionalFieldDrive(
+        id="regional-bias",
+        name="Independent regional drive",
+        target=fm.FieldTarget.object("magnet_1"),
+        amplitude_B_T=0.001,
+        direction=(0, 1, 0),
+        spatial_profile=fm.UniformFieldProfile(),
+        waveform=fm.Constant(),
+    ))
     conductor = fm.RegionRef("antenna_1")
 
     # These pinned identities exercise authoring only; they are not a mesh or
@@ -241,6 +250,7 @@ def test_complete_antenna_authoring_round_trips_through_stage_script() -> None:
     for collection in (
         "physics_objects",
         "current_modules",
+        "field_drives",
         "antenna_port_modes",
         "antenna_field_solve_stages",
         "antenna_spectrum_requests",
@@ -254,6 +264,26 @@ def test_complete_antenna_authoring_round_trips_through_stage_script() -> None:
         "add_solved_antenna_drive",
         "run",
     ]
+    scene = build_scene_document_from_builder(export_builder_draft(loaded))
+    scene["field_drives"]["drives"][0]["amplitude_B_T"] = 0.002
+    edited = render_loaded_problem_as_script(
+        loaded, overrides=builder_overrides_from_scene_document(scene)
+    )
+    with TemporaryDirectory() as directory:
+        script_path = Path(directory) / "antenna_with_edited_regional_drive.py"
+        script_path.write_text(edited, encoding="utf-8")
+        edited_problem = load_problem_from_script(script_path).problem.to_ir(
+            include_geometry_assets=False
+        )
+    assert edited_problem["field_drives"][0]["amplitude_B_T"] == 0.002
+    for collection in (
+        "antenna_port_modes",
+        "antenna_field_solve_stages",
+        "antenna_spectrum_requests",
+        "antenna_target_projections",
+        "solved_antenna_drives",
+    ):
+        assert edited_problem[collection] == authored[collection]
 
 
 def test_study_registers_port_mode_in_canonical_problem() -> None:
