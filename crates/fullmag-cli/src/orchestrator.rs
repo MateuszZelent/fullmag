@@ -2538,6 +2538,78 @@ fn accepted_relax_handoff_from_completed_stage(
     .map_err(|error| anyhow!(error.to_string()))
 }
 
+fn accepted_relax_handoff_from_completed_stage_with_exact_artifacts(
+    backend_plan: &BackendPlanIR,
+    source_stage: &ContinuationStageSource,
+    source_mesh: &fullmag_runner::FemMeshPayload,
+    completion: &fullmag_ir::StageCompletionIR,
+    equilibrium_magnetization: &[[f64; 3]],
+    artifact_dir: &Path,
+    accepted_fields: &fullmag_runner::CertifiedFemEquilibriumFields,
+    certified_fields: &fullmag_runner::CertifiedFemEquilibriumFields,
+    recomputed_certificate: &fullmag_runner::RecomputedFemLinearizationCertificateV1,
+) -> Result<Option<fullmag_runner::AcceptedFemRelaxStageHandoff>> {
+    let BackendPlanIR::Fem(source_plan) = backend_plan else {
+        return Ok(None);
+    };
+    if !source_stage.is_relaxation {
+        return Ok(None);
+    }
+    let accepted_path = artifact_dir.join(
+        fullmag_runner::CertifiedFemEquilibriumFields::accepted_artifact_path_for_material(
+            &source_plan.material,
+        ),
+    );
+    let (certified_relative_path, recomputed_relative_path) =
+        fullmag_runner::CertifiedFemEquilibriumFields::artifact_paths_for_material(
+            &source_plan.material,
+        );
+    let certified_path = artifact_dir.join(certified_relative_path);
+    let recomputed_path = artifact_dir.join(recomputed_relative_path);
+    let producer_provenance_path = artifact_dir.join(
+        fullmag_runner::FEM_RELAXATION_PRODUCER_PROVENANCE_RELATIVE_PATH,
+    );
+    let read_exact = |path: &Path, label: &str| -> Result<Vec<u8>> {
+        fs::read(path).with_context(|| {
+            format!(
+                "verified FEM relaxation handoff did not publish exact {label} bytes {}",
+                path.display()
+            )
+        })
+    };
+    let producer_provenance_json = read_exact(&producer_provenance_path, "producer provenance")?;
+    let producer_provenance: fullmag_runner::FemRelaxationProducerProvenance =
+        serde_json::from_slice(&producer_provenance_json)
+        .with_context(|| {
+            format!(
+                "failed to decode producer provenance sidecar {}",
+                producer_provenance_path.display()
+            )
+        })?;
+    fullmag_runner::AcceptedFemRelaxStageHandoff::from_completed_relax_verified_with_exact_artifacts_and_provenance(
+        &source_stage.run_id,
+        &source_stage.stage_id,
+        &source_stage.stage_kind,
+        true,
+        source_plan,
+        source_mesh,
+        completion,
+        equilibrium_magnetization.to_vec(),
+        accepted_fields.clone(),
+        certified_fields.clone(),
+        recomputed_certificate.clone(),
+        fullmag_runner::AcceptedFemRelaxExactArtifacts {
+            accepted_fields_json: read_exact(&accepted_path, "accepted fields")?,
+            certified_fields_json: read_exact(&certified_path, "certified fields")?,
+            recomputed_certificate_json: read_exact(&recomputed_path, "recomputed certificate")?,
+        },
+        producer_provenance,
+        producer_provenance_json,
+    )
+    .map(Some)
+    .map_err(|error| anyhow!(error.to_string()))
+}
+
 fn replace_continuation_after_synthetic_stage(
     continuation_magnetization: &mut Option<Vec<[f64; 3]>>,
     continuation_source: &mut Option<ContinuationSource>,
@@ -8667,6 +8739,22 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         let is_final_stage = stage_index + 1 == stage_count;
         let is_session_final_stage = is_final_stage && !interactive_requested;
         let current_stage_id = format!("stage-{stage_index:03}");
+        // The native runner receives the stage ProblemIR, while the session
+        // run identity lives in orchestration.  Carry both identities through
+        // runtime metadata so the artifact writer can publish producer
+        // provenance from the actual run instead of reconstructing it later.
+        stage.ir.problem_meta.runtime_metadata.insert(
+            "producer_run_id".to_string(),
+            serde_json::Value::String(run_id.clone()),
+        );
+        stage.ir.problem_meta.runtime_metadata.insert(
+            "producer_stage_id".to_string(),
+            serde_json::Value::String(current_stage_id.clone()),
+        );
+        stage.ir.problem_meta.runtime_metadata.insert(
+            "producer_stage_kind".to_string(),
+            serde_json::Value::String(stage.entrypoint_kind.clone()),
+        );
         let current_stage_artifact_dir = stage_artifact_dir(
             &workspace_dir,
             &artifact_dir,
@@ -9470,12 +9558,13 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 Some(accepted_fields),
                 Some(certified_fields),
                 Some(recomputed_certificate),
-            ) => accepted_relax_handoff_from_completed_stage(
+            ) => accepted_relax_handoff_from_completed_stage_with_exact_artifacts(
                 &execution_plan.backend_plan,
                 &next_continuation_stage_source,
                 source_mesh,
                 completion,
                 &next_continuation_magnetization,
+                &current_stage_artifact_dir,
                 accepted_fields,
                 certified_fields,
                 recomputed_certificate,
@@ -10434,6 +10523,22 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 &stage.entrypoint_kind,
             );
             let current_stage_id = format!("stage-{interactive_stage_index:03}");
+            // Preserve the actual orchestration identity at the producer
+            // boundary.  Interactive FEM eigen sweeps use the same exact
+            // relaxation sidecar contract as scripted stages; never let the
+            // runner infer these values from the consuming modal stage.
+            stage.ir.problem_meta.runtime_metadata.insert(
+                "producer_run_id".to_string(),
+                serde_json::Value::String(run_id.clone()),
+            );
+            stage.ir.problem_meta.runtime_metadata.insert(
+                "producer_stage_id".to_string(),
+                serde_json::Value::String(current_stage_id.clone()),
+            );
+            stage.ir.problem_meta.runtime_metadata.insert(
+                "producer_stage_kind".to_string(),
+                serde_json::Value::String(stage.entrypoint_kind.clone()),
+            );
             fs::create_dir_all(&current_stage_artifact_dir).with_context(|| {
                 format!(
                     "failed to create interactive stage artifact dir {}",

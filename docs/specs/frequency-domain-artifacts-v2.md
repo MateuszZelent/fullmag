@@ -1320,7 +1320,9 @@ Their singular manifest keys are `equilibrium_artifact_v8_path` and
 `linearization_state_v7_path`; multi-sample keys are
 `equilibrium_artifact_v8_paths[]` and `linearization_state_v7_paths[]`.
 Kontrakt R4 dodaje tablice `accepted_fem_equilibrium_fields_v1_paths[]`,
-`accepted_fem_equilibrium_fields_v2_paths[]` i `linearization_identity_v2_paths[]`.
+`accepted_fem_equilibrium_fields_v2_paths[]`,
+`linearization_identity_v2_paths[]` oraz
+`linearization_identity_preimage_v1_paths[]`.
 Dodatkowe tablice `certified_fem_equilibrium_fields_v1_paths[]`,
 `certified_fem_equilibrium_fields_v2_paths[]`,
 `recomputed_fem_linearization_certificate_v1_paths[]` oraz
@@ -1328,10 +1330,31 @@ Dodatkowe tablice `certified_fem_equilibrium_fields_v1_paths[]`,
 recomputed i certyfikat różnic. Puste tablice nie dowodzą replay; producent
 kontynuacji musi dostarczyć wszystkie payloady przed kwalifikacją R4.
 Wskazują rzeczywiście obecne immutable sidecars w `eigen/metadata/sample_NNNN/`.
+Nowy producer wyznacza coverage z rzeczywistego zbioru
+`eigen/spectrum.v2.json.samples[*].sample_index`; nie wolno zastępować go
+zakresem `0..sample_count` ani największym indeksem. Manifest może dodać
+`artifacts.linearization_identity_sha256_by_sample`, którego klucze są
+indeksami próbek, a wartościami są digesty odczytane i zweryfikowane z
+identity sidecarów. Brak identity/preimage, różny zbiór próbek, mieszana
+rodzina V1/V2, niepełna rodzina certified/recomputed albo niezgodny raw-byte
+digest oznacza `r4_replay.qualification = "NOT_VERIFIED"` i nie może ustawić
+bramki R4 jako gotowej.
+Jeżeli accepted oraz identity/preimage są poprawnie związane, ale rodzina
+certified/recomputed jest niepełna, manifest zachowuje mapę
+`linearization_identity_sha256_by_sample` i publikuje
+`r4_replay.status = "missing_recomputed"` wraz z
+`r4_replay.missing_recomputed_keys[]`; ten dowód identity nie oznacza replay
+payloadu ani kwalifikacji naukowej.
 Konflikt różnych bajtów podpisanych dokumentów pod jedną ścieżką próbki
 jest błędem agregacji; deduplikacja nie wybiera wtedy pierwszego dokumentu.
 Relokacja zachowuje dokładne bajty dokumentu, preimages i source identity;
 selekcja pól modów nie usuwa dowodów stanu równowagi policzonych próbek.
+Jeżeli producer dostarczył zwalidowany sidecar
+`eigen/metadata/sample_NNNN/producer_provenance.v1.json`, manifest publikuje
+`producer_provenance_v1_path` dla pojedynczego sample oraz
+`producer_provenance_v1_paths[]` w kolejności numerycznej `sample_index`.
+Wartość jest oryginalną ścieżką producenta i nie może być rekonstruowana przez
+relokację ani zmianę bajtów sidecara.
 Dla spectrum-only `mode_field_storage_format = "none"`; dokumenty stanu
 nie stanowią payloadów pól modów. Accepted fields są dowodami naukowymi,
 nie dowolnym opaque JSON: wymagają replay obu rodzin V1/V2 oraz związania
@@ -1357,6 +1380,111 @@ request and must match the source canonical identity. Changed Ku or physical axi
 must be rejected. Acceptance certificates, certified fields, mesh/phase binding,
 content digests and equilibrium/state IDs remain mandatory. This migration alone
 does not enable or scientifically qualify the public Ku modal path.
+
+### Kontrakt linearization_identity.v2
+
+Szczegółowy opis naukowy znajduje się w
+docs/physics/r4-linearization-identity-v2.md. Ten artefakt jest addytywnym
+rekordem pochodzenia jednego sample modalnego, a jego obecność nie kwalifikuje
+solvera ani nie zastępuje residualu, zbieżności siatki/airboxu, branch trackingu
+lub dowodu runtime.
+
+Canonical path ma postać
+`eigen/metadata/sample_NNNN/linearization_identity.v2.json`, a jego exact
+preimage jest w
+`eigen/metadata/sample_NNNN/linearization_identity_preimage.v1.json`. Token
+`NNNN` jest minimalną szerokością zgodną z Rust `format!("{index:04}")`:
+`sample_0007` jest poprawne, `sample_00000` jest niepoprawne, a indeks
+`10000` ma ścieżkę `sample_10000`. Manifest publikuje
+tablice artifacts.linearization_identity_v2_paths[] oraz
+artifacts.linearization_identity_preimage_v1_paths[]; kolejność tablic odpowiada
+kolejnym sample_index. Dotyczy to KSamplingIR::Single i każdego punktu
+KSamplingIR::Path. Nie wolno dopisywać brakującego punktu przez symetrię +k/-k.
+
+Identity wiąże następujące grupy pól:
+
+- family: schema_version, sample_index, equilibrium/state/fields/certificate
+  schema pairs;
+- handoff: handoff_schema_version, handoff_content_sha256, source_run_id,
+  source_stage_id i source_stage_kind;
+- source/build: producer_plan_snapshot_sha256,
+  consumer_plan_snapshot_sha256, producer_build_identity,
+  consumer_build_identity, oba source_snapshot_sha256 oraz
+  cross_build_policy=same_source_snapshot_required;
+- geometry/state: source_mesh_topology_sha256,
+  modal_mesh_topology_fingerprint_v3, node_count,
+  equilibrium_content_sha256, equilibrium_artifact_path/digest i
+  linearization_state_path/digest;
+- physical identity: equilibrium_material_signature i preimage,
+  equilibrium_static_physics_signature i preimage oraz
+  equilibrium_boundary_signature i preimage;
+- raw material provenance: material_signature,
+  material_identity_kind, material_provenance_signature/scope/preimage oraz
+  producer_material_provenance_signature/preimage;
+- exact payloads: accepted/certified/recomputed content digests, paths, raw byte
+  digests oraz recomputed_certificate_preimage_json i jego raw digest;
+- own digest: content_sha256.
+
+Rodziny są nieprzenikalne: Ku-free zachowuje equilibrium_artifact.v7,
+LinearizationState.v6, fields/certificate V1 i historyczny raw
+material_signature. Canonical Ku, również jawne Ku=0, wymaga
+equilibrium_artifact.v8, LinearizationState.v7, fields/certificate V2,
+material_identity_kind=canonical_equilibrium_material.v2 i
+material_provenance_scope=materialization_plan. V1 nie może reklamować pól V2,
+a pary V1/V2 nie mogą być mieszane w sample.
+
+Fizyczna sygnatura equilibrium jest oddzielona od raw MaterialIR provenance.
+Damping relaksacji i damping eigen mogą się różnić bez zmiany physical
+material/static/boundary identity; zmiana Ku, canonical axis, statycznego
+materiału lub boundary jest odrzucana. source_mesh_topology_sha256 jest
+topologią źródłowej relaksacji, a modal_mesh_topology_fingerprint_v3 jest
+mieszaną topologią operatora modalnego i nie wolno ich nadpisywać.
+
+content_sha256 identity jest liczony z exact UTF-8 JSON po wyzerowaniu własnego
+content_sha256:
+
+~~~{math}
+p_{\mathrm{id}} =
+\operatorname{JSON}_{\mathrm{serde}}
+\left(I_{\mathrm{v2}}[
+\mathrm{content\_sha256}\leftarrow\text{""}]
+\right),
+\qquad
+D_{\mathrm{id}} =
+\operatorname{SHA256}\left(
+\texttt{linearization\_identity.v2}\Vert\mathtt{0x00}
+\Vert\operatorname{LE}_{64}(|p_{\mathrm{id}}|)
+\Vert p_{\mathrm{id}}
+\right).
+~~~
+
+Exact recomputed-certificate preimage jest przechowywany oddzielnie od jego
+historycznego content digest. Producer publikuje również addytywny
+sample-scoped `linearization_identity_preimage.v1.json` z tablicą
+`artifacts.linearization_identity_preimage_v1_paths[]`. Sidecar ma
+`schema_version = linearization_identity_preimage.v1` oraz pola exact UTF-8
+`identity_preimage_json`, `identity_preimage_sha256` i
+`identity_content_sha256`; jego własny digest nie należy do p_id. Konsument
+porównuje exact preimage, typed semantic equality identity po wyzerowaniu
+`content_sha256` i framed digest. Brak sidecara dla deklarowanego identity jest
+błędem fail-closed. Python replay własnego identity może działać na takim
+artefakcie, lecz pełny R4 i managed runtime nadal mają status NOT VERIFIED.
+
+Odbiornik odrzuca brak payloadu/identity, family mismatch, niezgodny mesh/m0,
+różne source snapshots, różne fizyczne sygnatury, zmienione exact bytes,
+nieznaną politykę, konflikt dokumentów pod jedną ścieżką oraz V2 bez
+canonical kind/provenance. Puste tablice legacy nie deklarują drugiej rodziny.
+
+Nieobecność wszystkich tablic R4 w historycznym manifeście jest stanem
+`r4_replay.status = "historical"` i `qualification = "NOT_VERIFIED"`; pozostaje
+czytelna w dotychczasowym zakresie i nie jest nowym dowodem kwalifikacji
+runtime. Częściowa lub niespójna obecność tablic publikuje przyczynę
+`r4_replay.status = "invalid"`, `missing_identity`, `missing_recomputed` albo
+`missing_accepted`, lecz nie promuje ogólnego manifestu do pełnej kwalifikacji.
+Stan `payload_replay_pending` oznacza wyłącznie poprawne strukturalnie ścieżki
+i exact own-link identity; replay fizycznych pól, residual, siatki i managed
+runtime pozostają osobnymi bramkami.
+
 
 For modal k-path dispersion manifests, `capabilities.dispersion` must publish
 lane-specific status entries for:

@@ -30,13 +30,16 @@ pub(crate) mod eigen_execution_resolution;
 pub(crate) mod eigen_mass_metric;
 pub(crate) mod eigen_math;
 pub(crate) mod eigen_native_artifacts;
+mod eigen_nonshared_domain;
 pub(crate) mod eigen_native_result;
 pub(crate) mod eigen_native_window;
 pub(crate) mod eigen_operator;
 pub(crate) mod eigen_output;
 mod eigen_path;
 pub(crate) mod eigen_physical_potential;
-pub(crate) use eigen_path::execute_fem_eigen_path;
+pub(crate) use eigen_path::{
+    execute_fem_eigen_path, execute_fem_eigen_path_with_producer_identity,
+};
 #[cfg(test)]
 pub(crate) use eigen_path::test_support;
 pub(crate) mod eigen_policy;

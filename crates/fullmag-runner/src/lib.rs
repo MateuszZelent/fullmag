@@ -467,7 +467,11 @@ pub use capabilities::{
 };
 pub use fem_eigen::{
     fem_relax_equilibrium_identity_signatures, validate_recomputed_fem_linearization_certificate,
-    AcceptedFemRelaxStageHandoff,
+    AcceptedFemRelaxExactArtifacts, AcceptedFemRelaxStageHandoff,
+    FemRelaxationProducerBuildIdentity, FemRelaxationProducerPayloadRef,
+    FemRelaxationProducerPayloads, FemRelaxationProducerPlanSnapshot,
+    FemRelaxationProducerProvenance, FEM_RELAXATION_PRODUCER_PLAN_NAMESPACE_V1,
+    FEM_RELAXATION_PRODUCER_PROVENANCE_RELATIVE_PATH, FEM_RELAXATION_PRODUCER_PROVENANCE_V1,
 };
 pub use interactive::backend::BackendGeometry;
 pub use interactive::checkpoints::RunOutcome;
@@ -2422,6 +2426,41 @@ fn validate_sampling_resolution_provenance(
     Ok(())
 }
 
+/// Bind a newly executed standalone FEM producer before dispatch. Imported
+/// equilibrium records retain their own identity; this only names the execution
+/// owned by this entry point. Complete orchestrator bindings are preserved.
+fn bind_fem_execution_stage_identity<'a>(
+    problem: &'a ProblemIR,
+    plan: &fullmag_ir::ExecutionPlanIR,
+) -> Result<std::borrow::Cow<'a, ProblemIR>, RunError> {
+    let stage_kind = match &plan.backend_plan {
+        BackendPlanIR::Fem(fem) if fem.relaxation.is_some() => "relaxation",
+        BackendPlanIR::FemEigen(eigen) if !eigen.bias_field_samples.is_empty() => "eigenmodes",
+        _ => return Ok(std::borrow::Cow::Borrowed(problem)),
+    };
+    let keys = ["producer_run_id", "producer_stage_id", "producer_stage_kind"];
+    let metadata = &problem.problem_meta.runtime_metadata;
+    let declared = keys.iter().filter(|key| metadata.contains_key(**key)).count();
+    if declared != 0 {
+        if declared != keys.len()
+            || fem::eigen_equilibrium_contract::FemRelaxationProducerStageIdentity::from_problem(problem)
+                .is_none()
+        {
+            return Err(RunError {
+                message: "fem_producer_stage_identity_incomplete_or_invalid".to_string(),
+            });
+        }
+        return Ok(std::borrow::Cow::Borrowed(problem));
+    }
+    let mut bound = problem.clone();
+    let metadata = &mut bound.problem_meta.runtime_metadata;
+    let run_id = format!("run-{}", uuid::Uuid::new_v4());
+    metadata.insert("producer_run_id".to_string(), serde_json::json!(run_id));
+    metadata.insert("producer_stage_id".to_string(), serde_json::json!("stage-001"));
+    metadata.insert("producer_stage_kind".to_string(), serde_json::json!(stage_kind));
+    Ok(std::borrow::Cow::Owned(bound))
+}
+
 /// Plan and run a problem, writing artifacts to `output_dir`.
 ///
 /// This is the top-level entry point: ProblemIR → plan → execute → artifacts.
@@ -2446,6 +2485,8 @@ pub fn run_planned_problem(
     until_seconds: f64,
     output_dir: &Path,
 ) -> Result<RunResult, RunError> {
+    let execution_problem = bind_fem_execution_stage_identity(problem, plan)?;
+    let problem = execution_problem.as_ref();
     require_resolved_runtime_sampling(problem, plan)?;
     require_physics_graph_runtime_provenance(problem, plan)?;
     if let fullmag_ir::StudyIR::Hysteresis { .. } = &problem.study {
@@ -2533,7 +2574,16 @@ pub fn run_planned_problem(
         }
         BackendPlanIR::FemEigen(fem) => {
             let execution = dispatch::resolve_planned_fem_eigen_execution(problem, plan, fem)?;
-            dispatch::execute_fem_eigen(execution, fem, &plan.output_plan.outputs)
+            let producer_identity =
+                fem::eigen_equilibrium_contract::FemRelaxationProducerStageIdentity::from_problem(
+                    problem,
+                );
+            dispatch::execute_fem_eigen_with_producer_identity(
+                execution,
+                fem,
+                &plan.output_plan.outputs,
+                producer_identity.as_ref(),
+            )
         }
         BackendPlanIR::FemFrequencyResponse(response) => {
             let stage_context =
@@ -2820,6 +2870,8 @@ pub fn run_planned_problem_with_callback_and_fem_mesh_identity_and_relax_handoff
     relax_handoff: Option<&AcceptedFemRelaxStageHandoff>,
     mut on_step: impl FnMut(StepUpdate) -> StepAction + Send,
 ) -> Result<RunResult, RunError> {
+    let execution_problem = bind_fem_execution_stage_identity(problem, plan)?;
+    let problem = execution_problem.as_ref();
     require_resolved_runtime_sampling(problem, plan)?;
     require_physics_graph_runtime_provenance(problem, plan)?;
     if let fullmag_ir::StudyIR::Hysteresis { .. } = &problem.study {
@@ -2939,6 +2991,10 @@ pub fn run_planned_problem_with_callback_and_fem_mesh_identity_and_relax_handoff
         }
         BackendPlanIR::FemEigen(fem) => {
             let execution = dispatch::resolve_planned_fem_eigen_execution(problem, plan, fem)?;
+            let producer_identity =
+                fem::eigen_equilibrium_contract::FemRelaxationProducerStageIdentity::from_problem(
+                    problem,
+                );
             let mut progress_callback = |progress| {
                 on_step(fem_eigen_progress_update(
                     progress,
@@ -2948,18 +3004,20 @@ pub fn run_planned_problem_with_callback_and_fem_mesh_identity_and_relax_handoff
                 ))
             };
             match relax_handoff {
-                Some(handoff) => dispatch::execute_fem_eigen_with_progress_and_stage_handoff(
+                Some(handoff) => dispatch::execute_fem_eigen_with_progress_and_stage_handoff_and_producer_identity(
                     execution,
                     fem,
                     &runtime_outputs,
                     &mut progress_callback,
                     handoff,
+                    producer_identity.as_ref(),
                 ),
-                None => dispatch::execute_fem_eigen_with_progress(
+                None => dispatch::execute_fem_eigen_with_progress_and_producer_identity(
                     execution,
                     fem,
                     &runtime_outputs,
                     &mut progress_callback,
+                    producer_identity.as_ref(),
                 ),
             }
         }
@@ -3282,6 +3340,8 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
     initial_snapshot: bool,
     mut on_step: impl FnMut(StepUpdate) -> StepAction + Send,
 ) -> Result<RunResult, RunError> {
+    let execution_problem = bind_fem_execution_stage_identity(problem, plan)?;
+    let problem = execution_problem.as_ref();
     require_resolved_runtime_sampling(problem, plan)?;
     if let fullmag_ir::StudyIR::Hysteresis { .. } = &problem.study {
         return hysteresis::run_planned_hysteresis_with_live_preview(
@@ -3418,6 +3478,10 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
         }
         BackendPlanIR::FemEigen(fem) => {
             let execution = dispatch::resolve_planned_fem_eigen_execution(problem, plan, fem)?;
+            let producer_identity =
+                fem::eigen_equilibrium_contract::FemRelaxationProducerStageIdentity::from_problem(
+                    problem,
+                );
             let mut progress_callback = |progress| {
                 on_step(fem_eigen_progress_update(
                     progress,
@@ -3426,11 +3490,12 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
                         .and_then(|context| context.generation_id()),
                 ))
             };
-            dispatch::execute_fem_eigen_with_progress(
+            dispatch::execute_fem_eigen_with_progress_and_producer_identity(
                 execution,
                 fem,
                 &runtime_outputs,
                 &mut progress_callback,
+                producer_identity.as_ref(),
             )
         }
         BackendPlanIR::FemFrequencyResponse(response) => {
@@ -3802,6 +3867,8 @@ pub fn run_problem_with_interactive_fem_runtime_live_preview_interruptible(
     mut on_step: impl FnMut(StepUpdate) -> StepAction + Send,
 ) -> Result<RunResult, RunError> {
     let plan = fullmag_plan::plan(problem)?;
+    let execution_problem = bind_fem_execution_stage_identity(problem, &plan)?;
+    let problem = execution_problem.as_ref();
     require_physics_graph_runtime_provenance(problem, &plan)?;
     let BackendPlanIR::Fem(fem) = &plan.backend_plan else {
         return Err(RunError {
@@ -5801,6 +5868,50 @@ mod tests {
     fn certified_mixed_cpu_relaxation_guard_fixture(
     ) -> (fullmag_ir::ProblemIR, fullmag_ir::ExecutionPlanIR) {
         certified_mixed_cpu_relaxation_guard_fixture_for_layers(1)
+    }
+
+    #[test]
+    fn standalone_fem_producer_identity_is_allocated_before_execution_and_preserves_caller() {
+        let (problem, plan) = certified_mixed_cpu_relaxation_guard_fixture();
+        let first = bind_fem_execution_stage_identity(&problem, &plan).expect("first execution");
+        let second = bind_fem_execution_stage_identity(&problem, &plan).expect("second execution");
+        let first_id = fem::eigen_equilibrium_contract::FemRelaxationProducerStageIdentity::from_problem(first.as_ref())
+            .expect("bound producer identity");
+        let second_id = fem::eigen_equilibrium_contract::FemRelaxationProducerStageIdentity::from_problem(second.as_ref())
+            .expect("second producer identity");
+        assert_ne!(first_id.run_id, second_id.run_id);
+        assert_eq!(first_id.stage_id, "stage-001");
+        assert_eq!(first_id.stage_kind, "relaxation");
+        assert!(!problem.problem_meta.runtime_metadata.contains_key("producer_run_id"));
+        let preserved = bind_fem_execution_stage_identity(first.as_ref(), &plan).expect("explicit identity");
+        assert!(matches!(preserved, std::borrow::Cow::Borrowed(_)));
+        assert_eq!(
+            fem::eigen_equilibrium_contract::FemRelaxationProducerStageIdentity::from_problem(preserved.as_ref()),
+            Some(first_id),
+        );
+    }
+
+    #[test]
+    fn standalone_fem_producer_identity_rejects_partial_or_invalid_caller_metadata() {
+        let (problem, plan) = certified_mixed_cpu_relaxation_guard_fixture();
+        for invalid in [
+            json!({"producer_run_id": "source-run"}),
+            json!({"producer_run_id": "source-run", "producer_stage_id": "stage-001", "producer_stage_kind": null}),
+            json!({"producer_run_id": " ", "producer_stage_id": "stage-001", "producer_stage_kind": "relaxation"}),
+        ] {
+            let mut candidate = problem.clone();
+            for (key, value) in invalid.as_object().expect("metadata object") {
+                candidate.problem_meta.runtime_metadata.insert(key.clone(), value.clone());
+            }
+            let error = bind_fem_execution_stage_identity(&candidate, &plan).expect_err("invalid producer metadata");
+            assert_eq!(error.message, "fem_producer_stage_identity_incomplete_or_invalid");
+        }
+        let fdm_problem = ProblemIR::bootstrap_example();
+        let fdm_plan = fullmag_plan::plan(&fdm_problem).expect("FDM plan");
+        assert!(matches!(
+            bind_fem_execution_stage_identity(&fdm_problem, &fdm_plan).expect("unrelated lane"),
+            std::borrow::Cow::Borrowed(_)
+        ));
     }
 
     fn topology_guard_error(

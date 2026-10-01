@@ -1219,8 +1219,8 @@ def validate_r4_signed_sidecars(
         )
     return _r4_discovery_result(
         "payload_replay_pending",
-        "R4 sidecar paths are structurally consistent; accepted/recomputed "
-        "payload replay is not implemented",
+        "R4 sidecar paths are structurally consistent; source payload replay "
+        "is reported separately and independent operator replay remains pending",
         accepted_family=accepted_family,
         accepted_sample_indices=accepted_sample_indices,
         identity_sample_indices=set(identity_v2),
@@ -1271,6 +1271,92 @@ def validate_producer_provenance_discovery(
         "sample_indices": indices,
         "payload_replay_status": "NOT_VERIFIED",
     }
+
+
+def validate_producer_payload_replay(root: Path, manifest: dict) -> dict[str, object]:
+    """Replay producer payloads when v2 identity is available, independently of assembly.
+
+    This source-only gate neither validates the modal assembly family nor
+    replaces the later equilibrium/state validators or operator replay.
+    Nonshared bundles without this identity need their separate source-state
+    replay; no shared identity is inferred or fabricated for them.
+    """
+    root = root.resolve()
+    artifacts = manifest.get("artifacts", {})
+    producers = _declared_r4_sidecar_paths(
+        root, artifacts, "producer_provenance_v1_paths", "producer_provenance.v1.json"
+    )
+    if not producers:
+        return {"status": "NOT_VERIFIED", "reason": "producer provenance absent"}
+    identities = _declared_r4_sidecar_paths(
+        root, artifacts, R4_IDENTITY_SIDECAR_KEY, "linearization_identity.v2.json"
+    )
+    if not identities:
+        return {"status": "NOT_VERIFIED", "reason": "shared identity absent; nonshared replay required"}
+    preimages = _declared_r4_sidecar_paths(
+        root, artifacts, R4_IDENTITY_PREIMAGE_KEY, "linearization_identity_preimage.v1.json"
+    )
+    if not preimages:
+        return {"status": "NOT_VERIFIED", "reason": "identity exact preimage absent"}
+    pairs = _state_path_pairs(root, manifest, schema="v8") or _state_path_pairs(
+        root, manifest, schema="v7"
+    )
+    if not pairs:
+        return {"status": "NOT_VERIFIED", "reason": "equilibrium/state artifacts absent"}
+    state_by_index = {
+        (_r4_sidecar_sample_index(relative, eq.name, "producer replay equilibrium path") if key else 0): (relative, eq, state)
+        for relative, eq, state, key in pairs
+    }
+    if set(producers) != set(identities) or set(producers) != set(preimages) or set(producers) != set(state_by_index):
+        fail("producer payload replay sample coverage differs from identity/equilibrium/state")
+    from fem_producer_provenance_replay import (
+        ProducerArtifactPaths, ProducerProvenanceReplayError, replay_producer_provenance,
+    )
+    reports = {}
+    for index, (_, producer_path) in producers.items():
+        identity_path = identities[index][1]
+        try:
+            identity = strict_json_object(identity_path.read_bytes(), "linearization identity")
+        except IdentityReplayError as error:
+            fail(f"producer payload replay sample {index}: {error}")
+        if type(identity.get("sample_index")) is not int:
+            fail("producer replay identity sample_index must be an integer")
+        require_equal(identity.get("sample_index"), index, "producer replay identity sample_index")
+        relative, eq_path, state_path = state_by_index[index]
+        eq, state = load_json(eq_path), load_json(state_path)
+        for prefix, path, payload in (
+            ("equilibrium_artifact", eq_path, eq), ("linearization_state", state_path, state),
+        ):
+            require_equal(identity.get(prefix + "_path"), path.relative_to(root).as_posix(), prefix + " replay path")
+            require_equal(identity.get(prefix + "_sha256"), payload.get("content_sha256"), prefix + " replay content")
+            require_equal(identity.get(prefix + "_schema"), payload.get("schema_version"), prefix + " replay schema")
+        payload_paths = {}
+        for name, field in (
+            ("accepted_fields", "accepted_fields_path"),
+            ("certified_fields", "certified_fields_path"),
+            ("recomputed_certificate", "recomputed_certificate_path"),
+        ):
+            payload_paths[name] = require_bundle_path(root, identity.get(field), field)[1]
+        try:
+            report = replay_producer_provenance(
+                ProducerArtifactPaths(
+                    producer_root=root.resolve(), provenance_path=producer_path,
+                    equilibrium_magnetization_path=eq_path, identity_path=identity_path,
+                    identity_preimage_path=preimages[index][1], payload_paths=payload_paths,
+                ),
+                expected_source_run_id=identity.get("source_run_id"),
+                expected_source_stage_id=identity.get("source_stage_id"),
+                expected_source_stage_kind=identity.get("source_stage_kind"),
+                expected_source_snapshot_sha256=identity.get("consumer_source_snapshot_sha256"),
+            )
+        except ProducerProvenanceReplayError as error:
+            fail(f"producer payload replay sample {index}: {error}")
+        reports[str(index)] = {
+            "status": report.status, "identity_content_sha256": report.identity_content_sha256,
+            "producer_sidecar_raw_sha256": report.sidecar_raw_sha256,
+            "scientific_qualification": report.scientific_qualification,
+        }
+    return {"status": "source_payloads_replayed", "samples": reports, "operator_replay_status": "NOT_VERIFIED"}
 
 
 def _declared_state_paths(
@@ -1416,6 +1502,7 @@ def validate_equilibrium_artifacts(
     r4_discovery["producer_provenance_discovery"] = validate_producer_provenance_discovery(
         root, artifacts, computed_sample_indices,
     )
+    r4_discovery["producer_payload_replay"] = validate_producer_payload_replay(root, manifest)
     def has_declared_path(keys: tuple[str, ...]) -> bool:
         return any(
             key in artifacts

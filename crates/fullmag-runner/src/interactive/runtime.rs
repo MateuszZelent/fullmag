@@ -444,6 +444,8 @@ impl InteractiveRuntime {
         interrupt_requested: Option<&AtomicBool>,
         mut on_step: impl FnMut(StepUpdate) -> StepAction + Send,
     ) -> Result<RunResult, RunError> {
+        let execution_problem = crate::bind_fem_execution_stage_identity(problem, plan)?;
+        let problem = execution_problem.as_ref();
         crate::require_resolved_runtime_sampling(problem, plan)?;
         if matches!(problem.study, StudyIR::Hysteresis { .. }) {
             let stage_asset =

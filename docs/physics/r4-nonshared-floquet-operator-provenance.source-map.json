@@ -1,0 +1,40 @@
+{
+  "document": {
+    "path": "docs/physics/r4-nonshared-floquet-operator-provenance.md"
+  },
+  "backend_matrix": [
+    {"solver": "FEM", "device": "CPU", "status": "source_visible"},
+    {"solver": "FEM", "device": "GPU", "status": "source_visible", "reason": "Wspólny rekord jest przenoszony addytywnie; wykonanie GPU pozostaje NOT VERIFIED."},
+    {"solver": "FDM", "device": "CPU", "status": "not-applicable", "reason": "Ten rekord opisuje wyłącznie runnerowy matrix pencil native FEM; FDM nie konsumuje tego kontraktu."},
+    {"solver": "FDM", "device": "GPU", "status": "not-applicable", "reason": "Ten rekord opisuje wyłącznie runnerowy matrix pencil native FEM; FDM nie konsumuje tego kontraktu."}
+  ],
+  "equations": [
+    {"id": "eq-nonshared-floquet-pencil", "symbols": ["K-omega", "B", "k", "lambda", "q"], "sources": ["eigen-nonshared-domain"]},
+    {"id": "eq-nonshared-floquet-phase", "symbols": ["k", "Delta-r", "phi"], "sources": ["eigen-policy"]}
+  ],
+  "symbols": [
+    {"id": "K-omega", "latex": "K_{\\omega}", "meaning": "macierz pola liniaryzacji pomnożona przez `gamma_0`", "si_unit": "$\\mathrm{s^{-1}}$ w reprezentacji masowej"},
+    {"id": "B", "latex": "B", "meaning": "macierz pencil: blok żyromagnetyczny i masa styczna", "si_unit": "zależna od normalizacji FEM"},
+    {"id": "M-t", "latex": "M_t", "meaning": "tangent mass użyta przez solver", "si_unit": "$\\mathrm{m^3}$ w dyskretyzacji pola"},
+    {"id": "m-0", "latex": "m_0", "meaning": "magnetyzacja równowagi", "si_unit": "$1$"},
+    {"id": "alpha", "latex": "\\alpha", "meaning": "tłumienie planu modalnego", "si_unit": "$1$"},
+    {"id": "k", "latex": "\\mathbf{k}", "meaning": "wektor falowy", "si_unit": "$\\mathrm{rad\\,m^{-1}}$"},
+    {"id": "Delta-r", "latex": "\\Delta\\mathbf r", "meaning": "translacja pary periodycznej", "si_unit": "$\\mathrm{m}$"},
+    {"id": "phi", "latex": "\\phi", "meaning": "faza Floqueta", "si_unit": "$\\mathrm{rad}$"},
+    {"id": "lambda", "latex": "\\lambda", "meaning": "wartość własna pencil", "si_unit": "$\\mathrm{s^{-1}}$"},
+    {"id": "q", "latex": "q", "meaning": "zespolony wektor perturbacji modalnej", "si_unit": "$1$"},
+    {"id": "f", "latex": "f", "meaning": "częstotliwość własna", "si_unit": "$\\mathrm{Hz}$"},
+    {"id": "D", "latex": "D", "meaning": "digest tożsamości operatora", "si_unit": "$1$"}
+  ],
+  "sources": [
+    {"id": "eigen-nonshared-domain", "path": "crates/fullmag-runner/src/fem/eigen_nonshared_domain.rs", "symbol": "build_nonshared_floquet_provenance", "responsibility": "Budowa prywatnego stanu źródłowego wyłącznie dla aktywnej granicy Floqueta, exact producer plan snapshot, payloadu siatki, pełnego matrix-pencilu, exact preimage sidecarów operatora i fizycznych źródeł replayu wraz z namespace'ami digestów oraz canonical digestami."},
+    {"id": "eigen-native-window", "path": "crates/fullmag-runner/src/fem/eigen_native_window.rs", "symbol": "execute_native_modal_window", "responsibility": "Budowa i transport K_omega/G, walidacja powtarzalnych bloków masy, rozdzielenie jednostek pola od rad/s oraz fail-closed dla digestu zależności Rust i digestu actual native pencilu."},
+    {"id": "eigen-native-artifacts", "path": "crates/fullmag-runner/src/fem/eigen_native_artifacts.rs", "symbol": "native_modal_artifacts", "responsibility": "Publikacja provenance w summary, mode i exact source sidecarach oraz przekazanie indeksu próbki do CSV i identyfikatorów pól."},
+    {"id": "eigen-policy", "path": "crates/fullmag-runner/src/fem/eigen_policy.rs", "symbol": "native_modal_floquet_periodic_pairs", "responsibility": "Źródło par i faz Floqueta dla wejścia native."},
+    {"id": "interpreted-identity-regression", "path": "scripts/test_nonshared_floquet_operator_identity.py", "symbol": "class NonSharedFloquetOperatorIdentitySourceContract", "responsibility": "Source-only kontrola użycia framed digestu, exact preimage, wiring input/output, indeksu próbki CSV, bloków G i fail-closed payloadu siatki/digestu; nie jest dowodem native runtime."}
+  ],
+  "public_api": {
+    "parameters": [],
+    "note": "Brak zmian publicznego Python API i ProblemIR."
+  }
+}

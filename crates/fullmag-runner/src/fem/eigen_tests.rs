@@ -287,6 +287,32 @@ fn equilibrium_identity_signatures_mutate_only_in_the_owning_source_family() {
 }
 
 #[test]
+fn equilibrium_identity_separates_static_material_from_raw_modal_material_provenance() {
+    use crate::fem::equilibrium_identity::EquilibriumIdentitySignaturesV1;
+
+    let modal_plan = minimal_native_modal_plan();
+    let source_plan = relax_source_plan_from_eigen(&modal_plan);
+    let mut damping_variant = source_plan.clone();
+    damping_variant.material.damping = 0.5;
+
+    let baseline = EquilibriumIdentitySignaturesV1::from_relax_plan(&source_plan).unwrap();
+    let variant = EquilibriumIdentitySignaturesV1::from_relax_plan(&damping_variant).unwrap();
+    assert_eq!(
+        baseline.equilibrium_material_signature,
+        variant.equilibrium_material_signature,
+        "damping is dynamic and must not change the equilibrium material identity"
+    );
+    let baseline_raw = shared_domain_content_digest("material_signature", &source_plan.material)
+        .unwrap();
+    let variant_raw =
+        shared_domain_content_digest("material_signature", &damping_variant.material).unwrap();
+    assert_ne!(
+        baseline_raw, variant_raw,
+        "raw material provenance must retain the producer/consumer damping distinction"
+    );
+}
+
+#[test]
 fn equilibrium_uniaxial_identity_binds_signed_ku_and_canonical_rank_one_axis() {
     use crate::fem::equilibrium_identity::EquilibriumIdentitySignaturesV1;
     let mut plan = minimal_native_modal_plan();
@@ -334,6 +360,401 @@ fn certified_fields(node_count: usize) -> crate::types::CertifiedFemEquilibriumF
         vec![0.0; node_count],
     )
     .expect("certified field fixture")
+}
+
+fn certified_fields_for_exact_producer_fixture(
+    plan: &FemEigenPlanIR,
+) -> crate::types::CertifiedFemEquilibriumFields {
+    let node_count = plan.mesh.nodes.len();
+    let zeros = vec![[0.0, 0.0, 0.0]; node_count];
+    if plan.material.uniaxial_anisotropy.is_some() {
+        crate::types::CertifiedFemEquilibriumFields::from_fields_with_anisotropy(
+            zeros.clone(),
+            zeros.clone(),
+            zeros.clone(),
+            zeros.clone(),
+            zeros,
+            vec![0.0; node_count],
+        )
+    } else {
+        crate::types::CertifiedFemEquilibriumFields::from_fields(
+            zeros.clone(),
+            zeros.clone(),
+            zeros.clone(),
+            zeros,
+            vec![0.0; node_count],
+        )
+    }
+    .expect("exact producer field fixture")
+}
+
+struct ExactProducerFixture {
+    source_plan: fullmag_ir::FemPlanIR,
+    source_mesh: crate::types::FemMeshPayload,
+    completion: fullmag_ir::StageCompletionIR,
+    equilibrium_magnetization: Vec<[f64; 3]>,
+    accepted_fields: crate::types::CertifiedFemEquilibriumFields,
+    certified_fields: crate::types::CertifiedFemEquilibriumFields,
+    recomputed_certificate: crate::types::RecomputedFemLinearizationCertificateV1,
+    exact_artifacts: AcceptedFemRelaxExactArtifacts,
+    producer_provenance: FemRelaxationProducerProvenance,
+}
+
+fn exact_fixture_raw_sha256(bytes: &[u8]) -> String {
+    format!("sha256:{:x}", Sha256::digest(bytes))
+}
+
+fn exact_fixture_framed_sha256(namespace: &str, bytes: &[u8]) -> String {
+    let mut hash = Sha256::new();
+    hash.update(namespace.as_bytes());
+    hash.update([0_u8]);
+    hash.update((bytes.len() as u64).to_le_bytes());
+    hash.update(bytes);
+    format!("sha256:{:x}", hash.finalize())
+}
+
+fn exact_producer_fixture(with_declared_ku: bool) -> ExactProducerFixture {
+    let mut modal_plan = minimal_native_modal_plan();
+    if with_declared_ku {
+        // Explicit Ku=0 remains the V2 family and must retain the anisotropy
+        // view throughout the producer/consumer replay.
+        modal_plan.material.uniaxial_anisotropy = Some(0.0);
+        modal_plan.material.anisotropy_axis = Some([0.0, 0.0, 1.0]);
+    }
+    let source_plan = relax_source_plan_from_eigen(&modal_plan);
+    let source_mesh = crate::types::FemMeshPayload::from(&source_plan);
+    let equilibrium_magnetization = modal_plan.equilibrium_magnetization.clone();
+    let accepted_fields = certified_fields_for_exact_producer_fixture(&modal_plan);
+    let certified_fields = accepted_fields.clone();
+    let source_identity =
+        crate::fem::equilibrium_identity::EquilibriumIdentitySignaturesV1::from_relax_plan(
+            &source_plan,
+        )
+        .expect("source identity fixture");
+    let certificate_schema = if with_declared_ku {
+        "RecomputedFemLinearizationCertificate.v2"
+    } else {
+        "RecomputedFemLinearizationCertificate.v1"
+    };
+    let provider = if with_declared_ku {
+        "native_fem_final_state_refresh.v2"
+    } else {
+        "native_fem_final_state_refresh.v1"
+    };
+    let mut recomputed_certificate =
+        crate::types::RecomputedFemLinearizationCertificateV1 {
+            schema_version: certificate_schema.to_string(),
+            status: "matched".to_string(),
+            recompute_provider: provider.to_string(),
+            node_count: source_mesh.nodes.len(),
+            equilibrium_content_sha256:
+                crate::types::recomputed_fem_equilibrium_content_sha256(
+                    &equilibrium_magnetization,
+                ),
+            mesh_topology_sha256: crate::types::fem_mesh_topology_fingerprint(&source_mesh),
+            equilibrium_material_signature: source_identity
+                .equilibrium_material_signature
+                .clone(),
+            equilibrium_static_physics_signature: source_identity
+                .equilibrium_static_physics_signature
+                .clone(),
+            equilibrium_boundary_signature: source_identity
+                .equilibrium_boundary_signature
+                .clone(),
+            accepted_fields_content_sha256: accepted_fields.content_sha256.clone(),
+            recomputed_fields_content_sha256: certified_fields.content_sha256.clone(),
+            max_h_ex_difference_a_per_m: 0.0,
+            max_h_demag_difference_a_per_m: 0.0,
+            max_h_ext_difference_a_per_m: 0.0,
+            max_h_anisotropy_difference_a_per_m: with_declared_ku.then_some(0.0),
+            max_h_eff_difference_a_per_m: 0.0,
+            max_phi_difference_a: 0.0,
+            field_absolute_tolerance_a_per_m:
+                crate::types::FEM_LINEARIZATION_FIELD_ABSOLUTE_TOLERANCE_A_PER_M,
+            field_relative_tolerance: crate::types::FEM_LINEARIZATION_FIELD_RELATIVE_TOLERANCE,
+            phi_absolute_tolerance_a: crate::types::FEM_LINEARIZATION_PHI_ABSOLUTE_TOLERANCE_A,
+            content_sha256: String::new(),
+        };
+    recomputed_certificate.content_sha256 = crate::types::
+        recomputed_fem_linearization_certificate_sha256(&recomputed_certificate)
+        .expect("certificate fixture digest");
+
+    let accepted_fields_json = serde_json::to_vec(&accepted_fields).expect("accepted JSON");
+    // Pretty bytes intentionally differ from the accepted endpoint bytes;
+    // both decode to the independently validated typed value.
+    let certified_fields_json =
+        serde_json::to_vec_pretty(&certified_fields).expect("certified JSON");
+    let recomputed_certificate_json =
+        serde_json::to_vec_pretty(&recomputed_certificate).expect("certificate JSON");
+    let (certified_path, certificate_path) =
+        crate::types::CertifiedFemEquilibriumFields::artifact_paths_for_material(
+            &source_plan.material,
+        );
+    let accepted_path =
+        crate::types::CertifiedFemEquilibriumFields::accepted_artifact_path_for_material(
+            &source_plan.material,
+        );
+    let producer_provenance = fem_relaxation_producer_provenance_from_exact_artifacts(
+        "run-relax-exact",
+        "stage-relax-exact",
+        "flat_relax",
+        &source_plan,
+        &equilibrium_magnetization,
+        serde_json::json!({
+            "built_at_utc": "2026-10-01T00:00:00Z",
+            "git_commit": "fixture-producer",
+            "worktree_state": "clean",
+            "source_snapshot_sha256": format!("sha256:{}", "a".repeat(64)),
+        }),
+        accepted_path,
+        &accepted_fields_json,
+        certified_path,
+        &certified_fields_json,
+        certificate_path,
+        &recomputed_certificate_json,
+    )
+    .expect("producer provenance fixture");
+
+    ExactProducerFixture {
+        source_plan,
+        source_mesh,
+        completion: accepted_relax_completion(),
+        equilibrium_magnetization,
+        accepted_fields,
+        certified_fields,
+        recomputed_certificate,
+        exact_artifacts: AcceptedFemRelaxExactArtifacts {
+            accepted_fields_json,
+            certified_fields_json,
+            recomputed_certificate_json,
+        },
+        producer_provenance,
+    }
+}
+
+fn verified_exact_handoff_from_fixture(
+    fixture: &ExactProducerFixture,
+    provenance: FemRelaxationProducerProvenance,
+    exact_artifacts: AcceptedFemRelaxExactArtifacts,
+) -> Result<AcceptedFemRelaxStageHandoff, RunError> {
+    let producer_provenance_json = serde_json::to_vec_pretty(&provenance).expect("producer JSON");
+    AcceptedFemRelaxStageHandoff::from_completed_relax_verified_with_exact_artifacts_and_provenance(
+        "run-relax-exact",
+        "stage-relax-exact",
+        "flat_relax",
+        true,
+        &fixture.source_plan,
+        &fixture.source_mesh,
+        &fixture.completion,
+        fixture.equilibrium_magnetization.clone(),
+        fixture.accepted_fields.clone(),
+        fixture.certified_fields.clone(),
+        fixture.recomputed_certificate.clone(),
+        exact_artifacts,
+        provenance,
+        producer_provenance_json,
+    )
+}
+
+#[test]
+fn exact_producer_handoff_replays_imported_v1_and_declared_ku_zero_v2() {
+    for with_declared_ku in [false, true] {
+        let fixture = exact_producer_fixture(with_declared_ku);
+        let expected_field_schema = if with_declared_ku {
+            "CertifiedFemEquilibriumFields.v2"
+        } else {
+            "CertifiedFemEquilibriumFields.v1"
+        };
+        assert_eq!(fixture.accepted_fields.schema_version, expected_field_schema);
+        assert_eq!(fixture.certified_fields.schema_version, expected_field_schema);
+
+        // Model the cross-run import boundary: the producer sidecar is
+        // serialized and decoded before the consumer constructs its handoff.
+        let imported_sidecar = serde_json::from_slice::<FemRelaxationProducerProvenance>(
+            &serde_json::to_vec_pretty(&fixture.producer_provenance)
+                .expect("producer sidecar JSON"),
+        )
+        .expect("producer sidecar import");
+        let handoff = verified_exact_handoff_from_fixture(
+            &fixture,
+            imported_sidecar.clone(),
+            fixture.exact_artifacts.clone(),
+        )
+        .expect("exact producer handoff should replay");
+        let published_sidecar = handoff
+            .producer_provenance_sidecar_bytes()
+            .expect("verified handoff must retain producer sidecar");
+        let published = serde_json::from_slice::<FemRelaxationProducerProvenance>(
+            &published_sidecar,
+        )
+        .expect("published producer sidecar");
+        assert_eq!(published, imported_sidecar);
+        assert_eq!(
+            published.payloads.accepted_fields.path,
+            crate::types::CertifiedFemEquilibriumFields::accepted_artifact_path_for_material(
+                &fixture.source_plan.material,
+            )
+        );
+        assert_eq!(
+            published.payloads.certified_fields.path,
+            crate::types::CertifiedFemEquilibriumFields::artifact_paths_for_material(
+                &fixture.source_plan.material,
+            )
+            .0
+        );
+        assert_eq!(
+            published.payloads.recomputed_certificate.path,
+            crate::types::CertifiedFemEquilibriumFields::artifact_paths_for_material(
+                &fixture.source_plan.material,
+            )
+            .1
+        );
+    }
+}
+
+#[test]
+fn exact_producer_handoff_preserves_imported_sidecar_bytes() {
+    let fixture = exact_producer_fixture(false);
+    let canonical = serde_json::to_vec_pretty(&fixture.producer_provenance)
+        .expect("producer sidecar JSON");
+    let mut imported_bytes = b"\n  ".to_vec();
+    imported_bytes.extend_from_slice(&canonical);
+    imported_bytes.extend_from_slice(b"\n");
+    let imported_sidecar = serde_json::from_slice::<FemRelaxationProducerProvenance>(
+        &imported_bytes,
+    )
+    .expect("producer sidecar import");
+
+    let handoff =
+        AcceptedFemRelaxStageHandoff::from_completed_relax_verified_with_exact_artifacts_and_provenance(
+            "run-relax-exact",
+            "stage-relax-exact",
+            "flat_relax",
+            true,
+            &fixture.source_plan,
+            &fixture.source_mesh,
+            &fixture.completion,
+            fixture.equilibrium_magnetization.clone(),
+            fixture.accepted_fields.clone(),
+            fixture.certified_fields.clone(),
+            fixture.recomputed_certificate.clone(),
+            fixture.exact_artifacts.clone(),
+            imported_sidecar,
+            imported_bytes.clone(),
+        )
+        .expect("exact producer handoff should retain imported bytes");
+
+    assert_eq!(
+        handoff
+            .producer_provenance_sidecar_bytes()
+            .expect("verified handoff must retain producer sidecar"),
+        imported_bytes
+    );
+}
+
+#[test]
+fn exact_producer_handoff_rejects_missing_foreign_and_corrupt_replay_evidence() {
+    let fixture = exact_producer_fixture(false);
+
+    let missing_sidecar = AcceptedFemRelaxStageHandoff::from_completed_relax_verified_with_exact_artifacts(
+        "run-relax-exact",
+        "stage-relax-exact",
+        "flat_relax",
+        true,
+        &fixture.source_plan,
+        &fixture.source_mesh,
+        &fixture.completion,
+        fixture.equilibrium_magnetization.clone(),
+        fixture.accepted_fields.clone(),
+        fixture.certified_fields.clone(),
+        fixture.recomputed_certificate.clone(),
+        fixture.exact_artifacts.clone(),
+    )
+    .expect_err("exact bytes without producer sidecar must fail closed");
+    assert_eq!(
+        missing_sidecar.message,
+        "relax_stage_handoff_exact_producer_provenance_required"
+    );
+
+    let mut foreign_source = fixture.producer_provenance.clone();
+    foreign_source.source_stage_id = "foreign-relax-stage".to_string();
+    assert!(
+        verified_exact_handoff_from_fixture(
+            &fixture,
+            foreign_source,
+            fixture.exact_artifacts.clone(),
+        )
+        .is_err(),
+        "a sidecar from another producer stage must not be relabeled"
+    );
+
+    let mut corrupt_plan = fixture.producer_provenance.clone();
+    corrupt_plan.producer_plan_snapshot.preimage_json.push(' ');
+    assert!(
+        verified_exact_handoff_from_fixture(
+            &fixture,
+            corrupt_plan,
+            fixture.exact_artifacts.clone(),
+        )
+        .is_err(),
+        "a producer plan mutation without matching digests must fail"
+    );
+
+    let mut foreign_source_plan = fixture.source_plan.clone();
+    foreign_source_plan.mesh_name.push_str("-foreign");
+    let foreign_plan_bytes = serde_json::to_vec(&foreign_source_plan).expect("foreign plan JSON");
+    let foreign_plan_json = String::from_utf8(foreign_plan_bytes.clone()).expect("UTF-8 plan");
+    let mut foreign_plan = fixture.producer_provenance.clone();
+    foreign_plan.producer_plan_snapshot.preimage_json = foreign_plan_json;
+    foreign_plan.producer_plan_snapshot.raw_sha256 =
+        exact_fixture_raw_sha256(&foreign_plan_bytes);
+    foreign_plan.producer_plan_snapshot.framed_sha256 = exact_fixture_framed_sha256(
+        FEM_RELAXATION_PRODUCER_PLAN_NAMESPACE_V1,
+        &foreign_plan_bytes,
+    );
+    assert!(
+        verified_exact_handoff_from_fixture(
+            &fixture,
+            foreign_plan,
+            fixture.exact_artifacts.clone(),
+        )
+        .is_err(),
+        "a validly hashed producer plan from another source must not be relabeled"
+    );
+
+    let mut corrupt_build = fixture.producer_provenance.clone();
+    let uppercase_snapshot = corrupt_build
+        .producer_build_identity
+        .source_snapshot_sha256
+        .to_uppercase();
+    corrupt_build.producer_build_identity.source_snapshot_sha256 = uppercase_snapshot;
+    assert!(
+        verified_exact_handoff_from_fixture(
+            &fixture,
+            corrupt_build,
+            fixture.exact_artifacts.clone(),
+        )
+        .is_err(),
+        "noncanonical producer source snapshot must fail closed"
+    );
+
+    let mut corrupt_payloads = fixture.exact_artifacts.clone();
+    let mutation_index = corrupt_payloads.accepted_fields_json.len() - 2;
+    corrupt_payloads.accepted_fields_json[mutation_index] =
+        if corrupt_payloads.accepted_fields_json[mutation_index] == b'0' {
+            b'1'
+        } else {
+            b'0'
+        };
+    assert!(
+        verified_exact_handoff_from_fixture(
+            &fixture,
+            fixture.producer_provenance.clone(),
+            corrupt_payloads,
+        )
+        .is_err(),
+        "exact accepted payload byte mutation must fail before publication"
+    );
 }
 
 fn accepted_relax_completion() -> fullmag_ir::StageCompletionIR {
@@ -873,6 +1294,7 @@ fn relaxed_initial_state_without_handoff_fails_before_materialization() {
         None,
         None,
         None,
+        None,
     )
     .expect_err("uncertified relaxed_initial_state must fail closed");
 
@@ -902,6 +1324,7 @@ fn provided_equilibrium_without_certificate_fails_before_materialization() {
         false,
         Some(&mut progress),
         0,
+        None,
         None,
         None,
         None,
@@ -1351,6 +1774,8 @@ fn gpu_stage_handoff_rejects_plan_outside_native_shared_domain_lane_before_progr
         &[],
         Some(&mut progress),
         &handoff,
+        0,
+        None,
     )
     .expect_err("an unsupported prepared GPU plan must fail before solver execution");
 
@@ -2078,6 +2503,27 @@ fn bias_field_sweep_run_fixture(sample_index: usize, status: RunStatus) -> Execu
         auxiliary_artifacts,
         provenance: ExecutionProvenance::default(),
     }
+}
+
+#[test]
+fn bias_field_relaxation_decoder_rejects_duplicate_exact_artifact_paths() {
+    let mut run = bias_field_sweep_run_fixture(2, RunStatus::Completed);
+    let duplicate = AuxiliaryArtifact {
+        relative_path: "equilibrium/duplicate-relaxation-payload.json".to_string(),
+        bytes: br#"{}"#.to_vec(),
+    };
+    run.auxiliary_artifacts.push(duplicate.clone());
+    run.auxiliary_artifacts.push(duplicate);
+
+    let error = super::eigen_execution::decode_bias_field_relaxation_artifact_with_bytes::<
+        serde_json::Value,
+    >(
+        &run,
+        "equilibrium/duplicate-relaxation-payload.json",
+        2,
+    )
+    .expect_err("duplicate exact artifact paths must fail closed");
+    assert!(error.message.contains("duplicate artifacts"));
 }
 
 #[test]
@@ -4849,6 +5295,35 @@ fn native_eigen_v2_persists_certified_floquet_potential_binary_reference() {
 }
 
 #[test]
+fn native_eigen_v2_bundle_preserves_nonzero_sample_index() {
+    let plan = minimal_native_modal_plan();
+    let summary = serde_json::json!({
+        "solver_kind": "prepared-sample-index-regression",
+        "modes": [],
+    });
+    let mut artifacts = Vec::new();
+
+    write_eigen_v2_bundle(
+        &plan,
+        &summary,
+        &std::collections::BTreeSet::new(),
+        &mut artifacts,
+        7,
+    )
+    .expect("prepared nonzero sample bundle should write");
+
+    for relative_path in ["eigen/spectrum.v2.json", "eigen/spectrum.v3.json"] {
+        let payload = artifacts
+            .iter()
+            .find(|artifact| artifact.relative_path == relative_path)
+            .and_then(|artifact| serde_json::from_slice::<serde_json::Value>(&artifact.bytes).ok())
+            .expect("prepared spectrum artifact should be emitted");
+        assert_eq!(payload["samples"][0]["sample_index"], 7);
+        assert_eq!(payload["samples"][0]["sample_id"], "k-sample-0007");
+    }
+}
+
+#[test]
 fn native_eigen_v2_rejects_requested_mode_without_cartesian_complex_payload() {
     let plan = minimal_native_modal_plan();
     let summary = serde_json::json!({
@@ -5286,7 +5761,7 @@ fn dispersion_csv_maps_positive_imaginary_frequency_to_fwhm_linewidth() {
         }
     ]);
 
-    let csv = dispersion_v2_csv("k-sample-0000", None, &modes, &BTreeSet::from([3_u64]));
+    let csv = dispersion_v2_csv(0, "k-sample-0000", None, &modes, &BTreeSet::from([3_u64]));
     let header = csv
         .lines()
         .next()
@@ -8590,6 +9065,50 @@ fn eigen_path_forwards_stop_before_single_k_execution() {
         error.message
     );
     assert_eq!(phases, vec!["preparing_k_path_sample"]);
+}
+
+#[test]
+fn bias_field_path_requires_producer_identity_before_relaxation() {
+    let mut plan = minimal_native_modal_plan();
+    plan.k_sampling = Some(KSamplingIR::Path {
+        points: vec![
+            fullmag_ir::KPointIR {
+                label: Some("Gamma".into()),
+                k_vector: [0.0; 3],
+            },
+            fullmag_ir::KPointIR {
+                label: Some("X".into()),
+                k_vector: [1.0e6, 0.0, 0.0],
+            },
+        ],
+        samples_per_segment: vec![1],
+        closed: false,
+    });
+    plan.bias_field_samples = vec![
+        bias_field_sample(
+            0,
+            [20_000.0, 0.0, 0.0],
+            fullmag_ir::BiasFieldSweepEquilibriumPolicyIR::RelaxEach,
+            fullmag_ir::BiasFieldSweepContinuationSeedIR::InitialState,
+        ),
+        bias_field_sample(
+            1,
+            [25_000.0, 0.0, 0.0],
+            fullmag_ir::BiasFieldSweepEquilibriumPolicyIR::RelaxEach,
+            fullmag_ir::BiasFieldSweepContinuationSeedIR::InitialState,
+        ),
+    ];
+    let mut callback = |_event: FemEigenProgress| StepAction::Continue;
+    let error = crate::dispatch::execute_fem_eigen_with_progress(
+        PlannedFemEigenExecution::legacy(FemEigenExecutionLane::Cpu),
+        &plan,
+        &[],
+        &mut callback,
+    )
+    .expect_err("a physical bias-field path without producer identity must fail closed");
+    assert!(error
+        .message
+        .contains("fem_bias_field_relaxation_missing_producer_stage_identity"));
 }
 
 #[test]

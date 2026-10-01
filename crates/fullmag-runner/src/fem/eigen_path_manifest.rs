@@ -39,6 +39,20 @@ pub(super) fn build_eigen_path_frequency_domain_manifest(
         requested_outputs.push("mode_fields");
     }
     let mode_metadata_paths = eigen_path_mode_metadata_paths(mode_artifacts);
+    let computed_sample_indices = result
+        .samples
+        .iter()
+        .map(|sample| sample.sample.sample_index)
+        .collect::<Vec<_>>();
+    let r4_coverage = crate::fem::eigen_output::inspect_r4_sidecars(
+        mode_artifacts,
+        &computed_sample_indices,
+    );
+    let producer_provenance_v1_paths =
+        crate::fem::eigen_output::sample_scoped_producer_provenance_paths(mode_artifacts);
+    let producer_provenance_v1_path =
+        (computed_sample_indices.len() == 1 && producer_provenance_v1_paths.len() == 1)
+        .then(|| producer_provenance_v1_paths[0].clone());
     let equilibrium_artifact_v7_paths =
         eigen_path_state_metadata_paths(mode_artifacts, "equilibrium_artifact.v7.json");
     let linearization_state_v6_paths =
@@ -47,20 +61,28 @@ pub(super) fn build_eigen_path_frequency_domain_manifest(
         eigen_path_state_metadata_paths(mode_artifacts, "equilibrium_artifact.v8.json");
     let linearization_state_v7_paths =
         eigen_path_state_metadata_paths(mode_artifacts, "linearization_state.v7.json");
-    let accepted_fem_equilibrium_fields_v1_paths = eigen_path_state_metadata_paths(
-        mode_artifacts, "accepted_fem_equilibrium_fields.v1.json");
-    let accepted_fem_equilibrium_fields_v2_paths = eigen_path_state_metadata_paths(
-        mode_artifacts, "accepted_fem_equilibrium_fields.v2.json");
-    let linearization_identity_v2_paths = eigen_path_state_metadata_paths(
-        mode_artifacts, "linearization_identity.v2.json");
-    let certified_fem_equilibrium_fields_v1_paths = eigen_path_state_metadata_paths(
-        mode_artifacts, "certified_fem_equilibrium_fields.v1.json");
-    let certified_fem_equilibrium_fields_v2_paths = eigen_path_state_metadata_paths(
-        mode_artifacts, "certified_fem_equilibrium_fields.v2.json");
-    let recomputed_fem_linearization_certificate_v1_paths = eigen_path_state_metadata_paths(
-        mode_artifacts, "recomputed_fem_linearization_certificate.v1.json");
-    let recomputed_fem_linearization_certificate_v2_paths = eigen_path_state_metadata_paths(
-        mode_artifacts, "recomputed_fem_linearization_certificate.v2.json");
+    let r4_paths = |key: &str| {
+        r4_coverage
+            .paths_by_key
+            .get(key)
+            .cloned()
+            .unwrap_or_default()
+    };
+    let accepted_fem_equilibrium_fields_v1_paths =
+        r4_paths("accepted_fem_equilibrium_fields_v1_paths");
+    let accepted_fem_equilibrium_fields_v2_paths =
+        r4_paths("accepted_fem_equilibrium_fields_v2_paths");
+    let linearization_identity_v2_paths = r4_paths("linearization_identity_v2_paths");
+    let linearization_identity_preimage_v1_paths =
+        r4_paths("linearization_identity_preimage_v1_paths");
+    let certified_fem_equilibrium_fields_v1_paths =
+        r4_paths("certified_fem_equilibrium_fields_v1_paths");
+    let certified_fem_equilibrium_fields_v2_paths =
+        r4_paths("certified_fem_equilibrium_fields_v2_paths");
+    let recomputed_fem_linearization_certificate_v1_paths =
+        r4_paths("recomputed_fem_linearization_certificate_v1_paths");
+    let recomputed_fem_linearization_certificate_v2_paths =
+        r4_paths("recomputed_fem_linearization_certificate_v2_paths");
     let mode_field_resources = mode_metadata_paths
         .iter()
         .filter_map(|path| parse_eigen_path_mode_metadata_path(path))
@@ -325,6 +347,10 @@ pub(super) fn build_eigen_path_frequency_domain_manifest(
             "accepted_fem_equilibrium_fields_v1_paths": accepted_fem_equilibrium_fields_v1_paths,
             "accepted_fem_equilibrium_fields_v2_paths": accepted_fem_equilibrium_fields_v2_paths,
             "linearization_identity_v2_paths": linearization_identity_v2_paths,
+            "linearization_identity_preimage_v1_paths": linearization_identity_preimage_v1_paths,
+            "linearization_identity_sha256_by_sample": r4_coverage.identity_content_sha256_by_sample.clone(),
+            "producer_provenance_v1_path": producer_provenance_v1_path,
+            "producer_provenance_v1_paths": producer_provenance_v1_paths,
             "certified_fem_equilibrium_fields_v1_paths": certified_fem_equilibrium_fields_v1_paths,
             "certified_fem_equilibrium_fields_v2_paths": certified_fem_equilibrium_fields_v2_paths,
             "recomputed_fem_linearization_certificate_v1_paths": recomputed_fem_linearization_certificate_v1_paths,
@@ -362,6 +388,7 @@ pub(super) fn build_eigen_path_frequency_domain_manifest(
             "modal_overlap_available": modal_overlap_available,
             "modal_overlap_unavailable_reason": modal_overlap_unavailable_reason,
             "interrupted": false,
+            "r4_replay": r4_coverage.manifest_value(),
         },
         "capabilities": {
             "driven_response_artifact_available": false,
@@ -375,6 +402,30 @@ pub(super) fn build_eigen_path_frequency_domain_manifest(
             ),
         },
     });
+    if let Some(artifacts) = manifest
+        .get_mut("artifacts")
+        .and_then(Value::as_object_mut)
+    {
+        if !r4_coverage.has_any_sidecars {
+            for (key, _, _) in crate::fem::eigen_output::R4_SIDECAR_DEFINITIONS {
+                artifacts.remove(key);
+            }
+            artifacts.remove("linearization_identity_sha256_by_sample");
+        } else {
+            for (key, _, _) in crate::fem::eigen_output::R4_SIDECAR_DEFINITIONS {
+                let paths = r4_coverage
+                    .paths_by_key
+                    .get(key)
+                    .cloned()
+                    .unwrap_or_default();
+                artifacts.insert(key.to_string(), serde_json::json!(paths));
+            }
+            artifacts.insert(
+                "linearization_identity_sha256_by_sample".to_string(),
+                serde_json::json!(r4_coverage.identity_content_sha256_by_sample.clone()),
+            );
+        }
+    }
     if let Some(resolved) = manifest
         .get_mut("resolved_execution")
         .and_then(Value::as_object_mut)
@@ -806,16 +857,20 @@ pub(super) fn eigen_path_state_metadata_paths(
     mode_artifacts: &[crate::types::AuxiliaryArtifact],
     state_name: &str,
 ) -> Vec<String> {
-    let suffix = format!("/{state_name}");
     let mut paths = mode_artifacts
         .iter()
         .filter_map(|artifact| {
-            (artifact.relative_path.starts_with("eigen/metadata/sample_")
-                && artifact.relative_path.ends_with(&suffix))
-            .then_some(artifact.relative_path.clone())
+            crate::fem::eigen_output::canonical_sample_scoped_index(
+                &artifact.relative_path,
+                state_name,
+            )
+            .map(|_| artifact.relative_path.clone())
         })
         .collect::<Vec<_>>();
-    paths.sort();
+    paths.sort_by_key(|path| {
+        crate::fem::eigen_output::canonical_sample_scoped_index(path, state_name)
+            .unwrap_or(usize::MAX)
+    });
     paths
 }
 

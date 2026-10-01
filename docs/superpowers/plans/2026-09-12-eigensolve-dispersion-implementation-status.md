@@ -1,6 +1,6 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
-## Aktualny stan — 2026-10-01, po commicie 6b3b7357e
+## Aktualny stan — 2026-10-01, po commicie 60cf6269f
 
 Ta sekcja i tabela „Stan etapów” określają bieżące bramki. Pozostałe wpisy
 opisują historię; dawne `running/live/queued` nie są aktualnym stanem procesu.
@@ -35,6 +35,25 @@ opisują historię; dawne `running/live/queued` nie są aktualnym stanem procesu
   canonical paths, kolejność i alias singular/plural: 8 nowych regresji PASS,
   252 dotychczasowe kontrole verifiera/sidecarów i 15 subtests PASS.
   Discovery nie kwalifikuje zawartości payloadów ani źródła.
+  Checkpoint discovery jest na remote:
+  `60cf6269f18f8fc629ef1a4e6d73929dab9f89f0`.
+  Review adaptera źródła wykryło brak semantycznego porównania pól identity
+  z rzeczywistym producer record: własny poprawny hash nie wystarcza.
+  Poprawka adaptera wiąże IDs, build/plan/mesh/m0 i payload hashes;
+  regresje samospójnej obcej identity odrzucają podmiany. Główny verifier
+  wywołuje source adapter z dokładnymi sample paths i równowagą producenta,
+  osobno wiążąc schema/content/path equilibrium/state. Kontrole przyrostu:
+  25 unittest PASS; główny verifier 252 pytest i 15 subtests PASS.
+  Routing mock sprawdza tylko przekazanie danych; realny pakiet bez mocków
+  również PASS, z mutacjami artifact/path/hash po rehash identity.
+  Suite producenta/routingu/nonshared: 30 unittest PASS. Validator noty
+  adaptera PASS. Operator replay pozostaje NOT VERIFIED; do jego zamknięcia
+  potrzebne są exact consumer-plan bytes i niezależne odtworzenie operatora.
+  Review finalne wykryło stałe 0 w jednym write_eigen_v2_bundle: zastąpiono
+  rzeczywistym artifact_sample_index. Non-sweep wrapper zwraca teraz ostatnie
+  rzeczywiste m0; synthetic early-return używa handoff/plan fallback. Parser 19 zmienionych
+  plików Rust PASS; brak kompilacji testów native. Nowy build runtime-only
+  musi zweryfikować typy i rzeczywiste wykonanie tego checkpointu.
   Python sprawdza teraz pięć exact preimage materiału/statyki/boundary/raw
   po pełnym own-identity replay. Focused 59 i główny verifier 213 PASS.
   Poprawiono leksykalne ujemne zero, zakres deklaracji i regresje airbox/PBC;
@@ -47,7 +66,7 @@ opisują historię; dawne `running/live/queued` nie są aktualnym stanem procesu
   Obraz MFEM4.10: `8a508319a68c4116da81b745fdd1b084015b665d92b36b2241e1e245b5febf89`.
   Niezależny dry-run wrappera walidującego receipt/źródło zakończył się exit0.
   Jeden obserwator serii `thickness`, session `42033`, przeszedł do Γ t3.
-  Kontener solvera `21c61a91ee6f` jest aktywny; log pokazuje refinament 24/50.
+  Kontener solvera `21c61a91ee6f` jest aktywny; log pokazuje refinament 25/50.
   Nie ma jeszcze terminalnego wyniku częstotliwości ani kwalifikacji residualu.
   Konfiguracja: `storage/runs/eigensolve-dispersion-plan-20260-c5dfad6d7f548079/scientific-batches/nonzero-k-validation/19e798d5ff07454db64c90e63ba4f3a3/controller-config.json`.
   Przypięty model i runtime mają SHA `e78a25bac0f95c1190821524545803e4311b8ef9`:

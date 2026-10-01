@@ -12,19 +12,36 @@ pub(crate) use crate::fem::eigen_certificate::{
     OwnedModalCertificateV6View,
 };
 pub(crate) use crate::fem::eigen_constants::SHARED_DOMAIN_K0_RUNTIME_UNAVAILABLE_REASON;
-pub use crate::fem::eigen_equilibrium_contract::AcceptedFemRelaxStageHandoff;
+pub use crate::fem::eigen_equilibrium_contract::{
+    AcceptedFemRelaxExactArtifacts, AcceptedFemRelaxStageHandoff,
+    FemRelaxationProducerBuildIdentity, FemRelaxationProducerPayloadRef,
+    FemRelaxationProducerPayloads, FemRelaxationProducerPlanSnapshot,
+    FemRelaxationProducerProvenance, FEM_RELAXATION_PRODUCER_PLAN_NAMESPACE_V1,
+    FEM_RELAXATION_PRODUCER_PROVENANCE_RELATIVE_PATH, FEM_RELAXATION_PRODUCER_PROVENANCE_V1,
+};
 pub(crate) use crate::fem::eigen_equilibrium_contract::{
     accepted_relax_to_eigen_handoff_from_run, AcceptedFemEigenEquilibriumHandoff,
+    fem_relaxation_producer_provenance_sample_relative_path,
+    FemRelaxationProducerStageIdentity,
 };
 pub(crate) use crate::fem::eigen_execution::{
     execute_baseline_fem_eigen, execute_baseline_fem_eigen_with_progress, execute_cpu_fem_eigen,
+    execute_cpu_fem_eigen_with_handoff_and_progress_and_producer_identity,
     execute_cpu_fem_eigen_with_handoff, execute_cpu_fem_eigen_with_handoff_and_progress,
+    execute_cpu_fem_eigen_with_progress_and_producer_identity,
     execute_cpu_fem_eigen_with_progress, execute_cpu_fem_eigen_with_progress_and_stage_handoff,
+    execute_cpu_fem_eigen_with_progress_and_stage_handoff_and_producer_identity,
     execute_cpu_fem_eigen_with_stage_handoff, execute_gpu_fem_eigen,
+    execute_gpu_fem_eigen_with_handoff_and_progress_and_producer_identity,
     execute_gpu_fem_eigen_with_handoff, execute_gpu_fem_eigen_with_progress_and_stage_handoff,
+    execute_gpu_fem_eigen_with_progress_and_stage_handoff_and_producer_identity,
+    execute_gpu_fem_eigen_with_producer_identity,
     execute_gpu_fem_eigen_with_stage_handoff, execute_planned_fem_eigen,
+    execute_planned_fem_eigen_with_progress_and_producer_identity,
+    execute_planned_fem_eigen_with_producer_identity,
     execute_planned_fem_eigen_with_handoff, execute_planned_fem_eigen_with_handoff_and_progress,
     execute_planned_fem_eigen_with_progress,
+    execute_planned_fem_eigen_with_progress_and_stage_handoff_and_producer_identity,
     execute_planned_fem_eigen_with_progress_and_stage_handoff,
     execute_planned_fem_eigen_with_stage_handoff, reject_unsupported_floquet_dynamic_demag,
 };

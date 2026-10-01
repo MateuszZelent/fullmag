@@ -610,6 +610,106 @@ mod output_publication_tests {
     }
 
     #[test]
+    fn already_scoped_signed_sidecars_are_preserved_without_reserialization() {
+        let filename = "linearization_state.v7.json";
+        let path = format!("eigen/metadata/sample_0007/{filename}");
+        let payload = br#"{ "sample_index": 0, "preimage": "sample_0000" }"#;
+        let artifacts = vec![AuxiliaryArtifact {
+            relative_path: path.clone(),
+            bytes: payload.to_vec(),
+        }];
+
+        let remapped = remap_single_k_mode_artifacts(
+            &artifacts,
+            7,
+            &BTreeSet::new(),
+        )
+        .expect("matching scoped state must remain publishable");
+        assert_eq!(remapped.len(), 1);
+        assert_eq!(remapped[0].relative_path, path);
+        assert_eq!(remapped[0].bytes, payload);
+
+        let error = remap_single_k_mode_artifacts(&artifacts, 8, &BTreeSet::new())
+            .expect_err("a signed state from another sample must fail closed");
+        assert!(error
+            .message
+            .contains("eigen_path_signed_state_sample_index_mismatch"));
+    }
+
+    #[test]
+    fn canonical_sample_path_uses_minimum_width_for_large_indices() {
+        let filename = "linearization_state.v7.json";
+        let canonical = format!("eigen/metadata/sample_{:04}/{filename}", 10_000);
+        let artifact = AuxiliaryArtifact {
+            relative_path: canonical.clone(),
+            bytes: b"signed".to_vec(),
+        };
+        let remapped = remap_single_k_mode_artifacts(
+            &[artifact],
+            10_000,
+            &BTreeSet::new(),
+        )
+        .expect("sample_10000 is canonical Rust minimum-width formatting");
+        assert_eq!(remapped[0].relative_path, canonical);
+
+        for malformed in [
+            "eigen/metadata/sample_00000/linearization_state.v7.json",
+            "eigen/metadata/sample_00001/linearization_state.v7.json",
+        ] {
+            let error = remap_single_k_mode_artifacts(
+                &[AuxiliaryArtifact {
+                    relative_path: malformed.to_string(),
+                    bytes: b"signed".to_vec(),
+                }],
+                0,
+                &BTreeSet::new(),
+            )
+            .expect_err("arbitrary five-digit zero padding must fail closed");
+            assert!(error
+                .message
+                .contains("eigen_path_signed_state_sample_path_noncanonical"));
+        }
+    }
+
+    #[test]
+    fn producer_provenance_sidecars_are_preserved_without_remap() {
+        let sample_path =
+            "eigen/metadata/sample_0007/producer_provenance.v1.json".to_string();
+        let root_path = "equilibrium/producer_provenance.v1.json".to_string();
+        let artifacts = vec![
+            AuxiliaryArtifact {
+                relative_path: sample_path.clone(),
+                bytes: b"sample-provenance".to_vec(),
+            },
+            AuxiliaryArtifact {
+                relative_path: root_path.clone(),
+                bytes: b"root-provenance".to_vec(),
+            },
+        ];
+        let remapped = remap_single_k_mode_artifacts(&artifacts, 7, &BTreeSet::new())
+            .expect("producer provenance paths must remain immutable");
+        assert_eq!(remapped.len(), 2);
+        assert_eq!(remapped[0].relative_path, sample_path);
+        assert_eq!(remapped[0].bytes, b"sample-provenance");
+        assert_eq!(remapped[1].relative_path, root_path);
+        assert_eq!(remapped[1].bytes, b"root-provenance");
+
+        let error = remap_single_k_mode_artifacts(
+            &[AuxiliaryArtifact {
+                relative_path: "eigen/metadata/sample_00000/producer_provenance.v1.json"
+                    .to_string(),
+                bytes: b"invalid".to_vec(),
+            }],
+            0,
+            &BTreeSet::new(),
+        )
+        .expect_err("noncanonical producer provenance path must fail closed");
+        assert!(error
+            .message
+            .contains("eigen_path_producer_provenance_sample_path_noncanonical"));
+    }
+
+    #[test]
     fn signed_sidecars_preserve_exact_bytes_across_samples() {
         let filenames = [
             ("equilibrium", "accepted_fem_equilibrium_fields.v1.json"),
@@ -623,6 +723,7 @@ mod output_publication_tests {
             ("eigen/metadata", "recomputed_fem_linearization_certificate.v1.json"),
             ("eigen/metadata", "recomputed_fem_linearization_certificate.v2.json"),
             ("eigen/metadata", "linearization_identity.v2.json"),
+            ("eigen/metadata", "linearization_identity_preimage.v1.json"),
             ("eigen/metadata", "equilibrium_artifact.v7.json"),
             ("eigen/metadata", "equilibrium_artifact.v8.json"),
             ("eigen/metadata", "linearization_state.v6.json"),
@@ -684,6 +785,24 @@ mod output_publication_tests {
                         bytes: b"signed".to_vec(),
                     });
                 }
+                artifacts.push(AuxiliaryArtifact {
+                    relative_path: format!(
+                        "eigen/metadata/sample_{sample_index:04}/producer_provenance.v1.json"
+                    ),
+                    bytes: b"producer-provenance".to_vec(),
+                });
+                artifacts.push(AuxiliaryArtifact {
+                    relative_path: format!(
+                        "eigen/metadata/sample_{sample_index:04}/linearization_identity.v2.json"
+                    ),
+                    bytes: b"identity".to_vec(),
+                });
+                artifacts.push(AuxiliaryArtifact {
+                    relative_path: format!(
+                        "eigen/metadata/sample_{sample_index:04}/linearization_identity_preimage.v1.json"
+                    ),
+                    bytes: b"preimage".to_vec(),
+                });
             }
             let manifest = build_eigen_path_frequency_domain_manifest(
                 FemEngine::CpuNative, &result, &artifacts,
@@ -699,6 +818,31 @@ mod output_publication_tests {
                 let other_key = format!("{stem}_{other_version}_paths");
                 assert_eq!(manifest["artifacts"][&other_key], serde_json::json!([]));
             }
+            for (stem, expected) in [
+                (
+                    "linearization_identity_v2_paths",
+                    [0, 2, 7].map(|sample_index| format!(
+                        "eigen/metadata/sample_{sample_index:04}/linearization_identity.v2.json"
+                    )),
+                ),
+                (
+                    "linearization_identity_preimage_v1_paths",
+                    [0, 2, 7].map(|sample_index| format!(
+                        "eigen/metadata/sample_{sample_index:04}/linearization_identity_preimage.v1.json"
+                    )),
+                ),
+            ] {
+                assert_eq!(manifest["artifacts"][stem], serde_json::json!(expected));
+            }
+            assert_eq!(
+                manifest["artifacts"]["producer_provenance_v1_paths"],
+                serde_json::json!([
+                    "eigen/metadata/sample_0000/producer_provenance.v1.json",
+                    "eigen/metadata/sample_0002/producer_provenance.v1.json",
+                    "eigen/metadata/sample_0007/producer_provenance.v1.json",
+                ])
+            );
+            assert!(manifest["artifacts"]["producer_provenance_v1_path"].is_null());
             assert_eq!(manifest["artifacts"]["mode_field_storage_format"], "none");
         }
     }
@@ -712,6 +856,19 @@ mod output_publication_tests {
         let mut identical = vec![artifact(b"signed"), artifact(b"signed")];
         deduplicate_auxiliary_artifacts_by_path(&mut identical).unwrap();
         assert_eq!(identical.len(), 1);
+        let mut conflicting = vec![artifact(b"signed"), artifact(b"modified")];
+        let error = deduplicate_auxiliary_artifacts_by_path(&mut conflicting).unwrap_err();
+        assert!(error.message.contains("conflicting_signed_eigen_path_artifacts"));
+        assert_eq!(conflicting.len(), 2, "failed validation must not discard evidence");
+    }
+
+    #[test]
+    fn conflicting_identity_preimage_sidecars_fail_before_deduplication() {
+        let path = "eigen/metadata/sample_0007/linearization_identity_preimage.v1.json";
+        let artifact = |bytes: &[u8]| AuxiliaryArtifact {
+            relative_path: path.into(),
+            bytes: bytes.to_vec(),
+        };
         let mut conflicting = vec![artifact(b"signed"), artifact(b"modified")];
         let error = deduplicate_auxiliary_artifacts_by_path(&mut conflicting).unwrap_err();
         assert!(error.message.contains("conflicting_signed_eigen_path_artifacts"));
@@ -2095,6 +2252,50 @@ pub(super) fn remap_single_k_mode_artifacts(
 ) -> Result<Vec<crate::types::AuxiliaryArtifact>, RunError> {
     let mut remapped = Vec::new();
     for artifact in artifacts {
+        if is_sample_scoped_producer_provenance_candidate(&artifact.relative_path)
+            && sample_scoped_producer_provenance_artifact_index(&artifact.relative_path).is_none()
+        {
+            return Err(RunError {
+                message: format!(
+                    "eigen_path_producer_provenance_sample_path_noncanonical: {}",
+                    artifact.relative_path
+                ),
+            });
+        }
+        if is_sample_scoped_signed_state_candidate(&artifact.relative_path)
+            && sample_scoped_signed_state_artifact_index(&artifact.relative_path).is_none()
+        {
+            return Err(RunError {
+                message: format!(
+                    "eigen_path_signed_state_sample_path_noncanonical: {}",
+                    artifact.relative_path
+                ),
+            });
+        }
+        if let Some(source_sample_index) = sample_scoped_signed_state_artifact_index(
+            &artifact.relative_path,
+        ) {
+            if source_sample_index != sample_index {
+                return Err(RunError {
+                    message: format!(
+                        "eigen_path_signed_state_sample_index_mismatch: source={}, target={}",
+                        source_sample_index, sample_index
+                    ),
+                });
+            }
+        }
+        if let Some(source_sample_index) =
+            sample_scoped_producer_provenance_artifact_index(&artifact.relative_path)
+        {
+            if source_sample_index != sample_index {
+                return Err(RunError {
+                    message: format!(
+                        "eigen_path_producer_provenance_sample_index_mismatch: source={}, target={}",
+                        source_sample_index, sample_index
+                    ),
+                });
+            }
+        }
         let Some(relative_path) = remap_single_k_mode_artifact_path(
             &artifact.relative_path,
             sample_index,
@@ -2104,7 +2305,7 @@ pub(super) fn remap_single_k_mode_artifacts(
         };
         // Signed state sidecars are relocated without altering their payload:
         // a source name or preimage may legitimately contain "sample_0000".
-        let bytes = if single_k_signed_state_artifact(&artifact.relative_path) {
+        let bytes = if is_signed_state_artifact_path(&artifact.relative_path) {
             artifact.bytes.clone()
         } else if single_k_mode_artifact_is_json(&relative_path) {
             remap_single_k_mode_json_bytes(&artifact.bytes, sample_index)?
@@ -2119,16 +2320,57 @@ pub(super) fn remap_single_k_mode_artifacts(
     Ok(remapped)
 }
 
-fn eigen_path_signed_state_artifact(relative_path: &str) -> bool {
+fn sample_scoped_signed_state_artifact_index(relative_path: &str) -> Option<usize> {
+    let rest = relative_path.strip_prefix("eigen/metadata/")?;
+    let (_sample, filename) = rest.split_once('/')?;
+    if !single_k_signed_state_artifact(&format!("eigen/metadata/{filename}")) {
+        return None;
+    }
+    crate::fem::eigen_output::canonical_sample_scoped_index(
+        relative_path,
+        filename,
+    )
+}
+
+fn is_sample_scoped_signed_state_candidate(relative_path: &str) -> bool {
     let Some(rest) = relative_path.strip_prefix("eigen/metadata/") else {
         return false;
     };
     let Some((sample, filename)) = rest.split_once('/') else {
         return false;
     };
-    sample.strip_prefix("sample_").is_some_and(|index| {
-        !index.is_empty() && index.bytes().all(|byte| byte.is_ascii_digit())
-    }) && single_k_signed_state_artifact(&format!("eigen/metadata/{filename}"))
+    sample.starts_with("sample_")
+        && single_k_signed_state_artifact(&format!("eigen/metadata/{filename}"))
+}
+
+fn sample_scoped_producer_provenance_artifact_index(relative_path: &str) -> Option<usize> {
+    crate::fem::eigen_output::canonical_sample_scoped_index(
+        relative_path,
+        "producer_provenance.v1.json",
+    )
+}
+
+fn is_sample_scoped_producer_provenance_candidate(relative_path: &str) -> bool {
+    relative_path.starts_with("eigen/metadata/sample_")
+        && relative_path.ends_with("/producer_provenance.v1.json")
+}
+
+fn is_root_producer_provenance_artifact(relative_path: &str) -> bool {
+    relative_path == "equilibrium/producer_provenance.v1.json"
+        || relative_path == "eigen/metadata/producer_provenance.v1.json"
+}
+
+fn is_signed_state_artifact_path(relative_path: &str) -> bool {
+    is_root_producer_provenance_artifact(relative_path)
+        || is_sample_scoped_producer_provenance_candidate(relative_path)
+        || single_k_signed_state_artifact(relative_path)
+        || sample_scoped_signed_state_artifact_index(relative_path).is_some()
+}
+
+fn eigen_path_signed_state_artifact(relative_path: &str) -> bool {
+    is_root_producer_provenance_artifact(relative_path)
+        || is_sample_scoped_producer_provenance_candidate(relative_path)
+        || is_sample_scoped_signed_state_candidate(relative_path)
 }
 
 fn single_k_signed_state_artifact(relative_path: &str) -> bool {
@@ -2138,6 +2380,7 @@ fn single_k_signed_state_artifact(relative_path: &str) -> bool {
         | "eigen/metadata/equilibrium_artifact.v8.json"
         | "eigen/metadata/linearization_state.v7.json"
         | "eigen/metadata/linearization_identity.v2.json"
+        | "eigen/metadata/linearization_identity_preimage.v1.json"
         | "eigen/metadata/accepted_fem_equilibrium_fields.v1.json"
         | "eigen/metadata/accepted_fem_equilibrium_fields.v2.json"
         | "equilibrium/accepted_fem_equilibrium_fields.v1.json"
@@ -2158,6 +2401,17 @@ pub(super) fn remap_single_k_mode_artifact_path(
     published_mode_indices: &BTreeSet<u32>,
 ) -> Option<String> {
     let sample_path = format!("sample_{sample_index:04}");
+    if is_root_producer_provenance_artifact(relative_path) {
+        return Some(relative_path.to_string());
+    }
+    if let Some(source_sample_index) =
+        sample_scoped_producer_provenance_artifact_index(relative_path)
+    {
+        return (source_sample_index == sample_index).then(|| relative_path.to_string());
+    }
+    if let Some(source_sample_index) = sample_scoped_signed_state_artifact_index(relative_path) {
+        return (source_sample_index == sample_index).then(|| relative_path.to_string());
+    }
     if single_k_signed_state_artifact(relative_path) {
         let filename = relative_path.rsplit('/').next()?;
         return Some(format!("eigen/metadata/{sample_path}/{filename}"));

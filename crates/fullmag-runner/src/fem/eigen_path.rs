@@ -478,6 +478,24 @@ pub(crate) fn execute_fem_eigen_path(
     source_relax_handoff: Option<&fem_eigen::AcceptedFemRelaxStageHandoff>,
     progress: Option<&mut fem_eigen::FemEigenProgressCallback<'_>>,
 ) -> Result<ExecutedRun, RunError> {
+    execute_fem_eigen_path_with_producer_identity(
+        execution,
+        plan,
+        outputs,
+        source_relax_handoff,
+        progress,
+        None,
+    )
+}
+
+pub(crate) fn execute_fem_eigen_path_with_producer_identity(
+    execution: PlannedFemEigenExecution<'_>,
+    plan: &FemEigenPlanIR,
+    outputs: &[OutputIR],
+    source_relax_handoff: Option<&fem_eigen::AcceptedFemRelaxStageHandoff>,
+    progress: Option<&mut fem_eigen::FemEigenProgressCallback<'_>>,
+    producer_identity: Option<&fem_eigen::FemRelaxationProducerStageIdentity>,
+) -> Result<ExecutedRun, RunError> {
     reject_reference_solver_for_dispersion_validation(plan)?;
     let engine = match execution.lane() {
         FemEigenExecutionLane::Cpu => FemEngine::CpuNative,
@@ -512,7 +530,8 @@ pub(crate) fn execute_fem_eigen_path(
         tracking_metric:
             RefCell<Option<std::sync::Arc<crate::eigen::types::ConsistentP1TrackingMetric>>>,
         source_relax_handoff: Option<fem_eigen::AcceptedFemRelaxStageHandoff>,
-        relax_handoff: RefCell<Option<fem_eigen::AcceptedFemEigenEquilibriumHandoff>>,
+        producer_identity: Option<fem_eigen::FemRelaxationProducerStageIdentity>,
+        previous_accepted_magnetization: RefCell<Option<Vec<[f64; 3]>>>,
         periodic_airbox_k0_metrics:
             RefCell<Option<crate::eigen::K0KittelPeriodicAirboxDemagMetrics>>,
     }
@@ -542,19 +561,33 @@ pub(crate) fn execute_fem_eigen_path(
                 return solve_k0_kittel_synthetic_demag_factor_single_k(plan, sample);
             }
 
-            let existing_handoff = self.relax_handoff.borrow().clone();
-            let mut accepted_handoff = existing_handoff.clone();
             let source_stage_handoff =
                 relax_stage_handoff_for_path_sample(plan, self.source_relax_handoff.as_ref());
-            let point_plan = eigen_path_single_k_point_plan(
-                plan,
-                sample,
-                reuse_promoted_eigen_handoff(
-                    source_stage_handoff.is_some(),
-                    existing_handoff.is_some(),
-                ),
-                existing_handoff.as_ref(),
-            )?;
+            let mut point_plan = eigen_path_single_k_point_plan(plan, sample, false, None)?;
+            if bias_field_sweep_requested(plan) {
+                let declared_sample = plan
+                    .bias_field_samples
+                    .get(sample.sample_index)
+                    .ok_or_else(|| RunError {
+                        message: format!(
+                            "FEM bias_field_samples has no bias field for sample {}",
+                            sample.sample_index
+                        ),
+                    })?;
+                let prepared = super::eigen_sweep::prepare_bias_field_sample_plan(
+                    plan,
+                    declared_sample,
+                    &plan.equilibrium_magnetization,
+                    self.previous_accepted_magnetization.borrow().as_deref(),
+                )?;
+                // Keep the path's single-k/Floquet normalization while importing
+                // the canonical sweep preparation's field and equilibrium seed.
+                point_plan.external_field = prepared.external_field;
+                point_plan.equilibrium = prepared.equilibrium;
+                point_plan.equilibrium_magnetization = prepared.equilibrium_magnetization;
+                point_plan.bias_field_samples = prepared.bias_field_samples;
+                point_plan.k0_kittel_validation = prepared.k0_kittel_validation;
+            }
             let tracking_topology =
                 MeshTopology::from_ir(&point_plan.mesh).map_err(|error| RunError {
                     message: format!("eigen path tracking mesh topology: {error}"),
@@ -589,13 +622,10 @@ pub(crate) fn execute_fem_eigen_path(
                 }
             };
             let tracking_active_nodes = tracking_metric.node_indices();
-            // Every k sample linearizes the same certified static equilibrium.
-            // Keep the original Relax-stage certificate available after the
-            // first point: the promoted Eigen handoff carries identity hashes
-            // for path continuity, but it does not contain the accepted
-            // completion and certified static fields needed to reconstruct an
-            // equilibrium_artifact.v7. Field sweeps are distinct physical
-            // equilibria and therefore must not reuse this certificate.
+            // A non-sweep path consumes the immutable Relax-stage handoff for
+            // every k point. A bias-field path owns a separate accepted
+            // equilibrium and therefore takes the per-sample relaxation route
+            // below instead of reusing a summary-only continuation.
             let progress_sink = &self.progress;
             // Keep cancellation and native EPS/KSP telemetry connected for every
             // path sample, including the first relax-stage continuation.
@@ -607,7 +637,21 @@ pub(crate) fn execute_fem_eigen_path(
                     }),
                 Err(_) => crate::types::StepAction::Stop,
             };
-            let executed = if self.execution.resolution().is_some() {
+            let executed = if bias_field_sweep_requested(plan) {
+                let lane = match self.engine {
+                    FemEngine::CpuNative => FemEigenExecutionLane::Cpu,
+                    FemEngine::NativeGpu => FemEigenExecutionLane::Gpu,
+                };
+                super::eigen_execution::execute_bias_field_sample_with_relaxation(
+                    &point_plan,
+                    outputs,
+                    lane,
+                    Some(&mut forward),
+                    sample.sample_index,
+                    self.execution.resolution().map(|_| self.execution),
+                    self.producer_identity.as_ref(),
+                )?
+            } else if self.execution.resolution().is_some() {
                 if let Some(handoff) = source_stage_handoff {
                     fem_eigen::execute_planned_fem_eigen_with_progress_and_stage_handoff(
                         self.execution,
@@ -615,14 +659,18 @@ pub(crate) fn execute_fem_eigen_path(
                         outputs,
                         &mut forward,
                         handoff,
+                        sample.sample_index,
+                        Some(sample.sample_index),
                     )?
                 } else {
                     fem_eigen::execute_planned_fem_eigen_with_handoff_and_progress(
                         self.execution,
                         &point_plan,
                         outputs,
-                        existing_handoff.as_ref(),
+                        None,
                         Some(&mut forward),
+                        sample.sample_index,
+                        Some(sample.sample_index),
                     )?
                 }
             } else {
@@ -634,13 +682,17 @@ pub(crate) fn execute_fem_eigen_path(
                                 outputs,
                                 &mut forward,
                                 handoff,
+                                sample.sample_index,
+                                Some(sample.sample_index),
                             )?
                         } else {
                             fem_eigen::execute_cpu_fem_eigen_with_handoff_and_progress(
                                 &point_plan,
                                 outputs,
-                                existing_handoff.as_ref(),
+                                None,
                                 Some(&mut forward),
+                                sample.sample_index,
+                                Some(sample.sample_index),
                             )?
                         }
                     }
@@ -651,29 +703,39 @@ pub(crate) fn execute_fem_eigen_path(
                                 outputs,
                                 Some(&mut forward),
                                 handoff,
+                                sample.sample_index,
+                                Some(sample.sample_index),
                             )?
                         } else {
                             fem_eigen::execute_gpu_fem_eigen_with_handoff(
                                 &point_plan,
                                 outputs,
                                 Some(&mut forward),
-                                existing_handoff.as_ref(),
+                                None,
+                                sample.sample_index,
+                                Some(sample.sample_index),
                             )?
                         }
                     }
                 }
             };
-            if existing_handoff.is_none()
-                && !bias_field_sweep_requested(plan)
-                && matches!(
-                    plan.equilibrium,
-                    fullmag_ir::EquilibriumSourceIR::RelaxedInitialState
-                )
             {
-                let accepted =
-                    fem_eigen::accepted_relax_to_eigen_handoff_from_run(&point_plan, &executed)?;
-                accepted_handoff = Some(accepted.clone());
-                *self.relax_handoff.borrow_mut() = Some(accepted);
+                let final_magnetization = &executed.result.final_magnetization;
+                if final_magnetization.len() != plan.mesh.nodes.len()
+                    || final_magnetization
+                        .iter()
+                        .flatten()
+                        .any(|component| !component.is_finite())
+                {
+                    return Err(RunError {
+                        message: format!(
+                            "FEM eigen path sample {} did not produce a finite accepted equilibrium",
+                            sample.sample_index
+                        ),
+                    });
+                }
+                *self.previous_accepted_magnetization.borrow_mut() =
+                    Some(final_magnetization.clone());
             }
             if let Some(metrics) = eigen_path_periodic_airbox_k0_metrics_from_single_k_artifacts(
                 plan,
@@ -854,23 +916,6 @@ pub(crate) fn execute_fem_eigen_path(
                 );
             }
 
-            if let (Some(diagnostics), Some(handoff)) =
-                (solver_diagnostics.as_mut(), accepted_handoff.as_ref())
-            {
-                bind_eigen_path_handoff_diagnostics(
-                    diagnostics,
-                    sample.sample_index,
-                    handoff.content_sha256(),
-                    handoff.source_mesh_topology_sha256(),
-                    &point_plan
-                        .mesh
-                        .mixed_topology_fingerprint_v3()
-                        .map_err(|error| RunError {
-                            message: format!("modal source mesh identity is invalid: {error}"),
-                        })?,
-                );
-            }
-
             Ok(SingleKSolveResult {
                 sample: sample.clone(),
                 modes,
@@ -890,6 +935,20 @@ pub(crate) fn execute_fem_eigen_path(
         .iter()
         .any(|output| matches!(output, OutputIR::EigenMode { .. }));
     let wants_dispersion = eigen_path_wants_dispersion(outputs);
+    if bias_field_sweep_requested(plan) {
+        let samples = super::eigen_sweep::validate_bias_field_samples(plan)?;
+        let expanded_samples = crate::eigen::expand_k_sampling(plan.k_sampling.as_ref())
+            .map_err(|message| RunError { message })?;
+        if expanded_samples.len() != samples.len() {
+            return Err(RunError {
+                message: format!(
+                    "FEM bias-field path has {} k samples but {} bias_field_samples entries",
+                    expanded_samples.len(),
+                    samples.len()
+                ),
+            });
+        }
+    }
     let adapter = KSolverAdapter {
         progress: std::sync::Mutex::new(progress),
         execution,
@@ -898,7 +957,8 @@ pub(crate) fn execute_fem_eigen_path(
         publication_outputs: outputs.to_vec(),
         tracking_metric: RefCell::new(None),
         source_relax_handoff: source_relax_handoff.cloned(),
-        relax_handoff: RefCell::new(None),
+        producer_identity: producer_identity.cloned(),
+        previous_accepted_magnetization: RefCell::new(None),
         periodic_airbox_k0_metrics: RefCell::new(None),
     };
     let mut path_result = run_path_or_single(
@@ -908,6 +968,19 @@ pub(crate) fn execute_fem_eigen_path(
         None, // we collect artifacts manually below
         plan.mode_tracking.as_ref(),
     )?;
+    let last_accepted_magnetization = adapter.previous_accepted_magnetization.into_inner();
+    let final_magnetization = if bias_field_sweep_requested(plan) {
+        last_accepted_magnetization.ok_or_else(|| RunError {
+            message: "FEM bias-field path completed without an accepted equilibrium"
+                .to_string(),
+        })?
+    } else {
+        last_accepted_magnetization.unwrap_or_else(|| {
+            source_relax_handoff
+                .map(|handoff| handoff.equilibrium_magnetization.clone())
+                .unwrap_or_else(|| plan.equilibrium_magnetization.clone())
+        })
+    };
     path_result.k0_kittel_periodic_airbox_demag = adapter.periodic_airbox_k0_metrics.into_inner();
     if path_result.k0_kittel_periodic_airbox_demag.is_some() && engine == FemEngine::CpuNative {
         path_result.solver_model = crate::eigen::EigenSolverModel::ProductionCpuShiftInvert;
@@ -1431,7 +1504,7 @@ pub(crate) fn execute_fem_eigen_path(
         result: crate::types::RunResult {
             status: crate::types::RunStatus::Completed,
             steps: vec![],
-            final_magnetization: plan.equilibrium_magnetization.clone(),
+            final_magnetization,
             completion: Some(crate::relaxation::resolve_stage_completion(
                 crate::types::RunStatus::Completed,
                 None,

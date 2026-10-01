@@ -58,6 +58,695 @@ fn binary_artifact(path: impl Into<String>, bytes: Vec<u8>) -> AuxiliaryArtifact
     }
 }
 
+/// R4 sidecars are a closed family.  Keep the path spelling and family
+/// mapping in one Rust contract so single-k and multi-k publication cannot
+/// silently diverge.  `{:04}` is a minimum width: sample 10000 is therefore
+/// canonically named `sample_10000`, not padded to an arbitrary width.
+pub(crate) const R4_SIDECAR_DEFINITIONS: [(&str, &str, Option<&str>); 8] = [
+    (
+        "accepted_fem_equilibrium_fields_v1_paths",
+        "accepted_fem_equilibrium_fields.v1.json",
+        Some("v1"),
+    ),
+    (
+        "accepted_fem_equilibrium_fields_v2_paths",
+        "accepted_fem_equilibrium_fields.v2.json",
+        Some("v2"),
+    ),
+    (
+        "linearization_identity_v2_paths",
+        "linearization_identity.v2.json",
+        Some("v2"),
+    ),
+    (
+        "linearization_identity_preimage_v1_paths",
+        "linearization_identity_preimage.v1.json",
+        Some("v2"),
+    ),
+    (
+        "certified_fem_equilibrium_fields_v1_paths",
+        "certified_fem_equilibrium_fields.v1.json",
+        Some("v1"),
+    ),
+    (
+        "certified_fem_equilibrium_fields_v2_paths",
+        "certified_fem_equilibrium_fields.v2.json",
+        Some("v2"),
+    ),
+    (
+        "recomputed_fem_linearization_certificate_v1_paths",
+        "recomputed_fem_linearization_certificate.v1.json",
+        Some("v1"),
+    ),
+    (
+        "recomputed_fem_linearization_certificate_v2_paths",
+        "recomputed_fem_linearization_certificate.v2.json",
+        Some("v2"),
+    ),
+];
+
+/// Parse exactly the canonical `eigen/metadata/sample_NNNN/<filename>` path.
+/// The width is a minimum width, matching Rust `format!("{index:04}")` and
+/// allowing `sample_10000` without inventing a second five-digit convention.
+pub(crate) fn canonical_sample_scoped_index(
+    relative_path: &str,
+    filename: &str,
+) -> Option<usize> {
+    let prefix = "eigen/metadata/sample_";
+    let suffix = format!("/{filename}");
+    if relative_path.contains('\\')
+        || !relative_path.starts_with(prefix)
+        || !relative_path.ends_with(&suffix)
+    {
+        return None;
+    }
+    let token = &relative_path[prefix.len()..relative_path.len() - suffix.len()];
+    if token.is_empty() || !token.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    let sample_index = token.parse::<usize>().ok()?;
+    (token == format!("{sample_index:04}")).then_some(sample_index)
+}
+
+fn is_sample_scoped_sidecar_candidate(relative_path: &str, filename: &str) -> bool {
+    let prefix = "eigen/metadata/sample_";
+    let suffix = format!("/{filename}");
+    relative_path.starts_with(prefix) && relative_path.ends_with(&suffix)
+}
+
+fn r4_artifact_bytes<'a>(
+    artifacts: &'a [AuxiliaryArtifact],
+    relative_path: &str,
+) -> Option<&'a [u8]> {
+    artifacts
+        .iter()
+        .find(|artifact| artifact.relative_path == relative_path)
+        .map(|artifact| artifact.bytes.as_slice())
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct R4SidecarCoverage {
+    pub(crate) status: String,
+    pub(crate) reason: String,
+    pub(crate) accepted_family: Option<String>,
+    pub(crate) computed_sample_indices: BTreeSet<usize>,
+    pub(crate) accepted_sample_indices: BTreeSet<usize>,
+    pub(crate) identity_sample_indices: BTreeSet<usize>,
+    pub(crate) missing_recomputed_keys: Vec<String>,
+    pub(crate) identity_content_sha256_by_sample: BTreeMap<String, String>,
+    pub(crate) paths_by_key: BTreeMap<String, Vec<String>>,
+    pub(crate) has_any_sidecars: bool,
+    pub(crate) structural_complete: bool,
+}
+
+impl R4SidecarCoverage {
+    pub(crate) fn manifest_value(&self) -> serde_json::Value {
+        serde_json::json!({
+            "status": self.status,
+            "qualification": "NOT_VERIFIED",
+            "reason": self.reason,
+            "accepted_family": self.accepted_family,
+            "computed_sample_indices": self.computed_sample_indices.iter().copied().collect::<Vec<_>>(),
+            "accepted_sample_indices": self.accepted_sample_indices.iter().copied().collect::<Vec<_>>(),
+            "identity_sample_indices": self.identity_sample_indices.iter().copied().collect::<Vec<_>>(),
+            "missing_recomputed_keys": self.missing_recomputed_keys,
+            "identity_content_sha256_by_sample": self.identity_content_sha256_by_sample,
+            "structural_complete": self.structural_complete,
+            "payload_replay": "NOT_VERIFIED",
+        })
+    }
+}
+
+fn r4_sidecar_path_sets(
+    artifacts: &[AuxiliaryArtifact],
+) -> (
+    BTreeMap<String, Vec<String>>,
+    Vec<String>,
+) {
+    let mut paths_by_key = BTreeMap::new();
+    let mut invalid_paths = Vec::new();
+    for (key, filename, _) in R4_SIDECAR_DEFINITIONS {
+        let mut paths = artifacts
+            .iter()
+            .filter_map(|artifact| {
+                if is_sample_scoped_sidecar_candidate(&artifact.relative_path, filename)
+                    && canonical_sample_scoped_index(&artifact.relative_path, filename).is_none()
+                {
+                    invalid_paths.push(artifact.relative_path.clone());
+                    return None;
+                }
+                canonical_sample_scoped_index(&artifact.relative_path, filename)
+                    .map(|_| artifact.relative_path.clone())
+            })
+            .collect::<Vec<_>>();
+        paths.sort_by_key(|path| {
+            canonical_sample_scoped_index(path, filename).unwrap_or(usize::MAX)
+        });
+        paths.dedup();
+        paths_by_key.insert(key.to_string(), paths);
+    }
+    invalid_paths.sort();
+    invalid_paths.dedup();
+    (paths_by_key, invalid_paths)
+}
+
+fn r4_path_set(paths_by_key: &BTreeMap<String, Vec<String>>, key: &str) -> BTreeSet<usize> {
+    let filename = R4_SIDECAR_DEFINITIONS
+        .iter()
+        .find(|(candidate, _, _)| *candidate == key)
+        .map(|(_, filename, _)| *filename);
+    let Some(filename) = filename else {
+        return BTreeSet::new();
+    };
+    paths_by_key
+        .get(key)
+        .into_iter()
+        .flatten()
+        .filter_map(|path| canonical_sample_scoped_index(path, filename))
+        .collect()
+}
+
+fn validate_r4_identity_links(
+    identity: &super::eigen_equilibrium_contract::LinearizationIdentityV2,
+    artifacts: &[AuxiliaryArtifact],
+    accepted_family: &str,
+    allow_missing_recomputed: bool,
+    allow_unscoped_state_paths: bool,
+) -> Result<(), String> {
+    let sample_index = identity.sample_index;
+    let equilibrium_name = if accepted_family == "v1" {
+        "equilibrium_artifact.v7.json"
+    } else {
+        "equilibrium_artifact.v8.json"
+    };
+    let state_name = if accepted_family == "v1" {
+        "linearization_state.v6.json"
+    } else {
+        "linearization_state.v7.json"
+    };
+    let fields_version = accepted_family;
+    let expected = [
+        (
+            "equilibrium_artifact_path",
+            format!("eigen/metadata/sample_{sample_index:04}/{equilibrium_name}"),
+            identity.equilibrium_artifact_path.as_str(),
+            None,
+            false,
+        ),
+        (
+            "linearization_state_path",
+            format!("eigen/metadata/sample_{sample_index:04}/{state_name}"),
+            identity.linearization_state_path.as_str(),
+            None,
+            false,
+        ),
+        (
+            "accepted_fields_path",
+            format!(
+                "eigen/metadata/sample_{sample_index:04}/accepted_fem_equilibrium_fields.{fields_version}.json"
+            ),
+            identity.accepted_fields_path.as_str(),
+            Some(identity.accepted_fields_bytes_sha256.as_str()),
+            false,
+        ),
+        (
+            "certified_fields_path",
+            format!(
+                "eigen/metadata/sample_{sample_index:04}/certified_fem_equilibrium_fields.{fields_version}.json"
+            ),
+            identity.certified_fields_path.as_str(),
+            Some(identity.certified_fields_bytes_sha256.as_str()),
+            true,
+        ),
+        (
+            "recomputed_certificate_path",
+            format!(
+                "eigen/metadata/sample_{sample_index:04}/recomputed_fem_linearization_certificate.{fields_version}.json"
+            ),
+            identity.recomputed_certificate_path.as_str(),
+            Some(identity.recomputed_certificate_bytes_sha256.as_str()),
+            true,
+        ),
+    ];
+    for (field, expected_path, actual_path, raw_digest, recomputed_payload) in expected {
+        let root_state_path = if allow_unscoped_state_paths
+            && matches!(field, "equilibrium_artifact_path" | "linearization_state_path")
+        {
+            Some(format!(
+                "eigen/metadata/{}",
+                expected_path.rsplit('/').next().unwrap_or_default()
+            ))
+        } else {
+            None
+        };
+        let path_matches = actual_path == expected_path
+            || root_state_path.as_deref().is_some_and(|root| actual_path == root);
+        if !path_matches {
+            return Err(format!("{field} does not match canonical sample path"));
+        }
+        let Some(bytes) = r4_artifact_bytes(artifacts, actual_path) else {
+            if recomputed_payload && allow_missing_recomputed {
+                continue;
+            }
+            return Err(format!("{field} points to a missing sidecar"));
+        };
+        if let Some(expected_digest) = raw_digest {
+            let actual_digest = format!("sha256:{:x}", Sha256::digest(bytes));
+            if actual_digest != expected_digest {
+                return Err(format!("{field} raw byte digest does not match identity"));
+            }
+        }
+
+        let value = serde_json::from_slice::<serde_json::Value>(bytes)
+            .map_err(|error| format!("{field} JSON is invalid: {error}"))?;
+        let expected_schema = match field {
+            "accepted_fields_path" | "certified_fields_path" => {
+                format!("CertifiedFemEquilibriumFields.{fields_version}")
+            }
+            "recomputed_certificate_path" => {
+                format!("RecomputedFemLinearizationCertificate.{fields_version}")
+            }
+            _ => String::new(),
+        };
+        if !expected_schema.is_empty()
+            && value.get("schema_version").and_then(serde_json::Value::as_str)
+                != Some(expected_schema.as_str())
+        {
+            return Err(format!("{field} schema does not match identity family"));
+        }
+        match field {
+            "equilibrium_artifact_path" | "linearization_state_path" => {
+                let content = value
+                    .get("content_sha256")
+                    .and_then(serde_json::Value::as_str)
+                    .ok_or_else(|| format!("{field} is missing content_sha256"))?;
+                let expected_content = if field == "equilibrium_artifact_path" {
+                    &identity.equilibrium_artifact_sha256
+                } else {
+                    &identity.linearization_state_sha256
+                };
+                if content != expected_content {
+                    return Err(format!("{field} content digest does not match identity"));
+                }
+            }
+            "accepted_fields_path" => {
+                let content = value
+                    .get("content_sha256")
+                    .and_then(serde_json::Value::as_str)
+                    .ok_or_else(|| format!("{field} is missing content_sha256"))?;
+                if content != identity.accepted_fields_content_sha256 {
+                    return Err(format!("{field} content digest does not match identity"));
+                }
+            }
+            "certified_fields_path" => {
+                let content = value
+                    .get("content_sha256")
+                    .and_then(serde_json::Value::as_str)
+                    .ok_or_else(|| format!("{field} is missing content_sha256"))?;
+                if content != identity.certified_fields_content_sha256 {
+                    return Err(format!("{field} content digest does not match identity"));
+                }
+            }
+            "recomputed_certificate_path" => {
+                let certificate = serde_json::from_slice::<
+                    crate::types::RecomputedFemLinearizationCertificateV1,
+                >(bytes)
+                .map_err(|error| format!("{field} typed payload is invalid: {error}"))?;
+                if certificate.content_sha256 != identity.recomputed_certificate_content_sha256
+                {
+                    return Err(format!("{field} content digest does not match identity"));
+                }
+                let preimage_sha =
+                    crate::types::recomputed_fem_linearization_certificate_preimage_sha256(
+                        &certificate,
+                    )
+                    .map_err(|error| error.message)?;
+                if preimage_sha != identity.recomputed_certificate_preimage_sha256 {
+                    return Err(format!(
+                        "{field} exact preimage digest does not match identity"
+                    ));
+                }
+                let preimage = crate::types::recomputed_fem_linearization_certificate_preimage_bytes(
+                    &certificate,
+                )
+                .map_err(|error| error.message)?;
+                let preimage_text = String::from_utf8(preimage)
+                    .map_err(|error| format!("{field} exact preimage is not UTF-8: {error}"))?;
+                if preimage_text != identity.recomputed_certificate_preimage_json {
+                    return Err(format!("{field} exact preimage does not match identity"));
+                }
+            }
+            _ => {}
+        }
+    }
+    let expected_accepted_schema = format!("CertifiedFemEquilibriumFields.{fields_version}");
+    let expected_recomputed_schema =
+        format!("RecomputedFemLinearizationCertificate.{fields_version}");
+    if identity.accepted_fields_schema != expected_accepted_schema
+        || identity.certified_fields_schema != expected_accepted_schema
+        || identity.recomputed_certificate_schema != expected_recomputed_schema
+    {
+        return Err("identity schema family does not match accepted sidecars".to_string());
+    }
+    Ok(())
+}
+
+/// Inspect the actual sidecar bytes and paths used by a single-k or path
+/// producer.  This is a structural gate only: a complete family still reports
+/// `payload_replay_pending` because physical field replay is a separate gate.
+pub(crate) fn inspect_r4_sidecars(
+    artifacts: &[AuxiliaryArtifact],
+    computed_sample_indices: &[usize],
+) -> R4SidecarCoverage {
+    let computed_sample_count = computed_sample_indices.len();
+    let computed_sample_indices = computed_sample_indices.iter().copied().collect::<BTreeSet<_>>();
+    let (paths_by_key, invalid_paths) = r4_sidecar_path_sets(artifacts);
+    let has_any_sidecars = paths_by_key.values().any(|paths| !paths.is_empty())
+        || !invalid_paths.is_empty();
+    let empty = || R4SidecarCoverage {
+        status: "historical".to_string(),
+        reason: "R4 sidecar arrays are absent from this manifest".to_string(),
+        accepted_family: None,
+        computed_sample_indices: computed_sample_indices.clone(),
+        accepted_sample_indices: BTreeSet::new(),
+        identity_sample_indices: BTreeSet::new(),
+        missing_recomputed_keys: Vec::new(),
+        identity_content_sha256_by_sample: BTreeMap::new(),
+        paths_by_key: paths_by_key.clone(),
+        has_any_sidecars,
+        structural_complete: false,
+    };
+    if !has_any_sidecars {
+        return empty();
+    }
+    if computed_sample_indices.len() != computed_sample_count {
+        return R4SidecarCoverage {
+            status: "invalid".to_string(),
+            reason: "computed path samples contain duplicate sample_index values".to_string(),
+            ..empty()
+        };
+    }
+    if !invalid_paths.is_empty() {
+        return R4SidecarCoverage {
+            status: "invalid".to_string(),
+            reason: format!(
+                "non-canonical R4 sidecar paths: {}",
+                invalid_paths.join(", ")
+            ),
+            ..empty()
+        };
+    }
+    let accepted_v1 = r4_path_set(&paths_by_key, "accepted_fem_equilibrium_fields_v1_paths");
+    let accepted_v2 = r4_path_set(&paths_by_key, "accepted_fem_equilibrium_fields_v2_paths");
+    let (accepted_family, accepted_sample_indices) = match (accepted_v1.is_empty(), accepted_v2.is_empty()) {
+        (false, false) => {
+            return R4SidecarCoverage {
+                status: "invalid".to_string(),
+                reason: "R4 accepted sidecars mix v1 and v2 families".to_string(),
+                ..empty()
+            };
+        }
+        (false, true) => ("v1", accepted_v1),
+        (true, false) => ("v2", accepted_v2),
+        (true, true) => {
+            return R4SidecarCoverage {
+                status: "missing_accepted".to_string(),
+                reason: "R4 identity/certified/recomputed sidecars require accepted fields".to_string(),
+                ..empty()
+            };
+        }
+    };
+    if accepted_sample_indices != computed_sample_indices {
+        return R4SidecarCoverage {
+            status: "invalid".to_string(),
+            reason: "accepted R4 sample index set does not match computed samples".to_string(),
+            accepted_family: Some(accepted_family.to_string()),
+            accepted_sample_indices,
+            ..empty()
+        };
+    }
+    let identity_samples = r4_path_set(&paths_by_key, "linearization_identity_v2_paths");
+    let preimage_samples = r4_path_set(&paths_by_key, "linearization_identity_preimage_v1_paths");
+    if !identity_samples.is_empty() && identity_samples != accepted_sample_indices {
+        return R4SidecarCoverage {
+            status: "invalid".to_string(),
+            reason: "identity and accepted R4 sample index sets differ".to_string(),
+            accepted_family: Some(accepted_family.to_string()),
+            accepted_sample_indices,
+            identity_sample_indices: identity_samples,
+            ..empty()
+        };
+    }
+    if !preimage_samples.is_empty() && preimage_samples != identity_samples {
+        return R4SidecarCoverage {
+            status: "invalid".to_string(),
+            reason: "identity preimage and identity sample index sets differ".to_string(),
+            accepted_family: Some(accepted_family.to_string()),
+            accepted_sample_indices,
+            identity_sample_indices: identity_samples,
+            ..empty()
+        };
+    }
+    if identity_samples.is_empty() || preimage_samples.is_empty() {
+        return R4SidecarCoverage {
+            status: "missing_identity".to_string(),
+            reason: "R4 identity and exact preimage sidecars are incomplete; replay is not verified".to_string(),
+            accepted_family: Some(accepted_family.to_string()),
+            accepted_sample_indices,
+            identity_sample_indices: identity_samples,
+            ..empty()
+        };
+    }
+    let required_new = if accepted_family == "v1" {
+        [
+            "certified_fem_equilibrium_fields_v1_paths",
+            "recomputed_fem_linearization_certificate_v1_paths",
+        ]
+    } else {
+        [
+            "certified_fem_equilibrium_fields_v2_paths",
+            "recomputed_fem_linearization_certificate_v2_paths",
+        ]
+    };
+    let opposite_new = if accepted_family == "v1" {
+        [
+            "certified_fem_equilibrium_fields_v2_paths",
+            "recomputed_fem_linearization_certificate_v2_paths",
+        ]
+    } else {
+        [
+            "certified_fem_equilibrium_fields_v1_paths",
+            "recomputed_fem_linearization_certificate_v1_paths",
+        ]
+    };
+    if opposite_new
+        .iter()
+        .any(|key| !r4_path_set(&paths_by_key, key).is_empty())
+    {
+        return R4SidecarCoverage {
+            status: "invalid".to_string(),
+            reason: "R4 certified/recomputed sidecar families are mixed".to_string(),
+            accepted_family: Some(accepted_family.to_string()),
+            accepted_sample_indices,
+            identity_sample_indices: identity_samples,
+            ..empty()
+        };
+    }
+    let mut missing_recomputed_keys = Vec::new();
+    for key in required_new {
+        let sample_indices = r4_path_set(&paths_by_key, key);
+        if sample_indices == accepted_sample_indices {
+            continue;
+        }
+        if !sample_indices.is_subset(&accepted_sample_indices) {
+            return R4SidecarCoverage {
+                status: "invalid".to_string(),
+                reason: format!(
+                    "R4 certified/recomputed sidecar {key} contains samples outside accepted fields"
+                ),
+                accepted_family: Some(accepted_family.to_string()),
+                accepted_sample_indices,
+                identity_sample_indices: identity_samples,
+                ..empty()
+            };
+        }
+        missing_recomputed_keys.push(key.to_string());
+    }
+    let allow_missing_recomputed = !missing_recomputed_keys.is_empty();
+
+    let mut identity_content_sha256_by_sample = BTreeMap::new();
+    for sample_index in &identity_samples {
+        let identity_path = format!(
+            "eigen/metadata/sample_{sample_index:04}/linearization_identity.v2.json"
+        );
+        let preimage_path = format!(
+            "eigen/metadata/sample_{sample_index:04}/linearization_identity_preimage.v1.json"
+        );
+        let Some(identity_bytes) = r4_artifact_bytes(artifacts, &identity_path) else {
+            return R4SidecarCoverage {
+                status: "invalid".to_string(),
+                reason: format!("missing identity sidecar {identity_path}"),
+                accepted_family: Some(accepted_family.to_string()),
+                accepted_sample_indices,
+                identity_sample_indices: identity_samples,
+                ..empty()
+            };
+        };
+        let Some(preimage_bytes) = r4_artifact_bytes(artifacts, &preimage_path) else {
+            return R4SidecarCoverage {
+                status: "invalid".to_string(),
+                reason: format!("missing identity preimage sidecar {preimage_path}"),
+                accepted_family: Some(accepted_family.to_string()),
+                accepted_sample_indices,
+                identity_sample_indices: identity_samples,
+                ..empty()
+            };
+        };
+        let identity = match serde_json::from_slice::<
+            super::eigen_equilibrium_contract::LinearizationIdentityV2,
+        >(identity_bytes) {
+            Ok(identity) => identity,
+            Err(error) => {
+                return R4SidecarCoverage {
+                    status: "invalid".to_string(),
+                    reason: format!("identity sidecar {identity_path} is invalid: {error}"),
+                    accepted_family: Some(accepted_family.to_string()),
+                    accepted_sample_indices,
+                    identity_sample_indices: identity_samples,
+                    ..empty()
+                };
+            }
+        };
+        if identity.sample_index != *sample_index {
+            return R4SidecarCoverage {
+                status: "invalid".to_string(),
+                reason: format!("identity {identity_path} has the wrong sample_index"),
+                accepted_family: Some(accepted_family.to_string()),
+                accepted_sample_indices,
+                identity_sample_indices: identity_samples,
+                ..empty()
+            };
+        }
+        let sidecar = match serde_json::from_slice::<
+            super::eigen_equilibrium_contract::LinearizationIdentityPreimageV1,
+        >(preimage_bytes) {
+            Ok(sidecar) => sidecar,
+            Err(error) => {
+                return R4SidecarCoverage {
+                    status: "invalid".to_string(),
+                    reason: format!("identity preimage {preimage_path} is invalid: {error}"),
+                    accepted_family: Some(accepted_family.to_string()),
+                    accepted_sample_indices,
+                    identity_sample_indices: identity_samples,
+                    ..empty()
+                };
+            }
+        };
+        let preimage = sidecar.identity_preimage_json.as_bytes();
+        let mut expected_preimage_identity = identity.clone();
+        expected_preimage_identity.content_sha256.clear();
+        let preimage_identity = serde_json::from_slice::<
+            super::eigen_equilibrium_contract::LinearizationIdentityV2,
+        >(preimage);
+        let valid_preimage = sidecar.schema_version
+            == super::eigen_equilibrium_contract::LINEARIZATION_IDENTITY_PREIMAGE_V1
+            && sidecar.identity_schema
+                == super::eigen_equilibrium_contract::LINEARIZATION_IDENTITY_V2
+            && sidecar.identity_content_sha256 == identity.content_sha256
+            && sidecar.identity_preimage_sha256
+                == format!("sha256:{:x}", Sha256::digest(preimage))
+            && preimage_identity.as_ref().is_ok_and(|value| value == &expected_preimage_identity)
+            && super::eigen_equilibrium_contract::linearization_identity_v2_content_sha256_from_preimage_bytes(
+                preimage,
+            ) == identity.content_sha256;
+        if !valid_preimage {
+            return R4SidecarCoverage {
+                status: "invalid".to_string(),
+                reason: format!("identity/preimage exact-byte link failed for sample {sample_index}"),
+                accepted_family: Some(accepted_family.to_string()),
+                accepted_sample_indices,
+                identity_sample_indices: identity_samples,
+                ..empty()
+            };
+        }
+        if let Err(reason) = validate_r4_identity_links(
+            &identity,
+            artifacts,
+            accepted_family,
+            allow_missing_recomputed,
+            computed_sample_indices.len() == 1,
+        ) {
+            return R4SidecarCoverage {
+                status: "invalid".to_string(),
+                reason: format!("identity own-link check failed for sample {sample_index}: {reason}"),
+                accepted_family: Some(accepted_family.to_string()),
+                accepted_sample_indices,
+                identity_sample_indices: identity_samples,
+                ..empty()
+            };
+        }
+        identity_content_sha256_by_sample.insert(sample_index.to_string(), identity.content_sha256);
+    }
+    if allow_missing_recomputed {
+        return R4SidecarCoverage {
+            status: "missing_recomputed".to_string(),
+            reason: format!(
+                "R4 certified/recomputed sidecar arrays are missing or incomplete: {}",
+                missing_recomputed_keys.join(", ")
+            ),
+            accepted_family: Some(accepted_family.to_string()),
+            computed_sample_indices,
+            accepted_sample_indices,
+            identity_sample_indices: identity_samples,
+            missing_recomputed_keys,
+            identity_content_sha256_by_sample,
+            paths_by_key,
+            has_any_sidecars,
+            structural_complete: false,
+        };
+    }
+    R4SidecarCoverage {
+        status: "payload_replay_pending".to_string(),
+        reason: "R4 sidecar paths and exact identity links are structurally consistent; physical payload replay remains a separate gate".to_string(),
+        accepted_family: Some(accepted_family.to_string()),
+        computed_sample_indices,
+        accepted_sample_indices,
+        identity_sample_indices: identity_samples,
+        missing_recomputed_keys: Vec::new(),
+        identity_content_sha256_by_sample,
+        paths_by_key,
+        has_any_sidecars,
+        structural_complete: true,
+    }
+}
+
+pub(crate) fn sample_scoped_signed_sidecar_paths(
+    artifacts: &[AuxiliaryArtifact],
+    filename: &str,
+) -> Vec<String> {
+    let mut paths = artifacts
+        .iter()
+        .filter_map(|artifact| {
+            canonical_sample_scoped_index(&artifact.relative_path, filename)
+                .map(|_| artifact.relative_path.to_string())
+        })
+        .collect::<Vec<_>>();
+    paths.sort_by_key(|path| {
+        canonical_sample_scoped_index(path, filename).unwrap_or(usize::MAX)
+    });
+    paths.dedup();
+    paths
+}
+
+/// Return the immutable producer provenance sidecars in numeric sample order.
+/// The returned strings are the producer-published paths; this helper only
+/// selects and orders them and never rewrites their spelling or payload.
+pub(crate) fn sample_scoped_producer_provenance_paths(
+    artifacts: &[AuxiliaryArtifact],
+) -> Vec<String> {
+    sample_scoped_signed_sidecar_paths(artifacts, "producer_provenance.v1.json")
+}
+
 pub(super) fn published_artifact_sha256(
     artifacts: &[AuxiliaryArtifact],
     relative_path: &str,
@@ -71,6 +760,115 @@ pub(super) fn published_artifact_sha256(
             ),
         })?;
     Ok(format!("sha256:{:x}", Sha256::digest(&artifact.bytes)))
+}
+
+fn validate_published_linearization_identity_sidecars(
+    summary_payload: &serde_json::Value,
+    auxiliary_artifacts: &[AuxiliaryArtifact],
+    sample_index: usize,
+) -> Result<Option<(String, String)>, RunError> {
+    let Some(diagnostics) = summary_payload
+        .get("solver_diagnostics")
+        .and_then(serde_json::Value::as_object)
+    else {
+        return Ok(None);
+    };
+    let Some(identity_digest_value) = diagnostics.get("linearization_identity_sha256") else {
+        return Ok(None);
+    };
+    let identity_digest = identity_digest_value.as_str().ok_or_else(|| RunError {
+        message: "linearization_identity_sha256_must_be_string".to_string(),
+    })?;
+    let identity_path = format!(
+        "eigen/metadata/sample_{sample_index:04}/linearization_identity.v2.json"
+    );
+    let preimage_path = format!(
+        "eigen/metadata/sample_{sample_index:04}/linearization_identity_preimage.v1.json"
+    );
+    let identity_artifact = auxiliary_artifacts
+        .iter()
+        .find(|artifact| artifact.relative_path == identity_path)
+        .ok_or_else(|| RunError {
+            message: format!(
+                "linearization_identity_v2_artifact_missing_for_published_digest: {identity_path}"
+            ),
+        })?;
+    let identity = serde_json::from_slice::<
+        super::eigen_equilibrium_contract::LinearizationIdentityV2,
+    >(&identity_artifact.bytes)
+    .map_err(|error| RunError {
+        message: format!("linearization_identity_v2_artifact_invalid: {error}"),
+    })?;
+    if identity.sample_index != sample_index {
+        return Err(RunError {
+            message: format!(
+                "linearization_identity_v2_sample_index_mismatch: expected {sample_index}, got {}",
+                identity.sample_index
+            ),
+        });
+    }
+    if identity.content_sha256 != identity_digest {
+        return Err(RunError {
+            message: "linearization_identity_sha256_does_not_match_published_identity".to_string(),
+        });
+    }
+    let preimage_artifact = auxiliary_artifacts
+        .iter()
+        .find(|artifact| artifact.relative_path == preimage_path)
+        .ok_or_else(|| RunError {
+            message: format!(
+                "linearization_identity_preimage_v1_artifact_missing: {preimage_path}"
+            ),
+        })?;
+    let sidecar = serde_json::from_slice::<
+        super::eigen_equilibrium_contract::LinearizationIdentityPreimageV1,
+    >(&preimage_artifact.bytes)
+    .map_err(|error| RunError {
+        message: format!("linearization_identity_preimage_v1_artifact_invalid: {error}"),
+    })?;
+    if sidecar.schema_version
+        != super::eigen_equilibrium_contract::LINEARIZATION_IDENTITY_PREIMAGE_V1
+        || sidecar.identity_schema != super::eigen_equilibrium_contract::LINEARIZATION_IDENTITY_V2
+    {
+        return Err(RunError {
+            message: "linearization_identity_preimage_v1_schema_mismatch".to_string(),
+        });
+    }
+    if sidecar.identity_content_sha256 != identity_digest {
+        return Err(RunError {
+            message: "linearization_identity_preimage_v1_identity_digest_mismatch".to_string(),
+        });
+    }
+    let preimage_bytes = sidecar.identity_preimage_json.as_bytes();
+    let preimage_bytes_sha256 = format!("sha256:{:x}", Sha256::digest(preimage_bytes));
+    if sidecar.identity_preimage_sha256 != preimage_bytes_sha256 {
+        return Err(RunError {
+            message: "linearization_identity_preimage_v1_bytes_digest_mismatch".to_string(),
+        });
+    }
+    let preimage_identity = serde_json::from_slice::<
+        super::eigen_equilibrium_contract::LinearizationIdentityV2,
+    >(preimage_bytes)
+    .map_err(|error| RunError {
+        message: format!("linearization_identity_v2_preimage_json_invalid: {error}"),
+    })?;
+    let mut expected_preimage = identity.clone();
+    expected_preimage.content_sha256.clear();
+    if preimage_identity != expected_preimage {
+        return Err(RunError {
+            message: "linearization_identity_v2_preimage_value_mismatch".to_string(),
+        });
+    }
+    let recomputed_identity_digest =
+        super::eigen_equilibrium_contract::linearization_identity_v2_content_sha256_from_preimage_bytes(
+            preimage_bytes,
+        );
+    if recomputed_identity_digest != identity_digest {
+        return Err(RunError {
+            message: "linearization_identity_v2_framed_digest_mismatch".to_string(),
+        });
+    }
+    Ok(Some((identity_path, preimage_path)))
 }
 
 pub(super) fn mode_field_id(sample_index: usize, raw_mode_index: u64) -> String {
@@ -909,6 +1707,18 @@ pub(super) fn write_eigen_v2_bundle(
     auxiliary_artifacts: &mut Vec<AuxiliaryArtifact>,
     sample_index: usize,
 ) -> Result<(), RunError> {
+    let producer_provenance_v1_paths =
+        sample_scoped_producer_provenance_paths(auxiliary_artifacts);
+    let producer_provenance_v1_path = match producer_provenance_v1_paths.as_slice() {
+        [only] => Some(only.clone()),
+        _ => producer_provenance_v1_paths
+            .iter()
+            .find(|path| {
+                canonical_sample_scoped_index(path, "producer_provenance.v1.json")
+                    == Some(sample_index)
+            })
+            .cloned(),
+    };
     let publication_contract = modal_publication_contract(plan, summary_payload)?;
     let modal_source_topology_fingerprint =
         plan.mesh
@@ -1210,7 +2020,8 @@ pub(super) fn write_eigen_v2_bundle(
         auxiliary_artifacts.push(AuxiliaryArtifact {
             relative_path: "eigen/dispersion.csv".to_string(),
             bytes: dispersion_v2_csv(
-                &modal_sample_id(plan, 0),
+                sample_index,
+                &modal_sample_id(plan, sample_index),
                 plan.k_sampling.as_ref(),
                 &summary_payload["modes"],
                 &visualizable_mode_indices,
@@ -1513,6 +2324,13 @@ pub(super) fn write_eigen_v2_bundle(
         &published_solver_diagnostics,
     )?);
 
+    let linearization_identity_paths = validate_published_linearization_identity_sidecars(
+        summary_payload,
+        auxiliary_artifacts,
+        sample_index,
+    )?;
+    let r4_coverage = inspect_r4_sidecars(auxiliary_artifacts, &[sample_index]);
+
     let has_mode_fields = !mode_metadata_paths.is_empty();
     let spectrum_revision = spectrum_v2_revision;
     let branches_revision =
@@ -1551,6 +2369,17 @@ pub(super) fn write_eigen_v2_bundle(
             },
             "mode_field_storage_format": if has_mode_fields { "zarr" } else { "none" },
             "mode_metadata_paths": mode_metadata_paths,
+            "linearization_identity_v2_path": linearization_identity_paths
+                .as_ref()
+                .map(|(identity_path, _)| serde_json::json!(identity_path))
+                .unwrap_or(serde_json::Value::Null),
+            "linearization_identity_preimage_v1_path": linearization_identity_paths
+                .as_ref()
+                .map(|(_, preimage_path)| serde_json::json!(preimage_path))
+                .unwrap_or(serde_json::Value::Null),
+            "producer_provenance_v1_path": producer_provenance_v1_path,
+            "producer_provenance_v1_paths": producer_provenance_v1_paths,
+            "linearization_identity_sha256_by_sample": serde_json::json!({}),
         },
         "resources": {
             "spectrum_resource_key": "/v2/sessions/current/analysis/frequency-domain/eigen/spectrum.v2",
@@ -1622,6 +2451,36 @@ pub(super) fn write_eigen_v2_bundle(
             );
         }
     }
+    if r4_coverage.has_any_sidecars {
+        if let Some(artifacts) = manifest
+            .get_mut("artifacts")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            for (key, _, _) in R4_SIDECAR_DEFINITIONS {
+                let paths = r4_coverage
+                    .paths_by_key
+                    .get(key)
+                    .cloned()
+                    .unwrap_or_default();
+                artifacts.insert(key.to_string(), serde_json::json!(paths));
+            }
+            artifacts.insert(
+                "linearization_identity_sha256_by_sample".to_string(),
+                serde_json::json!(r4_coverage.identity_content_sha256_by_sample.clone()),
+            );
+        }
+    } else if let Some(artifacts) = manifest
+        .get_mut("artifacts")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        artifacts.remove("linearization_identity_sha256_by_sample");
+    }
+    if let Some(diagnostics) = manifest
+        .get_mut("diagnostics")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        diagnostics.insert("r4_replay".to_string(), r4_coverage.manifest_value());
+    }
     if let (Some(manifest_object), Some(diagnostics_object)) = (
         manifest.as_object_mut(),
         summary_payload["solver_diagnostics"].as_object(),
@@ -1639,6 +2498,7 @@ pub(super) fn write_eigen_v2_bundle(
             "phase_constraint_sha256",
             "equilibrium_artifact_sha256",
             "linearization_state_sha256",
+            "linearization_identity_sha256",
             "periodic_mesh_certificate_sha256",
             "relax_to_eigen_handoff_sha256",
             "relax_to_eigen_source_mesh_topology_sha256",
@@ -2143,6 +3003,7 @@ pub(super) fn dispersion_csv(
 }
 
 pub(super) fn dispersion_v2_csv(
+    sample_index: usize,
     sample_id: &str,
     k_sampling: Option<&KSamplingIR>,
     modes: &serde_json::Value,
@@ -2167,8 +3028,8 @@ pub(super) fn dispersion_v2_csv(
             let mode_field_available = visualizable_mode_indices.contains(&raw_mode_index);
             let (field_id, field_resource_key) = if mode_field_available {
                 (
-                    mode_field_id(0, raw_mode_index),
-                    mode_field_resource_key(0, raw_mode_index),
+                    mode_field_id(sample_index, raw_mode_index),
+                    mode_field_resource_key(sample_index, raw_mode_index),
                 )
             } else {
                 (String::new(), String::new())
@@ -2182,9 +3043,9 @@ pub(super) fn dispersion_v2_csv(
                 .filter(|value| value.is_finite() && *value > 0.0)
                 .map(|value| format!("{:.16e}", 2.0 * value))
                 .unwrap_or_default();
-            let mode_id = format!("sample-0000/mode-{raw_mode_index:04}");
+            let mode_id = format!("sample-{sample_index:04}/mode-{raw_mode_index:04}");
             csv.push_str(&format!(
-                "0,{},{:.16e},{:.16e},{:.16e},{:.16e},{},{},{},{},{:.16e},{:.16e},{},{},{},seed,{},{},{}\n",
+                "{sample_index},{},{:.16e},{:.16e},{:.16e},{:.16e},{},{},{},{},{:.16e},{:.16e},{},{},{},seed,{},{},{}\n",
                 sample_id,
                 0.0,
                 k_vector[0],
@@ -2373,5 +3234,495 @@ mod floquet_potential_tests {
         )
         .expect_err("non-finite coefficient must be rejected");
         assert!(error.message.contains("non-finite"));
+    }
+}
+
+#[cfg(test)]
+mod linearization_identity_sidecar_tests {
+    use super::*;
+    use crate::types::AuxiliaryArtifact;
+    use sha2::{Digest, Sha256};
+
+    fn identity_fixture(
+        sample_index: usize,
+    ) -> super::super::eigen_equilibrium_contract::LinearizationIdentityV2 {
+        let digest = format!("sha256:{}", "a".repeat(64));
+        let mut identity = serde_json::from_value(serde_json::json!({
+            "schema_version": super::super::eigen_equilibrium_contract::LINEARIZATION_IDENTITY_V2,
+            "sample_index": sample_index,
+            "equilibrium_artifact_schema": "equilibrium_artifact.v8",
+            "linearization_state_schema": "LinearizationState.v7",
+            "accepted_fields_schema": "CertifiedFemEquilibriumFields.v2",
+            "certified_fields_schema": "CertifiedFemEquilibriumFields.v2",
+            "recomputed_certificate_schema": "RecomputedFemLinearizationCertificate.v1",
+            "handoff_schema_version": "AcceptedFemRelaxStageHandoff.v2",
+            "handoff_content_sha256": digest.clone(),
+            "source_run_id": "run-test",
+            "source_stage_id": "stage-test",
+            "source_stage_kind": "relaxation",
+            "producer_plan_snapshot_sha256": digest.clone(),
+            "consumer_plan_snapshot_sha256": digest.clone(),
+            "producer_build_identity": {"source_snapshot_sha256": digest.clone()},
+            "consumer_build_identity": {"source_snapshot_sha256": digest.clone()},
+            "producer_source_snapshot_sha256": digest.clone(),
+            "consumer_source_snapshot_sha256": digest.clone(),
+            "cross_build_policy": "same_source_snapshot_required",
+            "source_mesh_topology_sha256": digest.clone(),
+            "modal_mesh_topology_fingerprint_v3": digest.clone(),
+            "node_count": 2,
+            "equilibrium_content_sha256": digest.clone(),
+            "equilibrium_artifact_path": "eigen/metadata/equilibrium_artifact.v8.json",
+            "equilibrium_artifact_sha256": digest.clone(),
+            "linearization_state_path": "eigen/metadata/linearization_state.v7.json",
+            "linearization_state_sha256": digest.clone(),
+            "equilibrium_material_signature": digest.clone(),
+            "equilibrium_material_preimage_json": "{}",
+            "equilibrium_static_physics_signature": digest.clone(),
+            "equilibrium_static_physics_preimage_json": "{}",
+            "equilibrium_boundary_signature": digest.clone(),
+            "equilibrium_boundary_preimage_json": "{}",
+            "material_signature": digest.clone(),
+            "material_identity_kind": "canonical_equilibrium_material.v2",
+            "material_provenance_signature": digest.clone(),
+            "material_provenance_scope": "materialization_plan",
+            "material_provenance_preimage_json": "{}",
+            "producer_material_provenance_signature": digest.clone(),
+            "producer_material_provenance_preimage_json": "{}",
+            "accepted_fields_content_sha256": digest.clone(),
+            "accepted_fields_path": "eigen/metadata/sample_0003/accepted_fem_equilibrium_fields.v2.json",
+            "certified_fields_content_sha256": digest.clone(),
+            "certified_fields_path": "eigen/metadata/sample_0003/certified_fem_equilibrium_fields.v2.json",
+            "recomputed_certificate_content_sha256": digest.clone(),
+            "recomputed_certificate_path": "eigen/metadata/sample_0003/recomputed_fem_linearization_certificate.v2.json",
+            "accepted_fields_bytes_sha256": digest.clone(),
+            "certified_fields_bytes_sha256": digest.clone(),
+            "recomputed_certificate_bytes_sha256": digest.clone(),
+            "recomputed_certificate_preimage_json": "{}",
+            "recomputed_certificate_preimage_sha256": digest,
+            "content_sha256": ""
+        }))
+        .expect("sidecar fixture must deserialize");
+        let preimage = serde_json::to_vec(&identity).expect("identity preimage must serialize");
+        identity.content_sha256 = super::super::eigen_equilibrium_contract::
+            linearization_identity_v2_content_sha256_from_preimage_bytes(&preimage);
+        identity
+    }
+
+    fn published_fixture(
+        sample_index: usize,
+    ) -> (
+        serde_json::Value,
+        Vec<AuxiliaryArtifact>,
+        super::super::eigen_equilibrium_contract::LinearizationIdentityV2,
+        Vec<u8>,
+    ) {
+        let identity = identity_fixture(sample_index);
+        let identity_path =
+            format!("eigen/metadata/sample_{sample_index:04}/linearization_identity.v2.json");
+        let preimage_path = format!(
+            "eigen/metadata/sample_{sample_index:04}/linearization_identity_preimage.v1.json"
+        );
+        let identity_bytes = serde_json::to_vec(&identity).expect("identity must serialize");
+        let preimage_sidecar = super::super::eigen_equilibrium_contract::
+            linearization_identity_v2_preimage_sidecar_bytes(&identity)
+            .expect("valid identity must produce a sidecar");
+        let preimage: super::super::eigen_equilibrium_contract::LinearizationIdentityPreimageV1 =
+            serde_json::from_slice(&preimage_sidecar).expect("sidecar must deserialize");
+        let preimage_bytes = preimage.identity_preimage_json.as_bytes().to_vec();
+        let summary = serde_json::json!({
+            "solver_diagnostics": {
+                "linearization_identity_sha256": identity.content_sha256.clone()
+            }
+        });
+        let artifacts = vec![
+            AuxiliaryArtifact {
+                relative_path: identity_path,
+                bytes: identity_bytes,
+            },
+            AuxiliaryArtifact {
+                relative_path: preimage_path,
+                bytes: preimage_sidecar,
+            },
+        ];
+        (summary, artifacts, identity, preimage_bytes)
+    }
+
+    #[test]
+    fn single_k_r4_manifest_helper_collects_complete_sample_arrays() {
+        let artifacts = vec![
+            AuxiliaryArtifact {
+                relative_path:
+                    "eigen/metadata/sample_0000/accepted_fem_equilibrium_fields.v2.json"
+                        .to_string(),
+                bytes: b"accepted".to_vec(),
+            },
+            AuxiliaryArtifact {
+                relative_path:
+                    "eigen/metadata/sample_0000/linearization_identity.v2.json".to_string(),
+                bytes: b"identity".to_vec(),
+            },
+            AuxiliaryArtifact {
+                relative_path: "eigen/metadata/sample_0000/linearization_identity_preimage.v1.json"
+                    .to_string(),
+                bytes: b"preimage".to_vec(),
+            },
+            AuxiliaryArtifact {
+                relative_path:
+                    "eigen/metadata/sample_0000/certified_fem_equilibrium_fields.v2.json"
+                        .to_string(),
+                bytes: b"certified".to_vec(),
+            },
+            AuxiliaryArtifact {
+                relative_path: "eigen/metadata/sample_0000/recomputed_fem_linearization_certificate.v2.json"
+                    .to_string(),
+                bytes: b"recomputed".to_vec(),
+            },
+        ];
+        assert_eq!(
+            sample_scoped_signed_sidecar_paths(
+                &artifacts,
+                "accepted_fem_equilibrium_fields.v2.json"
+            ),
+            vec![
+                "eigen/metadata/sample_0000/accepted_fem_equilibrium_fields.v2.json"
+            ]
+        );
+        assert_eq!(
+            sample_scoped_signed_sidecar_paths(
+                &artifacts,
+                "linearization_identity_preimage.v1.json"
+            ),
+            vec![
+                "eigen/metadata/sample_0000/linearization_identity_preimage.v1.json"
+            ]
+        );
+        assert!(sample_scoped_signed_sidecar_paths(
+            &artifacts,
+            "accepted_fem_equilibrium_fields.v1.json"
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn canonical_sample_paths_use_numeric_order_and_minimum_width() {
+        let filename = "linearization_state.v7.json";
+        let artifacts = [
+            AuxiliaryArtifact {
+                relative_path: format!("eigen/metadata/sample_{:04}/{filename}", 10_000),
+                bytes: b"large".to_vec(),
+            },
+            AuxiliaryArtifact {
+                relative_path: format!("eigen/metadata/sample_{:04}/{filename}", 9_999),
+                bytes: b"small".to_vec(),
+            },
+            AuxiliaryArtifact {
+                relative_path: format!("eigen/metadata/sample_00000/{filename}"),
+                bytes: b"overpadded".to_vec(),
+            },
+        ];
+        assert_eq!(
+            canonical_sample_scoped_index(
+                "eigen/metadata/sample_10000/linearization_state.v7.json",
+                filename,
+            ),
+            Some(10_000)
+        );
+        assert_eq!(
+            canonical_sample_scoped_index(
+                "eigen/metadata/sample_00000/linearization_state.v7.json",
+                filename,
+            ),
+            None
+        );
+        assert_eq!(
+            sample_scoped_signed_sidecar_paths(&artifacts, filename),
+            vec![
+                "eigen/metadata/sample_9999/linearization_state.v7.json",
+                "eigen/metadata/sample_10000/linearization_state.v7.json",
+            ]
+        );
+    }
+
+    #[test]
+    fn producer_provenance_paths_are_numeric_and_preserve_source_spelling() {
+        let artifacts = [
+            AuxiliaryArtifact {
+                relative_path:
+                    "eigen/metadata/sample_0010/producer_provenance.v1.json".to_string(),
+                bytes: b"ten".to_vec(),
+            },
+            AuxiliaryArtifact {
+                relative_path:
+                    "eigen/metadata/sample_0002/producer_provenance.v1.json".to_string(),
+                bytes: b"two".to_vec(),
+            },
+            AuxiliaryArtifact {
+                relative_path:
+                    "eigen/metadata/sample_00000/producer_provenance.v1.json".to_string(),
+                bytes: b"noncanonical".to_vec(),
+            },
+            AuxiliaryArtifact {
+                relative_path: "equilibrium/producer_provenance.v1.json".to_string(),
+                bytes: b"source".to_vec(),
+            },
+        ];
+        assert_eq!(
+            sample_scoped_producer_provenance_paths(&artifacts),
+            vec![
+                "eigen/metadata/sample_0002/producer_provenance.v1.json".to_string(),
+                "eigen/metadata/sample_0010/producer_provenance.v1.json".to_string(),
+            ]
+        );
+        assert_eq!(artifacts[0].bytes, b"ten");
+        assert_eq!(artifacts[1].bytes, b"two");
+    }
+
+    #[test]
+    fn r4_coverage_is_explicit_for_history_and_partial_sample_sets() {
+        let historical = inspect_r4_sidecars(&[], &[]);
+        assert_eq!(historical.status, "historical");
+        assert!(!historical.structural_complete);
+
+        let accepted = vec![
+            AuxiliaryArtifact {
+                relative_path:
+                    "eigen/metadata/sample_0000/accepted_fem_equilibrium_fields.v2.json"
+                        .to_string(),
+                bytes: b"accepted".to_vec(),
+            },
+            AuxiliaryArtifact {
+                relative_path:
+                    "eigen/metadata/sample_0002/accepted_fem_equilibrium_fields.v2.json"
+                        .to_string(),
+                bytes: b"accepted".to_vec(),
+            },
+        ];
+        let incomplete = inspect_r4_sidecars(&accepted, &[0, 2]);
+        assert_eq!(incomplete.status, "missing_identity");
+        assert_eq!(
+            incomplete.accepted_sample_indices,
+            BTreeSet::from([0_usize, 2_usize])
+        );
+
+        let mismatched = inspect_r4_sidecars(&accepted, &[0, 2, 7]);
+        assert_eq!(mismatched.status, "invalid");
+        assert!(mismatched.reason.contains("computed samples"));
+    }
+
+    #[test]
+    fn r4_coverage_rejects_partial_certified_family() {
+        let artifacts = vec![
+            AuxiliaryArtifact {
+                relative_path:
+                    "eigen/metadata/sample_0000/accepted_fem_equilibrium_fields.v2.json"
+                        .to_string(),
+                bytes: b"accepted".to_vec(),
+            },
+            AuxiliaryArtifact {
+                relative_path:
+                    "eigen/metadata/sample_0000/certified_fem_equilibrium_fields.v2.json"
+                        .to_string(),
+                bytes: b"certified".to_vec(),
+            },
+        ];
+        let coverage = inspect_r4_sidecars(&artifacts, &[0]);
+        assert_eq!(coverage.status, "missing_identity");
+        assert!(!coverage.structural_complete);
+    }
+
+    #[test]
+    fn r4_coverage_preserves_identity_evidence_when_recomputed_family_is_missing() {
+        let sample_index = 3_usize;
+        let mut identity = identity_fixture(sample_index);
+        let equilibrium_bytes = serde_json::to_vec(&serde_json::json!({
+            "content_sha256": identity.equilibrium_artifact_sha256.clone(),
+        }))
+        .expect("equilibrium fixture must serialize");
+        let state_bytes = serde_json::to_vec(&serde_json::json!({
+            "content_sha256": identity.linearization_state_sha256.clone(),
+        }))
+        .expect("state fixture must serialize");
+        let accepted_bytes = serde_json::to_vec(&serde_json::json!({
+            "schema_version": "CertifiedFemEquilibriumFields.v2",
+            "content_sha256": identity.accepted_fields_content_sha256.clone(),
+        }))
+        .expect("accepted fixture must serialize");
+        identity.accepted_fields_bytes_sha256 =
+            format!("sha256:{:x}", Sha256::digest(&accepted_bytes));
+        identity.content_sha256.clear();
+        let identity_preimage =
+            serde_json::to_vec(&identity).expect("identity preimage must serialize");
+        identity.content_sha256 = super::super::eigen_equilibrium_contract::
+            linearization_identity_v2_content_sha256_from_preimage_bytes(&identity_preimage);
+        let identity_bytes = serde_json::to_vec(&identity).expect("identity must serialize");
+        let preimage_sidecar = super::super::eigen_equilibrium_contract::
+            linearization_identity_v2_preimage_sidecar_bytes(&identity)
+            .expect("identity preimage sidecar must serialize");
+        let artifacts = vec![
+            AuxiliaryArtifact {
+                relative_path: format!(
+                    "eigen/metadata/sample_{sample_index:04}/accepted_fem_equilibrium_fields.v2.json"
+                ),
+                bytes: accepted_bytes,
+            },
+            AuxiliaryArtifact {
+                relative_path: format!(
+                    "eigen/metadata/sample_{sample_index:04}/linearization_identity.v2.json"
+                ),
+                bytes: identity_bytes,
+            },
+            AuxiliaryArtifact {
+                relative_path: format!(
+                    "eigen/metadata/sample_{sample_index:04}/linearization_identity_preimage.v1.json"
+                ),
+                bytes: preimage_sidecar,
+            },
+            AuxiliaryArtifact {
+                relative_path: "eigen/metadata/equilibrium_artifact.v8.json".to_string(),
+                bytes: equilibrium_bytes,
+            },
+            AuxiliaryArtifact {
+                relative_path: "eigen/metadata/linearization_state.v7.json".to_string(),
+                bytes: state_bytes,
+            },
+        ];
+        let coverage = inspect_r4_sidecars(&artifacts, &[sample_index]);
+        assert_eq!(coverage.status, "missing_recomputed");
+        assert_eq!(
+            coverage.missing_recomputed_keys,
+            vec![
+                "certified_fem_equilibrium_fields_v2_paths".to_string(),
+                "recomputed_fem_linearization_certificate_v2_paths".to_string(),
+            ]
+        );
+        assert_eq!(
+            coverage.identity_content_sha256_by_sample.get("3"),
+            Some(&identity.content_sha256)
+        );
+        assert!(!coverage.structural_complete);
+    }
+
+    #[test]
+    fn linearization_identity_preimage_sidecar_roundtrips_with_independent_framed_hash() {
+        let (summary, artifacts, identity, preimage_bytes) = published_fixture(3);
+        let expected_preimage_sha256 = format!("sha256:{:x}", Sha256::digest(&preimage_bytes));
+        let mut framed = Sha256::new();
+        framed
+            .update(super::super::eigen_equilibrium_contract::LINEARIZATION_IDENTITY_V2.as_bytes());
+        framed.update([0_u8]);
+        framed.update((preimage_bytes.len() as u64).to_le_bytes());
+        framed.update(&preimage_bytes);
+        let expected_identity_sha256 = format!("sha256:{:x}", framed.finalize());
+
+        assert_eq!(identity.content_sha256, expected_identity_sha256);
+        let preimage_artifact = artifacts
+            .iter()
+            .find(|artifact| {
+                artifact
+                    .relative_path
+                    .ends_with("linearization_identity_preimage.v1.json")
+            })
+            .expect("preimage sidecar must be published");
+        let sidecar: super::super::eigen_equilibrium_contract::LinearizationIdentityPreimageV1 =
+            serde_json::from_slice(&preimage_artifact.bytes).expect("sidecar must deserialize");
+        assert_eq!(sidecar.identity_preimage_sha256, expected_preimage_sha256);
+        assert_eq!(
+            super::validate_published_linearization_identity_sidecars(&summary, &artifacts, 3)
+                .expect("valid identity sidecars must validate"),
+            Some((
+                "eigen/metadata/sample_0003/linearization_identity.v2.json".to_string(),
+                "eigen/metadata/sample_0003/linearization_identity_preimage.v1.json".to_string(),
+            ))
+        );
+    }
+
+    #[test]
+    fn linearization_identity_sidecars_reject_mutated_preimage_bytes() {
+        let (summary, mut artifacts, _, _) = published_fixture(0);
+        let artifact = artifacts
+            .iter_mut()
+            .find(|artifact| {
+                artifact
+                    .relative_path
+                    .ends_with("linearization_identity_preimage.v1.json")
+            })
+            .expect("preimage sidecar must be present");
+        let mut sidecar: serde_json::Value =
+            serde_json::from_slice(&artifact.bytes).expect("sidecar must be JSON");
+        let original = sidecar["identity_preimage_json"]
+            .as_str()
+            .expect("preimage must be a string")
+            .to_string();
+        sidecar["identity_preimage_json"] = serde_json::json!(format!("{original} "));
+        artifact.bytes = serde_json::to_vec(&sidecar).expect("mutated sidecar must serialize");
+
+        let error =
+            super::validate_published_linearization_identity_sidecars(&summary, &artifacts, 0)
+                .expect_err("mutated preimage bytes must be rejected");
+        assert!(error.message.contains("bytes_digest_mismatch"));
+    }
+
+    #[test]
+    fn linearization_identity_sidecars_reject_identity_digest_tampering() {
+        let (_, artifacts, _, _) = published_fixture(1);
+        let tampered_summary = serde_json::json!({
+            "solver_diagnostics": {
+                "linearization_identity_sha256": format!("sha256:{}", "b".repeat(64))
+            }
+        });
+
+        let error = super::validate_published_linearization_identity_sidecars(
+            &tampered_summary,
+            &artifacts,
+            1,
+        )
+        .expect_err("tampered identity digest must be rejected");
+        assert!(error.message.contains("does_not_match_published_identity"));
+    }
+
+    #[test]
+    fn linearization_identity_sidecars_reject_sample_index_tampering() {
+        let (summary, mut artifacts, _, _) = published_fixture(2);
+        let artifact = artifacts
+            .iter_mut()
+            .find(|artifact| {
+                artifact
+                    .relative_path
+                    .ends_with("linearization_identity.v2.json")
+            })
+            .expect("identity artifact must be present");
+        let mut identity: serde_json::Value =
+            serde_json::from_slice(&artifact.bytes).expect("identity must be JSON");
+        identity["sample_index"] = serde_json::json!(7);
+        artifact.bytes = serde_json::to_vec(&identity).expect("mutated identity must serialize");
+
+        let error =
+            super::validate_published_linearization_identity_sidecars(&summary, &artifacts, 2)
+                .expect_err("sample index mismatch must be rejected");
+        assert!(error.message.contains("sample_index_mismatch"));
+    }
+
+    #[test]
+    fn linearization_identity_sidecars_reject_missing_artifacts_before_manifest_link() {
+        let (summary, _, _, _) = published_fixture(4);
+        let error = super::validate_published_linearization_identity_sidecars(&summary, &[], 4)
+            .expect_err("missing identity must be rejected before manifest publication");
+        assert!(error
+            .message
+            .contains("artifact_missing_for_published_digest"));
+    }
+
+    #[test]
+    fn linearization_identity_sidecars_reject_missing_preimage_before_manifest_link() {
+        let (summary, mut artifacts, _, _) = published_fixture(5);
+        artifacts.retain(|artifact| {
+            !artifact
+                .relative_path
+                .ends_with("linearization_identity_preimage.v1.json")
+        });
+        let error =
+            super::validate_published_linearization_identity_sidecars(&summary, &artifacts, 5)
+                .expect_err("missing preimage must be rejected before manifest publication");
+        assert!(error.message.contains("preimage_v1_artifact_missing"));
     }
 }

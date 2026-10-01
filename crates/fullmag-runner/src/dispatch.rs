@@ -2668,6 +2668,15 @@ pub(crate) fn execute_fem_eigen(
     plan: &FemEigenPlanIR,
     outputs: &[OutputIR],
 ) -> Result<ExecutedRun, RunError> {
+    execute_fem_eigen_with_producer_identity(execution, plan, outputs, None)
+}
+
+pub(crate) fn execute_fem_eigen_with_producer_identity(
+    execution: PlannedFemEigenExecution<'_>,
+    plan: &FemEigenPlanIR,
+    outputs: &[OutputIR],
+    producer_identity: Option<&fem_eigen::FemRelaxationProducerStageIdentity>,
+) -> Result<ExecutedRun, RunError> {
     // Route Path k-sampling through the multi-k orchestrator, which calls
     // the single-k solver for each sample point and then performs branch
     // tracking and writes V2 artifacts.
@@ -2683,17 +2692,38 @@ pub(crate) fn execute_fem_eigen(
     } {
         executed
     } else if matches!(plan.k_sampling, Some(fullmag_ir::KSamplingIR::Path { .. })) {
-        crate::fem::execute_fem_eigen_path(execution, plan, outputs, None, None)?
+        crate::fem::execute_fem_eigen_path_with_producer_identity(
+            execution,
+            plan,
+            outputs,
+            None,
+            None,
+            producer_identity,
+        )?
     } else if execution.resolution().is_some() {
-        fem_eigen::execute_planned_fem_eigen(execution, plan, outputs)?
+        fem_eigen::execute_planned_fem_eigen_with_producer_identity(
+            execution,
+            plan,
+            outputs,
+            producer_identity,
+        )?
     } else {
         match execution.lane() {
-            FemEigenExecutionLane::Cpu => fem_eigen::execute_cpu_fem_eigen(plan, outputs)?,
+            FemEigenExecutionLane::Cpu => fem_eigen::execute_cpu_fem_eigen_with_producer_identity(
+                plan,
+                outputs,
+                producer_identity,
+            )?,
             FemEigenExecutionLane::Gpu => {
                 // GPU-accelerated dense eigensolver (Etap A4) — TRANSITIONAL.
                 // `execute_gpu_fem_eigen` uses cuSolverDN; returns error if GPU
                 // is unavailable (no silent fallback to CPU).
-                fem_eigen::execute_gpu_fem_eigen(plan, outputs, None)?
+                fem_eigen::execute_gpu_fem_eigen_with_producer_identity(
+                    plan,
+                    outputs,
+                    None,
+                    producer_identity,
+                )?
             }
         }
     };
@@ -2707,6 +2737,22 @@ pub(crate) fn execute_fem_eigen_with_progress(
     outputs: &[OutputIR],
     progress: &mut fem_eigen::FemEigenProgressCallback<'_>,
 ) -> Result<ExecutedRun, RunError> {
+    execute_fem_eigen_with_progress_and_producer_identity(
+        execution,
+        plan,
+        outputs,
+        progress,
+        None,
+    )
+}
+
+pub(crate) fn execute_fem_eigen_with_progress_and_producer_identity(
+    execution: PlannedFemEigenExecution<'_>,
+    plan: &FemEigenPlanIR,
+    outputs: &[OutputIR],
+    progress: &mut fem_eigen::FemEigenProgressCallback<'_>,
+    producer_identity: Option<&fem_eigen::FemRelaxationProducerStageIdentity>,
+) -> Result<ExecutedRun, RunError> {
     let mut executed = if let Some(executed) = {
         #[cfg(test)]
         {
@@ -2719,16 +2765,39 @@ pub(crate) fn execute_fem_eigen_with_progress(
     } {
         executed
     } else if matches!(plan.k_sampling, Some(fullmag_ir::KSamplingIR::Path { .. })) {
-        crate::fem::execute_fem_eigen_path(execution, plan, outputs, None, Some(progress))?
+        crate::fem::execute_fem_eigen_path_with_producer_identity(
+            execution,
+            plan,
+            outputs,
+            None,
+            Some(progress),
+            producer_identity,
+        )?
     } else if execution.resolution().is_some() {
-        fem_eigen::execute_planned_fem_eigen_with_progress(execution, plan, outputs, progress)?
+        fem_eigen::execute_planned_fem_eigen_with_progress_and_producer_identity(
+            execution,
+            plan,
+            outputs,
+            progress,
+            producer_identity,
+        )?
     } else {
         match execution.lane() {
             FemEigenExecutionLane::Cpu => {
-                fem_eigen::execute_cpu_fem_eigen_with_progress(plan, outputs, progress)?
+                fem_eigen::execute_cpu_fem_eigen_with_progress_and_producer_identity(
+                    plan,
+                    outputs,
+                    progress,
+                    producer_identity,
+                )?
             }
             FemEigenExecutionLane::Gpu => {
-                fem_eigen::execute_gpu_fem_eigen(plan, outputs, Some(progress))?
+                fem_eigen::execute_gpu_fem_eigen_with_producer_identity(
+                    plan,
+                    outputs,
+                    Some(progress),
+                    producer_identity,
+                )?
             }
         }
     };
@@ -2743,13 +2812,32 @@ pub(crate) fn execute_fem_eigen_with_progress_and_stage_handoff(
     progress: &mut fem_eigen::FemEigenProgressCallback<'_>,
     handoff: &fem_eigen::AcceptedFemRelaxStageHandoff,
 ) -> Result<ExecutedRun, RunError> {
+    execute_fem_eigen_with_progress_and_stage_handoff_and_producer_identity(
+        execution,
+        plan,
+        outputs,
+        progress,
+        handoff,
+        None,
+    )
+}
+
+pub(crate) fn execute_fem_eigen_with_progress_and_stage_handoff_and_producer_identity(
+    execution: PlannedFemEigenExecution<'_>,
+    plan: &FemEigenPlanIR,
+    outputs: &[OutputIR],
+    progress: &mut fem_eigen::FemEigenProgressCallback<'_>,
+    handoff: &fem_eigen::AcceptedFemRelaxStageHandoff,
+    producer_identity: Option<&fem_eigen::FemRelaxationProducerStageIdentity>,
+) -> Result<ExecutedRun, RunError> {
     if matches!(plan.k_sampling, Some(fullmag_ir::KSamplingIR::Path { .. })) {
-        let mut executed = crate::fem::execute_fem_eigen_path(
+        let mut executed = crate::fem::execute_fem_eigen_path_with_producer_identity(
             execution,
             plan,
             outputs,
             Some(handoff),
             Some(progress),
+            producer_identity,
         )?;
         execution.bind_execution_provenance(&mut executed.provenance);
         return Ok(executed);
@@ -2770,22 +2858,38 @@ pub(crate) fn execute_fem_eigen_with_progress_and_stage_handoff(
     } {
         executed
     } else if execution.resolution().is_some() {
-        fem_eigen::execute_planned_fem_eigen_with_progress_and_stage_handoff(
-            execution, plan, outputs, progress, handoff,
+        fem_eigen::execute_planned_fem_eigen_with_progress_and_stage_handoff_and_producer_identity(
+            execution,
+            plan,
+            outputs,
+            progress,
+            handoff,
+            0,
+            None,
+            producer_identity,
         )?
     } else {
         match execution.lane() {
             FemEigenExecutionLane::Cpu => {
-                fem_eigen::execute_cpu_fem_eigen_with_progress_and_stage_handoff(
-                    plan, outputs, progress, handoff,
+                fem_eigen::execute_cpu_fem_eigen_with_progress_and_stage_handoff_and_producer_identity(
+                    plan,
+                    outputs,
+                    progress,
+                    handoff,
+                    0,
+                    None,
+                    producer_identity,
                 )?
             }
             FemEigenExecutionLane::Gpu => {
-                fem_eigen::execute_gpu_fem_eigen_with_progress_and_stage_handoff(
+                fem_eigen::execute_gpu_fem_eigen_with_progress_and_stage_handoff_and_producer_identity(
                     plan,
                     outputs,
                     Some(progress),
                     handoff,
+                    0,
+                    None,
+                    producer_identity,
                 )?
             }
         }

@@ -3,8 +3,11 @@ use super::eigen_constants::{
     NATIVE_CPU_MODAL_WINDOW_SOLVER_KIND, NATIVE_GPU_K0_KITTEL_SOLVER_KIND,
     NATIVE_GPU_MODAL_SHARED_DOMAIN_SOLVER_KIND,
 };
-use super::eigen_equilibrium_contract::AcceptedFemEigenEquilibriumHandoff;
+use super::eigen_equilibrium_contract::{
+    AcceptedFemEigenEquilibriumHandoff, AcceptedFemRelaxStageHandoff,
+};
 use super::eigen_native_result::NativeModalEigenpair;
+use super::eigen_nonshared_domain::NonSharedFloquetProvenance;
 use super::eigen_output::{
     classify_polarization, damping_policy_label, demag_realization_label, dispersion_csv,
     dispersion_v2_csv, equilibrium_source_json, floquet_potential_payload_bytes,
@@ -235,6 +238,49 @@ fn merge_object_fields(target: &mut serde_json::Value, fields: &serde_json::Valu
     }
 }
 
+fn append_exact_signed_sidecar(
+    artifacts: &mut Vec<AuxiliaryArtifact>,
+    relative_path: &str,
+    bytes: Vec<u8>,
+) -> Result<(), RunError> {
+    if let Some(existing) = artifacts
+        .iter()
+        .find(|artifact| artifact.relative_path == relative_path)
+    {
+        if existing.bytes == bytes {
+            return Ok(());
+        }
+        return Err(RunError {
+            message: format!(
+                "linearization_identity_signed_sidecar_conflict: {relative_path}"
+            ),
+        });
+    }
+    artifacts.push(AuxiliaryArtifact {
+        relative_path: relative_path.to_string(),
+        bytes,
+    });
+    Ok(())
+}
+
+fn state_artifact_paths(
+    state: &SharedDomainLinearizationState,
+    state_artifact_sample_index: Option<usize>,
+) -> Result<(String, String), RunError> {
+    let (equilibrium_filename, linearization_filename) =
+        super::eigen_equilibrium_contract::certified_equilibrium_artifact_filenames(
+            state.equilibrium_artifact["schema_version"].as_str(),
+            state.linearization_state["schema_version"].as_str(),
+        )?;
+    let prefix = state_artifact_sample_index
+        .map(|sample| format!("eigen/metadata/sample_{sample:04}/"))
+        .unwrap_or_else(|| "eigen/metadata/".to_string());
+    Ok((
+        format!("{prefix}{equilibrium_filename}"),
+        format!("{prefix}{linearization_filename}"),
+    ))
+}
+
 pub(super) fn native_modal_artifacts(
     plan: &FemEigenPlanIR,
     outputs: &[OutputIR],
@@ -246,9 +292,22 @@ pub(super) fn native_modal_artifacts(
     solver_diagnostics: serde_json::Value,
     relaxation_steps: u64,
     linearization_state: Option<&SharedDomainLinearizationState>,
+    source_relax_handoff: Option<&AcceptedFemRelaxStageHandoff>,
     relax_to_eigen_handoff: Option<&AcceptedFemEigenEquilibriumHandoff>,
+    nonshared_floquet_provenance: Option<&NonSharedFloquetProvenance>,
     sample_index: usize,
+    state_artifact_sample_index: Option<usize>,
 ) -> Result<Vec<AuxiliaryArtifact>, RunError> {
+    if let Some(state_sample_index) = state_artifact_sample_index {
+        if state_sample_index != sample_index {
+            return Err(RunError {
+                message: format!(
+                    "linearization_state_artifact_sample_index_mismatch: state={}, modal={}",
+                    state_sample_index, sample_index
+                ),
+            });
+        }
+    }
     let requested_modes = requested_mode_indices(outputs);
     let wants_spectrum = outputs
         .iter()
@@ -261,12 +320,33 @@ pub(super) fn native_modal_artifacts(
     let mu0_t_m_per_a = MU0;
     let mut auxiliary_artifacts = Vec::new();
     let mut solver_diagnostics = solver_diagnostics;
+    let published_state_artifact_paths = linearization_state
+        .map(|state| state_artifact_paths(state, state_artifact_sample_index))
+        .transpose()?;
     let modal_source_mesh_topology =
         plan.mesh
             .mixed_topology_fingerprint_v3()
             .map_err(|error| RunError {
                 message: format!("modal source mesh identity is invalid: {error}"),
             })?;
+    let linearization_identity_v2 = match (linearization_state, source_relax_handoff) {
+        (Some(state), Some(handoff)) => {
+            let (equilibrium_artifact_path, linearization_state_path) =
+                published_state_artifact_paths.as_ref().ok_or_else(|| RunError {
+                    message: "linearization_identity_state_artifact_paths_missing".to_string(),
+                })?;
+            Some(handoff.build_linearization_identity_v2(
+                plan,
+                state,
+                sample_index,
+                equilibrium_artifact_path.clone(),
+                linearization_state_path.clone(),
+                modal_source_mesh_topology.clone(),
+                crate::artifacts::build_identity_json(),
+            )?)
+        }
+        _ => None,
+    };
     if let Some(object) = solver_diagnostics.as_object_mut() {
         // The native diagnostics payload reports candidate/accepted counts,
         // while artifacts-v2 needs the exact number of modes that survived
@@ -300,6 +380,12 @@ pub(super) fn native_modal_artifacts(
                     "accepted_for_frequency_operator": true,
                 }),
             );
+            if let Some(identity) = linearization_identity_v2.as_ref() {
+                object.insert(
+                    "linearization_identity_sha256".to_string(),
+                    serde_json::json!(identity.content_sha256),
+                );
+            }
         }
     }
     if let Some(handoff) = relax_to_eigen_handoff {
@@ -315,6 +401,23 @@ pub(super) fn native_modal_artifacts(
             object.insert(
                 "relax_to_eigen_handoff".to_string(),
                 handoff.provenance_json(),
+            );
+        }
+    }
+    if let Some(provenance) = nonshared_floquet_provenance {
+        if let Some(object) = solver_diagnostics.as_object_mut() {
+            if let Some(fields) = provenance.artifact_diagnostics().as_object() {
+                for (key, value) in fields {
+                    object.insert(key.clone(), value.clone());
+                }
+            }
+            object.insert(
+                "nonshared_floquet_operator_identity".to_string(),
+                provenance.operator_identity.clone(),
+            );
+            object.insert(
+                "nonshared_floquet_source_state".to_string(),
+                provenance.source_state.clone(),
             );
         }
     }
@@ -597,6 +700,11 @@ pub(super) fn native_modal_artifacts(
     let mode_equilibrium_artifact = mode_provenance_value("equilibrium_artifact_sha256");
     let mode_linearization_state = mode_provenance_value("linearization_state_sha256");
     let mode_periodic_certificate = mode_provenance_value("periodic_mesh_certificate_sha256");
+    let mode_nonshared_identity =
+        mode_provenance_value("nonshared_floquet_operator_identity_sha256");
+    let mode_nonshared_source = mode_provenance_value("nonshared_floquet_source_state_sha256");
+    let mode_nonshared_matrix =
+        mode_provenance_value("nonshared_floquet_matrix_pencil_sha256");
     let mode_relax_to_eigen_handoff = mode_provenance_value("relax_to_eigen_handoff_sha256");
     let mode_relax_to_eigen_source_mesh_topology =
         mode_provenance_value("relax_to_eigen_source_mesh_topology_sha256");
@@ -708,6 +816,9 @@ pub(super) fn native_modal_artifacts(
             "equilibrium_artifact_sha256": mode_equilibrium_artifact.clone(),
             "linearization_state_sha256": mode_linearization_state.clone(),
             "periodic_mesh_certificate_sha256": mode_periodic_certificate.clone(),
+            "nonshared_floquet_operator_identity_sha256": mode_nonshared_identity.clone(),
+            "nonshared_floquet_source_state_sha256": mode_nonshared_source.clone(),
+            "nonshared_floquet_matrix_pencil_sha256": mode_nonshared_matrix.clone(),
             "relax_to_eigen_handoff_sha256": mode_relax_to_eigen_handoff.clone(),
             "relax_to_eigen_source_mesh_topology_sha256":
                 mode_relax_to_eigen_source_mesh_topology.clone(),
@@ -772,6 +883,9 @@ pub(super) fn native_modal_artifacts(
                 "equilibrium_artifact_sha256": mode_equilibrium_artifact,
                 "linearization_state_sha256": mode_linearization_state,
                 "periodic_mesh_certificate_sha256": mode_periodic_certificate,
+                "nonshared_floquet_operator_identity_sha256": mode_nonshared_identity,
+                "nonshared_floquet_source_state_sha256": mode_nonshared_source,
+                "nonshared_floquet_matrix_pencil_sha256": mode_nonshared_matrix,
                 "relax_to_eigen_handoff_sha256": mode_relax_to_eigen_handoff,
                 "relax_to_eigen_source_mesh_topology_sha256":
                     mode_relax_to_eigen_source_mesh_topology,
@@ -861,19 +975,95 @@ pub(super) fn native_modal_artifacts(
         &equilibrium_source_json(&plan.equilibrium),
     )?);
     if let Some(state) = linearization_state {
-        let (equilibrium_filename, linearization_filename) =
-            super::eigen_equilibrium_contract::certified_equilibrium_artifact_filenames(
-                state.equilibrium_artifact["schema_version"].as_str(),
-                state.linearization_state["schema_version"].as_str(),
-            )?;
+        let (equilibrium_artifact_path, linearization_state_path) =
+            published_state_artifact_paths.as_ref().ok_or_else(|| RunError {
+                message: "linearization_state_artifact_paths_missing".to_string(),
+            })?;
         auxiliary_artifacts.push(json_artifact(
-            &format!("eigen/metadata/{equilibrium_filename}"),
+            equilibrium_artifact_path,
             &state.equilibrium_artifact,
         )?);
         auxiliary_artifacts.push(json_artifact(
-            &format!("eigen/metadata/{linearization_filename}"),
+            linearization_state_path,
             &state.linearization_state,
         )?);
+        if source_relax_handoff.is_some_and(|handoff| handoff.verified_replay().is_some()) {
+            let source_relax_handoff = source_relax_handoff.expect("verified handoff is present");
+            let identity = linearization_identity_v2.as_ref().ok_or_else(|| RunError {
+                message: "linearization_identity_v2_missing_for_verified_handoff".to_string(),
+            })?;
+            append_exact_signed_sidecar(
+                &mut auxiliary_artifacts,
+                &identity.accepted_fields_path,
+                source_relax_handoff
+                    .verified_replay()
+                    .ok_or_else(|| RunError {
+                        message:
+                            "linearization_identity_missing_verified_replay_payload".to_string(),
+                    })?
+                    .accepted_fields_json
+                    .clone(),
+            )?;
+            append_exact_signed_sidecar(
+                &mut auxiliary_artifacts,
+                &identity.certified_fields_path,
+                source_relax_handoff
+                    .verified_replay()
+                    .ok_or_else(|| RunError {
+                        message:
+                            "linearization_identity_missing_verified_replay_payload".to_string(),
+                    })?
+                    .certified_fields_json
+                    .clone(),
+            )?;
+            append_exact_signed_sidecar(
+                &mut auxiliary_artifacts,
+                &identity.recomputed_certificate_path,
+                source_relax_handoff
+                    .verified_replay()
+                    .ok_or_else(|| RunError {
+                        message:
+                            "linearization_identity_missing_verified_replay_payload".to_string(),
+                    })?
+                    .recomputed_certificate_json
+                    .clone(),
+            )?;
+            append_exact_signed_sidecar(
+                &mut auxiliary_artifacts,
+                &format!(
+                    "eigen/metadata/sample_{sample_index:04}/linearization_identity.v2.json"
+                ),
+                serde_json::to_vec_pretty(&identity).map_err(|error| RunError {
+                    message: format!(
+                        "linearization_identity_v2_serialization_failed: {error}"
+                    ),
+                })?,
+            )?;
+            append_exact_signed_sidecar(
+                &mut auxiliary_artifacts,
+                &format!(
+                    "eigen/metadata/sample_{sample_index:04}/linearization_identity_preimage.v1.json"
+                ),
+                super::eigen_equilibrium_contract::linearization_identity_v2_preimage_sidecar_bytes(
+                    identity,
+                )?,
+            )?;
+            append_exact_signed_sidecar(
+                &mut auxiliary_artifacts,
+                &super::eigen_equilibrium_contract::
+                    fem_relaxation_producer_provenance_sample_relative_path(sample_index),
+                source_relax_handoff.producer_provenance_sidecar_bytes()?,
+            )?;
+        }
+    }
+    if let Some(provenance) = nonshared_floquet_provenance {
+        for sidecar in &provenance.sidecars {
+            append_exact_signed_sidecar(
+                &mut auxiliary_artifacts,
+                &sidecar.relative_path,
+                sidecar.bytes.clone(),
+            )?;
+        }
     }
 
     if wants_dispersion {
@@ -897,6 +1087,7 @@ pub(super) fn native_modal_artifacts(
         auxiliary_artifacts.push(AuxiliaryArtifact {
             relative_path: "eigen/dispersion.csv".to_string(),
             bytes: dispersion_v2_csv(
+                sample_index,
                 &modal_sample_id(plan, sample_index),
                 plan.k_sampling.as_ref(),
                 &summary_payload["modes"],

@@ -28,6 +28,7 @@ nie zawierają tego przyrostu. Pełny plan S00–S12 pozostaje obowiązujący.
 | CSV dyspersji wpisuje sample 0 | P1: `dispersion_v2_csv` hardkoduje `0`, `sample-0000` i identyfikator pola próbki zero | Potwierdzone w niezależnym review nonshared. Generator musi otrzymać rzeczywisty indeks z każdego call site, także fallbacku. Poprawka w implementacji. |
 | Brak kontroli dependency digestu odpowiedzi native | P1: żądanie przekazuje digest, lecz odbiornik kopiuje diagnostykę bez odrzucenia brakującej/obcej odpowiedzi | Potwierdzone w niezależnym review. Wymagana kontrola dependency digestu względem żądania; digest Rust i native mają różne preimage i nie wolno porównywać ich bezpośrednio. Poprawka w implementacji. |
 | Publiczny Python nie zapisuje producer identity | Luka integracyjna: `_core.run_problem_json` wywołuje runner bez metadanych orkiestratora CLI | Bez fałszywej kwalifikacji: sidecar był pomijany, a eigen pozostawał fail-closed. Dodano lokalne wiązanie rzeczywiście nowej standalone execution przed dispatch w czterech entrypointach runnera i w unified InteractiveRuntime. Import zachowuje historyczne identity. Regresje przygotowane, parser PASS; testów natywnych nie kompilowano. Review/build/runtime jeszcze OPEN. |
+| Adapter źródła porównuje tylko własny hash identity | P1: pełny own-preimage replay nie porównywał source IDs, build/plan/mesh/m0 i payload refs identity z rzeczywistym producentem | Wykryte przez root przed integracją głównej bramki. Wymagane bezpośrednie semantic bindings i mutacje z ponownie obliczonym own hash, aby obce source metadata nie przeszły przez sam poprawny digest. Poprawka w toku; adapter nie kwalifikuje jeszcze R4. |
 | Końcowe whitespace i nieprecyzyjna dokumentacja append JSON | P2: helper wymaga ostatniego znaku `}`, a opis obiecuje więcej niż sprawdza kod | Naprawiony źródłowo: trailing whitespace i pusty obiekt `{ \n }` są obsługiwane. Opis ograniczonego skanera nie obiecuje pełnej walidacji JSON. Native runtime NOT VERIFIED. |
 
 ## Potwierdzone właściwości źródeł
@@ -112,3 +113,24 @@ Nie sprawdza natywnych Jacobianów ani orientacji i nie dowodzi wykonania solver
    zastępować bramki naukowej samym poprawnym hashem identity.
 5. Nowy build dokładnego spójnego SHA przez kolejkę, następnie C0/C1, signed
    DE/BV, zbieżność i porównanie A1. Pozostałe zadania S00–S12 nie są usuwane.
+
+## Integracja replayu producenta z verifierem — checkpoint źródłowy
+
+Główny verifier wywołuje adapter producenta dla kompletnych pakietów z identity v2.
+Wiąże rzeczywisty sample-set, ścieżki, schema i content digest equilibrium/state
+z identity oraz przekazuje dokładne copied payloads. Brak historycznych danych
+pozostaje NOT VERIFIED; uszkodzona deklarowana relacja zostaje odrzucona.
+Nonshared bez identity v2 wymaga osobnego replayu source-state i nie otrzymuje
+fikcyjnej identity shared. Wynik source replay pozostaje oddzielony od operator
+replay, także dla nonshared z jawnie dostarczoną identity. Consumer plan digest
+jest dotąd sprawdzany składniowo; brak jego dokładnych bajtów nadal blokuje
+pełne odtworzenie operatora.
+
+Kontrole przyrostu: 25 unittest PASS; dotychczasowy verifier i signed sidecars:
+252 pytest oraz 15 subtests PASS. Test routingu używa mocku adaptera wyłącznie
+do kontroli przekazywanych ścieżek i separacji bramek; nie jest dowodem fizyki.
+Pełny pakiet producenta bez mocków przeszedł kontrolę: realny producer fixture,
+przeniesienie payloadów do sample_0000 i odrzucenie obcego artifact/path/hash
+po ponownym przeliczeniu własnego digestu identity. Aktualne suite producenta,
+routingu i nonshared: 30 unittest PASS; validator dokumentacji adaptera PASS.
+Build #193 nie zawiera tych zmian; pełny R4 i kwalifikacja nadal otwarte.

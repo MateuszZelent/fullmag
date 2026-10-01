@@ -15,6 +15,9 @@ use super::eigen_native_artifacts::{
     native_gpu_modal_shared_domain_execution_provenance, native_modal_artifacts,
     native_modal_execution_provenance,
 };
+use super::eigen_nonshared_domain::{
+    build_nonshared_floquet_provenance, NonSharedFloquetProvenance,
+};
 use super::eigen_native_result::{
     diagnostics_number, is_native_poisson_airbox_modal_adapter,
     merge_poisson_airbox_modal_result_diagnostics, native_bloch_floquet_modes_from_result_json,
@@ -93,6 +96,7 @@ pub(super) fn execute_native_modal_window(
     active_nodes: usize,
     effective_dof: usize,
     artifact_sample_index: usize,
+    state_artifact_sample_index: Option<usize>,
     execution_target: native_fem::NativeModalExecutionTarget,
     planned_execution: Option<PlannedFemEigenExecution<'_>>,
     expected_handoff: Option<&AcceptedFemEigenEquilibriumHandoff>,
@@ -148,6 +152,11 @@ pub(super) fn execute_native_modal_window(
                 handoff.validate_consumed_linearization(plan, &equilibrium, state)?;
                 Some(handoff.clone())
             }
+            // The runner-provided non-shared pencil has its own provenance
+            // transport below.  It must not be forced through the shared
+            // Poisson linearization state merely because a caller carried an
+            // optional handoff token.
+            (Some(_), None) if runner_operator.is_some() => None,
             (Some(_), None) => {
                 return Err(RunError {
                     message: "relax_to_eigen_handoff_requires_linearization_state".to_string(),
@@ -194,9 +203,8 @@ pub(super) fn execute_native_modal_window(
                 .to_string(),
         });
     }
-    let operator_diagnostics_json = if let Some((stiffness_field, mass)) = runner_operator {
+    let mut operator_diagnostics_value = if let Some((stiffness_field, mass)) = runner_operator {
         full_2x2_native_operator_diagnostics_json(plan, stiffness_field, mass, active_nodes)
-            .to_string()
     } else {
         serde_json::json!({
             "schema_version": "frequency_domain_operator_diagnostics.v1",
@@ -204,8 +212,46 @@ pub(super) fn execute_native_modal_window(
             "assembly_owner": "native_mfem",
             "runner_operator_transport": "disabled",
         })
-        .to_string()
     };
+    // The explicit runner operator is also used by real non-Floquet lanes
+    // (free, pinned and ordinary periodic boundaries).  This provenance
+    // record is intentionally scoped to the actual Floquet boundary kind;
+    // otherwise those lanes would publish a false Floquet identity while
+    // their solver path remains valid.
+    let nonshared_floquet_provenance = runner_operator
+        .filter(|_| {
+            matches!(
+                plan.spin_wave_bc.kind(),
+                fullmag_ir::SpinWaveBoundaryKindIR::Floquet
+            )
+        })
+        .map(|(stiffness_field, mass)| {
+            build_nonshared_floquet_provenance(
+                plan,
+                topology,
+                source_artifact,
+                source_relax_handoff,
+                &equilibrium,
+                &observables,
+                stiffness_field,
+                mass,
+                &gyrotropic_matrix_row_major_from_tangent_mass(mass, active_nodes)?,
+                active_nodes,
+                artifact_sample_index,
+                &operator_diagnostics_value,
+            )
+        })
+        .transpose()?;
+    if let Some(provenance) = nonshared_floquet_provenance.as_ref() {
+        if let Some(object) = operator_diagnostics_value.as_object_mut() {
+            if let Some(fields) = provenance.native_input_diagnostics().as_object() {
+                for (key, value) in fields {
+                    object.insert(key.clone(), value.clone());
+                }
+            }
+        }
+    }
+    let operator_diagnostics_json = operator_diagnostics_value.to_string();
     let shared_domain_identity = shared_domain_problem
         .as_ref()
         .map(|problem| -> Result<serde_json::Value, RunError> {
@@ -523,11 +569,14 @@ pub(super) fn execute_native_modal_window(
     } else {
         None
     };
-    let mut solver_diagnostics = native_solver_diagnostics_json(
+    let mut solver_diagnostics = native_solver_diagnostics_json_with_expected_digest(
         plan,
         &native_result.diagnostics_json,
         Some(&native_result.result_json),
         native_result.modal_gpu_attestation.as_ref(),
+        runner_magnetic_pencil
+            .as_ref()
+            .map(|pencil| pencil.dependency_digest.as_str()),
     )?;
     if let (Some(execution), Some(attestation)) =
         (planned_execution, native_execution_attestation.as_ref())
@@ -540,6 +589,16 @@ pub(super) fn execute_native_modal_window(
     ) {
         if let Some(identity_object) = identity.as_object() {
             for (key, value) in identity_object {
+                diagnostics.insert(key.clone(), value.clone());
+            }
+        }
+    }
+    if let (Some(provenance), Some(diagnostics)) = (
+        nonshared_floquet_provenance.as_ref(),
+        solver_diagnostics.as_object_mut(),
+    ) {
+        if let Some(fields) = provenance.artifact_diagnostics().as_object() {
+            for (key, value) in fields {
                 diagnostics.insert(key.clone(), value.clone());
             }
         }
@@ -686,8 +745,11 @@ pub(super) fn execute_native_modal_window(
         solver_diagnostics,
         relaxation_steps,
         shared_domain_linearization_state.as_ref(),
+        source_relax_handoff,
         relax_to_eigen_handoff.as_ref(),
+        nonshared_floquet_provenance.as_ref(),
         artifact_sample_index,
+        state_artifact_sample_index,
     )?;
     if shared_domain_mode && !interrupted && plan.enable_demag && plan.operator.include_demag {
         let (_, _, _, scalar_classes, scalar_class_count) =
@@ -970,12 +1032,114 @@ pub(super) fn execute_native_cpu_modal_window_from_bloch_floquet_complex(
     bases: &[(Vector3, Vector3)],
     stiffness: &[Vec<Complex64>],
     mass: &[Vec<Complex64>],
+    progress: Option<&mut FemEigenProgressCallback<'_>>,
+    active_nodes: usize,
+    effective_dof: usize,
+    artifact_sample_index: usize,
+    state_artifact_sample_index: Option<usize>,
+    planned_execution: Option<PlannedFemEigenExecution<'_>>,
+    shared_domain_problem: Option<native_fem::NativeModalEigenSharedDomainProblem<'_>>,
+) -> Result<ExecutedRun, RunError> {
+    execute_native_cpu_modal_window_from_bloch_floquet_complex_with_provenance(
+        plan,
+        outputs,
+        initial_magnetization,
+        equilibrium,
+        observables,
+        relaxation_steps,
+        reduction,
+        bases,
+        stiffness,
+        mass,
+        progress,
+        active_nodes,
+        effective_dof,
+        artifact_sample_index,
+        state_artifact_sample_index,
+        planned_execution,
+        shared_domain_problem,
+        None,
+    )
+}
+
+/// Prepare the provenance object needed by the complex Bloch/Floquet entry
+/// point.  The execution owner calls this before invoking the `_with_provenance`
+/// variant; keeping conversion here avoids a second, potentially different,
+/// matrix-to-pencil implementation in the execution layer.
+pub(super) fn build_nonshared_floquet_provenance_from_complex(
+    plan: &FemEigenPlanIR,
+    topology: &MeshTopology,
+    source_artifact: Option<&LoadedEquilibriumArtifact>,
+    source_relax_handoff: Option<&AcceptedFemRelaxStageHandoff>,
+    equilibrium: &[Vector3],
+    observables: &EffectiveFieldObservables,
+    stiffness: &[Vec<Complex64>],
+    mass: &[Vec<Complex64>],
+    active_nodes: usize,
+    sample_index: usize,
+) -> Result<NonSharedFloquetProvenance, RunError> {
+    if !matches!(
+        plan.spin_wave_bc.kind(),
+        fullmag_ir::SpinWaveBoundaryKindIR::Floquet
+    ) {
+        return Err(RunError {
+            message: "nonshared_floquet_provenance_requires_floquet_boundary".to_string(),
+        });
+    }
+    let payload = native_bloch_floquet_dense_payload_from_complex_pair(stiffness, mass)?;
+    // `build_nonshared_floquet_provenance` records the field-unit stiffness
+    // and applies gamma exactly once when it creates `stiffness_omega`.  The
+    // native execution path performs that same conversion only when it builds
+    // the MFEM payload below; passing an already scaled matrix here would make
+    // the provenance matrix pencil carry gamma^2.
+    let stiffness = payload.stiffness;
+    let diagnostics = serde_json::json!({
+        "schema_version": "frequency_domain_operator_diagnostics.v1",
+        "payload_kind": "bloch_floquet_tangent_operator",
+        "stiffness_field_units": "A_per_m_mass_weighted",
+        "stiffness_omega_units": "rad_s_inv",
+        "native_stiffness_input_units": "rad_s_inv",
+        "gyrotropic_form": "pencil_B=-G=[[0,-M],[M,0]]",
+        "operator_embedding": "complex_bloch_floquet_to_real_gyrotropic_pencil",
+    });
+    build_nonshared_floquet_provenance(
+        plan,
+        topology,
+        source_artifact,
+        source_relax_handoff,
+        equilibrium,
+        observables,
+        &stiffness,
+        &payload.tangent_mass,
+        &payload.gyrotropic_row_major,
+        active_nodes,
+        sample_index,
+        &diagnostics,
+    )
+}
+
+/// Variant used by the execution owner once it has built the non-shared
+/// source handoff.  The legacy wrapper above intentionally remains source
+/// compatible until that caller is migrated.
+pub(super) fn execute_native_cpu_modal_window_from_bloch_floquet_complex_with_provenance(
+    plan: &FemEigenPlanIR,
+    outputs: &[OutputIR],
+    initial_magnetization: Vec<Vector3>,
+    equilibrium: Vec<Vector3>,
+    observables: EffectiveFieldObservables,
+    relaxation_steps: u64,
+    reduction: &ReductionMap,
+    bases: &[(Vector3, Vector3)],
+    stiffness: &[Vec<Complex64>],
+    mass: &[Vec<Complex64>],
     mut progress: Option<&mut FemEigenProgressCallback<'_>>,
     active_nodes: usize,
     effective_dof: usize,
     artifact_sample_index: usize,
+    state_artifact_sample_index: Option<usize>,
     planned_execution: Option<PlannedFemEigenExecution<'_>>,
     shared_domain_problem: Option<native_fem::NativeModalEigenSharedDomainProblem<'_>>,
+    nonshared_floquet_provenance: Option<NonSharedFloquetProvenance>,
 ) -> Result<ExecutedRun, RunError> {
     emit_fem_eigen_progress(
         &mut progress,
@@ -1023,6 +1187,23 @@ pub(super) fn execute_native_cpu_modal_window_from_bloch_floquet_complex(
         &tangent_mass_row_major,
         &native_floquet_periodic_pairs,
     );
+    let mut operator_diagnostics_value = serde_json::json!({
+        "schema_version": "frequency_domain_operator_diagnostics.v1",
+        "payload_kind": "bloch_floquet_tangent_operator",
+        "stiffness_units": "rad_s_inv",
+        "gyrotropic_form": "pencil_B=-G=[[0,-M],[M,0]]",
+        "operator_embedding": "complex_bloch_floquet_to_real_gyrotropic_pencil",
+    });
+    if let Some(provenance) = nonshared_floquet_provenance.as_ref() {
+        if let Some(fields) = provenance.native_input_diagnostics().as_object() {
+            if let Some(object) = operator_diagnostics_value.as_object_mut() {
+                for (key, value) in fields {
+                    object.insert(key.clone(), value.clone());
+                }
+            }
+        }
+    }
+    let operator_diagnostics_json = operator_diagnostics_value.to_string();
     let stop_requested = AtomicBool::new(false);
     // Keep the phase-reduced Floquet path interruptible for the same two
     // control sources as the shared-domain native path: runtime callbacks and
@@ -1065,13 +1246,7 @@ pub(super) fn execute_native_cpu_modal_window_from_bloch_floquet_complex(
         damping_policy: native_modal_damping_policy(plan.damping_policy),
         spin_wave_bc_kind: native_modal_spin_wave_bc_kind(&plan.spin_wave_bc),
         k_vector_rad_m: native_modal_k_vector(plan.k_sampling.as_ref()),
-        operator_diagnostics_json: Some(
-            "{\"schema_version\":\"frequency_domain_operator_diagnostics.v1\",\
-             \"payload_kind\":\"bloch_floquet_tangent_operator\",\
-             \"stiffness_units\":\"rad_s_inv\",\
-             \"gyrotropic_form\":\"pencil_B=-G=[[0,-M],[M,0]]\",\
-             \"operator_embedding\":\"complex_bloch_floquet_to_real_gyrotropic_pencil\"}",
-        ),
+        operator_diagnostics_json: Some(operator_diagnostics_json.as_str()),
         requested_mode_count: plan.count as i32,
         target_kind: native_modal_target_kind(&plan.target),
         target_frequency_hz: native_modal_target_frequency_hz(&plan.target),
@@ -1144,16 +1319,26 @@ pub(super) fn execute_native_cpu_modal_window_from_bloch_floquet_complex(
     } else {
         None
     };
-    let mut solver_diagnostics = native_solver_diagnostics_json(
+    let mut solver_diagnostics = native_solver_diagnostics_json_with_expected_digest(
         plan,
         &native_result.diagnostics_json,
         Some(&native_result.result_json),
         None,
+        Some(magnetic_pencil.dependency_digest.as_str()),
     )?;
     if let (Some(execution), Some(attestation)) =
         (planned_execution, native_execution_attestation.as_ref())
     {
         bind_planned_execution_diagnostics(&mut solver_diagnostics, plan, execution, attestation)?;
+    }
+    if let Some(provenance) = nonshared_floquet_provenance.as_ref() {
+        if let Some(object) = solver_diagnostics.as_object_mut() {
+            if let Some(fields) = provenance.artifact_diagnostics().as_object() {
+                for (key, value) in fields {
+                    object.insert(key.clone(), value.clone());
+                }
+            }
+        }
     }
     if interrupted {
         if let Some(object) = solver_diagnostics.as_object_mut() {
@@ -1232,7 +1417,10 @@ pub(super) fn execute_native_cpu_modal_window_from_bloch_floquet_complex(
         relaxation_steps,
         None,
         None,
+        None,
+        nonshared_floquet_provenance.as_ref(),
         artifact_sample_index,
+        state_artifact_sample_index,
     )?;
     if interrupted {
         auxiliary_artifacts.push(json_artifact(
@@ -1568,7 +1756,11 @@ pub(super) fn full_2x2_native_operator_diagnostics_json(
         "payload_kind": payload_kind,
         "active_node_count": active_nodes,
         "tangent_dof_count": stiffness_field.nrows(),
-        "stiffness_units": "A_per_m_mass_weighted",
+        // The field-unit matrix is used only for the bounded diagnostic
+        // spectrum below.  The native modal request receives K_omega.
+        "stiffness_units": "rad_s_inv",
+        "stiffness_field_units": "A_per_m_mass_weighted",
+        "native_stiffness_input_units": "rad_s_inv",
         "gyrotropic_form": "pencil_B=-G=[[0,M],[-M,0]]",
         "stiffness_field_abs_max": matrix_abs_max(stiffness_field),
         "tangent_mass_abs_max": matrix_abs_max(mass),
@@ -1685,6 +1877,44 @@ pub(super) fn gyrotropic_matrix_row_major_from_tangent_mass(
             ),
         });
     }
+    let mass_abs_max = mass
+        .iter()
+        .copied()
+        .map(f64::abs)
+        .fold(0.0_f64, f64::max);
+    if !mass_abs_max.is_finite()
+        || mass
+            .iter()
+            .copied()
+            .any(|value| !value.is_finite())
+    {
+        return Err(RunError {
+            message: "native modal tangent mass contains a nonfinite value".to_string(),
+        });
+    }
+    // The 2N tangent mass is deliberately a repeated scalar FEM mass block.
+    // Do not silently discard a cross-component block or a different second
+    // diagonal block while constructing G; such a payload would represent a
+    // different pencil and must fail before native execution.
+    let block_tolerance = 1.0e-12 * mass_abs_max.max(1.0e-30);
+    for row in 0..active_nodes {
+        for col in 0..active_nodes {
+            let upper_right = mass[(row, col + active_nodes)];
+            let lower_left = mass[(row + active_nodes, col)];
+            let repeated_block_delta = mass[(row, col)] - mass[(row + active_nodes, col + active_nodes)];
+            if upper_right.abs() > block_tolerance || lower_left.abs() > block_tolerance {
+                return Err(RunError {
+                    message: "native modal tangent mass has nonzero cross-component block"
+                        .to_string(),
+                });
+            }
+            if repeated_block_delta.abs() > block_tolerance {
+                return Err(RunError {
+                    message: "native modal tangent mass diagonal blocks differ".to_string(),
+                });
+            }
+        }
+    }
     let mut gyrotropic = vec![0.0; dim * dim];
     for row in 0..active_nodes {
         for col in 0..active_nodes {
@@ -1722,6 +1952,22 @@ pub(super) fn native_solver_diagnostics_json(
     result_raw: Option<&str>,
     gpu_attestation: Option<&native_fem::NativeModalGpuAttestation>,
 ) -> Result<serde_json::Value, RunError> {
+    native_solver_diagnostics_json_with_expected_digest(
+        plan,
+        raw,
+        result_raw,
+        gpu_attestation,
+        None,
+    )
+}
+
+pub(super) fn native_solver_diagnostics_json_with_expected_digest(
+    plan: &FemEigenPlanIR,
+    raw: &str,
+    result_raw: Option<&str>,
+    gpu_attestation: Option<&native_fem::NativeModalGpuAttestation>,
+    expected_pencil_dependency_digest: Option<&str>,
+) -> Result<serde_json::Value, RunError> {
     let mut diagnostics =
         serde_json::from_str::<serde_json::Value>(raw).map_err(|error| RunError {
             message: format!("failed to parse native modal diagnostics JSON: {error}"),
@@ -1731,6 +1977,9 @@ pub(super) fn native_solver_diagnostics_json(
             message: "native modal diagnostics JSON must be an object".to_string(),
         });
     };
+    if let Some(expected) = expected_pencil_dependency_digest {
+        validate_native_magnetic_pencil_digests(object, result_raw, expected)?;
+    }
     object.insert(
         "schema_version".to_string(),
         serde_json::json!("frequency_domain_modal_solver_diagnostics.v1"),
@@ -1929,6 +2178,84 @@ pub(super) fn native_solver_diagnostics_json(
     // normalization step.
     insert_native_poisson_airbox_execution_provenance(object, plan, gpu_attestation)?;
     Ok(diagnostics)
+}
+
+fn validate_native_magnetic_pencil_digests(
+    diagnostics: &serde_json::Map<String, serde_json::Value>,
+    result_raw: Option<&str>,
+    expected_dependency_digest: &str,
+) -> Result<(), RunError> {
+    const DEPENDENCY_DIGEST_KEY: &str = "linearized_dynamic_pencil_dependency_digest";
+    const PENCIL_DIGEST_KEY: &str = "linearized_dynamic_pencil_digest";
+    if !is_native_sha256_hex(expected_dependency_digest) {
+        return Err(RunError {
+            message: "native magnetic pencil expected dependency digest is invalid".to_string(),
+        });
+    }
+    let diagnostics_dependency = required_native_sha256_field(
+        diagnostics,
+        DEPENDENCY_DIGEST_KEY,
+        "diagnostics_json",
+    )?;
+    let diagnostics_pencil =
+        required_native_sha256_field(diagnostics, PENCIL_DIGEST_KEY, "diagnostics_json")?;
+    let result_raw = result_raw.ok_or_else(|| RunError {
+        message: "native magnetic pencil result digest is missing result_json".to_string(),
+    })?;
+    let result = serde_json::from_str::<serde_json::Value>(result_raw).map_err(|error| {
+        RunError {
+            message: format!("failed to parse native magnetic pencil result JSON: {error}"),
+        }
+    })?;
+    let result_object = result.as_object().ok_or_else(|| RunError {
+        message: "native magnetic pencil result JSON must be an object".to_string(),
+    })?;
+    let result_dependency = required_native_sha256_field(
+        result_object,
+        DEPENDENCY_DIGEST_KEY,
+        "result_json",
+    )?;
+    let result_pencil =
+        required_native_sha256_field(result_object, PENCIL_DIGEST_KEY, "result_json")?;
+    if diagnostics_dependency != expected_dependency_digest
+        || result_dependency != expected_dependency_digest
+    {
+        return Err(RunError {
+            message: format!(
+                "native magnetic pencil dependency digest mismatch: expected={expected_dependency_digest}, diagnostics={diagnostics_dependency}, result={result_dependency}"
+            ),
+        });
+    }
+    if diagnostics_pencil != result_pencil {
+        return Err(RunError {
+            message: format!(
+                "native magnetic pencil digest differs between diagnostics_json and result_json: diagnostics={diagnostics_pencil}, result={result_pencil}"
+            ),
+        });
+    }
+    Ok(())
+}
+
+fn required_native_sha256_field<'a>(
+    object: &'a serde_json::Map<String, serde_json::Value>,
+    key: &str,
+    source: &str,
+) -> Result<&'a str, RunError> {
+    let value = object
+        .get(key)
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| is_native_sha256_hex(value))
+        .ok_or_else(|| RunError {
+            message: format!("native magnetic pencil {source} is missing valid {key}"),
+        })?;
+    Ok(value)
+}
+
+fn is_native_sha256_hex(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 fn insert_native_poisson_airbox_execution_provenance(

@@ -314,6 +314,59 @@ pub(super) fn bind_stage_continuation_artifacts(
             message: "relax_stage_handoff_missing_eigen_summary".to_string(),
         });
     }
+    let has_published_linearization_state = run.auxiliary_artifacts.iter().any(|artifact| {
+        matches!(
+            artifact.relative_path.as_str(),
+            "eigen/metadata/linearization_state.v6.json"
+                | "eigen/metadata/linearization_state.v7.json"
+        ) && !artifact.bytes.is_empty()
+    });
+    if handoff.verified_replay().is_some() && has_published_linearization_state {
+        let identity_prefix = run.auxiliary_artifacts.iter().find_map(|artifact| {
+            artifact
+                .relative_path
+                .strip_suffix("linearization_identity.v2.json")
+                .filter(|prefix| prefix.starts_with("eigen/metadata/sample_") && !artifact.bytes.is_empty())
+                .map(str::to_string)
+        });
+        let Some(identity_prefix) = identity_prefix else {
+            return Err(RunError {
+                message:
+                    "relax_stage_handoff_verified_replay_sidecars_missing_after_modal_publication"
+                        .to_string(),
+            });
+        };
+        let has_triplet = [
+            [
+                "accepted_fem_equilibrium_fields.v1.json",
+                "accepted_fem_equilibrium_fields.v2.json",
+            ],
+            [
+                "certified_fem_equilibrium_fields.v1.json",
+                "certified_fem_equilibrium_fields.v2.json",
+            ],
+            [
+                "recomputed_fem_linearization_certificate.v1.json",
+                "recomputed_fem_linearization_certificate.v2.json",
+            ],
+        ]
+        .into_iter()
+        .all(|family| {
+            family.into_iter().any(|filename| {
+                let path = format!("{identity_prefix}{filename}");
+                run.auxiliary_artifacts
+                    .iter()
+                    .any(|artifact| artifact.relative_path == path && !artifact.bytes.is_empty())
+            })
+        });
+        if !has_triplet {
+            return Err(RunError {
+                message:
+                    "relax_stage_handoff_verified_replay_sidecars_missing_after_modal_publication"
+                        .to_string(),
+            });
+        }
+    }
     Ok(())
 }
 
