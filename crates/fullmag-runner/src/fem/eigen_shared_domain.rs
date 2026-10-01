@@ -1553,6 +1553,27 @@ pub(super) fn validate_eigen_equilibrium_certificate(
         }
         _ => {}
     }
+    if let Some(handoff) = source_relax_handoff {
+        match plan.equilibrium {
+            EquilibriumSourceIR::RelaxedInitialState => {
+                handoff.validate_target_plan(plan)?;
+            }
+            EquilibriumSourceIR::Provided => {
+                // Stage continuation changes the source marker after the
+                // accepted relaxation has been checked.  Revalidate the
+                // resulting Provided plan so a multi-k point cannot carry a
+                // forged m0, mesh, material, static-field or boundary binding.
+                handoff.validate_provided_continuation_plan(plan)?;
+            }
+            _ => {
+                return Err(RunError {
+                    message:
+                        "relax_stage_handoff_requires_relaxed_or_provided_equilibrium_target"
+                            .to_string(),
+                });
+            }
+        }
+    }
     if let Some(handoff) = expected_handoff {
         if !matches!(plan.equilibrium, EquilibriumSourceIR::Provided) {
             return Err(RunError {

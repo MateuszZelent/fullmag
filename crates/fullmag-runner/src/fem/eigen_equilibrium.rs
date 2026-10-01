@@ -102,6 +102,7 @@ pub(super) fn prepare_single_k_stage_continuation(
     let mut prepared = plan.clone();
     prepared.equilibrium = EquilibriumSourceIR::Provided;
     prepared.equilibrium_magnetization = handoff.equilibrium_magnetization.clone();
+    handoff.validate_provided_continuation_plan(&prepared)?;
     Ok(prepared)
 }
 

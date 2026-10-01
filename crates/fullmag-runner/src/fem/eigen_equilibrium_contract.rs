@@ -344,7 +344,31 @@ impl AcceptedFemRelaxStageHandoff {
         })
     }
 
+    /// Validate the pre-conversion relaxation target.  This intentionally
+    /// accepts only the authored `RelaxedInitialState`/single-k shape; the
+    /// caller must run the separate provided-continuation validator after it
+    /// changes the source marker.
     pub(super) fn validate_target_plan(&self, plan: &FemEigenPlanIR) -> Result<(), RunError> {
+        self.validate_plan_binding(plan, false)
+    }
+
+    /// Validate the post-conversion continuation target.  A multi-k path may
+    /// reuse one accepted static relaxation, but a field sweep may not: each
+    /// sweep sample is a different physical equilibrium.  All m0, mesh,
+    /// material, static-physics, boundary and handoff digests are still
+    /// checked by the shared binding routine.
+    pub(super) fn validate_provided_continuation_plan(
+        &self,
+        plan: &FemEigenPlanIR,
+    ) -> Result<(), RunError> {
+        self.validate_plan_binding(plan, true)
+    }
+
+    fn validate_plan_binding(
+        &self,
+        plan: &FemEigenPlanIR,
+        provided_continuation: bool,
+    ) -> Result<(), RunError> {
         if self.schema_version != ACCEPTED_FEM_RELAX_STAGE_HANDOFF_V3 {
             return Err(RunError {
                 message: "relax_stage_handoff_v3_schema_version_mismatch".to_string(),
@@ -408,17 +432,35 @@ impl AcceptedFemRelaxStageHandoff {
                 message: "relax_stage_handoff_equilibrium_boundary_signature_mismatch".to_string(),
             });
         }
-        if !matches!(plan.equilibrium, EquilibriumSourceIR::RelaxedInitialState) {
-            return Err(RunError {
-                message: "relax_stage_handoff_requires_relaxed_initial_state_target".to_string(),
-            });
-        }
-        if matches!(plan.k_sampling, Some(KSamplingIR::Path { .. }))
-            || !plan.bias_field_samples.is_empty()
-        {
-            return Err(RunError {
-                message: "relax_stage_handoff_requires_single_k_target".to_string(),
-            });
+        if provided_continuation {
+            if !matches!(plan.equilibrium, EquilibriumSourceIR::Provided) {
+                return Err(RunError {
+                    message:
+                        "relax_stage_handoff_requires_provided_equilibrium_continuation_target"
+                            .to_string(),
+                });
+            }
+            if !plan.bias_field_samples.is_empty() {
+                return Err(RunError {
+                    message:
+                        "relax_stage_handoff_provided_continuation_rejects_bias_field_sweep"
+                            .to_string(),
+                });
+            }
+        } else {
+            if !matches!(plan.equilibrium, EquilibriumSourceIR::RelaxedInitialState) {
+                return Err(RunError {
+                    message: "relax_stage_handoff_requires_relaxed_initial_state_target"
+                        .to_string(),
+                });
+            }
+            if matches!(plan.k_sampling, Some(KSamplingIR::Path { .. }))
+                || !plan.bias_field_samples.is_empty()
+            {
+                return Err(RunError {
+                    message: "relax_stage_handoff_requires_single_k_target".to_string(),
+                });
+            }
         }
         let target_mesh = crate::types::FemMeshPayload::from(plan);
         let target_topology = crate::types::fem_mesh_topology_fingerprint(&target_mesh);

@@ -37,8 +37,8 @@ use fullmag_engine::{
     TimeIntegrator, Vector3, MU0,
 };
 use fullmag_ir::{
-    EigenDampingPolicyIR, EigenNormalizationIR, EquilibriumSourceIR, FemEigenPlanIR, KSamplingIR,
-    OutputIR, SpinWaveBoundaryConditionIR, SpinWaveBoundaryKindIR,
+    EigenDampingPolicyIR, EigenNormalizationIR, EquilibriumSourceIR, FemEigenPlanIR, KPointIR,
+    KSamplingIR, OutputIR, SpinWaveBoundaryConditionIR, SpinWaveBoundaryKindIR,
 };
 use nalgebra::{DMatrix, DVector, SymmetricEigen};
 use num_complex::Complex64;
@@ -987,6 +987,8 @@ fn accepted_relax_stage_handoff_prepares_single_k_without_second_relaxation() {
 
     let prepared = prepare_single_k_stage_continuation(&plan, &handoff)
         .expect("same-mesh single-k target should accept the handoff");
+    validate_eigen_equilibrium_certificate(&prepared, None, Some(&handoff))
+        .expect("post-conversion provided source handoff must be revalidated");
     let (_problem, consumed_m0, relaxation_steps, _observables, _source) =
         materialize_equilibrium(&prepared, &prepared.equilibrium_magnetization, None)
             .expect("provided equilibrium should materialize without relaxation");
@@ -994,6 +996,94 @@ fn accepted_relax_stage_handoff_prepares_single_k_without_second_relaxation() {
     assert_eq!(prepared.equilibrium, EquilibriumSourceIR::Provided);
     assert_eq!(consumed_m0, accepted_m0);
     assert_eq!(relaxation_steps, 0);
+}
+
+#[test]
+fn accepted_relax_stage_handoff_revalidates_provided_multik_path_and_rejects_sweeps() {
+    let mut plan = minimal_native_modal_plan();
+    plan.equilibrium = EquilibriumSourceIR::RelaxedInitialState;
+    plan.k_sampling = Some(KSamplingIR::Path {
+        points: vec![
+            KPointIR::gamma(),
+            KPointIR {
+                label: Some("X".to_string()),
+                k_vector: [1.0e7, 0.0, 0.0],
+            },
+        ],
+        samples_per_segment: vec![2],
+        closed: false,
+    });
+    let handoff = relax_handoff_from_completion(&plan, &accepted_relax_completion())
+        .expect("a path may reuse the same accepted static relaxation");
+
+    let mut provided = plan.clone();
+    provided.equilibrium = EquilibriumSourceIR::Provided;
+    provided.equilibrium_magnetization = handoff.equilibrium_magnetization.clone();
+    handoff
+        .validate_provided_continuation_plan(&provided)
+        .expect("provided multi-k continuation must retain the source binding");
+    validate_eigen_equilibrium_certificate(&provided, None, Some(&handoff))
+        .expect("the shared certificate validator must accept the bound path");
+    assert!(
+        handoff.validate_target_plan(&provided).is_err(),
+        "the pre-conversion validator must not accept a Provided path"
+    );
+
+    let mut m0_drift = provided.clone();
+    m0_drift.equilibrium_magnetization[0] = [0.0, 1.0, 0.0];
+    let error = validate_eigen_equilibrium_certificate(&m0_drift, None, Some(&handoff))
+        .expect_err("a provided continuation with forged m0 must fail closed");
+    assert!(error.message.contains("equilibrium_content_mismatch"));
+
+    let mut material_drift = provided.clone();
+    material_drift.material.saturation_magnetisation *= 1.01;
+    let error = validate_eigen_equilibrium_certificate(&material_drift, None, Some(&handoff))
+        .expect_err("a provided continuation with material drift must fail closed");
+    assert!(error.message.contains("equilibrium_material_signature_mismatch"));
+
+    let mut static_drift = provided.clone();
+    static_drift.external_field = Some([1.0, 0.0, 0.0]);
+    let error = validate_eigen_equilibrium_certificate(&static_drift, None, Some(&handoff))
+        .expect_err("a provided continuation with static-field drift must fail closed");
+    assert!(error
+        .message
+        .contains("equilibrium_static_physics_signature_mismatch"));
+
+    let mut boundary_drift = provided.clone();
+    boundary_drift.air_box_config = Some(fullmag_ir::AirBoxConfigIR {
+        factor: 2.0,
+        grading: 1.0,
+        boundary_marker: 99,
+        bc_kind: None,
+        robin_beta_mode: None,
+        robin_beta_factor: None,
+        shape: None,
+        factor_source: None,
+        boundary_marker_source: None,
+    });
+    let error = validate_eigen_equilibrium_certificate(&boundary_drift, None, Some(&handoff))
+        .expect_err("a provided continuation with boundary drift must fail closed");
+    assert!(error.message.contains("equilibrium_boundary_signature_mismatch"));
+
+    let mut mesh_drift = provided.clone();
+    mesh_drift.mesh.nodes[0][0] += 1.0e-12;
+    let error = validate_eigen_equilibrium_certificate(&mesh_drift, None, Some(&handoff))
+        .expect_err("a provided continuation with mesh drift must fail closed");
+    assert!(error.message.contains("mesh_identity_mismatch"));
+
+    let mut sweep = provided;
+    sweep.bias_field_samples.push(fullmag_ir::FemEigenBiasFieldSamplePlanIR {
+        sample_index: 0,
+        field_a_per_m: [1.0, 0.0, 0.0],
+        equilibrium_policy: fullmag_ir::BiasFieldSweepEquilibriumPolicyIR::RelaxEach,
+        continuation_seed: fullmag_ir::BiasFieldSweepContinuationSeedIR::InitialState,
+        execution: exact_k0_resolution(fullmag_ir::ExecutionDevice::Cpu),
+    });
+    let error = validate_eigen_equilibrium_certificate(&sweep, None, Some(&handoff))
+        .expect_err("a provided continuation must not reuse one m0 for a field sweep");
+    assert!(error
+        .message
+        .contains("provided_continuation_rejects_bias_field_sweep"));
 }
 
 #[test]
