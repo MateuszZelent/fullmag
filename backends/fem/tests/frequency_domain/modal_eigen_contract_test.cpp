@@ -3582,6 +3582,12 @@ void modal_nonzero_k_floquet_bloch_payload_with_dynamic_demag_k_is_admitted()
     check(contains(nearest_result.diagnostics_json,
                    "\"window_complete\":false"),
           "nearest Floquet diagnostics must never publish a complete window");
+    const std::string expected_solve_complete =
+        nearest_result.status == FULLMAG_FEM_FD_OK ?
+            "\"solve_complete\":true" :
+            "\"solve_complete\":false";
+    check(contains(nearest_result.diagnostics_json, expected_solve_complete),
+          "nearest Floquet diagnostics must distinguish solver completion from spectrum coverage");
     check(contains(nearest_result.result_json,
                    "\"target_kind\":\"nearest_frequency\""),
           "nearest Floquet result must publish the native target kind");
@@ -3594,6 +3600,8 @@ void modal_nonzero_k_floquet_bloch_payload_with_dynamic_demag_k_is_admitted()
     check(contains(nearest_result.result_json,
                    "\"window_complete\":false"),
           "nearest Floquet result must never publish a complete window");
+    check(contains(nearest_result.result_json, expected_solve_complete),
+          "nearest Floquet result must distinguish solver completion from spectrum coverage");
     fullmag_fem_frequency_domain_result_destroy(&nearest_result);
 }
 

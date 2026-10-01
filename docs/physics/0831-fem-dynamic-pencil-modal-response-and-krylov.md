@@ -1276,8 +1276,13 @@ periodic pair maps, and at least one nonzero sample. The runner classifies the
 periodic node pairs against the tet4 element markers and requires both a
 nonzero magnetic-pair count and a nonzero airbox-pair count; nonempty metadata
 lists alone are insufficient. These guards select the
-existing native MFEM/SLEPc Schur entry point; they do not introduce a second
-operator or a CPU fallback.
+existing native MFEM/SLEPc shared-domain Floquet sparse route; they do not
+introduce a second operator or a CPU fallback. The public engine name retains
+the historical `FloquetAirboxCpuSchurSlepc` label, but its nonzero-$k$ call
+chain is `modal_eigen_solver.cpp` -> `production_cpu_modal_eigen.cpp` ->
+`floquet_modal_solver.cpp` and `solve_floquet_shared_domain_sparse_modal_spectrum`.
+The descriptor Poisson Schur writer in
+`poisson_airbox_schur_matshell.cpp` remains the separate $k=0$ branch.
 
 `target="nearest"` carries one positive `target_frequency` in Hz. A single-$k$
 request and a multi-$k$ path use that same scalar target for every sample. The
@@ -1297,16 +1302,26 @@ replacement operator or an acceptance oracle. Managed runtime, residual,
 mesh/airbox convergence, signed-path completeness, COMSOL A1 parity and GPU
 qualification remain open.
 
+The legacy native `complete` flag describes whether the solver envelope
+finished; it is not a spectrum/window certificate. Nearest additionally
+publishes `solve_complete`, derived from the result status, so consumers do not
+infer coverage from that legacy flag. `spectrum_completeness` and
+`window_complete` remain the explicit coverage fields for this route. The
+frequency-window producer keeps its existing `complete` and
+`window_completeness` contract.
+
 The producer boundary for this metadata is
 `backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp`, after the
 Floquet owner has selected the nearest mode. Its native diagnostics and result
 envelopes must carry `target_kind="nearest_frequency"`, the finite requested
-`target_frequency_hz`, `spectrum_completeness="selected_only"` and
-`window_complete=false`. These fields describe the actual selected solve; they
-are not inferred by the runner from a target request. The frequency-window
-producer keeps its separate `window_completeness` contract and must not be
-marked selected-only by this route. Native compilation and runtime evidence for
-this producer remain pending.
+`target_frequency_hz`, `spectrum_completeness="selected_only"`,
+`window_complete=false` and the status-derived `solve_complete` field. These
+fields describe the actual selected solve; they are not inferred by the runner
+from a target request. The direct descriptor Poisson Schur branch is only the
+$k=0$ route and is therefore not the producer of nonzero-$k$ nearest metadata.
+The frequency-window producer keeps its separate `window_completeness`
+contract and must not be marked selected-only by this route. Native compilation
+and runtime evidence for this producer remain pending.
 
 
 ### Kanoniczne klasy redukcji periodycznej FEM CPU

@@ -225,7 +225,9 @@ bool is_nearest_frequency_target(const ModalEigenRequest &request) noexcept
         std::strcmp(request.target_kind, "nearest_frequency") == 0;
 }
 
-std::string nearest_frequency_metadata_json(const ModalEigenRequest &request)
+std::string nearest_frequency_metadata_json(
+    const ModalEigenRequest &request,
+    bool solve_complete)
 {
     if (!is_nearest_frequency_target(request)) {
         return {};
@@ -234,14 +236,21 @@ std::string nearest_frequency_metadata_json(const ModalEigenRequest &request)
         "\"target_frequency_hz\":" +
         format_double(request.target_frequency_hz) +
         ",\"spectrum_completeness\":\"selected_only\","
-        "\"window_complete\":false";
+        "\"window_complete\":false,"
+        "\"solve_complete\":" +
+        std::string(solve_complete ? "true" : "false");
 }
 
 void append_nearest_frequency_metadata(
     std::string &json,
-    const ModalEigenRequest &request)
+    const ModalEigenRequest &request,
+    FrequencyDomainStatus status)
 {
-    append_optional_json_field(json, nearest_frequency_metadata_json(request));
+    append_optional_json_field(
+        json,
+        nearest_frequency_metadata_json(
+            request,
+            status == FrequencyDomainStatus::ok));
 }
 
 std::string mode_kinematics_json_fields(ComplexEigenvalue lambda)
@@ -310,7 +319,8 @@ std::string dynamic_demag_k_diagnostics_json(
 
 std::string with_modal_request_diagnostics(
     std::string diagnostics_json,
-    const ModalEigenRequest &request)
+    const ModalEigenRequest &request,
+    FrequencyDomainStatus status)
 {
     if (!diagnostics_json.empty() && diagnostics_json.back() == '}') {
         diagnostics_json.pop_back();
@@ -318,7 +328,9 @@ std::string with_modal_request_diagnostics(
         diagnostics_json += modal_floquet_periodic_pair_diagnostics_json(request);
         diagnostics_json += dynamic_demag_k_diagnostics_json(request);
         const std::string nearest_metadata =
-            nearest_frequency_metadata_json(request);
+            nearest_frequency_metadata_json(
+                request,
+                status == FrequencyDomainStatus::ok);
         if (!nearest_metadata.empty()) {
             diagnostics_json += ",";
             diagnostics_json += nearest_metadata;
@@ -440,7 +452,7 @@ FrequencyDomainContractResult nonzero_k_floquet_modal_operator_missing(
         "\"spectral_transform\":\"shift_invert\","
         "\"phasor_convention\":\"exp_i_omega_t\"}";
     result.diagnostics_json =
-        with_modal_request_diagnostics(result.diagnostics_json, request);
+        with_modal_request_diagnostics(result.diagnostics_json, request, result.status);
     result.result_json =
         "{\"schema_version\":\"frequency_domain_modal_result.v1\","
         "\"study_product\":\"modal_eigen\","
@@ -449,7 +461,7 @@ FrequencyDomainContractResult nonzero_k_floquet_modal_operator_missing(
         "\"unsupported_reason\":\"production_cpu_modal_nonzero_k_floquet_operator_missing\","
         "\"required_operator_contract\":\"bloch_floquet_tangent_operator_with_periodic_pairs\","
         "\"required_operator_payload_kind\":\"bloch_floquet_tangent_operator\"}";
-    result.result_json = with_modal_request_diagnostics(result.result_json, request);
+    result.result_json = with_modal_request_diagnostics(result.result_json, request, result.status);
     result.artifact_manifest_path.clear();
     return result;
 }
@@ -480,7 +492,7 @@ FrequencyDomainContractResult nonzero_k_floquet_modal_gated_operator_terms_prese
         "\",\"spectral_transform\":\"shift_invert\","
         "\"phasor_convention\":\"exp_i_omega_t\"}";
     result.diagnostics_json =
-        with_modal_request_diagnostics(result.diagnostics_json, request);
+        with_modal_request_diagnostics(result.diagnostics_json, request, result.status);
     result.result_json =
         "{\"schema_version\":\"frequency_domain_modal_result.v1\","
         "\"study_product\":\"modal_eigen\","
@@ -491,7 +503,7 @@ FrequencyDomainContractResult nonzero_k_floquet_modal_gated_operator_terms_prese
         "\"required_operator_contract\":\"bloch_floquet_tangent_operator_without_gated_terms\","
         "\"gated_operator_term\":\"" +
         escape_json_string(term.c_str()) + "\"}";
-    result.result_json = with_modal_request_diagnostics(result.result_json, request);
+    result.result_json = with_modal_request_diagnostics(result.result_json, request, result.status);
     result.artifact_manifest_path.clear();
     return result;
 }
@@ -524,7 +536,7 @@ FrequencyDomainContractResult nonzero_k_floquet_modal_dynamic_demag_k_missing(
         ",\"spectral_transform\":\"shift_invert\","
         "\"phasor_convention\":\"exp_i_omega_t\"}";
     result.diagnostics_json =
-        with_modal_request_diagnostics(result.diagnostics_json, request);
+        with_modal_request_diagnostics(result.diagnostics_json, request, result.status);
     result.result_json =
         "{\"schema_version\":\"frequency_domain_modal_result.v1\","
         "\"study_product\":\"modal_eigen\","
@@ -535,7 +547,7 @@ FrequencyDomainContractResult nonzero_k_floquet_modal_dynamic_demag_k_missing(
         "\"required_operator_payload_kind\":\"bloch_floquet_tangent_operator\","
         "\"required_demag_payload_kind\":\"dynamic_demag_k_operator\","
         "\"dynamic_demag_operator_source\":\"missing_numeric_fem_demag_k\"}";
-    result.result_json = with_modal_request_diagnostics(result.result_json, request);
+    result.result_json = with_modal_request_diagnostics(result.result_json, request, result.status);
     result.artifact_manifest_path.clear();
     return result;
 }
@@ -937,13 +949,13 @@ FrequencyDomainContractResult dense_payload_validation_error(
         std::string(reason != nullptr ? reason : "validation_error") +
         "\"}";
     result.diagnostics_json =
-        with_modal_request_diagnostics(result.diagnostics_json, request);
+        with_modal_request_diagnostics(result.diagnostics_json, request, result.status);
     result.result_json =
         "{\"schema_version\":\"frequency_domain_modal_result.v1\","
         "\"study_product\":\"modal_eigen\","
         "\"status\":\"validation_error\","
         "\"accepted_mode_count\":0}";
-    append_nearest_frequency_metadata(result.result_json, request);
+    append_nearest_frequency_metadata(result.result_json, request, result.status);
     return result;
 }
 
@@ -966,13 +978,13 @@ FrequencyDomainContractResult sparse_payload_validation_error(
         std::string(reason != nullptr ? reason : "validation_error") +
         "\"}";
     result.diagnostics_json =
-        with_modal_request_diagnostics(result.diagnostics_json, request);
+        with_modal_request_diagnostics(result.diagnostics_json, request, result.status);
     result.result_json =
         "{\"schema_version\":\"frequency_domain_modal_result.v1\","
         "\"study_product\":\"modal_eigen\","
         "\"status\":\"validation_error\","
         "\"accepted_mode_count\":0}";
-    append_nearest_frequency_metadata(result.result_json, request);
+    append_nearest_frequency_metadata(result.result_json, request, result.status);
     return result;
 }
 
@@ -1032,7 +1044,7 @@ FrequencyDomainContractResult sparse_payload_solver_pending_result(
         std::string(adapter.slepc_available ? "true" : "false") +
         ",\"unsupported_reason\":\"sparse_modal_operator_payload_solver_pending\"}";
     result.diagnostics_json =
-        with_modal_request_diagnostics(result.diagnostics_json, request);
+        with_modal_request_diagnostics(result.diagnostics_json, request, result.status);
     result.result_json =
         "{\"schema_version\":\"frequency_domain_modal_result.v1\","
         "\"study_product\":\"modal_eigen\","
@@ -1047,7 +1059,7 @@ FrequencyDomainContractResult sparse_payload_solver_pending_result(
             format_double(shift.shift_frequency_hz);
     }
     result.result_json += "}";
-    append_nearest_frequency_metadata(result.result_json, request);
+    append_nearest_frequency_metadata(result.result_json, request, result.status);
     return result;
 }
 
@@ -1562,7 +1574,7 @@ FrequencyDomainContractResult contour_descriptor_certification_error(
         (failed_mode_index >= 0 ? std::to_string(failed_mode_index) : "null") +
         "}";
     result.diagnostics_json =
-        with_modal_request_diagnostics(result.diagnostics_json, request);
+        with_modal_request_diagnostics(result.diagnostics_json, request, result.status);
     result.result_json =
         "{\"schema_version\":\"frequency_domain_modal_result.v1\","
         "\"study_product\":\"modal_eigen\","
@@ -1575,7 +1587,7 @@ FrequencyDomainContractResult contour_descriptor_certification_error(
         "\"unsupported_reason\":\"" +
         std::string(reason != nullptr ? reason : "floquet_original_descriptor_residual_failed") +
         "\"}";
-    append_nearest_frequency_metadata(result.result_json, request);
+    append_nearest_frequency_metadata(result.result_json, request, result.status);
     return result;
 }
 
@@ -1795,7 +1807,7 @@ FrequencyDomainContractResult solve_dense_production_modal_contour_payload(
         result.diagnostics_json += contour_interval_diagnostics_json(contour_result);
         result.diagnostics_json += "}";
         result.diagnostics_json =
-            with_modal_request_diagnostics(result.diagnostics_json, request);
+            with_modal_request_diagnostics(result.diagnostics_json, request, result.status);
         result.result_json =
             "{\"schema_version\":\"frequency_domain_modal_result.v1\","
             "\"study_product\":\"modal_eigen\","
@@ -1806,7 +1818,7 @@ FrequencyDomainContractResult solve_dense_production_modal_contour_payload(
             "\",\"stop_reason\":\"" +
             std::string(window_stop_reason) +
             "\",\"window_completeness\":\"not_certified\"}";
-        append_nearest_frequency_metadata(result.result_json, request);
+        append_nearest_frequency_metadata(result.result_json, request, result.status);
         return result;
     }
 
@@ -1903,7 +1915,7 @@ FrequencyDomainContractResult solve_dense_production_modal_contour_payload(
     result.diagnostics_json += contour_interval_diagnostics_json(contour_result);
     result.diagnostics_json += "}";
     result.diagnostics_json =
-        with_modal_request_diagnostics(result.diagnostics_json, request);
+        with_modal_request_diagnostics(result.diagnostics_json, request, result.status);
     result.result_json =
         "{\"schema_version\":\"frequency_domain_modal_result.v1\","
         "\"study_product\":\"modal_eigen\","
@@ -1924,7 +1936,7 @@ FrequencyDomainContractResult solve_dense_production_modal_contour_payload(
         completeness_status +
         "\",\"modes\":" +
         format_contour_modes_json(contour_result.modes) + "}";
-    append_nearest_frequency_metadata(result.result_json, request);
+    append_nearest_frequency_metadata(result.result_json, request, result.status);
     result.artifact_manifest_path.clear();
     return result;
 }
@@ -2138,7 +2150,7 @@ FrequencyDomainContractResult solve_dense_production_modal_window_payload(
         result.diagnostics_json += window_diagnostics;
         result.diagnostics_json += "}";
         result.diagnostics_json =
-            with_modal_request_diagnostics(result.diagnostics_json, request);
+            with_modal_request_diagnostics(result.diagnostics_json, request, result.status);
         result.result_json =
             "{\"schema_version\":\"frequency_domain_modal_result.v1\","
             "\"study_product\":\"modal_eigen\","
@@ -2218,7 +2230,7 @@ FrequencyDomainContractResult solve_dense_production_modal_window_payload(
     result.diagnostics_json += window_diagnostics;
     result.diagnostics_json += "}";
     result.diagnostics_json =
-        with_modal_request_diagnostics(result.diagnostics_json, request);
+        with_modal_request_diagnostics(result.diagnostics_json, request, result.status);
     result.result_json =
         "{\"schema_version\":\"frequency_domain_modal_result.v1\","
         "\"study_product\":\"modal_eigen\","
@@ -2329,7 +2341,7 @@ FrequencyDomainContractResult solve_dense_production_modal_payload(
             std::string(stop_reason) +
             "\"}";
         result.diagnostics_json =
-            with_modal_request_diagnostics(result.diagnostics_json, request);
+            with_modal_request_diagnostics(result.diagnostics_json, request, result.status);
         result.result_json =
             "{\"schema_version\":\"frequency_domain_modal_result.v1\","
             "\"study_product\":\"modal_eigen\","
@@ -2342,7 +2354,7 @@ FrequencyDomainContractResult solve_dense_production_modal_payload(
             ",\"shift_omega_rad_s\":" +
             format_double(shift.shift_omega_rad_s) +
             "}";
-        append_nearest_frequency_metadata(result.result_json, request);
+        append_nearest_frequency_metadata(result.result_json, request, result.status);
         return result;
     }
 
@@ -2456,7 +2468,7 @@ FrequencyDomainContractResult solve_dense_production_modal_payload(
         ",\"relative_residual_max\":" +
         format_double(slepc_result.max_relative_residual) + "}";
     result.diagnostics_json =
-        with_modal_request_diagnostics(result.diagnostics_json, request);
+        with_modal_request_diagnostics(result.diagnostics_json, request, result.status);
     result.result_json =
         "{\"schema_version\":\"frequency_domain_modal_result.v1\","
         "\"study_product\":\"modal_eigen\","
@@ -2478,7 +2490,7 @@ FrequencyDomainContractResult solve_dense_production_modal_payload(
         format_double(shift.shift_omega_rad_s) +
         ",\"modes\":" +
         format_slepc_modes_json(slepc_result) + "}";
-    append_nearest_frequency_metadata(result.result_json, request);
+    append_nearest_frequency_metadata(result.result_json, request, result.status);
     result.artifact_manifest_path.clear();
     return result;
 }
@@ -2575,7 +2587,7 @@ FrequencyDomainContractResult solve_sparse_production_modal_payload(
             std::string(stop_reason) +
             "\"}";
         result.diagnostics_json =
-            with_modal_request_diagnostics(result.diagnostics_json, request);
+            with_modal_request_diagnostics(result.diagnostics_json, request, result.status);
         result.result_json =
             "{\"schema_version\":\"frequency_domain_modal_result.v1\","
             "\"study_product\":\"modal_eigen\","
@@ -2588,7 +2600,7 @@ FrequencyDomainContractResult solve_sparse_production_modal_payload(
             ",\"shift_omega_rad_s\":" +
             format_double(shift.shift_omega_rad_s) +
             "}";
-        append_nearest_frequency_metadata(result.result_json, request);
+        append_nearest_frequency_metadata(result.result_json, request, result.status);
         append_optional_json_field(result.diagnostics_json, demag_probe_json_field);
         append_optional_json_field(result.result_json, demag_probe_json_field);
         return result;
@@ -2705,7 +2717,7 @@ FrequencyDomainContractResult solve_sparse_production_modal_payload(
         ",\"relative_residual_max\":" +
         format_double(slepc_result.max_relative_residual) + "}";
     result.diagnostics_json =
-        with_modal_request_diagnostics(result.diagnostics_json, request);
+        with_modal_request_diagnostics(result.diagnostics_json, request, result.status);
     result.result_json =
         "{\"schema_version\":\"frequency_domain_modal_result.v1\","
         "\"study_product\":\"modal_eigen\","
@@ -2727,7 +2739,7 @@ FrequencyDomainContractResult solve_sparse_production_modal_payload(
         format_double(shift.shift_omega_rad_s) +
         ",\"modes\":" +
         format_slepc_modes_json(slepc_result) + "}";
-    append_nearest_frequency_metadata(result.result_json, request);
+    append_nearest_frequency_metadata(result.result_json, request, result.status);
     append_optional_json_field(result.diagnostics_json, demag_probe_json_field);
     append_optional_json_field(result.result_json, demag_probe_json_field);
     result.artifact_manifest_path.clear();
@@ -2915,7 +2927,7 @@ FrequencyDomainContractResult solve_sparse_production_modal_window_payload(
         result.diagnostics_json += window_diagnostics;
         result.diagnostics_json += "}";
         result.diagnostics_json =
-        with_modal_request_diagnostics(result.diagnostics_json, request);
+            with_modal_request_diagnostics(result.diagnostics_json, request, result.status);
         result.result_json =
             "{\"schema_version\":\"frequency_domain_modal_result.v1\","
             "\"study_product\":\"modal_eigen\","
@@ -3004,7 +3016,7 @@ FrequencyDomainContractResult solve_sparse_production_modal_window_payload(
     result.diagnostics_json += window_diagnostics;
     result.diagnostics_json += "}";
     result.diagnostics_json =
-        with_modal_request_diagnostics(result.diagnostics_json, request);
+        with_modal_request_diagnostics(result.diagnostics_json, request, result.status);
     result.result_json =
         "{\"schema_version\":\"frequency_domain_modal_result.v1\","
         "\"study_product\":\"modal_eigen\","
@@ -3208,7 +3220,7 @@ FrequencyDomainContractResult production_cpu_modal_eigen_unavailable(
     }
     result.diagnostics_json += "}";
     result.diagnostics_json =
-        with_modal_request_diagnostics(result.diagnostics_json, request);
+        with_modal_request_diagnostics(result.diagnostics_json, request, result.status);
     result.result_json =
         "{\"schema_version\":\"frequency_domain_modal_result.v1\","
         "\"study_product\":\"modal_eigen\","
@@ -3225,7 +3237,7 @@ FrequencyDomainContractResult production_cpu_modal_eigen_unavailable(
             format_double(shift.shift_omega_rad_s);
     }
     result.result_json += "}";
-    append_nearest_frequency_metadata(result.result_json, request);
+    append_nearest_frequency_metadata(result.result_json, request, result.status);
     result.artifact_manifest_path.clear();
     return result;
 }

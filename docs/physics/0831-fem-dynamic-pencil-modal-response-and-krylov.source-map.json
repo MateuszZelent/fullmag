@@ -1327,7 +1327,7 @@
       "id": "source-native-floquet-modal",
       "path": "backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp",
       "symbol": "solve_floquet_shared_domain_sparse_modal_spectrum",
-      "responsibility": "Apply the shared-domain Floquet Schur action through the matrix-free SLEPc operator; use MAT_SHIFT_NONE for the inner Poisson PCLU inverse; materialize the exact demag-aware shifted Schur preconditioner only up to the documented 512-dimensional validation bound and otherwise retain the sparse magnetic-only approximation. Record resolved EPS dimensions, GMRES restart policy and independently measured true shifted KSP residuals; preserve reduced-block residuals separately from reconstructed full-field projected weak-form and periodic seam checks.",
+      "responsibility": "Own the nonzero-k shared-domain Floquet sparse SLEPc operator reached from the production CPU modal adapter (the public engine label retains the historical Schur name); use MAT_SHIFT_NONE for the inner Poisson PCLU inverse; materialize the exact demag-aware shifted Schur preconditioner only up to the documented 512-dimensional validation bound and otherwise retain the sparse magnetic-only approximation. Record resolved EPS dimensions, GMRES restart policy and independently measured true shifted KSP residuals; preserve reduced-block residuals separately from reconstructed full-field projected weak-form and periodic seam checks. The descriptor Poisson Schur writer is the separate k=0 branch.",
       "evidence_status": "Managed build #151 succeeded with exit 0 and its k2 run published a 9.723336314057247 GHz mode with full projected weak-form residual 2.18834e-10, reduced residual 8.85558e-14, passing Floquet seams and dynamic-demag probes. Build #165 passed 9/9 modal contracts, but signed-eleven trials with GMRES restart 8, 10 and 16 still failed through restart discrepancy or incomplete convergence under the magnetic-only preconditioner. The bounded exact-Schur preconditioner is source-visible and awaits a fresh managed build and pilot; physical qualification remains NOT VERIFIED."
     },
     {
@@ -1895,7 +1895,7 @@
       "path": "backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp",
       "symbol": "solve_sparse_production_modal_payload",
       "evidence_status": "source-visible; interpreted regression PASS; native compilation and managed runtime pending",
-      "responsibility": "Publish the actual nearest-frequency Floquet result metadata: target kind and target frequency, selected-only spectrum completeness, and window_complete=false; leave the frequency-window producer contract separate."
+      "responsibility": "Publish the actual nearest-frequency Floquet result metadata: target kind and target frequency, selected-only spectrum completeness, window_complete=false, and status-derived solve_complete; leave the frequency-window producer contract separate."
     },
     {
       "id": "source-nearest-floquet-routing-regression",

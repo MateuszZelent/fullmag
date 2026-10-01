@@ -153,6 +153,16 @@ def test_native_solver_keeps_residual_and_selected_only_policies() -> None:
         '\\"window_complete\\":false',
         "native producer explicit window completeness field",
     )
+    require(
+        producer,
+        "FrequencyDomainStatus status",
+        "native producer status input",
+    )
+    require(
+        producer,
+        '\\"solve_complete\\":',
+        "native producer explicit solver completion field",
+    )
     sparse_payload = producer.split(
         "FrequencyDomainContractResult solve_sparse_production_modal_payload(",
         1,
@@ -162,13 +172,61 @@ def test_native_solver_keeps_residual_and_selected_only_policies() -> None:
     )[0]
     require(
         sparse_payload,
-        "append_nearest_frequency_metadata(result.result_json, request)",
+        "append_nearest_frequency_metadata(result.result_json, request, result.status)",
         "actual sparse Floquet producer result metadata handoff",
     )
     require(
         sparse_payload,
-        "with_modal_request_diagnostics(result.diagnostics_json, request)",
+        "with_modal_request_diagnostics(result.diagnostics_json, request, result.status)",
         "actual sparse Floquet producer diagnostics handoff",
+    )
+
+
+def test_nearest_completion_fields_have_separate_solver_and_coverage_meanings() -> None:
+    producer = read("backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp")
+    docs = read("docs/physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md")
+    require(
+        producer,
+        "status == FrequencyDomainStatus::ok",
+        "enum status drives nearest solve completion",
+    )
+    if "json_status_is_ok" in producer:
+        raise AssertionError("native producer must not infer solve status from JSON text")
+    for needle in (
+        "legacy native `complete` flag",
+        "`solve_complete`",
+        "`spectrum_completeness` and",
+        "`window_complete` remain the explicit coverage fields",
+        "not a spectrum/window certificate",
+    ):
+        require(docs, needle, f"nearest completion interpretation: {needle}")
+
+
+def test_nonzero_k_nearest_uses_floquet_sparse_owner_not_k0_poisson_writer() -> None:
+    contract = read("backends/fem/src/frequency_domain/modal_eigen_solver.cpp")
+    producer = read("backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp")
+    floquet = read("backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp")
+    docs = read("docs/physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md")
+    for needle in (
+        "effective_request.floquet_shared_domain_operator =",
+        "native_nonzero_k_shared_domain_provider = true",
+        "production_cpu_modal_eigen_unavailable(effective_request",
+    ):
+        require(contract, needle, f"nonzero-k shared-domain route: {needle}")
+    for needle in (
+        "request.floquet_shared_domain_operator != nullptr",
+        "solve_floquet_shared_domain_sparse_modal_spectrum",
+    ):
+        require(floquet, needle, f"Floquet sparse owner: {needle}")
+    require(
+        producer,
+        "with_modal_request_diagnostics(result.diagnostics_json, request, result.status)",
+        "status-bound nearest diagnostics on the sparse Floquet owner",
+    )
+    require(
+        docs,
+        "The descriptor Poisson Schur writer in",
+        "explicit k=0 Schur branch boundary",
     )
 
 
@@ -216,6 +274,8 @@ def main() -> None:
         test_resolution_and_executor_share_the_bounded_native_route,
         test_public_target_is_transferred_without_per_sample_retargeting,
         test_native_solver_keeps_residual_and_selected_only_policies,
+        test_nearest_completion_fields_have_separate_solver_and_coverage_meanings,
+        test_nonzero_k_nearest_uses_floquet_sparse_owner_not_k0_poisson_writer,
         test_de_smoke_pilot_routes_nearest_as_one_point_selected_only,
         test_native_rust_contract_prepares_nearest_single_and_path_cases,
     )
