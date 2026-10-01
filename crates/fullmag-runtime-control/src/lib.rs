@@ -584,6 +584,7 @@ pub use scheduler::{
 
 mod solution_set;
 mod study_field_tensor;
+pub use study_field_tensor::read_pinned_study_tensor_snapshot;
 mod study_dataset;
 
 mod study;

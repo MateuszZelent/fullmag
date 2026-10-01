@@ -54,10 +54,19 @@ tensora. Immutable source CAS zawiera receipt razem z wartościami;
 publikacja SolutionSet zachowuje źródłowy artefakt. Nie powstaje drugi output
 catalog ani ścieżka odkrywania receiptu przez skan katalogu.
 
-Receipt nie jest jeszcze osobnym zasobem API ani certyfikatem wartości
-odczytanych z dowolnego późniejszego tensora. Następny etap musi udostępnić
-typowanego exact source readera i natywną mapę/digest, zanim geometry root
-otrzyma mocniejszy status i uruchomimy przestrzenny konsument ilościowy.
+Receipt nie jest osobnym zasobem API. P6-56 dodaje jawny
+`read_pinned_study_tensor_snapshot`: odczyt exact historycznej rewizji,
+sprawdzenie źródła w tym samym memberze, accepted state, pełnej tożsamości
+bindingu oraz hasha wszystkich uporządkowanych bajtów F64 tensora względem
+receiptu z source CAS. Legacy bez receiptu zwraca None po sprawdzeniu bindingu;
+nie poświadcza wtedy payloadu. Odczyt całego pola jest osobną operacją,
+nie częścią zwykłego pobierania slice ani ścieżką renderowania.
+
+Source JSON ma istniejący limit 64 MiB; limit serializacji nie jest limitem
+peak RAM. Podczas odczytu tensora zwalniamy wektor źródłowych wartości i
+czytamy po jednym zweryfikowanym chunku do 196 608 B, zgodnie z rozmiarem
+chunków producenta. Wciąż potrzebna jest natywna mapa/digest, zanim geometry
+root otrzyma mocniejszy status i uruchomimy przestrzenny konsument ilościowy.
 
 ## Weryfikacja i rollback
 

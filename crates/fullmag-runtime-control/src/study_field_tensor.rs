@@ -20,11 +20,169 @@ use fullmag_session::{
     canonical_json_sha256, FmsStudyOutputManifestEntry, SessionStore, TensorChunk, TensorDescriptor,
 };
 use serde_json::json;
+use sha2::{Digest, Sha256};
 
 const MAX_SOURCE_STATE_BYTES: u64 = 64 * 1024 * 1024;
 const NODES_PER_CHUNK: usize = 8_192;
 const BYTES_PER_NODE: usize = 3 * std::mem::size_of::<f64>();
 const FIELD_ID: &str = "field:m";
+
+/// Verify a saved native snapshot against its exact historical source and all
+/// derived F64 tensor bytes. This is an explicit full-field integrity read,
+/// not a viewport slice or a certificate of native mesh-index correspondence.
+/// Legacy sources without a receipt return None after their binding is checked.
+pub fn read_pinned_study_tensor_snapshot(
+    store: &SessionStore,
+    pinned: &fullmag_session::solution_tensor_source::PinnedSolutionTensorSource,
+    output: &FmsStudyOutputManifestEntry,
+) -> Result<Option<fullmag_quantities::fem_state_snapshot_receipt::FemLocalNodeSnapshotReceipt>> {
+    let resolved = fullmag_session::solution_tensor_source::resolve_solution_tensor(store, pinned)?;
+    let owner = store
+        .solution_sets()
+        .read_revision(&pinned.solution_set_id, pinned.solution_revision)?
+        .context("saved snapshot exact owner revision is missing")?;
+    let source = owner
+        .members
+        .iter()
+        .find(|member| member.member_id == pinned.member_id)
+        .and_then(|member| {
+            member
+                .artifacts
+                .iter()
+                .find(|artifact| artifact.artifact_id == output.artifact_id)
+        })
+        .context("saved snapshot source is missing from the exact tensor owner")?;
+    validate_source_identity(source, output, &pinned.run_id, &pinned.run_spec_digest)?;
+    if !matches!(output.data_kind.as_str(), "state" | "initial_state")
+        || output.codec_id != STUDY_MAGNETIZATION_CODEC_ID
+        || output.codec_version != STUDY_MAGNETIZATION_CODEC_VERSION
+        || source.accepted_state != resolved.artifact.accepted_state
+    {
+        bail!("saved snapshot source codec or accepted state differs from its tensor");
+    }
+    let state = read_source_state(store, source, output)?;
+    let semantics = decode_magnetization_field_semantics(&state)?
+        .context("saved snapshot source has no typed FEM P1 semantics")?;
+    validate_plan_and_state_identity(&state.layout, state.values.len(), &semantics)?;
+    validate_snapshot_tensor_binding(
+        &resolved.tensor,
+        &state,
+        &semantics,
+        &pinned.run_id,
+        &pinned.run_spec_digest,
+        source,
+        output,
+    )?;
+    let Some(receipt) = state.native_state_snapshot else {
+        return Ok(None);
+    };
+    // No source field or chunk-sized duplicate is retained during tensor IO.
+    drop(state.values);
+    verify_snapshot_tensor_bytes(store.cas(), &resolved.tensor, &receipt.values_sha256)?;
+    Ok(Some(receipt))
+}
+
+fn verify_snapshot_tensor_bytes(
+    cas: &fullmag_session::CasStore,
+    tensor: &TensorDescriptor,
+    expected_digest: &str,
+) -> Result<()> {
+    let mut chunks = tensor.chunks.iter().collect::<Vec<_>>();
+    chunks.sort_unstable_by_key(|chunk| chunk.offset);
+    let mut digest = Sha256::new();
+    const MAX_CHUNK_BYTES: u64 = (NODES_PER_CHUNK * BYTES_PER_NODE) as u64;
+    for chunk in chunks {
+        let range = cas
+            .get_verified_range(&chunk.object_ref, 0, chunk.length as u64, MAX_CHUNK_BYTES)?
+            .context("saved snapshot tensor chunk is missing")?;
+        if range.object_length != chunk.length as u64 || range.bytes.len() != chunk.length {
+            bail!("saved snapshot tensor chunk length mismatch");
+        }
+        digest.update(&range.bytes);
+    }
+    if format!("sha256:{:x}", digest.finalize()) != expected_digest {
+        bail!("saved tensor values differ from the native source snapshot receipt");
+    }
+    Ok(())
+}
+
+fn validate_snapshot_tensor_binding(
+    tensor: &TensorDescriptor,
+    state: &fullmag_application::MagnetizationStateArtifact,
+    semantics: &fullmag_quantities::fem_state_field::FemP1MagnetizationFieldSemantics,
+    run_id: &str,
+    run_spec_digest: &str,
+    source: &SolutionArtifactRef,
+    output: &FmsStudyOutputManifestEntry,
+) -> Result<()> {
+    let binding = tensor
+        .field_binding
+        .as_ref()
+        .context("saved snapshot tensor binding is missing")?;
+    let fingerprint = tensor_owner_fingerprint(run_id, run_spec_digest, source, output);
+    let expected = TensorFieldBinding {
+        format: TENSOR_FIELD_BINDING_SCHEMA.to_string(),
+        dataset: MaterializedDatasetRef {
+            dataset_id: format!("dataset:study-state:{fingerprint}"),
+            revision: 1,
+        },
+        sample_id: output.case_id.clone(),
+        item_id: source.artifact_id.clone(),
+        field_id: FIELD_ID.to_string(),
+        group_id: format!("group:{fingerprint}"),
+        producer_id: semantics.producer_id.clone(),
+        producer_version: semantics.producer_version.clone(),
+        plane: DatasetSlicePlane::Values,
+        descriptor: semantics.descriptor.clone(),
+    };
+    if binding != &expected
+        || tensor.dtype != fullmag_session::TensorDtype::F64
+        || tensor.name != "m"
+        || tensor.shape != vec![state.values.len(), 3]
+        || tensor.logical_axes
+            != semantics
+                .descriptor
+                .axes
+                .iter()
+                .map(|axis| axis.axis_id.clone())
+                .collect::<Vec<_>>()
+    {
+        bail!("saved snapshot tensor binding differs from its exact producer source");
+    }
+    binding.validate_for_tensor(tensor)
+}
+
+fn read_source_state(
+    store: &SessionStore,
+    source: &SolutionArtifactRef,
+    output: &FmsStudyOutputManifestEntry,
+) -> Result<fullmag_application::MagnetizationStateArtifact> {
+    if source.byte_length == 0 || source.byte_length > MAX_SOURCE_STATE_BYTES {
+        bail!("typed study state exceeds the source metadata byte budget");
+    }
+    let range = store
+        .cas()
+        .get_verified_range(
+            &source.object_ref,
+            0,
+            source.byte_length,
+            MAX_SOURCE_STATE_BYTES,
+        )?
+        .context("typed study state CAS object is missing")?;
+    if range.object_length != source.byte_length || range.bytes.len() as u64 != source.byte_length {
+        bail!("typed study state CAS object length differs from its solution artifact");
+    }
+    let decoded = decode_study_artifact_bytes(
+        &output.data_kind,
+        &output.codec_id,
+        &output.codec_version,
+        &range.bytes,
+    )?;
+    let DecodedStudyArtifact::MagnetizationState(state) = decoded else {
+        bail!("magnetization field output did not decode to a state artifact");
+    };
+    Ok(state)
+}
 
 /// Materialize a typed FEM H1/P1 magnetization state as a durable tensor root.
 ///
@@ -68,28 +226,7 @@ pub(crate) fn materialize_study_state_tensor(
         );
     }
 
-    let range = store
-        .cas()
-        .get_verified_range(
-            &source.object_ref,
-            0,
-            source.byte_length,
-            MAX_SOURCE_STATE_BYTES,
-        )?
-        .context("typed study state CAS object is missing")?;
-    if range.object_length != source.byte_length || range.bytes.len() as u64 != source.byte_length {
-        bail!("typed study state CAS object length differs from its solution artifact");
-    }
-
-    let decoded = decode_study_artifact_bytes(
-        &output.data_kind,
-        &output.codec_id,
-        &output.codec_version,
-        &range.bytes,
-    )?;
-    let DecodedStudyArtifact::MagnetizationState(state) = decoded else {
-        bail!("magnetization field output did not decode to a state artifact");
-    };
+    let state = read_source_state(store, source, output)?;
     let Some(producer_semantics) = decode_magnetization_field_semantics(&state)? else {
         return Ok(None);
     };
@@ -325,6 +462,62 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(bytes, expected);
         assert_eq!(bytes.len(), values.len() * BYTES_PER_NODE);
+    }
+
+    #[test]
+    fn snapshot_tensor_hash_uses_logical_chunk_order_and_rejects_changed_values() {
+        let directory = tempfile::tempdir().unwrap();
+        let cas = fullmag_session::CasStore::open(directory.path().join("objects")).unwrap();
+        let values = [[1.0, -0.0, 0.25], [-0.5, 0.0, 1.0]];
+        let expected =
+            fullmag_quantities::fem_state_snapshot_receipt::local_node_values_sha256(&values)
+                .unwrap();
+        let mut tensor =
+            TensorDescriptor::new_f64("m", vec![2, 3], vec!["node".into(), "component".into()]);
+        for (index, row) in values.iter().enumerate().rev() {
+            let bytes = encode_node_chunk_bytes(std::slice::from_ref(row)).unwrap();
+            let hash = cas.put(&bytes).unwrap();
+            tensor.chunks.push(TensorChunk {
+                object_ref: hash.clone(),
+                offset: index * BYTES_PER_NODE,
+                length: bytes.len(),
+                sha256: Some(hash),
+            });
+        }
+        verify_snapshot_tensor_bytes(&cas, &tensor, &expected).unwrap();
+        let mut changed = values;
+        changed[0][1] = 0.0;
+        let bytes = encode_node_chunk_bytes(&changed[..1]).unwrap();
+        let hash = cas.put(&bytes).unwrap();
+        let index = tensor
+            .chunks
+            .iter()
+            .position(|chunk| chunk.offset == 0)
+            .unwrap();
+        tensor.chunks[index].object_ref = hash.clone();
+        tensor.chunks[index].sha256 = Some(hash);
+        assert!(verify_snapshot_tensor_bytes(&cas, &tensor, &expected).is_err());
+        tensor.chunks[index].length -= 8;
+        assert!(verify_snapshot_tensor_bytes(&cas, &tensor, &expected).is_err());
+    }
+
+    #[test]
+    fn snapshot_tensor_rejects_oversized_chunk_without_materializing_it() {
+        let directory = tempfile::tempdir().unwrap();
+        let cas = fullmag_session::CasStore::open(directory.path().join("objects")).unwrap();
+        let length = NODES_PER_CHUNK * BYTES_PER_NODE + 8;
+        let mut tensor =
+            TensorDescriptor::new_f64("m", vec![1, 3], vec!["node".into(), "component".into()]);
+        tensor.chunks.push(TensorChunk {
+            object_ref: "a".repeat(64),
+            offset: 0,
+            length,
+            sha256: None,
+        });
+        let error =
+            verify_snapshot_tensor_bytes(&cas, &tensor, &format!("sha256:{}", "a".repeat(64)))
+                .unwrap_err();
+        assert!(error.to_string().contains("outside the positive"));
     }
 
     #[test]

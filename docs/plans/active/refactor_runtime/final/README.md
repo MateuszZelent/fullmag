@@ -15,6 +15,11 @@ dlatego nie podnosi procentów P3/P5.
 
 ## Dokumenty finalne
 
+Checkpoint 01.10.2026: [P6-56 — exact reader zapisanego snapshotu](p6/56-exact-saved-snapshot-reader.md)
+wiąże historyczny source CAS z pełnym hashem tensora. Produkcyjne źródła PASS;
+native build 189 czeka na zakończenie aktywnego kontenera dyspersji.
+Runtime/map/API/renderer otwarte. P6 około 52%, cały plan około 49%.
+
 Checkpoint 01.10.2026: [P6-55 — receipt finalnego snapshotu FEM](p6/55-native-final-snapshot-receipt.md)
 wiąże actual handle receipt z endpointem i hashem wartości w source CAS,
 oddzielnie od layout fingerprint. Default źródła PASS; zgodny klient runnera

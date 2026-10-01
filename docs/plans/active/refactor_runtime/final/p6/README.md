@@ -212,3 +212,7 @@ pamięci i wszystkich lane'ów pozostają otwarte. P6 wynosi **52%**.
 55. [Receipt finalnego snapshotu FEM](55-native-final-snapshot-receipt.md)
     — actual handle, exact endpoint i F64LE digest w immutable source;
     default źródła PASS, native build/map/runtime/renderer otwarte.
+
+56. [Exact source reader zapisanego snapshotu](56-exact-saved-snapshot-reader.md)
+    — historyczny owner/source i pełny hash tensora względem native receiptu;
+    źródła PASS, runtime/map/API/renderer otwarte.
