@@ -137,42 +137,60 @@
       "path": "crates/fullmag-plan/src/antenna_validity.rs",
       "symbol": "antenna_validity_notes",
       "responsibility": "Publish the 0950 separable-field validity diagnostics eta_wave and eta_skin from the resolved conductor geometry and the versioned waveform bandwidth classification; remain explicitly unknown when bandwidth or geometry is unavailable."
+    },
+    {
+      "id": "antenna-python-port-mode",
+      "path": "packages/fullmag-py/src/fullmag/model/antenna.py",
+      "symbol": "class AntennaPortMode",
+      "responsibility": "Define current public port-mode field names and per-ampere branch normalization."
+    },
+    {
+      "id": "antenna-python-spectrum-request",
+      "path": "packages/fullmag-py/src/fullmag/model/antenna.py",
+      "symbol": "class AntennaSpectrumRequest",
+      "responsibility": "Define current source-spectrum authoring parameters and Python validation."
+    },
+    {
+      "id": "antenna-python-stage-roundtrip",
+      "path": "packages/fullmag-py/tests/test_antenna_stage_workflow.py",
+      "symbol": "test_antenna_solve_returns_symbolic_output_and_preserves_authoring_intent",
+      "responsibility": "Check the stage-first symbolic output reference and Python script round trip without claiming native field-solve qualification."
     }
   ],
   "public_api": {
     "parameters": [
       {
-        "python": "AntennaPortMode.source_object",
+        "python": "AntennaPortMode.source_object_id",
         "type": "str",
         "default": "required",
         "si_unit": "1",
-        "validation": "nonempty id naming exactly one existing PhysicsObject with explicitly authored antenna or conductor presentation type",
+        "validation": "nonempty; ProblemIR validation requires a referenced conductor or antenna physics object",
         "meaning": "stable conductor-source identity without copied geometry",
         "backend_support": "backend-neutral authoring; execution remains capability-scoped",
         "problem_ir": "antenna_port_modes[].source_object_id"
       },
       {
-        "python": "AntennaPortMode.current_transport",
+        "python": "AntennaPortMode.current_transport_id",
         "type": "str",
         "default": "required",
         "si_unit": "1",
-        "validation": "names one complete static one-way CurrentTransport bound to the source object",
+        "validation": "nonempty; ProblemIR validation requires a compatible charge-only transport on the source",
         "meaning": "owner of solved electric potential and conventional current",
         "backend_support": "FEM CPU/double initial reference lane",
         "problem_ir": "antenna_port_modes[].current_transport_id"
       },
       {
-        "python": "AntennaPortBranch.weight",
+        "python": "AntennaPortBranch.signed_weight",
         "type": "float",
         "default": "required",
         "si_unit": "1",
-        "validation": "finite; all branch weights in one mode sum to zero and include signal plus return",
+        "validation": "finite; one mode requires positive weights summing to one, negative return and total zero within 1e-12",
         "meaning": "signed current share relative to the common positive orientation",
         "backend_support": "backend-neutral contract",
-        "problem_ir": "antenna_port_modes[].branches[].weight"
+        "problem_ir": "antenna_port_modes[].branches[].signed_weight"
       },
       {
-        "python": "SolvedAntennaDrive.peak_current",
+        "python": "SolvedAntennaDrive.peak_current_a",
         "type": "float",
         "default": "required",
         "si_unit": "A",
@@ -194,9 +212,9 @@
       {
         "python": "AntennaSpectrumRequest.port_mode_id",
         "type": "str | None",
-        "default": "None only for legacy single-port assets",
+        "default": "None",
         "si_unit": "1",
-        "validation": "when present, non-empty and bound to the solve stage; omitted requests are valid only when that stage has exactly one port",
+        "validation": "when present, nonempty and bound to the solve stage; omission is valid only when the solve has exactly one port",
         "meaning": "selects the immutable per-ampere field basis used by source-spectrum analysis",
         "backend_support": "immutable FEM antenna asset; multi-port assets require explicit selection",
         "problem_ir": "antenna_spectrum_requests[].port_mode_id"

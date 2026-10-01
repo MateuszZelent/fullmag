@@ -816,6 +816,22 @@ material assignment and charge transport keep their existing owners. The thin
 antenna layer adds only port-mode binding, field-solve staging and field-basis
 consumption:
 
+**Implementation status (2026-10-01):** the block below is a design target,
+not an executable example of the current public DSL. In the implemented
+authoring contract, use `fm.study(...)`, `study.antenna_object(...)`,
+`study.current_transport(...)` with a complete `ConservativeCurrentView`,
+`study.add_antenna_port_mode(...)`, and
+`study.stages.add_antenna_field_solve(id=..., definition=...)`. The latter
+returns an `AntennaStageOutputRef` used by `AntennaTargetProjection` and
+`AntennaSpectrumRequest`; `study.add_solved_antenna_drive(...)` binds the
+projection before a later run stage. The round-trip authoring sequence is
+tested by `packages/fullmag-py/tests/test_antenna_stage_workflow.py::test_antenna_solve_returns_symbolic_output_and_preserves_authoring_intent`.
+This does **not** qualify a physical current/field solve: a placeholder RT0
+view with invented vertex IDs or digests would not satisfy the mesh and
+conservative-current contract. T18 must replace this block with a complete
+stage-first script backed by a genuinely resolved current view and runtime
+evidence before the example can be called executable.
+
 ```python
 # %% Shared physical owners
 cpw = fm.PhysicsObject(
@@ -953,20 +969,23 @@ terminal references and weights. It must not copy geometry, conductivity or
 terminal definitions into the antenna layer and must not invent a missing
 return path.
 
-The exhaustive public parameter mapping for the new thin contracts is:
+The current mapping below covers the principal thin-contract bindings. It is
+not yet the complete parameter inventory required for T18 publication; the
+remaining fields of the stage, projection, waveform, activation and spectrum
+types must be indexed against the public constructors and `ProblemIR`.
 
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 |---|---|---|---|---|---|---|---|
-| `AntennaPortMode.source_object` | `str` | required | `1` | nonempty id naming exactly one existing PhysicsObject with explicitly authored antenna or conductor presentation type | stable conductor-source identity without copied geometry | backend-neutral authoring; execution remains capability-scoped | `antenna_port_modes[].source_object_id` |
-| `AntennaPortMode.current_transport` | `str` | required | `1` | names one complete static one-way CurrentTransport bound to the source object | owner of solved electric potential and conventional current | FEM CPU/double initial reference lane | `antenna_port_modes[].current_transport_id` |
-| `AntennaPortBranch.weight` | `float` | required | `1` | finite; all branch weights in one mode sum to zero and include signal plus return | signed current share relative to the common positive orientation | backend-neutral contract | `antenna_port_modes[].branches[].weight` |
-| `SolvedAntennaDrive.peak_current` | `float` | required | `A` | finite; zero disables the drive without invalidating the spatial basis | signed peak multiplying the immutable per-ampere field basis | lane-specific artifact consumer | `solved_antenna_drives[].peak_current_a` |
+| `AntennaPortMode.source_object_id` | `str` | required | `$1$` | nonempty; ProblemIR validation requires a referenced conductor or antenna physics object | stable conductor-source identity without copied geometry | backend-neutral authoring; execution remains capability-scoped | `antenna_port_modes[].source_object_id` |
+| `AntennaPortMode.current_transport_id` | `str` | required | `$1$` | nonempty; ProblemIR validation requires a compatible charge-only transport on the source | owner of solved electric potential and conventional current | FEM CPU/double initial reference lane | `antenna_port_modes[].current_transport_id` |
+| `AntennaPortBranch.signed_weight` | `float` | required | `$1$` | finite; one mode requires positive weights summing to one, negative return and total zero within 1e-12 | signed current share relative to the common positive orientation | backend-neutral contract | `antenna_port_modes[].branches[].signed_weight` |
+| `SolvedAntennaDrive.peak_current_a` | `float` | required | `$\mathrm A$` | finite; zero disables the drive without invalidating the spatial basis | signed peak multiplying the immutable per-ampere field basis | lane-specific artifact consumer | `solved_antenna_drives[].peak_current_a` |
 | `AntennaSpectrumRequest.sampling_plane` | `AntennaSpectrumSamplingPlane` | required | m for origin/extents; 1 for counts and frame | orthonormal in-plane axes, positive extents, at least two samples per axis; current executable lane requires valid tet4 P1 topology or unique identity-coordinate carrier matches and fails closed for unsupported interpolation | centred physical lattice on which the per-ampere source field is sampled before the spatial Fourier transform | immutable FEM antenna asset with tet4 P1 or legacy identity sampling; FDM trilinear, direct RT0 evaluation, mixed topology, and native MFEM transfer remain explicitly unsupported | `antenna_spectrum_requests[].sampling_plane` |
-| `AntennaSpectrumRequest.port_mode_id` | `str | None` | None only for legacy single-port assets | `1` | when present, non-empty and bound to the solve stage; omitted requests are valid only when that stage has exactly one port | selects the immutable per-ampere field basis used by source-spectrum analysis | immutable FEM antenna asset; multi-port assets require explicit selection | `antenna_spectrum_requests[].port_mode_id` |
+| `AntennaSpectrumRequest.port_mode_id` | `str | None` | `None` | `$1$` | when present, nonempty and bound to the solve stage; omission is valid only when the solve has exactly one port | selects the immutable per-ampere field basis used by source-spectrum analysis | immutable FEM antenna asset; multi-port assets require explicit selection | `antenna_spectrum_requests[].port_mode_id` |
 
 (The optional `AntennaSpectrumRequest.port_mode_id` selects the immutable
 per-ampere basis used by the source-spectrum transform. It may be omitted only
-for a legacy single-port solve asset; a multi-port asset must name one of its
+when the solve stage has exactly one port; a multi-port asset must name one of its
 solved port modes. The value is recorded in the spectrum provenance and never
 changes the solved field itself.
 
@@ -1161,6 +1180,9 @@ evidence and cannot promote a capability lane.
 | `crates/fullmag-ir/src/spin_transport.rs` | `ResolvedChargeTransportPlanIR` | standalone resolved charge-only contract without synthetic spin transport |
 | `crates/fullmag-plan/src/spin_transport.rs` | `resolve_fem_charge_only_transport` | FEM CPU/double charge-only planning and conservative-current-view binding |
 | `crates/fullmag-runner/src/native_fem/charge_transport.rs` | `execute_native_fem_charge_transport_plans` | pre-LLG execution, field publication and Oersted delegation |
+| `packages/fullmag-py/src/fullmag/model/antenna.py` | `class AntennaPortMode` | current public names, normalization and branch validation for the thin port contract |
+| `packages/fullmag-py/src/fullmag/model/antenna.py` | `class AntennaSpectrumRequest` | current source-spectrum authoring fields and Python validation |
+| `packages/fullmag-py/tests/test_antenna_stage_workflow.py` | `test_antenna_solve_returns_symbolic_output_and_preserves_authoring_intent` | stage-first symbolic-reference round trip; not a field-solve runtime gate |
 | `backends/fem/tests/charge_transport_abi_contract.cpp` | `main` | native affine sign, linearity, balance and fail-closed gate |
 
 (antenna-scientific-bibliography)=
