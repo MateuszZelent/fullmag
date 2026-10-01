@@ -29,6 +29,28 @@ Nearest shifts 9/10 GHz służą wyszukiwaniu; nie zastępują częstotliwości
 solvera. Pierwszy błąd zatrzyma serię do diagnozy. Brak nowych wyników,
 kompletności widma i aktualizacji wykresu; pełny S00–S12 pozostaje otwarty.
 
+### Referencja analityczna DE/BV — zakres signed ±25 rad/µm
+
+Podczas oczekiwania #196 wygenerowano odrębny PNG/PDF/CSV oraz receipt w
+`storage/runs/<worktree-id>/scientific-batches/analytic-finite-airbox-de-bv-20261002/`.
+Parametry odczytano z jawnych stałych wersjonowanego
+`examples/fem_de_smoke_numeric.py`; nie wykonano tego modelu ani solvera FEM.
+Obie referencje pochodzą z `finite_dirichlet_thin_film_oracle.py`:
+otwarty film i jednorodny n=0 ze skończonym airboxem Dirichleta.
+Receipt zapisuje commit, hashe źródeł i artefaktów, parametry SI oraz
+`numerical_fem_point_count=0`; 4002 wiersze są wyłącznie analityczne.
+Sprawdzenie hashy, liczby wierszy, dodatnich skończonych częstotliwości
+i symetrii ±k PASS; PNG obejrzano.
+
+W Γ: open 9,309813711 GHz, finite 9,299249697 GHz.
+Na próbkowanej siatce największa ujemna różnica DE wynosi około
+−37,6984 MHz przy |k|=0,275 rad/µm; dla BV −10,5640 MHz w Γ.
+To diagnostyka wpływu warunków brzegowych na analitykę, nie nowy wynik
+Fullmaga ani rozwiązanie antydotu COMSOL A1. Nie zamyka zbieżności
+airboxu, poprawności operatora, pełnego widma ani kwalifikacji dyspersji.
+Sterownik #196 nadal potwierdzony żywy; job nadal `queued`.
+Ostatni health: 4 107 767 808 B wolnego (około 3,83 GiB), poniżej progu.
+
 ### Najnowszy wynik #195 i naprawa granicy build identity
 
 Koordynator zakończył #195 statusem `succeeded`; worker exit=0,
@@ -2532,7 +2554,7 @@ Realizacja [planu S00–S12](2026-09-12-eigensolve-dispersion-nonzero-k-plan.md)
 | S02 — Python/IR | W TRAKCIE | Walidacja k i selektorów, round-trip, testy konsumentów |
 | S03 — natywny operator magnetyczny Blocha | W TRAKCIE | Prolongacja i bounded sparse operator są w źródłach; geometry-aware tet/prism oraz ich rzeczywista kwadratura mają review. Wymagane są bieżący managed assembly/runtime i pełne certyfikaty deskryptora. |
 | S04 — dynamiczny demag-k CPU | W TRAKCIE | Sparse Schur/SLEPc i MFEM blocks są źródłowo zaimplementowane. Pozostają residual pełnego deskryptora/gauge/szwów, zbieżność airboxu i siatki oraz kwalifikacja nowego źródła; archiwalne punkty nie zastępują tych bramek. |
-| S05 — natywny solver spektralny | W TRAKCIE | #193: 14/50 podokien rozbieżnych, niekompletne okno; pojedynczy mod Γ zaakceptowany. #194 failed: pięć błędów Rust z czterech przyczyn; naprawy source zapisane i zreviewowane. #195 przyjęty, ostatni status running, sterownik sześciu punktów żywy. Nadal wymagane świeży runtime nearest, naprawa pełnego okna, certyfikat pokrycia/residuali i wznowienia; nearest nie zastępuje tej bramki. |
+| S05 — natywny solver spektralny | W TRAKCIE | #193: 14/50 podokien rozbieżnych, niekompletne okno; pojedynczy mod Γ zaakceptowany. #195 build succeeded, pilot Γ failed przed eigensolve na granicy build identity; poprawka raw64 jest na origin. Przyrost reuse/lifetime ma review i kontrole źródeł; #196 queued, sterownik sześciu punktów żywy. Nadal wymagane świeży runtime nearest, naprawa pełnego okna, certyfikat pokrycia/residuali i wznowienia; nearest nie zastępuje tej bramki. |
 | S06 — śledzenie gałęzi | W TRAKCIE | Hungarian/gaps i metryka masy FE są gotowe; pozostają fizyczne podprzestrzenie zdegenerowane |
 | S07 — artefakty i API | W TRAKCIE | Exact producer/consumer/mesh/native input replay zapisano i zreviewowano. Nowe refs diagnostyki mają odrębny writer/consumer i coverage, 44 regresje przyrostu oraz 213 głównego verifiera PASS; historyczne 56 regresji nonshared pozostają osobnym dowodem. P1 oznaczania nonzero-k jako K0 naprawiony w źródłach bf25. Nadal potrzebne pełne native matrix/physical replay, managed publikacja nowych refs, aktualne binary fields/selektory i managed evidence. |
 | S08 — Control Room | W TRAKCIE | Źródła authoring/scatterplot, selekcji k/pola i linewidth zostały poprawione. Wymagane są bieżący managed frontend/runtime, browser/WebGL, FMS round-trip, dostępność pól i stabilność Inspectora. Historyczny #119 nie jest aktualnym buildem. |
