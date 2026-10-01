@@ -739,6 +739,7 @@ impl StoreWalker {
 
     fn walk_solution_objects(&mut self, solution: &SolutionSet, source: &str) -> Result<()> {
         let mut dataset_revisions = BTreeSet::new();
+        let mut geometry_sources = BTreeSet::new();
         let has_typed_tensor_root = solution
             .members
             .iter()
@@ -747,6 +748,8 @@ impl StoreWalker {
                 artifact.schema_id == crate::solution_tensor_source::SOLUTION_TENSOR_SCHEMA
                     || artifact.schema_id
                         == crate::materialized_dataset::MATERIALIZED_DATASET_SCHEMA
+                    || artifact.schema_id
+                        == crate::solution_field_geometry::SOLUTION_FIELD_GEOMETRY_SCHEMA
             });
         if has_typed_tensor_root {
             crate::solution_tensor_source::verify_solution_tensor_run_owner(&self.root, solution)?;
@@ -769,6 +772,11 @@ impl StoreWalker {
                             &member.member_id,
                             &mut dataset_revisions,
                             source,
+                        )?;
+                    }
+                    crate::solution_field_geometry::SOLUTION_FIELD_GEOMETRY_SCHEMA => {
+                        self.follow_field_geometry_artifact(
+                            artifact, solution, &member.member_id, &mut geometry_sources, source,
                         )?;
                     }
                     _ => {}
@@ -894,6 +902,51 @@ impl StoreWalker {
             return Ok(());
         };
         crate::materialized_dataset::validate_materialized_dataset_tensor(&manifest, &descriptor)
+    }
+
+    fn follow_field_geometry_artifact(
+        &mut self,
+        artifact: &fullmag_quantities::SolutionArtifactRef,
+        solution: &SolutionSet,
+        member_id: &str,
+        geometry_sources: &mut BTreeSet<(String, String)>,
+        source: &str,
+    ) -> Result<()> {
+        use crate::solution_field_geometry as geometry;
+        use std::io::Read;
+        if artifact.byte_length == 0 || artifact.byte_length > geometry::MAX_FIELD_GEOMETRY_MANIFEST_BYTES {
+            bail!("saved field geometry binding exceeds its metadata budget");
+        }
+        let relative = format!("objects/sha256/{}", artifact.object_ref);
+        let path = self.root.join(&relative);
+        if !path.exists() { return Ok(()); }
+        reject_link_chain(&self.root, &relative)?;
+        let mut bytes = Vec::new();
+        fs::File::open(path)?.take(geometry::MAX_FIELD_GEOMETRY_MANIFEST_BYTES + 1).read_to_end(&mut bytes)?;
+        let manifest = geometry::parse_solution_field_geometry_manifest(&bytes, artifact)?;
+        drop(bytes);
+        if !geometry_sources.insert((manifest.source.member_id.clone(), manifest.source.artifact_id.clone())) {
+            bail!("saved field geometry is duplicated for the same tensor");
+        }
+        geometry::validate_field_geometry_owner(&manifest, solution, member_id, false)?;
+        if manifest.source.solution_revision != solution.revision {
+            let historical = self.read_solution_revision(&manifest.source.solution_set_id, manifest.source.solution_revision)?;
+            geometry::validate_field_geometry_owner(&manifest, &historical, member_id, true)?;
+        }
+        self.follow_solution_object_ref(&manifest.geometry.object_ref, manifest.geometry.byte_length, source)?;
+        let relative = format!("objects/sha256/{}", manifest.geometry.object_ref);
+        let path = self.root.join(&relative);
+        if !path.exists() { return Ok(()); }
+        reject_link_chain(&self.root, &relative)?;
+        let mut bytes = Vec::new();
+        fs::File::open(path)?.take(geometry::MAX_FEM_P1_GEOMETRY_BYTES + 1).read_to_end(&mut bytes)?;
+        let saved = geometry::parse_saved_fem_p1_geometry(&bytes, &manifest.geometry)?;
+        drop(bytes);
+        self.follow_solution_object_ref(&manifest.tensor_artifact.object_ref, manifest.tensor_artifact.byte_length, source)?;
+        if let Some(tensor) = self.follow_solution_tensor_artifact(&manifest.tensor_artifact, source)? {
+            geometry::validate_saved_geometry_tensor(&saved, &tensor)?;
+        }
+        Ok(())
     }
 
     fn validate_current_materialized_tensor_record(
@@ -2704,6 +2757,7 @@ impl<'a> ArchiveWalker<'a> {
         source: &str,
     ) -> Result<()> {
         let mut dataset_revisions = BTreeSet::new();
+        let mut geometry_sources = BTreeSet::new();
         let has_typed_tensor_root = solution
             .members
             .iter()
@@ -2712,6 +2766,8 @@ impl<'a> ArchiveWalker<'a> {
                 artifact.schema_id == crate::solution_tensor_source::SOLUTION_TENSOR_SCHEMA
                     || artifact.schema_id
                         == crate::materialized_dataset::MATERIALIZED_DATASET_SCHEMA
+                    || artifact.schema_id
+                        == crate::solution_field_geometry::SOLUTION_FIELD_GEOMETRY_SCHEMA
             });
         if has_typed_tensor_root {
             self.follow_solution_run_owner(solution)?;
@@ -2729,6 +2785,11 @@ impl<'a> ArchiveWalker<'a> {
                             &member.member_id,
                             &mut dataset_revisions,
                             source,
+                        )?;
+                    }
+                    crate::solution_field_geometry::SOLUTION_FIELD_GEOMETRY_SCHEMA => {
+                        self.add_archive_field_geometry_artifact(
+                            artifact, solution, &member.member_id, &mut geometry_sources, source,
                         )?;
                     }
                     _ => {
@@ -2858,6 +2919,44 @@ impl<'a> ArchiveWalker<'a> {
             return Ok(());
         };
         crate::materialized_dataset::validate_materialized_dataset_tensor(&manifest, &descriptor)
+    }
+
+    fn add_archive_field_geometry_artifact(
+        &mut self,
+        artifact: &fullmag_quantities::SolutionArtifactRef,
+        solution: &SolutionSet,
+        member_id: &str,
+        geometry_sources: &mut BTreeSet<(String, String)>,
+        source: &str,
+    ) -> Result<()> {
+        use crate::solution_field_geometry as geometry;
+        if artifact.byte_length == 0 || artifact.byte_length > geometry::MAX_FIELD_GEOMETRY_MANIFEST_BYTES {
+            bail!("saved field geometry binding exceeds its metadata budget");
+        }
+        self.add_archive_solution_object(&artifact.object_ref, artifact.byte_length, source)?;
+        let Some(bytes) = self.bounded_archive_object(&artifact.object_ref, geometry::MAX_FIELD_GEOMETRY_MANIFEST_BYTES)? else {
+            return Ok(());
+        };
+        let manifest = geometry::parse_solution_field_geometry_manifest(&bytes, artifact)?;
+        drop(bytes);
+        if !geometry_sources.insert((manifest.source.member_id.clone(), manifest.source.artifact_id.clone())) {
+            bail!("saved field geometry is duplicated for the same tensor");
+        }
+        geometry::validate_field_geometry_owner(&manifest, solution, member_id, false)?;
+        if manifest.source.solution_revision != solution.revision {
+            let historical = self.read_archive_solution_revision(&manifest.source.solution_set_id, manifest.source.solution_revision)?;
+            geometry::validate_field_geometry_owner(&manifest, &historical, member_id, true)?;
+        }
+        self.add_archive_solution_object(&manifest.geometry.object_ref, manifest.geometry.byte_length, source)?;
+        let Some(bytes) = self.bounded_archive_object(&manifest.geometry.object_ref, geometry::MAX_FEM_P1_GEOMETRY_BYTES)? else {
+            return Ok(());
+        };
+        let saved = geometry::parse_saved_fem_p1_geometry(&bytes, &manifest.geometry)?;
+        drop(bytes);
+        if let Some(tensor) = self.add_archive_solution_tensor_artifact(&manifest.tensor_artifact, source)? {
+            geometry::validate_saved_geometry_tensor(&saved, &tensor)?;
+        }
+        Ok(())
     }
 
     fn validate_archive_current_materialized_tensor_record(

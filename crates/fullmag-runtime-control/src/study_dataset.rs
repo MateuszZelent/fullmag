@@ -4,9 +4,13 @@
 //! does not introduce another Results store or advance scientific assessment.
 
 use anyhow::{bail, Result};
+use fullmag_ir::{BackendPlanIR, ExecutionPlanIR};
 use fullmag_quantities::{SolutionArtifactRef, SolutionSet};
 use fullmag_session::{
     materialized_dataset::{build_materialized_dataset_artifact, MATERIALIZED_DATASET_SCHEMA},
+    solution_field_geometry::{
+        build_solution_field_geometry_artifact, SOLUTION_FIELD_GEOMETRY_SCHEMA,
+    },
     solution_tensor_source::SOLUTION_TENSOR_SCHEMA,
     SessionStore,
 };
@@ -14,6 +18,7 @@ use fullmag_session::{
 pub(crate) fn attach_recorded_datasets(
     store: &SessionStore,
     solution: &mut SolutionSet,
+    plan: &ExecutionPlanIR,
 ) -> Result<()> {
     if let Some(current) = store.solution_sets().read(&solution.solution_set_id)? {
         // Carry the original root and pinned owner revision across terminal
@@ -23,6 +28,7 @@ pub(crate) fn attach_recorded_datasets(
     }
 
     let mut additions: Vec<(usize, SolutionArtifactRef)> = Vec::new();
+    let mut semantics = None;
     for (member_index, member) in solution.members.iter().enumerate() {
         for artifact in &member.artifacts {
             if artifact.schema_id == SOLUTION_TENSOR_SCHEMA {
@@ -34,6 +40,29 @@ pub(crate) fn attach_recorded_datasets(
                 )?;
                 if let Some(dataset) = dataset {
                     additions.push((member_index, dataset));
+                    // Plans without a materializable state tensor must not
+                    // acquire a new geometry-validation failure on replay.
+                    if semantics.is_none() {
+                        semantics = Some(
+                            fullmag_runner::fem_p1_magnetization_field_semantics(plan)
+                                .map_err(|error| anyhow::anyhow!(error))?,
+                        );
+                    }
+                    if let (BackendPlanIR::Fem(fem), Some(Some(semantics))) =
+                        (&plan.backend_plan, &semantics)
+                    {
+                        additions.push((
+                            member_index,
+                            build_solution_field_geometry_artifact(
+                                store.cas(),
+                                solution,
+                                &member.member_id,
+                                artifact,
+                                &fem.mesh,
+                                semantics,
+                            )?,
+                        ));
+                    }
                 }
             }
         }
@@ -52,7 +81,9 @@ pub(crate) fn attach_recorded_datasets(
 fn reuse_existing_datasets(current: &SolutionSet, desired: &mut SolutionSet) -> Result<()> {
     for member in &current.members {
         for artifact in &member.artifacts {
-            if artifact.schema_id != MATERIALIZED_DATASET_SCHEMA {
+            if artifact.schema_id != MATERIALIZED_DATASET_SCHEMA
+                && artifact.schema_id != SOLUTION_FIELD_GEOMETRY_SCHEMA
+            {
                 continue;
             }
             let Some(target) = desired

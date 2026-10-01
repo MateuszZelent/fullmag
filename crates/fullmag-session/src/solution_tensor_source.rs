@@ -121,6 +121,7 @@ pub(crate) fn verify_solution_tensor_run_owner(
         .any(|artifact| {
             artifact.schema_id == SOLUTION_TENSOR_SCHEMA
                 || artifact.schema_id == crate::materialized_dataset::MATERIALIZED_DATASET_SCHEMA
+                || artifact.schema_id == crate::solution_field_geometry::SOLUTION_FIELD_GEOMETRY_SCHEMA
         })
     {
         read_solution_run_owner(root, &solution.run_id, &solution.provenance.run_spec_digest)?;

@@ -383,7 +383,7 @@ fn build_solution(
         members,
         coverage,
     };
-    crate::study_dataset::attach_recorded_datasets(store, &mut solution)?;
+    crate::study_dataset::attach_recorded_datasets(store, &mut solution, resolved_plan)?;
     Ok(Some(solution))
 }
 

@@ -28,6 +28,7 @@ pub mod materialized_dataset;
 pub mod reachability;
 pub mod repository_path;
 pub mod solution_set_catalog;
+pub mod solution_field_geometry;
 pub mod solution_tensor_field;
 pub mod solution_tensor_source;
 pub mod store;

@@ -372,6 +372,18 @@ impl SolutionSetCatalog {
                     &self.root, solution,
                 )?;
                 self.verify_materialized_dataset_artifacts(solution)?;
+                self.verify_field_geometry_artifacts(solution)?;
+
+                for member in &solution.members {
+                    for artifact in &member.artifacts {
+                        if artifact.schema_id == crate::solution_field_geometry::SOLUTION_FIELD_GEOMETRY_SCHEMA {
+                            let manifest = crate::solution_field_geometry::read_solution_field_geometry_manifest(
+                                &self.existing_cas()?, artifact,
+                            )?;
+                            register_durable_object(&mut objects, &manifest.geometry.object_ref, manifest.geometry.byte_length)?;
+                        }
+                    }
+                }
 
                 for member in &solution.members {
                     for artifact in &member.artifacts {
@@ -641,6 +653,7 @@ impl SolutionSetCatalog {
             // them.
             crate::solution_tensor_source::verify_solution_tensor_run_owner(&self.root, solution)?;
             self.verify_materialized_dataset_artifacts(solution)?;
+            self.verify_field_geometry_artifacts(solution)?;
             for member in &solution.members {
                 for artifact in &member.artifacts {
                     // Keep unknown schemas opaque until their typed contract
@@ -655,6 +668,17 @@ impl SolutionSetCatalog {
                         verified_tensor_chunks(cas.as_ref().expect("CAS initialized"), artifact)?;
                 }
             }
+        }
+        Ok(())
+    }
+
+    fn verify_field_geometry_artifacts(&self, solution: &SolutionSet) -> Result<()> {
+        if solution.members.iter().flat_map(|member| &member.artifacts).any(|artifact| {
+            artifact.schema_id == crate::solution_field_geometry::SOLUTION_FIELD_GEOMETRY_SCHEMA
+        }) {
+            crate::solution_field_geometry::verify_field_geometries_for_solution(
+                &self.root, &self.existing_cas()?, solution,
+            )?;
         }
         Ok(())
     }

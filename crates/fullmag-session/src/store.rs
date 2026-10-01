@@ -180,6 +180,11 @@ impl SessionStore {
             &self.root, &self.cas, solution,
         )?;
         let mut referenced_objects = BTreeMap::new();
+        for geometry in crate::solution_field_geometry::verify_field_geometries_for_solution(
+            &self.root, &self.cas, solution,
+        )? {
+            register_solution_object(&mut referenced_objects, &geometry.object_ref, geometry.byte_length)?;
+        }
         for member in &solution.members {
             for artifact in &member.artifacts {
                 if artifact.schema_id == crate::solution_tensor_source::SOLUTION_TENSOR_SCHEMA {
