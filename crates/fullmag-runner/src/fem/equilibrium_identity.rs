@@ -29,6 +29,24 @@ struct EquilibriumMaterialSignaturePreimageV2 {
     canonical_uniaxial_axis: [f64; 3],
 }
 
+/// Strict replay-only V2 decoder.
+///
+/// The producer keeps the flattened representation above so the historical
+/// byte stream remains unchanged.  Replay uses a separate explicit type:
+/// `deny_unknown_fields` and `flatten` are a poor combination for a decoder,
+/// while replay must reject a mixed V1/V2 payload before hashing it.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+struct EquilibriumMaterialSignatureReplayV2 {
+    schema_version: String,
+    saturation_magnetisation_a_per_m: f64,
+    exchange_stiffness_j_per_m: f64,
+    saturation_magnetisation_field_a_per_m: Option<Vec<f64>>,
+    exchange_stiffness_field_j_per_m: Option<Vec<f64>>,
+    uniaxial_anisotropy_j_per_m3: f64,
+    canonical_uniaxial_axis: [f64; 3],
+}
+
 /// One normalization owner for equilibrium identity and native Ku transport.
 /// The axis is a rank-one direction: u and -u describe identical energies.
 pub(super) fn constant_uniaxial_descriptor(
@@ -370,6 +388,226 @@ fn signature_digest_and_preimage<T: Serialize>(
     Ok((format!("sha256:{:x}", hash.finalize()), preimage_json))
 }
 
+/// Replay a published equilibrium material preimage without reserializing it.
+///
+/// The JSON is decoded only to validate the versioned material contract.  The
+/// digest is then calculated from the original UTF-8 bytes, including their
+/// exact whitespace and number spellings, using the historical namespace,
+/// NUL separator, and little-endian byte length framing.  This keeps a
+/// published identity bound to the bytes that were actually emitted while
+/// still rejecting malformed, mixed-schema, or physically invalid payloads.
+pub(super) fn replay_equilibrium_material_signature(
+    preimage_json: &str,
+    expected_digest: &str,
+) -> Result<(), RunError> {
+    let actual_digest = equilibrium_material_signature_digest_from_preimage(preimage_json)?;
+    if actual_digest != expected_digest {
+        return Err(RunError {
+            message: format!(
+                "equilibrium_identity_preimage_digest_mismatch: expected {expected_digest}, got {actual_digest}"
+            ),
+        });
+    }
+    Ok(())
+}
+
+fn equilibrium_material_signature_digest_from_preimage(
+    preimage_json: &str,
+) -> Result<String, RunError> {
+    let envelope: serde_json::Value = serde_json::from_str(preimage_json).map_err(|error| {
+        RunError {
+            message: format!(
+                "equilibrium_identity_preimage_deserialization_failed: {error}"
+            ),
+        }
+    })?;
+    let schema_version = envelope
+        .as_object()
+        .and_then(|object| object.get("schema_version"))
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| RunError {
+            message: "equilibrium_identity_preimage_schema_missing_or_not_string".to_string(),
+        })?;
+
+    let namespace = match schema_version {
+        EQUILIBRIUM_MATERIAL_PREIMAGE_V1 => {
+            let value: EquilibriumMaterialSignaturePreimageV1 =
+                serde_json::from_str(preimage_json).map_err(|error| RunError {
+                    message: format!(
+                        "equilibrium_identity_preimage_v1_validation_failed: {error}"
+                    ),
+                })?;
+            validate_material_preimage_v1(&value)?;
+            EQUILIBRIUM_MATERIAL_PREIMAGE_V1
+        }
+        EQUILIBRIUM_MATERIAL_PREIMAGE_V2 => {
+            let value: EquilibriumMaterialSignatureReplayV2 =
+                serde_json::from_str(preimage_json).map_err(|error| RunError {
+                    message: format!(
+                        "equilibrium_identity_preimage_v2_validation_failed: {error}"
+                    ),
+                })?;
+            validate_material_preimage_v2(&value)?;
+            EQUILIBRIUM_MATERIAL_PREIMAGE_V2
+        }
+        other => {
+            return Err(RunError {
+                message: format!(
+                    "equilibrium_identity_preimage_schema_unsupported: {other}"
+                ),
+            });
+        }
+    };
+
+    // `&str` is already valid UTF-8.  Hash its untouched bytes instead of a
+    // serde_json reserialization so whitespace and lexical number forms stay
+    // part of the published identity.
+    let bytes = preimage_json.as_bytes();
+    let mut hash = Sha256::new();
+    hash.update(namespace.as_bytes());
+    hash.update([0]);
+    hash.update((bytes.len() as u64).to_le_bytes());
+    hash.update(bytes);
+    Ok(format!("sha256:{:x}", hash.finalize()))
+}
+
+fn validate_material_preimage_v1(
+    value: &EquilibriumMaterialSignaturePreimageV1,
+) -> Result<(), RunError> {
+    if value.schema_version != EQUILIBRIUM_MATERIAL_PREIMAGE_V1 {
+        return Err(RunError {
+            message: format!(
+                "equilibrium_identity_preimage_v1_schema_mismatch: {}",
+                value.schema_version
+            ),
+        });
+    }
+    validate_base_material_values(
+        value.saturation_magnetisation_a_per_m,
+        value.exchange_stiffness_j_per_m,
+        value.saturation_magnetisation_field_a_per_m.as_deref(),
+        value.exchange_stiffness_field_j_per_m.as_deref(),
+    )
+}
+
+fn validate_material_preimage_v2(
+    value: &EquilibriumMaterialSignatureReplayV2,
+) -> Result<(), RunError> {
+    if value.schema_version != EQUILIBRIUM_MATERIAL_PREIMAGE_V2 {
+        return Err(RunError {
+            message: format!(
+                "equilibrium_identity_preimage_v2_schema_mismatch: {}",
+                value.schema_version
+            ),
+        });
+    }
+    // The constant-Ku source identity is defined only for uniform Ms.  Keep
+    // this replay rule aligned with `constant_uniaxial_descriptor`, including
+    // the distinction between an absent field and an explicitly empty one.
+    if value.saturation_magnetisation_field_a_per_m.is_some() {
+        return Err(RunError {
+            message:
+                "equilibrium_identity_preimage_v2_ms_field_is_not_allowed_for_constant_ku"
+                    .to_string(),
+        });
+    }
+    validate_base_material_values(
+        value.saturation_magnetisation_a_per_m,
+        value.exchange_stiffness_j_per_m,
+        value.saturation_magnetisation_field_a_per_m.as_deref(),
+        value.exchange_stiffness_field_j_per_m.as_deref(),
+    )?;
+    if !value.uniaxial_anisotropy_j_per_m3.is_finite()
+        || (value.uniaxial_anisotropy_j_per_m3 == 0.0
+            && value.uniaxial_anisotropy_j_per_m3.is_sign_negative())
+    {
+        return Err(RunError {
+            message: "equilibrium_identity_preimage_v2_ku_invalid_or_noncanonical".to_string(),
+        });
+    }
+    validate_canonical_uniaxial_axis(&value.canonical_uniaxial_axis)
+}
+
+fn validate_base_material_values(
+    saturation_magnetisation_a_per_m: f64,
+    exchange_stiffness_j_per_m: f64,
+    saturation_magnetisation_field_a_per_m: Option<&[f64]>,
+    exchange_stiffness_field_j_per_m: Option<&[f64]>,
+) -> Result<(), RunError> {
+    if !saturation_magnetisation_a_per_m.is_finite()
+        || saturation_magnetisation_a_per_m <= 0.0
+    {
+        return Err(RunError {
+            message: "equilibrium_identity_preimage_ms_must_be_finite_and_positive".to_string(),
+        });
+    }
+    if !exchange_stiffness_j_per_m.is_finite() || exchange_stiffness_j_per_m < 0.0 {
+        return Err(RunError {
+            message: "equilibrium_identity_preimage_aex_must_be_finite_and_nonnegative".to_string(),
+        });
+    }
+    if let Some(values) = saturation_magnetisation_field_a_per_m {
+        if values
+            .iter()
+            .any(|value| !value.is_finite() || *value <= 0.0)
+        {
+            return Err(RunError {
+                message:
+                    "equilibrium_identity_preimage_ms_field_must_be_finite_and_positive"
+                        .to_string(),
+            });
+        }
+    }
+    if let Some(values) = exchange_stiffness_field_j_per_m {
+        if values
+            .iter()
+            .any(|value| !value.is_finite() || *value < 0.0)
+        {
+            return Err(RunError {
+                message:
+                    "equilibrium_identity_preimage_aex_field_must_be_finite_and_nonnegative"
+                        .to_string(),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn validate_canonical_uniaxial_axis(axis: &[f64; 3]) -> Result<(), RunError> {
+    if axis.iter().any(|value| !value.is_finite()) {
+        return Err(RunError {
+            message: "equilibrium_identity_preimage_axis_must_be_finite".to_string(),
+        });
+    }
+    if axis
+        .iter()
+        .any(|value| *value == 0.0 && value.is_sign_negative())
+    {
+        return Err(RunError {
+            message: "equilibrium_identity_preimage_axis_has_noncanonical_negative_zero"
+                .to_string(),
+        });
+    }
+    let norm = axis[0].hypot(axis[1]).hypot(axis[2]);
+    if !norm.is_finite() || (norm - 1.0).abs() > 1.0e-12 {
+        return Err(RunError {
+            message: "equilibrium_identity_preimage_axis_must_be_unit_length".to_string(),
+        });
+    }
+    let Some(first_nonzero) = axis.iter().find(|value| **value != 0.0) else {
+        return Err(RunError {
+            message: "equilibrium_identity_preimage_axis_must_be_nonzero".to_string(),
+        });
+    };
+    if *first_nonzero < 0.0 {
+        return Err(RunError {
+            message: "equilibrium_identity_preimage_axis_orientation_is_not_canonical"
+                .to_string(),
+        });
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod material_identity_tests {
     use super::*;
@@ -457,6 +695,83 @@ mod material_identity_tests {
         material.uniaxial_anisotropy = None;
         material.anisotropy_axis = None;
         assert_ne!(original, equilibrium_material_signature_and_preimage(&material).unwrap());
+    }
+
+    #[test]
+    fn replay_accepts_published_v1_and_v2_including_explicit_zero_ku() {
+        let v1 = r#"{"schema_version":"EquilibriumMaterialSignaturePreimage.v1","saturation_magnetisation_a_per_m":800000.0,"exchange_stiffness_j_per_m":1.3e-11,"saturation_magnetisation_field_a_per_m":null,"exchange_stiffness_field_j_per_m":null}"#;
+        let v2 = r#"{"schema_version":"EquilibriumMaterialSignaturePreimage.v2","saturation_magnetisation_a_per_m":800000.0,"exchange_stiffness_j_per_m":1.3e-11,"saturation_magnetisation_field_a_per_m":null,"exchange_stiffness_field_j_per_m":null,"uniaxial_anisotropy_j_per_m3":0.0,"canonical_uniaxial_axis":[0.5547001962252291,0.8320502943378437,0.0]}"#;
+        assert!(replay_equilibrium_material_signature(
+            v1,
+            "sha256:5acf82b569d679296e01d7724e5a2a83fc60ce37d3d711afd535143c4bdad5af",
+        )
+        .is_ok());
+        assert!(replay_equilibrium_material_signature(
+            v2,
+            "sha256:5aff2c9f1fa917b8f55646cdb181e93feb1d2d8052d265d7256da089944e0f1b",
+        )
+        .is_ok());
+        assert_ne!(
+            equilibrium_material_signature_digest_from_preimage(v1).unwrap(),
+            equilibrium_material_signature_digest_from_preimage(v2).unwrap(),
+            "Ku=0 remains in the V2 namespace"
+        );
+    }
+
+    #[test]
+    fn replay_binds_exact_whitespace_and_number_bytes() {
+        let v1 = r#"{"schema_version":"EquilibriumMaterialSignaturePreimage.v1","saturation_magnetisation_a_per_m":800000.0,"exchange_stiffness_j_per_m":1.3e-11,"saturation_magnetisation_field_a_per_m":null,"exchange_stiffness_field_j_per_m":null}"#;
+        let whitespace = format!("{v1} \n");
+        let error = replay_equilibrium_material_signature(
+            &whitespace,
+            "sha256:5acf82b569d679296e01d7724e5a2a83fc60ce37d3d711afd535143c4bdad5af",
+        )
+        .unwrap_err();
+        assert!(error.message.contains("digest_mismatch"));
+        let lexical_mutation = v1.replace("800000.0", "8.0e5");
+        let error = replay_equilibrium_material_signature(
+            &lexical_mutation,
+            "sha256:5acf82b569d679296e01d7724e5a2a83fc60ce37d3d711afd535143c4bdad5af",
+        )
+        .unwrap_err();
+        assert!(error.message.contains("digest_mismatch"));
+    }
+
+    #[test]
+    fn replay_rejects_mixed_schema_unknown_fields_and_invalid_values() {
+        let v1 = r#"{"schema_version":"EquilibriumMaterialSignaturePreimage.v1","saturation_magnetisation_a_per_m":800000.0,"exchange_stiffness_j_per_m":1.3e-11,"saturation_magnetisation_field_a_per_m":null,"exchange_stiffness_field_j_per_m":null}"#;
+        let v2 = r#"{"schema_version":"EquilibriumMaterialSignaturePreimage.v2","saturation_magnetisation_a_per_m":800000.0,"exchange_stiffness_j_per_m":1.3e-11,"saturation_magnetisation_field_a_per_m":null,"exchange_stiffness_field_j_per_m":null,"uniaxial_anisotropy_j_per_m3":0.0,"canonical_uniaxial_axis":[0.5547001962252291,0.8320502943378437,0.0]}"#;
+        let unknown = v1.replace(
+            "}",
+            ",\"uniaxial_anisotropy_j_per_m3\":0.0}",
+        );
+        assert!(equilibrium_material_signature_digest_from_preimage(&unknown).is_err());
+        let duplicate = v1.replace(
+            "\"schema_version\":\"EquilibriumMaterialSignaturePreimage.v1\",",
+            "\"schema_version\":\"EquilibriumMaterialSignaturePreimage.v1\",\"schema_version\":\"EquilibriumMaterialSignaturePreimage.v1\",",
+        );
+        assert!(equilibrium_material_signature_digest_from_preimage(&duplicate).is_err());
+        let mixed_schema = v2.replace(
+            "EquilibriumMaterialSignaturePreimage.v2",
+            "EquilibriumMaterialSignaturePreimage.v1",
+        );
+        assert!(equilibrium_material_signature_digest_from_preimage(&mixed_schema).is_err());
+        let invalid_ms = v1.replace("800000.0", "0.0");
+        assert!(equilibrium_material_signature_digest_from_preimage(&invalid_ms).is_err());
+        let invalid_aex = v1.replace("1.3e-11", "-1.3e-11");
+        assert!(equilibrium_material_signature_digest_from_preimage(&invalid_aex).is_err());
+        let invalid_axis = v2.replace(
+            "0.5547001962252291",
+            "-0.5547001962252291",
+        );
+        assert!(equilibrium_material_signature_digest_from_preimage(&invalid_axis).is_err());
+        let spatial_ms = v2.replace(
+            "\"saturation_magnetisation_field_a_per_m\":null",
+            "\"saturation_magnetisation_field_a_per_m\":[]",
+        );
+        assert!(equilibrium_material_signature_digest_from_preimage(&spatial_ms).is_err());
+        let invalid_nonfinite = v1.replace("800000.0", "NaN");
+        assert!(equilibrium_material_signature_digest_from_preimage(&invalid_nonfinite).is_err());
     }
 
 }

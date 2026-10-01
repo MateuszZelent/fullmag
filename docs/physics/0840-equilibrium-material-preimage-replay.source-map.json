@@ -1,0 +1,133 @@
+{
+  "document": {
+    "path": "docs/physics/0840-equilibrium-material-preimage-replay.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "FDM does not consume the FEM equilibrium material identity artifact."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "FDM does not consume the FEM equilibrium material identity artifact."
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-material-preimage-digest",
+      "symbols": ["N", "p", "p-length", "D"],
+      "sources": ["digest-framing"]
+    }
+  ],
+  "symbols": [
+    {
+      "id": "N",
+      "latex": "N",
+      "meaning": "wersjonowany namespace ramki digestu",
+      "si_unit": "1"
+    },
+    {
+      "id": "p",
+      "latex": "p",
+      "meaning": "dokładne bajty UTF-8 JSON preimage",
+      "si_unit": "1"
+    },
+    {
+      "id": "p-length",
+      "latex": "\\lvert p\\rvert",
+      "meaning": "długość preimage przekazana jako unsigned little-endian",
+      "si_unit": "1"
+    },
+    {
+      "id": "D",
+      "latex": "D",
+      "meaning": "digest SHA-256 tożsamości materiału",
+      "si_unit": "1"
+    },
+    {
+      "id": "Ms",
+      "latex": "M_s",
+      "meaning": "jednorodne nasycenie magnetyczne",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "Aex",
+      "latex": "A_{\\mathrm{ex}}",
+      "meaning": "stała sztywności wymiany",
+      "si_unit": "\\mathrm{J\\,m^{-1}}"
+    },
+    {
+      "id": "Ku",
+      "latex": "K_u",
+      "meaning": "stała pierwszego rzędu anizotropii jednoosiowej",
+      "si_unit": "\\mathrm{J\\,m^{-3}}"
+    },
+    {
+      "id": "axis",
+      "latex": "\\mathbf u",
+      "meaning": "kanoniczna oś jednoosiowa",
+      "si_unit": "1"
+    }
+  ],
+  "sources": [
+    {
+      "id": "digest-framing",
+      "path": "crates/fullmag-runner/src/fem/equilibrium_identity.rs",
+      "symbol": "equilibrium_material_signature_digest_from_preimage",
+      "responsibility": "Wybiera namespace po schema_version, waliduje preimage i hashuję niezmienione bajty UTF-8."
+    },
+    {
+      "id": "replay-helper",
+      "path": "crates/fullmag-runner/src/fem/equilibrium_identity.rs",
+      "symbol": "replay_equilibrium_material_signature",
+      "responsibility": "Porównuje digest odtworzony z dokładnego preimage z oczekiwanym podpisem."
+    },
+    {
+      "id": "v1-decoder",
+      "path": "crates/fullmag-runner/src/fem/equilibrium_identity.rs",
+      "symbol": "EquilibriumMaterialSignaturePreimageV1",
+      "responsibility": "Definiuje historyczny Ku-free payload z odrzucaniem nieznanych pól."
+    },
+    {
+      "id": "v2-decoder",
+      "path": "crates/fullmag-runner/src/fem/equilibrium_identity.rs",
+      "symbol": "EquilibriumMaterialSignatureReplayV2",
+      "responsibility": "Definiuje jawny ścisły decoder V2 dla Ku i canonical axis."
+    },
+    {
+      "id": "v2-validation",
+      "path": "crates/fullmag-runner/src/fem/equilibrium_identity.rs",
+      "symbol": "validate_material_preimage_v2",
+      "responsibility": "Sprawdza uniform Ms, finite Ku i canonical axis, w tym jawne Ku=0."
+    },
+    {
+      "id": "rust-regression",
+      "path": "crates/fullmag-runner/src/fem/equilibrium_identity.rs",
+      "symbol": "replay_accepts_published_v1_and_v2_including_explicit_zero_ku",
+      "responsibility": "Przygotowany test digestów V1/V2 i namespace Ku=0."
+    },
+    {
+      "id": "interpreted-regression",
+      "path": "scripts/test_equilibrium_material_preimage_replay.py",
+      "symbol": "main",
+      "responsibility": "Niezależny oracle Python dla framingu, schematów i mutacji."
+    }
+  ],
+  "public_api": {
+    "parameters": []
+  }
+}
