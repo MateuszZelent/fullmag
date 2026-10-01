@@ -1,6 +1,6 @@
 # Integracja K0 i nonzero-k — konkretna propozycja rozwiązania konfliktów
 
-Stan: użytkownik jawnie zatwierdził konkretną propozycję po review. Zastosowano rozwiązanie siedmiu konfliktów; historyczny merge K0 jest przygotowany do commita i push. Integracja niezacommitowanych pakietów solvera K0 nadal WIP. Automatyczna kontrola odrzuciła wcześniejsze rozwiązanie, a po konkretnej zgodzie dopuściła zapis.
+Stan: użytkownik jawnie zatwierdził konkretną propozycję po review. Zastosowano rozwiązanie siedmiu konfliktów; historyczny merge K0 jest zacommitowany i wypchnięty. Integracja niezacommitowanych pakietów solvera K0 nadal WIP. Automatyczna kontrola odrzuciła wcześniejsze rozwiązanie, a po konkretnej zgodzie dopuściła zapis.
 
 ## Tożsamość
 
@@ -104,3 +104,18 @@ Unikalne przyrosty K0 to przede wszystkim:
 5. **CPU/GPU fixtures.** Przed parity trzeba ujednolicić jawne wejścia fizyczne i siatkowe. Nie wystarczy zachować nazwę i komentarz przykładu.
 
 Wniosek integracyjny: **nonzero-k powinien zachować swoje rozszerzenia wspólnego rdzenia, a K0 dostarczyć wybrane przyrosty jako spójne pakiety: EPS, R4, mesh/Robin i kwalifikacja.** Dowody zachowane dla dawnych snapshotów nie przechodzą automatycznie na wynik integracji. Freeze edycji pozostaje zachowany.
+
+## Checkpoint integracji zapisanej historii
+
+Merge commit `9b14e53757412d91ba5cc955774e228fb71b8cf0` ma rodziców `25d6f3ac6e274df0e3ecd2c095de67eae348834d` i `072758129e169377df274e4e732f81d87570a243`. Push do `origin/codex/eigensolve-dispersion-plan-20260912` zakończył się sukcesem; odczyt `ls-remote` potwierdził pełny hash. Po merge worktree jest czysty, a K0 HEAD jest przodkiem wyniku. Nie oznacza to integracji dirty WIP K0 ani merge do master.
+
+| Pakiet dalszej integracji | Stan | Kryterium zakończenia |
+|---|---|---|
+| Historia K0 i runner cache | ZINTEGROWANE ŹRÓDŁOWO | Merge/push, 72 kontrole Python, review. Nowy runtime jeszcze NOT VERIFIED. |
+| EPS / bounded Krylov / positive nearest-target | Analiza portu w toku | Zachować window4x, cached preconditioner i cancellation; przenieść unikalne bounded dimensions i fail-closed diagnostykę; parser oraz managed runtime-only gate. |
+| R4 / relax→eigen replay | WIP, zakres zidentyfikowany | Spójnie przenieść source/modal identity V2, accepted/recomputed fields i replay; zachować equilibrium v8/linearization v7 oraz Ku raw/canonical i Floquet. |
+| Mesh / Robin / evidence | WIP, zakres zidentyfikowany | Actual open-axis extent, final-mesh evidence, CPU/GPU identyczne jawne wejścia; konwergencja airbox/warstw/siatki. |
+| Walidacja / receipts | WIP | Wersjonowane schematy i niezależny replay bez osłabiania existing nonzero-k validators. |
+| Native Windows runner | Osobny niedokończony zakres | Terminal receipt/ACL/deployment i wykonanie Windows EXE/DLL; nie przypisywać Linux receiptowi dowodu Windows. |
+
+Wspólny solver rozwijany dalej tylko w worktree nonzero-k. Wątek K0 otrzymał informację o tej bazie i polecenie utrzymania freeze, również przy automatycznej kontynuacji. Worktree K0 nadal przechowuje 100 pozycji dirty/untracked; nie wolno go usuwać przed rozliczeniem i integracją unikalnej pracy.
