@@ -1,4 +1,16 @@
-use fullmag_ir::{FieldTimeOriginIR, OutputIR, RegionalFieldDriveIR, TimeDependenceIR};
+use fullmag_ir::{
+    FieldTimeOriginIR, OutputIR, RegionalFieldDriveIR, TimeDependenceIR, TimeStageContextIR,
+};
+
+pub(crate) fn resolved_field_drive_is_active(
+    drive: &RegionalFieldDriveIR,
+    time_stage: &TimeStageContextIR,
+) -> bool {
+    drive.enabled
+        && drive
+            .activation
+            .is_active_for(time_stage.study_kind, time_stage.active_stage_id.as_deref())
+}
 
 #[cfg(test)]
 #[derive(Debug, Clone, PartialEq)]
@@ -27,12 +39,9 @@ fn waveform_event_offsets(waveform: &TimeDependenceIR) -> Vec<f64> {
 
 #[cfg(test)]
 fn drive_active_in_stage(drive: &RegionalFieldDriveIR, stage_id: &str) -> bool {
-    match &drive.activation {
-        fullmag_ir::DriveActivationIR::AllTimeEvolution {} => true,
-        fullmag_ir::DriveActivationIR::StageIds { stage_ids } => {
-            stage_ids.iter().any(|id| id == stage_id)
-        }
-    }
+    drive
+        .activation
+        .is_active_for(fullmag_ir::StudyKindIR::TimeEvolution, Some(stage_id))
 }
 
 #[cfg(test)]
@@ -202,7 +211,7 @@ mod tests {
     use super::*;
     use fullmag_ir::{
         DriveActivationIR, FieldDriveKindIR, FieldSpatialProfileIR, FieldTargetIR,
-        FieldTimeOriginIR, RegionalFieldDriveIR, TimeDependenceIR,
+        FieldTimeOriginIR, RegionalFieldDriveIR, StudyKindIR, TimeDependenceIR,
     };
 
     fn pulse(origin: FieldTimeOriginIR, activation: DriveActivationIR) -> RegionalFieldDriveIR {
@@ -223,6 +232,36 @@ mod tests {
             activation,
             migration: None,
         }
+    }
+
+    #[test]
+    fn resolved_analysis_drive_activation_respects_study_and_stage() {
+        let drive = pulse(
+            FieldTimeOriginIR::Absolute,
+            DriveActivationIR::AllTimeEvolution {},
+        );
+        let mut stage = TimeStageContextIR {
+            active_stage_id: Some("run".into()),
+            start_time_s: 0.0,
+            study_kind: StudyKindIR::Relaxation,
+        };
+        assert!(!resolved_field_drive_is_active(&drive, &stage));
+        stage.study_kind = StudyKindIR::TimeEvolution;
+        assert!(resolved_field_drive_is_active(&drive, &stage));
+
+        let mut explicit = pulse(
+            FieldTimeOriginIR::Absolute,
+            DriveActivationIR::StageIds {
+                stage_ids: vec!["relax".into()],
+            },
+        );
+        explicit.waveform = TimeDependenceIR::Constant;
+        stage.study_kind = StudyKindIR::Relaxation;
+        assert!(!resolved_field_drive_is_active(&explicit, &stage));
+        stage.active_stage_id = Some("relax".into());
+        assert!(resolved_field_drive_is_active(&explicit, &stage));
+        explicit.enabled = false;
+        assert!(!resolved_field_drive_is_active(&explicit, &stage));
     }
 
     #[test]
