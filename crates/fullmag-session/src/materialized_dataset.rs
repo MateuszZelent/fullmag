@@ -281,6 +281,134 @@ pub fn read_materialized_dataset_artifact(
     member_id: &str,
     artifact_id: &str,
 ) -> Result<Option<ResolvedMaterializedDataset>> {
+    let Some(resolved) =
+        resolve_materialized_dataset_metadata(store, containing, member_id, artifact_id, None)?
+    else {
+        return Ok(None);
+    };
+    verify_solution_tensor_payload(store.cas(), &resolved.manifest.field.tensor_artifact)?;
+    Ok(Some(resolved))
+}
+
+/// A bounded read certifies its returned ranges, not the complete field.
+pub struct ResolvedMaterializedDatasetSlice {
+    pub dataset: ResolvedMaterializedDataset,
+    pub field: crate::solution_tensor_field::ResolvedSolutionFieldSlice,
+}
+
+/// The selected immutable manifest or semantic field differs from the request.
+#[derive(Debug)]
+pub struct MaterializedDatasetSliceIdentityMismatch;
+
+impl std::fmt::Display for MaterializedDatasetSliceIdentityMismatch {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("materialized dataset slice identity differs from the pinned request")
+    }
+}
+
+impl std::error::Error for MaterializedDatasetSliceIdentityMismatch {}
+
+/// Read v1 Values bytes through their exact durable owner and existing slice
+/// adapter. No discovery, live topology, state transfer, or solver is involved.
+/// The manifest and tensor metadata are verified, and only touched CAS chunks
+/// are verified during the payload read. Untouched chunks are not certified.
+pub fn read_materialized_dataset_slice(
+    store: &SessionStore,
+    containing: &SolutionSet,
+    member_id: &str,
+    artifact_id: &str,
+    expected_manifest_object_ref: &str,
+    request: &fullmag_quantities::DatasetFieldSliceRequest,
+) -> Result<Option<ResolvedMaterializedDatasetSlice>> {
+    crate::cas::validate_hash(expected_manifest_object_ref)?;
+    request
+        .validate()
+        .context("invalid materialized dataset slice request")?;
+    let Some(dataset) = resolve_materialized_dataset_metadata(
+        store,
+        containing,
+        member_id,
+        artifact_id,
+        Some(expected_manifest_object_ref),
+    )?
+    else {
+        return Ok(None);
+    };
+    let manifest = &dataset.manifest;
+    if request.dataset.dataset_id != manifest.dataset.dataset_id
+        || request.dataset.revision != manifest.dataset.revision
+        || request.sample_id != manifest.field.sample_id
+        || request.item_id != manifest.field.item_id
+        || request.field_id != manifest.field.field_id
+    {
+        return Err(MaterializedDatasetSliceIdentityMismatch.into());
+    }
+    let coverage = &manifest.field.coverage;
+    if request
+        .element_offset
+        .checked_add(request.element_count)
+        .is_none_or(|end| end > coverage.total_elements)
+    {
+        return Err(fullmag_quantities::DatasetSliceError::ElementRangeOutsideField.into());
+    }
+    let bytes_per_value = match coverage.dtype {
+        TensorDtype::F32 => 4_u64,
+        TensorDtype::F64 => 8_u64,
+        _ => bail!("validated materialized dataset has unsupported dtype"),
+    };
+    let payload_bytes = request
+        .element_count
+        .checked_mul(u64::from(coverage.component_count))
+        .and_then(|values| values.checked_mul(bytes_per_value))
+        .context("materialized dataset slice size overflow")?;
+    if payload_bytes > request.max_response_bytes {
+        return Err(fullmag_quantities::DatasetSliceError::ResponseExceedsRequestBudget.into());
+    }
+    let field = crate::solution_tensor_field::read_pinned_solution_field_slice(
+        store,
+        request,
+        std::slice::from_ref(&manifest.field.source),
+    )?;
+    validate_materialized_slice_values(&field.slice)?;
+    Ok(Some(ResolvedMaterializedDatasetSlice { dataset, field }))
+}
+
+fn validate_materialized_slice_values(
+    slice: &crate::dataset_slice_adapter::TensorDatasetSliceRead,
+) -> Result<()> {
+    use fullmag_quantities::{DatasetNumericPrecision, DatasetSliceError};
+    let width = slice.manifest.precision.byte_size() as usize;
+    for (part, bytes) in slice.manifest.parts.iter().zip(&slice.part_bytes) {
+        for (index, scalar) in bytes.chunks_exact(width).enumerate() {
+            let finite = match slice.manifest.precision {
+                DatasetNumericPrecision::F32 => {
+                    f32::from_le_bytes(scalar.try_into().expect("aligned F32 slice part"))
+                        .is_finite()
+                }
+                DatasetNumericPrecision::F64 => {
+                    f64::from_le_bytes(scalar.try_into().expect("aligned F64 slice part"))
+                        .is_finite()
+                }
+            };
+            if !finite {
+                return Err(DatasetSliceError::NonFinitePayloadValue {
+                    plane: part.plane,
+                    value_index: (part.plane_offset_bytes / width as u64) as usize + index,
+                }
+                .into());
+            }
+        }
+    }
+    Ok(())
+}
+
+fn resolve_materialized_dataset_metadata(
+    store: &SessionStore,
+    containing: &SolutionSet,
+    member_id: &str,
+    artifact_id: &str,
+    expected_manifest_object_ref: Option<&str>,
+) -> Result<Option<ResolvedMaterializedDataset>> {
     containing
         .validate()
         .map_err(|error| anyhow::anyhow!(error.to_string()))
@@ -304,6 +432,10 @@ pub fn read_materialized_dataset_artifact(
         || manifest_artifact.schema_id != MATERIALIZED_DATASET_SCHEMA
     {
         bail!("selected materialized dataset artifact has unsupported schema or kind");
+    }
+    if expected_manifest_object_ref.is_some_and(|expected| expected != manifest_artifact.object_ref)
+    {
+        return Err(MaterializedDatasetSliceIdentityMismatch.into());
     }
 
     // Resolve the durable run owner before opening any CAS payload. This
@@ -331,7 +463,7 @@ pub fn read_materialized_dataset_artifact(
     // Source and owner identity are fenced before opening any tensor chunk.
     // A corrupt payload must not hide that the selected historical owner is
     // not the one named by the containing revision.
-    let tensor = verify_solution_tensor_payload(store.cas(), &manifest.field.tensor_artifact)?;
+    let tensor = read_solution_tensor_artifact(store.cas(), &manifest.field.tensor_artifact)?;
     validate_materialized_dataset_tensor(&manifest, &tensor)?;
 
     Ok(Some(ResolvedMaterializedDataset {
@@ -1190,6 +1322,10 @@ mod tests {
     }
 
     fn reader_fixture(historical_owner: bool) -> ReaderFixture {
+        reader_fixture_with_chunks(historical_owner, false)
+    }
+
+    fn reader_fixture_with_chunks(historical_owner: bool, split_chunks: bool) -> ReaderFixture {
         let directory = tempfile::tempdir().expect("temporary materialized dataset store");
         let store = SessionStore::open(directory.path().join("store")).expect("open store");
         let intent = FmsRunIntent::new(
@@ -1211,7 +1347,22 @@ mod tests {
             .cas()
             .put(&vec![0_u8; 48])
             .expect("publish tensor payload chunk");
-        let descriptor = tensor_descriptor_for_store(&chunk_ref);
+        let mut descriptor = tensor_descriptor_for_store(&chunk_ref);
+        if split_chunks {
+            descriptor.chunks = [vec![0_u8; 24], vec![1_u8; 24]]
+                .iter()
+                .enumerate()
+                .map(|(index, bytes)| {
+                    let object_ref = store.cas().put(bytes).expect("publish independent chunk");
+                    TensorChunk {
+                        object_ref: object_ref.clone(),
+                        offset: index * 24,
+                        length: 24,
+                        sha256: Some(object_ref),
+                    }
+                })
+                .collect();
+        }
         let descriptor_bytes = serde_json::to_vec(&descriptor).expect("serialize tensor root");
         let tensor_object_ref = store
             .cas()
@@ -1256,6 +1407,193 @@ mod tests {
             store,
             containing,
             manifest_artifact_id: manifest_artifact.artifact_id,
+        }
+    }
+
+    fn slice_request_for_fixture() -> fullmag_quantities::DatasetFieldSliceRequest {
+        fullmag_quantities::DatasetFieldSliceRequest {
+            schema_version: fullmag_quantities::DATASET_SLICE_SCHEMA_VERSION.to_string(),
+            dataset: MaterializedDatasetRef {
+                dataset_id: "dataset:test".to_string(),
+                revision: 1,
+            },
+            sample_id: "sample".to_string(),
+            item_id: "item".to_string(),
+            field_id: "field:m".to_string(),
+            element_offset: 0,
+            element_count: 1,
+            max_response_bytes: 24,
+        }
+    }
+
+    fn fixture_manifest_ref(fixture: &ReaderFixture) -> &str {
+        &fixture.containing.members[0]
+            .artifacts
+            .iter()
+            .find(|artifact| artifact.artifact_id == fixture.manifest_artifact_id)
+            .expect("fixture manifest artifact")
+            .object_ref
+    }
+
+    #[test]
+    fn bounded_slice_preserves_current_and_historical_owners() {
+        for historical in [false, true] {
+            let fixture = reader_fixture(historical);
+            let request = slice_request_for_fixture();
+            let resolved = read_materialized_dataset_slice(
+                &fixture.store,
+                &fixture.containing,
+                "member",
+                &fixture.manifest_artifact_id,
+                fixture_manifest_ref(&fixture),
+                &request,
+            )
+            .expect("bounded dataset read")
+            .expect("fixture dataset");
+            assert_eq!(resolved.dataset.owner.revision, 1);
+            assert_eq!(
+                resolved.dataset.containing_solution_revision,
+                if historical { 2 } else { 1 }
+            );
+            assert_eq!(resolved.field.slice.manifest.payload_bytes, 24);
+            assert_eq!(resolved.field.slice.part_bytes.concat(), vec![0_u8; 24]);
+            resolved
+                .field
+                .slice
+                .manifest
+                .validate_for_request(&request)
+                .expect("exact response identity");
+        }
+    }
+
+    #[test]
+    fn bounded_slice_fences_manifest_and_semantic_identity() {
+        let fixture = reader_fixture(false);
+        let request = slice_request_for_fixture();
+        let error = read_materialized_dataset_slice(
+            &fixture.store,
+            &fixture.containing,
+            "member",
+            &fixture.manifest_artifact_id,
+            &"f".repeat(64),
+            &request,
+        )
+        .err()
+        .expect("wrong manifest must fail");
+        assert!(error.is::<MaterializedDatasetSliceIdentityMismatch>());
+        let mut wrong_field = request;
+        wrong_field.field_id = "another-field".to_string();
+        let error = read_materialized_dataset_slice(
+            &fixture.store,
+            &fixture.containing,
+            "member",
+            &fixture.manifest_artifact_id,
+            fixture_manifest_ref(&fixture),
+            &wrong_field,
+        )
+        .err()
+        .expect("wrong field must fail");
+        assert!(error.is::<MaterializedDatasetSliceIdentityMismatch>());
+    }
+
+    #[test]
+    fn bounded_slice_rejects_budget_and_outside_field_range() {
+        let fixture = reader_fixture(false);
+        for request in [
+            fullmag_quantities::DatasetFieldSliceRequest {
+                max_response_bytes: 23,
+                ..slice_request_for_fixture()
+            },
+            fullmag_quantities::DatasetFieldSliceRequest {
+                element_offset: 2,
+                ..slice_request_for_fixture()
+            },
+        ] {
+            let error = read_materialized_dataset_slice(
+                &fixture.store,
+                &fixture.containing,
+                "member",
+                &fixture.manifest_artifact_id,
+                fixture_manifest_ref(&fixture),
+                &request,
+            )
+            .err()
+            .expect("invalid bounded request must fail");
+            assert!(error.is::<fullmag_quantities::DatasetSliceError>());
+        }
+    }
+
+    #[test]
+    fn bounded_slice_verifies_touched_chunks_without_certifying_unread_chunks() {
+        let fixture = reader_fixture_with_chunks(false, true);
+        let unread_ref = fixture
+            .store
+            .cas()
+            .put(&vec![1_u8; 24])
+            .expect("existing second chunk");
+        std::fs::write(
+            fixture
+                .store
+                .root()
+                .join("objects/sha256")
+                .join(&unread_ref),
+            vec![9_u8; 24],
+        )
+        .expect("corrupt isolated fixture chunk after publication");
+        let request = slice_request_for_fixture();
+        let resolved = read_materialized_dataset_slice(
+            &fixture.store,
+            &fixture.containing,
+            "member",
+            &fixture.manifest_artifact_id,
+            fixture_manifest_ref(&fixture),
+            &request,
+        )
+        .expect("untouched corruption is outside this read")
+        .expect("fixture dataset");
+        assert_eq!(resolved.field.slice.part_bytes.concat(), vec![0_u8; 24]);
+        assert!(read_materialized_dataset_artifact(
+            &fixture.store,
+            &fixture.containing,
+            "member",
+            &fixture.manifest_artifact_id,
+        )
+        .is_err());
+        let touched = fullmag_quantities::DatasetFieldSliceRequest {
+            element_offset: 1,
+            ..request
+        };
+        assert!(read_materialized_dataset_slice(
+            &fixture.store,
+            &fixture.containing,
+            "member",
+            &fixture.manifest_artifact_id,
+            fixture_manifest_ref(&fixture),
+            &touched,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn bounded_slice_numeric_validation_rejects_nonfinite_values() {
+        let fixture = reader_fixture(false);
+        let mut resolved = read_materialized_dataset_slice(
+            &fixture.store,
+            &fixture.containing,
+            "member",
+            &fixture.manifest_artifact_id,
+            fixture_manifest_ref(&fixture),
+            &slice_request_for_fixture(),
+        )
+        .expect("valid bounded read")
+        .expect("fixture dataset");
+        for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            resolved.field.slice.part_bytes[0][0..8].copy_from_slice(&value.to_le_bytes());
+            let error = validate_materialized_slice_values(&resolved.field.slice).unwrap_err();
+            assert!(matches!(
+                error.downcast_ref::<fullmag_quantities::DatasetSliceError>(),
+                Some(fullmag_quantities::DatasetSliceError::NonFinitePayloadValue { .. })
+            ));
         }
     }
 

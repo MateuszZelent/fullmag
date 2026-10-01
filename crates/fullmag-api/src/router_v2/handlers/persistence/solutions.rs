@@ -1,11 +1,17 @@
 //! Read-only project-owned historical results, independent of active runtime.
+use crate::schemas::materialized_dataset_slice::{
+    MaterializedDatasetSliceBinaryBody, MaterializedDatasetSliceEnvelopeResource,
+    MaterializedDatasetSliceQuery, MAX_SLICE_ENVELOPE_METADATA_BYTES,
+};
 use crate::{
     error::ApiError,
     schemas::{materialized_dataset::MaterializedDatasetResource, solutions::*},
     types::AppState,
 };
 use axum::{
+    body::Body,
     extract::{Path, Query, State},
+    http::{header, Response},
     Json,
 };
 use base64::Engine;
@@ -301,6 +307,146 @@ pub async fn get_materialized_dataset(
     .await
 }
 
+#[utoipa::path(get,
+    path = "/v2/persistence/projects/{project_id}/runs/{run_id}/solution-sets/{solution_set_id}/revisions/{revision}/members/{member_id}/artifacts/{artifact_id}/materialized-dataset/slice",
+    params(("project_id" = String, Path), ("run_id" = String, Path), ("solution_set_id" = String, Path), ("revision" = String, Path, description = "Canonical positive decimal u64"), ("member_id" = String, Path), ("artifact_id" = String, Path), MaterializedDatasetSliceQuery),
+    responses((status = 200, body = inline(MaterializedDatasetSliceBinaryBody), content_type = "application/octet-stream", description = "FMDS v1: 12-byte header, bounded JSON MaterializedDatasetSliceEnvelopeResource, then exact raw part bytes"), (status = 400, description = "Invalid identity, canonical counters, bounds or budget"), (status = 404, description = "Missing accepted run, revision, member or artifact"), (status = 409, description = "Pinned manifest, dataset or ownership mismatch"), (status = 422, description = "Requested slice metadata exceeds the 1 MiB envelope budget"), (status = 500, description = "Corrupt, nonfinite or unsupported persisted field")), tag = "persistence")]
+pub async fn get_materialized_dataset_slice(
+    State(state): State<Arc<AppState>>,
+    Path((project_id, run_id, solution_id, revision, member_id, artifact_id)): Path<(
+        String,
+        String,
+        String,
+        String,
+        String,
+        String,
+    )>,
+    Query(query): Query<MaterializedDatasetSliceQuery>,
+) -> Result<Response<Body>, ApiError> {
+    validate_lookup_id(&member_id, "member")?;
+    validate_lookup_id(&artifact_id, "artifact")?;
+    if !fullmag_quantities::is_canonical_sha256(&format!(
+        "sha256:{}",
+        query.expected_manifest_object_ref
+    )) {
+        return Err(ApiError::bad_request(
+            "expected manifest object ref must be a bare lowercase SHA-256 hash",
+        ));
+    }
+    let request = slice_request(&query)?;
+    let body = with_revision_value(
+        state, project_id.clone(), run_id, solution_id, revision,
+        move |store, solution| {
+            let resolved = fullmag_session::materialized_dataset::read_materialized_dataset_slice(
+                store, &solution, &member_id, &artifact_id,
+                &query.expected_manifest_object_ref, &request,
+            ).map_err(|error| {
+                if error.is::<fullmag_session::materialized_dataset::MaterializedDatasetSliceIdentityMismatch>() {
+                    ApiError::conflict(error.to_string())
+                } else if let Some(slice_error) = error.downcast_ref::<fullmag_quantities::DatasetSliceError>() {
+                    if matches!(slice_error, fullmag_quantities::DatasetSliceError::NonFinitePayloadValue { .. }) {
+                        ApiError::internal(error.to_string())
+                    } else {
+                        ApiError::bad_request(error.to_string())
+                    }
+                } else {
+                    ApiError::internal(error.to_string())
+                }
+            })?.ok_or_else(|| ApiError::not_found("materialized dataset artifact is missing"))?;
+            encode_materialized_dataset_slice(project_id, resolved)
+        },
+    ).await?;
+    Response::builder()
+        .header(header::CONTENT_TYPE, "application/octet-stream")
+        .header(header::CACHE_CONTROL, "private, no-store")
+        .header(header::CONTENT_LENGTH, body.len().to_string())
+        .body(Body::from(body))
+        .map_err(|error| ApiError::internal(error.to_string()))
+}
+
+fn slice_request(
+    query: &MaterializedDatasetSliceQuery,
+) -> Result<fullmag_quantities::DatasetFieldSliceRequest, ApiError> {
+    let request = fullmag_quantities::DatasetFieldSliceRequest {
+        schema_version: query.schema_version.clone(),
+        dataset: fullmag_quantities::MaterializedDatasetRef {
+            dataset_id: query.dataset_id.clone(),
+            revision: parse_revision(&query.dataset_revision)?,
+        },
+        sample_id: query.sample_id.clone(),
+        item_id: query.item_id.clone(),
+        field_id: query.field_id.clone(),
+        element_offset: parse_slice_counter(&query.element_offset)?,
+        element_count: parse_slice_counter(&query.element_count)?,
+        max_response_bytes: parse_slice_counter(&query.max_response_bytes)?,
+    };
+    for (kind, value) in [
+        ("dataset", &request.dataset.dataset_id),
+        ("sample", &request.sample_id),
+        ("item", &request.item_id),
+        ("field", &request.field_id),
+    ] {
+        validate_lookup_id(value, kind)?;
+    }
+    request
+        .validate()
+        .map_err(|error| ApiError::bad_request(error.to_string()))?;
+    Ok(request)
+}
+
+fn parse_slice_counter(value: &str) -> Result<u64, ApiError> {
+    let counter = value
+        .parse::<u64>()
+        .map_err(|_| ApiError::bad_request("slice counters must be canonical decimal u64"))?;
+    if counter.to_string() != value {
+        return Err(ApiError::bad_request(
+            "slice counters must be canonical decimal u64",
+        ));
+    }
+    Ok(counter)
+}
+
+fn encode_materialized_dataset_slice(
+    project_id: String,
+    resolved: fullmag_session::materialized_dataset::ResolvedMaterializedDatasetSlice,
+) -> Result<Vec<u8>, ApiError> {
+    let metadata = serialize_slice_metadata(
+        &MaterializedDatasetSliceEnvelopeResource::from_resolved(project_id, &resolved),
+    )?;
+    let payload_len = usize::try_from(resolved.field.slice.manifest.payload_bytes)
+        .map_err(|error| ApiError::internal(error.to_string()))?;
+    let total = 12_usize
+        .checked_add(metadata.len())
+        .and_then(|length| length.checked_add(payload_len))
+        .ok_or_else(|| ApiError::internal("dataset slice envelope length overflow"))?;
+    let mut body = Vec::with_capacity(total);
+    body.extend_from_slice(b"FMDS");
+    body.extend_from_slice(&1_u16.to_le_bytes());
+    body.extend_from_slice(&0_u16.to_le_bytes());
+    body.extend_from_slice(&(metadata.len() as u32).to_le_bytes());
+    body.extend_from_slice(&metadata);
+    for part in resolved.field.slice.part_bytes {
+        body.extend_from_slice(&part);
+    }
+    if body.len() != total {
+        return Err(ApiError::internal(
+            "dataset slice payload differs from declared byte length",
+        ));
+    }
+    Ok(body)
+}
+
+fn serialize_slice_metadata<T: Serialize>(value: &T) -> Result<Vec<u8>, ApiError> {
+    let metadata =
+        serde_json::to_vec(value).map_err(|error| ApiError::internal(error.to_string()))?;
+    if metadata.len() > MAX_SLICE_ENVELOPE_METADATA_BYTES {
+        return Err(ApiError::unprocessable(
+            "DATASET_SLICE_METADATA_BYTE_LIMIT: requested slice metadata exceeds 1 MiB; request fewer elements or use a supported descriptor",
+        ));
+    }
+    Ok(metadata)
+}
+
 async fn with_revision<T: Serialize + Send + 'static>(
     state: Arc<AppState>,
     project: String,
@@ -311,10 +457,23 @@ async fn with_revision<T: Serialize + Send + 'static>(
         + Send
         + 'static,
 ) -> Result<Json<T>, ApiError> {
+    bounded_json(with_revision_value(state, project, run, solution_id, revision, build).await?)
+}
+
+async fn with_revision_value<T: Send + 'static>(
+    state: Arc<AppState>,
+    project: String,
+    run: String,
+    solution_id: String,
+    revision: String,
+    build: impl FnOnce(&fullmag_session::SessionStore, SolutionSet) -> Result<T, ApiError>
+        + Send
+        + 'static,
+) -> Result<T, ApiError> {
     validate_solution_id(&solution_id)?;
     let revision = parse_revision(&revision)?;
     let expected_run_id = run.clone();
-    with_verified_run(state, project, run, move |store, run_spec_digest| {
+    with_verified_run_value(state, project, run, move |store, run_spec_digest| {
         let solution = store
             .solution_sets()
             .read_revision(&solution_id, revision)
@@ -332,6 +491,15 @@ async fn with_verified_run<T: Serialize + Send + 'static>(
     run: String,
     build: impl FnOnce(&fullmag_session::SessionStore, &str) -> Result<T, ApiError> + Send + 'static,
 ) -> Result<Json<T>, ApiError> {
+    bounded_json(with_verified_run_value(state, project, run, build).await?)
+}
+
+async fn with_verified_run_value<T: Send + 'static>(
+    state: Arc<AppState>,
+    project: String,
+    run: String,
+    build: impl FnOnce(&fullmag_session::SessionStore, &str) -> Result<T, ApiError> + Send + 'static,
+) -> Result<T, ApiError> {
     let project =
         ProjectId::parse(project).map_err(|error| ApiError::bad_request(error.to_string()))?;
     let run = RunId::parse(run).map_err(|error| ApiError::bad_request(error.to_string()))?;
@@ -368,7 +536,7 @@ async fn with_verified_run<T: Serialize + Send + 'static>(
                 "durable run identity or fingerprint is inconsistent",
             ));
         }
-        bounded_json(build(&store, &intent.payload_sha256)?)
+        build(&store, &intent.payload_sha256)
     })
     .await
     .map_err(|error| ApiError::internal(format!("solution read task failed: {error}")))?
@@ -562,6 +730,69 @@ fn member_resource(member: &SolutionMember) -> SolutionSetMemberResource {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dataset_slice_counters_preserve_u64_without_accepting_noncanonical_input() {
+        assert_eq!(parse_slice_counter("0").unwrap(), 0);
+        assert_eq!(
+            parse_slice_counter("9007199254740993").unwrap(),
+            9007199254740993
+        );
+        assert_eq!(
+            parse_slice_counter("18446744073709551615").unwrap(),
+            u64::MAX
+        );
+        for value in ["01", "+1", "-1", " 1", "1.0", "18446744073709551616"] {
+            assert_eq!(
+                parse_slice_counter(value).unwrap_err().status,
+                axum::http::StatusCode::BAD_REQUEST
+            );
+        }
+    }
+
+    #[test]
+    fn dataset_slice_query_rejects_unknown_fields_and_zero_budget() {
+        let mut query = serde_json::json!({
+            "schema_version": "1.0.0", "dataset_id": "dataset", "dataset_revision": "1",
+            "sample_id": "sample", "item_id": "item", "field_id": "field",
+            "expected_manifest_object_ref": "a".repeat(64), "element_offset": "0", "element_count": "1", "max_response_bytes": "8",
+        });
+        let parsed: MaterializedDatasetSliceQuery = serde_json::from_value(query.clone()).unwrap();
+        assert!(slice_request(&parsed).is_ok());
+        query["max_response_bytes"] = serde_json::json!("0");
+        let parsed: MaterializedDatasetSliceQuery = serde_json::from_value(query.clone()).unwrap();
+        assert_eq!(
+            slice_request(&parsed).unwrap_err().status,
+            axum::http::StatusCode::BAD_REQUEST
+        );
+        query["unscoped_source"] = serde_json::json!("current");
+        assert!(serde_json::from_value::<MaterializedDatasetSliceQuery>(query).is_err());
+    }
+
+    #[test]
+    fn legal_fragmented_slice_exceeding_http_metadata_budget_is_not_storage_corruption() {
+        use crate::schemas::materialized_dataset_slice::{
+            MaterializedDatasetSliceByteOrderResource, MaterializedDatasetSliceManifestResource,
+            MaterializedDatasetSlicePartResource, MaterializedDatasetSlicePrecisionResource,
+        };
+        let value = MaterializedDatasetSliceManifestResource {
+            schema_version: "1.0.0".to_string(), dataset_id: "dataset".to_string(), dataset_revision: "1".to_string(),
+            sample_id: "sample".to_string(), item_id: "item".to_string(), field_id: "field".to_string(),
+            field_layout_digest: format!("sha256:{}", "a".repeat(64)), element_offset: "0".to_string(),
+            element_count: "4096".to_string(), total_elements: "4096".to_string(), component_count: "1".to_string(),
+            precision: MaterializedDatasetSlicePrecisionResource::F64,
+            byte_order: MaterializedDatasetSliceByteOrderResource::LittleEndian, payload_bytes: "32768".to_string(),
+            parts: (0..4096).map(|index| MaterializedDatasetSlicePartResource {
+                plane: crate::schemas::materialized_dataset::MaterializedDatasetPlaneResource::Values,
+                object_ref: "a".repeat(64), object_offset_bytes: "0".to_string(),
+                plane_offset_bytes: (index * 8).to_string(), byte_length: "8".to_string(),
+                range_sha256: format!("sha256:{}", "b".repeat(64)),
+            }).collect(),
+        };
+        let error = serialize_slice_metadata(&value).unwrap_err();
+        assert_eq!(error.status, axum::http::StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(error.message.contains("DATASET_SLICE_METADATA_BYTE_LIMIT"));
+    }
     #[test]
     fn invalid_logical_identity_is_bad_request_without_storage_access() {
         for value in ["", " ", "solution:\n", "solution:\u{0085}"] {

@@ -187,6 +187,7 @@ import {
   PERSISTENCE_PROJECT_OPEN_PATH,
   PERSISTENCE_PROJECTS_PATH,
   PROJECT_MATERIALIZED_DATASET_PATH,
+  PROJECT_MATERIALIZED_DATASET_SLICE_PATH,
   PROJECT_SOLUTION_SET_ARTIFACTS_PATH,
   PROJECT_SOLUTION_SET_MEMBERS_PATH,
   PROJECT_SOLUTION_SET_PATH,
@@ -668,6 +669,12 @@ import { decodeCrossSection } from "./codecs/crossSectionCodec";
 import { decodeCrossSectionQuality } from "./codecs/crossSectionQualityCodec";
 import { decodeFieldVector } from "./codecs/fieldVectorCodec";
 import { decodeMeshQualityData } from "./codecs/meshQualityDataCodec";
+import { boundedBinaryResponse } from "./boundedBinaryResponse";
+import {
+  decodeMaterializedDatasetSlice,
+  materializedDatasetSliceByteLimit,
+  type MaterializedDatasetSliceRange,
+} from "./codecs/materializedDatasetSliceCodec";
 import { decodePeriodicPairs } from "./codecs/periodicPairsCodec";
 import { decodeTableRows } from "./codecs/tableRowsCodec";
 import {
@@ -2915,6 +2922,40 @@ export class ControlRoomApi {
             },
           },
         ),
+      materializedDatasetSlice: async (
+        dataset: MaterializedDatasetResource,
+        range: MaterializedDatasetSliceRange,
+        options?: RequestOptions,
+      ) => {
+        const result = await this.requestBinaryBytes(
+          PROJECT_MATERIALIZED_DATASET_SLICE_PATH,
+          { signal: options?.signal, maxResponseBytes: materializedDatasetSliceByteLimit(range) },
+          {
+            project_id: assertSolutionSetProjectId(dataset.project_id),
+            run_id: assertSolutionSetRunId(dataset.run_id),
+            solution_set_id: assertSolutionSetLogicalId(dataset.solution_set_id),
+            revision: assertSolutionSetRevision(dataset.containing_solution_revision),
+            member_id: assertMaterializedDatasetPathId("member id", dataset.member_id),
+            artifact_id: assertMaterializedDatasetPathId("artifact id", dataset.artifact_id),
+          },
+          {
+            schema_version: "1.0.0",
+            dataset_id: dataset.dataset.dataset_id,
+            dataset_revision: assertSolutionSetRevision(dataset.dataset.revision),
+            sample_id: dataset.sample_id,
+            item_id: dataset.item_id,
+            field_id: dataset.field_id,
+            expected_manifest_object_ref: dataset.manifest_object_ref,
+            element_offset: range.elementOffset,
+            element_count: range.elementCount,
+            max_response_bytes: range.maxResponseBytes,
+          },
+        );
+        if (result.status !== "ready") {
+          throw new ControlRoomApiError("Expected a complete pinned dataset slice response", 0);
+        }
+        return decodeMaterializedDatasetSlice(result.data, dataset, range, options?.signal);
+      },
       create: (request: ProjectCreateRequest, options?: RequestOptions) =>
         this.postJson<ProjectDocumentResource, ProjectCreateRequest>(
           PERSISTENCE_PROJECTS_PATH,
@@ -3915,7 +3956,7 @@ export class ControlRoomApi {
                   );
                   const resp = await this.executeBinaryOpenApiFetch(input, init);
                   requestState.lastResponse = resp;
-                  return resp;
+                  return boundedBinaryResponse(resp, options.maxResponseBytes);
                 },
                 headers,
                 params: { path: pathParams, query },

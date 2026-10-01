@@ -1117,3 +1117,47 @@ powstaje wyłącznie po jawnym Save/Save As/Export; import waliduje kandydacki
 runtime i wykonuje jeden atomowy swap albo nie zmienia aktywnej sesji. Task 0
 nie zmienia OpenAPI ani generowanych typów/transportu: opisuje obowiązek
 późniejszej implementacji, więc żadna runtime capability nie jest promowana.
+
+## Fragmenty trwałych pól MaterializedDataset
+
+`GET /v2/persistence/projects/{project_id}/runs/{run_id}/solution-sets/{solution_set_id}/revisions/{revision}/members/{member_id}/artifacts/{artifact_id}/materialized-dataset/slice`
+czyta wyłącznie istniejący, przypięty wynik. Nie zależy od `sessions/current`
+i nie uruchamia materializacji, solvera ani mutacji projektu.
+
+Query wymaga `schema_version=1.0.0`, `dataset_id`, `dataset_revision`,
+`sample_id`, `item_id`, `field_id`, `expected_manifest_object_ref`,
+`element_offset`, `element_count` i `max_response_bytes`. Rewizje i liczniki
+są kanonicznymi stringami u64; offset może być zerem, count i budżet muszą być
+dodatnie. Limit count to 8 Mi elementów, limit payloadu to 64 MiB. Oczekiwany
+manifest jest bare lowercase SHA-256. Scope projektu/runu jest sprawdzany
+przez durable RunIntent/RunSpec, następnie dokładny SolutionSet i manifest.
+Nie ma wyszukiwania „latest”, aliasu current, automatycznego retry compute
+ani translacji indeksów. Nieobsługiwany lub uszkodzony rekord daje błąd.
+
+Body `application/octet-stream` używa FMDS v1: magic `FMDS`, u16 LE version=1,
+u16 LE flags=0, u32 LE metadata length; dalej JSON
+`MaterializedDatasetSliceEnvelopeResource` do 1 MiB i raw part bytes.
+Descriptor przenosi jednostki i całą semantykę pola; `slice.parts` określa
+kolejność bytes, pozycje CAS, względne offsety płaszczyzny i range SHA-256.
+Wszystkie u64 metadata pozostają stringami. Całe body może przekroczyć
+payload budget wyłącznie o metadata i 12-bajtowy header. Klient kontroluje
+budżet podczas odczytu body, potem exact source/descriptor, długość, kompletność
+zakresów i checksumy przed udostępnieniem wartości.
+Jeżeli legalna liczba chunków albo descriptor powodują metadata większe niż
+1 MiB, odpowiedź ma HTTP 422 `DATASET_SLICE_METADATA_BYTE_LIMIT`; mniejszy
+wycinek może zmieścić się w kontrakcie. Nie oznacza to uszkodzonego manifestu.
+Backend i klient odrzucają NaN/Infinity również przy prawidłowym checksum.
+
+`integrity=verified_returned_ranges` obejmuje metadane i dotknięte obiekty CAS,
+nie całe pole ani naukową kwalifikację. Sprawdzenie hasha może wymagać odczytu
+całego dotkniętego chunku. Istniejący metadata endpoint nadal weryfikuje pełny
+payload; nowy slice nie osłabia tego kontraktu. Brakujące, uszkodzone lub
+niezgodne dane nie są zastępowane zerami. Cache-Control to `private, no-store`;
+etag/HTTP Range nie należą do tego przyrostu.
+
+Manifest v1 dopuszcza wyłącznie rzeczywiste `Values`, little-endian F32/F64.
+Pary real/imag wymagają nowego jawnego manifestu plane sources. Geometria i
+mapowanie indeksów także wymagają przypiętych artefaktów; bieżąca topologia
+sesji nie jest zamiennikiem. Bounded transport nie oznacza jeszcze montowanego
+resource hooka lub renderera w workspace. Decyzję i dalsze bramki opisuje
+[ADR 0040](../adr/0040-bounded-materialized-dataset-binary-slices.md).

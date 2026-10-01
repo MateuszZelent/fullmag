@@ -17057,6 +17057,187 @@
         ],
         "type": "object"
       },
+      "MaterializedDatasetSliceByteOrderResource": {
+        "enum": [
+          "little_endian"
+        ],
+        "type": "string"
+      },
+      "MaterializedDatasetSliceEnvelopeResource": {
+        "properties": {
+          "artifact_id": {
+            "type": "string"
+          },
+          "containing_solution_revision": {
+            "type": "string"
+          },
+          "descriptor": {
+            "$ref": "#/components/schemas/MaterializedDatasetFieldDescriptorResource",
+            "description": "Complete quantity, units, layout, support and complex semantics."
+          },
+          "integrity": {
+            "$ref": "#/components/schemas/MaterializedDatasetSliceIntegrityResource"
+          },
+          "manifest_byte_length": {
+            "type": "string"
+          },
+          "manifest_object_ref": {
+            "type": "string"
+          },
+          "member_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "slice": {
+            "$ref": "#/components/schemas/MaterializedDatasetSliceManifestResource"
+          },
+          "solution_set_id": {
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/MaterializedDatasetPinnedSourceResource"
+          }
+        },
+        "required": [
+          "schema_version",
+          "project_id",
+          "run_id",
+          "solution_set_id",
+          "containing_solution_revision",
+          "member_id",
+          "artifact_id",
+          "manifest_object_ref",
+          "manifest_byte_length",
+          "integrity",
+          "source",
+          "descriptor",
+          "slice"
+        ],
+        "type": "object"
+      },
+      "MaterializedDatasetSliceIntegrityResource": {
+        "enum": [
+          "verified_returned_ranges"
+        ],
+        "type": "string"
+      },
+      "MaterializedDatasetSliceManifestResource": {
+        "properties": {
+          "byte_order": {
+            "$ref": "#/components/schemas/MaterializedDatasetSliceByteOrderResource"
+          },
+          "component_count": {
+            "type": "string"
+          },
+          "dataset_id": {
+            "type": "string"
+          },
+          "dataset_revision": {
+            "type": "string"
+          },
+          "element_count": {
+            "type": "string"
+          },
+          "element_offset": {
+            "type": "string"
+          },
+          "field_id": {
+            "type": "string"
+          },
+          "field_layout_digest": {
+            "type": "string"
+          },
+          "item_id": {
+            "type": "string"
+          },
+          "parts": {
+            "description": "Body ranges follow this order. Plane offsets are relative to this slice.",
+            "items": {
+              "$ref": "#/components/schemas/MaterializedDatasetSlicePartResource"
+            },
+            "type": "array"
+          },
+          "payload_bytes": {
+            "type": "string"
+          },
+          "precision": {
+            "$ref": "#/components/schemas/MaterializedDatasetSlicePrecisionResource"
+          },
+          "sample_id": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "total_elements": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "dataset_id",
+          "dataset_revision",
+          "sample_id",
+          "item_id",
+          "field_id",
+          "field_layout_digest",
+          "element_offset",
+          "element_count",
+          "total_elements",
+          "component_count",
+          "precision",
+          "byte_order",
+          "payload_bytes",
+          "parts"
+        ],
+        "type": "object"
+      },
+      "MaterializedDatasetSlicePartResource": {
+        "properties": {
+          "byte_length": {
+            "type": "string"
+          },
+          "object_offset_bytes": {
+            "type": "string"
+          },
+          "object_ref": {
+            "type": "string"
+          },
+          "plane": {
+            "$ref": "#/components/schemas/MaterializedDatasetPlaneResource"
+          },
+          "plane_offset_bytes": {
+            "type": "string"
+          },
+          "range_sha256": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "plane",
+          "object_ref",
+          "object_offset_bytes",
+          "plane_offset_bytes",
+          "byte_length",
+          "range_sha256"
+        ],
+        "type": "object"
+      },
+      "MaterializedDatasetSlicePrecisionResource": {
+        "enum": [
+          "f32",
+          "f64"
+        ],
+        "type": "string"
+      },
       "MaterializedDatasetStatusResource": {
         "properties": {
           "actions": {
@@ -38828,6 +39009,176 @@
           },
           "500": {
             "description": "Invalid or oversized manifest"
+          }
+        },
+        "tags": [
+          "persistence"
+        ]
+      }
+    },
+    "/v2/persistence/projects/{project_id}/runs/{run_id}/solution-sets/{solution_set_id}/revisions/{revision}/members/{member_id}/artifacts/{artifact_id}/materialized-dataset/slice": {
+      "get": {
+        "operationId": "persistence_get_persistence_projects_project_id_runs_run_id_solution_sets_solution_set_id_revisions_revision_members_member_id_artifacts_artifact_id_materialized_dataset_slice",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "solution_set_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Canonical positive decimal u64",
+            "in": "path",
+            "name": "revision",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "member_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "artifact_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "schema_version",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "dataset_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "dataset_revision",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sample_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "item_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "field_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Bare lowercase SHA-256 CAS hash of the selected manifest.",
+            "in": "query",
+            "name": "expected_manifest_object_ref",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "element_offset",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "element_count",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Payload budget only; FMDS header and metadata add at most 1 MiB + 12 B.",
+            "in": "query",
+            "name": "max_response_bytes",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "description": "OpenAPI representation only; the handler returns raw FMDS bytes.",
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "FMDS v1: 12-byte header, bounded JSON MaterializedDatasetSliceEnvelopeResource, then exact raw part bytes"
+          },
+          "400": {
+            "description": "Invalid identity, canonical counters, bounds or budget"
+          },
+          "404": {
+            "description": "Missing accepted run, revision, member or artifact"
+          },
+          "409": {
+            "description": "Pinned manifest, dataset or ownership mismatch"
+          },
+          "422": {
+            "description": "Requested slice metadata exceeds the 1 MiB envelope budget"
+          },
+          "500": {
+            "description": "Corrupt, nonfinite or unsupported persisted field"
           }
         },
         "tags": [

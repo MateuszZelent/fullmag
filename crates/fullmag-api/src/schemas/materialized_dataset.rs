@@ -682,7 +682,7 @@ fn accepted_state_resource(
     }
 }
 
-fn pinned_source(
+pub(crate) fn pinned_source(
     source: &fullmag_session::solution_tensor_source::PinnedSolutionTensorSource,
 ) -> MaterializedDatasetPinnedSourceResource {
     MaterializedDatasetPinnedSourceResource {
@@ -797,7 +797,7 @@ fn transform_resource(value: &DatasetTransform) -> MaterializedDatasetTransformR
     }
 }
 
-fn descriptor_resource(
+pub(crate) fn descriptor_resource(
     value: &DatasetFieldDescriptor,
 ) -> MaterializedDatasetFieldDescriptorResource {
     MaterializedDatasetFieldDescriptorResource {

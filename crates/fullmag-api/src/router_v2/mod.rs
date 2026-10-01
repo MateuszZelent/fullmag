@@ -1088,6 +1088,10 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             get(handlers::persistence::solutions::get_materialized_dataset),
         )
         .route(
+            "/v2/persistence/projects/:project_id/runs/:run_id/solution-sets/:solution_set_id/revisions/:revision/members/:member_id/artifacts/:artifact_id/materialized-dataset/slice",
+            get(handlers::persistence::solutions::get_materialized_dataset_slice),
+        )
+        .route(
             "/v2/persistence/projects/:project_id/runs/:run_id/materialization",
             post(handlers::persistence::projects::materialize_run),
         )

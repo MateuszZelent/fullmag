@@ -196,6 +196,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/persistence/projects/{project_id}/runs/{run_id}/solution-sets/{solution_set_id}/revisions/{revision}/members/{member_id}/artifacts/{artifact_id}/materialized-dataset/slice": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["persistence_get_persistence_projects_project_id_runs_run_id_solution_sets_solution_set_id_revisions_revision_members_member_id_artifacts_artifact_id_materialized_dataset_slice"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/persistence/projects/{project_id}/runs/{run_id}/tasks/{task_id}/cancellation": {
         parameters: {
             query?: never;
@@ -8339,6 +8355,54 @@ export interface components {
             selection_id: string;
             selection_revision: string;
         };
+        /** @enum {string} */
+        MaterializedDatasetSliceByteOrderResource: "little_endian";
+        MaterializedDatasetSliceEnvelopeResource: {
+            artifact_id: string;
+            containing_solution_revision: string;
+            /** @description Complete quantity, units, layout, support and complex semantics. */
+            descriptor: components["schemas"]["MaterializedDatasetFieldDescriptorResource"];
+            integrity: components["schemas"]["MaterializedDatasetSliceIntegrityResource"];
+            manifest_byte_length: string;
+            manifest_object_ref: string;
+            member_id: string;
+            project_id: string;
+            run_id: string;
+            schema_version: string;
+            slice: components["schemas"]["MaterializedDatasetSliceManifestResource"];
+            solution_set_id: string;
+            source: components["schemas"]["MaterializedDatasetPinnedSourceResource"];
+        };
+        /** @enum {string} */
+        MaterializedDatasetSliceIntegrityResource: "verified_returned_ranges";
+        MaterializedDatasetSliceManifestResource: {
+            byte_order: components["schemas"]["MaterializedDatasetSliceByteOrderResource"];
+            component_count: string;
+            dataset_id: string;
+            dataset_revision: string;
+            element_count: string;
+            element_offset: string;
+            field_id: string;
+            field_layout_digest: string;
+            item_id: string;
+            /** @description Body ranges follow this order. Plane offsets are relative to this slice. */
+            parts: components["schemas"]["MaterializedDatasetSlicePartResource"][];
+            payload_bytes: string;
+            precision: components["schemas"]["MaterializedDatasetSlicePrecisionResource"];
+            sample_id: string;
+            schema_version: string;
+            total_elements: string;
+        };
+        MaterializedDatasetSlicePartResource: {
+            byte_length: string;
+            object_offset_bytes: string;
+            object_ref: string;
+            plane: components["schemas"]["MaterializedDatasetPlaneResource"];
+            plane_offset_bytes: string;
+            range_sha256: string;
+        };
+        /** @enum {string} */
+        MaterializedDatasetSlicePrecisionResource: "f32" | "f64";
         MaterializedDatasetStatusResource: {
             actions: components["schemas"]["MaterializedDatasetUnavailableActionResource"][];
             availability: components["schemas"]["MaterializedDatasetAvailabilityResource"];
@@ -14114,6 +14178,82 @@ export interface operations {
                 content?: never;
             };
             /** @description Invalid or oversized manifest */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    persistence_get_persistence_projects_project_id_runs_run_id_solution_sets_solution_set_id_revisions_revision_members_member_id_artifacts_artifact_id_materialized_dataset_slice: {
+        parameters: {
+            query: {
+                schema_version: string;
+                dataset_id: string;
+                dataset_revision: string;
+                sample_id: string;
+                item_id: string;
+                field_id: string;
+                /** @description Bare lowercase SHA-256 CAS hash of the selected manifest. */
+                expected_manifest_object_ref: string;
+                element_offset: string;
+                element_count: string;
+                /** @description Payload budget only; FMDS header and metadata add at most 1 MiB + 12 B. */
+                max_response_bytes: string;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+                run_id: string;
+                solution_set_id: string;
+                /** @description Canonical positive decimal u64 */
+                revision: string;
+                member_id: string;
+                artifact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description FMDS v1: 12-byte header, bounded JSON MaterializedDatasetSliceEnvelopeResource, then exact raw part bytes */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": string;
+                };
+            };
+            /** @description Invalid identity, canonical counters, bounds or budget */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing accepted run, revision, member or artifact */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Pinned manifest, dataset or ownership mismatch */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Requested slice metadata exceeds the 1 MiB envelope budget */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Corrupt, nonfinite or unsupported persisted field */
             500: {
                 headers: {
                     [name: string]: unknown;

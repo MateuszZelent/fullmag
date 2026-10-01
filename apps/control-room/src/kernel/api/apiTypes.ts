@@ -855,6 +855,8 @@ export type SolutionSetArtifactPageQuery =
 export type SolutionSetRevision = Extract<SolutionSetResource["revision"], string>;
 export type MaterializedDatasetResource =
   components["schemas"]["MaterializedDatasetResource"];
+export type MaterializedDatasetSliceEnvelopeResource =
+  components["schemas"]["MaterializedDatasetSliceEnvelopeResource"];
 export type ObservationFrameListQuery =
   components["schemas"]["ObservationFrameListQuery"];
 export type ObservationFrameListResource =
@@ -1008,6 +1010,8 @@ export interface RequestOptions {
 }
 
 export interface BinaryRequestOptions extends RequestOptions {
+  /** Optional hard body cap enforced while reading, before binary decoding. */
+  maxResponseBytes?: number;
   etag?: string | null;
   range?: string | null;
 }
