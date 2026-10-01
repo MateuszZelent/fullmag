@@ -3,6 +3,13 @@ from pathlib import Path
 import run_nonzero_k_validation_controller as controller
 
 
+def write_pinned_controller(storage, job):
+    pinned = storage / job["payload"]["capsule_relative"] / "tree/scripts/run_nonzero_k_validation_controller.py"
+    pinned.parent.mkdir(parents=True)
+    pinned.write_bytes(b"# Capsule uses LF, independent of Windows checkout line endings.\npass\n")
+    return pinned
+
+
 class ControllerTests(unittest.TestCase):
     def test_execution_rejects_modified_controller_before_running_pilots(self):
         import hashlib
@@ -85,6 +92,7 @@ class ControllerTests(unittest.TestCase):
             job = {"job_id": "a" * 32, "source_digest": "b" * 64,
                    "worktree_id": "worktree-test", "payload": {"capsule_relative":
                    "runs/worktree-test/" + "c" * 32 + "/source"}}
+            write_pinned_controller(storage, job)
             config = controller.prepare_controller_config(job, layout, "d" * 40)
             self.assertTrue(config.is_file())
             self.assertFalse((storage / "runs/worktree-test" / job["job_id"]).exists())
@@ -102,8 +110,12 @@ class ControllerTests(unittest.TestCase):
             job = {"job_id": "a" * 32, "source_digest": "b" * 64,
                    "worktree_id": "worktree-test", "payload": {"capsule_relative":
                    "runs/worktree-test/" + "c" * 32 + "/source"}}
+            pinned = write_pinned_controller(storage, job)
             path = controller.prepare_controller_config(job, layout, "d" * 40, "nearest-single-k")
             config = json.loads(path.read_text(encoding="utf-8"))
+            import hashlib
+            self.assertEqual(config["controller_sha256"], hashlib.sha256(pinned.read_bytes()).hexdigest())
+            controller.validate_controller_source(config, pinned.parents[1], pinned)
             self.assertEqual(config["series"], "nearest-single-k")
             self.assertEqual(config["model_ref"], "d" * 40)
             for _, pilot, _ in controller.validation_cases(config["series"]):
@@ -112,6 +124,19 @@ class ControllerTests(unittest.TestCase):
                 expected = "10" if pilot in {"de-smoke-k2", "de-smoke-k-2"} else "9"
                 self.assertEqual(arguments[-1], expected)
             self.assertFalse((storage / "runs/worktree-test" / job["job_id"]).exists())
+
+    def test_preparation_rejects_missing_pinned_source_without_writing_config(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as temporary:
+            storage = Path(temporary)
+            layout = {"storage_root": str(storage), "repo_root": str(storage / "checkout"),
+                      "worktree_id": "worktree-test"}
+            job = {"job_id": "a" * 32, "source_digest": "b" * 64,
+                   "worktree_id": "worktree-test", "payload": {"capsule_relative":
+                   "runs/worktree-test/" + "c" * 32 + "/source"}}
+            with self.assertRaisesRegex(ValueError, "controller source in pinned capsule"):
+                controller.prepare_controller_config(job, layout, "d" * 40, "nearest-single-k")
+            self.assertEqual(list(storage.iterdir()), [])
 
     def test_config_preparation_rejects_job_identity_and_path_traversal(self):
         import tempfile

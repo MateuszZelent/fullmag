@@ -128,10 +128,14 @@ def prepare_controller_config(job, layout, model_ref, series="thickness"):
     expected_prefix = "runs/" + layout["worktree_id"] + "/"
     if not isinstance(relative, str) or re.fullmatch(re.escape(expected_prefix) + r"[a-f0-9]{32}/source", relative) is None:
         raise ValueError("noncanonical managed source capsule")
+    capsule = storage / relative / "tree"
+    pinned_controller = capsule / "scripts/run_nonzero_k_validation_controller.py"
+    if not pinned_controller.is_file() or pinned_controller.is_symlink():
+        raise ValueError("missing regular controller source in pinned capsule")
     config = {"worktree": str(Path(layout["repo_root"])),
-              "capsule": str(storage / relative / "tree"), "job_id": job_id,
+              "capsule": str(capsule), "job_id": job_id,
               "source_digest": digest, "model_ref": model_ref, "series": series,
-              "controller_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest()}
+              "controller_sha256": hashlib.sha256(pinned_controller.read_bytes()).hexdigest()}
     if series == "nearest-single-k":
         config["nearest_targets_ghz"] = {
             pilot: (10.0 if pilot in {"de-smoke-k2", "de-smoke-k-2"} else 9.0)

@@ -1,6 +1,46 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
-## Aktualny stan — 2026-10-01, checkpoint nearest e6214cb39
+## Aktualny stan — 2026-10-01, checkpoint nearest bf25a30d7
+
+Spójny checkpoint natywny `bf25a30d7d8b26406bdbfc99d6412b10e4a15ae9`
+jest na origin brancha zadania. Zawiera naprawy kompilacji, provenance
+K0/Floquet, status nearest oraz sterownik sześciu rzeczywistych pilotów.
+Submission zakończony exit0, przyjęty job #195:
+`5a281e74772d4976a9d09ccc8d5c7be9`, runtime-only CPU/SLEPc, request key
+`eigensolve-nearest-bf25a30d7d8b-20261001`.
+Source digest `a10753dbee8313170b2a721716824496ebfbf1c255e01dc67ee446e96d89073f`,
+snapshot SHA `b6511df906eb213ffe5f820985c202cfc6cc5364c68becd569611de8bad506a5`,
+kapsuła `ab76858f0c0c475d898e79b71f864354/source`. Źródło czyste, commit mode.
+Ostatni status API running; kontener workera jeszcze nie istnieje, więc
+nie ma dowodu kompilacji. Koordynator żywy; nie ponawiać submission po
+samym timeout obserwacji. Runner preflight:
+worker_alive=true, accepting_jobs=true, brak aktywnych jobów, 13 653 528 576 B
+wolnego; runtime-v2 dopuszczony. To nie dowodzi sukcesu przyszłego buildu.
+
+Review ustaliło rzeczywisty przepływ: nonzero-k shared-domain przechodzi
+przez Floquet sparse operator oraz production CPU wrapper. Bezpośredni
+descriptorowy writer Poisson Schur jest osobną gałęzią K0. Poprawka
+`solve_complete` we wrapperze obejmuje więc rzeczywisty nonzero-k pilot;
+wartość pochodzi z enumu statusu native. Nie poszerzano migracji o gałąź K0.
+Kontrola źródłowa i pełny validator 0831 PASS; wykonanie NOT VERIFIED.
+
+Sterownik przygotowany w `scientific-batches/nonzero-k-validation/5a281e74772d4976a9d09ccc8d5c7be9`.
+Pierwsza próba zakończyła się przed obliczeniami: CRLF checkoutu i LF kapsuły
+miały różne raw SHA. Zachowano pierwszą konfigurację jako
+`controller-config.crlf-first-attempt.json`, nowa przypina raw SHA kapsuły
+`a3b70295961fdb187d6462366fd9167e50c054e0101221a5e9c157db2e0c8d28`.
+Uruchomiono dokładny kontroler kapsuły z `python -B`; sesja 95215 potwierdziła
+build_state=running. Kontrola hashy zachowana. Przygotowanie następnych
+konfiguracji naprawiono, aby zawsze odczytywało SHA kontrolera z kapsuły.
+
+Końcowe review kolektora przyjęło dokładnie sześć przypadków i binding
+targetów z konfiguracji. Wykryto P2 plotera: raportowe mu0 nie było ponownie
+wiązane z metadata przed wyznaczeniem analitycznego B0. Poprawka mu0 i pola
+zewnętrznego ma regresje, 53 kontrole kolektora/plotera PASS; scope w receipt
+jest kanoniczny selected_only. Nie zmienia fizyki native ani progów.
+Końcowe niezależne review kolektora, plotera i przygotowania kontrolera
+zamknięte bez P1/P2: 64 testy i 19 subtestów PASS. Pełny validator noty nearest
+PASS. Runtime/native i kwalifikacja naukowa pozostają osobnymi bramkami.
 
 Końcowe niezależne review e6214cb39 wykryło P1 provenance:
 `eigen_native_window.rs` może dla adaptera `floquet_airbox_cpu_schur_slepc`
@@ -2317,7 +2357,7 @@ Realizacja [planu S00–S12](2026-09-12-eigensolve-dispersion-nonzero-k-plan.md)
 | S02 — Python/IR | W TRAKCIE | Walidacja k i selektorów, round-trip, testy konsumentów |
 | S03 — natywny operator magnetyczny Blocha | W TRAKCIE | Prolongacja i bounded sparse operator są w źródłach; geometry-aware tet/prism oraz ich rzeczywista kwadratura mają review. Wymagane są bieżący managed assembly/runtime i pełne certyfikaty deskryptora. |
 | S04 — dynamiczny demag-k CPU | W TRAKCIE | Sparse Schur/SLEPc i MFEM blocks są źródłowo zaimplementowane. Pozostają residual pełnego deskryptora/gauge/szwów, zbieżność airboxu i siatki oraz kwalifikacja nowego źródła; archiwalne punkty nie zastępują tych bramek. |
-| S05 — natywny solver spektralny | W TRAKCIE | #193: 14/50 podokien rozbieżnych, niekompletne okno; pojedynczy mod Γ zaakceptowany. #194 failed: pięć błędów Rust z czterech przyczyn; naprawy source są w review. Nadal wymagane świeży runtime nearest, naprawa pełnego okna, certyfikat pokrycia/residuali i wznowienia; nearest nie zastępuje tej bramki. |
+| S05 — natywny solver spektralny | W TRAKCIE | #193: 14/50 podokien rozbieżnych, niekompletne okno; pojedynczy mod Γ zaakceptowany. #194 failed: pięć błędów Rust z czterech przyczyn; naprawy source zapisane i zreviewowane. #195 przyjęty, ostatni status running, sterownik sześciu punktów żywy. Nadal wymagane świeży runtime nearest, naprawa pełnego okna, certyfikat pokrycia/residuali i wznowienia; nearest nie zastępuje tej bramki. |
 | S06 — śledzenie gałęzi | W TRAKCIE | Hungarian/gaps i metryka masy FE są gotowe; pozostają fizyczne podprzestrzenie zdegenerowane |
 | S07 — artefakty i API | W TRAKCIE | Exact producer/consumer/mesh/native input replay zapisano i zreviewowano; 56 regresji nonshared i 213 głównego verifiera PASS. P1 oznaczania nonzero-k jako K0 naprawiony źródłowo i przyjęty w niezależnym review. Nadal potrzebne pełne native matrix/physical replay, strukturalne refs diagnostyki, aktualne binary fields/selektory i managed evidence. |
 | S08 — Control Room | W TRAKCIE | Źródła authoring/scatterplot, selekcji k/pola i linewidth zostały poprawione. Wymagane są bieżący managed frontend/runtime, browser/WebGL, FMS round-trip, dostępność pól i stabilność Inspectora. Historyczny #119 nie jest aktualnym buildem. |
