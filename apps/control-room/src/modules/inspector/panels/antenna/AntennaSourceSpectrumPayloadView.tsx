@@ -254,6 +254,21 @@ function validatePayloads(
   if (payloads.power.some((value) => !Number.isFinite(value) || value < 0)) {
     return "power payload contains a non-finite or negative value";
   }
+  for (let cell = 0; cell < payloads.power.length; cell += 1) {
+    let expectedPower = 0;
+    for (let component = 0; component < spectrum.component_labels.length; component += 1) {
+      const offset = 2 * (component * payloads.power.length + cell);
+      const re = payloads.amplitudes[offset];
+      const im = payloads.amplitudes[offset + 1];
+      expectedPower += re * re + im * im;
+    }
+    const actualPower = payloads.power[cell];
+    if (!Number.isFinite(expectedPower) ||
+        Math.abs(expectedPower - actualPower) >
+          1e-10 * Math.max(expectedPower, actualPower, 1e-300)) {
+      return `power payload disagrees with complex amplitudes at k-grid cell ${cell}`;
+    }
+  }
   return null;
 }
 
