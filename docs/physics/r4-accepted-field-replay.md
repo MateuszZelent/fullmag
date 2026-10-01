@@ -270,6 +270,8 @@ change slice and are therefore `NOT VERIFIED` here.
 
 | Claim | Source | Responsibility | Lane | Evidence |
 |---|---|---|---|---|
+| Complete sample coverage | `scripts/verify_fem_frequency_domain_eigen_artifacts.py` — `_computed_sample_indices_from_spectrum`, `validate_r4_signed_sidecars` | Require every computed sample independently of selected mode fields | FEM CPU/GPU | interpreted fixtures; runtime pending |
+| Sample coverage regression | `scripts/test_eigen_path_signed_sidecars.py` — `test_all_seven_sidecar_arrays_must_cover_every_computed_sample` | Missing/extra samples and strict integer counts | FEM CPU/GPU | 31 interpreted tests PASS |
 | V1/V2 and accepted path selection | `crates/fullmag-runner/src/types.rs` — `CertifiedFemEquilibriumFields::artifact_paths_for_material`, `accepted_artifact_path_for_material` | Exact artifact family and path | FEM CPU/GPU | source-visible |
 | Shared tolerances | `crates/fullmag-runner/src/types.rs` — `FEM_LINEARIZATION_FIELD_ABSOLUTE_TOLERANCE_A_PER_M` | One producer/consumer policy | FEM CPU/GPU | source-visible |
 | Accepted publication | `crates/fullmag-runner/src/fem/relax/finalize.rs` — `finalize_native_fem_relaxation` | Preserve endpoint before refresh | FEM CPU/GPU | source-visible |
@@ -306,3 +308,17 @@ duplikaty JSON oraz powiązanie dokładnego preimage z odczytanym certyfikatem.
 Brak preimage, magnetyzacji, topologii albo tożsamości źródła pozostaje jawną
 limitacją. Moduł nie jest jeszcze podłączony do pełnej bramki manifestu R4;
 fixtures nie dowodzą odtworzenia bieżącego solvera ani kwalifikacji naukowej.
+
+## Pokrycie wszystkich policzonych próbek — checkpoint 2026-10-01
+
+Walidator porównuje zbiory indeksów sidecarów z jawnymi rekordami
+`eigen/spectrum.v2.json` (`samples[].sample_index`, `sample_count`).
+Nie wyprowadza zakresu z największego indeksu ani z wybranych pól modów.
+Brak jednej próbki we wszystkich siedmiu tablicach oraz nadmiarowa próbka
+są odrzucane. Historyczny brak endpointów nadal daje NOT VERIFIED.
+Indeksy i liczniki muszą być nieujemnymi liczbami całkowitymi JSON;
+wartości bool i float oraz duplikaty indeksów są odrzucane.
+
+Weryfikacja: 31 regresji sidecarów PASS oraz 213 testów pytest istniejącego
+walidatora PASS. Ta kontrola nie odtwarza jeszcze podpisanych payloadów
+identity i nie dowodzi wykonania solvera. Główna bramka R4 pozostaje otwarta.

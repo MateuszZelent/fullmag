@@ -56,6 +56,8 @@
     {"id": "epsilon_rel", "latex": "\\epsilon_{X,\\mathrm{rel}}", "meaning": "relative field tolerance", "si_unit": "1"}
   ],
   "sources": [
+    {"id": "source-r4-computed-sample-coverage", "path": "scripts/verify_fem_frequency_domain_eigen_artifacts.py", "symbol": "_computed_sample_indices_from_spectrum", "responsibility": "Bind all sidecar sample sets to explicit spectrum sample records."},
+    {"id": "source-r4-computed-sample-regression", "path": "scripts/test_eigen_path_signed_sidecars.py", "symbol": "test_all_seven_sidecar_arrays_must_cover_every_computed_sample", "responsibility": "Reject missing or extra computed samples and invalid integer indices."},
     {"id": "source-independent-python-field-replay", "path": "scripts/fem_equilibrium_field_replay.py", "symbol": "replay_accepted_recomputed_fields", "responsibility": "Replay binary field digests and component differences; explicitly report missing certificate/source context."},
     {"id": "source-python-field-replay-regression", "path": "scripts/test_fem_equilibrium_field_replay.py", "symbol": "test_frozen_v1_and_v2_binary_field_digests_match_rust", "responsibility": "Frozen V1/V2 digests and negative replay/preimage cases without native compilation."},
     {"id": "source-r4-sidecar-conflict-propagation", "path": "crates/fullmag-runner/src/fem/eigen_path.rs", "symbol": "execute_fem_eigen_path", "responsibility": "Propagate conflicting signed sidecar errors before manifest publication."},

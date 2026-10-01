@@ -4633,3 +4633,16 @@ Po bezpiecznym zwolnieniu runnera: nowy obraz/ABI → pełny SHA runtime-only
 build → Γ → signed DE/BV → kompletne artefakty, zbieżność i COMSOL A1.
 Zakres S00–S12, waveguide, interakcje, GPU, browser/FMS i integracja pozostają
 w celu. Nie oznaczono całego celu ani R4 jako ukończonych.
+
+## R4 coverage i MFEM — checkpoint 2026-10-01
+
+Kontrola pełnego sample-set jest wdrożona: wszystkie opublikowane próbki ze
+spectrum.v2 muszą mieć zgodne sidecary, również przy spectrum-only. Zniknięcie
+całego punktu ze wszystkich tablic jest błędem. Liczniki/indeksy bool lub float,
+duplikaty i dodatkowe punkty są odrzucane. 31 regresji sidecarów i 213 testów
+pytest walidatora PASS. Pełny replay identity/payload i managed runtime OPEN.
+
+MFEM4.10: review sześciu konstruktorów HyprePCG potwierdziło jawne SetTol oraz
+SetMaxIter (d7789a563). Job189 succeeded; job191 pozostaje running.
+Drain włączony: obecny job dokończy się, kolejne czekają na okno operatorskie.
+Nie zbudowano nowego obrazu. Pełny S00–S12 i bramki naukowe pozostają otwarte.

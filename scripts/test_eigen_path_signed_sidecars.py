@@ -277,6 +277,148 @@ class EigenPathSignedSidecarTests(unittest.TestCase):
                 ],
             )
 
+    def test_all_seven_sidecar_arrays_must_cover_every_computed_sample(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            artifacts = _manifest_artifacts(
+                root, family="v2", samples=(0, 2), include_states=False
+            )
+            with self.assertRaises(SystemExit) as raised:
+                verifier.validate_r4_signed_sidecars(
+                    root, artifacts, computed_sample_indices={0, 2, 7}
+                )
+            self.assertIn(
+                "must match the computed spectrum sample index set",
+                str(raised.exception),
+            )
+
+    def test_all_seven_sidecar_arrays_reject_an_uncomputed_extra_sample(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            artifacts = _manifest_artifacts(
+                root, family="v2", samples=(0, 2, 7, 9), include_states=False
+            )
+            with self.assertRaises(SystemExit) as raised:
+                verifier.validate_r4_signed_sidecars(
+                    root, artifacts, computed_sample_indices={0, 2, 7}
+                )
+            self.assertIn(
+                "must match the computed spectrum sample index set",
+                str(raised.exception),
+            )
+
+    def test_spectrum_only_coverage_uses_samples_without_mode_selection(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            spectrum = {
+                "sample_count": 3,
+                "samples": [
+                    {"sample_index": 0, "modes": []},
+                    {"sample_index": 2, "modes": []},
+                    {"sample_index": 7, "modes": []},
+                ],
+            }
+            computed = verifier._computed_sample_indices_from_spectrum(spectrum)
+            self.assertEqual(computed, {0, 2, 7})
+            artifacts = _manifest_artifacts(
+                root, family="v2", samples=(0, 2, 7), include_states=False
+            )
+            result = verifier.validate_r4_signed_sidecars(
+                root, artifacts, computed_sample_indices=computed
+            )
+            self.assertEqual(result["status"], "payload_replay_pending")
+            self.assertEqual(result["computed_sample_indices"], [0, 2, 7])
+
+    def test_spectrum_sample_index_contract_rejects_invalid_values(self) -> None:
+        cases = (
+            (
+                "duplicate sample_index",
+                {
+                    "sample_count": 2,
+                    "samples": [
+                        {"sample_index": 0},
+                        {"sample_index": 0},
+                    ],
+                },
+                "duplicate sample_index",
+            ),
+            (
+                "negative sample_index",
+                {"sample_count": 1, "samples": [{"sample_index": -1}]},
+                "must be a non-negative integer",
+            ),
+            (
+                "boolean sample_index",
+                {"sample_count": 1, "samples": [{"sample_index": True}]},
+                "must be a non-negative integer",
+            ),
+            (
+                "float sample_index",
+                {"sample_count": 1, "samples": [{"sample_index": 1.0}]},
+                "must be a non-negative integer",
+            ),
+            (
+                "boolean sample_count",
+                {"sample_count": True, "samples": [{"sample_index": 0}]},
+                "spectrum.sample_count must be a non-negative integer",
+            ),
+            (
+                "float sample_count",
+                {"sample_count": 1.0, "samples": [{"sample_index": 0}]},
+                "spectrum.sample_count must be a non-negative integer",
+            ),
+            (
+                "sample_count mismatch",
+                {"sample_count": 2, "samples": [{"sample_index": 0}]},
+                "spectrum.sample_count: got 2, expected 1",
+            ),
+        )
+        for case, spectrum, message in cases:
+            with self.subTest(case=case):
+                with self.assertRaises(SystemExit) as raised:
+                    verifier._computed_sample_indices_from_spectrum(spectrum)
+                self.assertIn(message, str(raised.exception))
+
+    def test_empty_spectrum_is_not_an_inferred_contiguous_range(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            computed = verifier._computed_sample_indices_from_spectrum(
+                {"sample_count": 0, "samples": []}
+            )
+            self.assertEqual(computed, set())
+            artifacts = {
+                key: [] for key in verifier.R4_SIGNED_SIDECAR_DEFINITIONS
+            }
+            result = verifier.validate_r4_signed_sidecars(
+                root, artifacts, computed_sample_indices=computed
+            )
+            self.assertEqual(result["status"], "missing_accepted")
+            self.assertEqual(result["computed_sample_indices"], [])
+
+    def test_validate_equilibrium_artifacts_enforces_computed_sample_set(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            artifacts = _manifest_artifacts(
+                root, family="v2", samples=(0, 2, 7), include_states=False
+            )
+            result = verifier.validate_equilibrium_artifacts(
+                root,
+                {"artifacts": artifacts},
+                computed_sample_indices={0, 2, 7},
+            )
+            self.assertEqual(result["status"], "payload_replay_pending")
+            self.assertEqual(result["computed_sample_indices"], [0, 2, 7])
+            with self.assertRaises(SystemExit) as raised:
+                verifier.validate_equilibrium_artifacts(
+                    root,
+                    {"artifacts": artifacts},
+                    computed_sample_indices={0, 2},
+                )
+            self.assertIn(
+                "must match the computed spectrum sample index set",
+                str(raised.exception),
+            )
+
     def test_partial_r4_array_declaration_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

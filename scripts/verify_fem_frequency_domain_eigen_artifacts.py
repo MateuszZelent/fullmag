@@ -915,6 +915,7 @@ def _r4_discovery_result(
     accepted_sample_indices: set[int] | None = None,
     identity_sample_indices: set[int] | None = None,
     missing_recomputed_keys: list[str] | None = None,
+    computed_sample_indices: set[int] | None = None,
 ) -> dict[str, object]:
     if status not in R4_DISCOVERY_STATUSES:
         raise ValueError(f"unknown R4 discovery status: {status}")
@@ -925,6 +926,11 @@ def _r4_discovery_result(
         "accepted_sample_indices": sorted(accepted_sample_indices or set()),
         "identity_sample_indices": sorted(identity_sample_indices or set()),
         "missing_recomputed_keys": sorted(missing_recomputed_keys or []),
+        "computed_sample_indices": (
+            None
+            if computed_sample_indices is None
+            else sorted(computed_sample_indices)
+        ),
     }
 
 
@@ -949,20 +955,57 @@ def _state_family_has_paths(artifacts: dict, schema: str) -> bool:
     )
 
 
-def validate_r4_signed_sidecars(root: Path, artifacts: object) -> dict[str, object]:
+def _computed_sample_indices_from_spectrum(spectrum: object) -> set[int]:
+    """Return every sample the path producer actually published.
+
+    The path producers in ``fem/eigen_path.rs`` and
+    ``fem/eigen_output.rs`` (with the modal manifest adapter in
+    ``eigen/artifacts/modal_manifest.rs``) publish ``sample_count`` and
+    explicit ``sample_index`` records.  Use those records as the coverage
+    contract; never infer a contiguous range from the largest index or from
+    selected mode fields.  ``eigen/artifacts/common.rs`` only carries the
+    source-revision helpers and is not the spectrum payload producer.
+    """
+    if not isinstance(spectrum, dict):
+        fail("eigen/spectrum.v2.json must be an object")
+    samples = require_object_list(spectrum.get("samples"), "spectrum.samples")
+    sample_count = require_non_negative_int(
+        spectrum.get("sample_count"), "spectrum.sample_count"
+    )
+    require_equal(sample_count, len(samples), "spectrum.sample_count")
+    indices: set[int] = set()
+    for position, sample in enumerate(samples):
+        sample_index = require_non_negative_int(
+            sample.get("sample_index"),
+            f"spectrum.samples[{position}].sample_index",
+        )
+        if sample_index in indices:
+            fail(f"spectrum.samples contains duplicate sample_index {sample_index}")
+        indices.add(sample_index)
+    return indices
+
+
+def validate_r4_signed_sidecars(
+    root: Path,
+    artifacts: object,
+    computed_sample_indices: set[int] | None = None,
+) -> dict[str, object]:
     """Validate R4 sidecar discovery and family/sample binding.
 
     Historical manifests omit all R4 keys and remain valid.  A producer may
     publish an accepted sidecar family before the identity-v2 producer is
     available; that state is reported as ``missing_identity`` rather than
     being treated as a certified result.  This function validates only path
-    identity and family/sample-set consistency; accepted/recomputed field
-    replay and the opaque identity-v2 payload remain separate gates.
+    identity and family/sample-set consistency; when supplied, the explicit
+    spectrum sample set is the complete computed-sample contract.  Accepted/
+    recomputed field replay and the opaque identity-v2 payload remain separate
+    gates.
     """
     if not isinstance(artifacts, dict):
         return _r4_discovery_result(
             "historical",
             "R4 sidecar arrays are absent from a historical manifest",
+            computed_sample_indices=computed_sample_indices,
         )
     keys = tuple(R4_SIGNED_SIDECAR_DEFINITIONS)
     present = [key for key in keys if key in artifacts]
@@ -970,6 +1013,7 @@ def validate_r4_signed_sidecars(root: Path, artifacts: object) -> dict[str, obje
         return _r4_discovery_result(
             "historical",
             "R4 sidecar arrays are absent from a historical manifest",
+            computed_sample_indices=computed_sample_indices,
         )
     old_keys = (*R4_ACCEPTED_SIDECAR_KEYS, R4_IDENTITY_SIDECAR_KEY)
     new_present = [key for key in R4_NEW_SIDECAR_KEYS if key in artifacts]
@@ -1020,6 +1064,7 @@ def validate_r4_signed_sidecars(root: Path, artifacts: object) -> dict[str, obje
             "R4 accepted FEM equilibrium sidecars are missing",
             identity_sample_indices=set(identity_v2),
             missing_recomputed_keys=missing_declared_new_keys,
+            computed_sample_indices=computed_sample_indices,
         )
     if accepted_v1 and accepted_v2:
         fail(
@@ -1028,6 +1073,14 @@ def validate_r4_signed_sidecars(root: Path, artifacts: object) -> dict[str, obje
         )
     accepted_family = "v1" if accepted_v1 else "v2"
     accepted_sample_indices = set(accepted_v1 or accepted_v2)
+    if (
+        computed_sample_indices is not None
+        and accepted_sample_indices != set(computed_sample_indices)
+    ):
+        fail(
+            "manifest.artifacts accepted FEM equilibrium sidecar sample index "
+            "set must match the computed spectrum sample index set"
+        )
     required_new_keys = [
         key for key in R4_NEW_SIDECAR_KEYS
         if R4_SIDECAR_FAMILY[key] == accepted_family
@@ -1086,6 +1139,7 @@ def validate_r4_signed_sidecars(root: Path, artifacts: object) -> dict[str, obje
             accepted_family=accepted_family,
             accepted_sample_indices=accepted_sample_indices,
             missing_recomputed_keys=missing_recomputed_keys,
+            computed_sample_indices=computed_sample_indices,
         )
     if not identity_v2:
         return _r4_discovery_result(
@@ -1095,6 +1149,7 @@ def validate_r4_signed_sidecars(root: Path, artifacts: object) -> dict[str, obje
             accepted_family=accepted_family,
             accepted_sample_indices=accepted_sample_indices,
             missing_recomputed_keys=missing_recomputed_keys,
+            computed_sample_indices=computed_sample_indices,
         )
     if missing_recomputed_keys:
         return _r4_discovery_result(
@@ -1105,6 +1160,7 @@ def validate_r4_signed_sidecars(root: Path, artifacts: object) -> dict[str, obje
             accepted_sample_indices=accepted_sample_indices,
             identity_sample_indices=set(identity_v2),
             missing_recomputed_keys=missing_recomputed_keys,
+            computed_sample_indices=computed_sample_indices,
         )
     return _r4_discovery_result(
         "payload_replay_pending",
@@ -1113,6 +1169,7 @@ def validate_r4_signed_sidecars(root: Path, artifacts: object) -> dict[str, obje
         accepted_family=accepted_family,
         accepted_sample_indices=accepted_sample_indices,
         identity_sample_indices=set(identity_v2),
+        computed_sample_indices=computed_sample_indices,
     )
 
 
@@ -1238,15 +1295,24 @@ def validate_linearization_handoff_diagnostics(
 
 
 def validate_equilibrium_artifacts(
-    root: Path, manifest: dict, solver_diagnostics: dict | None = None
+    root: Path,
+    manifest: dict,
+    solver_diagnostics: dict | None = None,
+    *,
+    computed_sample_indices: set[int] | None = None,
 ) -> dict[str, object]:
     artifacts = manifest.get("artifacts")
     if not isinstance(artifacts, dict):
         return _r4_discovery_result(
             "historical",
             "R4 sidecar arrays are absent from a historical manifest",
+            computed_sample_indices=computed_sample_indices,
         )
-    r4_discovery = validate_r4_signed_sidecars(root, artifacts)
+    r4_discovery = validate_r4_signed_sidecars(
+        root,
+        artifacts,
+        computed_sample_indices=computed_sample_indices,
+    )
     def has_declared_path(keys: tuple[str, ...]) -> bool:
         return any(
             key in artifacts
@@ -1445,7 +1511,7 @@ def median(values: list[float]) -> float:
 
 
 def require_non_negative_int(value: object, name: str) -> int:
-    if not isinstance(value, int) or value < 0:
+    if type(value) is not int or value < 0:
         fail(f"{name} must be a non-negative integer")
     return value
 
@@ -6065,7 +6131,13 @@ def main(argv: list[str] | None = None) -> int:
         "manifest.schema_version",
     )
     require_equal(manifest.get("stage_kind"), "eigenmodes", "manifest.stage_kind")
-    r4_discovery = validate_equilibrium_artifacts(root, manifest, solver_diagnostics)
+    computed_sample_indices = _computed_sample_indices_from_spectrum(spectrum)
+    r4_discovery = validate_equilibrium_artifacts(
+        root,
+        manifest,
+        solver_diagnostics,
+        computed_sample_indices=computed_sample_indices,
+    )
     report_r4_discovery(r4_discovery)
     if args.require_r4_replay:
         fail(
