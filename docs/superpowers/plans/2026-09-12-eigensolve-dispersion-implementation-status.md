@@ -1,9 +1,20 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
-## Aktualny stan — 2026-10-01, po commicie 60cf6269f
+## Aktualny stan — 2026-10-01, po commicie 09aa7e5bc
 
 Ta sekcja i tabela „Stan etapów” określają bieżące bramki. Pozostałe wpisy
 opisują historię; dawne `running/live/queued` nie są aktualnym stanem procesu.
+
+Checkpoint producenta, exact replay i sample binding:
+`09aa7e5bc5018534c8490eabdd29a1fe9cdc33da`, commit i push potwierdzone.
+Zlecenie runtime-only builda tego SHA zostało odrzucone przez preflight:
+`Storage is busy: eigensolve-dispersion-plan-20260-c5dfad6d7f548079`.
+Nowy job nie został przyjęty; proces pilota używającego runtime #193 nadal
+trzyma lock worktree (aktywny właściciel PID 168336 na Orion, potwierdzony proces).
+Odczyt nazwy skryptu właściciela: `run_de_100nm_pilot.py`. Nie użyto
+alternatywnego storage ani równoległego buildu. Następnie ponowić ten sam
+request-key po zwolnieniu zasobu. W czasie oczekiwania: exact consumer-plan
+sidecar oraz niezależny nonshared source/operator replay. Pełny S00–S12 otwarty.
 
 - Na remote: checkpoint replayu pól i actual mesh `6b3b7357e1084aa91e9a5b77b9503e8929d5eb4a`,
   pełny sample-set sidecarów, własny exact identity replay Python
