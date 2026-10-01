@@ -75,9 +75,20 @@ Końcowy production source receipt po tej korekcie: PASS, exit 0,
 `storage/builds/fullmag-0950f4dca4ffe38f/windows-api-source-check/api-source-check/`.
 Spójność repozytorium, zmienione linki dokumentacji i diff check: PASS.
 
-Build 189 (`529ac93e81744c5faf50494306d50a11`) nadal queued na poprzednim
-commicie. Koordynator czeka na istniejący kontener dyspersji. Nie zatrzymano
-aktywnego zadania i nie zgłoszono duplikatu. Ten build nie kwalifikuje P6-57.
+Implementacja: commit `46636f3562d44afd74d3a6cd6f0585e2eab0c1a8`.
+Zlecono produkcyjny build 190 (`c80236a8ce674d6e9709346363d86ea3`),
+profil `fem-cpu-release`, źródło dokładnie tego commita, bez dirty paths.
+Request key: `80e0e199e24849d6ab3414527430d654`.
+Source capsule SHA-256: `5857cbed9d825515ae514a48edad4efbf9a11eaf26017f4e9201488b2262fa9f`.
+Native source snapshot SHA-256: `b9a693907d90b1f17ab7a4e80913cf2e836b747adf74168825c09829b86c8ab7`.
+Odczyt po zgłoszeniu: **queued**, coordinator i exit code null.
+To nie jest dowód kompilacji ani runtime.
+
+Build 189 (`529ac93e81744c5faf50494306d50a11`) nadal queued na starszym
+commicie `8bb7f068d097d94a5266983d64b07f2ca2d470b9` i nie kwalifikuje P6-57.
+Nie anulowano wcześniejszego zadania ani nie zatrzymano istniejącego kontenera
+dyspersji, na który czekał koordynator. Build 190 obejmuje nowe źródła;
+nie jest ponowieniem tego samego requestu po timeout obserwatora.
 
 ## Dalsze prace
 
