@@ -74,6 +74,188 @@ def test_spectrum_component_matches_the_canonical_ir_allow_list() -> None:
         raise AssertionError("unsupported spectrum component must fail in Python authoring")
 
 
+def test_complete_antenna_authoring_round_trips_through_stage_script() -> None:
+    fm.reset()
+    study = _configure_study()
+    study.engine("fem")
+    study.device("cpu", precision="double")
+    study.mode("strict")
+    study.antenna_object(fm.Box(200e-9, 20e-9, 10e-9), name="antenna_1")
+    conductor = fm.RegionRef("antenna_1")
+
+    # These pinned identities exercise authoring only; they are not a mesh or
+    # a qualified current/field solution for the geometric box above.
+    identity = fm.ConservativeCurrentIdentity(
+        source_module_id="transport_1",
+        source_state_revision="state-1",
+        source_field_digest="field-1",
+        conductivity_digest="sigma-1",
+        mesh_revision="mesh-1",
+        topology_revision="topology-1",
+        geometry_digest="geometry-1",
+        envelope_revision="envelope-1",
+        envelope_digest="envelope-digest-1",
+        evaluated_envelope_multiplier=1.0,
+        evaluation_time_s=0.0,
+        stage_identity=1,
+    )
+    current_view = fm.ConservativeCurrentView(
+        stable_vertex_ids=(10, 20, 30, 40),
+        boundary_faces=(
+            fm.ConservativeCurrentBoundaryFace((10, 20, 30), "source_cut", "cut"),
+            fm.ConservativeCurrentBoundaryFace((10, 20, 40), "source_cut", "cut"),
+            fm.ConservativeCurrentBoundaryFace((10, 30, 40), "insulating_outer"),
+            fm.ConservativeCurrentBoundaryFace((20, 30, 40), "insulating_outer"),
+        ),
+        identity=identity,
+        pins=fm.ConservativeCurrentPins(
+            required_source_state_revision="state-1",
+            required_source_field_digest="field-1",
+            required_mesh_revision="mesh-1",
+            required_topology_revision="topology-1",
+        ),
+        closure=fm.ConservativeCurrentClosedGeometry(
+            "fem_closed_current_geometry.v1",
+            "closure-1",
+            "closure-digest-1",
+            (
+                fm.ConservativeCurrentSourceCut(
+                    "cut",
+                    (1.0, 0.0, 0.0),
+                    0.1,
+                    (fm.ConservativeCurrentSourceCutFacePair((10, 20, 30), (10, 20, 40)),),
+                ),
+            ),
+        ),
+        algebraic_relative_tolerance=1e-10,
+        physical_relative_gate=1e-8,
+        physical_absolute_gate_a=1e-12,
+    )
+    study.current_transport(
+        name="transport_1",
+        model="ohmic_poisson",
+        domain=(conductor,),
+        materials=(
+            fm.ChargeTransportMaterialAssignment(
+                conductor, fm.ChargeTransportMaterial(sigma_Spm=5.8e7)
+            ),
+        ),
+        boundaries=(
+            fm.VoltageElectrode(
+                "signal_in", (fm.SurfaceRef("antenna_1", "x-", (-1, 0, 0)),), potential_V=0.1
+            ),
+            fm.VoltageElectrode(
+                "signal_out", (fm.SurfaceRef("antenna_1", "x+", (1, 0, 0)),), potential_V=0.0
+            ),
+            fm.VoltageElectrode(
+                "return_in", (fm.SurfaceRef("antenna_1", "y-", (0, -1, 0)),), potential_V=0.1
+            ),
+            fm.VoltageElectrode(
+                "return_out", (fm.SurfaceRef("antenna_1", "y+", (0, 1, 0)),), potential_V=0.0
+            ),
+        ),
+        gauge=fm.ChargePotentialGauge("dirichlet_reference"),
+        solver=fm.ChargeSolverPolicy(),
+        conservative_current_view=current_view,
+    )
+    study.add_antenna_port_mode(
+        port_mode=fm.AntennaPortMode(
+            id="port_1",
+            source_object_id="antenna_1",
+            current_transport_id="transport_1",
+            branches=(
+                fm.AntennaPortBranch("signal", "signal_in", "signal_out", 1.0),
+                fm.AntennaPortBranch("return", "return_in", "return_out", -1.0),
+            ),
+        )
+    )
+    basis = study.stages.add_antenna_field_solve(
+        id="solve_antenna_1", definition=_field_solve_definition()
+    )
+    study.add_antenna_spectrum_request(
+        request=fm.AntennaSpectrumRequest(
+            id="source_k",
+            solution_ref=basis,
+            port_mode_id="port_1",
+            target=fm.FieldTarget.global_domain(),
+            transform="spatial_fft",
+            sampling_plane=fm.AntennaSpectrumSamplingPlane(
+                origin_m=(0, 0, 0),
+                axis_u=(1, 0, 0),
+                axis_v=(0, 1, 0),
+                extent_u_m=200e-9,
+                extent_v_m=100e-9,
+                sample_count_u=8,
+                sample_count_v=8,
+            ),
+            window="rectangular",
+            normalization="integral_si",
+            component="u",
+            output_id="source_k_output",
+        )
+    )
+    projection = fm.AntennaTargetProjection(
+        id="projection_1",
+        solution=basis,
+        target=fm.FieldTarget.object("magnet_1"),
+        output_id="projected",
+    )
+    study.add_solved_antenna_drive(
+        drive=fm.SolvedAntennaDrive(
+            id="drive_1",
+            name="1 GHz antenna drive",
+            projection_ref=projection.id,
+            port_mode_id="port_1",
+            peak_current_a=0.01,
+            waveform=fm.Sinusoidal(frequency_hz=1e9),
+        ),
+        projection=projection,
+    )
+    study.stages.add_run(1e-12, stage_id="run")
+    authored = flat_world._build_problem().to_ir(include_geometry_assets=False)
+    assert authored["antenna_target_projections"][0]["solution"] == basis.to_ir()
+    assert authored["antenna_spectrum_requests"][0]["solution_ref"] == basis.to_ir()
+    captured = tuple(
+        LoadedStage(
+            problem=stage.problem,
+            entrypoint_kind=stage.entrypoint_kind,
+            default_until_seconds=stage.default_until_seconds,
+            action=stage.action,
+            stage_id=stage.stage_id,
+        )
+        for stage in flat_world._state._declared_stages
+    )
+    loaded = LoadedProblem(
+        problem=flat_world._build_problem(),
+        source_path=Path("complete_antenna_authoring.py"),
+        script_source="",
+        entrypoint_kind="flat_sequence",
+        stages=captured,
+    )
+    rendered = render_loaded_problem_as_script(loaded)
+    with TemporaryDirectory() as directory:
+        script_path = Path(directory) / "complete_antenna_authoring.py"
+        script_path.write_text(rendered, encoding="utf-8")
+        reloaded = load_problem_from_script(script_path)
+    replayed = reloaded.problem.to_ir(include_geometry_assets=False)
+    for collection in (
+        "physics_objects",
+        "current_modules",
+        "antenna_port_modes",
+        "antenna_field_solve_stages",
+        "antenna_spectrum_requests",
+        "antenna_target_projections",
+        "solved_antenna_drives",
+    ):
+        assert replayed[collection] == authored[collection]
+    assert [node["stage_kind"] for node in reloaded.study_pipeline_document()["nodes"]] == [
+        "antenna_field_solve",
+        "antenna_source_spectrum",
+        "add_solved_antenna_drive",
+        "run",
+    ]
+
+
 def test_study_registers_port_mode_in_canonical_problem() -> None:
     fm.reset()
     study = _configure_study()
