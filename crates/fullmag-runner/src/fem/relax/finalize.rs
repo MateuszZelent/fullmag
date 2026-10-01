@@ -30,6 +30,7 @@ const LINEARIZATION_PHI_ABSOLUTE_TOLERANCE_A: f64 = 1.0e-12;
 struct NativeEquilibriumEvaluation {
     magnetization: Vec<[f64; 3]>,
     fields: CertifiedFemEquilibriumFields,
+    representation: fullmag_quantities::FemRepresentationReceipt,
 }
 
 #[cfg(test)]
@@ -177,6 +178,7 @@ fn copy_native_equilibrium_evaluation(
             )?,
             backend.copy_demag_phi(node_count)?,
         )?,
+        representation: backend.representation_receipt()?,
     })
 }
 
@@ -614,6 +616,15 @@ pub(crate) fn finalize_native_fem_relaxation(
         &accepted_native_equilibrium,
         &recomputed_native_equilibrium,
     )?;
+    let final_snapshot_receipt =
+        fullmag_quantities::fem_state_snapshot_receipt::FemLocalNodeSnapshotReceipt::capture(
+            final_stats.step,
+            final_stats.time,
+            final_stats.dt,
+            &recomputed_native_equilibrium.magnetization,
+            recomputed_native_equilibrium.representation,
+        )
+        .map_err(|message| RunError { message })?;
     let final_magnetization = recomputed_native_equilibrium.magnetization;
     let certified_fem_equilibrium_fields = recomputed_native_equilibrium.fields;
     finalization_field_copy_wall_time_ns =
@@ -623,6 +634,14 @@ pub(crate) fn finalize_native_fem_relaxation(
     let mut diagnostic_steps = artifacts.take_solver_steps();
     let (mut field_snapshots, field_snapshot_count, provenance) = artifacts.finish();
     let mut auxiliary_artifacts = Vec::new();
+    auxiliary_artifacts.push(AuxiliaryArtifact {
+        relative_path:
+            fullmag_quantities::fem_state_snapshot_receipt::FEM_FINAL_SNAPSHOT_RECEIPT_ARTIFACT
+                .into(),
+        bytes: serde_json::to_vec(&final_snapshot_receipt).map_err(|error| RunError {
+            message: format!("failed to encode final FEM state representation: {error}"),
+        })?,
+    });
     auxiliary_artifacts.push(AuxiliaryArtifact {
         relative_path: "equilibrium/certified_fem_equilibrium_fields.v1.json".into(),
         bytes: serde_json::to_vec_pretty(&certified_fem_equilibrium_fields).map_err(|error| {

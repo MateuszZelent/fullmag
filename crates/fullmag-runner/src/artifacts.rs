@@ -1976,7 +1976,7 @@ pub(crate) fn write_artifacts(
         &executed.initial_magnetization,
     )?;
 
-    let final_stats = accepted_steps.last().cloned().unwrap_or(StepStats {
+    let mut final_stats = accepted_steps.last().cloned().unwrap_or(StepStats {
         step: 0,
         time: 0.0,
         dt: 0.0,
@@ -1991,7 +1991,12 @@ pub(crate) fn write_artifacts(
         wall_time_ns: 0,
         ..StepStats::default()
     });
-    write_field_file(
+    let final_snapshot_receipt = final_native_snapshot_receipt(
+        &field_context,
+        executed,
+        &mut final_stats,
+    )?;
+    write_field_file_with_native_snapshot(
         &output_dir.join("m_final.json"),
         &field_context,
         &execution_provenance,
@@ -2000,6 +2005,7 @@ pub(crate) fn write_artifacts(
         final_stats.time,
         final_stats.dt,
         &executed.result.final_magnetization,
+        final_snapshot_receipt.as_ref(),
     )?;
 
     if streamed.is_none() {
@@ -4382,6 +4388,56 @@ fn write_sampling_resolution_artifact(
     )
 }
 
+fn final_native_snapshot_receipt(
+    context: &FieldArtifactContext,
+    executed: &ExecutedRun,
+    stats: &mut StepStats,
+) -> std::io::Result<
+    Option<fullmag_quantities::fem_state_snapshot_receipt::FemLocalNodeSnapshotReceipt>,
+> {
+    use fullmag_quantities::fem_state_snapshot_receipt::{
+        parse_fem_snapshot_receipt, FEM_FINAL_SNAPSHOT_RECEIPT_ARTIFACT,
+    };
+    let mut artifacts = executed
+        .auxiliary_artifacts
+        .iter()
+        .filter(|artifact| artifact.relative_path == FEM_FINAL_SNAPSHOT_RECEIPT_ARTIFACT);
+    let Some(artifact) = artifacts.next() else {
+        return Ok(None);
+    };
+    if artifacts.next().is_some()
+        || context
+            .layout
+            .get("backend")
+            .and_then(serde_json::Value::as_str)
+            != Some("fem")
+        || !matches!(
+            executed.provenance.execution_engine.as_str(),
+            "fem_cpu_native" | "fem_native_gpu"
+        )
+    {
+        return Err(Error::new(
+            ErrorKind::InvalidData,
+            "ambiguous or nonnative final FEM snapshot receipt",
+        ));
+    }
+    let receipt = parse_fem_snapshot_receipt(&artifact.bytes)
+        .map_err(|message| Error::new(ErrorKind::InvalidData, message))?;
+    receipt
+        .validate_snapshot(
+            receipt.snapshot_step,
+            receipt.snapshot_time_s,
+            receipt.snapshot_solver_dt_s,
+            &executed.result.final_magnetization,
+        )
+        .map_err(|message| Error::new(ErrorKind::InvalidData, message))?;
+    // A sampled diagnostic trace can omit the final endpoint. The receipt
+    // captured with final m is the authority for this artifact's timestamp.
+    stats.step = receipt.snapshot_step;
+    stats.time = receipt.snapshot_time_s;
+    stats.dt = receipt.snapshot_solver_dt_s;
+    Ok(Some(receipt))
+}
 pub(crate) fn write_field_file(
     path: &Path,
     context: &FieldArtifactContext,
@@ -4391,6 +4447,21 @@ pub(crate) fn write_field_file(
     time: f64,
     solver_dt: f64,
     values: &[[f64; 3]],
+) -> std::io::Result<()> {
+    write_field_file_with_native_snapshot(path, context, provenance, observable, step, time, solver_dt, values, None)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn write_field_file_with_native_snapshot(
+    path: &Path,
+    context: &FieldArtifactContext,
+    provenance: &crate::types::ExecutionProvenance,
+    observable: &str,
+    step: u64,
+    time: f64,
+    solver_dt: f64,
+    values: &[[f64; 3]],
+    snapshot_receipt: Option<&fullmag_quantities::fem_state_snapshot_receipt::FemLocalNodeSnapshotReceipt>,
 ) -> std::io::Result<()> {
     let mut layout = context.layout.clone();
     if observable == "m" {
@@ -4445,6 +4516,18 @@ pub(crate) fn write_field_file(
         "provenance": artifact_provenance_json(context, provenance),
         "values": values,
     });
+    if let Some(receipt) = snapshot_receipt {
+        if observable != "m"
+            || context.layout.get("backend").and_then(serde_json::Value::as_str) != Some("fem")
+            || !matches!(provenance.execution_engine.as_str(), "fem_cpu_native" | "fem_native_gpu")
+        {
+            return Err(Error::new(ErrorKind::InvalidData, "native state receipt requires native FEM m output"));
+        }
+        receipt.validate_snapshot(step, time, solver_dt, values)
+            .map_err(|message| Error::new(ErrorKind::InvalidData, message))?;
+        field_json.as_object_mut().expect("field artifact is an object")
+            .insert("native_state_snapshot".into(), serde_json::to_value(receipt)?);
+    }
     if observable == "m" {
         let layout = field_json.get("layout").ok_or_else(|| {
             Error::new(
@@ -6743,6 +6826,77 @@ mod tests {
             auxiliary_artifacts: Vec::new(),
             provenance,
         }
+    }
+
+    #[test]
+    fn final_native_snapshot_uses_captured_endpoint_and_rejects_corrupt_or_duplicate_proof() {
+        use fullmag_quantities::fem_state_snapshot_receipt::{
+            FemLocalNodeSnapshotReceipt, FEM_FINAL_SNAPSHOT_RECEIPT_ARTIFACT,
+        };
+        use fullmag_quantities::{
+            FemMaterialFieldLocation, FemRepresentationReceipt, FemStateRepresentation,
+        };
+        let plan = test_fem_execution_plan();
+        let context = FieldArtifactContext {
+            problem_name: "native-final-state".into(),
+            ir_version: "v0".into(),
+            source_hash: None,
+            execution_mode: ExecutionMode::Strict,
+            layout: field_layout(&plan),
+            magnetization_field_semantics: Ok(None),
+            execution_resolution: None,
+        };
+        let mut executed = final_execution_test_run(ExecutionProvenance {
+            execution_engine: "fem_cpu_native".into(),
+            ..ExecutionProvenance::default()
+        });
+        let receipt = FemLocalNodeSnapshotReceipt::capture(
+            9,
+            0.9,
+            0.1,
+            &executed.result.final_magnetization,
+            FemRepresentationReceipt {
+                schema_version: 1,
+                state_space: FemStateRepresentation::LocalNodeAos,
+                ms_location: FemMaterialFieldLocation::Scalar,
+                a_location: FemMaterialFieldLocation::Scalar,
+                local_node_count: 4,
+                true_node_count: 2,
+                periodic_map_revision: 13,
+                representation_copy_count: 0,
+                gather_scatter_bytes: 0,
+                invalid_space_assertion_count: 0,
+                hot_loop_representation_copy_count: 0,
+                hot_loop_gather_scatter_bytes: 0,
+            },
+        )
+        .unwrap();
+        executed
+            .auxiliary_artifacts
+            .push(crate::types::AuxiliaryArtifact {
+                relative_path: FEM_FINAL_SNAPSHOT_RECEIPT_ARTIFACT.into(),
+                bytes: serde_json::to_vec(&receipt).unwrap(),
+            });
+        let mut stats = executed.result.steps[0].clone();
+        let captured = final_native_snapshot_receipt(&context, &executed, &mut stats).unwrap();
+        assert_eq!((stats.step, stats.time, stats.dt), (9, 0.9, 0.1));
+        assert!(context.layout.get("native_state_snapshot").is_none());
+        assert_eq!(captured.unwrap(), receipt);
+        let mut invalid = executed.clone();
+        invalid.result.final_magnetization[0][0] = 0.5;
+        assert!(final_native_snapshot_receipt(&context, &invalid, &mut stats).is_err());
+        invalid = executed.clone();
+        invalid.provenance.execution_engine = "fem_cpu_baseline_internal".into();
+        assert!(final_native_snapshot_receipt(&context, &invalid, &mut stats).is_err());
+        invalid = executed.clone();
+        invalid
+            .auxiliary_artifacts
+            .push(invalid.auxiliary_artifacts[0].clone());
+        assert!(final_native_snapshot_receipt(&context, &invalid, &mut stats).is_err());
+        invalid = executed.clone();
+        invalid.auxiliary_artifacts.clear();
+        let legacy = final_native_snapshot_receipt(&context, &invalid, &mut stats).unwrap();
+        assert!(legacy.is_none());
     }
 
     fn write_final_execution_test_metadata(

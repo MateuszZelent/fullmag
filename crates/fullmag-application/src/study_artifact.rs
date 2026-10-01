@@ -32,6 +32,8 @@ pub struct MagnetizationStateArtifact {
     pub layout: Value,
     pub provenance: Value,
     pub values: Vec<[f64; 3]>,
+    pub native_state_snapshot:
+        Option<fullmag_quantities::fem_state_snapshot_receipt::FemLocalNodeSnapshotReceipt>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -57,6 +59,22 @@ struct MagnetizationFieldArtifactV1 {
     provenance: Value,
     state_identity: MagnetizationStateIdentityV1,
     values: Vec<[f64; 3]>,
+    #[serde(default, deserialize_with = "deserialize_native_snapshot_receipt")]
+    native_state_snapshot:
+        Option<fullmag_quantities::fem_state_snapshot_receipt::FemLocalNodeSnapshotReceipt>,
+}
+
+fn deserialize_native_snapshot_receipt<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<
+    Option<fullmag_quantities::fem_state_snapshot_receipt::FemLocalNodeSnapshotReceipt>,
+    D::Error,
+> {
+    let raw = Value::deserialize(deserializer)?;
+    // Missing is legacy None; present null or malformed is an explicit error.
+    fullmag_quantities::fem_state_snapshot_receipt::parse_fem_snapshot_receipt_value(&raw)
+        .map(Some)
+        .map_err(serde::de::Error::custom)
 }
 
 #[derive(Debug, Deserialize)]
@@ -255,9 +273,35 @@ fn decode_magnetization_state(bytes: &[u8]) -> Result<MagnetizationStateArtifact
         layout: payload.layout,
         provenance: payload.provenance,
         values: payload.values,
+        native_state_snapshot: payload.native_state_snapshot,
     };
     decode_magnetization_field_semantics(&state)?;
+    validate_native_magnetization_snapshot(&state)?;
     Ok(state)
+}
+
+fn validate_native_magnetization_snapshot(
+    state: &MagnetizationStateArtifact,
+) -> Result<(), ExecutionError> {
+    let Some(receipt) = state.native_state_snapshot.as_ref() else {
+        return Ok(());
+    };
+    if state.layout.get("backend").and_then(Value::as_str) != Some("fem")
+        || !matches!(
+            state
+                .provenance
+                .get("execution_engine")
+                .and_then(Value::as_str),
+            Some("fem_cpu_native" | "fem_native_gpu")
+        )
+    {
+        return Err(invalid(
+            "native snapshot receipt requires executed native FEM provenance",
+        ));
+    }
+    receipt
+        .validate_snapshot(state.step, state.time_s, state.solver_dt_s, &state.values)
+        .map_err(invalid)
 }
 
 fn validate_magnetization_layout(
@@ -491,7 +535,69 @@ mod tests {
             layout,
             provenance: json!({"execution_resolution": {"requested": "fem"}}),
             values: vec![[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            native_state_snapshot: None,
         }
+    }
+
+    #[test]
+    fn native_snapshot_receipt_survives_json_and_rejects_foreign_values_or_provenance() {
+        use fullmag_quantities::fem_state_snapshot_receipt::FemLocalNodeSnapshotReceipt;
+        use fullmag_quantities::{
+            FemMaterialFieldLocation, FemRepresentationReceipt, FemStateRepresentation,
+        };
+        let mut state = state_with_layout(fem_layout());
+        state.provenance = json!({"execution_engine": "fem_cpu_native"});
+        let receipt = FemLocalNodeSnapshotReceipt::capture(
+            state.step,
+            state.time_s,
+            state.solver_dt_s,
+            &state.values,
+            FemRepresentationReceipt {
+                schema_version: 1,
+                state_space: FemStateRepresentation::LocalNodeAos,
+                ms_location: FemMaterialFieldLocation::Scalar,
+                a_location: FemMaterialFieldLocation::Scalar,
+                local_node_count: 2,
+                true_node_count: 1,
+                periodic_map_revision: 123,
+                representation_copy_count: 0,
+                gather_scatter_bytes: 0,
+                invalid_space_assertion_count: 0,
+                hot_loop_representation_copy_count: 0,
+                hot_loop_gather_scatter_bytes: 0,
+            },
+        )
+        .unwrap();
+        state.native_state_snapshot = Some(receipt);
+        assert!(validate_native_magnetization_snapshot(&state).is_ok());
+        let bytes = serde_json::to_vec(&json!({
+            "observable":"m", "unit":"1", "step":state.step, "time":state.time_s,
+            "solver_dt":state.solver_dt_s, "layout":state.layout, "provenance":state.provenance,
+            "state_identity": {"schema_version":MAGNETIZATION_STATE_IDENTITY_SCHEMA,
+                "backend":"fem", "layout_sha256":study_state_layout_sha256(&state.layout).unwrap(),
+                "sample_count":state.values.len()}, "values":state.values,
+            "native_state_snapshot":state.native_state_snapshot,
+        }))
+        .unwrap();
+        assert!(decode_magnetization_state(&bytes).is_ok());
+        let mut changed = state.clone();
+        changed.values[0][0] = 0.5;
+        assert!(validate_native_magnetization_snapshot(&changed).is_err());
+        changed = state.clone();
+        changed.step += 1;
+        assert!(validate_native_magnetization_snapshot(&changed).is_err());
+        changed = state.clone();
+        changed.provenance["execution_engine"] = json!("fem_cpu_baseline_internal");
+        assert!(validate_native_magnetization_snapshot(&changed).is_err());
+        let mut null_proof: Value = serde_json::from_slice(&bytes).unwrap();
+        null_proof["native_state_snapshot"] = Value::Null;
+        assert!(decode_magnetization_state(&serde_json::to_vec(&null_proof).unwrap()).is_err());
+        assert_eq!(
+            decode_magnetization_state(&bytes)
+                .unwrap()
+                .space_fingerprint,
+            state.space_fingerprint
+        );
     }
 
     fn decode_bytes(

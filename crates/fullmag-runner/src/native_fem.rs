@@ -3379,6 +3379,13 @@ impl NativeFemBackend {
     }
 
     fn attach_representation_receipt(&self, stats: &mut StepStats) -> Result<(), RunError> {
+        stats.fem_representation_receipt = Some(self.representation_receipt()?);
+        Ok(())
+    }
+
+    /// Read from this executing backend handle, never from the accepted plan
+    /// or a previously retained step diagnostic.
+    pub(crate) fn representation_receipt(&self) -> Result<FemRepresentationReceipt, RunError> {
         let mut raw = ffi::fullmag_fem_representation_receipt_v1::default();
         let rc = unsafe {
             ffi::fullmag_fem_backend_snapshot_representation_receipt_v1(self.handle, &mut raw)
@@ -3386,8 +3393,7 @@ impl NativeFemBackend {
         if rc != ffi::FULLMAG_FEM_OK {
             return Err(self.last_error_or("FEM representation receipt read failed"));
         }
-        stats.fem_representation_receipt = Some(representation_receipt_from_ffi(&raw)?);
-        Ok(())
+        representation_receipt_from_ffi(&raw)
     }
 
     fn average_m_for_nodes(&self, node_indices: &[u32]) -> Result<Option<[f64; 3]>, RunError> {
