@@ -3,8 +3,9 @@
 ## Wynik i granice dowodu
 
 Źródła wskazują kosztowną sekwencję osobnych solve'ów shift-invert, a nie
-ponowne składanie całego operatora Poissona. Nie mamy profilu czasowego,
-który pozwala przypisać procent czasu poszczególnym operacjom.
+ponowne składanie całego operatora Poissona. Terminalna diagnostyka pozwala
+przypisać 98,81765% sumy czasu podokien nieudanym solve'om. Nie mamy jeszcze
+profilu rozdzielającego assembly, preconditioner, EPSSolve i Poisson apply.
 Nie obniżono liczby podokien, wymagania kompletności ani progów residualu.
 
 Przegląd dotyczy worktree `eigensolve-dispersion-plan-20260912`, przy
@@ -14,10 +15,12 @@ Pilot używa starszego, jawnie przypiętego runtime/modelu
 Build i batch naukowy są odrębnymi etapami: numer #193 identyfikuje receipt
 runtime, nie osobny job kwalifikacji naukowej.
 
-Odczyt kontenera `21c61a91ee6f` potwierdził aktywny proces. Log pilota Γ t3
-pokazuje `active_nodes=328`, `effective_dof=656`, refinament `24/50` i
-`window_s=3845.3`. Są to dane obserwowane, bez terminalnej częstotliwości.
-Residual wypisywany przy iteracjach liniowych nie zastępuje residualu modu.
+Pilot Γ t3 zakończył się błędem kompletnego okna: 36 podokien poprawnych,
+14 nieudanych (`slepc_diverged`). Suma czasów podokien wynosi 14 845,011149 s;
+nieudane zajęły 14 669,491091 s, poprawne 175,520058 s. To suma pomiarów
+podokien, nie wall time całego pipeline'u ani buildu. Pojedynczy mod Γ
+9,299249697 GHz przeszedł kontrolę oryginalnego residualu, ale nie powstał
+kompletny wynik widma. [Tożsamość logu i wynik](2026-10-01-mfem410-gamma-window-outcome.md).
 
 ## Mechanizm potwierdzony w źródłach
 
@@ -39,9 +42,10 @@ shifty seryjnie. Nie deklarujemy równoległego liczenia punktów ani shiftów.
 harmonogram okna wyznacza wymiar jako `2*problem.q_dof_count`. Przy porównaniu
 progu cache należy odczytać rzeczywisty wymiar wewnętrzny. Sam komunikat
 `effective_dof=656` nie jest pomiarem wymiaru tej macierzy i nie uzasadnia
-zwiększenia limitu tylko do 656. Przekroczenie progu przez pilot pozostaje
-niepotwierdzone bez odczytu rzeczywistego split_count. Dokładny koszt
-materializacji trzeba policzyć dla tego wewnętrznego wymiaru.
+zwiększenia limitu tylko do 656. Terminalna diagnostyka podaje q_dof_count=656,
+phi_dof_count=5084 oraz augmented_dof_count=5740. Z kodu realnego splitu
+wynika split_count=1312; nie jest to nowy pomiar telemetrii. Runtime #193
+nie publikuje czasu ani liczników materializacji dokładnego preconditionera.
 
 Wycofano liczbowe twierdzenie o historycznych licznikach: wskazany do review
 `stage_00_flat_relax/metadata.json` zawiera również duże tablice indeksów.
@@ -50,8 +54,9 @@ solvera. Mechanizm reużycia potwierdzają wymienione źródła, nie ten odczyt.
 
 ## Następne działania
 
-1. Dokończyć obecny pilot i odczytać terminalne liczniki/receipt. Nie uruchamiać
-   duplikatu ani nie przerywać go wyłącznie z powodu długiego czasu.
+1. Terminalny pilot i liczniki odczytano. Przygotować świeży runtime nearest
+   dla Γ/±DE/±BV i kontrolować oryginalne residuale oraz selected-only output.
+   Zachować osobną bramkę naprawy rozbiegania i kompletności pełnego okna.
 2. Zmierzyć per-shift assembly, factorization PC, setup EPS/ST/KSP, EPSSolve,
    retry oraz apply/Poisson solve. Rozdzielić setup od czasu rozwiązania.
 3. Zbadać współdzielenie pattern/preallocation sparse fallbacku i aktualizację

@@ -1,6 +1,35 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
-## Aktualny stan — 2026-10-01, po commicie 206a684b4
+## Aktualny stan — 2026-10-01, po commicie c5b14ffd4
+
+Pilot na runtime #193 zakończył się błędem `frequency_window_subwindow_failed`:
+36 z 50 podokien poprawnych, 14 rozbieżnych. Obserwator 42033 zakończył się
+kodem 1, proces 168336 nie istnieje; wcześniejsze wpisy running są historyczne.
+Z diagnostyki zachowano pojedynczy zaakceptowany mod Γ: 9,299249697068405 GHz,
+full backward error 2,01e-13. Analityka tej samej geometrii skończonego airboxu
+i konwencji engine μ0=4π·1e-7 daje 9,299249697068401 GHz. Nie powstało kompletne
+widmo ani oficjalny CSV dyspersji; nie wykonano kolejnych punktów DE/BV.
+Nieudane podokna zużyły 98,81765% sumy zmierzonych czasów podokien.
+Szczegóły i tożsamość logu: [audyt wyniku Γ](../../audits/2026-10-01-mfem410-gamma-window-outcome.md).
+Kolejny krok: spójny checkpoint nearest, świeży preflight managed runnera,
+runtime-only build i osobne Γ/±DE/±BV. Kompletność okna pozostaje wymagana
+w docelowym solverze; selected-only służy kontroli pojedynczych modów.
+
+Checkpoint diagnostyki Schur/EPS:
+`c5b14ffd4aadcb798c3b708381999048f6cf963f` — commit i push potwierdzone,
+HEAD i origin są zgodne. Zakres: 7 plików; niezależne review czterech korekt,
+source contract i pełny validator noty PASS. Zachowane limity 512/8192,
+produkcyjny MatShell i dotychczasowe progi solvera. Doprecyzowano jednostki
+bezwymiarowego EPS pencilu po normalizacji i powrót do fizycznej częstotliwości.
+Native compilation/runtime tego SHA pozostają NOT VERIFIED.
+
+W toku: jawny nearest pilot single-k oraz dopuszczenie go w pełnym kontrakcie
+Floquet + dynamiczny demag CPU. Review wykryło lukę dowodową source testu:
+selected_only z K0 nie dowodzi wyjścia Floquet nonzero-k. Potrzebne są jawne
+target_kind, target_frequency_hz, spectrum_completeness=selected_only oraz
+window_complete=false w rzeczywistym producerze i kontrola solver.v1.json.
+Pilot musi obsługiwać osobne Γ/±DE/±BV z własnym celem; pełna kompletność
+okna, ciągłość pasm i zbieżność pozostają oddzielnymi bramkami S00–S12.
 
 Checkpoint exact mesh replay, małych macierzy i kanonicznych ścieżek:
 `206a684b4f21d1439e7dcb57cce7408006e42312` — commit i push potwierdzone;
@@ -58,14 +87,9 @@ Po integracji: 40 interpretowanych regresji producenta/routingu/consumer/
 nonshared PASS oraz 213 testów głównego verifiera PASS (75,58 s).
 Pełne walidatory trzech not naukowych PASS; kontrola parsera nie zastępuje
 kompilacji ani uruchomienia natywnego solvera.
-Nie kompilowano testów native. Obserwator session 42033 został ponownie
-odpytany i nadal jest running; proces pilota PID 168336 jest aktywny,
-log Γ t3 przeszedł do refinement 38/50, computed_modes=0. Brak nowego
-terminalnego wyniku częstotliwości, widma i CSV dyspersji; wykres nie został
-zaktualizowany o nowe punkty tej serii.
-Niezależny odczyt Docker potwierdził kontener `21c61a91ee6f` jako running:
-chwilowe CPU 213,39%, RAM 354,7 MiB. To pomiar całego kontenera, nie kosztu
-samej macierzy lub fazy EPS; nie dowodzi zbieżności modalnej.
+Nie kompilowano testów native. Pilot zakończył się błędem pełnego okna;
+pojedynczy zaakceptowany mod Γ jest opisany w aktualnym audycie powyżej.
+Nie ma oficjalnego CSV tej serii ani nowych punktów nonzero-k na wykresie.
 Review integracji wykryło dwa kolejne defekty obsługi wejścia: wszystkie
 jawnie puste tablice nonshared były traktowane jak historyczny brak, a typy
 JSON niezgodne z kontraktem mogły spowodować TypeError/AttributeError.
@@ -83,10 +107,10 @@ Checkpoint producenta, exact replay i sample binding:
 `09aa7e5bc5018534c8490eabdd29a1fe9cdc33da`, commit i push potwierdzone.
 Zlecenie runtime-only builda tego SHA zostało odrzucone przez preflight:
 `Storage is busy: eigensolve-dispersion-plan-20260-c5dfad6d7f548079`.
-Nowy job nie został przyjęty; proces pilota używającego runtime #193 nadal
-trzyma lock worktree (aktywny właściciel PID 168336 na Orion, potwierdzony proces).
-Odczyt nazwy skryptu właściciela: `run_de_100nm_pilot.py`. Nie użyto
-alternatywnego storage ani równoległego buildu. Następnie ponowić ten sam
+Nowy job nie został wtedy przyjęty; pilot runtime #193 trzymał lock worktree
+(PID 168336 na Orion). Proces już zakończył się; stan lease musi uzgodnić
+świeży managed preflight. Nie użyto alternatywnego storage ani równoległego
+buildu. Dla identycznego źródła można ponowić ten sam
 request-key po zwolnieniu zasobu, jeśli nadal sprawdzamy 09aa7e5bc.
 Dla późniejszego spójnego checkpointu użyć nowego request-key z jego pełnym
 SHA; build starego checkpointu nie kwalifikuje późniejszych zmian.

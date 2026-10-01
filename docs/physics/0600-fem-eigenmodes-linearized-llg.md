@@ -470,6 +470,18 @@ albo nie rozwiązywał poprawnie profilu po grubości. Residual nie wykrywa taki
 niespójności fizycznej; trzeba odczytać rzeczywiste bounds z `DomainFrameIR` i
 wykonać sweep paddingu oraz liczby warstw.
 
+Aktualizacja diagnostyczna z 2026-10-01: pilot Γ t3 na MFEM 4.10
+(runtime SHA `e78a25bac0f95c1190821524545803e4311b8ef9`, build #193)
+zachował dodatni mod $9.299249697068405$ GHz z full backward error
+$2.01\cdot10^{-13}$. Przy produkcyjnej konwencji
+$\mu_0=4\pi\cdot10^{-7}$ i powyższej geometrii jednorodna analityka finite
+airbox daje $9.299249697068401$ GHz. Nie był to sukces pełnego okna:
+14 z 50 podokien podało `slepc_diverged`; wynik końcowy ma
+`window_complete=false`. Nie dowodzi to nonzero-k, kompletności widma
+ani kwalifikacji bieżącego brancha. Szczegóły, source identity, residuale
+oraz błąd metadanej $\mu_0$ zapisano w
+[raporcie wyniku Γ](../audits/2026-10-01-mfem410-gamma-window-outcome.md).
+
 Współczynnik P00 jest obliczany stabilnie: dla małego bezwymiarowego argumentu
 `x=|k|*t` używane jest rozwinięcie `x/2-x^2/6+x^3/24-x^4/120+x^5/720`,
 a poza nim `1+expm1(-x)/x`. Granica w zerze wynosi zero. Generator CSV
