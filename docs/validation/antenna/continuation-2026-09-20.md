@@ -5,7 +5,23 @@ Data bazowego przekazania: 2026-09-20; aktualizacja: 2026-10-01. Status całośc
 
 ## 1. Punkt wznowienia i zakres tego dokumentu
 
-### Najnowszy checkpoint — zgodność składowej widma Python–IR, 2026-10-01
+### Najnowszy checkpoint — pełny authoring stage-first, 2026-10-01
+
+Commit `25c05e363700663da6d5b1032b11b1ab838b7007` dodaje test przejścia
+od obiektu anteny i `CurrentTransport` przez port, solve, widmo, projekcję,
+drive i run do eksportu skryptu oraz ponownego importu. Symboliczne
+`stage_id/output_id`, siedem kolekcji IR i kolejność etapów są zachowane;
+44 testy Python w grupach stage-workflow, composition-contract i current-transport
+przeszły. Przypięte w fixture ID widoku prądu są syntetyczne: to dowód
+round-trip authoringu T03, **nie** wykonalnego pola ani kwalifikacji T05/T06.
+Nadal brakuje testu rzeczywistej transakcji API → GET → export → loader → IR.
+
+Korekta notatki 0950 i mapy źródeł została osobno zatwierdzona commitem
+`af52f1aeae4861e7bd29118f23a5f4bb0fb491e6`; walidator source-map,
+32 testy dokumentacji i `git diff --check` przeszły. Przykład fizyczny
+end-to-end oraz pełna tabela parametrów T18 pozostają otwarte.
+
+### Wcześniejszy checkpoint — zgodność składowej widma Python–IR, 2026-10-01
 
 Commit `a96054d28ffb7020087cfc80abca13dffc9b1eda` odrzuca w publicznym
 `AntennaSpectrumRequest` nazwy `component`, których nie akceptują kanoniczny
@@ -15,10 +31,10 @@ composition-contract przeszły, podobnie `git diff --check`. Jest to bramka
 authoringu, nie dowód numerycznej poprawności FFT ani runtime FEM/FDM.
 
 Pozostały niezatwierdzony WIP obejmuje m.in. kontrolę aktualności manifestu
-przed wczytaniem pola i atomowe rozwiązywanie referencji T08 oraz korektę
-statusu starego przykładu w notatce 0950. Testów jednostkowych Rust nie
-kompilowano zgodnie z obowiązującym zakazem. `just runner-container-status`
-z poprawnie rozpoznanym `D:\git\fullmag\storage` zwrócił
+przed wczytaniem pola i atomowe rozwiązywanie referencji T08. Testów
+jednostkowych Rust nie kompilowano zgodnie z obowiązującym zakazem.
+`just runner-container-status` z poprawnie rozpoznanym
+`D:\git\fullmag\storage` zwrócił
 `Container configuration is missing`; konfiguracji runnera nie odtwarzano.
 
 ### Wcześniejszy checkpoint — algebraiczna para PBC, 2026-09-30
