@@ -257,16 +257,39 @@ pub struct RecomputedFemLinearizationCertificateV1 {
 pub fn recomputed_fem_linearization_certificate_sha256(
     certificate: &RecomputedFemLinearizationCertificateV1,
 ) -> Result<String, RunError> {
-    let mut preimage = certificate.clone();
-    preimage.content_sha256.clear();
-    let encoded = serde_json::to_vec(&preimage).map_err(|error| RunError {
-        message: format!("failed to encode recomputed FEM linearization certificate: {error}"),
-    })?;
+    let encoded = recomputed_fem_linearization_certificate_preimage_bytes(certificate)?;
     let mut hash = Sha256::new();
     hash.update(certificate.schema_version.as_bytes());
     hash.update([0u8]);
     hash.update((encoded.len() as u64).to_le_bytes());
     hash.update(encoded);
+    Ok(format!("sha256:{:x}", hash.finalize()))
+}
+
+/// Return the exact UTF-8 JSON bytes used by the historical certificate
+/// digest.  This is deliberately separate from the certificate digest so a
+/// downstream replay implementation can verify Rust's serde bytes without
+/// reserializing the JSON in another language.
+pub fn recomputed_fem_linearization_certificate_preimage_bytes(
+    certificate: &RecomputedFemLinearizationCertificateV1,
+) -> Result<Vec<u8>, RunError> {
+    let mut preimage = certificate.clone();
+    preimage.content_sha256.clear();
+    serde_json::to_vec(&preimage).map_err(|error| RunError {
+        message: format!("failed to encode recomputed FEM linearization certificate: {error}"),
+    })
+}
+
+/// Digest the exact certificate preimage bytes without the historical
+/// schema/length framing.  The framed certificate digest remains the source
+/// of truth for compatibility; this auxiliary digest proves the bytes that
+/// were published beside the certificate.
+pub fn recomputed_fem_linearization_certificate_preimage_sha256(
+    certificate: &RecomputedFemLinearizationCertificateV1,
+) -> Result<String, RunError> {
+    let bytes = recomputed_fem_linearization_certificate_preimage_bytes(certificate)?;
+    let mut hash = Sha256::new();
+    hash.update(bytes);
     Ok(format!("sha256:{:x}", hash.finalize()))
 }
 
@@ -4767,6 +4790,21 @@ mod certified_field_version_tests {
         assert_eq!(serde_json::to_string(&certificate).unwrap(), frozen_json);
         assert_eq!(super::recomputed_fem_linearization_certificate_sha256(&certificate).unwrap(),
             "sha256:ed9805381c87f09d4b3f0a47b822b1ce8e0dbaa81c5511fccb205987e21fb2f9");
+        let preimage = super::recomputed_fem_linearization_certificate_preimage_bytes(&certificate)
+            .unwrap();
+        // Use the frozen producer bytes: serializing Value would sort object
+        // keys and would not reproduce the typed serde field order.
+        let expected_preimage = frozen_json.replace(
+            &format!("\"content_sha256\":\"{}\"", certificate.content_sha256),
+            "\"content_sha256\":\"\"",
+        );
+        assert_eq!(preimage.as_slice(), expected_preimage.as_bytes());
+        use sha2::{Digest, Sha256};
+        assert_eq!(
+            super::recomputed_fem_linearization_certificate_preimage_sha256(&certificate)
+                .unwrap(),
+            format!("sha256:{:x}", Sha256::digest(&preimage))
+        );
         let mut explicit_null = serde_json::to_value(&certificate).unwrap();
         explicit_null["max_h_anisotropy_difference_a_per_m"] = serde_json::Value::Null;
         assert!(serde_json::from_value::<super::RecomputedFemLinearizationCertificateV1>(explicit_null).is_err());

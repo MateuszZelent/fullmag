@@ -18,8 +18,11 @@ opisują historię; dawne `running/live/queued` nie są aktualnym stanem procesu
   single-k publikuje komplet ośmiu tablic. Runtime pozostaje NOT VERIFIED.
   Kolejne review: poprawiono cztery błędne nazwy parametrów blokujące
   kompilację; trwa utwardzenie kompletności tablic i digestów per próbka.
-  Nowy replay pól wymaga rzeczywistej topologii do wyliczenia fingerprintu,
-  a nie samego zadeklarowanego digestu. Ta luka jest naprawiana przed publikacją.
+  Nowy replay pól wylicza fingerprint z rzeczywistej topologii, sprawdza
+  node-count/CSR/roles/PBC i odrzuca zduplikowane aliasy tolerancji.
+  Wrapper/base replay: 20 PASS; mesh fingerprint: 29 PASS; mapa naukowa PASS.
+  Pełna integracja replay pól/źródła/operatora z głównym verifierem pozostaje
+  otwarta; wynik wrappera ma jawny zakres caller-validated sygnatur.
   Python sprawdza teraz pięć exact preimage materiału/statyki/boundary/raw
   po pełnym own-identity replay. Focused 59 i główny verifier 213 PASS.
   Poprawiono leksykalne ujemne zero, zakres deklaracji i regresje airbox/PBC;

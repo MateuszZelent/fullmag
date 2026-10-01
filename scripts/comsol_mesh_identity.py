@@ -131,6 +131,15 @@ def mesh_topology_fingerprint_v3(mesh):
         for item in values:
             write_item(item)
 
+    def optional_sequence(mapping, key):
+        # FemMeshPayload uses serde(default, skip_serializing_if = "Vec::is_empty")
+        # for these arrays.  A missing value is therefore the empty sequence;
+        # an explicitly supplied non-array remains invalid.
+        value = mapping.get(key, [])
+        if not isinstance(value, list):
+            raise ValueError("topology fingerprint v3 sequence field must be an array")
+        return value
+
     def optional(value, write_value):
         if value is None:
             u8(0)
@@ -163,26 +172,34 @@ def mesh_topology_fingerprint_v3(mesh):
         {"tet4": 1, "prism6": 2, "pyramid5": 3, "hex8": 4}, value))
     sequence(cells.get("offsets"), u32)
     sequence(cells.get("nodes"), u32)
-    sequence(cells.get("global_ordinals"), u64)
-    sequence(cells.get("mesh_parts"), lambda value: enum(
+    cell_ordinals = optional_sequence(cells, "global_ordinals")
+    if not cell_ordinals and cells.get("types"):
+        cell_ordinals = list(range(len(cells["types"])))
+    sequence(cell_ordinals, u64)
+    sequence(optional_sequence(cells, "mesh_parts"), lambda value: enum(
         {
             "magnetic": 1,
             "transition_air": 2,
             "far_air": 3,
         },
         value))
-    sequence(mesh.get("element_markers"), u32)
+    sequence(optional_sequence(mesh, "element_markers"), u32)
     sequence(facets.get("types"), lambda value: enum({"tri3": 1, "quad4": 2}, value))
     sequence(facets.get("roles"), lambda value: enum(
         {"exterior": 1, "material_interface": 2, "periodic_seam": 3}, value))
     sequence(facets.get("offsets"), u32)
     sequence(facets.get("nodes"), u32)
-    sequence(facets.get("global_ordinals"), u64)
-    sequence(mesh.get("boundary_markers"), u32)
+    facet_ordinals = optional_sequence(facets, "global_ordinals")
+    if not facet_ordinals and facets.get("types"):
+        facet_ordinals = list(range(len(facets["types"])))
+    sequence(facet_ordinals, u64)
+    sequence(optional_sequence(mesh, "boundary_markers"), u32)
 
     def periodic_boundary_pair(pair):
         if not isinstance(pair, Mapping):
             raise TypeError("topology fingerprint v3 periodic boundary pair must be an object")
+        if "tolerance" in pair and "tolerance_m" in pair:
+            raise ValueError("periodic boundary pair duplicates tolerance through tolerance_m alias")
         string(pair.get("pair_id"))
         optional(pair.get("source_marker"), string)
         optional(pair.get("destination_marker"), string)
@@ -197,7 +214,7 @@ def mesh_topology_fingerprint_v3(mesh):
         optional(pair.get("orientation"), string)
         optional(pair.get("pairing_policy"), string)
 
-    sequence(mesh.get("periodic_boundary_pairs"), periodic_boundary_pair)
+    sequence(optional_sequence(mesh, "periodic_boundary_pairs"), periodic_boundary_pair)
 
     def periodic_node_pair(pair):
         if not isinstance(pair, Mapping):
@@ -206,5 +223,5 @@ def mesh_topology_fingerprint_v3(mesh):
         u32(pair.get("node_a"))
         u32(pair.get("node_b"))
 
-    sequence(mesh.get("periodic_node_pairs"), periodic_node_pair)
+    sequence(optional_sequence(mesh, "periodic_node_pairs"), periodic_node_pair)
     return "sha256:" + hashlib.sha256(encoded).hexdigest()

@@ -14,12 +14,15 @@ nie zawierają tego przyrostu. Pełny plan S00–S12 pozostaje obowiązujący.
 |---|---|---|
 | Brak własnego exact preimage identity | P1: digest powstaje z kompaktowego `serde_json::to_vec` po wyzerowaniu `content_sha256`, publikowany JSON jest inną reprezentacją | Potwierdzony. Addytywny `linearization_identity_preimage.v1` ma zachować dokładne bajty, raw SHA-256 i framed digest. Python musi sprawdzić również zgodność wszystkich wartości z opublikowanym identity. |
 | Brak identity w non-shared Floquet | P1: `eigen_native_window.rs` przekazuje brak state/handoff do publikacji, choć wykorzystano stan relaksacji | Potwierdzony przez niezależne review; wymagane przekazanie stanu i certyfikatów lub jawny brak kwalifikacji. Nie można nazywać tej ścieżki pełnym R4. |
-| Rekonstrukcja danych producenta w bieżącym procesie | P1/P2: `from_exact_artifacts` przypisuje aktualny `build_identity_json()` bez transportu historycznej tożsamości producenta | Otwarte: sprawdzić faktyczną dostępność importu między runami. Kontrakt importu musi przenosić producer build/source-plan metadata; bieżąca tożsamość nie może zastępować nieznanej. |
+| Rekonstrukcja danych producenta w bieżącym procesie | P1/P2: `from_exact_artifacts` przypisywał aktualny `build_identity_json()` bez transportu historycznej tożsamości producenta | Naprawa źródłowa w review: typed producer record powstaje przy zapisie relaksacji, exact verified constructor i loader przenoszą rzeczywisty build/source-plan metadata. Root potwierdził brak produkcyjnych wywołań starego exact konstruktora. Prepared pełne regresje live/import oraz managed runtime nadal wymagane. |
 | Null operator input signature w non-shared Floquet | P1: manifest nie wiąże rzeczywistych wejść operatora | Otwarte. Przekazać produkcyjną sygnaturę wraz z dokumentowanym zakresem; porównywać punkty poza jawną zmianą k. |
 | Niepełne wiązanie semantyki dynamicznej | P2: statyczne identity pomija damping zgodnie z fizyką, lecz modal identity nie jest użyte produkcyjnie | Otwarte. Związać damping policy, k, Floquet boundary i operator przez modal identity. Damping relaksacji 0,5 i eigen 0 nie może sam zmieniać statycznej tożsamości. |
-| Nieprawidłowy indeks identity multi-k | P1: wrapper stage-handoff przekazuje indeks 0, a późniejsze przeniesienie pliku nie zmienia podpisanego `sample_index` | Potwierdzony w focused review. Przekazać rzeczywisty indeks przed tworzeniem identity; testować co najmniej drugą próbkę. Naprawa w toku. |
-| Nieaktualne ścieżki state w podpisanym identity | P1: identity wskazuje rootowe equilibrium/state, które później są przenoszone do `sample_NNNN` | Potwierdzony. Podpisywać finalne ścieżki; nie zmieniać rekordów po podpisaniu. Naprawa w toku. |
-| Single-k pomijany przez discovery R4 | P1: producent zapisuje sidecary, ale manifest publikuje tylko singular identity paths | Potwierdzony. Wystawić komplet plural arrays dla jednej próbki zgodnie z kontraktem discovery. Naprawa w toku. |
+| Nieprawidłowy indeks identity multi-k | P1: wrapper stage-handoff przekazuje indeks 0, a późniejsze przeniesienie pliku nie zmienia podpisanego `sample_index` | Naprawa źródłowa w niezależnym review: rzeczywisty indeks jest przekazywany przed tworzeniem identity; przygotowane regresje dla dalszych próbek. Runtime NOT VERIFIED. |
+| Nieaktualne ścieżki state w podpisanym identity | P1: identity wskazuje rootowe equilibrium/state, które później są przenoszone do `sample_NNNN` | Naprawa źródłowa w niezależnym review: podpisywane są finalne ścieżki; remap zachowuje exact bytes. Runtime NOT VERIFIED. |
+| Single-k pomijany przez discovery R4 | P1: producent zapisuje sidecary, ale manifest publikuje tylko singular identity paths | Naprawa źródłowa w niezależnym review: komplet ośmiu plural arrays dla jednej próbki, nieobecne rodziny puste. Runtime NOT VERIFIED. |
+| Błędna nazwa indeksu ścieżki state | P1: cztery wywołania używały niezdefiniowanego `artifact_state_sample_index` | Poprawiono na rzeczywisty parametr `state_artifact_sample_index`. Parser Rust PASS, przegląd czterech call sites PASS; production build aktualnego źródła nadal wymagany. |
+| Częściowe sidecary i niekanoniczne indeksy w manifeście | P2: filtry po nazwach nie zapewniają pełnego computed sample-set ani powiązania digestów dla każdej próbki | Potwierdzone w kolejnym review. Naprawa coverage, kanonicznych nazw i mapy rzeczywistych identity digestów w toku. Historyczny brak R4 nie może dostać pełnej kwalifikacji. |
+| Replay mesh porównuje tylko zadeklarowane digesty | P1: nowy helper może oznaczyć mesh binding jako poprawny bez rzeczywistych węzłów i elementów | Naprawione w helperze: actual topology fingerprint v3, zgodność node-count i struktury CSR/roles/PBC oraz regresje mutacyjne. 20 testów wrapper/base replay i 29 testów siatki PASS. Integracja pełnego R4 z głównym verifierem pozostaje NOT VERIFIED. |
 | Zagnieżdżony klucz tłumi eksport kwadratury | P2: `.find("shared_domain_operator_provenance")` traktuje nested klucz jako top-level | Naprawiony źródłowo: guard top-level; prepared regresja przez kontrakt natywny i publiczne C ABI. Focused review bez nowych P1/P2; runtime NOT VERIFIED. |
 | Końcowe whitespace i nieprecyzyjna dokumentacja append JSON | P2: helper wymaga ostatniego znaku `}`, a opis obiecuje więcej niż sprawdza kod | Naprawiony źródłowo: trailing whitespace i pusty obiekt `{ \n }` są obsługiwane. Opis ograniczonego skanera nie obiecuje pełnej walidacji JSON. Native runtime NOT VERIFIED. |
 
@@ -49,6 +52,38 @@ nie zawierają tego przyrostu. Pełny plan S00–S12 pozostaje obowiązujący.
 ## Kolejność domknięcia
 
 ### Dodatkowe focused review helpera fizycznego
+
+Niezależne review nowego wrappera accepted/recomputed wykryło dodatkowe
+błędy przed jego publikacją:
+
+- P1: liczba węzłów rzeczywistej siatki nie była porównywana z `node_count`
+  pól i m0. Niepoprawny fixture miał cztery węzły siatki i jeden węzeł pól.
+- P1: fingerprint Python odrzucał brak pustych tablic PBC, choć Rust
+  poprawnie pomija je przez `skip_serializing_if` i odtwarza przez `default`.
+- P2: potrzebna jest kontrola struktury siatki, a nie sam digest topologii.
+- P2: raport musi jawnie ujawniać zakres caller-validated sygnatur;
+  ekstrakcja preimage certyfikatu nie weryfikuje całego identity v2.
+
+Poprawki node-count/PBC/struktury i jawnego zakresu sygnatur są obecne
+w źródłach. Końcowe review root wykryło dodatkowo brak zgodności liczby
+`facets.roles` z liczbą facets; dodano kontrolę i regresję z pasującym
+digestem wadliwej siatki. Kolejne niezależne review wykryło akceptowanie
+jednoczesnych kluczy `tolerance` i `tolerance_m`, które Rust traktuje jako
+zduplikowane pole. Oba konsumery odrzucają ten przypadek; dodano regresje.
+Aktualne kontrole: 20 testów wrapper/base replay oraz 29 testów fingerprintu
+PASS. Literalny frozen digest certyfikatu pochodzi
+z `types.rs`, nie z samodzielnej serializacji fixture'u Pythona.
+
+Pełny validator dokumentacji wrappera ujawnił braki mapy źródeł, tabel i
+przykładu; po korekcie PASS. Review fizyczne poprawiło jednostkę `m0` na
+bezwymiarowy kierunek oraz opis wyboru V2 przez `Some(Ku)`, także zero.
+Review prepared regresji Rust wykryło nieprawidłową ponowną serializację
+`serde_json::Value` zamiast typed serde field order; porównanie używa teraz
+zamrożonych bajtów producenta. Parser Rust PASS; tej regresji natywnej
+nie kompilowano ani nie uruchamiano.
+
+Wrapper nie jest jeszcze podłączony jako pełna bramka R4 w głównym verifierze.
+Nie sprawdza natywnych Jacobianów ani orientacji i nie dowodzi wykonania solvera.
 
 - P2: Python parsuje leksykalne `-0` jako integer zero, a Rust w polu f64
   zachowuje znak i odrzuca ujemne zero Ku/osi. Wymagane regresje `-0`, `-0.0`

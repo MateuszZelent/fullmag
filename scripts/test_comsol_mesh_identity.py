@@ -90,6 +90,28 @@ def test_v3_preserves_signed_zero_and_rejects_nonfinite_values():
         mesh_topology_fingerprint_v3(nonfinite)
 
 
+def test_v3_applies_rust_serde_defaults_for_optional_wire_arrays():
+    canonical = fixture()
+    canonical["cells"]["mesh_parts"] = []
+    canonical["cells"]["global_ordinals"] = [0]
+    legacy_wire = copy.deepcopy(canonical)
+    legacy_wire.pop("periodic_boundary_pairs")
+    legacy_wire.pop("periodic_node_pairs")
+    legacy_wire["cells"].pop("mesh_parts")
+    legacy_wire["cells"].pop("global_ordinals")
+    legacy_wire["facets"].pop("global_ordinals")
+    assert mesh_topology_fingerprint_v3(legacy_wire) == mesh_topology_fingerprint_v3(canonical)
+
+
+def test_v3_rejects_duplicate_tolerance_alias_even_when_values_match():
+    mesh = fixture()
+    mesh["periodic_boundary_pairs"] = [
+        {"pair_id": "x", "tolerance": 1e-9, "tolerance_m": 1e-9}
+    ]
+    with pytest.raises(ValueError, match="duplicates tolerance"):
+        mesh_topology_fingerprint_v3(mesh)
+
+
 def test_v3_rejects_role_aliases_outside_the_rust_typed_contract():
     mesh = fixture()
     mesh["cells"]["mesh_parts"] = ["magnetic_object"]

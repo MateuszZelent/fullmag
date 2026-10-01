@@ -1,0 +1,250 @@
+{
+  "document": {
+    "path": "docs/physics/r4-accepted-recomputed-replay-v2.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "not verified",
+      "reason": "Payload parity does not prove managed GPU residency or device identity."
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "unsupported",
+      "reason": "The sidecar schema is owned by the FEM relaxation path."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "unsupported",
+      "reason": "The sidecar schema is owned by the FEM relaxation path."
+    }
+  ],
+  "equations": [
+    {
+      "id": "r4-replay-field-sum",
+      "symbols": ["H_eff", "H_ex", "H_demag", "H_ext", "H_ani"],
+      "sources": ["source-native-validator", "source-python-replay"]
+    },
+    {
+      "id": "r4-replay-difference",
+      "symbols": ["Delta_X", "Delta_phi"],
+      "sources": ["source-native-validator"]
+    },
+    {
+      "id": "r4-replay-field-digest",
+      "symbols": ["D_F", "s_F", "n", "F_i"],
+      "sources": ["source-field-digest"]
+    },
+    {
+      "id": "r4-replay-certificate-digest",
+      "symbols": ["D_C", "s_C", "P_C"],
+      "sources": ["source-certificate-preimage"]
+    }
+  ],
+  "symbols": [
+    {
+      "id": "H_eff",
+      "latex": "\\mathbf H_{\\mathrm{eff}}",
+      "meaning": "suma pól statycznych",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "H_ex",
+      "latex": "\\mathbf H_{\\mathrm{ex}}",
+      "meaning": "pole wymiany",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "H_demag",
+      "latex": "\\mathbf H_{\\mathrm{demag}}",
+      "meaning": "pole demagnetyzujące",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "H_ani",
+      "latex": "\\mathbf H_{\\mathrm{ani}}",
+      "meaning": "pole anizotropii jednoosiowej",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "H_ext",
+      "latex": "\\mathbf H_{\\mathrm{ext}}",
+      "meaning": "pole zewnętrzne",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "phi",
+      "latex": "\\phi",
+      "meaning": "potencjał skalarny demagnetyzacji",
+      "si_unit": "\\mathrm{A}"
+    },
+    {
+      "id": "Ku",
+      "latex": "K_u",
+      "meaning": "stała anizotropii jednoosiowej",
+      "si_unit": "\\mathrm{J\\,m^{-3}}"
+    },
+    {
+      "id": "m0",
+      "latex": "m_0",
+      "meaning": "znormalizowany kierunek magnetyzacji równowagi",
+      "si_unit": "1"
+    },
+    {
+      "id": "n",
+      "latex": "n",
+      "meaning": "liczba węzłów",
+      "si_unit": "1"
+    },
+    {
+      "id": "Delta_X",
+      "latex": "\\Delta_X",
+      "meaning": "maksymalna różnica składowej pola",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "Delta_phi",
+      "latex": "\\Delta_\\phi",
+      "meaning": "maksymalna różnica potencjału",
+      "si_unit": "\\mathrm{A}"
+    },
+    {
+      "id": "D_F",
+      "latex": "D_F",
+      "meaning": "digest binarny payloadu pól",
+      "si_unit": "1"
+    },
+    {
+      "id": "D_C",
+      "latex": "D_C",
+      "meaning": "digest certyfikatu",
+      "si_unit": "1"
+    },
+    {
+      "id": "s_F",
+      "latex": "s_F",
+      "meaning": "identyfikator schematu digestu pól",
+      "si_unit": "1"
+    },
+    {
+      "id": "s_C",
+      "latex": "s_C",
+      "meaning": "identyfikator schematu certyfikatu",
+      "si_unit": "1"
+    },
+    {
+      "id": "F_i",
+      "latex": "F_i",
+      "meaning": "uporządkowana wartość pola w rekordzie $i$",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "P_C",
+      "latex": "P_C",
+      "meaning": "dokładne bajty preimage certyfikatu",
+      "si_unit": "1"
+    }
+  ],
+  "sources": [
+    {
+      "id": "source-native-validator",
+      "path": "crates/fullmag-runner/src/fem_eigen.rs",
+      "symbol": "validate_recomputed_fem_linearization_certificate",
+      "responsibility": "Validate field family, source digests, differences and tolerances."
+    },
+    {
+      "id": "source-field-digest",
+      "path": "crates/fullmag-runner/src/types.rs",
+      "symbol": "certified_equilibrium_fields_sha256",
+      "responsibility": "Define the binary field content digest."
+    },
+    {
+      "id": "source-certificate-preimage",
+      "path": "crates/fullmag-runner/src/types.rs",
+      "symbol": "recomputed_fem_linearization_certificate_sha256",
+      "responsibility": "Define the framing of the producer-owned exact certificate preimage."
+    },
+    {
+      "id": "source-python-replay",
+      "path": "scripts/fem_accepted_recomputed_replay.py",
+      "symbol": "replay_accepted_recomputed_payloads",
+      "responsibility": "Bind accepted/certified payloads to m0, mesh and physical identity."
+    },
+    {
+      "id": "source-python-mesh",
+      "path": "scripts/comsol_mesh_identity.py",
+      "symbol": "mesh_topology_fingerprint_v3",
+      "responsibility": "Recompute the canonical source mesh fingerprint from nodes, connectivity, markers and PBC metadata."
+    },
+    {
+      "id": "source-python-tests",
+      "path": "scripts/test_fem_accepted_recomputed_replay.py",
+      "symbol": "test_v1_binds_m0_mesh_and_three_identity_signatures_but_missing_preimage_is_pending",
+      "responsibility": "Interpret the V1/V2/Ku0 and fail-closed replay regression."
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "ReplaySourceContext.node_count",
+        "type": "int",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "> 0 and equal to every field and m0 array length",
+        "meaning": "Source FEM node count",
+        "backend_support": "FEM CPU/GPU payloads; runtime not verified",
+        "problem_ir": "No change"
+      },
+      {
+        "python": "ReplaySourceContext.mesh",
+        "type": "mapping or exact UTF-8 JSON bytes",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "Canonical v3 FemMeshPayload topology; structural MeshIR subset, Rust serde defaults for optional PBC/ordinals, omitted mesh keeps payload replay unqualified",
+        "meaning": "Source nodes/cells/facets/markers/PBC used to recompute topology fingerprint",
+        "backend_support": "FEM CPU/GPU payloads; runtime not verified",
+        "problem_ir": "mesh"
+      },
+      {
+        "python": "ReplaySourceContext.material['uniaxial_anisotropy']",
+        "type": "None or finite float",
+        "default": "required key",
+        "si_unit": "\\mathrm{J\\,m^{-3}}",
+        "validation": "None selects V1; present finite value, including 0, selects V2",
+        "meaning": "Material-family discriminator",
+        "backend_support": "FEM CPU/GPU payloads; runtime not verified",
+        "problem_ir": "materials[].uniaxial_anisotropy"
+      },
+      {
+        "python": "replay_accepted_recomputed_payloads.certificate_preimage",
+        "type": "bytes or None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "Exact producer UTF-8 serde bytes required for qualified certificate digest",
+        "meaning": "Certificate framing preimage",
+        "backend_support": "FEM CPU/GPU payloads; runtime not verified",
+        "problem_ir": "No change"
+      }
+    ],
+    "report_scope": {
+      "identity_scope": "caller_validated_source_signatures",
+      "certificate_preimage_from_identity": "preimage_extractor_only",
+      "mesh_validation": "structural MeshIR subset; native strict geometry/Jacobian validation remains outside interpreted replay",
+      "optional_wire_defaults": [
+        "periodic_boundary_pairs",
+        "periodic_node_pairs",
+        "cells.global_ordinals",
+        "cells.mesh_parts",
+        "facets.global_ordinals"
+      ]
+    }
+  }
+}
