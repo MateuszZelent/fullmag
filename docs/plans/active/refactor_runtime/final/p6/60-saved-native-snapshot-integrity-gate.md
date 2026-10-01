@@ -66,6 +66,18 @@ Build 189 (`529ac93e81744c5faf50494306d50a11`) nadal **running**;
 191 przypięty do P6-59 nie zawiera nowej komendy P6-60.
 Nie zatrzymano żadnego z tych zadań.
 
+Implementacja P6-60: `fa7378e72018e8d98157ff37a27861c48f670626`,
+zacommitowana i wysłana na remote master. Build **192**,
+`5d750ed66e584869ab6e88e48c457c86`, profil `fem-cpu-release`, źródło commit
+dokładnie powyżej, `source_snapshot_dirty=false`, bez dirty paths.
+Request key: `p6-60-fa7378e72018e8d98157ff37a27861c48f670626`.
+Capture: `c15e562ab48e46d0a82999afc2cc2494`.
+Source capsule SHA-256: `de865d2422d8f2e5ba7f1d4979128512701cc0157770f8016af7555cbb328d49`.
+Native source snapshot SHA-256: `540bb2ff7be94c4b6a21efb31b73a66c65346d89b41c12a1a9f0b8a75a3f7934`.
+Odczyt po zgłoszeniu: **queued**, coordinator/exit code null. Ten build ma
+dostarczyć binarium komendy P6-60. Build 191 zachowano jako osobną bramkę
+kompilacji natywnego przyrostu P6-59. Żaden queued build nie jest PASS.
+
 Wykonać bramkę na rzeczywistym accepted FEM run po produkcyjnym buildzie
 zawierającym tę komendę, następnie porównać wynik przed eksportem i po imporcie
 FMS do oddzielnego magazynu oraz sprawdzić odrzucenie uszkodzonych kopii.
