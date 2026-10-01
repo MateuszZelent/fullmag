@@ -204,6 +204,48 @@ pub fn parse_saved_fem_p1_geometry(
     Ok(geometry)
 }
 
+/// Resolve geometry from the exact immutable tensor owner, never from the
+/// containing latest revision or an active runtime mesh. Missing geometry is
+/// explicit; malformed, duplicate or incompatible bindings are errors.
+/// This cold reader verifies CAS integrity and support/layout consistency,
+/// but does not certify the native representation or execute a solver.
+pub fn read_pinned_solution_field_geometry(
+    store: &SessionStore,
+    pinned: &PinnedSolutionTensorSource,
+) -> Result<Option<(SolutionFieldGeometryManifest, SavedFemP1FieldGeometry)>> {
+    let resolved = crate::solution_tensor_source::resolve_solution_tensor(store, pinned)?;
+    let owner = store
+        .solution_sets()
+        .read_revision(&pinned.solution_set_id, pinned.solution_revision)?
+        .context("saved geometry exact tensor owner revision is missing")?;
+    let member = owner
+        .members
+        .iter()
+        .find(|member| member.member_id == pinned.member_id)
+        .context("saved geometry exact tensor member is missing")?;
+    let mut selected = None;
+    for artifact in &member.artifacts {
+        if artifact.schema_id != SOLUTION_FIELD_GEOMETRY_SCHEMA {
+            continue;
+        }
+        let manifest = read_solution_field_geometry_manifest(store.cas(), artifact)?;
+        if &manifest.source != pinned {
+            continue;
+        }
+        if selected.is_some() {
+            bail!("saved tensor has duplicate exact geometry bindings");
+        }
+        validate_field_geometry_owner(&manifest, &owner, &member.member_id, true)?;
+        selected = Some(manifest);
+    }
+    let Some(manifest) = selected else {
+        return Ok(None);
+    };
+    let geometry = read_saved_fem_p1_geometry(store.cas(), &manifest.geometry)?;
+    validate_saved_geometry_tensor(&geometry, &resolved.tensor)?;
+    Ok(Some((manifest, geometry)))
+}
+
 pub fn validate_saved_geometry_tensor(
     geometry: &SavedFemP1FieldGeometry,
     tensor: &TensorDescriptor,

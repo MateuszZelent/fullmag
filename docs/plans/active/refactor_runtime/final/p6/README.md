@@ -7,6 +7,10 @@ bounded data plane oraz jeden frontend analityczny oparty o pinned source.
 
 ## Przyrosty
 
+[P6-63 — wspólny czytnik historycznej geometrii](63-exact-pinned-geometry-reader.md)
+— exact owner/tensor/geometry CAS, jawny brak i wspólny konsument native;
+źródła PASS, binary resource i viewport pozostają otwarte.
+
 [P6-62 — aktualność źródeł natywnego buildu](62-managed-native-source-freshness.md)
 — usunięcie przyczyny wyboru starych zależności Cargo po materializacji
 kapsuły; testy Python PASS, managed build po poprawce otwarty.

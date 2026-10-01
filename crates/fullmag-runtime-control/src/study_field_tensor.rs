@@ -88,9 +88,7 @@ pub fn read_pinned_study_tensor_snapshot(
     if let Some(map) = &state.native_node_map {
         native_map_geometry::validate_saved_native_map_geometry(
             store,
-            &owner,
             pinned,
-            &resolved.tensor,
             map,
             receipt.native_indexed_geometry_sha256.as_deref(),
         )?;

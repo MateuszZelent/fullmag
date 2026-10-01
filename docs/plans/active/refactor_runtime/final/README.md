@@ -15,6 +15,11 @@ dlatego nie podnosi procentów P3/P5.
 
 ## Dokumenty finalne
 
+Checkpoint 01.10.2026: [P6-63 — czytnik historycznej geometrii](p6/63-exact-pinned-geometry-reader.md)
+centralizuje exact pinned owner/geometry/support lookup i podłącza natywną
+bramkę. Produkcyjne źródła PASS; transport i viewport nadal otwarte.
+P6 około 52%, cały plan około 49%.
+
 Checkpoint 01.10.2026: [P6-62 — aktualność źródeł native buildu](p6/62-managed-native-source-freshness.md)
 usuwa wykazaną przyczynę błędu buildu 191 bez kasowania cache.
 Testy źródłowe PASS; runner zatrzymany na żądanie operatora, build 192 queued.

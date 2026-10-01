@@ -201,6 +201,54 @@ fn archive_documents(fixture: &Fixture) -> HashMap<String, Vec<u8>> {
 }
 
 #[test]
+fn pinned_geometry_reader_uses_exact_revision_and_keeps_unverified_evidence() {
+    let fixture = fixture();
+    fixture
+        .store
+        .publish_solution_set(&fixture.solution)
+        .unwrap();
+    let manifest =
+        read_solution_field_geometry_manifest(fixture.store.cas(), &fixture.geometry_artifact)
+            .unwrap();
+    let mut later = fixture.solution.clone();
+    later.revision = 2;
+    fixture.store.publish_solution_set(&later).unwrap();
+    let (read_manifest, geometry) =
+        read_pinned_solution_field_geometry(&fixture.store, &manifest.source)
+            .unwrap()
+            .unwrap();
+    assert_eq!(read_manifest, manifest);
+    assert_eq!(read_manifest.source.solution_revision, 1);
+    assert_eq!(
+        geometry.representation_evidence,
+        SavedFieldRepresentationEvidence::NotVerified
+    );
+    let mut foreign = manifest.source;
+    foreign.run_id = "foreign-run".into();
+    assert!(read_pinned_solution_field_geometry(&fixture.store, &foreign).is_err());
+}
+
+#[test]
+fn pinned_geometry_reader_reports_absent_binding_without_live_fallback() {
+    let mut fixture = fixture();
+    let manifest =
+        read_solution_field_geometry_manifest(fixture.store.cas(), &fixture.geometry_artifact)
+            .unwrap();
+    fixture.solution.members[0]
+        .artifacts
+        .retain(|artifact| artifact.schema_id != SOLUTION_FIELD_GEOMETRY_SCHEMA);
+    fixture
+        .store
+        .publish_solution_set(&fixture.solution)
+        .unwrap();
+    assert!(
+        read_pinned_solution_field_geometry(&fixture.store, &manifest.source)
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
 fn parser_rejects_unknown_mesh_fields_false_native_evidence_and_foreign_support() {
     let geometry = geometry();
     let bytes = serde_json::to_vec(&geometry).unwrap();

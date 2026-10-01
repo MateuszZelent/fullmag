@@ -4,45 +4,19 @@
 
 use anyhow::{bail, Context, Result};
 use fullmag_ir::MeshPeriodicNodePairIR;
-use fullmag_quantities::{fem_local_node_map::FemLocalNodeIndexMap, SolutionSet};
-use fullmag_session::solution_field_geometry::{
-    read_saved_fem_p1_geometry, read_solution_field_geometry_manifest,
-    validate_field_geometry_owner, validate_saved_geometry_tensor, SOLUTION_FIELD_GEOMETRY_SCHEMA,
-};
+use fullmag_quantities::fem_local_node_map::FemLocalNodeIndexMap;
+use fullmag_session::solution_field_geometry::read_pinned_solution_field_geometry;
 use fullmag_session::solution_tensor_source::PinnedSolutionTensorSource;
-use fullmag_session::{SessionStore, TensorDescriptor};
+use fullmag_session::SessionStore;
 
 pub(super) fn validate_saved_native_map_geometry(
     store: &SessionStore,
-    owner: &SolutionSet,
     pinned: &PinnedSolutionTensorSource,
-    tensor: &TensorDescriptor,
     map: &FemLocalNodeIndexMap,
     native_indexed_geometry_sha256: Option<&str>,
 ) -> Result<()> {
-    let member = owner
-        .members
-        .iter()
-        .find(|member| member.member_id == pinned.member_id)
-        .context("saved native map geometry member is missing")?;
-    let mut selected = None;
-    for artifact in &member.artifacts {
-        if artifact.schema_id != SOLUTION_FIELD_GEOMETRY_SCHEMA {
-            continue;
-        }
-        let manifest = read_solution_field_geometry_manifest(store.cas(), artifact)?;
-        if &manifest.source != pinned {
-            continue;
-        }
-        if selected.is_some() {
-            bail!("saved native map has duplicate exact geometry bindings");
-        }
-        validate_field_geometry_owner(&manifest, owner, &member.member_id, true)?;
-        selected = Some(manifest);
-    }
-    let manifest = selected.context("saved native map has no exact geometry binding")?;
-    let geometry = read_saved_fem_p1_geometry(store.cas(), &manifest.geometry)?;
-    validate_saved_geometry_tensor(&geometry, tensor)?;
+    let (_, geometry) = read_pinned_solution_field_geometry(store, pinned)?
+        .context("saved native map has no exact geometry binding")?;
     if let Some(expected) = native_indexed_geometry_sha256 {
         validate_indexed_geometry_digest(expected, &geometry.mesh)?;
     }
