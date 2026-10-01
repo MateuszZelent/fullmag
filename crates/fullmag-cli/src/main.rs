@@ -22,6 +22,7 @@ mod nvtx_range;
 mod orchestrator;
 mod python_bridge;
 mod runtime_supervisor;
+mod saved_fem_snapshot_gate;
 mod scratch_runtime;
 mod simulation_preparation;
 mod solver_profile_persistence;
@@ -67,6 +68,13 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
+        Command::Runtime(RuntimeCommand::VerifySavedFemSnapshot {
+            store,
+            source,
+            source_artifact_id,
+        }) => {
+            saved_fem_snapshot_gate::verify(&store, &source, &source_artifact_id)?;
+        }
         Command::Doctor => {
             println!("fullmag status");
             println!("- public authoring surface: embedded Python API");

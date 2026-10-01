@@ -118,6 +118,17 @@ class RouteSpec:
 
 
 ROUTES = {
+    "cli-source-check": RouteSpec(
+        name="cli-source-check",
+        profile="windows-api-source-check",
+        receipt_schema="fullmag_cli_source_check_v1",
+        command=("cargo", "check", "--locked", "-p", "fullmag-cli", "--bin", "fullmag"),
+        source_paths=API_SOURCE_PATHS + (
+            "crates/fullmag-cli/Cargo.toml",
+            "crates/fullmag-cli/src",
+        ),
+        local_dependency_manifest="crates/fullmag-cli/Cargo.toml",
+    ),
     "session-persistence": RouteSpec(
         name="session-persistence",
         profile="windows-session-check",

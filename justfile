@@ -230,6 +230,10 @@ check-session-persistence:
 check-api-source:
     {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --route api-source-check --repo-root "{{repo_root}}"
 
+# Source-only production CLI check; excludes unit tests and native solvers.
+check-cli-source:
+    {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --route cli-source-check --repo-root "{{repo_root}}"
+
 # Source check for truthful local resource capacity discovery and publication.
 check-api-resource-pool:
     {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --route api-resource-pool-check --repo-root "{{repo_root}}"

@@ -1217,6 +1217,7 @@ dependencies = [
  "fullmag-ir",
  "fullmag-plan",
  "fullmag-runner",
+ "fullmag-runtime-control",
  "fullmag-session",
  "libc",
  "rayon",

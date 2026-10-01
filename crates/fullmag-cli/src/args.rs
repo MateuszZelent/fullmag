@@ -231,6 +231,16 @@ pub(crate) struct UiCli {
 
 #[derive(Subcommand)]
 pub(crate) enum RuntimeCommand {
+    /// Internal cold integrity gate for an explicitly pinned saved FEM tensor.
+    #[command(hide = true)]
+    VerifySavedFemSnapshot {
+        #[arg(long)]
+        store: std::path::PathBuf,
+        #[arg(long)]
+        source: std::path::PathBuf,
+        #[arg(long)]
+        source_artifact_id: String,
+    },
     /// Diagnose installed runtime packs and host capabilities
     Doctor,
     /// Print native FEM CPU/GPU availability from the linked runtime

@@ -23,6 +23,8 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 
 mod native_map_geometry;
+mod saved_snapshot_gate;
+pub use saved_snapshot_gate::verify_pinned_native_fem_snapshot;
 
 const MAX_SOURCE_STATE_BYTES: u64 =
     fullmag_quantities::fem_local_node_map::MAX_FEM_MAPPED_STATE_JSON_BYTES as u64;

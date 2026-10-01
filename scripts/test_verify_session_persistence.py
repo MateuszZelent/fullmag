@@ -45,6 +45,18 @@ def test_command_scope_is_fixed_to_session_package() -> None:
         MODULE.validate_command(("cargo", "test", "--workspace"))
 
 
+def test_cli_source_route_excludes_test_and_native_targets() -> None:
+    route = MODULE.ROUTES["cli-source-check"]
+    assert route.command == (
+        "cargo", "check", "--locked", "-p", "fullmag-cli", "--bin", "fullmag"
+    )
+    assert route.local_dependency_manifest == "crates/fullmag-cli/Cargo.toml"
+    assert "crates/fullmag-runtime-control/src" in route.source_paths
+    assert MODULE.validate_command(route.command, route) == route.command
+    with pytest.raises(MODULE.SessionCheckError):
+        MODULE.validate_command(("cargo", "test", "-p", "fullmag-cli"), route)
+
+
 def test_application_routes_have_separate_fixed_commands_and_profiles() -> None:
     check = MODULE.ROUTES["project-application-check"]
     test = MODULE.ROUTES["project-application-test"]

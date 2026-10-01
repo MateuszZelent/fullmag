@@ -7,6 +7,10 @@ bounded data plane oraz jeden frontend analityczny oparty o pinned source.
 
 ## Przyrosty
 
+[P6-60 — bramka integralności zapisanego snapshotu FEM](60-saved-native-snapshot-integrity-gate.md)
+— read-only kontrola exact owner i historycznej próby, pełnego pola,
+native map oraz indexed geometry; runtime i FMS roundtrip otwarte.
+
 [P6-59 — projekcja rzeczywistej geometrii MFEM](59-native-indexed-geometry-projection.md)
 — bounded actual node/cell ABI, inkrementalny digest oraz porównanie
 z accepted i saved MeshIR; native/runtime qualification otwarte.

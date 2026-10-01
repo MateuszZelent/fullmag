@@ -138,6 +138,9 @@ case "${recipe}" in
   *"scripts/verify_session_persistence.py"*"--route project-entrypoint-check"*)
     exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route project-entrypoint-check --repo-root "${repo_root}"
     ;;
+  *"scripts/verify_session_persistence.py"*"--route cli-source-check"*)
+    exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route cli-source-check --repo-root "${repo_root}"
+    ;;
   *"scripts/verify_session_persistence.py"*"--route api-source-check"*)
     exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-source-check --repo-root "${repo_root}"
     ;;
