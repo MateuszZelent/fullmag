@@ -34,7 +34,15 @@ def test_plot_selected_only_rechecks_native_target_and_scope(tmp_path):
     (case / "metadata.json").write_text(json.dumps({"problem_meta": {"runtime_metadata": {
         "de_smoke": {"modal_target": "nearest", "selection_scope": "selected_only",
                       "window_complete": False, "target_frequency_hz": target,
-                      "mu0_t_m_a": mu0, "external_induction_t": external_induction}}}}))
+                      "mu0_t_m_a": mu0, "external_induction_t": external_induction,
+                      "air_padding_each_side_m": 2e-6, "sampling": "k2",
+                      "dispersion_geometry": "damon_eshbach",
+                      "orientation": "M0=x,k=y,normal=z",
+                      "k_vectors_rad_per_m": [[0.0, 2e6, 0.0]],
+                      "film_thickness_m": 10e-9,
+                      "exchange_stiffness_j_per_m": 13e-12,
+                      "saturation_magnetization_a_per_m": 800000.0,
+                      "gamma0_m_per_a_s": 221100.0}}}}))
     (case / "solver.v1.json").write_text(json.dumps({
         "target_kind": "nearest_frequency",
         "spectrum_completeness": "selected_only",
@@ -46,17 +54,32 @@ def test_plot_selected_only_rechecks_native_target_and_scope(tmp_path):
     (case / "eigen" / "modes" / "sample_0000").mkdir(parents=True)
     (case / "eigen" / "modes" / "sample_0000" / "mode_0000.json").write_text(
         json.dumps({"block_residuals": {"eps_full": 1e-10}}))
-    record = {"run_path": str(run), "pilot": "de-smoke-k2",
+    record = {"run_path": str(run), "pilot": "de-smoke-k2", "geometry": "damon_eshbach",
+              "k_rad_per_m": 2e6,
               "modal_target": "nearest", "selection_scope": "selected_only",
               "window_complete": False, "target_frequency_hz": target,
               "native_target_frequency_hz": target, "job": job,
               "model_source": model_source, "full_residual": 1e-10,
-              "parameters": {"mu0_t_m_a": mu0, "external_induction_t": external_induction}}
+              "parameters": {"geometry": "damon_eshbach",
+                             "bias_field_a_per_m": external_induction / mu0,
+                             "mu0_t_m_a": mu0, "external_induction_t": external_induction,
+                             "film_thickness_m": 10e-9,
+                             "exchange_stiffness_j_per_m": 13e-12,
+                             "saturation_magnetisation_a_per_m": 800000.0,
+                             "gamma0_rad_s_per_a_m": 221100.0}}
+    record["air_padding_each_side_m"] = 2e-6
     native = validate_selected_only_record(record)
     assert native["target_kind"] == "nearest_frequency"
 
 
-@pytest.mark.parametrize("mutation", ["window", "target", "mu0", "external_induction"])
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "window", "target", "mu0", "external_induction", "bias",
+        "thickness", "exchange", "saturation", "gamma", "padding",
+        "wavevector", "geometry",
+    ],
+)
 def test_plot_selected_only_rejects_unqualified_record(tmp_path, mutation):
     run = Path(tmp_path)
     pilot = "de-smoke-k2"
@@ -84,7 +107,15 @@ def test_plot_selected_only_rejects_unqualified_record(tmp_path, mutation):
     (case / "metadata.json").write_text(json.dumps({"problem_meta": {"runtime_metadata": {
         "de_smoke": {"modal_target": "nearest", "selection_scope": "selected_only",
                       "window_complete": False, "target_frequency_hz": target,
-                      "mu0_t_m_a": mu0, "external_induction_t": external_induction}}}}))
+                      "mu0_t_m_a": mu0, "external_induction_t": external_induction,
+                      "air_padding_each_side_m": 2e-6, "sampling": "k2",
+                      "dispersion_geometry": "damon_eshbach",
+                      "orientation": "M0=x,k=y,normal=z",
+                      "k_vectors_rad_per_m": [[0.0, 2e6, 0.0]],
+                      "film_thickness_m": 10e-9,
+                      "exchange_stiffness_j_per_m": 13e-12,
+                      "saturation_magnetization_a_per_m": 800000.0,
+                      "gamma0_m_per_a_s": 221100.0}}}}))
     (case / "solver.v1.json").write_text(json.dumps({
         "target_kind": "nearest_frequency", "spectrum_completeness": "selected_only",
         "window_complete": False, "target_omega_rad_s": target * 2.0 * 3.141592653589793,
@@ -94,19 +125,44 @@ def test_plot_selected_only_rejects_unqualified_record(tmp_path, mutation):
     (case / "eigen" / "modes" / "sample_0000").mkdir(parents=True)
     (case / "eigen" / "modes" / "sample_0000" / "mode_0000.json").write_text(
         json.dumps({"block_residuals": {"eps_full": 1e-10}}))
-    record = {"run_path": str(run), "pilot": "de-smoke-k2", "modal_target": "nearest",
+    record = {"run_path": str(run), "pilot": "de-smoke-k2", "geometry": "damon_eshbach",
+              "k_rad_per_m": 2e6, "modal_target": "nearest",
               "selection_scope": "selected_only", "window_complete": False,
               "target_frequency_hz": target, "native_target_frequency_hz": target,
               "job": job, "model_source": model_source, "full_residual": 1e-10,
-              "parameters": {"mu0_t_m_a": mu0, "external_induction_t": external_induction}}
+              "parameters": {"geometry": "damon_eshbach",
+                             "bias_field_a_per_m": external_induction / mu0,
+                             "mu0_t_m_a": mu0, "external_induction_t": external_induction,
+                             "film_thickness_m": 10e-9,
+                             "exchange_stiffness_j_per_m": 13e-12,
+                             "saturation_magnetisation_a_per_m": 800000.0,
+                             "gamma0_rad_s_per_a_m": 221100.0}}
+    record["air_padding_each_side_m"] = 2e-6
     if mutation == "window":
         record["window_complete"] = True
     elif mutation == "target":
         record["native_target_frequency_hz"] = 13e9
     elif mutation == "mu0":
         record["parameters"]["mu0_t_m_a"] *= 1.001
-    else:
+    elif mutation == "external_induction":
         record["parameters"]["external_induction_t"] *= 1.001
+    elif mutation == "bias":
+        record["parameters"]["bias_field_a_per_m"] *= 1.001
+    elif mutation == "thickness":
+        record["parameters"]["film_thickness_m"] *= 1.001
+    elif mutation == "exchange":
+        record["parameters"]["exchange_stiffness_j_per_m"] *= 1.001
+    elif mutation == "saturation":
+        record["parameters"]["saturation_magnetisation_a_per_m"] *= 1.001
+    elif mutation == "gamma":
+        record["parameters"]["gamma0_rad_s_per_a_m"] *= 1.001
+    elif mutation == "wavevector":
+        record["k_rad_per_m"] *= 1.001
+    elif mutation == "geometry":
+        record["geometry"] = "backward_volume"
+        record["parameters"]["geometry"] = "backward_volume"
+    else:
+        record["air_padding_each_side_m"] *= 1.001
     with pytest.raises(ValueError):
         validate_selected_only_record(record)
 
@@ -116,13 +172,14 @@ def test_plot_selected_only_uses_fresh_scope_and_schema(tmp_path, monkeypatch):
 
     record = {
         "geometry": "damon_eshbach", "k_rad_per_m": 2e6, "frequency_hz": 9e9,
-        "parameters": {"geometry": "damon_eshbach", "bias_field_a_per_m": 80000.0,
+        "parameters": {"geometry": "damon_eshbach", "bias_field_a_per_m": 0.1 / (4 * 3.141592653589793e-7),
                        "mu0_t_m_a": 4 * 3.141592653589793e-7,
                        "external_induction_t": 0.1,
                        "film_thickness_m": 10e-9, "exchange_stiffness_j_per_m": 13e-12,
                        "saturation_magnetisation_a_per_m": 800000.0,
                        "gamma0_rad_s_per_a_m": 221100.0},
         "mesh_level": "L2", "run_path": str(tmp_path / "run"),
+        "air_padding_each_side_m": 2e-6,
         "pilot": "de-smoke-k2", "selection_scope": "selected_only",
         "modal_target": "nearest", "window_complete": False,
         "target_frequency_hz": 10e9, "native_target_frequency_hz": 10e9,
@@ -147,3 +204,5 @@ def test_plot_selected_only_uses_fresh_scope_and_schema(tmp_path, monkeypatch):
     assert report["selection_scope"] == "selected_only"
     assert report["window_complete"] is False
     assert report["mirrored_samples"] is False
+    assert report["analytic_reference_models"]["finite_dirichlet_n0"]["status"] == "available"
+    assert report["references"][0]["finite_dirichlet_n0_frequency_hz"] is not None

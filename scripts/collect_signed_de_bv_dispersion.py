@@ -11,6 +11,7 @@ from compare_de_bv_mode_profiles import load_record, sha256
 from run_nonzero_k_validation_controller import validation_cases
 from validate_de_smoke_rows import SAMPLING, validate_rows, validate_selected_only_diagnostics
 from verify_fem_frequency_domain_eigen_artifacts import kalinikos_slab_n0_frequency_hz
+from finite_dirichlet_thin_film_oracle import n0_reference_frequencies
 
 
 def _positive(value, name):
@@ -23,6 +24,141 @@ def _positive(value, name):
     if not math.isfinite(value) or value <= 0:
         raise ValueError(f"selected-only record has invalid {name}")
     return value
+
+
+def _attach_n0_references(record, model):
+    """Attach resolved open-film and finite-airbox n=0 references.
+
+    The historical ``analytic_frequency_hz`` field is preserved.  New fields
+    use the resolved model metadata, including the actual air padding, and
+    fail closed when that identity is unavailable.
+    """
+    parameters = record.get("parameters")
+    if not isinstance(parameters, dict):
+        raise ValueError("n=0 reference requires model parameters")
+    mu0 = _positive(model.get("mu0_t_m_a"), "mu0_t_m_a")
+    external_induction = _positive(
+        model.get("external_induction_t"), "external_induction_t"
+    )
+    padding = _positive(
+        model.get("air_padding_each_side_m"), "air_padding_each_side_m"
+    )
+    if "air_padding_each_side_m" in record:
+        declared_padding = _positive(
+            record.get("air_padding_each_side_m"), "air_padding_each_side_m"
+        )
+        if not math.isclose(declared_padding, padding, rel_tol=1e-12, abs_tol=0.0):
+            raise ValueError("record air padding differs from resolved model metadata")
+    resolved_bindings = (
+        ("film_thickness_m", "film_thickness_m"),
+        ("exchange_stiffness_j_per_m", "exchange_stiffness_j_per_m"),
+        ("saturation_magnetisation_a_per_m", "saturation_magnetization_a_per_m"),
+        ("gamma0_rad_s_per_a_m", "gamma0_m_per_a_s"),
+    )
+    for parameter_name, model_name in resolved_bindings:
+        if parameter_name in parameters:
+            declared = _positive(parameters.get(parameter_name), parameter_name)
+            actual = _positive(model.get(model_name), model_name)
+            if not math.isclose(declared, actual, rel_tol=1e-12, abs_tol=0.0):
+                raise ValueError(
+                    f"record {parameter_name} differs from resolved model metadata"
+                )
+    resolved_bias = external_induction / mu0
+    if "bias_field_a_per_m" in parameters:
+        declared_bias = _positive(
+            parameters.get("bias_field_a_per_m"), "bias_field_a_per_m"
+        )
+        if not math.isclose(declared_bias, resolved_bias, rel_tol=1e-12, abs_tol=0.0):
+            raise ValueError(
+                "resolved external_induction_t, mu0_t_m_a and bias_field_a_per_m disagree"
+            )
+    else:
+        parameters["bias_field_a_per_m"] = resolved_bias
+    parameters["mu0_t_m_a"] = mu0
+    parameters["external_induction_t"] = external_induction
+    common = {
+        "k_rad_m": record["k_rad_per_m"],
+        "geometry": record["geometry"],
+        "bias_field_a_per_m": _positive(
+            parameters.get("bias_field_a_per_m"), "bias_field_a_per_m"
+        ),
+        "film_thickness_m": _positive(
+            parameters.get("film_thickness_m"), "film_thickness_m"
+        ),
+        "air_padding_each_side_m": padding,
+        "exchange_stiffness_j_per_m": _positive(
+            parameters.get("exchange_stiffness_j_per_m"),
+            "exchange_stiffness_j_per_m",
+        ),
+        "saturation_magnetisation_a_per_m": _positive(
+            parameters.get("saturation_magnetisation_a_per_m"),
+            "saturation_magnetisation_a_per_m",
+        ),
+        "gamma0_rad_s_per_a_m": _positive(
+            parameters.get("gamma0_rad_s_per_a_m"), "gamma0_rad_s_per_a_m"
+        ),
+        "mu0_t_m_a": mu0,
+    }
+    references = n0_reference_frequencies(**common)
+    open_frequency = references["open_film_n0_frequency_hz"]
+    finite_frequency = references["finite_dirichlet_n0_frequency_hz"]
+    record["analytic_open_film_n0_frequency_hz"] = open_frequency
+    record["analytic_finite_dirichlet_n0_frequency_hz"] = finite_frequency
+    record["difference_from_open_film_n0_percent"] = 100.0 * (
+        record["frequency_hz"] / open_frequency - 1.0
+    )
+    record["difference_from_finite_dirichlet_n0_percent"] = 100.0 * (
+        record["frequency_hz"] / finite_frequency - 1.0
+    )
+    record["analytic_references"] = {
+        "open_film_n0": {
+            "boundary": "open_magnetostatic_free",
+            "frequency_hz": open_frequency,
+            **references["open_film_n0_demag_factors"],
+        },
+        "finite_dirichlet_n0": {
+            "status": "available",
+            "boundary": "scalar_potential_dirichlet",
+            "air_padding_each_side_m": padding,
+            "frequency_hz": finite_frequency,
+            **references["finite_dirichlet_n0_demag_factors"],
+        },
+    }
+    return record
+
+
+def _reference_summary(records):
+    """Return explicit availability metadata without inventing a padding."""
+    references = []
+    for record in records:
+        reference_container = record.get("analytic_references", {})
+        references.append(
+            reference_container.get("finite_dirichlet_n0")
+            if isinstance(reference_container, dict)
+            else None
+        )
+    if not references or any(
+        not isinstance(reference, dict) or reference.get("status") != "available"
+        for reference in references
+    ):
+        return {
+            "status": "NOT_AVAILABLE",
+            "reason": "resolved air_padding_each_side_m is absent from one or more records",
+        }
+    padding = references[0].get("air_padding_each_side_m")
+    if any(reference.get("air_padding_each_side_m") != padding for reference in references):
+        return {
+            "status": "NOT_AVAILABLE",
+            "reason": "records use different resolved airbox padding values",
+        }
+    return {
+        "status": "available",
+        "finite_dirichlet_n0": {
+            "boundary": "scalar_potential_dirichlet",
+            "air_padding_each_side_m": padding,
+        },
+        "open_film_n0": {"boundary": "open_magnetostatic_free"},
+    }
 
 
 def _selected_sampling(pilot, request):
@@ -148,6 +284,7 @@ def _collect_selected_record(run, expected_job, model_ref):
         "modal_target": "nearest", "selection_scope": "selected_only", "window_complete": False,
         "target_frequency_hz": target_hz, "native_target_frequency_hz": native_target["target_frequency_hz"],
         "artifact_sha256": {name: sha256(run / name) for name in files}}
+    _attach_n0_references(record, model)
     mesh, _, tetra, _, hashes, uniform = load_record(record)
     import numpy as np
     xy = np.unique(np.round(mesh.nodes[np.unique(tetra), :2], 17), axis=0)
@@ -277,6 +414,7 @@ def collect_selected_only(control_path, config, control, root, relative, model_r
             "selection_scope": "selected_only", "modal_target": "nearest", "window_complete": False,
             "mirrored_samples": False,
             "records": points, "symmetry_measurements": symmetry,
+            "analytic_reference_models": _reference_summary(points),
             "convergence_evidence": {"status": "NOT VERIFIED", "reason": "selected-only diagnostic has no full-window convergence certificate"},
             "controller_source_sha256": declared_controller_hash,
             "collector_source_sha256": sha256(Path(__file__)),
@@ -347,6 +485,18 @@ def collect(control_path):
         if layers != "3":
             continue  # Separate thickness collector receives convergence-results.json.
         record = collect_record(output, 3, job, sampling=pilot.removeprefix("de-smoke-"))
+        metadata_path = Path(output) / pilot / "metadata.json"
+        if metadata_path.is_file():
+            model = read_json(metadata_path)["problem_meta"]["runtime_metadata"]["de_smoke"]
+            _attach_n0_references(record, model)
+        else:
+            record["analytic_references"] = {
+                "finite_dirichlet_n0": {
+                    "status": "NOT_AVAILABLE",
+                    "reason": "resolved model metadata is absent",
+                },
+                "open_film_n0": {"status": "available", "boundary": "open_magnetostatic_free"},
+            }
         if record["model_source"].get("commit") != model_ref:
             raise ValueError("case model source mismatch")
         common = {"job": job, "model_source": record["model_source"],
@@ -391,6 +541,7 @@ def collect(control_path):
     return {"schema": "fullmag.signed-de-bv-dispersion.v1", "qualification": "NOT VERIFIED",
             "scope": "actual signed-k samples; convergence and scientific qualification remain separate",
             "records": points, "symmetry_measurements": symmetry,
+            "analytic_reference_models": _reference_summary(points),
             "convergence_evidence": convergence,
             "controller_source_sha256": declared_controller_hash,
             "collector_source_sha256": sha256(Path(__file__)),

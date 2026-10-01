@@ -1,0 +1,184 @@
+{
+  "document": {
+    "path": "docs/physics/finite-dirichlet-n0-dispersion.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "source-visible / unvalidated",
+      "reason": "The helper is a postsolve reference for the CPU FEM airbox contract."
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "No GPU implementation or runtime evidence is changed."
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "No FDM implementation is changed."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "No FDM implementation is changed."
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-finite-airbox-green",
+      "symbols": ["G_D", "z", "z'", "q", "L", "z_<", "z_>"],
+      "sources": ["source-finite-reference", "source-green-quadrature-test"]
+    },
+    {
+      "id": "eq-finite-airbox-demag-parallel",
+      "symbols": ["N_parallel_D"],
+      "sources": ["source-finite-reference", "source-green-quadrature-test"]
+    },
+    {
+      "id": "eq-finite-airbox-demag-normal",
+      "symbols": ["N_z_D"],
+      "sources": ["source-finite-reference", "source-green-quadrature-test"]
+    },
+    {
+      "id": "eq-finite-airbox-frequency",
+      "symbols": ["f_DE_D", "X", "H_0", "A_ex", "mu_0", "M_s", "gamma_0"],
+      "sources": ["source-finite-frequency"]
+    },
+    {
+      "id": "eq-finite-airbox-frequency-bv",
+      "symbols": ["f_BV_D", "X", "N_z_D"],
+      "sources": ["source-finite-frequency"]
+    },
+    {
+      "id": "eq-finite-airbox-gamma-limit",
+      "symbols": ["N_parallel_D", "N_z_D", "d", "t"],
+      "sources": ["source-finite-reference", "source-finite-frequency"]
+    },
+    {
+      "id": "eq-finite-airbox-open-limit",
+      "symbols": ["N_z_D", "N_parallel_D", "q", "t", "d"],
+      "sources": ["source-finite-reference", "source-open-reference"]
+    }
+  ],
+  "symbols": [
+    {"id": "q", "latex": "q", "meaning": "wartość bezwzględna wektora falowego", "si_unit": "\\mathrm{m^{-1}}"},
+    {"id": "k", "latex": "k", "meaning": "signed składowa ścieżki DE/BV", "si_unit": "\\mathrm{m^{-1}}"},
+    {"id": "t", "latex": "t", "meaning": "grubość filmu", "si_unit": "\\mathrm{m}"},
+    {"id": "d", "latex": "d", "meaning": "odległość od powierzchni filmu do płaszczyzny Dirichleta", "si_unit": "\\mathrm{m}"},
+    {"id": "L", "latex": "L", "meaning": "położenie płaszczyzny Dirichleta, $d+t/2$", "si_unit": "\\mathrm{m}"},
+    {"id": "z", "latex": "z", "meaning": "współrzędne normalne funkcji Greena", "si_unit": "\\mathrm{m}"},
+    {"id": "z'", "latex": "z'", "meaning": "współrzędne normalne funkcji Greena", "si_unit": "\\mathrm{m}"},
+    {"id": "z_<", "latex": "z_<", "meaning": "minimum z i z-prime", "si_unit": "\\mathrm{m}"},
+    {"id": "z_>", "latex": "z_>", "meaning": "maksimum z i z-prime", "si_unit": "\\mathrm{m}"},
+    {"id": "G_D", "latex": "G_D", "meaning": "funkcja Greena potencjału skalarnego", "si_unit": "\\mathrm{m}"},
+    {"id": "N_parallel_D", "latex": "N_\\parallel^D", "meaning": "finite-airbox czynnik dla składowej równoległej do $\\mathbf{k}$", "si_unit": "1"},
+    {"id": "N_z_D", "latex": "N_z^D", "meaning": "finite-airbox czynnik dla składowej normalnej", "si_unit": "1"},
+    {"id": "X", "latex": "X(q)", "meaning": "pole biasu powiększone o pole wymiany", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "H_0", "latex": "H_0", "meaning": "pole biasu", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "B_0", "latex": "B_0", "meaning": "resolved indukcja zewnętrzna", "si_unit": "\\mathrm{T}"},
+    {"id": "A_ex", "latex": "A_{\\mathrm{ex}}", "meaning": "stała wymiany", "si_unit": "\\mathrm{J\\,m^{-1}}"},
+    {"id": "mu_0", "latex": "\\mu_0", "meaning": "przenikalność próżni w konwencji modelu", "si_unit": "\\mathrm{T\\,m\\,A^{-1}}"},
+    {"id": "M_s", "latex": "M_s", "meaning": "nasycenie magnetyzacji", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "gamma_0", "latex": "\\gamma_0", "meaning": "współczynnik gyromagnetyczny", "si_unit": "\\mathrm{m\\,A^{-1}\\,s^{-1}}"},
+    {"id": "f_DE_D", "latex": "f_{\\mathrm{DE}}^D", "meaning": "częstotliwość DE modu n=0 w finite airbox", "si_unit": "\\mathrm{Hz}"},
+    {"id": "f_BV_D", "latex": "f_{\\mathrm{BV}}^D", "meaning": "częstotliwość BV modu n=0 w finite airbox", "si_unit": "\\mathrm{Hz}"},
+    {"id": "phi", "latex": "\\phi", "meaning": "potencjał magnetostatyczny", "si_unit": "\\mathrm{A}"}
+  ],
+  "sources": [
+    {
+      "id": "source-finite-reference",
+      "path": "scripts/finite_dirichlet_thin_film_oracle.py",
+      "symbol": "finite_dirichlet_n0_demag_factors",
+      "responsibility": "Stable finite-Dirichlet Green-function demag factors with resolved t and d, including small-qt cancellation and overflow-safe q=0 control."
+    },
+    {
+      "id": "source-open-reference",
+      "path": "scripts/finite_dirichlet_thin_film_oracle.py",
+      "symbol": "open_film_n0_demag_factors",
+      "responsibility": "Open-film limiting n=0 factors."
+    },
+    {
+      "id": "source-finite-frequency",
+      "path": "scripts/finite_dirichlet_thin_film_oracle.py",
+      "symbol": "n0_reference_frequencies",
+      "responsibility": "Resolved-parameter DE/BV finite and open frequency references."
+    },
+    {
+      "id": "source-pilot-airbox",
+      "path": "examples/fem_de_smoke_numeric.py",
+      "symbol": "AIR_PADDING_EACH_SIDE_M",
+      "responsibility": "Authoring source for the pilot airbox padding."
+    },
+    {
+      "id": "source-collector",
+      "path": "scripts/collect_signed_de_bv_dispersion.py",
+      "symbol": "_attach_n0_references",
+      "responsibility": "Bind resolved model metadata to additive collector references."
+    },
+    {
+      "id": "source-plot-record",
+      "path": "scripts/plot_de_bv_dispersion_comparison.py",
+      "symbol": "_record_n0_reference",
+      "responsibility": "Recompute both references from the record before plotting."
+    },
+    {
+      "id": "source-plot-context",
+      "path": "scripts/plot_de_bv_dispersion_comparison.py",
+      "symbol": "_shared_finite_reference_context",
+      "responsibility": "Require one compatible resolved airbox or report NOT_AVAILABLE."
+    },
+    {
+      "id": "source-green-quadrature-test",
+      "path": "scripts/test_finite_dirichlet_thin_film_oracle.py",
+      "symbol": "test_surface_and_volume_green_quadrature_reproduce_both_factors",
+      "responsibility": "Independent surface and volume Green-function regression."
+    },
+    {
+      "id": "source-plot-test",
+      "path": "scripts/test_plot_de_bv_dispersion_comparison.py",
+      "symbol": "test_plot_selected_only_rejects_unqualified_record",
+      "responsibility": "Plot receipt and complete resolved geometry, wavevector, material, bias and padding binding regressions."
+    },
+    {
+      "id": "source-collector-test",
+      "path": "scripts/test_signed_de_bv_dispersion.py",
+      "symbol": "test_nearest_record_binds_native_target_and_full_residual",
+      "responsibility": "Nearest collector artifact binding regression."
+    }
+  ],
+  "public_api": {
+    "parameters": [],
+    "notes": [
+      "The helper is internal postsolve analysis; no public Python DSL or ProblemIR field is added.",
+      "Resolved metadata names air_padding_each_side_m, mu0_t_m_a and external_induction_t are consumed only after artifact validation."
+    ]
+  },
+  "python_api": {
+    "authoring": "examples/fem_de_smoke_numeric.py remains the FEM stage-first authoring source",
+    "helper": "scripts/finite_dirichlet_thin_film_oracle.py"
+  },
+  "problem_ir": {
+    "changed": false,
+    "notes": ["No ProblemIR normalization or planner capability changes."]
+  },
+  "validation": {
+    "interpreted": [
+      "scripts/test_finite_dirichlet_thin_film_oracle.py",
+      "scripts/test_plot_de_bv_dispersion_comparison.py",
+      "scripts/test_signed_de_bv_dispersion.py"
+    ],
+    "native_compile": "NOT VERIFIED",
+    "managed_runtime": "NOT VERIFIED",
+    "scientific_qualification": "NOT VERIFIED"
+  },
+  "limitations": [
+    "Uniform n=0 slab reference is not an exact FEM result.",
+    "Antidot, nonuniform material, higher thickness modes and asymmetric boundary physics are outside scope.",
+    "Missing resolved air padding produces an explicit NOT_AVAILABLE gap rather than a hardcoded value."
+  ]
+}

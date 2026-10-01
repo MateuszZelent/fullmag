@@ -357,3 +357,51 @@ def test_nearest_record_binds_native_target_and_full_residual(tmp_path):
     assert record["native_target_frequency_hz"] == 10e9
     assert record["full_residual"] == pytest.approx(1e-10)
     assert record["parameters"]["mu0_t_m_a"] == pytest.approx(4 * np.pi * 1e-7)
+    assert record["analytic_references"]["finite_dirichlet_n0"]["status"] == "available"
+    assert record["analytic_finite_dirichlet_n0_frequency_hz"] > 0.0
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["bias", "thickness", "exchange", "saturation", "gamma", "padding"],
+)
+def test_n0_reference_rejects_mixed_resolved_model_metadata(mutation):
+    from collect_signed_de_bv_dispersion import _attach_n0_references
+
+    mu0 = 4.0 * np.pi * 1e-7
+    record = {
+        "geometry": "damon_eshbach",
+        "k_rad_per_m": 2e6,
+        "frequency_hz": 9.7e9,
+        "air_padding_each_side_m": 2e-6,
+        "parameters": {
+            "bias_field_a_per_m": 0.1 / mu0,
+            "film_thickness_m": 10e-9,
+            "exchange_stiffness_j_per_m": 13e-12,
+            "saturation_magnetisation_a_per_m": 8e5,
+            "gamma0_rad_s_per_a_m": 2.211e5,
+        },
+    }
+    model = {
+        "external_induction_t": 0.1,
+        "mu0_t_m_a": mu0,
+        "air_padding_each_side_m": 2e-6,
+        "film_thickness_m": 10e-9,
+        "exchange_stiffness_j_per_m": 13e-12,
+        "saturation_magnetization_a_per_m": 8e5,
+        "gamma0_m_per_a_s": 2.211e5,
+    }
+    if mutation == "bias":
+        record["parameters"]["bias_field_a_per_m"] *= 1.001
+    elif mutation == "thickness":
+        model["film_thickness_m"] *= 1.001
+    elif mutation == "exchange":
+        model["exchange_stiffness_j_per_m"] *= 1.001
+    elif mutation == "saturation":
+        model["saturation_magnetization_a_per_m"] *= 1.001
+    elif mutation == "gamma":
+        model["gamma0_m_per_a_s"] *= 1.001
+    else:
+        model["air_padding_each_side_m"] *= 1.001
+    with pytest.raises(ValueError):
+        _attach_n0_references(record, model)

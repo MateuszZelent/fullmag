@@ -42,6 +42,11 @@ zbieżność, A1, GPU i browser pozostają wymaganymi, otwartymi bramkami.
 
 ### Korekty z bieżącego review przed zamrożeniem przyrostów
 
+Checkpoint raw64 zapisano i wysłano na origin:
+`2be55bdaad69686d8ed612f398cfbcebd04366b2`.
+Zakres: producer/linearization identity Rust, trzy odbiorniki Python,
+fixture'y, regresje i kontrakty. Dowody kontroli opisano powyżej.
+
 - S05: ścieżka reuse musi przejść pełne `admit_floquet_modal_sparse_request`,
   a nie omijać admission przy bezpośrednim wejściu do shared-domain solvera.
 - S05: twardy błąd `EPSSolve` z unsafe cleanup musi zatrzymać dalsze reuse
@@ -61,6 +66,14 @@ zbieżność, A1, GPU i browser pozostają wymaganymi, otwartymi bramkami.
   częstotliwości (czynnik jest wówczas bardzo mały), ale blokuje twierdzenie
   o dokładnej granicy low-k. Wymagana stabilna postać algebraiczna z Taylor
   dla różnicy `2P-uF`, niezależne regresje wysokoprecyzyjne i ponowny review.
+
+Przyrost finite-airbox po poprawkach: wszystkie parametry rekord→metadata
+są wiązane, jednostka potencjału to A, błędna geometria daje kontrolowany
+ValueError. Stabilna postać z Taylor eliminuje cancellation low-k; niezależny
+Decimal70 daje błędy względne poniżej 3e-16 dla k=0,01, 1, 100, 10000 rad/m
+w badanym modelu. Gałąź Γ nie tworzy przepełniającego 2d. 78 testów PASS,
+mapa naukowa PASS. Jest to referencja jednorodnego n0, nie wynik FEM;
+pełna zgodność, profil modu i zbieżność pozostają otwarte.
 
 Przyrost S07 uzupełnia strukturalne referencje finalnej diagnostyki C ABI
 w manifestach single-k i multi-k. Nowa para ma oddzielną coverage i właściwe
