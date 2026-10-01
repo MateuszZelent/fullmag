@@ -208,6 +208,46 @@ double max_matrix_difference(const fd::PoissonAirboxSharedDomainCsrMatrix &left,
     return maximum;
 }
 
+std::size_t numerical_rank(std::vector<double> matrix, std::size_t dimension)
+{
+    check(matrix.size() == dimension * dimension,
+          "numerical rank requires a square dense matrix");
+    double scale = 0.0;
+    for (const double value : matrix) {
+        scale = std::max(scale, std::abs(value));
+    }
+    const double tolerance = 1.0e-10 * std::max(1.0, scale);
+    std::size_t rank = 0u;
+    for (std::size_t column = 0u; column < dimension && rank < dimension; ++column) {
+        std::size_t pivot = rank;
+        for (std::size_t row = rank + 1u; row < dimension; ++row) {
+            if (std::abs(matrix[row * dimension + column]) >
+                std::abs(matrix[pivot * dimension + column])) {
+                pivot = row;
+            }
+        }
+        if (std::abs(matrix[pivot * dimension + column]) <= tolerance) {
+            continue;
+        }
+        if (pivot != rank) {
+            for (std::size_t entry = 0u; entry < dimension; ++entry) {
+                std::swap(matrix[rank * dimension + entry],
+                           matrix[pivot * dimension + entry]);
+            }
+        }
+        const double pivot_value = matrix[rank * dimension + column];
+        for (std::size_t row = rank + 1u; row < dimension; ++row) {
+            const double factor = matrix[row * dimension + column] / pivot_value;
+            for (std::size_t entry = column; entry < dimension; ++entry) {
+                matrix[row * dimension + entry] -=
+                    factor * matrix[rank * dimension + entry];
+            }
+        }
+        ++rank;
+    }
+    return rank;
+}
+
 double tetra_volume_from_vertices(const mfem::Mesh &mesh, int element)
 {
     mfem::Array<int> vertices;
@@ -414,7 +454,7 @@ void invert_3x3(const double matrix[3][3], double inverse[3][3], double *determi
     *determinant = det;
 }
 
-std::vector<double> independent_prism_exchange_oracle(
+std::vector<double> independent_prism_exchange_exact_affine_oracle(
     mfem::FiniteElementSpace &scalar_space,
     const std::vector<std::uint8_t> &magnetic_elements,
     const std::vector<double> &tangent_frames,
@@ -427,12 +467,23 @@ std::vector<double> independent_prism_exchange_oracle(
     check(mesh != nullptr, "independent prism exchange oracle requires an MFEM mesh");
     check(magnetic_elements.size() == static_cast<std::size_t>(mesh->GetNE()),
           "independent prism exchange oracle requires one mask entry per element");
-    // This is the explicit geometry/math form of the native order-one prism
-    // quadrature: triangle centroid times interval midpoint, with reference
-    // prism measure 1/2.  It intentionally tracks the producer's declared
-    // MFEM quadrature without reading MFEM integration data.
-    constexpr double kReferencePoint[3] = {1.0 / 3.0, 1.0 / 3.0, 0.5};
-    constexpr double kReferenceWeight = 0.5;
+    check(tangent_frames.size() == static_cast<std::size_t>(6u * node_count),
+          "independent prism exchange oracle requires two three-vector frames per node");
+    // Independent affine prism rule: three degree-two triangle points and two
+    // degree-two Gauss points on the interval.  This is not read from MFEM and
+    // exactly integrates the quadratic grad(N_i).grad(N_j) form on an affine
+    // prism.  It therefore cannot reproduce the producer's old centroid rule.
+    constexpr double kTrianglePoints[3][2] = {
+        {1.0 / 6.0, 1.0 / 6.0},
+        {2.0 / 3.0, 1.0 / 6.0},
+        {1.0 / 6.0, 2.0 / 3.0},
+    };
+    constexpr double kTriangleWeight = 1.0 / 6.0;
+    const double kSegmentPoints[2] = {
+        0.5 - 1.0 / (2.0 * std::sqrt(3.0)),
+        0.5 + 1.0 / (2.0 * std::sqrt(3.0)),
+    };
+    constexpr double kSegmentWeight = 0.5;
     for (int element = 0; element < mesh->GetNE(); ++element) {
         if (magnetic_elements[static_cast<std::size_t>(element)] == 0u) {
             continue;
@@ -457,58 +508,68 @@ std::vector<double> independent_prism_exchange_oracle(
         double inverse_jacobian[3][3]{};
         double determinant = 0.0;
         invert_3x3(jacobian, inverse_jacobian, &determinant);
-        const double reference_gradients[6][3] = {
-            {kReferencePoint[2] - 1.0, kReferencePoint[2] - 1.0,
-             kReferencePoint[0] + kReferencePoint[1] - 1.0},
-            {1.0 - kReferencePoint[2], 0.0, -kReferencePoint[0]},
-            {0.0, 1.0 - kReferencePoint[2], -kReferencePoint[1]},
-            {-kReferencePoint[2], -kReferencePoint[2],
-             1.0 - kReferencePoint[0] - kReferencePoint[1]},
-            {kReferencePoint[2], 0.0, kReferencePoint[0]},
-            {0.0, kReferencePoint[2], kReferencePoint[1]},
-        };
-        double physical_gradients[6][3]{};
-        for (int local = 0; local < 6; ++local) {
-            for (int axis = 0; axis < 3; ++axis) {
-                for (int reference_axis = 0; reference_axis < 3; ++reference_axis) {
-                    physical_gradients[local][axis] +=
-                        reference_gradients[local][reference_axis] *
-                        inverse_jacobian[reference_axis][axis];
+        for (const auto &triangle_point : kTrianglePoints) {
+            for (const double segment_point : kSegmentPoints) {
+                const double reference_point[3] = {
+                    triangle_point[0], triangle_point[1], segment_point};
+                const double reference_gradients[6][3] = {
+                    {reference_point[2] - 1.0, reference_point[2] - 1.0,
+                     reference_point[0] + reference_point[1] - 1.0},
+                    {1.0 - reference_point[2], 0.0, -reference_point[0]},
+                    {0.0, 1.0 - reference_point[2], -reference_point[1]},
+                    {-reference_point[2], -reference_point[2],
+                     1.0 - reference_point[0] - reference_point[1]},
+                    {reference_point[2], 0.0, reference_point[0]},
+                    {0.0, reference_point[2], reference_point[1]},
+                };
+                double physical_gradients[6][3]{};
+                for (int local = 0; local < 6; ++local) {
+                    for (int axis = 0; axis < 3; ++axis) {
+                        for (int reference_axis = 0; reference_axis < 3;
+                             ++reference_axis) {
+                            physical_gradients[local][axis] +=
+                                reference_gradients[local][reference_axis] *
+                                inverse_jacobian[reference_axis][axis];
+                        }
+                    }
                 }
-            }
-        }
-        const double weight = std::abs(determinant) * kReferenceWeight;
-        for (int local_row = 0; local_row < 6; ++local_row) {
-            const std::uint64_t row_node = static_cast<std::uint64_t>(
-                dofs[local_row] >= 0 ? dofs[local_row] : -1 - dofs[local_row]);
-            const double row_sign = dofs[local_row] >= 0 ? 1.0 : -1.0;
-            for (int local_column = 0; local_column < 6; ++local_column) {
-                const std::uint64_t column_node = static_cast<std::uint64_t>(
-                    dofs[local_column] >= 0 ? dofs[local_column] : -1 - dofs[local_column]);
-                const double column_sign = dofs[local_column] >= 0 ? 1.0 : -1.0;
-                double gradient_dot = 0.0;
-                for (int axis = 0; axis < 3; ++axis) {
-                    gradient_dot += physical_gradients[local_row][axis] *
-                        physical_gradients[local_column][axis];
-                }
-                const double coefficient = row_sign * column_sign * 2.0 *
-                    exchange_stiffness * gradient_dot * weight;
-                for (std::uint32_t row_component = 0; row_component < 2u;
-                     ++row_component) {
-                    const double *row_frame = &tangent_frames[
-                        static_cast<std::size_t>(6u * row_node + 3u * row_component)];
-                    for (std::uint32_t column_component = 0; column_component < 2u;
-                         ++column_component) {
-                        const double *column_frame = &tangent_frames[
-                            static_cast<std::size_t>(
-                                6u * column_node + 3u * column_component)];
-                        const double frame_dot = row_frame[0] * column_frame[0] +
-                            row_frame[1] * column_frame[1] +
-                            row_frame[2] * column_frame[2];
-                        oracle[static_cast<std::size_t>(
-                            (2u * row_node + row_component) * q_count +
-                            2u * column_node + column_component)] +=
-                            coefficient * frame_dot;
+                const double weight = std::abs(determinant) *
+                    kTriangleWeight * kSegmentWeight;
+                for (int local_row = 0; local_row < 6; ++local_row) {
+                    const std::uint64_t row_node = static_cast<std::uint64_t>(
+                        dofs[local_row] >= 0 ? dofs[local_row] : -1 - dofs[local_row]);
+                    const double row_sign = dofs[local_row] >= 0 ? 1.0 : -1.0;
+                    for (int local_column = 0; local_column < 6; ++local_column) {
+                        const std::uint64_t column_node = static_cast<std::uint64_t>(
+                            dofs[local_column] >= 0 ? dofs[local_column] :
+                                                       -1 - dofs[local_column]);
+                        const double column_sign = dofs[local_column] >= 0 ? 1.0 : -1.0;
+                        double gradient_dot = 0.0;
+                        for (int axis = 0; axis < 3; ++axis) {
+                            gradient_dot += physical_gradients[local_row][axis] *
+                                physical_gradients[local_column][axis];
+                        }
+                        const double coefficient = row_sign * column_sign * 2.0 *
+                            exchange_stiffness * gradient_dot * weight;
+                        for (std::uint32_t row_component = 0; row_component < 2u;
+                             ++row_component) {
+                            const double *row_frame = &tangent_frames[
+                                static_cast<std::size_t>(
+                                    6u * row_node + 3u * row_component)];
+                            for (std::uint32_t column_component = 0; column_component < 2u;
+                                 ++column_component) {
+                                const double *column_frame = &tangent_frames[
+                                    static_cast<std::size_t>(
+                                        6u * column_node + 3u * column_component)];
+                                const double frame_dot = row_frame[0] * column_frame[0] +
+                                    row_frame[1] * column_frame[1] +
+                                    row_frame[2] * column_frame[2];
+                                oracle[static_cast<std::size_t>(
+                                    (2u * row_node + row_component) * q_count +
+                                    2u * column_node + column_component)] +=
+                                    coefficient * frame_dot;
+                            }
+                        }
                     }
                 }
             }
@@ -532,6 +593,33 @@ int main()
         1.0);
     mfem::H1_FECollection collection(1, mesh.Dimension());
     mfem::FiniteElementSpace scalar_space(&mesh, &collection);
+
+    // MFEM v4.7's tetrahedron order-4 rule is not admissible for the native
+    // exchange producer: it contains a negative weight.  Keep this explicit
+    // regression beside the independent affine-tetrahedron gradient oracle
+    // below so a future policy change cannot silently reintroduce it.
+    const mfem::IntegrationRule &tetra_order4 =
+        mfem::IntRules.Get(mfem::Geometry::TETRAHEDRON, 4);
+    check(tetra_order4.GetNPoints() > 0,
+          "MFEM tetrahedron order4 rule must remain available for diagnostics");
+    const mfem::IntegrationRule &tetra_order5 =
+        mfem::IntRules.Get(mfem::Geometry::TETRAHEDRON, 5);
+    check(tetra_order5.GetNPoints() > 0,
+          "native tet4 positive policy must provide an order5 rule");
+    for (int point = 0; point < tetra_order5.GetNPoints(); ++point) {
+        check(std::isfinite(tetra_order5.IntPoint(point).weight) &&
+                  tetra_order5.IntPoint(point).weight > 0.0,
+              "native tet4 order5 policy must have positive reference weights");
+    }
+    const mfem::IntegrationRule &prism_order4 =
+        mfem::IntRules.Get(mfem::Geometry::PRISM, 4);
+    check(prism_order4.GetNPoints() > 0,
+          "native prism6 positive policy must provide an order4 rule");
+    for (int point = 0; point < prism_order4.GetNPoints(); ++point) {
+        check(std::isfinite(prism_order4.IntPoint(point).weight) &&
+                  prism_order4.IntPoint(point).weight > 0.0,
+              "native prism6 order4 policy must have positive reference weights");
+    }
 
     const std::uint64_t node_count = static_cast<std::uint64_t>(scalar_space.GetVSize());
     check(node_count > 0, "manufactured mesh has scalar P1 nodes");
@@ -880,8 +968,8 @@ int main()
     // The N1a mixed-P1 contract contributes magnetic prism6 exchange exactly
     // once and must never leak an air tet4 into A_qq.  The prism oracle below
     // intentionally uses reference prism shape derivatives, an explicit
-    // affine Jacobian inverse, and direct order-one quadrature rather than
-    // MFEM CalcPhysDShape or the assembled CSR as its expected value.
+    // affine Jacobian inverse, and an independent exact order-two rule rather
+    // than MFEM CalcPhysDShape or the assembled CSR as its expected value.
     mfem::Mesh mixed_mesh(3, 10, 2, 0, 3);
     const double mixed_vertices[][3] = {
         {0.0, 0.0, 0.0}, {1.0, 0.0, 0.0}, {0.0, 1.0, 0.0},
@@ -923,7 +1011,8 @@ int main()
     check(std::abs(matrix_value(mixed_a_qq, 0u, 0u)) > 0.0 &&
               std::abs(matrix_value(mixed_a_qq, 1u, 1u)) > 0.0,
           "mixed prism A_qq publishes nonzero tangent components");
-    const std::vector<double> prism_exchange_oracle = independent_prism_exchange_oracle(
+    const std::vector<double> prism_exchange_oracle =
+        independent_prism_exchange_exact_affine_oracle(
         mixed_scalar_space,
         mixed_magnetic_elements,
         mixed_descriptor.tangent_frame_xyz,
@@ -945,6 +1034,120 @@ int main()
           "independent prism exchange oracle exercises a nonzero tangent block");
     check(prism_oracle_error <= 1.0e-12 * std::max(1.0, prism_oracle_scale),
           "native mixed prism exchange matches the independent weak-form oracle");
+
+    // The exact affine prism scalar block has one and only one null vector:
+    // the constant field.  The former centroid rule had rank at most three
+    // and therefore introduced hourglass modes.  Undo any MFEM local signs so
+    // this check remains about the reference prism rather than DOF orientation.
+    mfem::Array<int> mixed_prism_dofs;
+    mixed_scalar_space.GetElementDofs(0, mixed_prism_dofs);
+    check(mixed_prism_dofs.Size() == 6, "mixed prism rank check has six scalar P1 dofs");
+    std::vector<double> prism_scalar_matrix(36u, 0.0);
+    for (int local_row = 0; local_row < 6; ++local_row) {
+        const std::uint64_t row_node = static_cast<std::uint64_t>(
+            mixed_prism_dofs[local_row] >= 0 ? mixed_prism_dofs[local_row] :
+                                               -1 - mixed_prism_dofs[local_row]);
+        const double row_sign = mixed_prism_dofs[local_row] >= 0 ? 1.0 : -1.0;
+        for (int local_column = 0; local_column < 6; ++local_column) {
+            const std::uint64_t column_node = static_cast<std::uint64_t>(
+                mixed_prism_dofs[local_column] >= 0 ? mixed_prism_dofs[local_column] :
+                                                       -1 - mixed_prism_dofs[local_column]);
+            const double column_sign = mixed_prism_dofs[local_column] >= 0 ? 1.0 : -1.0;
+            prism_scalar_matrix[static_cast<std::size_t>(local_row * 6 + local_column)] =
+                row_sign * column_sign *
+                matrix_value(mixed_a_qq, 2u * row_node, 2u * column_node);
+        }
+    }
+    check(numerical_rank(prism_scalar_matrix, 6u) == 5u,
+          "exact prism6 exchange scalar block has rank five");
+    double constant_action = 0.0;
+    for (int row = 0; row < 6; ++row) {
+        double action = 0.0;
+        for (int column = 0; column < 6; ++column) {
+            action += prism_scalar_matrix[static_cast<std::size_t>(row * 6 + column)];
+        }
+        constant_action = std::max(constant_action, std::abs(action));
+    }
+    check(constant_action <= 1.0e-12,
+          "constant prism6 perturbation is the exchange nullspace");
+    constexpr double kHourglass[6] = {0.0, 1.0, -1.0, 0.0, -1.0, 1.0};
+    double hourglass_energy = 0.0;
+    for (int row = 0; row < 6; ++row) {
+        double action = 0.0;
+        for (int column = 0; column < 6; ++column) {
+            action += prism_scalar_matrix[static_cast<std::size_t>(row * 6 + column)] *
+                kHourglass[column];
+        }
+        hourglass_energy += kHourglass[row] * action;
+    }
+    check(std::abs(hourglass_energy - 8.0 / 3.0) <= 1.0e-11,
+          "prism6 hourglass field has the exact positive exchange energy");
+
+    // Repeat the same affine prism with independently rotated nodal tangent
+    // bases.  The result must agree with the Cartesian frame-dot oracle and
+    // must differ from the identity-frame matrix, proving the prism path uses
+    // the supplied local-to-Cartesian transport.
+    NativeExchangeDescriptorFixture rotated_mixed_descriptor(mixed_node_count);
+    std::vector<fd::TangentFrameNode> rotated_mixed_frames =
+        rotated_mixed_descriptor.tangent_frames;
+    std::vector<double> rotated_mixed_frame_xyz =
+        rotated_mixed_descriptor.tangent_frame_xyz;
+    for (std::uint64_t node = 0u; node < mixed_node_count; ++node) {
+        const double angle = 0.13 * static_cast<double>(node + 1u);
+        const double cosine = std::cos(angle);
+        const double sine = std::sin(angle);
+        rotated_mixed_frames[static_cast<std::size_t>(node)].e1[0] = cosine;
+        rotated_mixed_frames[static_cast<std::size_t>(node)].e1[1] = sine;
+        rotated_mixed_frames[static_cast<std::size_t>(node)].e2[0] = -sine;
+        rotated_mixed_frames[static_cast<std::size_t>(node)].e2[1] = cosine;
+        for (int axis = 0; axis < 3; ++axis) {
+            rotated_mixed_frame_xyz[6u * node + static_cast<std::size_t>(axis)] =
+                rotated_mixed_frames[static_cast<std::size_t>(node)].e1[axis];
+            rotated_mixed_frame_xyz[
+                6u * node + 3u + static_cast<std::size_t>(axis)] =
+                rotated_mixed_frames[static_cast<std::size_t>(node)].e2[axis];
+        }
+    }
+    rotated_mixed_descriptor.descriptor.tangent_frame_xyz =
+        rotated_mixed_frame_xyz.data();
+    fd::PoissonAirboxSharedDomainCsrMatrix rotated_mixed_a_qq{};
+    check(fd::assemble_native_magnetic_a_qq(
+              rotated_mixed_descriptor.descriptor,
+              &mixed_scalar_space,
+              mixed_magnetic_elements.data(),
+              mixed_magnetic_elements.size(),
+              &rotated_mixed_a_qq,
+              producer_error,
+              nullptr,
+              rotated_mixed_frames.data(),
+              rotated_mixed_frames.size()) == fd::FrequencyDomainStatus::ok,
+          producer_error);
+    const std::vector<double> rotated_prism_exchange_oracle =
+        independent_prism_exchange_exact_affine_oracle(
+            mixed_scalar_space,
+            mixed_magnetic_elements,
+            rotated_mixed_frame_xyz,
+            rotated_mixed_descriptor.exchange_edge.stiffness,
+            mixed_node_count);
+    double rotated_oracle_error = 0.0;
+    double rotated_oracle_scale = 0.0;
+    for (std::uint64_t row = 0u; row < mixed_q_count; ++row) {
+        for (std::uint64_t column = 0u; column < mixed_q_count; ++column) {
+            const double actual = matrix_value(rotated_mixed_a_qq, row, column);
+            const double expected = rotated_prism_exchange_oracle[
+                static_cast<std::size_t>(row * mixed_q_count + column)];
+            rotated_oracle_error = std::max(rotated_oracle_error,
+                                            std::abs(actual - expected));
+            rotated_oracle_scale = std::max(
+                rotated_oracle_scale, std::max(std::abs(actual), std::abs(expected)));
+        }
+    }
+    check(max_matrix_difference(mixed_a_qq, rotated_mixed_a_qq) > 1.0e-6,
+          "rotated prism tangent bases change the tangent-coordinate matrix");
+    check(rotated_oracle_scale > 0.0 &&
+              rotated_oracle_error <= 1.0e-12 * rotated_oracle_scale,
+          "prism exchange transports independently rotated tangent bases");
+
     std::vector<double> prism_random_vector(static_cast<std::size_t>(mixed_q_count), 0.0);
     for (std::uint64_t index = 0u; index < mixed_q_count; ++index) {
         prism_random_vector[static_cast<std::size_t>(index)] =

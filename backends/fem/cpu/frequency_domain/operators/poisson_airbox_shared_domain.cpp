@@ -27,6 +27,61 @@
 namespace fullmag::fem::frequency_domain {
 namespace {
 
+// F01: keep the mixed-P1 frequency-domain blocks on one geometry-aware
+// overintegrated policy.  Prism6 shape gradients are linear on the reference
+// prism, so their products are quadratic; order 1 is therefore an
+// hourglass-producing rule.  The MFEM 4.7 tetrahedron order-4 rule contains a
+// negative weight, while the exchange producer requires every physical
+// quadrature weight to be positive.  Use the next positive tetrahedron rule
+// for compatibility with that image and retain order 4 for prism6 (triangle
+// order 4 x segment order 4).  Newer MFEM releases may make simplex order4
+// positive, but do not change this explicit backend policy implicitly.
+constexpr int kFrequencyDomainP1TetrahedronQuadratureOrder = 5;
+constexpr int kFrequencyDomainP1PrismQuadratureOrder = 4;
+constexpr char kFrequencyDomainP1QuadraturePolicy[] =
+    "p1_geometry_aware_tet5_prism4_positive";
+
+const char *frequency_domain_p1_geometry_name(mfem::Geometry::Type geometry)
+{
+    switch (geometry) {
+    case mfem::Geometry::TETRAHEDRON:
+        return "tet4";
+    case mfem::Geometry::PRISM:
+        return "prism6";
+    default:
+        return "unsupported";
+    }
+}
+
+int frequency_domain_p1_quadrature_order(mfem::Geometry::Type geometry)
+{
+    switch (geometry) {
+    case mfem::Geometry::TETRAHEDRON:
+        return kFrequencyDomainP1TetrahedronQuadratureOrder;
+    case mfem::Geometry::PRISM:
+        return kFrequencyDomainP1PrismQuadratureOrder;
+    default:
+        throw std::invalid_argument(
+            "frequency-domain P1 quadrature supports only tet4 or prism6 elements");
+    }
+}
+
+const mfem::IntegrationRule &frequency_domain_p1_quadrature(
+    const mfem::FiniteElement &finite_element)
+{
+    const mfem::IntegrationRule &rule = mfem::IntRules.Get(
+        finite_element.GetGeomType(),
+        frequency_domain_p1_quadrature_order(finite_element.GetGeomType()));
+    for (int point_index = 0; point_index < rule.GetNPoints(); ++point_index) {
+        if (!std::isfinite(rule.IntPoint(point_index).weight) ||
+            !(rule.IntPoint(point_index).weight > 0.0)) {
+            throw std::invalid_argument(
+                "frequency-domain P1 quadrature policy requires positive reference weights");
+        }
+    }
+    return rule;
+}
+
 constexpr std::uint32_t kInactiveMagneticClass = std::numeric_limits<std::uint32_t>::max();
 
 struct SparseAccumulator {
@@ -1968,6 +2023,17 @@ FrequencyDomainStatus assemble_native_magnetic_a_qq(
              *   K[(i,c),(j,d)] += 2 A_ex
              *       (e_c(i) . e_d(j)) (grad N_i . grad N_j) w_K.
              *
+             * The geometry-aware positive-weight policy is intentional:
+             * prism6 P1 shape gradients are linear on the reference prism,
+             * so their dot products are quadratic and order one would create
+             * hourglass null modes.  MFEM order 4 is positive for prism6,
+             * while the MFEM 4.7 order-4 tet rule contains a negative point
+             * and is therefore not used by this exchange path; tet4 uses
+             * order 5.  Newer MFEM releases may provide positive simplex
+             * order4, but the explicit tet5 policy remains stable.
+             * The same selected rule is used by the mixed field/coupling
+             * blocks below; A_ex is not rescaled to hide quadrature error.
+             *
              * Keeping this carrier interpretation explicit prevents a
              * runner-owned graph Laplacian from becoming production physics.
              */
@@ -2032,7 +2098,7 @@ FrequencyDomainStatus assemble_native_magnetic_a_qq(
                 mfem::ElementTransformation *transformation =
                     exchange_mesh->GetElementTransformation(element);
                 const mfem::IntegrationRule &rule =
-                    mfem::IntRules.Get(finite_element->GetGeomType(), 1);
+                    frequency_domain_p1_quadrature(*finite_element);
                 for (int point_index = 0; point_index < rule.GetNPoints(); ++point_index) {
                     const mfem::IntegrationPoint &point = rule.IntPoint(point_index);
                     transformation->SetIntPoint(&point);
@@ -2137,13 +2203,18 @@ FrequencyDomainStatus assemble_native_magnetic_a_qq(
                 const mfem::FiniteElement *finite_element = scalar_space->GetFE(element);
                 mfem::ElementTransformation *transformation = mesh->GetElementTransformation(element);
                 const mfem::IntegrationRule &rule =
-                    mfem::IntRules.Get(finite_element->GetGeomType(), 4);
+                    frequency_domain_p1_quadrature(*finite_element);
                 for (int point_index = 0; point_index < rule.GetNPoints(); ++point_index) {
                     const mfem::IntegrationPoint &point = rule.IntPoint(point_index);
                     transformation->SetIntPoint(&point);
                     mfem::Vector shape(dofs.Size());
                     finite_element->CalcShape(point, shape);
                     const double weight = transformation->Weight() * point.weight;
+                    if (!finite_positive(weight)) {
+                        copy_error(error_message,
+                                   "native magnetic A_qq field quadrature has non-positive weight");
+                        return FrequencyDomainStatus::operator_error;
+                    }
                     double m0[3] = {0.0, 0.0, 0.0};
                     double h_eff0[3] = {0.0, 0.0, 0.0};
                     double ms = 0.0;
@@ -2536,7 +2607,7 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain(
             mfem::ElementTransformation *transformation =
                 mesh->GetElementTransformation(element);
             const mfem::IntegrationRule &rule =
-                mfem::IntRules.Get(finite_element->GetGeomType(), 4);
+                frequency_domain_p1_quadrature(*finite_element);
             for (int point_index = 0; point_index < rule.GetNPoints(); ++point_index) {
                 const mfem::IntegrationPoint &point = rule.IntPoint(point_index);
                 transformation->SetIntPoint(&point);
@@ -2545,6 +2616,12 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain(
                 finite_element->CalcShape(point, shape);
                 finite_element->CalcPhysDShape(*transformation, physical_dshape);
                 const double weight = transformation->Weight() * point.weight;
+                if (!finite_positive(weight)) {
+                    copy_error(out_result->error_message,
+                               "shared-domain mixed quadrature has non-positive weight");
+                    out_result->status = FrequencyDomainStatus::operator_error;
+                    return out_result->status;
+                }
                 double m0[3] = {0.0, 0.0, 0.0};
                 double ms = 0.0;
                 for (int local = 0; local < dofs.Size(); ++local) {
@@ -2847,6 +2924,38 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain(
         digest.add_u64("q_dof_count", 2u * request.magnetic_reduced_node_count);
         digest.add_string("boundary_kind", boundary);
         digest.add_string("gauge_policy", gauge);
+        digest.add_string("quadrature_policy", kFrequencyDomainP1QuadraturePolicy);
+        std::uint64_t quadrature_element_count = 0u;
+        for (int element = 0; element < mesh->GetNE(); ++element) {
+            if (request.magnetic_element_mask[static_cast<std::size_t>(element)] == 0u) {
+                continue;
+            }
+            const mfem::FiniteElement *finite_element = request.scalar_space->GetFE(element);
+            if (finite_element == nullptr) {
+                throw std::invalid_argument(
+                    "shared-domain quadrature provenance requires one finite element per magnetic cell");
+            }
+            const mfem::IntegrationRule &rule =
+                frequency_domain_p1_quadrature(*finite_element);
+            const std::string prefix =
+                "quadrature.element[" + std::to_string(element) + "]";
+            digest.add_string(prefix + ".topology",
+                              frequency_domain_p1_geometry_name(finite_element->GetGeomType()));
+            digest.add_u64(prefix + ".topology_id",
+                           static_cast<std::uint64_t>(finite_element->GetGeomType()));
+            digest.add_u64(prefix + ".finite_element_order",
+                           static_cast<std::uint64_t>(finite_element->GetOrder()));
+            digest.add_u64(prefix + ".requested_quadrature_order",
+                           static_cast<std::uint64_t>(
+                               frequency_domain_p1_quadrature_order(
+                                   finite_element->GetGeomType())));
+            digest.add_u64(prefix + ".actual_quadrature_order",
+                           static_cast<std::uint64_t>(rule.GetOrder()));
+            digest.add_u64(prefix + ".actual_quadrature_npoints",
+                           static_cast<std::uint64_t>(rule.GetNPoints()));
+            ++quadrature_element_count;
+        }
+        digest.add_u64("quadrature.element_count", quadrature_element_count);
         digest.add_double("robin_beta", request.robin_beta);
         digest.add_double("gamma0_m_per_a_s", request.gamma0_m_per_a_s);
         digest.add_double("mu0_T_m_A", request.mu0_T_m_A);

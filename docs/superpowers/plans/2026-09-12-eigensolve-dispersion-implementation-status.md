@@ -4511,3 +4511,29 @@ Parser dwóch plików Rust PASS; natywne testy nadal NOT VERIFIED. Pełny R4
 nie jest gotowy: accepted/recomputed fields, V2/Ku namespace, Provided continuation
 multi-k, remap accepted/identity artifacts i Python V1/V2 validator wymagają
 spójnego portu. K0-only topologyV6 override nie zastępuje naszego mixedV3.
+
+
+## Checkpoint F01 i MFEM 4.10 — 2026-10-01
+
+F01 naprawiony źródłowo: exchange prism6 nie używa już centroid/order1.
+Polityka zależna od geometrii to tet5/prism4, z dodatnimi wagami referencyjnymi
+i fizycznymi. Ten sam wybór dotyczy field/anisotropy i sprzężeń mixed.
+Digest wiąże topologię, FE order, requested/resolved order i rzeczywistą liczbę
+punktów. Nie zmieniono Aex ani progu residualu.
+
+Niezależny oracle afinicznego prism6 ma rank5, centroid rank3. Energia pola
+hourglass wynosi 2/3 zamiast błędnego0; K00=5/12 zamiast11/36. Dowód Python
+PASS; source-map PASS; wcześniejsze dziewięć kontraktów dokumentacji PASS.
+Niezależne review po korekcie tet5/prism4 nie wskazało blokera źródłowego.
+Przygotowane native checks obejmują exact tetra gradients, prism rank/nullspace,
+PSD, tangent-frame transport i air isolation. Nie kompilowano ich.
+Runtime, zdeformowany prism i zbieżność order4/5/7 nadal NOT VERIFIED.
+Czytelny eksport szczegółów kwadratury obok hasha pozostaje luką evidence P2.
+
+MFEM4.10 source pin jest na remote: commit
+`2548bbb9440603d6128d34daeaab0009ab53b5fb`. Nowe obrazy, ABI attestation
+i runtime nadal NOT VERIFIED. Kontener #188 pozostaje live/running na starym
+obrazie; nie nadpisano go ani nie uruchomiono równoległego ciężkiego buildu.
+R4 exact-preimage foundation opublikowano jako
+`2c9ed3c5836ffff9e574271a7c39afd07590b5e5`; full accepted replay nadal OPEN.
+Zakres S00–S12 nie został zawężony ani uznany za ukończony.
