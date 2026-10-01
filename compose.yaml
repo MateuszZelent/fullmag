@@ -200,6 +200,7 @@ services:
     environment:
       RUST_LOG: ${RUST_LOG:-info}
       FULLMAG_BUILD_ROOT: /workspace/.fullmag-build
+      FULLMAG_FEM_CPU_BUILD_ROOT: /workspace/.fullmag-build/fem-cpu-only
       FULLMAG_CARGO_TARGET_DIR: /workspace/target
       CARGO_TARGET_DIR: /workspace/target
       FULLMAG_CACHE_ROOT: /workspace/.fullmag-cache

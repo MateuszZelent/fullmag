@@ -1561,7 +1561,7 @@ verify-fem-oersted-oet0-tsan-cpu-contract:
 
 verify-fem-oersted-oef1-cpu-contract:
     docker compose build fem-cpu
-    docker compose run --rm --no-deps -e FULLMAG_FEM_CPU_BUILD_ROOT=/workspace/.fullmag-build/fem-cpu-only fem-cpu ./scripts/run_fem_cpu_only_contract.sh oersted-oef1
+    docker compose run --rm --no-deps fem-cpu ./scripts/run_fem_cpu_only_contract.sh oersted-oef1
 
 verify-fem-oersted-oef2-cpu-contract:
     docker compose build fem-cpu
