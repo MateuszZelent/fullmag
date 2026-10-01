@@ -15,7 +15,14 @@ dlatego nie podnosi procentów P3/P5.
 
 ## Dokumenty finalne
 
-Checkpoint 01.10.2026: [P6-51 — zapisane wyniki projektu bez aktywnej
+Checkpoint 01.10.2026: [P6-52 — binarny odczyt fragmentów trwałego datasetu](p6/52-bounded-materialized-dataset-binary-slices.md)
+obejmuje exact pinned source, bounded FMDS transport, range checksums,
+F32/F64, odrzucanie NaN/Infinity i jawny limit metadata. Produkcyjna kompilacja
+przy codegen, TypeScript, API hygiene i review przeszły; testy jednostkowe,
+backend HTTP, resource hook i renderer pozostają NOT VERIFIED.
+P6 nadal około 52%, cały plan około 49%.
+
+Poprzedni checkpoint: [P6-51 — zapisane wyniki projektu bez aktywnej
 sesji](p6/51-project-results-without-session.md), po [discovery i przypiętym
 Inspectorze P6-50](p6/50-saved-results-discovery-and-inspector.md). Otwarty
 projekt korzysta z tego samego dockingu i readonly Inspectora bez fikcyjnej

@@ -190,3 +190,13 @@ pamięci i wszystkich lane'ów pozostają otwarte. P6 wynosi **52%**.
     — exact owner reader, project-owned API, pełne typed metadata, generowane
     OpenAPI/client i resource hook; source/codegen/API hygiene PASS,
     konsumenci UI, binarny slice i runtime pozostają otwarte.
+
+50. [Discovery i readonly Inspector](50-saved-results-discovery-and-inspector.md)
+    — project/run/SolutionSet discovery, exact pin i UI fixture; renderer otwarty.
+
+51. [Wyniki projektu bez aktywnej sesji](51-project-results-without-session.md)
+    — ten sam docking, Inspector i confirmed session identity; browser fixture PASS.
+
+52. [Binarny odczyt fragmentów trwałego datasetu](52-bounded-materialized-dataset-binary-slices.md)
+    — bounded FMDS, exact range integrity, F32/F64 i publiczny kontrakt;
+    source/codegen/review PASS, unit/HTTP/resource hook/renderer otwarte.
