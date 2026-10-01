@@ -1,5 +1,14 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
+## Odbiór GPT PRO ab64bac, 2026-10-01
+
+- Oryginał zachowany w docs/audits/2026-10-01-gpt-pro-eigensolve-ab64bac-original.md; pełny odbiór i kolejność napraw: docs/audits/2026-10-01-gpt-pro-eigensolve-remediation.md.
+- F01 prism6 exchange quadrature,P1; F02 explicit-sample legacy fallback,P1; F03 Hz/axis linewidth mismatch,P2 potwierdzone w aktualnych źródłach i otwarte. Najpierw F02/F03, następnie F01 z polityką transformacji i kontrolą nullspace. Pilot tetrahedral nie korzysta z prism6.
+- Dodano G04: Gamma finite-Dirichlet reference9.299249694GHz kontra open-film9.309813709GHz; porównanie po weryfikacji rzeczywistych BC i osobnej zbieżności airboxu, bez zmiany residual gate.
+- G01 canonical/raw migration źródłowo799be85, lecz guard/runtime nadal otwarte; G02 multi-candidate branch/subspace, H01 realification, H02 variational texture i H03 gauge nadal wymagają dowodu. Pięć zbieżności i pełen zakres S00–S12 zachowane.
+- Modal telemetry commit3b67a9f3c6a75e0d8d5c28116170477784c3a570:13parserPASS, mapa/publicexamplesPASS; review P1/P2 naprawione wraz z mixed frame. Native testy przygotowane, niekompilowane; managed runtime/browser NOT VERIFIED.
+
+
 
 ## S08/S12 — modalny postęp bez fikcyjnych pomiarów, 2026-10-01
 
