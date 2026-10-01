@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 
 import { useKernel } from "@/kernel/KernelContext";
 import { decodeFieldVector } from "@/kernel/api/codecs";
@@ -331,32 +331,39 @@ function useFieldMapModuleController() {
       selectedFieldContext.stageId,
     ],
   );
-  const retainedPlanarFrameRef = useRef<{
+  const [retainedPlanarFrame, setRetainedPlanarFrame] = useState<{
     identityKey: string;
+    revisionKey: string;
     model: NonNullable<typeof freshRenderModel>;
   } | null>(null);
-  const retainedPlanarFrame = retainedPlanarFrameRef.current;
+  const planarFrameRevisionKey = JSON.stringify({
+    mask: mask.revision,
+    mesh: meshOverlay.revision,
+    meta: meta.data?.etag,
+    presentation: presentationPlanar,
+    scalar: scalar.data?.etag,
+    vectors: vectors.revision,
+    wireframe: effectiveWireframeStyle,
+  });
+  if (freshRenderModel && (
+    retainedPlanarFrame?.identityKey !== planarViewIdentityKey ||
+    retainedPlanarFrame.revisionKey !== planarFrameRevisionKey
+  )) {
+    setRetainedPlanarFrame({
+      identityKey: planarViewIdentityKey,
+      revisionKey: planarFrameRevisionKey,
+      model: freshRenderModel,
+    });
+  } else if (!freshRenderModel && retainedPlanarFrame &&
+    retainedPlanarFrame.identityKey !== planarViewIdentityKey) {
+    setRetainedPlanarFrame(null);
+  }
   const renderModel =
     freshRenderModel ??
     (retainedPlanarFrame &&
     retainedPlanarFrame.identityKey === planarViewIdentityKey
       ? retainedPlanarFrame.model
       : null);
-  useEffect(() => {
-    if (freshRenderModel) {
-      retainedPlanarFrameRef.current = {
-        identityKey: planarViewIdentityKey,
-        model: freshRenderModel,
-      };
-      return;
-    }
-    if (
-      retainedPlanarFrameRef.current &&
-      retainedPlanarFrameRef.current.identityKey !== planarViewIdentityKey
-    ) {
-      retainedPlanarFrameRef.current = null;
-    }
-  }, [freshRenderModel, planarViewIdentityKey]);
   const pinnedAxisState = useMemo(() => {
     if (!renderModel || !probe.data) return null;
     const axisFrame = {
@@ -456,7 +463,6 @@ function useFieldMapModuleController() {
     canonicalPlanar,
     canonicalSampleError,
     evidence,
-    frame,
     mask,
     meshOverlay,
     meta,
@@ -479,7 +485,6 @@ export default function FieldMapModule() {
     canonicalPlanar,
     canonicalSampleError,
     evidence,
-    frame,
     mask,
     meshOverlay,
     meta,
@@ -538,6 +543,9 @@ export default function FieldMapModule() {
   if (!renderModel) {
     return <FieldMapStatus message="Loading planar field…" planarStatus="loading" />;
   }
+  const ambiguousSurfaceMeta = meta.data && surfaceProjectionStatus(meta.data) === "ambiguous"
+    ? meta.data
+    : null;
 
   return (
     <section className="fm-field-map">
@@ -585,10 +593,10 @@ export default function FieldMapModule() {
         <strong>{plan.quantityId}</strong>
         <span>{presentationPlanar.component}</span>
         <span>{renderModel.display.legendUnit}</span>
-        {surfaceProjectionStatus(meta.data) === "ambiguous" ? (
+        {ambiguousSurfaceMeta ? (
           <span className="fm-field-map__diagnostic" role="status">
-            Ambiguous surface: {meta.data.overlap_count} overlaps,{" "}
-            {meta.data.fold_count} folds
+            Ambiguous surface: {ambiguousSurfaceMeta.overlap_count} overlaps,{" "}
+            {ambiguousSurfaceMeta.fold_count} folds
           </span>
         ) : null}
       </header>

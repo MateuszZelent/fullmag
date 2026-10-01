@@ -10,6 +10,7 @@ import FieldMapModule from "./FieldMapModule";
 
 const mocks = vi.hoisted(() => ({
   meta: vi.fn(),
+  metaAvailable: true,
   probeData: null as null | { occupancy: string; scalar: number | null; u_m: number; v_m: number },
   queuePatch: vi.fn(),
   renderModel: vi.fn(),
@@ -48,7 +49,8 @@ vi.mock("./model/fieldMapRenderModel", () => ({
   normalizePlanarColorRange: () => null,
   projectPlanarVectors: () => null,
   resolveFieldMapAuxiliaryDiagnostics: () => [],
-  surfaceProjectionStatus: () => "resolved",
+  surfaceProjectionStatus: (meta: { fold_count: number; non_injective: boolean; overlap_count: number }) =>
+    meta.non_injective || meta.fold_count > 0 || meta.overlap_count > 0 ? "ambiguous" : "resolved",
 }));
 
 vi.mock("./renderer/PlanarSurface", () => ({
@@ -85,7 +87,7 @@ vi.mock("@/kernel/resources/planarFieldResources", () => ({
     mocks.meta(...args);
     const requestedSource = args[1] as { kind?: string } | undefined;
     const isDefault = requestedSource?.kind === "default";
-    return mocks.renderReady
+    return mocks.renderReady && mocks.metaAvailable
       ? {
           data: {
             canonical_unit: "A/m",
@@ -130,7 +132,7 @@ vi.mock("@/kernel/resources/planarFieldResources", () => ({
           error: null,
           status: "ready",
         }
-      : { data: null, error: null, status: "idle" };
+      : { data: null, error: null, status: mocks.renderReady ? "loading" : "idle" };
   },
   usePlanarMaskResource: () => ({ data: null, error: null, status: "idle" }),
   usePlanarMeshOverlayResource: () => ({ data: null, error: null, status: "idle" }),
@@ -170,11 +172,13 @@ vi.mock("@/kernel/visualization/useVisualizationStateResource", () => ({
 describe("FieldMapModule planar state ownership", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.renderModel.mockReset();
     mocks.visualization.data = null;
     mocks.visualization.error = null;
     mocks.visualization.status = "loading";
     mocks.visualization.optimisticData = null;
     mocks.renderReady = false;
+    mocks.metaAvailable = true;
     mocks.probeData = null;
     mocks.selection = emptySelection();
   });
@@ -245,6 +249,42 @@ describe("FieldMapModule planar state ownership", () => {
         expect.any(Object),
         { enabled: true },
       );
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("retains the planar surface while metadata refresh has no data", async () => {
+    mocks.visualization.data = {
+      planar: {
+        colormap: "viridis",
+        component: "magnitude",
+        display_unit: "A/m",
+        interaction: { pan_u_m: 0, pan_v_m: 0, zoom: 1 },
+        layers: { mesh: false, vectors: false },
+        quantity_id: "m",
+        quality: "interactive",
+        range: { mode: "auto" },
+        resolution: { height: 128, width: 256 },
+        source: { kind: "default" },
+        default_slice: { operator: { kind: "plane_sample" }, plane: "xy", position_fraction: 0.5 },
+        vector_style: { color_mode: "orientation", length_mode: "uniform", scale: 1 },
+        view_scope: { kind: "monitor_target" },
+      },
+    };
+    mocks.visualization.status = "ready";
+    mocks.renderReady = true;
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => root.render(<FieldMapModule />));
+      expect(container.querySelector(".fm-field-map__canvas-stack")).toBeDefined();
+      mocks.metaAvailable = false;
+      await act(async () => root.render(<FieldMapModule />));
+      expect(container.querySelector(".fm-field-map__canvas-stack")).toBeDefined();
+      expect(container.textContent).not.toContain("Ambiguous surface");
     } finally {
       await act(async () => root.unmount());
       dom.restore();
@@ -351,7 +391,7 @@ describe("FieldMapModule planar state ownership", () => {
     };
     mocks.visualization.status = "ready";
     mocks.renderReady = true;
-    mocks.renderModel.mockImplementationOnce((input: unknown) => ({
+    mocks.renderModel.mockImplementation((input: unknown) => ({
       diagnostics: [],
       bounds: [0, 1, 0, 1],
       frame: {
