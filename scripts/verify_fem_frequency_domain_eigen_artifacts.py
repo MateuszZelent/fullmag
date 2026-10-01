@@ -97,6 +97,69 @@ REFERENCE_FULL_2X2_FLOQUET_REJECTION_CONTRACTS = {
     },
 }
 
+# R4 multi-k path sidecars are intentionally validated at the manifest/path
+# boundary here.  Their signed JSON payloads are replayed by a separate
+# accepted-field contract; this verifier must not invent a schema for the
+# still-evolving linearization_identity.v2 producer.
+R4_SIGNED_SIDECAR_DEFINITIONS = {
+    "accepted_fem_equilibrium_fields_v1_paths": (
+        "accepted_fem_equilibrium_fields.v1.json",
+        "v7",
+    ),
+    "accepted_fem_equilibrium_fields_v2_paths": (
+        "accepted_fem_equilibrium_fields.v2.json",
+        "v8",
+    ),
+    "linearization_identity_v2_paths": (
+        "linearization_identity.v2.json",
+        "v8",
+    ),
+    "certified_fem_equilibrium_fields_v1_paths": (
+        "certified_fem_equilibrium_fields.v1.json",
+        "v7",
+    ),
+    "certified_fem_equilibrium_fields_v2_paths": (
+        "certified_fem_equilibrium_fields.v2.json",
+        "v8",
+    ),
+    "recomputed_fem_linearization_certificate_v1_paths": (
+        "recomputed_fem_linearization_certificate.v1.json",
+        "v7",
+    ),
+    "recomputed_fem_linearization_certificate_v2_paths": (
+        "recomputed_fem_linearization_certificate.v2.json",
+        "v8",
+    ),
+}
+
+R4_ACCEPTED_SIDECAR_KEYS = (
+    "accepted_fem_equilibrium_fields_v1_paths",
+    "accepted_fem_equilibrium_fields_v2_paths",
+)
+R4_IDENTITY_SIDECAR_KEY = "linearization_identity_v2_paths"
+R4_NEW_SIDECAR_KEYS = (
+    "certified_fem_equilibrium_fields_v1_paths",
+    "certified_fem_equilibrium_fields_v2_paths",
+    "recomputed_fem_linearization_certificate_v1_paths",
+    "recomputed_fem_linearization_certificate_v2_paths",
+)
+R4_SIDECAR_FAMILY = {
+    "accepted_fem_equilibrium_fields_v1_paths": "v1",
+    "accepted_fem_equilibrium_fields_v2_paths": "v2",
+    "certified_fem_equilibrium_fields_v1_paths": "v1",
+    "certified_fem_equilibrium_fields_v2_paths": "v2",
+    "recomputed_fem_linearization_certificate_v1_paths": "v1",
+    "recomputed_fem_linearization_certificate_v2_paths": "v2",
+}
+
+R4_DISCOVERY_STATUSES = {
+    "historical",
+    "missing_accepted",
+    "missing_identity",
+    "missing_recomputed",
+    "payload_replay_pending",
+}
+
 
 def fail(message: str) -> None:
     raise SystemExit(f"invalid frequency-domain eigen artifacts:\n{message}")
@@ -751,6 +814,308 @@ def _state_sample_key(relative_path: str, filename: str) -> str:
     return middle
 
 
+def _r4_sidecar_sample_index(relative_path: str, filename: str, name: str) -> int:
+    """Return the canonical sample index from one R4 sidecar path.
+
+    The path is part of the signed multi-k manifest contract.  Keep this
+    check stricter than the generic bundle-path resolver: accepting an
+    arbitrary directory below ``eigen/metadata`` would make the sample
+    binding ambiguous, even when the file itself exists.
+    """
+    normalized = Path(relative_path).as_posix()
+    if relative_path != normalized:
+        fail(f"{name} must use canonical forward-slash separators")
+    prefix = "eigen/metadata/sample_"
+    suffix = f"/{filename}"
+    if not normalized.startswith(prefix) or not normalized.endswith(suffix):
+        fail(
+            f"{name} must use eigen/metadata/sample_NNNN/{filename}"
+        )
+    token = normalized[len(prefix) : -len(suffix)]
+    if not token.isdigit():
+        fail(f"{name} has an invalid sample index")
+    sample_index = int(token)
+    if token != f"{sample_index:04d}":
+        fail(f"{name} must use the canonical sample_{sample_index:04d} directory")
+    return sample_index
+
+
+def _declared_r4_sidecar_paths(
+    root: Path,
+    artifacts: dict,
+    key: str,
+    filename: str,
+) -> dict[int, tuple[str, Path]] | None:
+    """Resolve one optional R4 plural sidecar array.
+
+    ``None`` means that a historical manifest does not know this key.  An
+    explicitly present empty list is valid for a newer spectrum-only
+    manifest.  Non-empty arrays are required to contain existing canonical
+    paths, one path per sample index, without traversal or duplicates.
+    """
+    if key not in artifacts:
+        return None
+    value = artifacts[key]
+    if not isinstance(value, list):
+        fail(f"manifest.artifacts.{key} must be a list")
+    if any(not isinstance(item, str) for item in value):
+        fail(f"manifest.artifacts.{key} must be a list of paths")
+    if len(set(value)) != len(value):
+        fail(f"manifest.artifacts.{key} must not contain duplicate paths")
+    result: dict[int, tuple[str, Path]] = {}
+    for index, item in enumerate(value):
+        relative_path, artifact_path = require_bundle_path(
+            root, item, f"manifest.artifacts.{key}[{index}]"
+        )
+        sample_index = _r4_sidecar_sample_index(
+            relative_path,
+            filename,
+            f"manifest.artifacts.{key}[{index}]",
+        )
+        if sample_index in result:
+            fail(
+                f"manifest.artifacts.{key} contains duplicate sample index "
+                f"{sample_index}"
+            )
+        result[sample_index] = (relative_path, artifact_path)
+    return result
+
+
+def _legacy_state_sample_indices(
+    root: Path, artifacts: dict, schema: str
+) -> set[int]:
+    """Return the sample indices of one existing v7/v6 or v8/v7 pair."""
+    pairs = _state_path_pairs(root, {"artifacts": artifacts}, schema=schema)
+    indices: set[int] = set()
+    for _, _, _, sample_key in pairs:
+        if sample_key == "":
+            sample_index = 0
+        else:
+            token = sample_key.removeprefix("sample_")
+            if not token.isdigit() or token != f"{int(token):04d}":
+                fail(
+                    f"manifest.artifacts {schema} state paths have an invalid "
+                    f"sample key {sample_key!r}"
+                )
+            sample_index = int(token)
+        if sample_index in indices:
+            fail(
+                f"manifest.artifacts {schema} state paths contain duplicate "
+                f"sample index {sample_index}"
+            )
+        indices.add(sample_index)
+    return indices
+
+
+def _r4_discovery_result(
+    status: str,
+    reason: str,
+    *,
+    accepted_family: str | None = None,
+    accepted_sample_indices: set[int] | None = None,
+    identity_sample_indices: set[int] | None = None,
+    missing_recomputed_keys: list[str] | None = None,
+) -> dict[str, object]:
+    if status not in R4_DISCOVERY_STATUSES:
+        raise ValueError(f"unknown R4 discovery status: {status}")
+    return {
+        "status": status,
+        "reason": reason,
+        "accepted_family": accepted_family,
+        "accepted_sample_indices": sorted(accepted_sample_indices or set()),
+        "identity_sample_indices": sorted(identity_sample_indices or set()),
+        "missing_recomputed_keys": sorted(missing_recomputed_keys or []),
+    }
+
+
+def _state_family_has_paths(artifacts: dict, schema: str) -> bool:
+    if schema == "v8":
+        keys = (
+            "equilibrium_artifact_v8_path",
+            "equilibrium_artifact_v8_paths",
+            "linearization_state_v7_path",
+            "linearization_state_v7_paths",
+        )
+    else:
+        keys = (
+            "equilibrium_artifact_v7_path",
+            "equilibrium_artifact_v7_paths",
+            "linearization_state_v6_path",
+            "linearization_state_v6_paths",
+        )
+    return any(
+        key in artifacts and artifacts.get(key) not in (None, "", [])
+        for key in keys
+    )
+
+
+def validate_r4_signed_sidecars(root: Path, artifacts: object) -> dict[str, object]:
+    """Validate R4 sidecar discovery and family/sample binding.
+
+    Historical manifests omit all R4 keys and remain valid.  A producer may
+    publish an accepted sidecar family before the identity-v2 producer is
+    available; that state is reported as ``missing_identity`` rather than
+    being treated as a certified result.  This function validates only path
+    identity and family/sample-set consistency; accepted/recomputed field
+    replay and the opaque identity-v2 payload remain separate gates.
+    """
+    if not isinstance(artifacts, dict):
+        return _r4_discovery_result(
+            "historical",
+            "R4 sidecar arrays are absent from a historical manifest",
+        )
+    keys = tuple(R4_SIGNED_SIDECAR_DEFINITIONS)
+    present = [key for key in keys if key in artifacts]
+    if not present:
+        return _r4_discovery_result(
+            "historical",
+            "R4 sidecar arrays are absent from a historical manifest",
+        )
+    old_keys = (*R4_ACCEPTED_SIDECAR_KEYS, R4_IDENTITY_SIDECAR_KEY)
+    new_present = [key for key in R4_NEW_SIDECAR_KEYS if key in artifacts]
+    missing_old = [key for key in old_keys if key not in artifacts]
+    if missing_old:
+        fail(
+            "manifest.artifacts R4 signed sidecars must declare all plural "
+            f"arrays; missing {', '.join(missing_old)}"
+        )
+    if new_present:
+        missing_new = [key for key in R4_NEW_SIDECAR_KEYS if key not in artifacts]
+        if missing_new:
+            fail(
+                "manifest.artifacts R4 certified/recomputed sidecars must "
+                "declare all four plural arrays; missing "
+                f"{', '.join(missing_new)}"
+            )
+
+    declared = {
+        key: _declared_r4_sidecar_paths(
+            root,
+            artifacts,
+            key,
+            R4_SIGNED_SIDECAR_DEFINITIONS[key][0],
+        )
+        for key in present
+    }
+    accepted_v1 = declared.get("accepted_fem_equilibrium_fields_v1_paths") or {}
+    accepted_v2 = declared.get("accepted_fem_equilibrium_fields_v2_paths") or {}
+    identity_v2 = declared.get(R4_IDENTITY_SIDECAR_KEY) or {}
+    new_sidecars = {
+        key: declared.get(key) or {}
+        for key in R4_NEW_SIDECAR_KEYS
+    }
+    missing_declared_new_keys = [
+        key for key in R4_NEW_SIDECAR_KEYS if not new_sidecars[key]
+    ]
+
+    if not accepted_v1 and not accepted_v2:
+        if identity_v2 or any(new_sidecars.values()):
+            fail(
+                "manifest.artifacts R4 identity/certified/recomputed sidecars "
+                "cannot be declared without an accepted FEM equilibrium "
+                "sidecar family"
+            )
+        return _r4_discovery_result(
+            "missing_accepted",
+            "R4 accepted FEM equilibrium sidecars are missing",
+            identity_sample_indices=set(identity_v2),
+            missing_recomputed_keys=missing_declared_new_keys,
+        )
+    if accepted_v1 and accepted_v2:
+        fail(
+            "manifest.artifacts R4 sidecars mix accepted FEM equilibrium "
+            "field families v1 and v2"
+        )
+    accepted_family = "v1" if accepted_v1 else "v2"
+    accepted_sample_indices = set(accepted_v1 or accepted_v2)
+    required_new_keys = [
+        key for key in R4_NEW_SIDECAR_KEYS
+        if R4_SIDECAR_FAMILY[key] == accepted_family
+    ]
+    missing_recomputed_keys = [
+        key for key in required_new_keys if not new_sidecars[key]
+    ]
+    if identity_v2 and set(accepted_sample_indices) != set(identity_v2):
+        fail(
+            "manifest.artifacts accepted fields and linearization identity "
+            "sample index sets must match"
+        )
+
+    # Keep the already-existing state-pair binding when those sidecars are
+    # declared, but do not turn their absence into a new R4 qualification
+    # failure while the producer migration is still in progress.
+    state_schema = "v7" if accepted_v1 else "v8"
+    opposite_state_schema = "v8" if accepted_v1 else "v7"
+    if _state_family_has_paths(artifacts, opposite_state_schema):
+        fail(
+            "manifest.artifacts accepted fields and state paths use mixed "
+            "schema families"
+        )
+    if _state_family_has_paths(artifacts, state_schema):
+        expected_state_samples = _legacy_state_sample_indices(
+            root, artifacts, state_schema
+        )
+        if set(accepted_sample_indices) != expected_state_samples:
+            fail(
+                "manifest.artifacts accepted fields and state sample "
+                "index sets must match"
+            )
+
+    for key, paths in new_sidecars.items():
+        if not paths:
+            continue
+        expected_family = R4_SIDECAR_FAMILY[key]
+        if expected_family != accepted_family:
+            fail(
+                "manifest.artifacts R4 certified/recomputed sidecar "
+                f"{key} uses family {expected_family}, but accepted fields "
+                f"use family {accepted_family}"
+            )
+        if set(paths) != accepted_sample_indices:
+            fail(
+                "manifest.artifacts R4 certified/recomputed sidecar "
+                f"{key} sample index set must match accepted fields"
+            )
+
+    if not identity_v2 and missing_recomputed_keys:
+        return _r4_discovery_result(
+            "missing_recomputed",
+            "R4 linearization identity v2 and certified/recomputed sidecar "
+            "arrays are missing or empty; accepted field payload replay is "
+            "not verified",
+            accepted_family=accepted_family,
+            accepted_sample_indices=accepted_sample_indices,
+            missing_recomputed_keys=missing_recomputed_keys,
+        )
+    if not identity_v2:
+        return _r4_discovery_result(
+            "missing_identity",
+            "R4 linearization identity v2 sidecars are missing; accepted "
+            "field payload replay is not verified",
+            accepted_family=accepted_family,
+            accepted_sample_indices=accepted_sample_indices,
+            missing_recomputed_keys=missing_recomputed_keys,
+        )
+    if missing_recomputed_keys:
+        return _r4_discovery_result(
+            "missing_recomputed",
+            "R4 certified/recomputed sidecar arrays are missing or empty; "
+            "accepted field payload replay is not verified",
+            accepted_family=accepted_family,
+            accepted_sample_indices=accepted_sample_indices,
+            identity_sample_indices=set(identity_v2),
+            missing_recomputed_keys=missing_recomputed_keys,
+        )
+    return _r4_discovery_result(
+        "payload_replay_pending",
+        "R4 sidecar paths are structurally consistent; accepted/recomputed "
+        "payload replay is not implemented",
+        accepted_family=accepted_family,
+        accepted_sample_indices=accepted_sample_indices,
+        identity_sample_indices=set(identity_v2),
+    )
+
+
 def _declared_state_paths(
     root: Path, artifacts: object, stem: str, filename: str
 ) -> list[tuple[str, Path, str]]:
@@ -874,10 +1239,14 @@ def validate_linearization_handoff_diagnostics(
 
 def validate_equilibrium_artifacts(
     root: Path, manifest: dict, solver_diagnostics: dict | None = None
-) -> None:
+) -> dict[str, object]:
     artifacts = manifest.get("artifacts")
     if not isinstance(artifacts, dict):
-        return
+        return _r4_discovery_result(
+            "historical",
+            "R4 sidecar arrays are absent from a historical manifest",
+        )
+    r4_discovery = validate_r4_signed_sidecars(root, artifacts)
     def has_declared_path(keys: tuple[str, ...]) -> bool:
         return any(
             key in artifacts
@@ -936,7 +1305,7 @@ def validate_equilibrium_artifacts(
             ) or handoff_found
         if not handoff_found:
             fail("v8/v7 artifacts require linearization_handoff diagnostics")
-        return
+        return r4_discovery
     if has_v7:
         validate_equilibrium_artifact_v7(root, manifest)
         has_v7_state = any(
@@ -947,7 +1316,7 @@ def validate_equilibrium_artifacts(
             )
         )
         if not has_v7_state:
-            return
+            return r4_discovery
         pairs = _state_path_pairs(root, manifest, schema="v7")
         expected_equilibrium_sha = manifest.get("equilibrium_artifact_sha256")
         expected_state_sha = manifest.get("linearization_state_sha256")
@@ -969,6 +1338,7 @@ def validate_equilibrium_artifacts(
                 expected_state_schema="LinearizationState.v6",
                 name=name,
             ) or handoff_found
+    return r4_discovery
 
 
 def validate_equilibrium_artifact_v7(root: Path, manifest: dict) -> None:
@@ -1015,6 +1385,13 @@ def validate_periodic_mesh_certificate(
         certificate.get("magnetic_pair_map_sha256"),
         f"{name}.magnetic_pair_map_sha256",
     )
+
+
+def report_r4_discovery(result: dict[str, object]) -> None:
+    """Report the separate, currently unverified R4 replay gate."""
+    status = require_non_empty_string(result.get("status"), "R4 discovery.status")
+    reason = require_non_empty_string(result.get("reason"), "R4 discovery.reason")
+    print(f"R4 replay NOT VERIFIED [{status}]: {reason}", file=sys.stderr)
 
 
 def require_finite_number(value: object, name: str) -> float:
@@ -5629,6 +6006,15 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
             "Kalinikos n=0 model applicability, with analytic agreement"
         ),
     )
+    parser.add_argument(
+        "--require-r4-replay",
+        action="store_true",
+        help=(
+            "require the accepted/recomputed FEM equilibrium and linearization "
+            "identity replay gate; this remains unavailable until its payload "
+            "consumer is implemented"
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -5679,7 +6065,13 @@ def main(argv: list[str] | None = None) -> int:
         "manifest.schema_version",
     )
     require_equal(manifest.get("stage_kind"), "eigenmodes", "manifest.stage_kind")
-    validate_equilibrium_artifacts(root, manifest, solver_diagnostics)
+    r4_discovery = validate_equilibrium_artifacts(root, manifest, solver_diagnostics)
+    report_r4_discovery(r4_discovery)
+    if args.require_r4_replay:
+        fail(
+            "R4 replay NOT VERIFIED "
+            f"[{r4_discovery['status']}]: {r4_discovery['reason']}"
+        )
     validate_manifest_physics(manifest)
     require_equal(
         manifest.get("artifacts", {}).get("solver_diagnostics_path"),
