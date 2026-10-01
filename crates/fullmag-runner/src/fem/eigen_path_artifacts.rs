@@ -641,8 +641,10 @@ mod output_publication_tests {
     }
 
     #[test]
-    fn nonshared_exact_preimages_are_preserved_without_reserialization() {
+    fn nonshared_exact_sidecars_are_preserved_without_reserialization() {
         for filename in [
+            "native_input_operator_diagnostics.v1.json",
+            "native_input_operator_diagnostics_preimage.v1.json",
             "nonshared_floquet_source_state_preimage.v1.json",
             "nonshared_floquet_operator_input_preimage.v1.json",
             "equilibrium_material_preimage.v1.json",
