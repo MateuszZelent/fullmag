@@ -94,10 +94,11 @@ def main():
     accepted = json.loads(args.runtime_pairs.read_text(encoding="utf-8"))
     if accepted["certificate_status"] != "accepted" or accepted["validation_status"] != "ok":
         raise ValueError("runtime periodic certificate is not accepted")
-    actual_pairs = {(p["node_a"], p["node_b"])
-                    for boundary in accepted["pairs"] for p in boundary["node_pairs"]}
-    if set(pairs) != actual_pairs:
-        raise ValueError("reconstructed packing does not match actual runtime node pairs")
+    actual_order = list(dict.fromkeys((p["node_a"], p["node_b"])
+                    for boundary in accepted["pairs"] for p in boundary["node_pairs"]))
+    packed_order = list(dict.fromkeys(pairs))
+    if packed_order != actual_order:
+        raise ValueError("reconstructed packing does not match actual runtime node pair order")
     magnetic = set(range(len(old_magnetic)))
     legacy = replay(count, magnetic, pairs, False)
     fixed = replay(count, magnetic, pairs, True)
@@ -113,6 +114,7 @@ def main():
               "node_count": count, "magnetic_node_count": len(magnetic),
               "unique_periodic_pair_count": len(set(pairs)),
               "runtime_pair_set_matches_packed_source": True,
+              "runtime_pair_order_matches_packed_source": True,
               "legacy": legacy, "minimum_root": fixed,
               "direction_and_order_invariant": True,
               "input_sha256": {str(p): hashlib.sha256(p.read_bytes()).hexdigest()

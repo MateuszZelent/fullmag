@@ -16,7 +16,7 @@ v6 wymaga sortowania według najmniejszych węzłów klas; nie należy go osłab
 `scripts/replay_modal_periodic_reduction_maps.py` niezależnie buduje komponenty
 spójne grafu, odtwarza packing pojedynczego regionu i porównuje zbiór par z
 rzeczywistym zaakceptowanym `mesh/periodic_pairs.v1.json` relaksacji #187.
-Zgodność zbioru par jest obowiązkową kontrolą; sam hipotetyczny remap nie wystarcza.
+Zgodność zbioru i kolejności pierwszych wystąpień par jest obowiązkową kontrolą; sam hipotetyczny remap nie wystarcza.
 Wejścia są związane SHA-256 w `2026-10-01-modal-periodic-map-replay.json`.
 
 Siatka: 6138 węzłów, 396 magnetycznych, 1116 unikalnych par periodycznych.
@@ -41,3 +41,5 @@ Wymagany następny dowód: nowy snapshot runtime-v2, terminalny receipt, pilot �
 a następnie DE/BV k25 L2/t3/t6/t9 z kompletem pól, residuali i provenance.
 Nadal otwarte są zbieżność, COMSOL A1, Ku/material identity, wszystkie pozostałe
 interakcje, waveguide, GPU, browser i integracja całego planu S00–S12.
+
+Niezależne review potwierdziło przyczynę i poprawność minimum-root union bez P1/P2. Po uwadze review replay kontroluje także kolejność unikalnych par runtime, istotną dla odtwarzania starego algorytmu.

@@ -5,6 +5,7 @@
   "magnetic_node_count": 396,
   "unique_periodic_pair_count": 1116,
   "runtime_pair_set_matches_packed_source": true,
+  "runtime_pair_order_matches_packed_source": true,
   "legacy": {
     "scalar_mismatched_nodes": [],
     "magnetic_mismatched_nodes": [
