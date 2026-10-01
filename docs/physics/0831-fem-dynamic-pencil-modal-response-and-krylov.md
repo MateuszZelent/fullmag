@@ -694,10 +694,15 @@ current/Oersted, stochastic/thermal, mechanical, spatial Ku/axis or sharp elemen
 contributions. The bounded Ku realization requires uniform positive Ms; legacy nodal A remains
 digest-bound in material identity. GPU linearization field export also requires
 a valid accepted-endpoint observable cache, but GPU physics remains unqualified.
-The accepted-fields hash in the refresh certificate is digest-bound trusted
-producer evidence: the consumer receives and independently hashes the refreshed
-field payload, not the historical accepted payload. Its accepted digest is
-checked as strict lowercase SHA-256 without claiming independent replay.
+Historical refresh certificates with only a recomputed payload carry an
+accepted-fields digest as trusted producer evidence; they do not prove
+independent accepted-field replay. The R4 source increment publishes a separate
+immutable accepted endpoint payload and the consumer independently hashes both
+payloads, replays all recorded field/phi differences, and enforces the shared
+tolerances. V2 also replays anisotropy, including explicit Ku=0. The verified
+constructor is used by the runner and CLI; the legacy constructor is internal.
+Full V3/source identity binding, Python artifact replay and managed runtime
+remain separate open gates. Historical artifacts are not relabelled as R4 proof.
 
 Constraint construction operates on complete corner/edge equivalence classes
 and checks cycle consistency. A phase-only tangent constraint is invalid for

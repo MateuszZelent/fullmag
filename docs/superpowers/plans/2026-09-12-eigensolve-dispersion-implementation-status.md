@@ -4581,3 +4581,18 @@ przygotowany. F01deformed referenceGLconvergence przygotowana; rootmathprobe
 potwierdził GL4→GL5 max4.0978971e-8, GL5→GL7max1.5717799e-10
 bezfaktora2Aex,scalar rank5 i dodatniJacobian. Nie jest to MFEMruntime.
 Pełny S00–S12 nadal otwarty.
+
+R4 accepted replay: CLI P1 skorygowany źródłowo, accepted payload ładowany
+oddzielnie; verifiedconstructorpublic,legacyinternal, load_state czyści
+accepted continuation. Repo-wide search nie znalazł już produkcyjnego
+legacycallera;4interpretedchecksPASS i parserPASS wedługautora.
+Końcowe niezależne review pending. PełneV3/sourceidentity i Pythonartifactreplay
+nadal OPEN. Nie uznano fragmentu za runtime/science qualification.
+Remotecheckpoint poprzednich etapów ecb614bd36de754286cd09788f9cc8f4c5a1bddb.
+
+R4 accepted fragment po końcowym review: P1 CLIarity/legacybypass closed
+źródłowo. Dodatkowe P2 stale continuation po interaktywnym load_state i remesh
+naprawione: import używa wspólnego invalidation helper, remesh czyści
+mesh/completion/stage/accepted/certified cache. AktualnyCLIparserPASS,
+14lightchecksPASS, stageddiffPASS po usunięciu pustej liniiEOF noty.
+Native/build/runtime i V3/sourceidentity/pełny Pythonreplay pozostają OPEN.

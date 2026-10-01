@@ -114,7 +114,48 @@ pub struct AcceptedFemRelaxStageHandoff {
 }
 
 impl AcceptedFemRelaxStageHandoff {
-    pub fn from_completed_relax(
+    /// Construct a handoff only after independently replaying the native
+    /// accepted endpoint against the refreshed/recomputed endpoint.  The
+    /// accepted payload is deliberately passed separately from the certified
+    /// payload so callers cannot satisfy this gate with a second decode of the
+    /// same artifact.  Production callers in the runner and CLI must use this
+    /// constructor; the legacy constructor remains available for compatibility
+    /// with older in-crate fixtures and serialized handoffs.
+    pub fn from_completed_relax_verified(
+        source_run_id: &str,
+        source_stage_id: &str,
+        source_stage_kind: &str,
+        source_stage_is_relaxation: bool,
+        source_plan: &fullmag_ir::FemPlanIR,
+        source_mesh: &crate::types::FemMeshPayload,
+        completion: &fullmag_ir::StageCompletionIR,
+        equilibrium_magnetization: Vec<Vector3>,
+        accepted_fields: crate::types::CertifiedFemEquilibriumFields,
+        certified_fields: crate::types::CertifiedFemEquilibriumFields,
+        recomputed_certificate: crate::types::RecomputedFemLinearizationCertificateV1,
+    ) -> Result<Self, RunError> {
+        crate::validate_recomputed_fem_linearization_certificate(
+            source_plan,
+            source_mesh,
+            &equilibrium_magnetization,
+            &accepted_fields,
+            &certified_fields,
+            &recomputed_certificate,
+        )?;
+        Self::from_completed_relax(
+            source_run_id,
+            source_stage_id,
+            source_stage_kind,
+            source_stage_is_relaxation,
+            source_plan,
+            source_mesh,
+            completion,
+            equilibrium_magnetization,
+            certified_fields,
+        )
+    }
+
+    pub(super) fn from_completed_relax(
         source_run_id: &str,
         source_stage_id: &str,
         source_stage_kind: &str,

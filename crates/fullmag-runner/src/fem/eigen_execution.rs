@@ -210,9 +210,20 @@ fn execute_bias_field_sample_with_relaxation(
             ),
         })?;
     let final_magnetization = relax_run.result.final_magnetization.clone();
-    let (fields_path, refresh_path) = crate::types::CertifiedFemEquilibriumFields::artifact_paths_for_material(
-        &sample_plan.material,
-    );
+    let accepted_fields_path =
+        crate::types::CertifiedFemEquilibriumFields::accepted_artifact_path_for_material(
+            &sample_plan.material,
+        );
+    let (fields_path, refresh_path) =
+        crate::types::CertifiedFemEquilibriumFields::artifact_paths_for_material(
+            &sample_plan.material,
+        );
+    let accepted_fields =
+        decode_bias_field_relaxation_artifact::<crate::types::CertifiedFemEquilibriumFields>(
+            &relax_run,
+            accepted_fields_path,
+            sample_position,
+        )?;
     let certified_fields =
         decode_bias_field_relaxation_artifact::<crate::types::CertifiedFemEquilibriumFields>(
             &relax_run,
@@ -227,14 +238,7 @@ fn execute_bias_field_sample_with_relaxation(
         sample_position,
     )?;
     let source_mesh = crate::types::FemMeshPayload::from(&relax_plan);
-    crate::validate_recomputed_fem_linearization_certificate(
-        &relax_plan,
-        &source_mesh,
-        &final_magnetization,
-        &certified_fields,
-        &recomputed_certificate,
-    )?;
-    let handoff = AcceptedFemRelaxStageHandoff::from_completed_relax(
+    let handoff = AcceptedFemRelaxStageHandoff::from_completed_relax_verified(
         &format!("bias-field-sweep-sample-{sample_position:04}"),
         &format!("sample-{sample_position:04}-relax"),
         "bias_field_sweep_relaxation",
@@ -243,7 +247,9 @@ fn execute_bias_field_sample_with_relaxation(
         &source_mesh,
         &completion,
         final_magnetization,
+        accepted_fields,
         certified_fields,
+        recomputed_certificate,
     )?;
     let equilibrium = handoff.equilibrium_magnetization.clone();
     execute_fem_eigen_inner(

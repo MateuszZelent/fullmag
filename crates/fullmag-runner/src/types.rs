@@ -112,6 +112,13 @@ pub struct CertifiedFemEquilibriumFields {
     pub content_sha256: String,
 }
 
+// Keep the producer and the independent replay validator on one numerical
+// tolerance contract.  These values describe the accepted-vs-recomputed
+// snapshot comparison; they are not modal residual tolerances.
+pub(crate) const FEM_LINEARIZATION_FIELD_ABSOLUTE_TOLERANCE_A_PER_M: f64 = 1.0e-6;
+pub(crate) const FEM_LINEARIZATION_FIELD_RELATIVE_TOLERANCE: f64 = 1.0e-8;
+pub(crate) const FEM_LINEARIZATION_PHI_ABSOLUTE_TOLERANCE_A: f64 = 1.0e-12;
+
 /// A missing legacy view is valid; an explicitly present null is not a view.
 fn deserialize_present_certificate_view<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
 where
@@ -130,6 +137,21 @@ impl CertifiedFemEquilibriumFields {
         } else {
             ("equilibrium/certified_fem_equilibrium_fields.v1.json",
              "equilibrium/recomputed_fem_linearization_certificate.v1.json")
+        }
+    }
+
+    /// Select the independent accepted endpoint payload for the same schema
+    /// family as the certified/recomputed field payload.
+    ///
+    /// A declared `Ku=0` remains a V2 material.  The presence of the
+    /// authoring field, rather than its numeric value, selects the schema so
+    /// that the anisotropy observable cannot silently disappear during a
+    /// zero-anisotropy replay.
+    pub fn accepted_artifact_path_for_material(material: &fullmag_ir::MaterialIR) -> &'static str {
+        if material.uniaxial_anisotropy.is_some() {
+            "equilibrium/accepted_fem_equilibrium_fields.v2.json"
+        } else {
+            "equilibrium/accepted_fem_equilibrium_fields.v1.json"
         }
     }
 
@@ -4756,10 +4778,14 @@ mod certified_field_version_tests {
         assert_eq!(CertifiedFemEquilibriumFields::artifact_paths_for_material(&material),
             ("equilibrium/certified_fem_equilibrium_fields.v1.json",
              "equilibrium/recomputed_fem_linearization_certificate.v1.json"));
+        assert_eq!(CertifiedFemEquilibriumFields::accepted_artifact_path_for_material(&material),
+            "equilibrium/accepted_fem_equilibrium_fields.v1.json");
         material.uniaxial_anisotropy = Some(0.0);
         assert_eq!(CertifiedFemEquilibriumFields::artifact_paths_for_material(&material),
             ("equilibrium/certified_fem_equilibrium_fields.v2.json",
              "equilibrium/recomputed_fem_linearization_certificate.v2.json"));
+        assert_eq!(CertifiedFemEquilibriumFields::accepted_artifact_path_for_material(&material),
+            "equilibrium/accepted_fem_equilibrium_fields.v2.json");
     }
 
     #[test]
