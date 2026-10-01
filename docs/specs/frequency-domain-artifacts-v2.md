@@ -659,6 +659,12 @@ damping_rate_hz = frequency_imag_hz
 linewidth_fwhm_hz = 2 * frequency_imag_hz
 ```
 
+An illustrative modal Lorentzian uses `damping_rate_hz` as HWHM, not
+half of that rate. Frequencies and HWHM are evaluated in Hz before conversion
+to a Hz/kHz/MHz/GHz display axis. Unknown display units are unsupported.
+Normalized illustrative weights do not constitute measured FMR/BLS intensity
+or a forced response without drive/detector residues.
+
 A damped `exp_i_omega_t` mode must not publish a negative
 `frequency_imag_hz`. If a solver uses `exp(-i omega t)`, the artifact must
 state that phasor convention and keep the sign mapping self-consistent.

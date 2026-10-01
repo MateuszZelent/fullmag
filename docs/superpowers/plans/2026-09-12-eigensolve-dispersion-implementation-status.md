@@ -1,5 +1,13 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
+## F03/S08 — jednostki i HWHM obwiedni, 2026-10-01
+
+- Potwierdzono writer/spec: damping_rate_hz=frequency_imag_hz=HWHM, FWHM=2*imag. Shared spectralEnvelope liczy Hz, przelicza wyłącznie oś i nie dzieli HWHM przez2. Nieznane jednostki dają unsupported; label illustrative zamiast fizycznej intensywności.
+- Direct production TypeScript execution Node24 PASS: jednostki Hz/kHz/MHz/GHz, rachunek HWHM, tożsamość punktów, unknown units, undamped/empty. Recepta node apps/control-room/scripts/check-modal-envelope-units.mjs nie kompiluje jednostkowych testów, native ani bundla. Nie jest typecheck/Vitest/browser/FEM proof.
+- Niezależny review F03 bez P1/P2. Przygotowane Vitest regresje niekompilowane/nieuruchomione. Współczesny FrequencyDomainCharts korzysta z innego modelu rank-vsHz; helper F03 w repo ma tylko testowe callsites. Nie podmieniono produktu na syntetyczne widmo.
+- F02 source commit73cc2b1992f6f887aad389e94f07669d229618d6; parser/review PASS, runtime NOT VERIFIED. F01 quadrature, signed seria, finite-airbox Gamma, pozostałe S00–S12 i integracja nadal otwarte.
+
+
 ## F02/S07 — jawny sample bez podmiany legacy, 2026-10-01
 
 - Usunięto catch-all fallback get_mode do legacy. Wspólny read_selected_eigen_mode utrzymuje autorytatywny sample także dla get_mode_v2; legacy tylko przy braku sample_index. Brak pliku404 i parse/read error nie zmieniają wyboru próbki.

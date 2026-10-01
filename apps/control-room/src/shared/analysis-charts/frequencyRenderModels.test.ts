@@ -42,12 +42,38 @@ describe("frequency render models", () => {
 
   it("preserves the normalized 501-point Lorentzian envelope", () => {
     const model = frequencySpectrumRenderModel([
-      { dampingRateHz: 0.2, frequencyValue: 7.5, rowIndex: 0 },
-      { dampingRateHz: 0.4, frequencyValue: 8.5, rowIndex: 1 },
+      { dampingRateHz: 0.2e9, frequencyValue: 7.5, rowIndex: 0 },
+      { dampingRateHz: 0.4e9, frequencyValue: 8.5, rowIndex: 1 },
     ], "GHz");
     const envelope = model.series.find((series) => series.id === "spectral-envelope");
     expect(envelope?.points).toHaveLength(501);
     expect(Math.max(...(envelope?.points.map((point) => point.y) ?? []))).toBeCloseTo(1);
+  });
+
+  it("keeps physical modal envelopes invariant under Hz/kHz/MHz/GHz", () => {
+    const curves = [1, 1e3, 1e6, 1e9].map((scale, index) => {
+      const model = frequencySpectrumRenderModel([
+        { dampingRateHz: 1e8, frequencyValue: 10e9 / scale, rowIndex: 0 },
+      ], ["Hz", "kHz", "MHz", "GHz"][index]!);
+      return model.series.find((series) => series.id === "spectral-envelope")!.points;
+    });
+    for (const curve of curves.slice(1)) {
+      curve.forEach((point, index) => expect(point.y).toBeCloseTo(curves[0]![index]!.y, 12));
+    }
+    const curve = curves[0]!;
+    const a = curve[30]!;
+    const b = curve[80]!;
+    const expected = ((b.x - 10e9) ** 2 + 1e16) / ((a.x - 10e9) ** 2 + 1e16);
+    expect(a.y / b.y).toBeCloseTo(expected, 12);
+  });
+
+  it("rejects unknown units rather than inventing a physical envelope", () => {
+    const model = frequencySpectrumRenderModel([
+      { dampingRateHz: 1e8, frequencyValue: 10, rowIndex: 0 },
+    ], "rad/s");
+    expect(model.status).toBe("unsupported");
+    expect(model.statusMessage).toContain("rad/s");
+    expect(model.series).toEqual([]);
   });
 
   it("fails closed to the first compatible quantity and units", () => {

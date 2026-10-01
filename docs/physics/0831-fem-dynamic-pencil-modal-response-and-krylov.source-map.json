@@ -1024,6 +1024,12 @@
   ],
   "sources": [
     {
+      "id": "source-modal-envelope-units",
+      "path": "apps/control-room/src/shared/analysis-charts/frequencyRenderModels.ts",
+      "symbol": "spectralEnvelope",
+      "responsibility": "Compute illustrative Lorentzian profiles in Hz using artifact damping HWHM, without claiming measured intensity"
+    },
+    {
       "id": "source-modal-progress-units",
       "path": "crates/fullmag-runner/src/lib.rs",
       "symbol": "fem_eigen_progress_update",
@@ -1059,11 +1065,36 @@
       "symbol": "test_zero_static_field_retains_easy_plane_and_exchange_curvature",
       "responsibility": "Independent finite differences of easy-plane and exchange tangent energy with zero equilibrium field"
     },
-    {"id": "source-modal-thickness-collection-control", "path": "scripts/collect_de_bv_thickness_comparison.py", "symbol": "collect_control", "responsibility": "Independent full validation of six thickness controls and Gamma before signed series evidence is accepted"},
-    {"id": "source-signed-modal-series", "path": "scripts/run_nonzero_k_validation_controller.py", "symbol": "validation_cases", "responsibility": "Actual separately executed signed-k DE/BV points and independent thickness controls"},
-    {"id": "source-signed-modal-collector", "path": "scripts/collect_signed_de_bv_dispersion.py", "symbol": "collect", "responsibility": "Bind actual signed solver samples to source, fields and original residual gates and measure symmetry"},
-    {"id": "source-canonical-modal-reduction-maps", "path": "crates/fullmag-runner/src/fem/eigen_shared_domain_geometry.rs", "symbol": "modal_shared_domain_equivalence_classes", "responsibility": "Canonical minimum-member representative and dense periodic class numbering before native assembly"},
-    {"id": "source-canonical-modal-reduction-replay", "path": "scripts/replay_modal_periodic_reduction_maps.py", "symbol": "replay", "responsibility": "Independent graph-components comparison of legacy and minimum-root maps on accepted runtime pair artifacts"},
+    {
+      "id": "source-modal-thickness-collection-control",
+      "path": "scripts/collect_de_bv_thickness_comparison.py",
+      "symbol": "collect_control",
+      "responsibility": "Independent full validation of six thickness controls and Gamma before signed series evidence is accepted"
+    },
+    {
+      "id": "source-signed-modal-series",
+      "path": "scripts/run_nonzero_k_validation_controller.py",
+      "symbol": "validation_cases",
+      "responsibility": "Actual separately executed signed-k DE/BV points and independent thickness controls"
+    },
+    {
+      "id": "source-signed-modal-collector",
+      "path": "scripts/collect_signed_de_bv_dispersion.py",
+      "symbol": "collect",
+      "responsibility": "Bind actual signed solver samples to source, fields and original residual gates and measure symmetry"
+    },
+    {
+      "id": "source-canonical-modal-reduction-maps",
+      "path": "crates/fullmag-runner/src/fem/eigen_shared_domain_geometry.rs",
+      "symbol": "modal_shared_domain_equivalence_classes",
+      "responsibility": "Canonical minimum-member representative and dense periodic class numbering before native assembly"
+    },
+    {
+      "id": "source-canonical-modal-reduction-replay",
+      "path": "scripts/replay_modal_periodic_reduction_maps.py",
+      "symbol": "replay",
+      "responsibility": "Independent graph-components comparison of legacy and minimum-root maps on accepted runtime pair artifacts"
+    },
     {
       "id": "source-archived-run-parameters",
       "path": "scripts/compare_de_bv_mode_profiles.py",

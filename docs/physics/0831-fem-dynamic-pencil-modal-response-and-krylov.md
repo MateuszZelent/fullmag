@@ -1279,6 +1279,15 @@ measurements and filter diagnostic-only rows without rewriting archived input
 or renumbering source cursors. Realtime scalar samples require an accepted
 scalar revision change.
 
+An illustrative modal envelope uses the artifact damping convention, not a
+measured drive/detector response. For `exp(i omega t)`,
+`damping_rate_hz = Im(omega)/(2*pi)` is the Lorentzian HWHM in Hz;
+FWHM is twice that value. In the illustrative profile
+`1 / ((f - f_mode)^2 + damping_rate_hz^2)`, both frequencies and the
+half-width are evaluated in Hz before display-axis conversion. Unknown axis
+units are unsupported. Normalization does not infer residues, oscillator
+strength, FMR or BLS intensity.
+
 ### 4.5 Artifact requirements
 
 Artifacts bind git/build/run identity and the equilibrium, mesh/topology,
@@ -1880,6 +1889,7 @@ visibility into runtime qualification.
 
 | Equation/claim | Lane | Repository path + stable symbol | Responsibility | Tests/evidence | Evidence status | Immutable link |
 |---|---|---|---|---|---|---|
+| Illustrative modal envelope | Shared UI source model | `apps/control-room/src/shared/analysis-charts/frequencyRenderModels.ts` + `spectralEnvelope` | Hz-consistent HWHM from artifact damping rate; unit conversion without intensity claim. | `apps/control-room/scripts/check-modal-envelope-units.mjs` | Direct production TypeScript check PASS; no browser or FEM proof | Pending scoped commit |
 | Modal progress units | FEM CPU/GPU host telemetry | `crates/fullmag-runner/src/lib.rs` + `fem_eigen_progress_update` | Keep numerical residual outside physical field metrics; retain exact categorical identity. | `eigen_progress_keeps_residual_separate_from_physical_field` | Rust regression prepared, not compiled; runtime pending | [3b67a9f3c](https://github.com/MateuszZelent/fullmag/commit/3b67a9f3c6a75e0d8d5c28116170477784c3a570) |
 | Modal progress display | CLI / stage resource | `crates/fullmag-cli/src/orchestrator.rs` + `format_stage_progress_line` | Show modal diagnostics without invented physical measurements or dense solver fallback. | `terminal_stage_line_includes_fem_eigen_window_progress`, `modal_solver_identity_never_infers_dense_from_missing_or_ambiguous_flags` | Rust regressions prepared, not compiled; runtime/browser pending | [3b67a9f3c](https://github.com/MateuszZelent/fullmag/commit/3b67a9f3c6a75e0d8d5c28116170477784c3a570) |
 | Canonical/raw material artifacts | FEM CPU orchestration | `crates/fullmag-runner/src/fem/eigen_shared_domain.rs` + `shared_domain_artifact_material_identity` | Shared canonical Ku signature and preserved raw plan provenance; legacy semantics retained. | `shared_domain_material_identity_preserves_raw_legacy_and_canonical_ku` | Rust regression prepared, not compiled; managed runtime pending | [799be85d3](https://github.com/MateuszZelent/fullmag/blob/799be85d3e1c40ee1d7790797d6f81536e9d9ce9/crates/fullmag-runner/src/fem/eigen_shared_domain.rs) |
