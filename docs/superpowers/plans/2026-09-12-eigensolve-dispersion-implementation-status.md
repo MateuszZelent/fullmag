@@ -4643,6 +4643,21 @@ duplikaty i dodatkowe punkty są odrzucane. 31 regresji sidecarów i 213 testów
 pytest walidatora PASS. Pełny replay identity/payload i managed runtime OPEN.
 
 MFEM4.10: review sześciu konstruktorów HyprePCG potwierdziło jawne SetTol oraz
-SetMaxIter (d7789a563). Job189 succeeded; job191 pozostaje running.
-Drain włączony: obecny job dokończy się, kolejne czekają na okno operatorskie.
-Nie zbudowano nowego obrazu. Pełny S00–S12 i bramki naukowe pozostają otwarte.
+SetMaxIter (d7789a563). Job189 succeeded; job191 zakończył się failed, exit2.
+Drain osiągnął paused bez aktywnych jobów. Uruchomiono operatorską budowę
+nowego obrazu CPU MFEM4.10 przez just; żywy handle24954. Pierwsza próba z
+raw imageID w FROM została odrzucona; użycie sprawdzonego lokalnego tagu
+z właściwym immutableID rozpoczęło kompilację. Terminalny obraz/ABI/build
+Fullmaga nadal NOT VERIFIED. Rekord stanu jest w kanonicznym storage/builds,
+profil operator-mfem410-20261001. Pełny S00–S12 i bramki naukowe są otwarte.
+
+## MFEM4.10 — obraz wykonany, runtime-only build przyjęty
+
+Nowy obraz8a508319a68c4116da81b745fdd1b084015b665d92b36b2241e1e245b5febf89
+zbudowany exit0. Header/CMake/loaded MFEM4.10.0 potwierdzone; CPU MFEM bez
+CUDA, istniejący libCEED korzysta z image-owned compatibility driver.
+Profil runtime-v2 przypięty do tego obrazu, inne profile/zasoby zachowane.
+Kolejka wznowiona. Job193 / 19e798d5ff07454db64c90e63ba4f3a3 przyjęty queued
+z commita e78a25bac0f95c1190821524545803e4311b8ef9. Bez unit compilation.
+Toolchain diagnostic PASS; managed Fullmag receipt/ABI/solver jeszcze OPEN.
+Bieżące fullR4 i F01kwadratura są w lokalnym review, poza tą kapsułą.
