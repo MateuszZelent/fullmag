@@ -128,7 +128,7 @@ fn native_cpu_modal_floquet_target_supported(target: &fullmag_ir::EigenTargetIR)
     }
 }
 
-fn native_shared_domain_cpu_modal_supported(plan: &FemEigenPlanIR) -> bool {
+pub(super) fn native_shared_domain_cpu_modal_supported(plan: &FemEigenPlanIR) -> bool {
     if !shared_domain_k0_modal_requested(plan)
         || plan.count == 0
         || !native_shared_domain_mesh_metadata_valid(plan)

@@ -1,4 +1,7 @@
-use super::eigen_capability::native_cpu_modal_window_has_floquet_dynamic_demag_path;
+use super::eigen_capability::{
+    native_cpu_modal_window_has_floquet_dynamic_demag_path,
+    native_shared_domain_cpu_modal_supported,
+};
 use super::eigen_constants::{
     NATIVE_CPU_MODAL_WINDOW_SOLVER_KIND, NATIVE_GPU_MODAL_SHARED_DOMAIN_SOLVER_KIND,
 };
@@ -960,7 +963,7 @@ pub(super) fn bind_planned_execution_diagnostics(
     );
     requested.insert(
         "magnetostatic_bc".to_string(),
-        serde_json::json!("periodic_airbox_k0"),
+        serde_json::json!(planned_magnetostatic_bc(plan)),
     );
 
     let resolved = object
@@ -1027,6 +1030,30 @@ pub(super) fn bind_planned_execution_diagnostics(
         })?,
     );
     Ok(())
+}
+
+/// Resolve the magnetostatic boundary label from the actual FEM eigen plan.
+///
+/// The planned execution envelope is shared by the Gamma/K0 and nonzero-k
+/// lanes.  It must therefore never use the historical K0 label as a default:
+/// a Floquet dynamic-demag request carries `floquet_airbox` even when its
+/// pair/target capability gate will reject execution.  The requested envelope
+/// records physical intent; the native adapter contract below decides whether
+/// that intent is executable.  Plans without a requested periodic-airbox
+/// demag model remain explicitly open.
+pub(super) fn planned_magnetostatic_bc(plan: &FemEigenPlanIR) -> &'static str {
+    let requested_floquet_dynamic_demag = plan.enable_demag
+        && plan.operator.include_demag
+        && plan.spin_wave_bc.kind() == fullmag_ir::SpinWaveBoundaryKindIR::Floquet;
+    if requested_floquet_dynamic_demag
+        || native_cpu_modal_window_has_floquet_dynamic_demag_path(plan)
+    {
+        "floquet_airbox"
+    } else if shared_domain_k0_modal_requested(plan) {
+        "periodic_airbox_k0"
+    } else {
+        "open"
+    }
 }
 
 pub(super) fn execute_native_cpu_modal_window_from_bloch_floquet_complex(
@@ -2273,6 +2300,68 @@ fn is_native_sha256_hex(value: &str) -> bool {
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct NativePoissonAirboxExecutionContract {
+    magnetostatic_bc: &'static str,
+    production_periodic_airbox_claim: bool,
+    validated_scope: Option<&'static str>,
+}
+
+fn is_native_k0_poisson_airbox_modal_adapter(adapter: &str) -> bool {
+    matches!(
+        adapter,
+        "k0_poisson_airbox_cpu_full_coupled_slepc"
+            | "k0_poisson_airbox_cpu_schur_slepc"
+            | "k0_poisson_airbox_gpu_petsc_slepc"
+            | "k0_poisson_airbox_gpu_modal_device_krylov"
+    )
+}
+
+/// Bind the native adapter name to the plan's physical boundary contract.
+///
+/// Adapter text alone is insufficient: a K0 adapter name must not turn a
+/// nonzero Floquet plan into a K0 claim, and a Floquet adapter name must not
+/// be accepted for a plan that failed the complete shared-domain/nonzero-k
+/// predicate.  A recognized adapter/plan mismatch is a run error rather than
+/// an unqualified result: allowing the lower normalizer to continue would
+/// still let a later mode publisher observe a physically incompatible result.
+fn native_poisson_airbox_execution_contract(
+    plan: &FemEigenPlanIR,
+    adapter: &str,
+    gpu: bool,
+) -> Result<NativePoissonAirboxExecutionContract, RunError> {
+    let floquet_plan = native_cpu_modal_window_has_floquet_dynamic_demag_path(plan);
+    if adapter == "floquet_airbox_cpu_schur_slepc" {
+        if !floquet_plan {
+            return Err(RunError {
+                message: "native_poisson_airbox_floquet_adapter_plan_mismatch".to_string(),
+            });
+        }
+        return Ok(NativePoissonAirboxExecutionContract {
+            magnetostatic_bc: "floquet_airbox",
+            production_periodic_airbox_claim: false,
+            validated_scope: None,
+        });
+    }
+    if is_native_k0_poisson_airbox_modal_adapter(adapter) {
+        if !native_shared_domain_cpu_modal_supported(plan) {
+            return Err(RunError {
+                message: "native_poisson_airbox_k0_adapter_plan_mismatch".to_string(),
+            });
+        }
+        let cpu_schur = adapter == "k0_poisson_airbox_cpu_schur_slepc";
+        return Ok(NativePoissonAirboxExecutionContract {
+            magnetostatic_bc: "periodic_airbox_k0",
+            production_periodic_airbox_claim: true,
+            validated_scope: (!gpu && cpu_schur)
+                .then_some("fem_k0_periodic_airbox_p1_double_cpu_slepc"),
+        });
+    }
+    Err(RunError {
+        message: format!("native_poisson_airbox_unknown_adapter={adapter}"),
+    })
+}
+
 fn insert_native_poisson_airbox_execution_provenance(
     diagnostics: &mut serde_json::Map<String, serde_json::Value>,
     plan: &FemEigenPlanIR,
@@ -2292,6 +2381,7 @@ fn insert_native_poisson_airbox_execution_provenance(
         adapter.as_str(),
         "k0_poisson_airbox_gpu_petsc_slepc" | "k0_poisson_airbox_gpu_modal_device_krylov"
     );
+    let contract = native_poisson_airbox_execution_contract(plan, &adapter, gpu)?;
     if gpu && gpu_attestation.is_none() {
         return Err(RunError {
             message: "k0_poisson_airbox_gpu_attestation_missing".to_string(),
@@ -2318,17 +2408,10 @@ fn insert_native_poisson_airbox_execution_provenance(
         requested_object
             .entry("solver_family".to_string())
             .or_insert_with(|| serde_json::json!("modal_eigen"));
-        requested_object
-            .entry("magnetostatic_bc".to_string())
-            .or_insert_with(|| {
-                serde_json::json!(
-                    if native_cpu_modal_window_has_floquet_dynamic_demag_path(plan) {
-                        "floquet_airbox"
-                    } else {
-                        "periodic_airbox_k0"
-                    }
-                )
-            });
+        requested_object.insert(
+            "magnetostatic_bc".to_string(),
+            serde_json::json!(contract.magnetostatic_bc),
+        );
     }
     diagnostics.insert("requested_execution".to_string(), requested);
 
@@ -2487,6 +2570,7 @@ fn insert_native_poisson_airbox_hardened_contract(
         adapter.as_str(),
         "k0_poisson_airbox_gpu_petsc_slepc" | "k0_poisson_airbox_gpu_modal_device_krylov"
     );
+    let contract = native_poisson_airbox_execution_contract(plan, &adapter, gpu)?;
     if gpu && gpu_attestation.is_none() {
         return Err(RunError {
             message: "k0_poisson_airbox_gpu_attestation_missing".to_string(),
@@ -2630,16 +2714,15 @@ fn insert_native_poisson_airbox_hardened_contract(
     );
     diagnostics.insert(
         "production_periodic_airbox_claim".to_string(),
-        serde_json::json!(true),
+        serde_json::json!(contract.production_periodic_airbox_claim),
     );
     diagnostics.insert(
         "validated_scope".to_string(),
-        serde_json::json!(if gpu {
-            serde_json::Value::Null
-        } else {
-            serde_json::json!("fem_k0_periodic_airbox_p1_double_cpu_slepc")
-        }),
+        contract
+            .validated_scope
+            .map_or(serde_json::Value::Null, |value| serde_json::json!(value)),
     );
+    let magnetostatic_bc = contract.magnetostatic_bc;
     diagnostics.insert(
         "requested_execution".to_string(),
         serde_json::json!({
@@ -2654,8 +2737,8 @@ fn insert_native_poisson_airbox_hardened_contract(
                 "targeted_spectrum"
             },
             "preconditioner": if gpu { "shifted_schur_device" } else { "lu" },
-            "include_demag": true,
-            "magnetostatic_bc": "periodic_airbox_k0",
+            "include_demag": plan.enable_demag && plan.operator.include_demag,
+            "magnetostatic_bc": magnetostatic_bc,
         }),
     );
     diagnostics.insert(
@@ -2679,7 +2762,7 @@ fn insert_native_poisson_airbox_hardened_contract(
     diagnostics.insert(
         "boundary_gauge".to_string(),
         serde_json::json!({
-            "magnetostatic_bc": "periodic_airbox_k0",
+            "magnetostatic_bc": magnetostatic_bc,
             "outer_boundary_kind": outer_boundary_kind,
             "robin_beta": robin_beta,
             "robin_beta_unit": "1/m",

@@ -1,0 +1,170 @@
+{
+  "document": {
+    "path": "docs/physics/0841-fem-poisson-airbox-adapter-provenance.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "source_visible / unvalidated"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "source_visible / unvalidated"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "Nota dotyczy wyłącznie diagnostyki modalnego FEM Poisson-airbox."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "Nota dotyczy wyłącznie diagnostyki modalnego FEM Poisson-airbox."
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-adapter-plan-boundary-contract",
+      "symbols": ["c", "k", "A"],
+      "sources": [
+        "source-floquet-plan-gate",
+        "source-k0-plan-gate",
+        "source-k0-execution-gate",
+        "source-adapter-contract"
+      ]
+    }
+  ],
+  "symbols": [
+    {
+      "id": "c",
+      "latex": "c",
+      "meaning": "klasyfikacja kontraktu granicy magnetostatycznej",
+      "si_unit": "1"
+    },
+    {
+      "id": "k",
+      "latex": "k",
+      "meaning": "wektor falowy planu",
+      "si_unit": "rad/m"
+    },
+    {
+      "id": "A",
+      "latex": "A",
+      "meaning": "identyfikator adaptera native",
+      "si_unit": "1"
+    }
+  ],
+  "sources": [
+    {
+      "id": "source-floquet-plan-gate",
+      "path": "crates/fullmag-runner/src/fem/eigen_capability.rs",
+      "symbol": "native_cpu_modal_window_has_floquet_dynamic_demag_path",
+      "responsibility": "Sprawdza pełny niezerowy plan Floqueta z demagiem Poissona i wspólną domeną.",
+      "evidence_status": "source-visible; native compilation and managed runtime NOT VERIFIED"
+    },
+    {
+      "id": "source-k0-plan-gate",
+      "path": "crates/fullmag-runner/src/fem/eigen_policy.rs",
+      "symbol": "shared_domain_k0_modal_requested",
+      "responsibility": "Rozpoznaje wstępną intencję kontraktu K0 periodic-airbox.",
+      "evidence_status": "source-visible; native compilation and managed runtime NOT VERIFIED"
+    },
+    {
+      "id": "source-k0-execution-gate",
+      "path": "crates/fullmag-runner/src/fem/eigen_capability.rs",
+      "symbol": "native_shared_domain_cpu_modal_supported",
+      "responsibility": "Wymaga pełnych metadanych par mesh, airboxa, magnetic assembly i poprawnego targetu przed kontraktem K0.",
+      "evidence_status": "source-visible; native compilation and managed runtime NOT VERIFIED"
+    },
+    {
+      "id": "source-planned-boundary",
+      "path": "crates/fullmag-runner/src/fem/eigen_native_window.rs",
+      "symbol": "planned_magnetostatic_bc",
+      "responsibility": "Wpisuje boundary model do wspólnego planowanego envelope.",
+      "evidence_status": "source-visible; native compilation and managed runtime NOT VERIFIED"
+    },
+    {
+      "id": "source-adapter-contract",
+      "path": "crates/fullmag-runner/src/fem/eigen_native_window.rs",
+      "symbol": "native_poisson_airbox_execution_contract",
+      "responsibility": "Łączy faktyczny adapter z odpowiednią bramą planu i fail-closed mismatch.",
+      "evidence_status": "source-visible; native compilation and managed runtime NOT VERIFIED"
+    },
+    {
+      "id": "source-hardened-contract",
+      "path": "crates/fullmag-runner/src/fem/eigen_native_window.rs",
+      "symbol": "insert_native_poisson_airbox_hardened_contract",
+      "responsibility": "Publikuje BC, claim i scope bez fałszywego K0 dla Floqueta.",
+      "evidence_status": "source-visible; native compilation and managed runtime NOT VERIFIED"
+    },
+    {
+      "id": "source-adapter-allowlist",
+      "path": "crates/fullmag-runner/src/fem/eigen_native_result.rs",
+      "symbol": "is_native_poisson_airbox_modal_adapter",
+      "responsibility": "Rozpoznaje adapter Floquet i adaptery K0 bez rozszerzania K0-only metrics.",
+      "evidence_status": "source-visible; native compilation and managed runtime NOT VERIFIED"
+    },
+    {
+      "id": "source-k0-metrics-allowlist",
+      "path": "crates/fullmag-runner/src/fem/eigen_native_result.rs",
+      "symbol": "is_native_k0_poisson_airbox_modal_adapter",
+      "responsibility": "Utrzymuje parser Kittel metrics wyłącznie dla adapterów K0.",
+      "evidence_status": "source-visible; native compilation and managed runtime NOT VERIFIED"
+    },
+    {
+      "id": "source-floquet-regression",
+      "path": "crates/fullmag-runner/src/fem/eigen_tests.rs",
+      "symbol": "native_nonzero_floquet_diagnostics_bind_floquet_boundary_without_k0_claim",
+      "responsibility": "Przygotowana regresja poprawnego niezerowego Floqueta.",
+      "evidence_status": "prepared source regression; native compilation NOT VERIFIED"
+    },
+    {
+      "id": "source-mismatch-regression",
+      "path": "crates/fullmag-runner/src/fem/eigen_tests.rs",
+      "symbol": "native_nonzero_floquet_plan_rejects_k0_adapter_claim_and_boundary_label",
+      "responsibility": "Przygotowana regresja rozbieżności plan–adapter kończącej się RunError przed publikacją modów.",
+      "evidence_status": "prepared source regression; native compilation NOT VERIFIED"
+    },
+    {
+      "id": "source-planned-floquet-regression",
+      "path": "crates/fullmag-runner/src/fem/eigen_tests.rs",
+      "symbol": "planned_floquet_boundary_label_survives_invalid_execution_capability",
+      "responsibility": "Sprawdza zachowanie semantycznej etykiety Floqueta przy niepoprawnych parach i target.",
+      "evidence_status": "prepared source regression; native compilation NOT VERIFIED"
+    },
+    {
+      "id": "source-floquet-mismatch-regression",
+      "path": "crates/fullmag-runner/src/fem/eigen_tests.rs",
+      "symbol": "native_floquet_adapter_rejects_incomplete_plan_before_mode_publication",
+      "responsibility": "Sprawdza RunError dla rozpoznanego adaptera Floquet przy niekompletnym planie przed publikacją modów.",
+      "evidence_status": "prepared source regression; native compilation NOT VERIFIED"
+    },
+    {
+      "id": "source-k0-scope-regression",
+      "path": "crates/fullmag-runner/src/fem/eigen_tests.rs",
+      "symbol": "native_poisson_airbox_top_level_accepted_mode_count_is_preserved",
+      "responsibility": "Sprawdza, że istniejący scope K0 jest publikowany tylko dla CPU Schur na pełnym fixture.",
+      "evidence_status": "prepared source regression; native compilation NOT VERIFIED"
+    },
+    {
+      "id": "source-k0-metrics-regression",
+      "path": "crates/fullmag-runner/src/fem/eigen_tests.rs",
+      "symbol": "native_poisson_airbox_k0_metrics_reject_floquet_adapter_even_with_k0_demag_kind",
+      "responsibility": "Przygotowana regresja ochrony parsera K0-only.",
+      "evidence_status": "prepared source regression; native compilation NOT VERIFIED"
+    }
+  ],
+  "public_api": {
+    "parameters": []
+  },
+  "validation": {
+    "source_check": "prepared Rust regressions in eigen_tests.rs",
+    "native_runtime": "NOT VERIFIED",
+    "managed_runner": "NOT VERIFIED",
+    "physics": "NOT VERIFIED"
+  }
+}

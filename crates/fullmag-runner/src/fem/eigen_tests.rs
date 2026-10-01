@@ -5990,11 +5990,7 @@ fn native_frequency_window_solver_diagnostics_publish_mode_count() {
 
 #[test]
 fn native_floquet_window_diagnostics_do_not_invent_missing_block_residuals() {
-    let mut plan = minimal_native_modal_plan();
-    plan.target = fullmag_ir::EigenTargetIR::FrequencyWindow {
-        frequency_min_hz: 8.5e9,
-        frequency_max_hz: 12.0e9,
-    };
+    let plan = bounded_floquet_dynamic_demag_execution_plan();
     let raw = serde_json::json!({
         "solver_adapter": "floquet_airbox_cpu_schur_slepc",
         "production_implication": false,
@@ -6048,8 +6044,109 @@ fn native_floquet_window_diagnostics_do_not_invent_missing_block_residuals() {
 }
 
 #[test]
+fn native_nonzero_floquet_diagnostics_bind_floquet_boundary_without_k0_claim() {
+    let mut plan = minimal_native_modal_plan();
+    plan.operator.kind = fullmag_ir::EigenOperatorIR::Full2x2;
+    plan.operator.include_demag = true;
+    plan.enable_demag = true;
+    plan.demag_realization = Some(fullmag_ir::ResolvedFemDemagIR::PoissonRobin);
+    plan.domain_mesh_mode = fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir;
+    plan.damping_policy = EigenDampingPolicyIR::Ignore;
+    plan.target = fullmag_ir::EigenTargetIR::FrequencyWindow {
+        frequency_min_hz: 8.5e9,
+        frequency_max_hz: 12.0e9,
+    };
+    add_x_floquet_shared_domain_airbox_to_plan(&mut plan);
+    assert!(native_cpu_modal_window_has_floquet_dynamic_demag_path(&plan));
+
+    let raw = serde_json::json!({
+        "solver_adapter": "floquet_airbox_cpu_schur_slepc",
+        "production_implication": false,
+        "status": "ok",
+        "accepted_mode_count": 1,
+    });
+    let diagnostics = native_solver_diagnostics_json(&plan, &raw.to_string(), None, None)
+        .expect("valid nonzero-k Floquet diagnostics must normalize");
+
+    assert_eq!(
+        diagnostics["requested_execution"]["magnetostatic_bc"],
+        "floquet_airbox"
+    );
+    assert_eq!(
+        diagnostics["boundary_gauge"]["magnetostatic_bc"],
+        "floquet_airbox"
+    );
+    assert_eq!(diagnostics["production_periodic_airbox_claim"], false);
+    assert_eq!(diagnostics["validated_scope"], serde_json::Value::Null);
+    assert_eq!(diagnostics["requested_execution"]["include_demag"], true);
+}
+
+#[test]
+fn planned_floquet_boundary_label_survives_invalid_execution_capability() {
+    let mut plan = bounded_floquet_dynamic_demag_execution_plan();
+    plan.mesh.periodic_boundary_pairs.clear();
+    plan.mesh.periodic_node_pairs.clear();
+    plan.target = fullmag_ir::EigenTargetIR::Lowest;
+
+    assert!(!native_cpu_modal_window_has_floquet_dynamic_demag_path(&plan));
+    assert_eq!(planned_magnetostatic_bc(&plan), "floquet_airbox");
+}
+
+#[test]
+fn native_floquet_adapter_rejects_incomplete_plan_before_mode_publication() {
+    let mut plan = bounded_floquet_dynamic_demag_execution_plan();
+    plan.mesh.periodic_boundary_pairs.clear();
+    plan.mesh.periodic_node_pairs.clear();
+    plan.target = fullmag_ir::EigenTargetIR::Lowest;
+    let raw = serde_json::json!({
+        "solver_adapter": "floquet_airbox_cpu_schur_slepc",
+        "production_implication": false,
+        "status": "ok",
+        "accepted_mode_count": 1,
+    });
+
+    let error = native_solver_diagnostics_json(&plan, &raw.to_string(), None, None)
+        .expect_err("incomplete Floquet plan must fail before mode publication");
+    assert!(error
+        .message
+        .contains("native_poisson_airbox_floquet_adapter_plan_mismatch"));
+}
+
+#[test]
+fn native_nonzero_floquet_plan_rejects_k0_adapter_claim_and_boundary_label() {
+    let mut plan = minimal_native_modal_plan();
+    plan.operator.kind = fullmag_ir::EigenOperatorIR::Full2x2;
+    plan.operator.include_demag = true;
+    plan.enable_demag = true;
+    plan.demag_realization = Some(fullmag_ir::ResolvedFemDemagIR::PoissonRobin);
+    plan.domain_mesh_mode = fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir;
+    plan.damping_policy = EigenDampingPolicyIR::Ignore;
+    plan.target = fullmag_ir::EigenTargetIR::FrequencyWindow {
+        frequency_min_hz: 8.5e9,
+        frequency_max_hz: 12.0e9,
+    };
+    add_x_floquet_shared_domain_airbox_to_plan(&mut plan);
+    assert!(native_cpu_modal_window_has_floquet_dynamic_demag_path(&plan));
+
+    let raw = serde_json::json!({
+        "solver_adapter": "k0_poisson_airbox_cpu_schur_slepc",
+        "production_implication": false,
+        "status": "ok",
+        "accepted_mode_count": 1,
+        "requested_execution": {
+            "magnetostatic_bc": "periodic_airbox_k0"
+        }
+    });
+    let error = native_solver_diagnostics_json(&plan, &raw.to_string(), None, None)
+        .expect_err("recognized K0 adapter/Floquet plan mismatch must fail before mode publication");
+    assert!(error
+        .message
+        .contains("native_poisson_airbox_k0_adapter_plan_mismatch"));
+}
+
+#[test]
 fn native_poisson_airbox_result_metrics_are_preserved_in_solver_diagnostics() {
-    let plan = minimal_native_modal_plan();
+    let plan = bounded_k0_execution_plan();
     let diagnostics_raw = serde_json::json!({
         "resolved_solver_family": "shift_invert",
         "solver_model": "reference_full_2x2_tangent",
@@ -6131,6 +6228,7 @@ fn native_poisson_airbox_result_metrics_are_preserved_in_solver_diagnostics() {
     assert_eq!(diagnostics["validation_state"], "unvalidated");
     assert_eq!(diagnostics["execution_lane"], "production_cpu");
     assert_eq!(diagnostics["production_periodic_airbox_claim"], true);
+    assert_eq!(diagnostics["validated_scope"], serde_json::Value::Null);
     assert_eq!(diagnostics["resolved_execution"]["device"], "cpu");
     assert_eq!(
         diagnostics["resolved_execution"]["native_backend"],
@@ -6175,7 +6273,7 @@ fn native_poisson_airbox_result_metrics_are_preserved_in_solver_diagnostics() {
 
 #[test]
 fn native_poisson_airbox_gpu_contract_publishes_real_split_schur_metadata() {
-    let plan = minimal_native_modal_plan();
+    let plan = bounded_k0_execution_plan();
     let diagnostics_raw = serde_json::json!({
         "status": "ok",
         "solver_adapter": "k0_poisson_airbox_gpu_petsc_slepc",
@@ -6284,7 +6382,7 @@ fn native_poisson_airbox_gpu_contract_publishes_real_split_schur_metadata() {
 
 #[test]
 fn native_poisson_airbox_gpu_adapter_without_attestation_fails_closed() {
-    let plan = minimal_native_modal_plan();
+    let plan = bounded_k0_execution_plan();
     let diagnostics_raw = serde_json::json!({
         "status": "ok",
         "solver_adapter": "k0_poisson_airbox_gpu_petsc_slepc",
@@ -6299,7 +6397,7 @@ fn native_poisson_airbox_gpu_adapter_without_attestation_fails_closed() {
 
 #[test]
 fn native_production_poisson_airbox_diagnostics_reject_missing_boundary_contract() {
-    let plan = minimal_native_modal_plan();
+    let plan = bounded_k0_execution_plan();
     let diagnostics_raw = serde_json::json!({
         "status": "ok",
         "solver_adapter": "k0_poisson_airbox_gpu_petsc_slepc",
@@ -6322,7 +6420,7 @@ fn native_production_poisson_airbox_diagnostics_reject_missing_boundary_contract
 
 #[test]
 fn native_poisson_airbox_top_level_accepted_mode_count_is_preserved() {
-    let plan = minimal_native_modal_plan();
+    let plan = bounded_k0_execution_plan();
     let diagnostics_raw = serde_json::json!({
         "resolved_solver_family": "shift_invert",
         "solver_model": "reference_full_2x2_tangent",
@@ -6340,6 +6438,10 @@ fn native_poisson_airbox_top_level_accepted_mode_count_is_preserved() {
             .expect("native Schur diagnostics should be normalized");
 
     assert_eq!(diagnostics["accepted_mode_count"], 3);
+    assert_eq!(
+        diagnostics["validated_scope"],
+        "fem_k0_periodic_airbox_p1_double_cpu_slepc"
+    );
 }
 
 #[test]
@@ -6424,6 +6526,33 @@ fn native_poisson_airbox_metrics_reject_wrong_solver_adapter() {
         },
     )
     .expect_err("generic modal JSON must not populate periodic-airbox metrics");
+
+    assert!(err.message.contains("solver_adapter"));
+}
+
+#[test]
+fn native_poisson_airbox_k0_metrics_reject_floquet_adapter_even_with_k0_demag_kind() {
+    let raw = serde_json::json!({
+        "schema_version": "frequency_domain_modal_result.v1",
+        "solver_adapter": "floquet_airbox_cpu_schur_slepc",
+        "demag_kind": "periodic_airbox_k0",
+        "phi_dof_count": 4,
+        "augmented_phi_dof_count": 5,
+        "poisson_constraint_relative_residual": 0.0,
+        "relative_reference_frequency_error": 0.0,
+    })
+    .to_string();
+    let err = native_poisson_airbox_k0_metrics_from_result_json(
+        &raw,
+        NativePoissonAirboxK0MetricsInput {
+            mesh_resolution_m: 10.0e-9,
+            airbox_size_m: 400.0e-9,
+            magnetic_pair_count: 12,
+            airbox_pair_count: 20,
+            effective_magnetisation_a_per_m: 800_000.0,
+        },
+    )
+    .expect_err("Floquet adapter must never populate K0-only metrics");
 
     assert!(err.message.contains("solver_adapter"));
 }

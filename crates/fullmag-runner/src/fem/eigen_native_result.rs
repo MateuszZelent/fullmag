@@ -310,6 +310,16 @@ pub(super) fn is_native_poisson_airbox_modal_adapter(adapter: Option<&str>) -> b
     )
 }
 
+fn is_native_k0_poisson_airbox_modal_adapter(adapter: Option<&str>) -> bool {
+    matches!(
+        adapter,
+        Some("k0_poisson_airbox_cpu_full_coupled_slepc")
+            | Some("k0_poisson_airbox_cpu_schur_slepc")
+            | Some("k0_poisson_airbox_gpu_petsc_slepc")
+            | Some("k0_poisson_airbox_gpu_modal_device_krylov")
+    )
+}
+
 fn json_value_at<'a>(value: &'a serde_json::Value, key: &str) -> Option<&'a serde_json::Value> {
     value.get(key)
 }
@@ -353,7 +363,7 @@ pub(crate) fn native_poisson_airbox_k0_metrics_from_result_json(
             message: "native Poisson-airbox modal result JSON is missing solver_adapter"
                 .to_string(),
         })?;
-    if !is_native_poisson_airbox_modal_adapter(Some(solver_adapter)) {
+    if !is_native_k0_poisson_airbox_modal_adapter(Some(solver_adapter)) {
         return Err(RunError {
             message: format!(
                 "native Poisson-airbox modal result solver_adapter must be a supported CPU/GPU K0 adapter, got {solver_adapter}"
