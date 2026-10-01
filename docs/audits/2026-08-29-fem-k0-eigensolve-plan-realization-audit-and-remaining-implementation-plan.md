@@ -2647,3 +2647,169 @@ zmienić wyłącznie regułę `beta` na zależną od otwartej osi i wykonać kon
 `layers=1/4/8` oraz airbox `3/5/8`; dopiero zgodność po tych testach pozwoli
 nazwać problem błędem implementacji zamiast kontrolowanym przybliżeniem
 granicy.
+
+### 17.52. Reconciliacja diagnozy Kittela po fast-forward do master
+
+Worktree został zaktualizowany fast-forward z `e3241af9a` do bieżącego lokalnego
+`master`/`origin/master`, `93f11dbc564c00b725d174ccb2fd0ff9a96493c9`. Nie powstał
+merge-commit, a przed aktualizacją worktree był czysty i HEAD był przodkiem
+`master`.
+
+Historyczny wynik 3.56--3.90% deficytu nie opisuje już dokładnie aktualnego
+źródła. Receipt w sekcji 17.44 pochodzi z 2026-08-31 08:38 UTC, natomiast commit
+`e3241af9a` z 2026-09-01 zmienił wyznaczanie Robin reference extent. Różnica w
+starym kodzie była konkretna: po znalezieniu największego wymiaru otwartego
+przyjmował on maksimum z wymiarem wszystkich osi, przez co okresowe x/y ponownie
+wpływały na skalę granicy. Obecne `robin_reference_extent_m` w
+`crates/fullmag-runner/src/fem/eigen_shared_domain_geometry.rs` używa wyłącznie
+osi otwartych, jeśli taka istnieje; test
+`robin_reference_extent_ignores_periodic_cell_width` koduje ten kontrakt.
+
+Dla domyślnej geometrii fixture
+`examples/fem_eigen_k0_kittel_periodic_airbox.py` (160 x 80 x 10 nm, airbox
+factor 5, PBC w x/y) otwarta oś z ma 50 nm. Przy domyślnym współczynniku 2
+stary kod ustalał skalę z 160 nm i dawał beta 25e6 1/m; obecny wzór używa 50 nm
+i daje 80e6 1/m. To potwierdza źródłowo błąd strojenia sztucznej granicy przez
+rozmiar komórki okresowej. **Nie dowodzi jednak, o ile częstotliwość zmieniła
+się po poprawce**: nie istnieje w tym worktree świeży runtime sweep związany z
+HEAD `93f11dbc...`, a historyczne katalogi `C:\fullmag-cache` wskazane w
+starszych sekcjach nie są dostępne. Stare `M_eff=738461.538 A/m`, residuale i
+częstotliwości pozostają dowodem historycznym, nie aktualnym wynikiem mastera.
+
+Diagnoza rozdziela zatem trzy rzeczy:
+
+1. Dla starego snapshotu mocnym, źródłowo potwierdzonym błędem była zależność
+   Robin beta od szerokości okresowej komórki; parametry `Ms`, `gamma0`, `mu0`
+   i pole były zgodne z oracle, a małe residuale wykluczały niedokładne
+   rozwiązanie liniowe dla tamtego artefaktu (sekcja 17.51).
+2. Dla aktualnego źródła usunięto ten mechanizm, ale zmiana fizycznej
+   częstotliwości jest **NOT VERIFIED**, dopóki nie zostanie wykonany nowy
+   15-punktowy przebieg.
+3. Wpływ skończonego airboxu i rozdzielczości przez grubość nadal wymaga
+   osobnego rozdzielenia. Fixture udostępnia `FULLMAG_K0_KITTEL_LAYERS`, lecz
+   obecna recepta `verify-fem-frequency-domain-eigen-k0-kittel-periodic-airbox-convergence-cpu`
+   go nie przekazuje i wykonuje wyłącznie sweep rozmiaru elementu oraz airboxu.
+
+Kolejność weryfikacji pozostaje: najpierw uruchomić test geometrii Robina na
+aktualnym źródle; następnie wykonać porównanie `layers=1/4/8` przy stałej
+geometrii i airboxie; potem `airbox factor=3/5/8` przy ustalonej zbieżnej
+siatce przez grubość; na końcu powtórzyć zestaw trzech siatek i trzech airboxów
+z niezmienionymi 15 polami, materiałem oraz `periodic_airbox_k0`. Zachować
+istniejące progi walidacji. Do czasu uzyskania receipts związanych z jednym
+source/runtime/input identity zgodność z Kittelem po poprawce pozostaje
+**NOT VERIFIED**.
+
+### 17.53. Preflight runtime po synchronizacji worktree
+
+Kontrola wykonana 2026-09-23.
+
+Resolver wskazuje project storage `C:\git\fullmag\storage` oraz
+worktree ID `eigensolve-k0-finalization-db0fde795ab86411`. Rekord worktree został
+zarejestrowany 2026-09-23 w
+`storage/index/eigensolve-k0-finalization-db0fde795ab86411.json`, z właścicielem
+`Mateusz / Codex`, bazowym HEAD `93f11dbc...` i stanem `active`. Kanoniczne
+katalogi `storage/runs/<worktree-id>` oraz
+`storage/runtimes/<worktree-id>/reports` nie zawierają obecnie wyniku Kittel.
+
+W checkoutcie istnieje natomiast rzeczywisty katalog
+`worktrees/eigensolve-k0-finalization/.fullmag` (nie link zgodności), z
+podkatalogami `cache`, `local`, `local-live`, `reports` i `runtimes`. Dokładne
+report roots używane przez recepty Kittel nie istnieją, ale katalog jest
+istniejącym, ignorowanym stanem historycznym. Nie wolno usuwać go ani zastępować
+linkiem automatycznie. Bieżąca recepta konwergencji wykonuje `rm -rf` pod tym
+`.fullmag`, a storage preflight wymaga sprawdzonego linku; dlatego recepty nie
+uruchomiono. Także bezpośredni `fullmag_storage.py run` odrzuca istniejący
+realny `.fullmag` w `validate_prepared_links_for_run`; nie ma obecnie gotowej
+resolverowej ścieżki, która bezpiecznie ominie ten warunek. Przed runtime trzeba
+dodać i zweryfikować taką trasę albo uzyskać zgodę na migrację dokładnego
+katalogu legacy. Do tego czasu cała zawartość `.fullmag` pozostaje nietknięta.
+
+Współdzielona konfiguracja zawiera obraz koordynatora `eed020...` i siedem
+profili, w tym nieobsługiwany już `fem-cpu-slepc-runtime-v1`; ten sam profil
+pozostaje w build-config obok jego następnika `fem-cpu-slepc-modal-v1` z tym
+samym image digest. Pierwszy odczyt hostowego CLI kończył się
+`Container profile allow-list mismatch`. Dodano i przetestowano migrację, która
+rozpoznaje wyłącznie tę dokładną historyczną listę, aby jawne
+`container-configure --enable-slepc-modal` mogło zapisać kanoniczną listę sześciu
+profili bez zmiany portu ani tokenu. Konfiguracja współdzielona nie została
+jeszcze zmieniona.
+
+Autoryzowany odczyt health z 2026-09-23 14:16 UTC potwierdził działający
+koordynator, `worker_alive=true`, `accepting_jobs=true` i jeden aktywny job
+`2439cca257fb49ffb42bc8adba739623` o profilu `fem-cpu-slepc-runtime-v1`; kolejka
+nie miała innych oczekujących zadań. Zgodnie z decyzją użytkownika job nie
+zostanie anulowany. Pauza przyjmowania nowych zadań, zmiana konfiguracji i
+wymiana kontenera muszą poczekać na jego stan terminalny oraz ponowne
+potwierdzenie pustego slotu.
+
+### 17.54. Naprawa shared runner i wynik builda docelowego SHA
+
+Weryfikacja wykonana 2026-09-23 15:43 UTC.
+
+Po terminalnym sukcesie joba `2439cca257fb49ffb42bc8adba739623` (profil
+legacy, exit 0) naprawiono współdzielony runner. Commit `46a1d488c546ca8778fb8852b04ad7a0637da052`
+dodaje kanoniczny profil `fem-cpu-slepc-modal-v1` do wejścia builda oraz
+kontrolowaną migrację wyłącznie dokładnej historycznej allow-listy. Testy
+`just runner-test` zakończyły się wynikiem 223 passed, 5 skipped. Build nowego
+obrazu koordynatora zakończył się sukcesem (`sha256:905f59fac9fac20e390de6f85ca2ad493babc553c276f398099d9e326a7229eb`),
+a oficjalna procedura wymieniła wyłącznie kontener `Fullmag_build_runner`.
+Nowy health-check potwierdza `worker_alive=true`, `accepting_jobs=true`, brak
+aktywnych i legacy jobs oraz kanoniczną allow-listę sześciu profili. Zachowano
+port 8765, token i istniejący project storage. Profil
+`fem-cpu-slepc-runtime-v1` usunięto też z lokalnego build-config po weryfikacji
+zgodnych parametrów profilu modal i pustej kolejki.
+
+Następnie zgłoszono job `b0635ee724444977bae6402221f82990` (#108), profil
+`fem-cpu-slepc-modal-v1`, dla dokładnego commitu
+`999e6b287d95e9e5f85ddccbcb2c1d87ef7d1297`. Receipt wiąże go z czystym snapshotem
+źródła (`fec7fe2050c239ec518401eb2a7adff0efcede83cda7879619f41af42aaddda7`).
+Runner poprawnie zweryfikował kapsułę, utworzył izolowany worker i wykonał etap
+`native-build`; job zakończył się `failed`, exit code 2, nie z powodu runnera,
+lecz błędu kompilacji Rust E0308 w
+`crates/fullmag-runner/src/fem/eigen_equilibrium_contract.rs:345`. Wywołanie
+`validate_handoff_m0_norms` przekazuje `&topology.magnetic_node_volumes`
+(`&Vec<f64>`), podczas gdy funkcja oczekuje maski `&[bool]`. Inne wywołanie w
+tym samym pliku buduje tę maskę przez `volume > 0.0`. Pełny log i build receipt
+są zachowane pod `storage/runs/eigensolve-k0-finalization-db0fde795ab86411/b0635ee724444977bae6402221f82990/artifacts/`.
+Poprawki źródłowej FEM nie wprowadzono w ramach naprawy runnera.
+
+Rozdzielenie statusów pozostaje ważne: runner jest operacyjnie naprawiony i
+przyjmuje zadania; build badanego SHA nie przeszedł kompilacji; runtime,
+walidacja fizyczna oraz zgodność Kittela pozostają **NOT VERIFIED**. Wcześniejszy
+blok `.fullmag` i brak świeżego 15-punktowego sweepu Kittela pozostają
+nierozwiązane; żadne dane z tego katalogu nie zostały usunięte ani przeniesione.
+
+### 17.55. Dodatkowa kontrola profili runnera
+
+Niezależny przegląd poprawki wykrył rozjazd istniejący poza dodanym profilem
+SLEPc: host i koordynator akceptowały `fem-cpu-current-contracts-v1` oraz
+`fem-gpu-current-contracts-v1`, ale zaufany worker nie miał dla nich definicji.
+Job mógł więc zostać przyjęty, a następnie odrzucony dopiero w kontenerze.
+
+Przywrócono oba wcześniej reklamowane profile. CPU wykonuje zamknięty zestaw
+trzech scenariuszy (steady transport, wariant RT0 i OE-T0); GPU wykonuje
+scenariusz `gpu-current`. Worker i host wymagają kompletnego zestawu raportów,
+zgodnych schematów i jawnego `status=pass`; kod SKIP 77 nie jest sukcesem.
+Dodano także test zgodności katalogów profili i odświeżanie czasu modyfikacji
+kopii źródła, aby utrwalony cache CMake/Cargo nie pomijał zmienionych wejść ze
+starszym mtime.
+
+Weryfikacja lokalna: `just runner-test` — 226 testów zaliczonych, 5
+pominiętych. Job #109 z innego worktree (`fem-cpu-slepc-runtime-v1`)
+zakończył się sukcesem, exit 0; receipt zawiera jeden zaliczony etap
+`native-build`, 14 artefaktów i nadal `qualification=NOT VERIFIED`. Dopiero po
+terminalnym wyniku oraz potwierdzeniu pustej kolejki wykonano graceful drain.
+
+W lokalnym build-config usunięto wyłącznie klucz
+`fem-cpu-slepc-runtime-v1`, po potwierdzeniu, że jego obraz, CPU i limit pamięci
+były identyczne z `fem-cpu-slepc-modal-v1`. Hostowa allow-lista została
+znormalizowana do sześciu kanonicznych profili. Zbudowano obraz koordynatora
+`sha256:e9f46ae4690d96dfcdfa915584265733b6d9930fdecf60b16b95f6bfb26101fc` i
+oficjalną procedurą wymieniono dokładny kontener `Fullmag_build_runner`.
+Zachowano port 8765, token oraz project storage; worker został wznowiony.
+
+Końcowy health API potwierdza `worker_alive=true`, `accepting_jobs=true`, stan
+koordynatora `idle`, pustą listę aktywnych i legacy jobs, brak `last_error` oraz
+allow-listę dokładnie sześciu profili. Profil runtime nie jest już dozwolony ani
+skonfigurowany. Nie zmieniono kodu FEM dla błędu E0308 joba #108; ten build
+pozostaje nieudany, a runtime/physics/Kittel nadal mają status **NOT VERIFIED**.

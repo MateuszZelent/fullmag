@@ -874,6 +874,32 @@ class BuildEntryPointTests(unittest.TestCase):
         self.assertEqual(environment.get("RUSTUP_TOOLCHAIN"), "nightly")
         self.assertEqual(environment.get("RUSTUP_AUTO_INSTALL"), "0")
 
+    def test_materialization_refreshes_source_mtimes_for_persistent_build_caches(self) -> None:
+        old_ns = 1_600_000_000_000_000_000
+        cached_artifact_ns = old_ns + 10_000_000_000
+        source_file = self.source / "tree" / "README.txt"
+        nested = self.source / "tree" / "nested"
+        nested.mkdir()
+        nested_file = nested / "input.txt"
+        nested_file.write_bytes(b"new input with old timestamp\n")
+        entrypoint.os.utime(source_file, ns=(old_ns, old_ns))
+        entrypoint.os.utime(nested_file, ns=(old_ns, old_ns))
+        content = nested_file.read_bytes()
+        manifest = {**self.manifest, "files": [*self.manifest["files"], {
+            "path": "nested/input.txt", "type": "file", "mode": "100644",
+            "size": len(content), "sha256": hashlib.sha256(content).hexdigest(),
+        }]}
+
+        entrypoint.materialize_capsule(manifest, self.source, self.workspace)
+
+        for relative in ("README.txt", "nested/input.txt"):
+            with self.subTest(path=relative):
+                original = self.source / "tree" / relative
+                copied = self.workspace / relative
+                self.assertEqual(original.stat().st_mtime_ns, old_ns)
+                self.assertEqual(copied.read_bytes(), original.read_bytes())
+                self.assertGreater(copied.stat().st_mtime_ns, cached_artifact_ns)
+
     def test_preflight_requires_an_installed_nightly_toolchain(self) -> None:
         with patch.object(
             entrypoint.shutil,
