@@ -1,5 +1,34 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
+## Aktualny stan — 2026-10-01, po checkpointach e5dc37407 i 9d8f8bf9e
+
+Ta sekcja i tabela „Stan etapów” określają bieżące bramki. Pozostałe wpisy
+opisują historię; dawne `running/live/queued` nie są aktualnym stanem procesu.
+
+- Na remote: pełny sample-set sidecarów, własny exact identity replay Python
+  i czytelna diagnostyka rzeczywistej kwadratury k0/Floquet. Review i lekkie
+  regresje są dowodem źródeł, nie wykonania aktualnego solvera.
+- Lokalnie w review: zweryfikowany exact-artifact handoff Rust, identity v2,
+  producer own-preimage sidecar, single-/multi-k manifest links i retention.
+  Otwarte: non-shared identity, provenance importu, modal identity i pełny replay.
+  Focused review wykrył ponadto trzy P1 publikacji: indeks multi-k stale=0,
+  ścieżki state sprzed przeniesienia oraz brak plural arrays single-k.
+  Naprawa tych trzech błędów jest w toku; nie są oznaczone jako ukończone.
+  Python sprawdza teraz pięć exact preimage materiału/statyki/boundary/raw
+  po pełnym own-identity replay. Focused 59 i główny verifier 213 PASS.
+  Poprawiono leksykalne ujemne zero, zakres deklaracji i regresje airbox/PBC;
+  te kontrole nie certyfikują jeszcze pól, operatora ani źródła.
+- MFEM CPU 4.10.0 jest zbudowany i odczytany z rzeczywistej biblioteki. Build
+  Fullmaga #193 (`19e798d5ff07454db64c90e63ba4f3a3`) rozpoczął running, źródło
+  `e78a25bac0f95c1190821524545803e4311b8ef9`. Nie zawiera nowszych przyrostów.
+  Kontener `463764a54084782448cea6a6c43743ce9da046a38939dda3d637391b18418061`
+  jest przypięty do obrazu MFEM4.10 `8a508319a68c4116da81b745fdd1b084015b665d92b36b2241e1e245b5febf89`.
+- #188 i jego kontroler są terminalne: błąd kompletności okna, 6/50 podokien.
+  Lokalny kandydat 9.299249697 GHz nie jest kwalifikowanym punktem dyspersji.
+- Archiwalne punkty i wykresy nie kwalifikują bieżącego źródła. Wymagane są
+  nowe C0/C1, signed DE/BV, zbieżność, A1, pozostałe interakcje, 2.5D, GPU,
+  Control Room/FMS/browser oraz końcowe review i integracja całego S00–S12.
+
 ## EPS — diagnostyka niepełnej zbieżności, 2026-10-01
 
 Baza przyrostu: `99293ff8659276abfb57c2dddaff46f269e5c234` (bounded Krylov).
@@ -2049,14 +2078,14 @@ Realizacja [planu S00–S12](2026-09-12-eigensolve-dispersion-nonzero-k-plan.md)
 | S00 — baza K0 i dowody | W TRAKCIE | Bieżący managed runtime, Kittel, pełny zaakceptowany handoff |
 | S01 — nauka, ADR, kontrakty | W TRAKCIE | Noty, mapy źródeł, walidatory i review |
 | S02 — Python/IR | W TRAKCIE | Walidacja k i selektorów, round-trip, testy konsumentów |
-| S03 — natywny operator magnetyczny Blocha | W TRAKCIE | Prolongacja fazowa i właściciel sparse są zapisane; pozostają MFEM sparse/matrix-free, pełne assembly i managed runtime |
-| S04 — dynamiczny demag-k CPU | W TRAKCIE | W źródle istnieje bounded sparse Schur/SLEPc route i producent bloków MFEM; poprawiono znak `A_phiq`. Pozostają pełny residual deskryptora z gauge/szwami, zbieżność airboxu i siatki oraz aktualny managed runtime; żaden punkt nie jest jeszcze zaakceptowany |
-| S05 — natywny solver spektralny | W TRAKCIE | Dense i sparse Floquet SLEPc mają routing i diagnostykę bloków. Operator obsługuje fazowaną rotację lokalnej bazy T_member^T T_rep; poprawiono także sprzeczny Rust preflight, który wcześniej blokował tę rotację. Regresje przyjmują zmianę ram przy zgodnym fizycznym m0 i odrzucają niezgodne m0, ale nie zostały skompilowane. Managed k2 z 2026-09-23 nie zaakceptował modów (residual magnetyczny 2.17e-7 przy progu 1e-8). Nadal brakuje certyfikacji pełnego residualu deskryptora i kompletnego okna, wznowienia oraz managed builda aktualnego źródła. |
+| S03 — natywny operator magnetyczny Blocha | W TRAKCIE | Prolongacja i bounded sparse operator są w źródłach; geometry-aware tet/prism oraz ich rzeczywista kwadratura mają review. Wymagane są bieżący managed assembly/runtime i pełne certyfikaty deskryptora. |
+| S04 — dynamiczny demag-k CPU | W TRAKCIE | Sparse Schur/SLEPc i MFEM blocks są źródłowo zaimplementowane. Pozostają residual pełnego deskryptora/gauge/szwów, zbieżność airboxu i siatki oraz kwalifikacja nowego źródła; archiwalne punkty nie zastępują tych bramek. |
+| S05 — natywny solver spektralny | W TRAKCIE | Bounded EPS/Krylov i diagnostyka niepełnych Ritz są zapisane bez publikowania odrzuconych modów. #188 zakończył się błędem 6/50 podokien. #193 dotyczy wcześniejszego źródła na MFEM4.10; potem potrzebny spójny SHA i dowód kompletnego okna, residuali oraz wznowienia. |
 | S06 — śledzenie gałęzi | W TRAKCIE | Hungarian/gaps i metryka masy FE są gotowe; pozostają fizyczne podprzestrzenie zdegenerowane |
-| S07 — artefakty i API | W TRAKCIE | Stabilne ID, faza/obwiednia, selektory, binarne pola |
-| S08 — Control Room | W TRAKCIE | Authoring i wykres f(k) są widoczne źródłowo. Naprawiono odtworzenie wektora k z metadanych ścieżki, przekazanie go z punktu/gałęzi do selekcji i podglądu 3D oraz respektowanie mode_field_available w FMR. Pozostają testy z bieżącego źródła, browser/WebGL, FMS round-trip i stabilność Inspectora.  Bieżący build #119 ujawnił błąd TypeScript: nadmiarowy przecinek w typie Map; poprawiono go w źródle, ale świeży managed build jest jeszcze potrzebny. |
+| S07 — artefakty i API | W TRAKCIE | Complete sample coverage, canonical/raw Ku migration i own exact identity replay mają lekkie regresje. Rust producer sidecar/handoff jest w review. Nadal potrzebne pełne physical/source replay, aktualne binary fields/selektory i managed evidence. |
+| S08 — Control Room | W TRAKCIE | Źródła authoring/scatterplot, selekcji k/pola i linewidth zostały poprawione. Wymagane są bieżący managed frontend/runtime, browser/WebGL, FMS round-trip, dostępność pól i stabilność Inspectora. Historyczny #119 nie jest aktualnym buildem. |
 | S09 — falowód 2.5D | W TRAKCIE | Bounded provider i deterministyczny P1 assembler przekroju są zapisane; pozostają typed realization/routing, managed/MFEM owner, open-boundary convergence i porównania TetraX/3D |
-| S10 — interakcje | W TRAKCIE | Planner odrzuca teraz nieobsługiwaną anizotropię, DMI, niejednorodne `A` i anizotropię powierzchniową przed runtime; właściwe tangent terms, transport DMI na seamach i damping `include` pozostają do implementacji i walidacji |
+| S10 — interakcje | W TRAKCIE | Ku tangent terms i canonical/raw artifact v8/v7 mają implementację źródłową; guard/runtime i pełna kwalifikacja nadal otwarte. DMI, surface terms, niejednorodność, seam transport i damping `include` wymagają odpowiednich implementacji i walidacji bez osłabiania capability guards. |
 | S11 — GPU | DO WYKONANIA | Jawna trasa double bez fallbacku, residency i parytet |
 | S12 — kwalifikacja i integracja | W TRAKCIE | Managed benchmarki, review, commity, PR, merge, weryfikacja mastera |
 

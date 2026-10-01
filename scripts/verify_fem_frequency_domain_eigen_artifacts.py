@@ -14,6 +14,9 @@ from pathlib import Path
 from fem_linearization_identity_replay import (
     IdentityReplayError, replay_identity_preimage, strict_json_object,
 )
+from fem_equilibrium_identity_replay import (
+    EquilibriumIdentityReplayError, replay_equilibrium_identity_preimages,
+)
 
 
 TWO_PI = 2.0 * math.pi
@@ -921,6 +924,7 @@ def _r4_discovery_result(
     missing_recomputed_keys: list[str] | None = None,
     computed_sample_indices: set[int] | None = None,
     identity_content_sha256_by_sample: dict[str, str] | None = None,
+    equilibrium_preimage_sha256_by_sample: dict[str, dict[str, str]] | None = None,
 ) -> dict[str, object]:
     if status not in R4_DISCOVERY_STATUSES:
         raise ValueError(f"unknown R4 discovery status: {status}")
@@ -941,6 +945,11 @@ def _r4_discovery_result(
             if identity_content_sha256_by_sample else "unverified_missing_preimage"
         ),
         "identity_content_sha256_by_sample": dict(identity_content_sha256_by_sample or {}),
+        "equilibrium_preimage_digest_status": (
+            "verified_five_exact_preimages"
+            if equilibrium_preimage_sha256_by_sample else "unverified_missing_preimage"
+        ),
+        "equilibrium_preimage_sha256_by_sample": dict(equilibrium_preimage_sha256_by_sample or {}),
     }
 
 
@@ -1117,6 +1126,7 @@ def validate_r4_signed_sidecars(
             fail("manifest.artifacts identity preimage sample index set must match accepted fields")
 
     identity_digests: dict[str, str] = {}
+    equilibrium_digests: dict[str, dict[str, str]] = {}
     for sample_index, (_, preimage_path) in (identity_preimages or {}).items():
         identity_path = identity_v2[sample_index][1]
         try:
@@ -1127,8 +1137,11 @@ def validate_r4_signed_sidecars(
             identity_digests[str(sample_index)] = replay_identity_preimage(
                 identity_bytes, preimage_path.read_bytes(),
             )
+            equilibrium_digests[str(sample_index)] = replay_equilibrium_identity_preimages(identity_bytes)
         except (IdentityReplayError, OSError) as error:
             fail(f"sample {sample_index} identity exact preimage replay failed: {error}")
+        except EquilibriumIdentityReplayError as error:
+            fail(f"sample {sample_index} equilibrium exact preimage replay failed: {error}")
 
     # Keep the already-existing state-pair binding when those sidecars are
     # declared, but do not turn their absence into a new R4 qualification
@@ -1177,6 +1190,7 @@ def validate_r4_signed_sidecars(
             missing_recomputed_keys=missing_recomputed_keys,
             computed_sample_indices=computed_sample_indices,
             identity_content_sha256_by_sample=identity_digests,
+            equilibrium_preimage_sha256_by_sample=equilibrium_digests,
         )
     if not identity_v2:
         return _r4_discovery_result(
@@ -1188,6 +1202,7 @@ def validate_r4_signed_sidecars(
             missing_recomputed_keys=missing_recomputed_keys,
             computed_sample_indices=computed_sample_indices,
             identity_content_sha256_by_sample=identity_digests,
+            equilibrium_preimage_sha256_by_sample=equilibrium_digests,
         )
     if missing_recomputed_keys:
         return _r4_discovery_result(
@@ -1200,6 +1215,7 @@ def validate_r4_signed_sidecars(
             missing_recomputed_keys=missing_recomputed_keys,
             computed_sample_indices=computed_sample_indices,
             identity_content_sha256_by_sample=identity_digests,
+            equilibrium_preimage_sha256_by_sample=equilibrium_digests,
         )
     return _r4_discovery_result(
         "payload_replay_pending",
@@ -1210,6 +1226,7 @@ def validate_r4_signed_sidecars(
         identity_sample_indices=set(identity_v2),
         computed_sample_indices=computed_sample_indices,
         identity_content_sha256_by_sample=identity_digests,
+        equilibrium_preimage_sha256_by_sample=equilibrium_digests,
     )
 
 

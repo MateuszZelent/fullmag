@@ -21,7 +21,14 @@ SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 
 import verify_fem_frequency_domain_eigen_artifacts as verifier  # noqa: E402
-from test_fem_linearization_identity_replay import fixture as identity_fixture, encode  # noqa: E402
+from test_fem_linearization_identity_replay import fixture as exact_identity_fixture, encode  # noqa: E402
+from test_fem_equilibrium_identity_replay import _identity_fixture as equilibrium_fixture  # noqa: E402
+
+
+def identity_fixture(sample_index=2, *, overrides=None):
+    physical, _ = equilibrium_fixture()
+    physical.update(overrides or {})
+    return exact_identity_fixture(sample_index, overrides=physical)
 
 
 SIDECAR_DEFINITIONS = verifier.R4_SIGNED_SIDECAR_DEFINITIONS
@@ -577,6 +584,9 @@ class IdentityPreimagePathTests(unittest.TestCase):
             result = verifier.validate_r4_signed_sidecars(root, artifacts, {0, 2, 7})
             self.assertEqual(result["identity_content_digest_status"], "verified_exact_preimage")
             self.assertEqual(set(result["identity_content_sha256_by_sample"]), {"0", "2", "7"})
+            self.assertEqual(result["equilibrium_preimage_digest_status"], "verified_five_exact_preimages")
+            self.assertEqual(set(result["equilibrium_preimage_sha256_by_sample"]), {"0", "2", "7"})
+            self.assertTrue(all(len(digests) == 5 for digests in result["equilibrium_preimage_sha256_by_sample"].values()))
             # Identity digest replay cannot promote missing physical replay.
             self.assertEqual(result["status"], "payload_replay_pending")
 
@@ -586,7 +596,24 @@ class IdentityPreimagePathTests(unittest.TestCase):
             artifacts = _manifest_artifacts(root, family="v2", samples=(2,))
             result = verifier.validate_r4_signed_sidecars(root, artifacts, {2})
             self.assertEqual(result["identity_content_digest_status"], "unverified_missing_preimage")
+            self.assertEqual(result["equilibrium_preimage_digest_status"], "unverified_missing_preimage")
             self.assertEqual(result["status"], "payload_replay_pending")
+
+    def test_valid_outer_digest_cannot_hide_corrupt_physical_preimage(self):
+        physical, _ = equilibrium_fixture()
+        fields = [key for key in physical if key.endswith("_preimage_json")]
+        self.assertEqual(len(fields), 5)
+        for field in fields:
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                artifacts = self.bundle(root, samples=(2,))
+                identity, preimage = identity_fixture(2, overrides={field: physical[field] + " "})
+                _write(root, artifacts[verifier.R4_IDENTITY_SIDECAR_KEY][0], encode(identity))
+                _write(root, artifacts[verifier.R4_IDENTITY_PREIMAGE_KEY][0], encode(preimage))
+                # The outer digest is freshly valid, but each inner digest
+                # still binds its original exact bytes and must reject.
+                with self.assertRaisesRegex(SystemExit, "equilibrium exact preimage replay failed"):
+                    verifier.validate_r4_signed_sidecars(root, artifacts, {2})
 
     def test_missing_fields_preserve_successful_identity_digest_evidence(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -598,6 +625,7 @@ class IdentityPreimagePathTests(unittest.TestCase):
             self.assertEqual(result["status"], "missing_recomputed")
             self.assertEqual(result["identity_content_digest_status"], "verified_exact_preimage")
             self.assertEqual(set(result["identity_content_sha256_by_sample"]), {"2"})
+            self.assertEqual(result["equilibrium_preimage_digest_status"], "verified_five_exact_preimages")
 
     def test_incomplete_or_extra_preimage_sample_sets_are_rejected(self):
         for mutation in ("empty", "missing", "extra"):

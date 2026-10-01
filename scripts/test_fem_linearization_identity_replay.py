@@ -20,7 +20,7 @@ def encode(value: object) -> bytes:
     return json.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8")
 
 
-def fixture(sample_index: int = 2) -> tuple[dict, dict]:
+def fixture(sample_index: int = 2, *, overrides: dict | None = None) -> tuple[dict, dict]:
     identity = {key: "fixture" for key in IDENTITY_FIELDS}
     identity.update(schema_version="linearization_identity.v2", sample_index=sample_index,
                     node_count=1, content_sha256="",
@@ -28,6 +28,8 @@ def fixture(sample_index: int = 2) -> tuple[dict, dict]:
                                              "nested": {"enabled": True, "value": 1}},
                     consumer_build_identity={"source_snapshot_sha256": "sha256:" + "a" * 64},
                     source_stage_id="relaxation-zażółć")
+    if overrides:
+        identity.update(overrides)
     # Intentionally pretty, reversed-order UTF-8 bytes: hashing must retain
     # these exact bytes rather than recreate compact sorted Python JSON.
     preimage = json.dumps(dict(reversed(list(identity.items()))), ensure_ascii=False,
