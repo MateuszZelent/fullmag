@@ -24,9 +24,11 @@ RUN if [ "$CPU_MFEM_ONLY" = "1" ]; then \
       mkdir -p /tmp/fullmag-runner-mfem-src && \
       git -C /tmp/fullmag-runner-mfem-src init && \
       git -C /tmp/fullmag-runner-mfem-src remote add origin https://github.com/mfem/mfem.git && \
-      git -C /tmp/fullmag-runner-mfem-src fetch --depth 1 origin d9d6526cc1749980a2ba1da16e2c1ca1e07d82ec && \
+      git -C /tmp/fullmag-runner-mfem-src fetch --depth 1 origin d964264cdb9a13e94a201b6c236c7721e0c8765f && \
       git -C /tmp/fullmag-runner-mfem-src checkout --detach FETCH_HEAD && \
+      test "$(git -C /tmp/fullmag-runner-mfem-src rev-parse HEAD)" = "d964264cdb9a13e94a201b6c236c7721e0c8765f" && \
       cmake -S /tmp/fullmag-runner-mfem-src -B /tmp/fullmag-runner-mfem-build -G "Unix Makefiles" \
+        -DCMAKE_CXX_STANDARD=17 \
         -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/opt/fullmag-mfem-cpu \
         -DCMAKE_PREFIX_PATH=/opt/fullmag-deps -DBUILD_SHARED_LIBS=ON \
         -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DMFEM_USE_MPI=YES \

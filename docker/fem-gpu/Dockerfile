@@ -35,7 +35,8 @@ ARG FULLMAG_CUDA_ARCHITECTURES="80-real;89-real;90-real;90-virtual"
 ARG FULLMAG_HYPRE_GPU_ARCHITECTURES="60 70 80 89 90"
 ENV DEBIAN_FRONTEND=noninteractive
 ENV CMAKE_VERSION=3.30.5
-ENV MFEM_REF=v4.9
+ENV MFEM_REF=v4.10
+ENV MFEM_SOURCE_COMMIT=d964264cdb9a13e94a201b6c236c7721e0c8765f
 ENV LIBCEED_REF=v0.12.0
 ENV HYPRE_REF=v3.1.0
 ENV PETSC_REF=v3.24.6
@@ -81,7 +82,8 @@ RUN curl https://sh.rustup.rs -sSf | bash -s -- -y --default-toolchain nightly
 
 WORKDIR /tmp/build
 
-RUN git clone --depth 1 --branch ${MFEM_REF} https://github.com/mfem/mfem.git
+RUN git clone --depth 1 --branch ${MFEM_REF} https://github.com/mfem/mfem.git && \
+    test "$(git -C mfem rev-parse HEAD)" = "${MFEM_SOURCE_COMMIT}"
 RUN git clone --depth 1 --branch ${LIBCEED_REF} https://github.com/CEED/libCEED.git /tmp/build/libCEED
 
 RUN make -C /tmp/build/libCEED CUDA_DIR=${CUDA_HOME} -j"$(nproc)" && \
@@ -193,6 +195,7 @@ RUN git clone --depth 1 --branch ${SLEPC_REF} https://gitlab.com/slepc/slepc.git
 RUN cmake -S /tmp/build/mfem -B /tmp/build/mfem/build \
       -G Ninja \
       -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_CXX_STANDARD=17 \
       -DCMAKE_INSTALL_PREFIX=${INSTALL_PREFIX} \
       -DBUILD_SHARED_LIBS=ON \
       -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
@@ -204,8 +207,9 @@ RUN cmake -S /tmp/build/mfem -B /tmp/build/mfem/build \
       -DMFEM_USE_CEED=YES \
       -DCEED_DIR=${INSTALL_PREFIX} \
       -DMFEM_USE_HYPRE=YES \
-      -DHYPRE_DIR=${INSTALL_PREFIX} && \
-    cmake --build /tmp/build/mfem/build -j"$(nproc)" && \
+      -DHYPRE_DIR=${INSTALL_PREFIX} \
+      -DMFEM_ENABLE_TESTING=OFF && \
+    cmake --build /tmp/build/mfem/build --target mfem -j"$(nproc)" && \
     cmake --install /tmp/build/mfem/build
 
 # CUDA-free MFEM requires a matching CUDA-free HYPRE; retain the GPU prefix.
@@ -221,6 +225,7 @@ RUN cmake -S /tmp/build/hypre/src -B /tmp/build/hypre/build-cpu -G Ninja \
 # same layout on both sides of the ABI. The GPU installation above is intact.
 RUN cmake -S /tmp/build/mfem -B /tmp/build/mfem/build-cpu -G Ninja \
       -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_CXX_STANDARD=17 \
       -DCMAKE_INSTALL_PREFIX=/opt/fullmag-mfem-cpu \
       -DCMAKE_PREFIX_PATH=${INSTALL_PREFIX} \
       -DBUILD_SHARED_LIBS=ON \

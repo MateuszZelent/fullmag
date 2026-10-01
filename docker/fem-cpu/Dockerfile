@@ -2,7 +2,8 @@ FROM ubuntu:22.04 AS deps
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV CMAKE_VERSION=3.30.5
-ENV MFEM_REF=v4.7
+ENV MFEM_REF=v4.10
+ENV MFEM_SOURCE_COMMIT=d964264cdb9a13e94a201b6c236c7721e0c8765f
 ENV HYPRE_REF=v2.32.0
 ENV INSTALL_PREFIX=/opt/fullmag-deps
 ENV CC=gcc
@@ -32,7 +33,8 @@ RUN pip3 install --no-cache-dir cmake==${CMAKE_VERSION}
 
 WORKDIR /tmp/build
 
-RUN git clone --depth 1 --branch ${MFEM_REF} https://github.com/mfem/mfem.git
+RUN git clone --depth 1 --branch ${MFEM_REF} https://github.com/mfem/mfem.git && \
+    test "$(git -C mfem rev-parse HEAD)" = "${MFEM_SOURCE_COMMIT}"
 RUN git clone --depth 1 --branch ${HYPRE_REF} https://github.com/hypre-space/hypre.git
 
 # This dependency prefix is immutable input to Fullmag's native configure.
@@ -51,6 +53,7 @@ RUN cd /tmp/build/hypre/src && \
 RUN cmake -S /tmp/build/mfem -B /tmp/build/mfem/build \
       -G Ninja \
       -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_CXX_STANDARD=17 \
       -DCMAKE_INSTALL_PREFIX=${INSTALL_PREFIX} \
       -DBUILD_SHARED_LIBS=ON \
       -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
@@ -60,8 +63,9 @@ RUN cmake -S /tmp/build/mfem -B /tmp/build/mfem/build \
       -DMFEM_USE_CUDA=NO \
       -DMFEM_USE_CEED=NO \
       -DMFEM_USE_HYPRE=YES \
-      -DHYPRE_DIR=${INSTALL_PREFIX} && \
-    cmake --build /tmp/build/mfem/build -j"$(nproc)" && \
+      -DHYPRE_DIR=${INSTALL_PREFIX} \
+      -DMFEM_ENABLE_TESTING=OFF && \
+    cmake --build /tmp/build/mfem/build --target mfem -j"$(nproc)" && \
     cmake --install /tmp/build/mfem/build
 
 FROM ubuntu:22.04 AS fem-cpu-dev
