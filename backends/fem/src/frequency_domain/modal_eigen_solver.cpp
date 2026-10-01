@@ -489,16 +489,166 @@ std::string k0_demag_operator_probe_json_field(
 
 std::string append_json_field(std::string json, const std::string &field)
 {
-    if (field.empty() || json.empty() || json.back() != '}') {
+    if (field.empty() || json.empty()) {
         return json;
     }
+    const auto is_json_whitespace = [](char value) noexcept {
+        return value == ' ' || value == '\t' || value == '\n' || value == '\r';
+    };
+    std::size_t json_end = json.size();
+    while (json_end > 0u && is_json_whitespace(json[json_end - 1u])) {
+        --json_end;
+    }
+    if (json_end == 0u || json[json_end - 1u] != '}') {
+        return json;
+    }
+    std::size_t object_begin = 0u;
+    while (object_begin < json_end && is_json_whitespace(json[object_begin])) {
+        ++object_begin;
+    }
+    if (object_begin >= json_end || json[object_begin] != '{') {
+        return json;
+    }
+    std::size_t object_content_end = json_end - 1u;
+    while (object_content_end > object_begin + 1u &&
+           is_json_whitespace(json[object_content_end - 1u])) {
+        --object_content_end;
+    }
+    const bool object_has_members = object_content_end > object_begin + 1u;
+    const std::string trailing_whitespace = json.substr(json_end);
+    json.resize(json_end);
     json.pop_back();
-    if (json.size() > 1u) {
+    if (object_has_members) {
         json += ',';
     }
     json += field;
     json += '}';
+    json += trailing_whitespace;
     return json;
+}
+
+bool json_has_top_level_field(
+    const std::string &json,
+    const char *field_name) noexcept
+{
+    if (json.empty() || field_name == nullptr || field_name[0] == '\0') {
+        return false;
+    }
+    std::size_t first = 0u;
+    while (first < json.size()) {
+        const char value = json[first];
+        if (value != ' ' && value != '\t' && value != '\n' && value != '\r') {
+            break;
+        }
+        ++first;
+    }
+    if (first == json.size() || json[first] != '{') {
+        return false;
+    }
+
+    int depth = 0;
+    bool in_string = false;
+    bool escaped = false;
+    for (std::size_t index = first; index < json.size(); ++index) {
+        const char value = json[index];
+        if (in_string) {
+            if (escaped) {
+                escaped = false;
+            } else if (value == '\\') {
+                escaped = true;
+            } else if (value == '"') {
+                in_string = false;
+            }
+            continue;
+        }
+        if (value == '"') {
+            if (depth == 1) {
+                const std::size_t key_begin = index + 1u;
+                std::size_t key_end = key_begin;
+                bool key_escaped = false;
+                for (; key_end < json.size(); ++key_end) {
+                    if (json[key_end] == '\\') {
+                        key_escaped = true;
+                        ++key_end;
+                        continue;
+                    }
+                    if (json[key_end] == '"') {
+                        break;
+                    }
+                }
+                if (key_end == json.size()) {
+                    return false;
+                }
+                std::size_t colon = key_end + 1u;
+                while (colon < json.size()) {
+                    const char whitespace = json[colon];
+                    if (whitespace != ' ' && whitespace != '\t' &&
+                        whitespace != '\n' && whitespace != '\r') {
+                        break;
+                    }
+                    ++colon;
+                }
+                const std::size_t field_length = std::strlen(field_name);
+                if (!key_escaped && key_end - key_begin == field_length &&
+                    std::strncmp(
+                        json.data() + key_begin,
+                        field_name,
+                        field_length) == 0 &&
+                    colon < json.size() && json[colon] == ':') {
+                    return true;
+                }
+                index = key_end;
+                continue;
+            }
+            in_string = true;
+            continue;
+        }
+        if (value == '{' || value == '[') {
+            ++depth;
+        } else if (value == '}' || value == ']') {
+            if (depth == 0) {
+                return false;
+            }
+            --depth;
+        }
+    }
+    return false;
+}
+
+std::string shared_domain_operator_provenance_json(
+    const PoissonAirboxSharedDomainAssemblyResult &assembly,
+    const char *scope)
+{
+    if (assembly.operator_digest[0] == '\0' ||
+        scope == nullptr || scope[0] == '\0' ||
+        assembly.quadrature_provenance_json.empty()) {
+        return {};
+    }
+    return "\"shared_domain_operator_provenance\":{"
+        "\"schema_version\":\"poisson_airbox_shared_domain_operator_provenance.v1\","
+        "\"publisher_lane\":\"fem_cpu\","
+        "\"scope\":\"" + escape_json_string(scope) + "\","
+        "\"operator_digest\":\"" +
+        escape_json_string(assembly.operator_digest) +
+        "\",\"quadrature\":" + assembly.quadrature_provenance_json + "}";
+}
+
+void append_shared_domain_operator_provenance(
+    FrequencyDomainContractResult &result,
+    const std::string &provenance_json)
+{
+    if (provenance_json.empty()) {
+        return;
+    }
+    constexpr const char *kFieldName = "shared_domain_operator_provenance";
+    if (!json_has_top_level_field(result.diagnostics_json, kFieldName)) {
+        result.diagnostics_json = append_json_field(
+            std::move(result.diagnostics_json), provenance_json);
+    }
+    if (!json_has_top_level_field(result.result_json, kFieldName)) {
+        result.result_json = append_json_field(
+            std::move(result.result_json), provenance_json);
+    }
 }
 
 bool append_shared_domain_cartesian_modes(
@@ -1856,6 +2006,8 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
     ModalEigenRequest effective_request = request;
     std::vector<double> floquet_dynamic_demag_k_storage;
     bool native_nonzero_k_shared_domain_provider = false;
+    std::string k0_shared_domain_provenance;
+    std::string assembled_operator_provenance;
     PoissonAirboxSharedDomainAssemblyResult native_floquet_sparse_assembly{};
     FloquetSharedDomainSparseModalOperator native_floquet_sparse_operator{};
     std::string floquet_potential_certificate;
@@ -1920,6 +2072,10 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
                 "production_cpu_floquet_airbox_sparse_shared_domain_provider");
             return result;
         }
+        assembled_operator_provenance =
+            shared_domain_operator_provenance_json(
+                native_floquet_sparse_assembly,
+                "floquet_sparse_shared_domain_assembly");
         native_floquet_sparse_operator.a_qq =
             &native_floquet_sparse_assembly.floquet_a_qq;
         native_floquet_sparse_operator.b_qq =
@@ -2008,13 +2164,20 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
             return result;
         }
 
+        assembled_operator_provenance =
+            shared_domain_operator_provenance_json(
+                provider_assembly,
+                "floquet_legacy_dynamic_demag_k_assembly");
         const auto &certificate = provider_result.diagnostics;
         if (!certificate.potential_solve_certified ||
             certificate.certified_rhs_count != certificate.q_dof_count) {
-            return validation_error_result(
+            FrequencyDomainContractResult result = validation_error_result(
                 "modal_eigen", "Floquet potential solve has no complete certificate",
                 "floquet_potential_certificate_missing",
                 request.operator_request.operator_diagnostics_json);
+            append_shared_domain_operator_provenance(
+                result, assembled_operator_provenance);
+            return result;
         }
         floquet_potential_certificate =
             "{\"potential_solve_certified\":true,"
@@ -2085,6 +2248,10 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
                 "shared_domain_assembly_failed",
                 request.operator_request.operator_diagnostics_json);
         }
+        k0_shared_domain_provenance =
+            shared_domain_operator_provenance_json(
+                shared_domain_assembly,
+                "k0_shared_domain_assembly");
         const FullmagFemModalSharedDomainPayload &payload =
             *request.poisson_airbox_shared_domain_payload;
         effective_request.poisson_airbox_block_enabled = 1;
@@ -2209,6 +2376,8 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
                     request.execution_target,
                     ModalSpectralTransformKind::shift_invert,
                     "validation_error");
+                append_shared_domain_operator_provenance(
+                    result, k0_shared_domain_provenance);
                 return result;
             }
             if (request.poisson_airbox_shift_invert_action_device == 1) {
@@ -2260,6 +2429,9 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
                     "\"frequency_response_proxy\":false}";
 #endif
 
+                append_shared_domain_operator_provenance(
+                    result, k0_shared_domain_provenance);
+
                 std::string artifact_path_string;
                 if (result.status == FrequencyDomainStatus::ok &&
                     request.write_partial_artifacts != 0) {
@@ -2284,6 +2456,8 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
                             "\"study_product\":\"modal_eigen\","
                             "\"status\":\"artifact_error\"}";
                         result.artifact_manifest_path.clear();
+                        append_shared_domain_operator_provenance(
+                            result, k0_shared_domain_provenance);
                         return result;
                     }
                     artifact_path_string = artifact_path.string();
@@ -2315,6 +2489,8 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
                     "\"artifact_manifest_path\":\"" +
                     escape_json_string(artifact_path_string.c_str()) +
                     "\"}";
+                append_shared_domain_operator_provenance(
+                    result, k0_shared_domain_provenance);
                 return result;
             }
 
@@ -2343,6 +2519,8 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
             result.status = status;
             result.error_message = action_result.error_message;
             result.diagnostics_json = action_result.diagnostics_json;
+            append_shared_domain_operator_provenance(
+                result, k0_shared_domain_provenance);
 
             std::string artifact_path_string;
             if (status == FrequencyDomainStatus::ok &&
@@ -2354,7 +2532,7 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
                 std::string artifact_error;
                 if (!write_text_file(
                         artifact_path,
-                        action_result.diagnostics_json,
+                        result.diagnostics_json.c_str(),
                         artifact_error)) {
                     result.status = FrequencyDomainStatus::artifact_error;
                     result.error_message = artifact_error;
@@ -2368,6 +2546,8 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
                         "\"study_product\":\"modal_eigen\","
                         "\"status\":\"artifact_error\"}";
                     result.artifact_manifest_path.clear();
+                    append_shared_domain_operator_provenance(
+                        result, k0_shared_domain_provenance);
                     return result;
                 }
                 artifact_path_string = artifact_path.string();
@@ -2401,6 +2581,8 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
                 ",\"artifact_manifest_path\":\"" +
                 escape_json_string(artifact_path_string.c_str()) +
                 "\"}";
+            append_shared_domain_operator_provenance(
+                result, k0_shared_domain_provenance);
             return result;
         }
 
@@ -2486,6 +2668,8 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
         result.status = status;
         result.error_message = poisson_result.error_message;
         result.diagnostics_json = poisson_result.diagnostics_json;
+        append_shared_domain_operator_provenance(
+            result, k0_shared_domain_provenance);
         const std::string k0_demag_probe_json =
             k0_demag_operator_probe_json_field(
                 poisson_result.k0_demag_operator_probe);
@@ -2553,6 +2737,8 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
                 "\"study_product\":\"modal_eigen\","
                 "\"status\":\"operator_error\","
                 "\"accepted_mode_count\":0,\"modes\":[]}";
+            append_shared_domain_operator_provenance(
+                result, k0_shared_domain_provenance);
             return result;
         }
         result.result_json =
@@ -2610,6 +2796,8 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
         result.result_json = append_json_field(
             std::move(result.result_json),
             k0_demag_probe_json);
+        append_shared_domain_operator_provenance(
+            result, k0_shared_domain_provenance);
         if ((status == FrequencyDomainStatus::ok ||
              status == FrequencyDomainStatus::interrupted) &&
             !poisson_result.accepted_modes.empty()) {
@@ -2647,6 +2835,8 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
                         "\"study_product\":\"modal_eigen\","
                         "\"status\":\"operator_error\","
                         "\"accepted_mode_count\":0}";
+                    append_shared_domain_operator_provenance(
+                        result, k0_shared_domain_provenance);
                     return result;
                 }
                 result.modal_eigen.mode_q_complex.insert(
@@ -2681,6 +2871,8 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
                         "\"study_product\":\"modal_eigen\","
                         "\"status\":\"operator_error\","
                         "\"accepted_mode_count\":0}";
+                    append_shared_domain_operator_provenance(
+                        result, k0_shared_domain_provenance);
                     return result;
                 }
             }
@@ -2711,6 +2903,8 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
         std::move(result.diagnostics_json), effective_request, "linearized_dynamic_pencil_digest");
     result.result_json = with_magnetic_pencil_digest(
         std::move(result.result_json), effective_request, "linearized_dynamic_pencil_digest");
+    append_shared_domain_operator_provenance(
+        result, assembled_operator_provenance);
     const ModalExecutionTarget unavailable_target =
         request.execution_target == ModalExecutionTarget::production_gpu
             ? ModalExecutionTarget::production_gpu

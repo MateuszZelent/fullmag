@@ -183,6 +183,11 @@ struct PoissonAirboxSharedDomainAssemblyResult {
     char gauge_policy[32]{};
     char assembly_kind[64]{};
     char operator_digest[65]{};
+    // Human-readable provenance emitted from the same magnetic-element
+    // quadrature traversal that contributes the immutable operator digest.
+    // This is backend-owned C++ state and is intentionally outside every
+    // public C ABI structure.
+    std::string quadrature_provenance_json{};
 };
 
 /* Shared descriptor contract used by the public ABI boundary and the native

@@ -4692,3 +4692,18 @@ hashu przy missing_recomputed poprawione z regresjami. 48 testów przyrostu PASS
 213 testów dotychczasowego walidatora PASS. Scientific source-map PASS.
 Rust sidecar producer, non-shared handoff, source provenance i modal identity
 są w dalszej implementacji. Ten etap nie dowodzi managed runtime ani fizyki.
+
+## F01 — czytelna rzeczywista kwadratura, poprawki review
+
+Wynik składania publikuje agregat geometrii, rzędu FE, requested/resolved rule,
+rzeczywistej liczby punktów MFEM i liczby magnetycznych elementów. Jest on
+dołączany do digestu w diagnostics/result dla k0, sparse Floquet i legacy
+dynamic-demag-k po udanym składaniu. Dotychczasowy preimage digestu i C ABI
+nie zmieniają się.
+
+P2 nested key/whitespace naprawione; pusty obiekt nie generuje błędnego
+przecinka. Prepared regresje obejmują tet/prism/Floquet oraz bezpośredni
+kontrakt solvera i publiczne C ABI z nested operator diagnostics. Focused
+review bez nowych P1/P2; source-only wiring i scientific source-map PASS.
+Native testy nie były kompilowane. Wykonanie i wartości w artefaktach solvera
+wymagają nowego managed builda spójnego SHA; #193 nie zawiera tego przyrostu.

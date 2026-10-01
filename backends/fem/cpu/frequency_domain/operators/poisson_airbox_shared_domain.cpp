@@ -21,6 +21,7 @@
 #include <set>
 #include <string>
 #include <stdexcept>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -40,6 +41,59 @@ constexpr int kFrequencyDomainP1TetrahedronQuadratureOrder = 5;
 constexpr int kFrequencyDomainP1PrismQuadratureOrder = 4;
 constexpr char kFrequencyDomainP1QuadraturePolicy[] =
     "p1_geometry_aware_tet5_prism4_positive";
+
+struct QuadratureProvenanceKey {
+    std::string geometry{};
+    int finite_element_order = 0;
+    int requested_quadrature_order = 0;
+    int resolved_quadrature_order = 0;
+    int rule_npoints = 0;
+
+    bool operator<(const QuadratureProvenanceKey &other) const noexcept
+    {
+        return std::tie(
+                   geometry,
+                   finite_element_order,
+                   requested_quadrature_order,
+                   resolved_quadrature_order,
+                   rule_npoints) <
+            std::tie(
+                other.geometry,
+                other.finite_element_order,
+                other.requested_quadrature_order,
+                other.resolved_quadrature_order,
+                other.rule_npoints);
+    }
+};
+
+std::string quadrature_provenance_json(
+    const std::map<QuadratureProvenanceKey, std::uint64_t> &entries,
+    std::uint64_t element_count)
+{
+    std::string json =
+        "{\"schema_version\":\"poisson_airbox_shared_domain_quadrature.v1\","
+        "\"policy\":\"" + std::string(kFrequencyDomainP1QuadraturePolicy) +
+        "\",\"element_count\":" + std::to_string(element_count) +
+        ",\"entries\":[";
+    bool first = true;
+    for (const auto &[key, count] : entries) {
+        if (!first) {
+            json += ',';
+        }
+        first = false;
+        json += "{\"geometry\":\"" + key.geometry +
+            "\",\"finite_element_order\":" +
+            std::to_string(key.finite_element_order) +
+            ",\"requested_quadrature_order\":" +
+            std::to_string(key.requested_quadrature_order) +
+            ",\"resolved_quadrature_order\":" +
+            std::to_string(key.resolved_quadrature_order) +
+            ",\"rule_npoints\":" + std::to_string(key.rule_npoints) +
+            ",\"element_count\":" + std::to_string(count) + "}";
+    }
+    json += "]}";
+    return json;
+}
 
 const char *frequency_domain_p1_geometry_name(mfem::Geometry::Type geometry)
 {
@@ -2926,6 +2980,7 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain(
         digest.add_string("gauge_policy", gauge);
         digest.add_string("quadrature_policy", kFrequencyDomainP1QuadraturePolicy);
         std::uint64_t quadrature_element_count = 0u;
+        std::map<QuadratureProvenanceKey, std::uint64_t> quadrature_entries;
         for (int element = 0; element < mesh->GetNE(); ++element) {
             if (request.magnetic_element_mask[static_cast<std::size_t>(element)] == 0u) {
                 continue;
@@ -2937,25 +2992,36 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain(
             }
             const mfem::IntegrationRule &rule =
                 frequency_domain_p1_quadrature(*finite_element);
+            const std::string geometry =
+                frequency_domain_p1_geometry_name(finite_element->GetGeomType());
+            const int requested_quadrature_order =
+                frequency_domain_p1_quadrature_order(finite_element->GetGeomType());
+            const int resolved_quadrature_order = rule.GetOrder();
+            const int rule_npoints = rule.GetNPoints();
             const std::string prefix =
                 "quadrature.element[" + std::to_string(element) + "]";
-            digest.add_string(prefix + ".topology",
-                              frequency_domain_p1_geometry_name(finite_element->GetGeomType()));
+            digest.add_string(prefix + ".topology", geometry);
             digest.add_u64(prefix + ".topology_id",
                            static_cast<std::uint64_t>(finite_element->GetGeomType()));
             digest.add_u64(prefix + ".finite_element_order",
                            static_cast<std::uint64_t>(finite_element->GetOrder()));
             digest.add_u64(prefix + ".requested_quadrature_order",
-                           static_cast<std::uint64_t>(
-                               frequency_domain_p1_quadrature_order(
-                                   finite_element->GetGeomType())));
+                           static_cast<std::uint64_t>(requested_quadrature_order));
             digest.add_u64(prefix + ".actual_quadrature_order",
-                           static_cast<std::uint64_t>(rule.GetOrder()));
+                           static_cast<std::uint64_t>(resolved_quadrature_order));
             digest.add_u64(prefix + ".actual_quadrature_npoints",
-                           static_cast<std::uint64_t>(rule.GetNPoints()));
+                           static_cast<std::uint64_t>(rule_npoints));
+            ++quadrature_entries[QuadratureProvenanceKey{
+                geometry,
+                finite_element->GetOrder(),
+                requested_quadrature_order,
+                resolved_quadrature_order,
+                rule_npoints}];
             ++quadrature_element_count;
         }
         digest.add_u64("quadrature.element_count", quadrature_element_count);
+        out_result->quadrature_provenance_json = quadrature_provenance_json(
+            quadrature_entries, quadrature_element_count);
         digest.add_double("robin_beta", request.robin_beta);
         digest.add_double("gamma0_m_per_a_s", request.gamma0_m_per_a_s);
         digest.add_double("mu0_T_m_A", request.mu0_T_m_A);

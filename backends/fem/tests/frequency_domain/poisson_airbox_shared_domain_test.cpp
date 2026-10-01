@@ -1292,6 +1292,62 @@ int main()
     check(prism_oracle_error <= 1.0e-12 * std::max(1.0, prism_oracle_scale),
           "native mixed prism exchange matches the independent weak-form oracle");
 
+    std::vector<std::uint32_t> mixed_scalar_classes(
+        static_cast<std::size_t>(mixed_node_count));
+    std::vector<std::uint32_t> mixed_magnetic_classes(
+        static_cast<std::size_t>(mixed_node_count));
+    for (std::uint32_t node = 0u; node < mixed_node_count; ++node) {
+        mixed_scalar_classes[static_cast<std::size_t>(node)] = node;
+        mixed_magnetic_classes[static_cast<std::size_t>(node)] = node;
+    }
+    mfem::Array<int> mixed_boundary_marker(mixed_mesh.bdr_attributes.Max());
+    mixed_boundary_marker = 1;
+    fd::CsrMatrixView mixed_a_qq_view = mixed_a_qq.view();
+    fd::PoissonAirboxSharedDomainAssemblyRequest mixed_shared_request{};
+    mixed_shared_request.scalar_space = &mixed_scalar_space;
+    mixed_shared_request.tangent_frames = mixed_descriptor.tangent_frames.data();
+    mixed_shared_request.tangent_frame_count = mixed_descriptor.tangent_frames.size();
+    mixed_shared_request.magnetic_element_mask = mixed_magnetic_elements.data();
+    mixed_shared_request.magnetic_element_count = mixed_magnetic_elements.size();
+    mixed_shared_request.uniform_saturation_magnetization_a_per_m = 2.0;
+    mixed_shared_request.gamma0_m_per_a_s = 3.0;
+    mixed_shared_request.mu0_T_m_A = 4.0;
+    mixed_shared_request.magnetic_a_qq_csr = &mixed_a_qq_view;
+    mixed_shared_request.scalar_reduced_node = mixed_scalar_classes.data();
+    mixed_shared_request.scalar_reduced_node_count = mixed_scalar_classes.size();
+    mixed_shared_request.magnetic_reduced_node = mixed_magnetic_classes.data();
+    mixed_shared_request.magnetic_reduced_node_count = mixed_magnetic_classes.size();
+    mixed_shared_request.equivalence_classes_complete = true;
+    mixed_shared_request.boundary_kind = fd::PoissonAirboxBoundaryKind::robin;
+    mixed_shared_request.robin_beta = 1.0;
+    mixed_shared_request.robin_boundary_marker = &mixed_boundary_marker;
+    fd::PoissonAirboxSharedDomainAssemblyResult mixed_shared_result{};
+    check(fd::assemble_poisson_airbox_shared_domain(
+              mixed_shared_request, &mixed_shared_result) ==
+              fd::FrequencyDomainStatus::ok,
+          mixed_shared_result.error_message);
+    check(mixed_shared_result.operator_digest[0] != '\0',
+          "mixed prism shared-domain assembly publishes its digest");
+    check(!mixed_shared_result.quadrature_provenance_json.empty(),
+          "mixed prism shared-domain assembly publishes quadrature provenance");
+    check(mixed_shared_result.quadrature_provenance_json.find("\"geometry\":\"prism6\"") !=
+              std::string::npos,
+          "quadrature provenance identifies the prism6 geometry");
+    check(mixed_shared_result.quadrature_provenance_json.find(
+              "\"requested_quadrature_order\":4") != std::string::npos,
+          "quadrature provenance reports the requested prism order");
+    check(mixed_shared_result.quadrature_provenance_json.find(
+              "\"resolved_quadrature_order\":" +
+              std::to_string(prism_order4.GetOrder())) != std::string::npos,
+          "quadrature provenance reports MFEM's resolved prism order");
+    check(mixed_shared_result.quadrature_provenance_json.find(
+              "\"rule_npoints\":" +
+              std::to_string(prism_order4.GetNPoints())) != std::string::npos,
+          "quadrature provenance reports MFEM prism rule point count");
+    check(mixed_shared_result.quadrature_provenance_json.find("\"element_count\":1") !=
+              std::string::npos,
+          "quadrature provenance reports one magnetic prism element");
+
     // The exact affine prism scalar block has one and only one null vector:
     // the constant field.  The former centroid rule had rank at most three
     // and therefore introduced hourglass modes.  Undo any MFEM local signs so
@@ -2183,6 +2239,28 @@ int main()
     check(gyrotropic_sign_flip_error > 1.0e-6 * gyrotropic_oracle_scale,
           "B_qq sign-flip negative control must be rejected by the independent oracle");
     check(result.operator_digest[0] != '\0', "shared-domain assembly publishes digest");
+    check(!result.quadrature_provenance_json.empty(),
+          "shared-domain assembly publishes readable quadrature provenance");
+    check(result.quadrature_provenance_json.find("\"geometry\":\"tet4\"") !=
+              std::string::npos,
+          "quadrature provenance identifies the tetrahedron geometry");
+    check(result.quadrature_provenance_json.find("\"finite_element_order\":1") !=
+              std::string::npos,
+          "quadrature provenance reports the P1 finite-element order");
+    check(result.quadrature_provenance_json.find("\"requested_quadrature_order\":5") !=
+              std::string::npos,
+          "quadrature provenance reports the requested tetrahedron order");
+    check(result.quadrature_provenance_json.find(
+              "\"resolved_quadrature_order\":" +
+              std::to_string(tetra_order5.GetOrder())) != std::string::npos,
+          "quadrature provenance reports MFEM's resolved tetrahedron order");
+    check(result.quadrature_provenance_json.find(
+              "\"rule_npoints\":" +
+              std::to_string(tetra_order5.GetNPoints())) != std::string::npos,
+          "quadrature provenance reports MFEM tetrahedron rule point count");
+    check(result.quadrature_provenance_json.find("\"element_count\":1") !=
+              std::string::npos,
+          "quadrature provenance reports the actual magnetic-element count");
 
     fd::PoissonAirboxSharedDomainAssemblyRequest pure_neumann = request;
     pure_neumann.boundary_kind = fd::PoissonAirboxBoundaryKind::pure_neumann;
@@ -3295,6 +3373,16 @@ int main()
         floquet_reciprocity_result.error_message);
     check(floquet_reciprocity_result.floquet_sparse_operator_ready,
           "Floquet sparse reciprocity fixture must publish the sparse operator");
+    check(floquet_reciprocity_result.operator_digest[0] != '\0',
+          "Floquet shared-domain assembly must retain its operator digest");
+    check(!floquet_reciprocity_result.quadrature_provenance_json.empty(),
+          "Floquet shared-domain assembly must retain quadrature provenance");
+    check(floquet_reciprocity_result.quadrature_provenance_json.find(
+              "\"geometry\":\"tet4\"") != std::string::npos,
+          "Floquet quadrature provenance must identify the magnetic tetrahedron");
+    check(floquet_reciprocity_result.quadrature_provenance_json.find(
+              "\"element_count\":1") != std::string::npos,
+          "Floquet quadrature provenance must retain the magnetic-element count");
     check(floquet_reciprocity_result.floquet_a_qq.row_count > 0u &&
               floquet_reciprocity_result.floquet_uniform_transverse_probe_q_y.size() ==
                   floquet_reciprocity_result.floquet_a_qq.row_count &&

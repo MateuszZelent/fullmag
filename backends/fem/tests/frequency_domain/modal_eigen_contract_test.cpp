@@ -1412,6 +1412,68 @@ void modal_floquet_contour_original_descriptor_certification_is_fail_closed()
     reset_progress_capture();
     FullmagFemModalEigenRequest request =
         make_floquet_contour_request(fixture, stiffness, gyrotropic);
+    static constexpr char kNestedOperatorDiagnostics[] =
+        "{\"operator_diagnostics\":{\"shared_domain_operator_provenance\":"
+        "{\"scope\":\"nested-only\"}}}";
+
+    fd::ModalEigenRequest native_request{};
+    native_request.abi_version = fd::kFrequencyDomainAbiVersion;
+    native_request.struct_size = sizeof(native_request);
+    native_request.operator_request.abi_version = fd::kFrequencyDomainAbiVersion;
+    native_request.operator_request.mesh_asset_id = "modal-quadrature-provenance-fixture";
+    native_request.operator_request.equilibrium_source_kind = "provided";
+    native_request.operator_request.gamma_rad_s_T = 1.760859e11;
+    native_request.operator_request.mu0_T_m_A = 1.25663706212e-6;
+    native_request.operator_request.include_demag = 1;
+    native_request.operator_request.demag_realization = "floquet_airbox";
+    native_request.operator_request.spin_wave_bc_kind = "floquet";
+    native_request.operator_request.operator_diagnostics_json =
+        kNestedOperatorDiagnostics;
+    native_request.requested_mode_count = 1;
+    native_request.target_kind = "frequency_window";
+    native_request.frequency_min_hz = 0.01;
+    native_request.frequency_max_hz = 1.0;
+    native_request.residual_tolerance = 1.0e-10;
+    native_request.max_outer_iterations = 32;
+    native_request.max_linear_iterations = 128;
+    native_request.eigensolver_family = 2;
+    native_request.completeness_policy = 1;
+    native_request.execution_target = fd::ModalExecutionTarget::production_cpu;
+    native_request.mfem_operator_enabled = 1;
+    native_request.mfem_tangent_dof_count = 2u;
+    native_request.mfem_stiffness_matrix_row_major = stiffness;
+    native_request.mfem_gyrotropic_matrix_row_major = gyrotropic;
+    native_request.has_floquet_k_vector = true;
+    native_request.floquet_k_vector_rad_per_m[0] = fixture.k_vector[0];
+    native_request.floquet_k_vector_rad_per_m[1] = fixture.k_vector[1];
+    native_request.floquet_k_vector_rad_per_m[2] = fixture.k_vector[2];
+    native_request.phase_convention = fd::FrequencyDomainPhaseConvention::exp_i_omega_t;
+    native_request.floquet_periodic_pairs = fixture.native_pairs.data();
+    native_request.floquet_periodic_pair_count = fixture.native_pairs.size();
+    native_request.poisson_airbox_periodic_mesh_certificate_schema =
+        fixture.payload.mesh_certificate_schema;
+    native_request.poisson_airbox_magnetic_pair_count = fixture.payload.magnetic_pair_count;
+    native_request.poisson_airbox_airbox_pair_count = fixture.payload.airbox_pair_count;
+    native_request.poisson_airbox_shared_domain_enabled = 1;
+    native_request.poisson_airbox_shared_domain_payload = &fixture.payload;
+    const fd::FrequencyDomainContractResult native_result =
+        fd::solve_modal_eigen_contract(native_request);
+    check(native_result.status == fd::FrequencyDomainStatus::ok,
+          "native modal contract provenance fixture must reach the Floquet solver");
+    check(native_result.diagnostics_json.find(
+              "\"operator_diagnostics\":{\"operator_diagnostics\":{\"shared_domain_operator_provenance\":"
+              "{\"scope\":\"nested-only\"}}}") != std::string::npos,
+          "native modal contract must retain nested operator diagnostics");
+    check(native_result.diagnostics_json.find(
+              ",\"shared_domain_operator_provenance\":{\"schema_version\":\"poisson_airbox_shared_domain_operator_provenance.v1\"") !=
+              std::string::npos,
+          "native modal contract must append provenance at diagnostics top level");
+    check(native_result.result_json.find(
+              ",\"shared_domain_operator_provenance\":{\"schema_version\":\"poisson_airbox_shared_domain_operator_provenance.v1\"") !=
+              std::string::npos,
+          "native modal contract must append provenance at result top level");
+    request.operator_request.operator_diagnostics_json =
+        kNestedOperatorDiagnostics;
     request.progress_callback = capture_progress;
     FullmagFemFrequencyDomainResult result = fullmag_fem_modal_eigen_solve(&request);
     check(result.status == FULLMAG_FEM_FD_OK,
@@ -1427,6 +1489,19 @@ void modal_floquet_contour_original_descriptor_certification_is_fail_closed()
           "Floquet contour result must publish the reconstructed potential representation");
     check(contains(result.result_json, "\"magnetic_relative_residual\":"),
           "Floquet contour result must publish the original magnetic residual");
+    check(contains(
+              result.diagnostics_json,
+              "\"operator_diagnostics\":{\"operator_diagnostics\":{\"shared_domain_operator_provenance\":"
+              "{\"scope\":\"nested-only\"}}}"),
+          "nested operator provenance fixture must remain nested under operator diagnostics");
+    check(contains(
+              result.diagnostics_json,
+              ",\"shared_domain_operator_provenance\":{\"schema_version\":\"poisson_airbox_shared_domain_operator_provenance.v1\""),
+          "modal solver must append assembled provenance at the diagnostics top level");
+    check(contains(
+              result.result_json,
+              ",\"shared_domain_operator_provenance\":{\"schema_version\":\"poisson_airbox_shared_domain_operator_provenance.v1\""),
+          "modal solver must append assembled provenance at the result top level");
     check(contains(result.result_json, "\"potential_relative_residual\":"),
           "Floquet contour result must publish the original potential residual");
     check(contains(result.result_json, "\"potential_vector_real\":[") &&
