@@ -1,3 +1,7 @@
+#[path = "accepted_fem_state.rs"]
+mod accepted_fem_state;
+#[path = "accepted_fem_study_worker.rs"]
+mod accepted_fem_study_worker;
 #[path = "accepted_study_worker.rs"]
 mod accepted_study_worker;
 

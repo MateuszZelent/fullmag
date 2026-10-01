@@ -260,3 +260,8 @@ pamięci i wszystkich lane'ów pozostają otwarte. P6 wynosi **52%**.
 64c. [Binaria accepted flow w pakiecie managed](64c-managed-accepted-runtime-binaries.md)
     — pięć pominiętych programów w instalacji/rpath; kontrola źródeł PASS,
     odbiór nowego pakietu i runtime pozostają otwarte.
+
+66. [Producent accepted FEM CPU](66-accepted-fem-cpu-producer-contract.md)
+    — preflight przed solverem, typed cancellation, receipt-only recovery i
+    exact final state; produkcyjne źródła worker/API oraz review PASS,
+    managed build blokowany pojemnością, runtime i nauka pozostają otwarte.

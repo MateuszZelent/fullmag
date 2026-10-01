@@ -967,6 +967,19 @@ pub(crate) fn execute_accepted_worker_start(
 
     let specification = &accepted.run.specification;
     let request = &specification.requested_execution;
+    if request.backend == "fem" {
+        crate::accepted_fem_study_worker::validate_declared_outputs(&study_step.outputs)
+            .context("validate accepted FEM output contract before recovery or reservation")?;
+        return execute_accepted_fem_worker_start(
+            store,
+            &accepted,
+            start,
+            accepted_step,
+            study_step,
+            case_id,
+            interrupt_requested,
+        );
+    }
     if request.backend != "fdm"
         || !matches!(request.device.as_str(), "cpu" | "gpu")
         || request.precision != "double"
@@ -1157,6 +1170,164 @@ pub(crate) fn execute_accepted_worker_start(
         recovered_from_receipt: false,
         accepted_state_ref,
         observation_source,
+    })
+}
+
+fn execute_accepted_fem_worker_start(
+    store: &SessionStore,
+    accepted: &fullmag_runtime_control::AcceptedStudySnapshot,
+    start: &fullmag_application::WorkerCommandEnvelope,
+    accepted_step: &AcceptedWorkerStep,
+    study_step: &fullmag_authoring::StudyStep,
+    case_id: &str,
+    interrupt_requested: Option<&AtomicBool>,
+) -> Result<AcceptedRunnerExecution> {
+    let receipt_identity = worker_execution_receipt_identity(start, accepted_step, case_id)?;
+    let existing_attempt = match existing_private_attempt_output_dir(store, &accepted_step.claim) {
+        Ok(path) => Some(path),
+        Err(error) if is_not_found_error(&error) => None,
+        Err(error) => return Err(error).context("inspect existing accepted FEM worker attempt"),
+    };
+    if let Some(existing_path) = existing_attempt {
+        return recover_accepted_fem_worker_attempt(
+            store,
+            accepted_step,
+            &receipt_identity,
+            &study_step.outputs,
+            existing_path,
+        )
+        .context("recover completed accepted FEM worker attempt without rerunning solver");
+    }
+
+    let prepared = crate::accepted_fem_study_worker::prepare_accepted_fem_cpu_execution(
+        store,
+        accepted,
+        accepted_step,
+        study_step,
+        case_id,
+    )
+    .context("prepare accepted FEM CPU execution before attempt reservation")?;
+    let attempt_output_dir = match retry_store_writer_busy(|| {
+        create_private_attempt_output_dir(store, &accepted_step.claim)
+    }) {
+        Ok(path) => {
+            write_immutable_attempt_receipt(
+                &path,
+                WORKER_EXECUTION_STARTED_RECEIPT,
+                &WorkerExecutionStartedReceipt {
+                    identity: receipt_identity.clone(),
+                },
+            )
+            .context("persist worker start receipt before the FEM solver side effect")?;
+            path
+        }
+        Err(reservation_error) => {
+            let existing_path =
+                match existing_private_attempt_output_dir(store, &accepted_step.claim) {
+                    Ok(path) => path,
+                    Err(_error) => {
+                        return Err(reservation_error).context(
+                            "reserve output directory for the accepted FEM worker attempt",
+                        )
+                    }
+                };
+            return recover_accepted_fem_worker_attempt(
+                store,
+                accepted_step,
+                &receipt_identity,
+                &prepared.output_ports,
+                existing_path,
+            )
+            .context("recover completed accepted FEM worker attempt without rerunning solver");
+        }
+    };
+
+    let outcome = crate::accepted_fem_study_worker::execute_accepted_fem_cpu_attempt(
+        accepted_step,
+        &prepared,
+        &attempt_output_dir,
+        interrupt_requested,
+    )
+    .context("execute accepted FEM CPU worker attempt")?;
+    match outcome {
+        crate::accepted_fem_study_worker::AcceptedFemCpuExecutionOutcome::Cancelled {
+            completed_step_count,
+            attempt_output_dir,
+        } => Ok(AcceptedRunnerExecution {
+            status: RunStatus::Cancelled,
+            completed_step_count,
+            outputs: Vec::new(),
+            attempt_output_dir,
+            recovered_from_receipt: false,
+            accepted_state_ref: None,
+            observation_source: None,
+        }),
+        crate::accepted_fem_study_worker::AcceptedFemCpuExecutionOutcome::Completed(execution) => {
+            persist_completed_worker_execution(
+                store,
+                &execution.attempt_output_dir,
+                &receipt_identity,
+                &prepared.output_ports,
+                execution.status,
+                execution.completed_step_count,
+                &execution.outputs,
+                Some(&execution.accepted_state_ref),
+                None,
+            )
+            .context("persist immutable completed FEM worker output receipt")?;
+            Ok(AcceptedRunnerExecution {
+                status: execution.status,
+                completed_step_count: execution.completed_step_count,
+                outputs: execution.outputs,
+                attempt_output_dir: execution.attempt_output_dir,
+                recovered_from_receipt: false,
+                accepted_state_ref: Some(execution.accepted_state_ref),
+                observation_source: None,
+            })
+        }
+    }
+}
+
+fn recover_accepted_fem_worker_attempt(
+    store: &SessionStore,
+    accepted_step: &AcceptedWorkerStep,
+    receipt_identity: &WorkerExecutionReceiptIdentity,
+    declared_outputs: &[StudyOutputPort],
+    existing_path: PathBuf,
+) -> Result<AcceptedRunnerExecution> {
+    let current_claim = retry_store_writer_busy(|| {
+        fullmag_runtime_control::load_current_task_claim(
+            store,
+            &accepted_step.claim.run_id,
+            accepted_step.claim.task_id.as_str(),
+        )
+    })
+    .context("reconcile accepted FEM worker receipt under the current claim")?;
+    if !accepted_step.claim.is_same_or_renewed_by(&current_claim) {
+        bail!("accepted FEM worker receipt belongs to a stale task claim");
+    }
+    let expected_accepted_state_ref =
+        crate::accepted_fem_study_worker::accepted_state_ref_from_attempt_snapshot(
+            &existing_path,
+            accepted_step,
+        )
+        .context("load accepted FEM state identity for receipt recovery")?;
+    recover_completed_worker_execution(
+        store,
+        &existing_path,
+        receipt_identity,
+        declared_outputs,
+        accepted_step.claim.lease.budget.storage_bytes,
+        Some(&expected_accepted_state_ref),
+        None,
+    )
+}
+
+fn is_not_found_error(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound)
     })
 }
 
