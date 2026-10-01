@@ -31399,6 +31399,78 @@
         ],
         "type": "object"
       },
+      "SolutionSetDiscoveryPageQuery": {
+        "additionalProperties": false,
+        "properties": {
+          "cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "limit": {
+            "description": "Default 25, maximum 50.",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "SolutionSetDiscoveryPageResource": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SolutionSetDiscoveryRefResource"
+            },
+            "type": "array"
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "project_id",
+          "run_id",
+          "items"
+        ],
+        "type": "object"
+      },
+      "SolutionSetDiscoveryRefResource": {
+        "properties": {
+          "manifest_digest": {
+            "type": "string"
+          },
+          "revision": {
+            "description": "Canonical positive decimal u64, preserved without rounding.",
+            "type": "string"
+          },
+          "solution_set_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "solution_set_id",
+          "revision",
+          "manifest_digest"
+        ],
+        "type": "object"
+      },
       "SolutionSetManifestStateResource": {
         "enum": [
           "open",
@@ -38374,6 +38446,71 @@
           },
           "409": {
             "description": "Run belongs to another project"
+          }
+        },
+        "tags": [
+          "persistence"
+        ]
+      }
+    },
+    "/v2/persistence/projects/{project_id}/runs/{run_id}/solution-sets": {
+      "get": {
+        "operationId": "persistence_get_persistence_projects_project_id_runs_run_id_solution_sets",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Default 25, maximum 50.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SolutionSetDiscoveryPageResource"
+                }
+              }
+            },
+            "description": "Bounded immutable SolutionSet references for one accepted run"
+          },
+          "400": {
+            "description": "Invalid, foreign, or unknown cursor"
+          },
+          "404": {
+            "description": "Missing accepted run storage or intent"
+          },
+          "409": {
+            "description": "Solution ownership or RunSpec mismatch"
           }
         },
         "tags": [

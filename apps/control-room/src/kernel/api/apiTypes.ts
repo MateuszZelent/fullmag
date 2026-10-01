@@ -834,6 +834,10 @@ export type ProjectRunTaskCancellationRequest =
   components["schemas"]["ProjectRunTaskCancellationRequest"];
 export type ProjectRunTaskCancellationResource =
   components["schemas"]["ProjectRunTaskCancellationResource"];
+export type SolutionSetDiscoveryPageResource =
+  components["schemas"]["SolutionSetDiscoveryPageResource"];
+export type SolutionSetDiscoveryPageQuery =
+  components["schemas"]["SolutionSetDiscoveryPageQuery"];
 export type SolutionSetResource =
   components["schemas"]["SolutionSetResource"];
 export type SolutionSetMemberResource =

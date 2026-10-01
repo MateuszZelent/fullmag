@@ -42,6 +42,39 @@ strony tej samej rewizji zwracają tę samą tożsamość i digest.
 
 ## Stronicowanie i budżety
 
+### Discovery wyników runu
+
+`GET /v2/persistence/projects/{project_id}/runs/{run_id}/solution-sets`
+udostępnia stronicowane referencje do rzeczywiście opublikowanych wyników.
+Nie jest aliasem odczytu `latest`: każda referencja zawiera exact revision
+i `manifest_digest`, z których UI tworzy dalsze przypięte żądania.
+Odpowiedź zawiera schema `fullmag.analysis.solution_set_discovery.v1`,
+project/run, items (solution_set_id, revision, manifest_digest) i next_cursor.
+Rewizja pozostaje stringiem u64. Każdy zwrócony wynik przechodzi fence
+RunSpec/projekt/run. CAS, runtime i solver nie są otwierane.
+
+Discovery przegląda istniejącą przestrzeń nazw magazynu przy stałej pamięci
+na wpisy katalogowe. W jednym żądaniu sprawdza najwyżej `limit` bieżących
+manifestów (domyślnie 25, zakres 1–50), również jeżeli część należy do innych
+runów. Zwracana referencja musi zgadzać się z odpowiadającą jej dokładną
+immutable rewizją; brak lub rozbieżność daje błąd. Odczyty tych dwóch
+manifestów są sekwencyjne i ograniczone, bez pełnego skanu historii.
+Sortowanie używa niezmiennego skrótu katalogu SolutionSet; cursor jest
+wersjonowany, przypięty do projektu/runu i walidowany przez serwer.
+Strona może być pusta i mieć next_cursor — oznacza to dalsze wpisy do
+sprawdzenia, nie brak wyników runu. UI musi zachować możliwość następnej strony.
+Nie wolno zbierać wszystkich stron automatycznie ani pokazywać zer jako
+zamiennika błędu. Directory traversal pozostaje O(N); jego koszt i peak RAM
+wymagają osobnych pomiarów, a paginacja nie dowodzi stałego czasu odpowiedzi.
+
+Nie jest to atomowy snapshot mutable katalogu. Publikacja nowego katalogu
+przed granicą cursora jest widoczna po odświeżeniu od początku; aktualizacja
+manifestu nie zmienia już przypiętej referencji. Uszkodzony manifest lub
+niezgodny digest ownera daje jawny błąd. Nie ma reconciliation ani pomijania
+korupcji jako pustego sukcesu. Nieznana lub obca granica cursora daje 400.
+Obowiązuje istniejący limit 16 MiB na jeden manifest i 1 MiB na odpowiedź.
+Nie tworzy się drugiego indeksu, nowego writera ani wyprowadzonych przez UI IDs.
+
 Strony są sortowane rosnąco po immutable `member_id` lub `artifact_id`.
 `limit` domyślnie wynosi 50; zakres wynosi 1–100. `after_member_id` oraz
 `after_artifact_id` są jawnymi granicami pozycji w wskazanej rewizji i memberze.

@@ -56,6 +56,7 @@ import { FmrModalSpectrumInspectorPanel } from "./panels/frequency-domain/FmrMod
 import { FmrResponseSweepInspectorPanel } from "./panels/frequency-domain/FmrResponseSweepInspectorPanel";
 import { FieldQuantityInspectorPanel } from "./panels/FieldQuantityInspectorPanel";
 import { AnalysisResultInspectorPanel } from "./panels/analysis-results/AnalysisResultInspectorPanel";
+import { MaterializedDatasetInspectorPanel } from "./panels/MaterializedDatasetInspectorPanel";
 import { FrozenSpinsInspectorPanel } from "./panels/constraint/FrozenSpinsInspectorPanel";
 import { MeshPartVisualizationPanel } from "./panels/MeshPartVisualizationPanel";
 import { ModeVisualizationOverviewPanel } from "./panels/mode-visualization/ModeVisualizationOverviewPanel";
@@ -1437,6 +1438,12 @@ const INSPECTOR_ROUTE_CONTRIBUTIONS: InspectorPanelContribution[] = [
     title: "Analysis result",
     selectionKinds: ["analysis.result"],
     component: AnalysisResultInspectorPanel,
+  },
+  {
+    id: "materialized-dataset",
+    title: "Materialized Dataset",
+    selectionKinds: ["results.materialized_dataset"],
+    component: MaterializedDatasetInspectorPanel,
   },
   {
     id: "field-quantity",

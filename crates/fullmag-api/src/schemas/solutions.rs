@@ -166,6 +166,26 @@ pub struct SolutionSetResource {
     pub coverage_count: u64,
 }
 
+pub const SOLUTION_SET_DISCOVERY_RESOURCE_SCHEMA: &str =
+    "fullmag.analysis.solution_set_discovery.v1";
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct SolutionSetDiscoveryRefResource {
+    pub solution_set_id: String,
+    /// Canonical positive decimal u64, preserved without rounding.
+    pub revision: String,
+    pub manifest_digest: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct SolutionSetDiscoveryPageResource {
+    pub schema_version: String,
+    pub project_id: String,
+    pub run_id: String,
+    pub items: Vec<SolutionSetDiscoveryRefResource>,
+    pub next_cursor: Option<String>,
+}
+
 #[derive(Debug, Serialize, ToSchema)]
 pub struct SolutionSetMemberResource {
     pub member_id: String,
@@ -259,5 +279,14 @@ pub struct SolutionSetMemberPageQuery {
 pub struct SolutionSetArtifactPageQuery {
     pub after_artifact_id: Option<String>,
     /// Default 50, maximum 100.
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Default, Deserialize, IntoParams, ToSchema)]
+#[serde(deny_unknown_fields)]
+#[into_params(parameter_in = Query)]
+pub struct SolutionSetDiscoveryPageQuery {
+    pub cursor: Option<String>,
+    /// Default 25, maximum 50.
     pub limit: Option<usize>,
 }

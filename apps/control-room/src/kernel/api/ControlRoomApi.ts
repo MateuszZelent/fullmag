@@ -190,6 +190,7 @@ import {
   PROJECT_SOLUTION_SET_ARTIFACTS_PATH,
   PROJECT_SOLUTION_SET_MEMBERS_PATH,
   PROJECT_SOLUTION_SET_PATH,
+  PROJECT_SOLUTION_SET_DISCOVERY_PATH,
   PROJECT_RUN_SUBMIT_PATH,
   PROJECT_RUN_MATERIALIZATION_PATH,
   PROJECT_RUN_PATH,
@@ -466,6 +467,8 @@ import type {
   SolutionSetMemberPageQuery,
   SolutionSetMemberPageResource,
   SolutionSetResource,
+  SolutionSetDiscoveryPageQuery,
+  SolutionSetDiscoveryPageResource,
   MaterializedDatasetResource,
   SolutionSetRevision,
   ObservationFrameListQuery,
@@ -2799,6 +2802,33 @@ export class ControlRoomApi {
           options,
           { path: { project_id: projectId, run_id: runId } },
         ),
+      solutionSets: (
+        projectId: string,
+        runId: string,
+        query: SolutionSetDiscoveryPageQuery = {},
+        options?: RequestOptions,
+      ) => {
+        const limit = query.limit ?? 25;
+        if (!Number.isInteger(limit) || limit < 1 || limit > 50) {
+          throw new Error("Solution discovery limit must be between 1 and 50.");
+        }
+        const cursor = query.cursor ?? undefined;
+        if (cursor !== undefined &&
+          (cursor.length > 4096 || !/^[A-Za-z0-9_-]+$/.test(cursor))) {
+          throw new Error("Invalid solution discovery cursor.");
+        }
+        return this.requestJson<SolutionSetDiscoveryPageResource>(
+          PROJECT_SOLUTION_SET_DISCOVERY_PATH,
+          options,
+          {
+            path: {
+              project_id: assertSolutionSetProjectId(projectId),
+              run_id: assertSolutionSetRunId(runId),
+            },
+            query: { cursor, limit },
+          },
+        );
+      },
       solutionSet: (
         projectId: string,
         runId: string,

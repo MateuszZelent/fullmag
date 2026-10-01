@@ -8,12 +8,78 @@ use axum::{
     extract::{Path, Query, State},
     Json,
 };
+use base64::Engine;
 use fullmag_application::{ProjectId, RunId, RunSpecification};
 use fullmag_quantities::{SolutionMember, SolutionSet};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
+const MAX_DISCOVERY_CURSOR_BYTES: usize = 4096;
+const DISCOVERY_CURSOR_VERSION: u8 = 1;
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct SolutionSetDiscoveryCursor {
+    version: u8,
+    project_id: String,
+    run_id: String,
+    after_directory: String,
+}
+
+#[utoipa::path(get,
+    path = "/v2/persistence/projects/{project_id}/runs/{run_id}/solution-sets",
+    params(("project_id" = String, Path), ("run_id" = String, Path), SolutionSetDiscoveryPageQuery),
+    responses((status = 200, body = SolutionSetDiscoveryPageResource, description = "Bounded immutable SolutionSet references for one accepted run"), (status = 400, description = "Invalid, foreign, or unknown cursor"), (status = 404, description = "Missing accepted run storage or intent"), (status = 409, description = "Solution ownership or RunSpec mismatch")), tag = "persistence")]
+pub async fn get_solution_set_discovery(
+    State(state): State<Arc<AppState>>,
+    Path((project_id, run_id)): Path<(String, String)>,
+    Query(query): Query<SolutionSetDiscoveryPageQuery>,
+) -> Result<Json<SolutionSetDiscoveryPageResource>, ApiError> {
+    let limit = discovery_page_limit(query.limit)?;
+    let after_directory = decode_discovery_cursor(query.cursor.as_deref(), &project_id, &run_id)?;
+    let response_project_id = project_id.clone();
+    let response_run_id = run_id.clone();
+    with_verified_run(state, project_id, run_id, move |store, run_spec_digest| {
+        let page = store
+            .solution_sets()
+            .list_run_page(&response_run_id, after_directory.as_deref(), limit)
+            .map_err(map_discovery_storage_error)?;
+        let expected_run_spec_digest = format!("sha256:{run_spec_digest}");
+        let items = page
+            .items
+            .into_iter()
+            .map(|item| {
+                if item.run_id != response_run_id {
+                    return Err(ApiError::conflict(
+                        "solution discovery item belongs to another run",
+                    ));
+                }
+                if item.run_spec_digest != expected_run_spec_digest {
+                    return Err(ApiError::conflict(
+                        "solution provenance differs from immutable RunSpec",
+                    ));
+                }
+                Ok(SolutionSetDiscoveryRefResource {
+                    solution_set_id: item.solution_set_id,
+                    revision: item.revision.to_string(),
+                    manifest_digest: item.manifest_digest,
+                })
+            })
+            .collect::<Result<Vec<_>, ApiError>>()?;
+        let next_cursor = page.next_after_directory.map(|directory| {
+            encode_discovery_cursor(&response_project_id, &response_run_id, directory)
+        });
+        Ok(SolutionSetDiscoveryPageResource {
+            schema_version: SOLUTION_SET_DISCOVERY_RESOURCE_SCHEMA.to_string(),
+            project_id: response_project_id,
+            run_id: response_run_id,
+            items,
+            next_cursor,
+        })
+    })
+    .await
+}
 
 #[utoipa::path(get,
     path = "/v2/persistence/projects/{project_id}/runs/{run_id}/solution-sets/{solution_set_id}/revisions/{revision}",
@@ -245,11 +311,30 @@ async fn with_revision<T: Serialize + Send + 'static>(
         + Send
         + 'static,
 ) -> Result<Json<T>, ApiError> {
+    validate_solution_id(&solution_id)?;
+    let revision = parse_revision(&revision)?;
+    let expected_run_id = run.clone();
+    with_verified_run(state, project, run, move |store, run_spec_digest| {
+        let solution = store
+            .solution_sets()
+            .read_revision(&solution_id, revision)
+            .map_err(|error| ApiError::internal(error.to_string()))?
+            .ok_or_else(|| ApiError::not_found("solution revision is missing"))?;
+        validate_solution_owner(&solution, &expected_run_id, run_spec_digest)?;
+        build(store, solution)
+    })
+    .await
+}
+
+async fn with_verified_run<T: Serialize + Send + 'static>(
+    state: Arc<AppState>,
+    project: String,
+    run: String,
+    build: impl FnOnce(&fullmag_session::SessionStore, &str) -> Result<T, ApiError> + Send + 'static,
+) -> Result<Json<T>, ApiError> {
     let project =
         ProjectId::parse(project).map_err(|error| ApiError::bad_request(error.to_string()))?;
     let run = RunId::parse(run).map_err(|error| ApiError::bad_request(error.to_string()))?;
-    let revision = parse_revision(&revision)?;
-    validate_solution_id(&solution_id)?;
     tokio::task::spawn_blocking(move || {
         let root = state
             .submit_store_root
@@ -283,13 +368,7 @@ async fn with_revision<T: Serialize + Send + 'static>(
                 "durable run identity or fingerprint is inconsistent",
             ));
         }
-        let solution = store
-            .solution_sets()
-            .read_revision(&solution_id, revision)
-            .map_err(|error| ApiError::internal(error.to_string()))?
-            .ok_or_else(|| ApiError::not_found("solution revision is missing"))?;
-        validate_solution_owner(&solution, run.as_str(), &intent.payload_sha256)?;
-        bounded_json(build(&store, solution)?)
+        bounded_json(build(&store, &intent.payload_sha256)?)
     })
     .await
     .map_err(|error| ApiError::internal(format!("solution read task failed: {error}")))?
@@ -320,6 +399,96 @@ fn validate_lookup_id(value: &str, kind: &str) -> Result<(), ApiError> {
         return Err(ApiError::bad_request(format!("invalid {kind} identity")));
     }
     Ok(())
+}
+
+fn discovery_page_limit(value: Option<usize>) -> Result<usize, ApiError> {
+    let value = value.unwrap_or(25);
+    if !(1..=50).contains(&value) {
+        return Err(ApiError::bad_request(
+            "solution-set discovery limit must be in 1..=50",
+        ));
+    }
+    Ok(value)
+}
+
+fn decode_discovery_cursor(
+    value: Option<&str>,
+    project_id: &str,
+    run_id: &str,
+) -> Result<Option<String>, ApiError> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    if value.is_empty() || value.len() > MAX_DISCOVERY_CURSOR_BYTES {
+        return Err(ApiError::bad_request(
+            "solution-set discovery cursor is oversized",
+        ));
+    }
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(value.as_bytes())
+        .map_err(|_| {
+            ApiError::bad_request("solution-set discovery cursor is not valid base64url")
+        })?;
+    if bytes.len() > MAX_DISCOVERY_CURSOR_BYTES {
+        return Err(ApiError::bad_request(
+            "solution-set discovery cursor is oversized",
+        ));
+    }
+    let cursor: SolutionSetDiscoveryCursor = serde_json::from_slice(&bytes)
+        .map_err(|_| ApiError::bad_request("solution-set discovery cursor payload is invalid"))?;
+    if cursor.version != DISCOVERY_CURSOR_VERSION {
+        return Err(ApiError::bad_request(
+            "solution-set discovery cursor version is unsupported",
+        ));
+    }
+    if cursor.project_id != project_id || cursor.run_id != run_id {
+        return Err(ApiError::bad_request(
+            "solution-set discovery cursor belongs to another project or run",
+        ));
+    }
+    validate_directory_cursor(&cursor.after_directory)?;
+    let canonical =
+        serde_json::to_vec(&cursor).map_err(|error| ApiError::internal(error.to_string()))?;
+    let canonical_encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&canonical);
+    if canonical_encoded != value {
+        return Err(ApiError::bad_request(
+            "solution-set discovery cursor is not canonical",
+        ));
+    }
+    Ok(Some(cursor.after_directory))
+}
+
+fn encode_discovery_cursor(project_id: &str, run_id: &str, after_directory: String) -> String {
+    let cursor = SolutionSetDiscoveryCursor {
+        version: DISCOVERY_CURSOR_VERSION,
+        project_id: project_id.to_string(),
+        run_id: run_id.to_string(),
+        after_directory,
+    };
+    let bytes = serde_json::to_vec(&cursor).expect("discovery cursor serializes");
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
+}
+
+fn validate_directory_cursor(value: &str) -> Result<(), ApiError> {
+    if value.len() != 64
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(ApiError::bad_request(
+            "solution-set discovery cursor boundary is not a canonical directory hash",
+        ));
+    }
+    Ok(())
+}
+
+fn map_discovery_storage_error(error: anyhow::Error) -> ApiError {
+    let message = error.to_string();
+    if message.contains("solution-set discovery cursor is unknown") {
+        ApiError::bad_request("solution-set discovery cursor is unknown")
+    } else {
+        ApiError::internal(message)
+    }
 }
 
 fn parse_revision(value: &str) -> Result<u64, ApiError> {
@@ -489,5 +658,71 @@ mod tests {
         let items = ["a", "b", "c"];
         assert_eq!(page_start(&items, Some("b"), |value| value).unwrap(), 2);
         assert!(page_start(&items, Some("foreign"), |value| value).is_err());
+    }
+
+    #[test]
+    fn discovery_cursor_round_trip_is_project_run_bound_and_preserves_u64_boundaries() {
+        let project_id = "project:discovery";
+        let run_id = "run:discovery";
+        let directory = "a".repeat(64);
+        let encoded = encode_discovery_cursor(project_id, run_id, directory.clone());
+        assert!(!encoded.contains('='));
+        assert_eq!(
+            decode_discovery_cursor(Some(&encoded), project_id, run_id).unwrap(),
+            Some(directory)
+        );
+        assert!(decode_discovery_cursor(Some(&encoded), "project:other", run_id).is_err());
+        assert!(decode_discovery_cursor(Some(&encoded), project_id, "run:other").is_err());
+        assert_eq!(u64::MAX.to_string(), "18446744073709551615");
+        assert_eq!(discovery_page_limit(None).unwrap(), 25);
+        assert_eq!(discovery_page_limit(Some(50)).unwrap(), 50);
+        assert!(discovery_page_limit(Some(51)).is_err());
+    }
+
+    #[test]
+    fn discovery_cursor_rejects_noncanonical_payload_and_bad_boundaries() {
+        let directory = "b".repeat(64);
+        let cursor = SolutionSetDiscoveryCursor {
+            version: DISCOVERY_CURSOR_VERSION,
+            project_id: "project:discovery".to_string(),
+            run_id: "run:discovery".to_string(),
+            after_directory: directory,
+        };
+        let pretty = serde_json::to_vec_pretty(&cursor).unwrap();
+        let noncanonical = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(pretty);
+        assert!(
+            decode_discovery_cursor(Some(&noncanonical), "project:discovery", "run:discovery")
+                .is_err()
+        );
+        let malformed = encode_discovery_cursor(
+            "project:discovery",
+            "run:discovery",
+            "not-a-directory-hash".to_string(),
+        );
+        assert!(
+            decode_discovery_cursor(Some(&malformed), "project:discovery", "run:discovery")
+                .is_err()
+        );
+        assert!(decode_discovery_cursor(
+            Some(&"x".repeat(4097)),
+            "project:discovery",
+            "run:discovery"
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn discovery_storage_unknown_cursor_is_client_error_but_corruption_is_server_error() {
+        assert_eq!(
+            map_discovery_storage_error(anyhow::anyhow!(
+                "solution-set discovery cursor is unknown"
+            ))
+            .status,
+            axum::http::StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            map_discovery_storage_error(anyhow::anyhow!("corrupt solution-set manifest")).status,
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR
+        );
     }
 }

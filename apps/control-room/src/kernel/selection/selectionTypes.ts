@@ -272,6 +272,7 @@ export type SelectionRef =
   | LiveChartSelectionRef
   | LiveChartPointSelectionRef
   | AnalysisResultSelectionRef
+  | PinnedMaterializedDatasetSelectionRef
   | {
       acceptedRevision: number;
       acceptedStep: number;
@@ -741,6 +742,65 @@ export type SelectionRef =
       wavevectorKf?: readonly [number, number, number];
     };
 
+export interface PinnedMaterializedDatasetSelectionRef {
+  artifactId: string;
+  containingRevision: string;
+  datasetId: string;
+  datasetRevision: string;
+  fieldId: string;
+  itemId: string;
+  kind: "results.materialized_dataset";
+  manifestObjectRef: string;
+  memberId: string;
+  nodeId: string;
+  projectId: string;
+  runId: string;
+  sampleId: string;
+  solutionSetId: string;
+  type: "materialized-dataset";
+}
+
+type PinnedMaterializedDatasetSelectionInput = Omit<
+  PinnedMaterializedDatasetSelectionRef,
+  "kind" | "nodeId" | "type"
+>;
+
+function encodeMaterializedDatasetIdentity(value: string): string {
+  return encodeURIComponent(value);
+}
+
+export function buildPinnedMaterializedDatasetNodeId(
+  input: PinnedMaterializedDatasetSelectionInput,
+): string {
+  return [
+    ["project", input.projectId],
+    ["run", input.runId],
+    ["solution", input.solutionSetId],
+    ["containing", input.containingRevision],
+    ["member", input.memberId],
+    ["artifact", input.artifactId],
+    ["manifest", input.manifestObjectRef],
+    ["sample", input.sampleId],
+    ["item", input.itemId],
+    ["field", input.fieldId],
+    ["dataset", input.datasetId],
+    ["datasetRevision", input.datasetRevision],
+  ]
+    .map(([label, value]) => `${label}=${encodeMaterializedDatasetIdentity(value)}`)
+    .join("|");
+}
+
+export function pinnedMaterializedDatasetSelectionRef(
+  input: PinnedMaterializedDatasetSelectionInput,
+): PinnedMaterializedDatasetSelectionRef {
+  return {
+    ...input,
+    kind: "results.materialized_dataset",
+    nodeId: buildPinnedMaterializedDatasetNodeId(input),
+    type: "materialized-dataset",
+  };
+}
+
 export interface Selection {
   /** Selected scene object ID (geometry body, mesh region, etc.) */
   objectId: string | null;
@@ -845,6 +905,24 @@ export function selectionRefEquals(
         nullableStringEquals(left.projectionId, right.projectionId) &&
         nullableStringEquals(left.projectionRevision, right.projectionRevision) &&
         (left.projectionOrdinal ?? null) === (right.projectionOrdinal ?? null)
+      );
+    case "materialized-dataset":
+      return (
+        right.type === "materialized-dataset" &&
+        left.kind === right.kind &&
+        left.nodeId === right.nodeId &&
+        left.projectId === right.projectId &&
+        left.runId === right.runId &&
+        left.solutionSetId === right.solutionSetId &&
+        left.containingRevision === right.containingRevision &&
+        left.memberId === right.memberId &&
+        left.artifactId === right.artifactId &&
+        left.manifestObjectRef === right.manifestObjectRef &&
+        left.sampleId === right.sampleId &&
+        left.itemId === right.itemId &&
+        left.fieldId === right.fieldId &&
+        left.datasetId === right.datasetId &&
+        left.datasetRevision === right.datasetRevision
       );
     case "frozen-spins":
       return (

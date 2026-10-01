@@ -339,6 +339,11 @@ check-control-room-production-source:
 check-control-room-api-hygiene:
     {{storage_python}} "{{repo_root}}/scripts/verify_control_room_sources.py" --route api-hygiene --repo-root "{{repo_root}}"
 
+# Actual browser interaction on an isolated managed frontend source snapshot.
+# Responses are fixtures; this is neither a backend runtime nor a solver gate.
+verify-pinned-dataset-browser:
+    {{storage_python}} "{{repo_root}}/scripts/verify_pinned_dataset_browser.py" --repo-root "{{repo_root}}"
+
 lint-control-room-source:
     {{storage_python}} "{{repo_root}}/scripts/verify_control_room_sources.py" --route lint --repo-root "{{repo_root}}"
 

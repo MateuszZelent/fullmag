@@ -30,6 +30,28 @@ pub struct SolutionSetReconciliation {
     pub revision_count: usize,
 }
 
+/// One immutable SolutionSet reference returned by run discovery.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SolutionSetDiscoveryItem {
+    pub solution_set_id: String,
+    pub run_id: String,
+    pub revision: u64,
+    pub run_spec_digest: String,
+    pub manifest_digest: String,
+}
+
+/// Bounded page of immutable SolutionSet references. The cursor is the
+/// physical catalog directory boundary, not a logical mutable `CURRENT` alias.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SolutionSetDiscoveryPage {
+    pub items: Vec<SolutionSetDiscoveryItem>,
+    pub next_after_directory: Option<String>,
+}
+
+const MAX_RUN_DISCOVERY_PAGE_LIMIT: usize = 50;
+
 impl SolutionSetCatalog {
     pub fn open(root: impl Into<PathBuf>) -> Result<Self> {
         let root = root.into();
@@ -115,6 +137,133 @@ impl SolutionSetCatalog {
         }
         solutions.sort_unstable_by(|left, right| left.solution_set_id.cmp(&right.solution_set_id));
         Ok(solutions)
+    }
+
+    /// Return a bounded page of published SolutionSet references for one run.
+    ///
+    /// Discovery scans immutable catalog directory names and reads at most
+    /// `limit` current manifests. It never opens CAS or uses a mutable current
+    /// session pointer as a result source.
+    pub fn list_run_page(
+        &self,
+        run_id: &str,
+        after_directory: Option<&str>,
+        limit: usize,
+    ) -> Result<SolutionSetDiscoveryPage> {
+        crate::repository_path::validate_store_id(run_id)?;
+        if !(1..=MAX_RUN_DISCOVERY_PAGE_LIMIT).contains(&limit) {
+            bail!("solution-set discovery limit must be in 1..={MAX_RUN_DISCOVERY_PAGE_LIMIT}");
+        }
+        if let Some(cursor) = after_directory {
+            validate_directory_name(cursor)?;
+        }
+
+        let solutions_root = checked_path(&self.root, "solutions")?;
+        if !solutions_root.exists() {
+            if after_directory.is_some() {
+                bail!("solution-set discovery cursor is unknown");
+            }
+            return Ok(SolutionSetDiscoveryPage {
+                items: Vec::new(),
+                next_after_directory: None,
+            });
+        }
+
+        let candidate_limit = limit
+            .checked_add(1)
+            .context("solution-set discovery page limit overflow")?;
+        let mut candidates = std::collections::BTreeSet::new();
+        let mut cursor_seen = after_directory.is_none();
+        let mut has_more_candidates = false;
+        for entry in fs::read_dir(&solutions_root)? {
+            let entry = entry?;
+            let entry_path = entry.path();
+            reject_link(&entry_path)?;
+            let directory_name = entry
+                .file_name()
+                .into_string()
+                .map_err(|_| anyhow::anyhow!("non-UTF8 solution-set catalog directory"))?;
+            validate_directory_name(&directory_name)?;
+            if !entry.file_type()?.is_dir() {
+                bail!("invalid solution-set catalog entry `{directory_name}`");
+            }
+            if after_directory == Some(directory_name.as_str()) {
+                cursor_seen = true;
+                continue;
+            }
+            if after_directory.is_some_and(|cursor| directory_name.as_str() <= cursor) {
+                continue;
+            }
+
+            if candidates.len() < candidate_limit {
+                candidates.insert(directory_name);
+                continue;
+            }
+            has_more_candidates = true;
+            let largest = candidates
+                .iter()
+                .next_back()
+                .cloned()
+                .expect("candidate limit is positive");
+            if directory_name < largest {
+                candidates.remove(&largest);
+                candidates.insert(directory_name);
+            }
+        }
+        if !cursor_seen {
+            bail!("solution-set discovery cursor is unknown");
+        }
+
+        let candidates = candidates.into_iter().collect::<Vec<_>>();
+        let mut items = Vec::with_capacity(limit.min(candidates.len()));
+        let mut visited = 0usize;
+        let mut manifests_read = 0usize;
+        let mut last_visited = None;
+        while visited < candidates.len() && manifests_read < limit {
+            let directory_name = &candidates[visited];
+            visited += 1;
+            last_visited = Some(directory_name.clone());
+            let relative = format!("solutions/{directory_name}/manifest.json");
+            let path = checked_path(&self.root, &relative)?;
+            if !path.exists() {
+                // A directory without a current manifest is a recoverable
+                // orphan; its directory boundary is still consumed.
+                continue;
+            }
+            let solution = read_solution_set(&path)?;
+            manifests_read += 1;
+            if solution_directory(&solution.solution_set_id) != *directory_name {
+                bail!("solution-set catalog directory does not match logical identity");
+            }
+            let immutable = self
+                .read_revision(&solution.solution_set_id, solution.revision)?
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "solution-set current manifest has no immutable revision {}",
+                        solution.revision
+                    )
+                })?;
+            if immutable != solution {
+                bail!("solution-set current manifest conflicts with immutable revision history");
+            }
+            if solution.run_id != run_id {
+                continue;
+            }
+            let manifest_digest = solution_manifest_digest(&solution)?;
+            items.push(SolutionSetDiscoveryItem {
+                solution_set_id: solution.solution_set_id,
+                run_id: solution.run_id,
+                revision: solution.revision,
+                run_spec_digest: solution.provenance.run_spec_digest,
+                manifest_digest,
+            });
+        }
+
+        let has_unvisited_candidate = visited < candidates.len() || has_more_candidates;
+        Ok(SolutionSetDiscoveryPage {
+            items,
+            next_after_directory: has_unvisited_candidate.then_some(last_visited).flatten(),
+        })
     }
 
     #[cfg(test)]
@@ -576,6 +725,12 @@ fn read_solution_set(path: &Path) -> Result<SolutionSet> {
         .validate()
         .with_context(|| format!("validating {}", path.display()))?;
     Ok(solution)
+}
+
+fn solution_manifest_digest(solution: &SolutionSet) -> Result<String> {
+    let value =
+        serde_json::to_value(solution).context("serializing SolutionSet manifest digest")?;
+    Ok(format!("sha256:{}", crate::canonical_json_sha256(&value)))
 }
 
 fn require_logical_id(solution_set_id: &str) -> Result<()> {
@@ -1284,5 +1439,117 @@ mod tests {
             .pinned_refs()
             .expect("read pins after recovery")
             .contains(&object_ref));
+    }
+
+    #[test]
+    fn run_discovery_pages_filter_orphans_and_reject_invalid_cursors() {
+        let directory = tempfile::tempdir().expect("temporary catalog");
+        let catalog = SolutionSetCatalog::open(directory.path()).expect("open catalog");
+
+        let mut ids = (0..6)
+            .map(|index| format!("solution-discovery-{index}"))
+            .collect::<Vec<_>>();
+        ids.sort_by_key(|solution_set_id| solution_directory(solution_set_id));
+        let other_run_id = ids[0].clone();
+        for solution_set_id in &ids {
+            let mut value = solution(1, SolutionSetManifestState::Open);
+            value.solution_set_id = solution_set_id.clone();
+            value.run_id = if solution_set_id == &other_run_id {
+                "run-other".to_string()
+            } else {
+                "run-target".to_string()
+            };
+            catalog.publish(&value).expect("publish discovery manifest");
+        }
+
+        let mut orphan_directory = "0".repeat(64);
+        if ids
+            .iter()
+            .any(|solution_set_id| solution_directory(solution_set_id) == orphan_directory)
+        {
+            orphan_directory = "f".repeat(64);
+        }
+        let orphan_path = checked_path(&catalog.root, &format!("solutions/{orphan_directory}"))
+            .expect("orphan directory path");
+        fs::create_dir_all(orphan_path).expect("create orphan directory");
+
+        let first = catalog
+            .list_run_page("run-target", None, 1)
+            .expect("read first discovery page");
+        assert!(first.items.is_empty());
+        assert!(first.next_after_directory.is_some());
+
+        let mut cursor = first.next_after_directory;
+        let mut discovered = Vec::new();
+        for _ in 0..20 {
+            let page = catalog
+                .list_run_page("run-target", cursor.as_deref(), 1)
+                .expect("read discovery page");
+            assert!(page.items.len() <= 1);
+            discovered.extend(page.items.into_iter().map(|item| item.solution_set_id));
+            cursor = page.next_after_directory;
+            if cursor.is_none() {
+                break;
+            }
+        }
+        assert!(cursor.is_none(), "discovery pagination did not terminate");
+        let expected = ids
+            .into_iter()
+            .skip(1)
+            .collect::<std::collections::BTreeSet<_>>();
+        let actual = discovered
+            .into_iter()
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(actual, expected);
+
+        assert!(catalog
+            .list_run_page("run-target", Some("../escape"), 1)
+            .is_err());
+        assert!(catalog.list_run_page("../escape", None, 1).is_err());
+        assert!(catalog.list_run_page("run-target", None, 0).is_err());
+        assert!(catalog
+            .list_run_page("run-target", None, MAX_RUN_DISCOVERY_PAGE_LIMIT + 1)
+            .is_err());
+
+        let unknown_cursor = "e".repeat(64);
+        assert!(catalog
+            .list_run_page("run-target", Some(&unknown_cursor), 1)
+            .is_err());
+    }
+
+    #[test]
+    fn run_discovery_preserves_large_revision_and_does_not_read_cas() {
+        let directory = tempfile::tempdir().expect("temporary catalog");
+        let catalog = SolutionSetCatalog::open(directory.path()).expect("open catalog");
+        let mut value = solution_with_artifact("a".repeat(64), 7);
+        value.solution_set_id = "solution-large-revision".to_string();
+        value.run_id = "run-large-revision".to_string();
+        value.revision = 9_007_199_254_740_993;
+
+        let revision_path = create_parent(
+            &catalog.root,
+            &catalog.revision_relative_path(&value.solution_set_id, value.revision),
+        )
+        .expect("immutable manifest path");
+        let bytes = serde_json::to_vec_pretty(&value).expect("serialize discovery manifest");
+        crate::durability::atomic_write(&revision_path, &bytes)
+            .expect("write immutable discovery manifest");
+        let path = create_parent(
+            &catalog.root,
+            &catalog.current_manifest_relative_path(&value.solution_set_id),
+        )
+        .expect("manifest path");
+        crate::durability::atomic_write(&path, &bytes).expect("write discovery manifest");
+
+        let page = catalog
+            .list_run_page("run-large-revision", None, 1)
+            .expect("read discovery metadata without CAS");
+        assert_eq!(page.items.len(), 1);
+        assert_eq!(page.items[0].solution_set_id, value.solution_set_id);
+        assert_eq!(page.items[0].revision, 9_007_199_254_740_993);
+        assert_eq!(
+            page.items[0].manifest_digest,
+            solution_manifest_digest(&value).expect("canonical manifest digest")
+        );
     }
 }

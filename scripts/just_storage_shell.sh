@@ -87,6 +87,14 @@ esac
 # paths/lock inside the dedicated helper. Do not run the generic compatibility-
 # link or heavy-build wrapper for them.
 case "${recipe}" in
+  *"scripts/verify_pinned_dataset_browser.py"*)
+    browser_recipe_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_pinned_dataset_browser.py" --repo-root "[^"]+"$'
+    if [[ ! "${recipe}" =~ ${browser_recipe_pattern} ]]; then
+      echo "[fullmag just] invalid pinned dataset browser recipe" >&2
+      exit 2
+    fi
+    exec "${python_cmd}" "${script_dir}/verify_pinned_dataset_browser.py" --repo-root "${repo_root}"
+    ;;
   *"scripts/verify_control_room_sources.py"*)
     # Never execute the recipe text: accept only the fixed argument shape and
     # invoke the trusted helper from this checkout with the selected route.

@@ -1072,6 +1072,10 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             get(handlers::persistence::solutions::get_solution_revision),
         )
         .route(
+            "/v2/persistence/projects/:project_id/runs/:run_id/solution-sets",
+            get(handlers::persistence::solutions::get_solution_set_discovery),
+        )
+        .route(
             "/v2/persistence/projects/:project_id/runs/:run_id/solution-sets/:solution_set_id/revisions/:revision/members",
             get(handlers::persistence::solutions::get_solution_members),
         )

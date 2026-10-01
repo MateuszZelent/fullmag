@@ -12,6 +12,8 @@ import {
 } from "../api/ControlRoomApi";
 import type {
   MaterializedDatasetResource,
+  SolutionSetDiscoveryPageResource,
+  SolutionSetDiscoveryPageQuery,
   SolutionSetArtifactPageQuery,
   SolutionSetArtifactPageResource,
   SolutionSetMemberPageQuery,
@@ -60,6 +62,81 @@ export const SOLUTION_SET_SCHEMA_VERSION =
 const SOLUTION_SET_MANIFEST_DIGEST_PATTERN = /^sha256:[a-f0-9]{64}$/;
 
 const EMPTY_RESOURCE_KEY = "solution-set:none";
+
+export function solutionSetDiscoveryResourceKey(
+  projectId: string,
+  runId: string,
+  query: SolutionSetDiscoveryPageQuery = {},
+): string {
+  return `solution-set-discovery:${encodeURIComponent(projectId)}:${encodeURIComponent(runId)}:${encodeURIComponent(query.cursor ?? "")}:${query.limit ?? 25}`;
+}
+
+export function validateSolutionSetDiscoveryEnvelope(
+  data: SolutionSetDiscoveryPageResource,
+  projectId: string,
+  runId: string,
+  query: SolutionSetDiscoveryPageQuery = {},
+): SolutionSetDiscoveryPageResource {
+  if (data.schema_version !== "fullmag.analysis.solution_set_discovery.v1" ||
+    data.project_id !== projectId || data.run_id !== runId ||
+    data.items.length > (query.limit ?? 25) ||
+    (data.next_cursor != null &&
+      (data.next_cursor === query.cursor || data.next_cursor.length > 4096 ||
+        !/^[A-Za-z0-9_-]+$/.test(data.next_cursor)))) {
+    throw new Error("Solution discovery response does not match the requested page.");
+  }
+  const ids = new Set<string>();
+  for (const item of data.items) {
+    assertSolutionSetLogicalId(item.solution_set_id);
+    assertSolutionSetRevision(item.revision);
+    if (ids.has(item.solution_set_id) ||
+      !SOLUTION_SET_MANIFEST_DIGEST_PATTERN.test(item.manifest_digest)) {
+      throw new Error("Solution discovery page contains inconsistent pinned references.");
+    }
+    ids.add(item.solution_set_id);
+  }
+  return data;
+}
+
+export function useSolutionSetDiscoveryResource(
+  projectId: string | null | undefined,
+  runId: string | null | undefined,
+  options: SolutionSetResourceOptions & { query?: SolutionSetDiscoveryPageQuery } = {},
+): ResourceResult<SolutionSetDiscoveryPageResource | null> {
+  const { api } = useKernel();
+  const cursor = options.query?.cursor ?? undefined;
+  const limit = options.query?.limit ?? 25;
+  const identity = useMemo(() => {
+    if (!projectId || !runId || !Number.isInteger(limit) || limit < 1 || limit > 50 ||
+      (cursor !== undefined && (cursor.length > 4096 || !/^[A-Za-z0-9_-]+$/.test(cursor)))) return null;
+    try {
+      return {
+        projectId: assertSolutionSetProjectId(projectId),
+        runId: assertSolutionSetRunId(runId),
+        query: { cursor, limit },
+      };
+    } catch {
+      return null;
+    }
+  }, [projectId, runId, cursor, limit]);
+  const load = useCallback(({ signal }: { signal: AbortSignal }) => {
+    if (!identity) return Promise.resolve(null);
+    return api.persistence.projects.solutionSets(
+      identity.projectId, identity.runId, identity.query, { signal },
+    ).then((data) => validateSolutionSetDiscoveryEnvelope(
+      data, identity.projectId, identity.runId, identity.query,
+    ));
+  }, [api, identity]);
+  return useResource<SolutionSetDiscoveryPageResource | null>({
+    abortStaleInflight: true,
+    enabled: identity !== null && options.enabled !== false,
+    load,
+    resourceKey: identity
+      ? solutionSetDiscoveryResourceKey(identity.projectId, identity.runId, identity.query)
+      : "solution-set-discovery:none",
+    resolveRevision: (data) => data ? JSON.stringify([data.items, data.next_cursor]) : null,
+  });
+}
 
 export function solutionSetResourceKey(
   projectId: string,

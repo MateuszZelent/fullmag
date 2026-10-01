@@ -116,6 +116,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/persistence/projects/{project_id}/runs/{run_id}/solution-sets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["persistence_get_persistence_projects_project_id_runs_run_id_solution_sets"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/persistence/projects/{project_id}/runs/{run_id}/solution-sets/{solution_set_id}/revisions/{revision}": {
         parameters: {
             query?: never;
@@ -11862,6 +11878,24 @@ export interface components {
             schema_id: string;
             scientific_evidence: boolean;
         };
+        SolutionSetDiscoveryPageQuery: {
+            cursor?: string | null;
+            /** @description Default 25, maximum 50. */
+            limit?: number | null;
+        };
+        SolutionSetDiscoveryPageResource: {
+            items: components["schemas"]["SolutionSetDiscoveryRefResource"][];
+            next_cursor?: string | null;
+            project_id: string;
+            run_id: string;
+            schema_version: string;
+        };
+        SolutionSetDiscoveryRefResource: {
+            manifest_digest: string;
+            /** @description Canonical positive decimal u64, preserved without rounding. */
+            revision: string;
+            solution_set_id: string;
+        };
         /** @enum {string} */
         SolutionSetManifestStateResource: "open" | "closed";
         SolutionSetMemberPageQuery: {
@@ -13828,6 +13862,54 @@ export interface operations {
                 content?: never;
             };
             /** @description Run belongs to another project */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    persistence_get_persistence_projects_project_id_runs_run_id_solution_sets: {
+        parameters: {
+            query?: {
+                cursor?: string;
+                /** @description Default 25, maximum 50. */
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Bounded immutable SolutionSet references for one accepted run */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SolutionSetDiscoveryPageResource"];
+                };
+            };
+            /** @description Invalid, foreign, or unknown cursor */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing accepted run storage or intent */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Solution ownership or RunSpec mismatch */
             409: {
                 headers: {
                     [name: string]: unknown;

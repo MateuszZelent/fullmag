@@ -1026,6 +1026,10 @@ export const PROJECT_RUN_PATH = openApiV2Path(
   "/v2/persistence/projects/{project_id}/runs/{run_id}",
 );
 
+export const PROJECT_SOLUTION_SET_DISCOVERY_PATH = openApiV2Path(
+  "/v2/persistence/projects/{project_id}/runs/{run_id}/solution-sets",
+);
+
 export const PROJECT_SOLUTION_SET_PATH = openApiV2Path(
   "/v2/persistence/projects/{project_id}/runs/{run_id}/solution-sets/{solution_set_id}/revisions/{revision}",
 );
