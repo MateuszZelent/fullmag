@@ -754,9 +754,30 @@ SLEPcTinyGyrotropicModalEigenResult solve_modal_spectrum_for_request(
 
 SLEPcTinyGyrotropicModalEigenResult solve_sparse_modal_spectrum_for_request(
     const ModalEigenRequest &request,
-    const SLEPcSparseGyrotropicModalEigenRequest &spectral_request) noexcept
+    const SLEPcSparseGyrotropicModalEigenRequest &spectral_request,
+    FloquetSharedDomainSparseModalSolveContext *reuse_context) noexcept
 {
     if (modal_request_is_nonzero_k_floquet(request)) {
+        // The reused shared-domain entry point must pass through the same
+        // request/operator/device/phase/payload admission as the ordinary
+        // sparse Floquet route.  Calling the lower-level owner directly is
+        // necessary for one-window state reuse, but it must never bypass the
+        // public CPU Floquet contract.
+        const FloquetModalSolverAdmission admission =
+            admit_floquet_modal_sparse_request(request, spectral_request);
+        if (!admission.accepted) {
+            SLEPcTinyGyrotropicModalEigenResult rejected{};
+            rejected.status = "validation_error";
+            rejected.unsupported_reason = admission.reason;
+            return rejected;
+        }
+        if (spectral_request.floquet_shared_domain_operator != nullptr &&
+            reuse_context != nullptr) {
+            return solve_floquet_shared_domain_sparse_modal_spectrum(
+                *spectral_request.floquet_shared_domain_operator,
+                spectral_request,
+                reuse_context);
+        }
         return solve_floquet_modal_sparse_spectrum(request, spectral_request);
     }
     return solve_slepc_sparse_gyrotropic_modal_eigen(spectral_request);
@@ -1166,6 +1187,19 @@ const char *subwindow_stop_reason(
     return stop_reason_or_default(slepc_result);
 }
 
+bool subwindow_requires_fail_closed(
+    const SLEPcTinyGyrotropicModalEigenResult &slepc_result) noexcept
+{
+    // A solver/validation error is different from an exhausted search window
+    // or a residual rejection.  Continuing after it could combine modes from
+    // a different state with an invalidated shared-domain context and publish
+    // a misleading partial window as complete.
+    return !slepc_result.ok &&
+        slepc_result.status != nullptr &&
+        (std::strcmp(slepc_result.status, "solve_error") == 0 ||
+         std::strcmp(slepc_result.status, "validation_error") == 0);
+}
+
 std::string production_window_diagnostics_json(
     const ModalEigenRequest &request,
     const FrequencyWindowPartition &partition,
@@ -1206,13 +1240,20 @@ std::string production_window_diagnostics_json(
                 return std::strcmp(solve.stop_reason, "window_exhausted") != 0 &&
                     std::strcmp(solve.stop_reason, "converged") != 0;
             });
-    const std::string completeness_status = truncated_by_requested_count ?
+    const bool hard_failure = std::any_of(
+        subwindow_solves.begin(),
+        subwindow_solves.end(),
+        [](const DenseSubwindowSolve &solve) {
+            return subwindow_requires_fail_closed(solve.result);
+        });
+    const std::string completeness_status = hard_failure ?
+        "solver_error" : (truncated_by_requested_count ?
         "truncated_by_requested_count" :
         (exhausted_without_modes ? "window_exhausted" :
             (partial_convergence ? "partial_convergence" :
-                (certified ? "certified" : "not_certified")));
+                (certified ? "certified" : "not_certified"))));
     const char *additional_modes_may_exist =
-        (certified && !truncated_by_requested_count) ? "false" : "true";
+        (!hard_failure && certified && !truncated_by_requested_count) ? "false" : "true";
     double ksp_final_residual = 0.0;
     for (const DenseSubwindowSolve &solve : subwindow_solves) {
         if (std::isfinite(solve.result.ksp_final_residual)) {
@@ -2532,7 +2573,7 @@ FrequencyDomainContractResult solve_sparse_production_modal_payload(
     slepc_request.max_linear_iterations = request.max_linear_iterations;
     slepc_request.phase_convention = request.phase_convention;
     const SLEPcTinyGyrotropicModalEigenResult slepc_result =
-        solve_sparse_modal_spectrum_for_request(request, slepc_request);
+        solve_sparse_modal_spectrum_for_request(request, slepc_request, nullptr);
 
     FrequencyDomainContractResult result{};
     const bool native_floquet_sparse =
@@ -2770,6 +2811,13 @@ FrequencyDomainContractResult solve_sparse_production_modal_window_payload(
     std::vector<DenseSubwindowSolve> subwindow_solves;
     subwindow_solves.reserve(partition.subwindows.size());
     std::vector<SLEPcModalAcceptedMode> candidate_modes;
+    bool subwindow_hard_failure = false;
+    const char *subwindow_failure_reason = nullptr;
+    FloquetSharedDomainSparseModalSolveContext floquet_window_context{};
+    FloquetSharedDomainSparseModalSolveContext *reuse_context =
+        request.floquet_shared_domain_operator != nullptr
+            ? &floquet_window_context
+            : nullptr;
     for (const FrequencySubwindow &subwindow : partition.subwindows) {
         SLEPcSparseGyrotropicModalEigenRequest slepc_request{};
         slepc_request.tangent_dof_count =
@@ -2787,7 +2835,10 @@ FrequencyDomainContractResult solve_sparse_production_modal_window_payload(
         slepc_request.max_linear_iterations = request.max_linear_iterations;
         slepc_request.phase_convention = request.phase_convention;
         SLEPcTinyGyrotropicModalEigenResult slepc_result =
-            solve_sparse_modal_spectrum_for_request(request, slepc_request);
+            solve_sparse_modal_spectrum_for_request(
+                request,
+                slepc_request,
+                reuse_context);
         const char *stop_reason = subwindow_stop_reason(slepc_result);
         emit_production_shift_invert_progress(
             request,
@@ -2804,6 +2855,12 @@ FrequencyDomainContractResult solve_sparse_production_modal_window_payload(
         }
         subwindow_solves.push_back(
             DenseSubwindowSolve{subwindow, std::move(slepc_result), stop_reason});
+        const DenseSubwindowSolve &completed_subwindow = subwindow_solves.back();
+        if (subwindow_requires_fail_closed(completed_subwindow.result)) {
+            subwindow_hard_failure = true;
+            subwindow_failure_reason = completed_subwindow.result.unsupported_reason;
+            break;
+        }
     }
 
     // The native shared-domain owner keeps the mass metric on the backend
@@ -2858,15 +2915,17 @@ FrequencyDomainContractResult solve_sparse_production_modal_window_payload(
                 return std::strcmp(solve.stop_reason, "window_exhausted") != 0 &&
                     std::strcmp(solve.stop_reason, "converged") != 0;
             });
-    const char *window_stop_reason = truncated_by_requested_count ?
+    const char *window_stop_reason = subwindow_hard_failure
+        ? "subwindow_failed" : (truncated_by_requested_count ?
         "requested_count_reached" :
         (accepted_modes.empty() ?
             (partial_convergence ? "partial_convergence" : "window_exhausted") :
-            (partial_convergence ? "partial_convergence" : "converged"));
-    const char *window_completeness_status = truncated_by_requested_count ?
+            (partial_convergence ? "partial_convergence" : "converged")));
+    const char *window_completeness_status = subwindow_hard_failure
+        ? "solver_error" : (truncated_by_requested_count ?
         "truncated_by_requested_count" :
         (exhausted_without_modes ? "window_exhausted" :
-            (partial_convergence ? "partial_convergence" : "not_certified"));
+            (partial_convergence ? "partial_convergence" : "not_certified")));
     const bool native_floquet_sparse =
         request.floquet_shared_domain_operator != nullptr;
     const bool window_complete =
@@ -2895,6 +2954,56 @@ FrequencyDomainContractResult solve_sparse_production_modal_window_payload(
             accepted_modes,
             accepted_mode_count_before_cap,
             truncated_by_requested_count);
+    if (subwindow_hard_failure) {
+        const char *failure_reason = subwindow_failure_reason != nullptr
+            ? subwindow_failure_reason : "subwindow_solver_failed";
+        result.status = FrequencyDomainStatus::solve_error;
+        result.error_message =
+            "native FEM modal_eigen production CPU sparse CSR multi-shift solve stopped after a hard subwindow failure: " +
+            std::string(failure_reason);
+        result.diagnostics_json =
+            "{\"schema_version\":\"frequency_domain_modal_diagnostics.v1\","
+            "\"study_product\":\"modal_eigen\","
+            "\"status\":\"solve_error\","
+            "\"complete\":false,"
+            "\"execution_lane\":\"production_cpu\","
+            "\"progress_schema_version\":\"fem_frequency_domain_progress.v1\","
+            "\"production_solver_available\":true,"
+            "\"tiny_validation_solver\":false,"
+            "\"mfem_operator_request\":true,"
+            "\"tangent_dof_count\":" +
+            std::to_string(sparse_modal_tangent_dof_count(request)) +
+            ",\"mfem_operator_payload\":\"" +
+            std::string(kSparsePayload) +
+            "\",\"resolved_solver_family\":\"" +
+            std::string(selection.family) +
+            "\",\"solver_selection_reason\":\"" +
+            std::string(selection.reason) +
+            "\",\"spectral_transform\":\"shift_invert\","
+            "\"solver_model\":\"" +
+            std::string(kSparseWindowSolverModel) +
+            "\",\"stop_reason\":\"subwindow_failed\","
+            "\"failure_reason\":\"" +
+            std::string(failure_reason) +
+            "\",\"accepted_mode_count\":" +
+            std::to_string(accepted_modes.size()) + ",";
+        result.diagnostics_json += window_diagnostics;
+        result.diagnostics_json += "}";
+        result.diagnostics_json =
+            with_modal_request_diagnostics(result.diagnostics_json, request, result.status);
+        result.result_json =
+            "{\"schema_version\":\"frequency_domain_modal_result.v1\","
+            "\"study_product\":\"modal_eigen\","
+            "\"status\":\"solve_error\",\"accepted_mode_count\":" +
+            std::to_string(accepted_modes.size()) +
+            ",\"resolved_solver_family\":\"" +
+            std::string(selection.family) +
+            "\",\"stop_reason\":\"subwindow_failed\","
+            "\"window_completeness\":\"solver_error\","
+            "\"failure_reason\":\"" +
+            std::string(failure_reason) + "\"}";
+        return result;
+    }
     if (accepted_modes.empty()) {
         result.status = FrequencyDomainStatus::solve_error;
         result.error_message =

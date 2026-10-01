@@ -36,6 +36,27 @@ struct FloquetSharedDomainSparseModalOperator {
     const char *gauge_policy = nullptr;
 };
 
+/*
+ * Optional owner for one native frequency-window execution.  The object is
+ * intentionally opaque here: PETSc matrices, KSP state and work vectors are
+ * created and destroyed by the Floquet implementation.  It is never a
+ * process-global cache and must not outlive the operator payload it borrows.
+ */
+struct FloquetSharedDomainSparseModalSolveContext {
+    FloquetSharedDomainSparseModalSolveContext() noexcept;
+    ~FloquetSharedDomainSparseModalSolveContext() noexcept;
+    FloquetSharedDomainSparseModalSolveContext(
+        const FloquetSharedDomainSparseModalSolveContext &) = delete;
+    FloquetSharedDomainSparseModalSolveContext &operator=(
+        const FloquetSharedDomainSparseModalSolveContext &) = delete;
+    FloquetSharedDomainSparseModalSolveContext(
+        FloquetSharedDomainSparseModalSolveContext &&) = delete;
+    FloquetSharedDomainSparseModalSolveContext &operator=(
+        FloquetSharedDomainSparseModalSolveContext &&) = delete;
+
+    void *opaque = nullptr;
+};
+
 // The Floquet modal owner is the boundary between the phase-reduced Bloch
 // operator and the ordinary SLEPc spectral adapter.  The spectral request is
 // already realified by the caller; this owner only admits the finite-k,
@@ -77,6 +98,12 @@ SLEPcTinyGyrotropicModalEigenResult
 solve_floquet_shared_domain_sparse_modal_spectrum(
     const FloquetSharedDomainSparseModalOperator &operator_view,
     const SLEPcSparseGyrotropicModalEigenRequest &spectral_request) noexcept;
+
+SLEPcTinyGyrotropicModalEigenResult
+solve_floquet_shared_domain_sparse_modal_spectrum(
+    const FloquetSharedDomainSparseModalOperator &operator_view,
+    const SLEPcSparseGyrotropicModalEigenRequest &spectral_request,
+    FloquetSharedDomainSparseModalSolveContext *reuse_context) noexcept;
 
 const char *floquet_modal_solver_model() noexcept;
 

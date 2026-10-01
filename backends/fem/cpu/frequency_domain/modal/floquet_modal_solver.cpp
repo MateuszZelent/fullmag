@@ -6,7 +6,9 @@
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <memory>
 #include <mutex>
+#include <new>
 #include <vector>
 
 #ifndef FULLMAG_FEM_WITH_SLEPC
@@ -1196,10 +1198,13 @@ bool normalize_native_floquet_pencil(
     NativeFloquetMatShellContext *context,
     Mat gyrotropic,
     PetscReal target_shift,
+    double previous_normalization_scale,
     double *normalization_scale)
 {
     if (context == nullptr || gyrotropic == nullptr || normalization_scale == nullptr ||
-        !std::isfinite(static_cast<double>(target_shift))) {
+        !std::isfinite(static_cast<double>(target_shift)) ||
+        !std::isfinite(previous_normalization_scale) ||
+        previous_normalization_scale <= 0.0) {
         return false;
     }
     PetscReal magnetic_norm = 0.0;
@@ -1216,12 +1221,21 @@ bool normalize_native_floquet_pencil(
     if (!std::isfinite(scale_reference) || scale_reference <= 0.0) {
         return false;
     }
-    const double scale = 1.0 / scale_reference;
+    // MatNorm observes the matrices after the previous target's scaling.  If
+    // their current absolute scale is p, the desired absolute scale is
+    // p/reference_scaled; therefore the multiplicative update is simply
+    // 1/reference_scaled.  Keeping these two values separate prevents a
+    // second target from applying the absolute scale twice.
+    const double scale_ratio = 1.0 / scale_reference;
+    const double scale = previous_normalization_scale * scale_ratio;
+    if (!std::isfinite(scale_ratio) || scale_ratio <= 0.0) {
+        return false;
+    }
     if (!std::isfinite(scale) ||
-        MatScale(context->a_qq, static_cast<PetscScalar>(scale)) != 0 ||
-        MatScale(context->rotated_a_qq, static_cast<PetscScalar>(scale)) != 0 ||
-        MatScale(context->a_qphi, static_cast<PetscScalar>(scale)) != 0 ||
-        MatScale(gyrotropic, static_cast<PetscScalar>(scale)) != 0) {
+        MatScale(context->a_qq, static_cast<PetscScalar>(scale_ratio)) != 0 ||
+        MatScale(context->rotated_a_qq, static_cast<PetscScalar>(scale_ratio)) != 0 ||
+        MatScale(context->a_qphi, static_cast<PetscScalar>(scale_ratio)) != 0 ||
+        MatScale(gyrotropic, static_cast<PetscScalar>(scale_ratio)) != 0) {
         return false;
     }
     // The Schur action is A_qq - A_qphi P^-1 A_phiq. Scaling A_qq and
@@ -1328,6 +1342,97 @@ void destroy_native_floquet_context(NativeFloquetMatShellContext *context) noexc
         MatDestroy(&context->a_qq);
     }
 }
+
+struct ReusableFloquetWindowState {
+    NativeFloquetMatShellContext context{};
+    Mat shell = nullptr;
+    Mat gyrotropic = nullptr;
+    const FloquetSharedDomainSparseModalOperator *operator_identity = nullptr;
+    const char *boundary_kind = nullptr;
+    const char *gauge_policy = nullptr;
+    std::array<double, 3> k_rad_per_m{};
+    double mu0_T_m_A = 0.0;
+    int phase_sign = 0;
+    double applied_normalization_scale = 1.0;
+    double residual_tolerance = 0.0;
+    int max_linear_iterations = 0;
+    double poisson_ksp_rtol = 0.0;
+    double poisson_ksp_atol = 0.0;
+    int poisson_ksp_max_iterations = 0;
+    bool initialized = false;
+    // A hard EPSSolve failure can leave SLEPc holding borrowed DS/Mat views.
+    // Such a state is permanently unusable and must never be entered by a
+    // later subwindow.
+    bool invalidated = false;
+    // When EPSDestroy is unsafe after a hard PETSc/SLEPc error, all objects
+    // reachable from the EPS are intentionally process-bounded leaks.  This
+    // keeps their matrices alive until OS teardown instead of destroying a
+    // view still owned by SLEPc.
+    bool eps_lifetime_unsafe = false;
+    bool demag_probe_completed = false;
+    FloquetDemagOperatorProbeResult demag_probe{};
+};
+
+void destroy_reusable_floquet_window_state(
+    ReusableFloquetWindowState *state) noexcept
+{
+    if (state == nullptr) {
+        return;
+    }
+    if (state->eps_lifetime_unsafe) {
+        return;
+    }
+    if (state->shell != nullptr) {
+        MatDestroy(&state->shell);
+    }
+    if (state->gyrotropic != nullptr) {
+        MatDestroy(&state->gyrotropic);
+    }
+    destroy_native_floquet_context(&state->context);
+    state->operator_identity = nullptr;
+    state->boundary_kind = nullptr;
+    state->gauge_policy = nullptr;
+    state->k_rad_per_m = {};
+    state->mu0_T_m_A = 0.0;
+    state->phase_sign = 0;
+    state->applied_normalization_scale = 1.0;
+    state->residual_tolerance = 0.0;
+    state->max_linear_iterations = 0;
+    state->poisson_ksp_rtol = 0.0;
+    state->poisson_ksp_atol = 0.0;
+    state->poisson_ksp_max_iterations = 0;
+    state->initialized = false;
+    state->invalidated = false;
+    state->eps_lifetime_unsafe = false;
+    state->demag_probe_completed = false;
+    state->demag_probe = FloquetDemagOperatorProbeResult{};
+}
+
+void destroy_opaque_floquet_window_context(void *opaque) noexcept
+{
+    auto *state = static_cast<ReusableFloquetWindowState *>(opaque);
+    if (state == nullptr) {
+        return;
+    }
+    if (state->eps_lifetime_unsafe) {
+        // See the state comment: deleting the owner here would leave an
+        // undestroyed EPS referring to freed PETSc matrices.
+        return;
+    }
+    destroy_reusable_floquet_window_state(state);
+    delete state;
+}
+
+struct ReusableFloquetWindowStateDeleter {
+    void operator()(ReusableFloquetWindowState *state) const noexcept
+    {
+        destroy_opaque_floquet_window_context(state);
+    }
+};
+
+using ReusableFloquetWindowStateOwner =
+    std::unique_ptr<ReusableFloquetWindowState,
+                    ReusableFloquetWindowStateDeleter>;
 
 bool solve_native_floquet_phi_for_vector(
     NativeFloquetMatShellContext *context,
@@ -2379,6 +2484,17 @@ bool run_floquet_dense_original_oracle(
 
 } // namespace
 
+FloquetSharedDomainSparseModalSolveContext::FloquetSharedDomainSparseModalSolveContext() noexcept = default;
+
+FloquetSharedDomainSparseModalSolveContext::
+    ~FloquetSharedDomainSparseModalSolveContext() noexcept
+{
+#if FULLMAG_FEM_WITH_SLEPC
+    destroy_opaque_floquet_window_context(opaque);
+#endif
+    opaque = nullptr;
+}
+
 FloquetModalSolverAdmission admit_floquet_modal_request(
     const ModalEigenRequest &request,
     const SLEPcTinyGyrotropicModalEigenRequest &spectral_request) noexcept
@@ -2545,6 +2661,18 @@ solve_floquet_shared_domain_sparse_modal_spectrum(
     const FloquetSharedDomainSparseModalOperator &operator_view,
     const SLEPcSparseGyrotropicModalEigenRequest &spectral_request) noexcept
 {
+    return solve_floquet_shared_domain_sparse_modal_spectrum(
+        operator_view,
+        spectral_request,
+        nullptr);
+}
+
+SLEPcTinyGyrotropicModalEigenResult
+solve_floquet_shared_domain_sparse_modal_spectrum(
+    const FloquetSharedDomainSparseModalOperator &operator_view,
+    const SLEPcSparseGyrotropicModalEigenRequest &spectral_request,
+    FloquetSharedDomainSparseModalSolveContext *reuse_context) noexcept
+{
     SLEPcTinyGyrotropicModalEigenResult result{};
     result.solver_adapter = "floquet_airbox_cpu_schur_slepc";
     result.eps_type = "krylovschur";
@@ -2604,17 +2732,68 @@ solve_floquet_shared_domain_sparse_modal_spectrum(
         return result;
     }
 
-    NativeFloquetMatShellContext context{};
-    context.phase_sign = spectral_request.phase_convention ==
+    const bool borrowed_reuse_state = reuse_context != nullptr;
+    ReusableFloquetWindowStateOwner local_state_owner;
+    ReusableFloquetWindowState *state = nullptr;
+    if (!borrowed_reuse_state) {
+        local_state_owner.reset(new (std::nothrow) ReusableFloquetWindowState{});
+        if (!local_state_owner) {
+            result.status = "solve_error";
+            result.unsupported_reason = "floquet_local_state_allocation_failed";
+            return result;
+        }
+        state = local_state_owner.get();
+    }
+    const int requested_phase_sign = spectral_request.phase_convention ==
         FrequencyDomainPhaseConvention::exp_i_omega_t ? 1 : -1;
-    context.q_complex_count = static_cast<PetscInt>(
-        operator_view.q_complex_dof_count);
-    context.q_split_count = static_cast<PetscInt>(
-        2u * operator_view.q_complex_dof_count);
-    context.phi_split_count = static_cast<PetscInt>(
-        2u * operator_view.phi_dof_count);
-    Mat shell = nullptr;
-    Mat gyrotropic = nullptr;
+    const auto reuse_text_matches = [](const char *left, const char *right) noexcept {
+        if (left == nullptr || right == nullptr) {
+            return left == right;
+        }
+        return std::strcmp(left, right) == 0;
+    };
+    if (reuse_context != nullptr) {
+        if (reuse_context->opaque == nullptr) {
+            auto *created = new (std::nothrow) ReusableFloquetWindowState{};
+            if (created == nullptr) {
+                result.status = "solve_error";
+                result.unsupported_reason = "floquet_reuse_context_allocation_failed";
+                return result;
+            }
+            reuse_context->opaque = created;
+        }
+        state = static_cast<ReusableFloquetWindowState *>(reuse_context->opaque);
+        if (state->invalidated) {
+            result.status = "solve_error";
+            result.unsupported_reason = "floquet_reuse_context_invalidated";
+            return result;
+        }
+        if (state->initialized &&
+            (state->operator_identity != &operator_view ||
+             state->phase_sign != requested_phase_sign ||
+             state->context.q_complex_count != static_cast<PetscInt>(
+                 operator_view.q_complex_dof_count) ||
+             state->context.q_split_count != static_cast<PetscInt>(
+                 2u * operator_view.q_complex_dof_count) ||
+             state->context.phi_split_count != static_cast<PetscInt>(
+                 2u * operator_view.phi_dof_count) ||
+             !reuse_text_matches(state->boundary_kind, operator_view.boundary_kind) ||
+             !reuse_text_matches(state->gauge_policy, operator_view.gauge_policy) ||
+             state->k_rad_per_m != operator_view.k_rad_per_m ||
+             state->mu0_T_m_A != operator_view.mu0_T_m_A ||
+             state->residual_tolerance != spectral_request.residual_tolerance ||
+             state->max_linear_iterations != spectral_request.max_linear_iterations)) {
+            result.status = "validation_error";
+            result.unsupported_reason = "floquet_reuse_context_mismatch";
+            return result;
+        }
+    }
+    NativeFloquetMatShellContext &context = state->context;
+    Mat &shell = state->shell;
+    Mat &gyrotropic = state->gyrotropic;
+    // Error text belongs to one attempt; a later subwindow must not inherit a
+    // diagnostic from a previous shift that reused the same MatShell.
+    context.error_message[0] = '\0';
     Mat shifted_preconditioner = nullptr;
     bool exact_schur_preconditioner_materialized = false;
     EPS eps = nullptr;
@@ -2644,72 +2823,69 @@ solve_floquet_shared_domain_sparse_modal_spectrum(
         if (last_shifted_solve.shifted_operator != nullptr) {
             MatDestroy(&last_shifted_solve.shifted_operator);
         }
-        if (shell != nullptr) {
-            MatDestroy(&shell);
-        }
-        if (gyrotropic != nullptr) {
-            MatDestroy(&gyrotropic);
-        }
         if (shifted_preconditioner != nullptr) {
             MatDestroy(&shifted_preconditioner);
         }
-        destroy_native_floquet_context(&context);
+        // Heap-owned nonreuse state is released by local_state_owner.  A
+        // borrowed window state belongs to FloquetSharedDomainSparseModal-
+        // SolveContext and remains available for the next subwindow.
     };
 
-    if (!create_real_split_matrix(*operator_view.a_qq, &context.a_qq) ||
-        !create_real_split_matrix(
-            *operator_view.a_qq,
-            &context.rotated_a_qq,
-            context.phase_sign) ||
-        !create_real_split_matrix(*operator_view.a_qphi, &context.a_qphi) ||
-        !create_real_split_matrix(*operator_view.a_phiq, &context.a_phiq) ||
-        !create_real_split_matrix(*operator_view.p, &context.p) ||
-        !create_real_split_matrix(*operator_view.b_qq, &gyrotropic)) {
-        result.status = "solve_error";
-        result.unsupported_reason = "petsc_floquet_sparse_matrix_creation_failed";
-        destroy_all();
-        return result;
-    }
     const PetscReal target_shift = static_cast<PetscReal>(
         omega_rad_s_from_frequency_hz(
             std::max(0.0, spectral_request.target_frequency_hz)));
-    if (!normalize_native_floquet_pencil(
-            &context,
-            gyrotropic,
-            target_shift,
-            &result.operator_normalization_scale)) {
-        result.status = "solve_error";
-        result.unsupported_reason = "floquet_operator_normalization_failed";
-        destroy_all();
-        return result;
-    }
-    if (KSPCreate(PETSC_COMM_SELF, &context.p_ksp) != 0 ||
-        KSPSetOperators(context.p_ksp, context.p, context.p) != 0 ||
-        KSPSetType(context.p_ksp, KSPPREONLY) != 0) {
-        result.status = "solve_error";
-        result.unsupported_reason = "floquet_poisson_ksp_creation_failed";
-        destroy_all();
-        return result;
-    }
-    const PetscReal poisson_ksp_rtol = std::max(
+    if (!state->initialized) {
+        context.phase_sign = requested_phase_sign;
+        context.q_complex_count = static_cast<PetscInt>(
+            operator_view.q_complex_dof_count);
+        context.q_split_count = static_cast<PetscInt>(
+            2u * operator_view.q_complex_dof_count);
+        context.phi_split_count = static_cast<PetscInt>(
+            2u * operator_view.phi_dof_count);
+        if (!create_real_split_matrix(*operator_view.a_qq, &context.a_qq) ||
+            !create_real_split_matrix(
+                *operator_view.a_qq,
+                &context.rotated_a_qq,
+                context.phase_sign) ||
+            !create_real_split_matrix(*operator_view.a_qphi, &context.a_qphi) ||
+            !create_real_split_matrix(*operator_view.a_phiq, &context.a_phiq) ||
+            !create_real_split_matrix(*operator_view.p, &context.p) ||
+            !create_real_split_matrix(*operator_view.b_qq, &gyrotropic)) {
+            result.status = "solve_error";
+            result.unsupported_reason =
+                "petsc_floquet_sparse_matrix_creation_failed";
+            destroy_reusable_floquet_window_state(state);
+            destroy_all();
+            return result;
+        }
+        if (KSPCreate(PETSC_COMM_SELF, &context.p_ksp) != 0 ||
+            KSPSetOperators(context.p_ksp, context.p, context.p) != 0 ||
+            KSPSetType(context.p_ksp, KSPPREONLY) != 0) {
+            result.status = "solve_error";
+            result.unsupported_reason = "floquet_poisson_ksp_creation_failed";
+            destroy_reusable_floquet_window_state(state);
+            destroy_all();
+            return result;
+        }
+        const PetscReal poisson_ksp_rtol = std::max(
         static_cast<PetscReal>(1.0e-13),
         std::min(
             static_cast<PetscReal>(1.0e-10),
             static_cast<PetscReal>(1.0e-3 * std::max(
                 spectral_request.residual_tolerance,
                 1.0e-10))));
-    // Keep both KSP layers explicit.  PETSC_DEFAULT is part of the selected
-    // PETSc policy here; query the resolved value below instead of reporting
-    // a guessed zero or introducing a hidden absolute-tolerance constant.
-    const PetscInt requested_linear_iterations =
+        // Keep both KSP layers explicit.  PETSC_DEFAULT is part of the selected
+        // PETSc policy here; query the resolved value below instead of reporting
+        // a guessed zero or introducing a hidden absolute-tolerance constant.
+        const PetscInt requested_linear_iterations =
         spectral_request.max_linear_iterations > 0
             ? static_cast<PetscInt>(spectral_request.max_linear_iterations)
             : PETSC_DEFAULT;
-    PC poisson_pc = nullptr;
-    // This preonly LU computes P(k)^-1 inside the physical Schur operator.
-    // A factorization shift would change that inverse, so an unusable P(k)
-    // must fail closed instead of regularizing the physical Poisson block.
-    if (KSPGetPC(context.p_ksp, &poisson_pc) != 0 ||
+        PC poisson_pc = nullptr;
+        // This preonly LU computes P(k)^-1 inside the physical Schur operator.
+        // A factorization shift would change that inverse, so an unusable P(k)
+        // must fail closed instead of regularizing the physical Poisson block.
+        if (KSPGetPC(context.p_ksp, &poisson_pc) != 0 ||
         PCSetType(poisson_pc, PCLU) != 0 ||
         PCFactorSetShiftType(poisson_pc, MAT_SHIFT_NONE) != 0 ||
         KSPSetTolerances(
@@ -2725,45 +2901,53 @@ solve_floquet_shared_domain_sparse_modal_spectrum(
         VecCreateSeq(PETSC_COMM_SELF, context.q_split_count, &context.feedback) != 0 ||
         VecCreateSeq(PETSC_COMM_SELF, context.q_split_count, &context.q_physical_real) != 0 ||
         VecCreateSeq(PETSC_COMM_SELF, context.q_split_count, &context.q_physical_imag) != 0) {
-        result.status = "solve_error";
-        result.unsupported_reason = "floquet_poisson_ksp_setup_failed";
-        destroy_all();
-        return result;
-    }
-    PetscReal poisson_actual_rtol = 0.0;
-    PetscReal poisson_actual_atol = 0.0;
-    PetscReal poisson_actual_dtol = 0.0;
-    PetscInt poisson_actual_max_iterations = 0;
-    if (KSPGetTolerances(
+            result.status = "solve_error";
+            result.unsupported_reason = "floquet_poisson_ksp_setup_failed";
+            destroy_reusable_floquet_window_state(state);
+            destroy_all();
+            return result;
+        }
+        PetscReal poisson_actual_rtol = 0.0;
+        PetscReal poisson_actual_atol = 0.0;
+        PetscReal poisson_actual_dtol = 0.0;
+        PetscInt poisson_actual_max_iterations = 0;
+        if (KSPGetTolerances(
             context.p_ksp,
             &poisson_actual_rtol,
             &poisson_actual_atol,
             &poisson_actual_dtol,
             &poisson_actual_max_iterations) != 0) {
-        result.status = "solve_error";
-        result.unsupported_reason = "floquet_poisson_ksp_tolerance_query_failed";
-        destroy_all();
-        return result;
-    }
-    (void)poisson_actual_dtol;
-    result.poisson_ksp_rtol = static_cast<double>(poisson_actual_rtol);
-    result.poisson_ksp_atol = static_cast<double>(poisson_actual_atol);
-    result.poisson_ksp_max_iterations = poisson_actual_max_iterations > 0
-        ? static_cast<int>(poisson_actual_max_iterations)
-        : 0;
-    if (operator_view.uniform_transverse_probe_q_y != nullptr ||
-        operator_view.uniform_transverse_probe_q_z != nullptr) {
-        if (!run_floquet_demag_operator_probe(
-                &context,
-                operator_view,
-                &result.dynamic_demag_operator_probe)) {
             result.status = "solve_error";
-            result.unsupported_reason = "floquet_dynamic_demag_operator_probe_failed";
+            result.unsupported_reason = "floquet_poisson_ksp_tolerance_query_failed";
+            destroy_reusable_floquet_window_state(state);
             destroy_all();
             return result;
         }
-    }
-    if (MatCreateShell(
+        (void)poisson_actual_dtol;
+        state->poisson_ksp_rtol = static_cast<double>(poisson_actual_rtol);
+        state->poisson_ksp_atol = static_cast<double>(poisson_actual_atol);
+        state->poisson_ksp_max_iterations = poisson_actual_max_iterations > 0
+            ? static_cast<int>(poisson_actual_max_iterations)
+            : 0;
+        result.poisson_ksp_rtol = state->poisson_ksp_rtol;
+        result.poisson_ksp_atol = state->poisson_ksp_atol;
+        result.poisson_ksp_max_iterations = state->poisson_ksp_max_iterations;
+        if (operator_view.uniform_transverse_probe_q_y != nullptr ||
+        operator_view.uniform_transverse_probe_q_z != nullptr) {
+            if (!run_floquet_demag_operator_probe(
+                &context,
+                operator_view,
+                &state->demag_probe)) {
+                result.status = "solve_error";
+                result.unsupported_reason = "floquet_dynamic_demag_operator_probe_failed";
+                destroy_reusable_floquet_window_state(state);
+                destroy_all();
+                return result;
+            }
+            state->demag_probe_completed = true;
+            result.dynamic_demag_operator_probe = state->demag_probe;
+        }
+        if (MatCreateShell(
             PETSC_COMM_SELF,
             context.q_split_count,
             context.q_split_count,
@@ -2775,11 +2959,45 @@ solve_floquet_shared_domain_sparse_modal_spectrum(
             shell,
             MATOP_MULT,
             reinterpret_cast<void (*)(void)>(native_floquet_matmult)) != 0) {
+            result.status = "solve_error";
+            result.unsupported_reason = "floquet_matshell_creation_failed";
+            destroy_reusable_floquet_window_state(state);
+            destroy_all();
+            return result;
+        }
+        state->operator_identity = &operator_view;
+        state->boundary_kind = operator_view.boundary_kind;
+        state->gauge_policy = operator_view.gauge_policy;
+        state->k_rad_per_m = operator_view.k_rad_per_m;
+        state->mu0_T_m_A = operator_view.mu0_T_m_A;
+        state->phase_sign = requested_phase_sign;
+        state->residual_tolerance = spectral_request.residual_tolerance;
+        state->max_linear_iterations = spectral_request.max_linear_iterations;
+        state->applied_normalization_scale = 1.0;
+        state->initialized = true;
+    }
+    if (state->demag_probe_completed) {
+        result.dynamic_demag_operator_probe = state->demag_probe;
+    }
+    result.poisson_ksp_rtol = state->poisson_ksp_rtol;
+    result.poisson_ksp_atol = state->poisson_ksp_atol;
+    result.poisson_ksp_max_iterations = state->poisson_ksp_max_iterations;
+    if (!normalize_native_floquet_pencil(
+            &context,
+            gyrotropic,
+            target_shift,
+            state->applied_normalization_scale,
+            &result.operator_normalization_scale)) {
         result.status = "solve_error";
-        result.unsupported_reason = "floquet_matshell_creation_failed";
+        result.unsupported_reason = "floquet_operator_normalization_failed";
+        // MatScale can fail after modifying only a prefix of the pencil.  The
+        // borrowed context must therefore be discarded rather than reused
+        // with matrices whose relative scale is no longer known.
+        destroy_reusable_floquet_window_state(state);
         destroy_all();
         return result;
     }
+    state->applied_normalization_scale = result.operator_normalization_scale;
     if (floquet_dense_oracle_requested()) {
         // C2 is explicitly diagnostic.  Its failure must never change the
         // production Schur/Krylov path or introduce a fallback solver.
@@ -3020,6 +3238,22 @@ solve_floquet_shared_domain_sparse_modal_spectrum(
         result.ksp_max_true_relative_residual =
             last_shifted_solve.maximum_true_relative_residual;
     }
+    if (eps_solve_error != 0) {
+        result.status = "solve_error";
+        result.unsupported_reason =
+            context.error_message[0] != '\0'
+                ? "floquet_matshell_action_failed"
+                : "floquet_slepc_solve_failed";
+        // Do not query or mutate EPS, its ST/KSP, or any matrix in the
+        // reusable context after this point.  SLEPc may still own a DSGetMat
+        // view, so EPSDestroy and matrix destruction are unsafe.  Marking the
+        // context invalid makes the production window stop before another
+        // subwindow can touch the borrowed operators; teardown intentionally
+        // leaves the process-bounded object graph alive for OS reclamation.
+        state->invalidated = true;
+        state->eps_lifetime_unsafe = true;
+        return result;
+    }
     PetscInt resolved_nev = 0;
     PetscInt resolved_ncv = 0;
     PetscInt resolved_mpd = 0;
@@ -3075,19 +3309,6 @@ solve_floquet_shared_domain_sparse_modal_spectrum(
         result.ksp_converged_reason =
             static_cast<int>(shifted_converged_reason);
     }
-    // Retain observable KSP state even when a hard PETSc error leaves its
-    // reason at ITERATING. Preserve the first EPS/MatShell error and do not
-    // treat a recurrence norm as an independently measured true residual.
-    if (eps_solve_error != 0) {
-        result.status = "solve_error";
-        result.unsupported_reason =
-            context.error_message[0] != '\0'
-                ? "floquet_matshell_action_failed"
-                : "floquet_slepc_solve_failed";
-        destroy_all();
-        return result;
-    }
-
     // SLEPc may release the KSP's borrowed rhs and solution when EPSSolve
     // returns. The post-solve hook copied the last pair while both were live.
     // PETSc's reported norm may also be preconditioned, so compute the true

@@ -74,6 +74,29 @@ Decimal70 daje błędy względne poniżej 3e-16 dla k=0,01, 1, 100, 10000 rad/m
 w badanym modelu. Gałąź Γ nie tworzy przepełniającego 2d. 78 testów PASS,
 mapa naukowa PASS. Jest to referencja jednorodnego n0, nie wynik FEM;
 pełna zgodność, profil modu i zbieżność pozostają otwarte.
+Checkpoint referencji finite-airbox zapisano i wysłano na origin:
+`fe8170df2612fa380ef475c99e7984fa853da4eb`.
+
+Re-review S05 ujawniło dodatkowy P1 w ścieżce bez reuse: po twardym
+EPSSolve błędzie pozostawiony MatShell nadal wskazywał stack-owned context.
+Samo pominięcie destroy PETSc nie zachowuje życia wektorów C++ ani callback
+contextu. Wymagany jest retained heap owner również dla nearest/single-shift,
+z normalnym cleanupem na sukcesie i process-bounded retention tylko wtedy,
+gdy cleanup EPS jest niebezpieczny. Przyrost S05 pozostaje niezatwierdzony
+do buildu do zamknięcia tej bramki i ponownego review.
+
+Finalny przyrost S05 zamknął wskazane P1/P2 w review źródłowym: kontekst
+Floqueta współdzieli real-split matrices, Poisson KSP/LU, workspace i MatShell
+w obrębie jednego pełnego okna; EPS i shifted preconditioner są odrębne dla
+próby. Pełna admission działa także w reuse. Twardy błąd zatrzymuje okno
+z `complete=false` i `solver_error`; unsafe EPS zachowuje heap owner także
+w nearest/nonreuse. Callback nie dereferencjuje zewnętrznego operator view
+po powrocie. Root i niezależny review nie znalazły dalszych P1/P2. Source
+regression z trzema shiftami i modelem lifetime oraz mapa naukowa PASS.
+Native compile/runtime i rzeczywisty speed-up pozostają NOT VERIFIED;
+zakaz dotyczy unit-test compilation, więc następny managed runtime-only
+build jest autoryzowany. #193 było K0: ten przyrost nie dowodzi przyspieszenia
+ani kompletności jego okna, nie zamyka pełnego S05/S04 ani S00–S12.
 
 Przyrost S07 uzupełnia strukturalne referencje finalnej diagnostyki C ABI
 w manifestach single-k i multi-k. Nowa para ma oddzielną coverage i właściwe

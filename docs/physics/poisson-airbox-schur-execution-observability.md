@@ -76,6 +76,28 @@ $s\leq512$. Dla pojedynczego przesunięcia istniejący limit materializacji
 wynosi $s\leq8192$. Poza tymi limitami wybierany jest istniejący magnetyczny
 preconditioner iteracyjny.
 
+Dla natywnego, fazowego operatora Floqueta analogiczny kontekst reuse jest
+utrzymywany wyłącznie przez jedno wywołanie pełnego `frequency_window`. Nie
+zmienia on operatora fizycznego ani macierzy `EPSSetOperators`. Współdzielony
+stan ma postać:
+
+```{math}
+:label: eq-floquet-window-reuse-context
+\mathcal C_F=\{A_{qq}^{\mathbb R},\widetilde A_{qq}^{\mathbb R},
+A_{q\phi}^{\mathbb R},A_{\phi q}^{\mathbb R},P^{\mathbb R},K_P,
+\Phi_q\},
+```
+
+gdzie realne macierze są tylko widokami PETSc z niezmiennych zespolonych CSR
+operatora, $P^{\mathbb R}$ jest blokiem Poissona, $K_P$ jego faktoryzacją
+`KSPPREONLY/LU`, a $\Phi_q$ oznacza workspace wektorów. Dla kolejnych
+shiftów zmienia się wyłącznie target EPS, skala normalizacji operatora i
+preconditioner shift-invert; faktoryzacja $P^{\mathbb R}$ oraz assembly pięciu
+macierzy split nie są wykonywane ponownie. Kontekst może być użyty tylko z tym
+samym adresem operatora, wymiarem i konwencją fazy; nie ma globalnego ani
+międzyzadaniowego cache. Niezgodność tych warunków kończy się jawnym błędem,
+zamiast cichego użycia obcego operatora.
+
 Metryki są definiowane jako różnice liczników i pomiarów zegara monotonicznego:
 
 ```{math}
@@ -116,6 +138,10 @@ przerwaniem.
 | $t_{\mathrm{build}}$, $t_{\mathrm{shift}}$, $t_{\mathrm{EPS}}$ | czasy faz wykonania | s |
 | $\tau$ | cel po skalowaniu pencilu | 1; fizyczny cel dzielony przez skalę częstotliwości kątowej |
 | $\phi$ | współczynniki potencjału skalarnego | A |
+| $\mathcal C_F$ / `FloquetSharedDomainSparseModalSolveContext` | kontekst reuse jednego okna Floqueta | stan runtime, bez jednostki |
+| $A_{qq}^{\mathbb R}$, $A_{q\phi}^{\mathbb R}$, $A_{\phi q}^{\mathbb R}$ | realne splitowane bloki zespolonego operatora Floqueta | macierze algebraiczne po skalowaniu |
+| $P^{\mathbb R}$ / `p_ksp` | realny blok Poissona i jego solver/faktoryzacja | macierz algebraiczna; solver runtime |
+| $N_{\mathrm{window}}$ | liczba podokien korzystających z jednego kontekstu | liczba całkowita, bez jednostki |
 
 Tabela kontraktowa używa również stabilnych, maszynowo mapowanych nazw:
 
@@ -135,6 +161,19 @@ Tabela kontraktowa używa również stabilnych, maszynowo mapowanych nazw:
 | t_shift | t_{\mathrm{shift}} | one shifted preconditioner setup time | s |
 | t_EPS | t_{\mathrm{EPS}} | one EPSSolve duration | s |
 | phi | \phi | scalar-potential coefficient | A |
+
+The machine-readable Floquet symbols use the same English meaning strings as
+the source map, so the symbol table itself remains an auditable contract:
+
+| Symbol | Meaning | SI unit |
+|---|---|---|
+| $\mathcal C_F$ | single-window Floquet PETSc reuse context | 1 |
+| $A_{qq}^{\mathbb R}$ | real-split Floquet magnetic block | 1 |
+| $A_{q\phi}^{\mathbb R}$ | real-split magnetic-potential block | 1 |
+| $A_{\phi q}^{\mathbb R}$ | real-split potential-magnetic block | 1 |
+| $P^{\mathbb R}$ | real-split scalar Poisson block | 1 |
+| $K_P$ | Poisson KSP factorization reused by one window | 1 |
+| $\Phi_q$ | persistent scalar and magnetic workspace vectors | 1 |
 
 Jednostki w wierszach $A_s$, $M_s$, $P_s$ i $S_s$ opisują bezwymiarową
 reprezentację algebraiczną pencilu po skalowaniu FE. Kod używa
@@ -167,6 +206,13 @@ konfigurowanego kontekstu operatora, a nie z hardkodowanego pilota.
 - Anulowanie i błędy zachowują już zebrane liczniki; brakujące fazy pozostają
   `null`. Nie wolno traktować kolejki, źródłowego testu ani samego JSON-u jako
   dowodu runtime.
+- Kontekst Floqueta nie przekracza granicy jednego wywołania okna. Własność
+  wejściowych CSR, równowagi, siatki, $k$ i konwencji fazy pozostaje po stronie
+  wywołującego; kontekst przechowuje wyłącznie obiekty PETSc utworzone z tych
+  danych. Po zakończeniu okna wszystkie obiekty są niszczone deterministycznie.
+- Reuse nie jest dowodem zbieżności ani kompletności widma. Nie zmienia
+  `frequency_window`, `nearest_frequency`, progów residualu, lokalnych
+  przedziałów ani bramy `window_complete`.
 
 (python-api)=
 ## 5. Python API
@@ -243,6 +289,38 @@ Preconditioner exact pozostaje własnością STSINVERT. `EPSSetOperators` nadal
 otrzymuje `schur_shell` i `split_mass`; zmiana nie wprowadza dense route dla
 operatora modalnego i nie zmienia limitu okna 512.
 
+W torze Floqueta `production_cpu_modal_eigen.cpp::solve_sparse_production_modal_window_payload`
+tworzy jeden `FloquetSharedDomainSparseModalSolveContext` na całe okno i
+przekazuje go do każdego podokna. `floquet_modal_solver.cpp` inicjalizuje
+realne macierze split oraz `p_ksp` tylko przy pierwszym podoknie. Następne
+wywołania aktualizują skalę operatora przez iloraz bieżącej i poprzedniej
+skali, tworzą własny shift-invert preconditioner i własny `EPS`, a następnie
+wykonują te same niezależne filtry częstotliwości, residuale magnetyczne,
+potencjału i pełnego deskryptora. Preconditioner i EPS nie są współdzielone,
+ponieważ zależą od targetu i wymagają odrębnej faktoryzacji. Ta granica jest
+zamierzona: ograniczenie assembly/faktoryzacji Poissona nie może być mylone z
+reuse rozwiązania shift-invert.
+
+Każde wejście reuse przechodzi ponownie przez `admit_floquet_modal_sparse_request`;
+bez pozytywnej walidacji CPU, niezerowego i skończonego `k`, fazy, par
+periodycznych, znacznika Blocha oraz payloadu operatora niższy owner nie jest
+wywoływany. Jeżeli `EPSSolve` zwróci twardy błąd, stan reuse otrzymuje
+`invalidated=true`, bieżące okno kończy się `subwindow_failed` i żadne kolejne
+podokno nie może modyfikować macierzy. W tym przypadku SLEPc może nadal
+posiadać widok `DSGetMat`; dlatego `EPSDestroy` i niszczenie macierzy są
+celowo pomijane, a cały obiektowy graf pozostaje do odzyskania przez system
+operacyjny przy zakończeniu procesu. Jest to jawny, ograniczony wyciek po
+błędzie infrastruktury, a nie cache do ponownego użycia. Okno z takim błędem
+zawsze ma `complete=false` i nie publikuje częściowych modów jako pełnego
+widma.
+
+Stan operatora jest heap-owned także dla pojedynczego `nearest_frequency` bez
+zewnętrznego kontekstu. Właściciel RAII używa tego samego deletera co kontekst
+okna: po bezpiecznym zakończeniu niszczy macierze i zwalnia stan, a po
+niebezpiecznym błędzie EPS zachowuje heapowy callback context razem z
+macierzami do zakończenia procesu. Dzięki temu żaden niedestroyowany EPS nie
+otrzymuje wskaźnika do lokalnego obiektu stosowego.
+
 (implementation-mapping)=
 ## 9. Mapowanie na kod
 
@@ -253,17 +331,25 @@ operatora modalnego i nie zmienia limitu okna 512.
 - `...::solve_poisson_airbox_modal_eigen_cpu_schur` — granice faz setup, fallbacku i `EPSSolve`.
 - `...::write_production_schur_diagnostics` — top-level JSON z `null` dla nieuruchomionych faz.
 - `backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp::with_operator_diagnostics` — zachowanie warstwy adaptera.
+- `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.hpp::FloquetSharedDomainSparseModalSolveContext` — jawna własność kontekstu reuse jednego okna.
+- `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp::solve_floquet_shared_domain_sparse_modal_spectrum` — inicjalizacja i reuse realnych macierzy split oraz faktoryzacji Poissona.
+- `backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp::solve_sparse_production_modal_window_payload` — granica życia kontekstu i przekazanie do podokien.
 - `backends/fem/tests/frequency_domain/poisson_airbox_modal_eigen_slepc_test.cpp::FrequencyWindowPublishesCompleteCertificateForSyntheticFixture` — przygotowana regresja natywna.
 - `scripts/test_poisson_airbox_schur_observability_source.py::main` — interpretowany source-level wiring check.
+- `scripts/test_floquet_window_context_reuse_source.py::main` — interpretowany check własności, zgodności operatora i braku globalnego cache.
 
 (validation)=
 ## 10. Walidacja
 
-W tym kroku wykonano wyłącznie:
+W tym kroku wykonano wyłącznie kontrole źródłowe:
 
 ```text
 python scripts/test_poisson_airbox_schur_observability_source.py
 PASS: CPU Schur observability source contract
+python scripts/test_floquet_window_context_reuse_source.py
+PASS: interpreted Floquet window reuse contract and three-shift normalization
+python .agents/skills/scientific-documentation-contract/scripts/validate_scientific_docs.py docs/physics/poisson-airbox-schur-execution-observability.source-map.json --repo-root .
+(exit 0; validator emitted no errors)
 git diff --check (owned files)
 ```
 
@@ -273,6 +359,11 @@ wykonania pozostaje `NOT VERIFIED`. Nie ma jeszcze zmierzonego runtime dla
 pilota `active_nodes=328`; zależność $N_{\mathrm{PC}}=2s$ dla rzeczywistego
 przypadku pozostaje oczekiwaniem wynikającym ze źródła, dopóki receipt nie
 opublikuje tych pól.
+
+Regresja interpretowana obejmuje również wspólne admission dla ścieżki reuse,
+marker unieważnienia kontekstu po `EPSSolve` oraz model zatrzymania pętli po
+twardym błędzie. To nadal dowód wiring/source-only; kompilacja i wykonanie
+PETSc/SLEPc pozostają `NOT VERIFIED`.
 
 (limitations)=
 ## 11. Ograniczenia
@@ -285,6 +376,14 @@ opublikuje tych pól.
   materializacja jest raportowana wyłącznie jako `construction_seconds`.
 - Brak pola RSS, peak memory, liczby kolumn Krylov lub kwalifikacji GPU. Limit
   512 dotyczy exact cache okna; `ncv` i limit kolumn materializacji są odrębne.
+- Reuse Floqueta nie ma jeszcze managed runtime ani pomiaru przed/po na tym
+  samym nonzero-k frequency window. Oczekiwane zmniejszenie assembly/factor
+  setupu wynika ze źródła; nie jest przedstawiane jako zmierzony speed-up.
+- Twardy błąd `EPSSolve` ma odrębną politykę życia zasobów: pozostawienie
+  EPS i macierzy przy życiu do końca procesu jest bezpieczniejsze niż
+  `EPSDestroy` na potencjalnie pożyczonym widoku, ale nie jest rozwiązaniem
+  pamięciowym ani dowodem odzyskiwania zasobów. Kontekst jest trwale
+  unieważniony, a dalsze podokna są odrzucane.
 - Bufor śladu ma ograniczony rozmiar i używa jawnego markera truncation.
   Zewnętrzny JSON ma osobny fail-closed fallback; żadna ścieżka nie publikuje
   cichego, uciętego dokumentu.
@@ -318,3 +417,7 @@ check; żaden z nich nie zastępuje managed runtime ani dowodu fizycznego.
 | backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp | with_operator_diagnostics | Przeniesienie diagnostyki adaptera. |
 | backends/fem/tests/frequency_domain/poisson_airbox_modal_eigen_slepc_test.cpp | void FrequencyWindowPublishesCompleteCertificateForSyntheticFixture | Przygotowana regresja natywna. |
 | scripts/test_poisson_airbox_schur_observability_source.py | main | Interpretowany check źródeł. |
+| backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp | FloquetSharedDomainSparseModalSolveContext::FloquetSharedDomainSparseModalSolveContext | Własność kontekstu reuse jednego okna bez globalnego cache. |
+| backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp | SLEPcTinyGyrotropicModalEigenResult solve_sparse_modal_spectrum_for_request | Przekazanie kontekstu do podokien natywnego Floqueta. |
+| backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp | void destroy_reusable_floquet_window_state | Niszczenie bezpiecznego stanu PETSc; unsafe EPS zachowuje graf do końca procesu. |
+| scripts/test_floquet_window_context_reuse_source.py | main | Interpretowany check reuse, zgodności wejścia i trzyshiftowej normalizacji. |

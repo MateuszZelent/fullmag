@@ -47,6 +47,11 @@
       "id": "eq-schur-observability-metrics",
       "symbols": ["N_PC", "t_build", "t_shift", "t_EPS"],
       "sources": ["source-execution-telemetry"]
+    },
+    {
+      "id": "eq-floquet-window-reuse-context",
+      "symbols": ["C_F", "A_qq_R", "A_qphi_R", "A_phiq_R", "P_R", "K_P", "Phi_q"],
+      "sources": ["source-floquet-reuse-context", "source-floquet-window-adapter"]
     }
   ],
   "symbols": [
@@ -63,7 +68,14 @@
     {"id": "t_build", "latex": "t_{\\mathrm{build}}", "meaning": "shared exact-cache construction time", "si_unit": "s"},
     {"id": "t_shift", "latex": "t_{\\mathrm{shift}}", "meaning": "one shifted preconditioner setup time", "si_unit": "s"},
     {"id": "t_EPS", "latex": "t_{\\mathrm{EPS}}", "meaning": "one EPSSolve duration", "si_unit": "s"},
-    {"id": "phi", "latex": "\\phi", "meaning": "scalar-potential coefficient", "si_unit": "A"}
+    {"id": "phi", "latex": "\\phi", "meaning": "scalar-potential coefficient", "si_unit": "A"},
+    {"id": "C_F", "latex": "\\mathcal C_F", "meaning": "single-window Floquet PETSc reuse context", "si_unit": "1"},
+    {"id": "A_qq_R", "latex": "A_{qq}^{\\mathbb R}", "meaning": "real-split Floquet magnetic block", "si_unit": "1"},
+    {"id": "A_qphi_R", "latex": "A_{q\\phi}^{\\mathbb R}", "meaning": "real-split magnetic-potential block", "si_unit": "1"},
+    {"id": "A_phiq_R", "latex": "A_{\\phi q}^{\\mathbb R}", "meaning": "real-split potential-magnetic block", "si_unit": "1"},
+    {"id": "P_R", "latex": "P^{\\mathbb R}", "meaning": "real-split scalar Poisson block", "si_unit": "1"},
+    {"id": "K_P", "latex": "K_P", "meaning": "Poisson KSP factorization reused by one window", "si_unit": "1"},
+    {"id": "Phi_q", "latex": "\\Phi_q", "meaning": "persistent scalar and magnetic workspace vectors", "si_unit": "1"}
   ],
   "sources": [
     {"id": "source-cpu-schur-context", "path": "backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.cpp", "symbol": "bool configure_production_cpu_operator_context", "responsibility": "Own q, phi, split and persistent exact-cache state."},
@@ -74,14 +86,18 @@
     {"id": "source-execution-telemetry", "path": "backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.cpp", "symbol": "void write_production_schur_diagnostics", "responsibility": "Serialize nullable phase metrics without changing operator identity."},
     {"id": "source-generic-adapter", "path": "backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp", "symbol": "with_operator_diagnostics", "responsibility": "Carry native operator diagnostics through the generic CPU adapter."},
     {"id": "source-native-regression", "path": "backends/fem/tests/frequency_domain/poisson_airbox_modal_eigen_slepc_test.cpp", "symbol": "void FrequencyWindowPublishesCompleteCertificateForSyntheticFixture", "responsibility": "Prepared native assertions for DOF and phase telemetry."},
-    {"id": "source-interpreted-regression", "path": "scripts/test_poisson_airbox_schur_observability_source.py", "symbol": "main", "responsibility": "Check source wiring, MatShell binding and unchanged caps without native compilation."}
+    {"id": "source-interpreted-regression", "path": "scripts/test_poisson_airbox_schur_observability_source.py", "symbol": "main", "responsibility": "Check source wiring, MatShell binding and unchanged caps without native compilation."},
+    {"id": "source-floquet-reuse-context", "path": "backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp", "symbol": "FloquetSharedDomainSparseModalSolveContext::FloquetSharedDomainSparseModalSolveContext", "responsibility": "Own one-window-only Floquet PETSc reuse state without a global cache."},
+    {"id": "source-floquet-window-adapter", "path": "backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp", "symbol": "SLEPcTinyGyrotropicModalEigenResult solve_sparse_modal_spectrum_for_request", "responsibility": "Re-admit every sparse Floquet request before dispatching the one-window context to native subwindows and stop the aggregate after a hard subwindow error."},
+    {"id": "source-floquet-reuse-implementation", "path": "backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp", "symbol": "void destroy_reusable_floquet_window_state", "responsibility": "Guard heap-owned reused state, invalidate it after hard EPSSolve failure, and preserve the EPS-referenced PETSc object graph when destruction is unsafe."},
+    {"id": "source-floquet-interpreted-regression", "path": "scripts/test_floquet_window_context_reuse_source.py", "symbol": "main", "responsibility": "Check admission before reuse, context lifetime, hard-error fail-closed behavior and no global-cache route without native compilation."}
   ],
   "public_api": {
     "parameters": [],
     "notes": ["No Python DSL, ProblemIR or public C ABI field is changed."]
   },
   "validation": {
-    "source_check": "scripts/test_poisson_airbox_schur_observability_source.py",
+    "source_check": ["scripts/test_poisson_airbox_schur_observability_source.py", "scripts/test_floquet_window_context_reuse_source.py"],
     "native_runtime": "NOT VERIFIED",
     "managed_runner": "NOT VERIFIED"
   }
