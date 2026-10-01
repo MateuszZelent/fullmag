@@ -171,6 +171,15 @@ def build_command(job_id, source_digest, profile, config, paths, storage):
     return argv
 
 
+def artifact_sha256(path):
+    """Stream artifacts on both coordinator and Python 3.10 runtime hosts."""
+    digest = hashlib.sha256()
+    with path.open('rb') as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b''):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def validate_build_receipt(artifacts, job, journal):
     path = artifacts / 'build-receipt.json'
     validate_path(path, artifacts, 'build receipt')
@@ -206,8 +215,7 @@ def validate_build_receipt(artifacts, job, journal):
         artifact = validate_path(artifacts / relative, artifacts, 'build artifact')
         if not artifact.is_file() or artifact.stat().st_size != entry['size']:
             raise ValueError('Artifact size mismatch')
-        with artifact.open('rb') as stream:
-            digest = hashlib.file_digest(stream, 'sha256').hexdigest()
+        digest = artifact_sha256(artifact)
         if digest != entry['sha256']:
             raise ValueError('Artifact hash mismatch')
     return receipt

@@ -87,6 +87,14 @@ esac
 # paths/lock inside the dedicated helper. Do not run the generic compatibility-
 # link or heavy-build wrapper for them.
 case "${recipe}" in
+  *"scripts/verify_saved_fem_archive_roundtrip.py"*)
+    roundtrip_recipe_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_saved_fem_archive_roundtrip.py" --repo-root "[^"]+"$'
+    if [[ ! "${recipe}" =~ ${roundtrip_recipe_pattern} ]]; then
+      echo "[fullmag just] invalid saved FEM archive recipe" >&2
+      exit 2
+    fi
+    exec "${python_cmd}" "${script_dir}/verify_saved_fem_archive_roundtrip.py" --repo-root "${repo_root}"
+    ;;
   *"scripts/verify_pinned_dataset_browser.py"*)
     browser_recipe_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_pinned_dataset_browser.py" --repo-root "[^"]+"$'
     if [[ ! "${recipe}" =~ ${browser_recipe_pattern} ]]; then

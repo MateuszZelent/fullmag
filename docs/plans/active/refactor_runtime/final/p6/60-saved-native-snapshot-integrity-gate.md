@@ -61,6 +61,16 @@ odrzucany, nawet gdy inny ogólny reader dopuszcza większy dokument.
 
 ## Pozostałe bramki
 
+Aktualizacja 01.10.2026 13:16 UTC: build 189 zakończony exit 0, wszystkie
+113 artefaktów zweryfikowane; dotyczy tylko P6-55. Build 191 już running,
+192 nadal queued. Procedura Archive roundtrip i dokładny zakres dowodów:
+[P6-61](61-saved-fem-archive-roundtrip-route.md). Niższe stany kolejki opisują
+historyczny checkpoint zgłoszenia.
+Późniejszy odczyt: build 191 terminalny **failed**, exit 2 w native-build;
+compiler widzi starsze quantities/IR metadata mimo obecności nowych modułów
+w źródłach. Diagnoza nadal otwarta; build 192 pozostaje queued. Nie traktować
+wcześniejszego stanu running ani source check PASS jako sukcesu native buildu.
+
 Build 189 (`529ac93e81744c5faf50494306d50a11`) nadal **running**;
 191 (`78d0c52ecb0245aa85f9411d76f8b914`) nadal **queued**.
 191 przypięty do P6-59 nie zawiera nowej komendy P6-60.

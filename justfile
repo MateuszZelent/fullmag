@@ -234,6 +234,10 @@ check-api-source:
 check-cli-source:
     {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --route cli-source-check --repo-root "{{repo_root}}"
 
+# Cold archive integrity gate; config names exact managed build and saved source.
+verify-saved-fem-archive-roundtrip:
+    {{storage_python}} "{{repo_root}}/scripts/verify_saved_fem_archive_roundtrip.py" --repo-root "{{repo_root}}"
+
 # Source check for truthful local resource capacity discovery and publication.
 check-api-resource-pool:
     {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --route api-resource-pool-check --repo-root "{{repo_root}}"

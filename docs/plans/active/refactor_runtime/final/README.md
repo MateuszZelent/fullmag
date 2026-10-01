@@ -15,6 +15,11 @@ dlatego nie podnosi procentów P3/P5.
 
 ## Dokumenty finalne
 
+Checkpoint 01.10.2026: [P6-61 — trasa kontroli archiwum FEM](p6/61-saved-fem-archive-roundtrip-route.md)
+przygotowuje izolowany export/import bez buildu/solvera. Build 189 ma terminalny
+sukces i 113 zweryfikowanych artefaktów dla P6-55; build 191 failed, 192 czeka.
+Actual roundtrip nadal NOT VERIFIED; P6 około 52%, cały plan około 49%.
+
 Checkpoint 01.10.2026: [P6-60 — bramka zapisanego snapshotu FEM](p6/60-saved-native-snapshot-integrity-gate.md)
 udostępnia kontrolę integralności dla dokładnego historycznego źródła,
 bez zmiany sesji. Source check PASS; wykonanie i archive roundtrip otwarte.

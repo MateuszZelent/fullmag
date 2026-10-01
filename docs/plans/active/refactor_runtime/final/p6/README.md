@@ -7,6 +7,10 @@ bounded data plane oraz jeden frontend analityczny oparty o pinned source.
 
 ## Przyrosty
 
+[P6-61 — trasa kontroli archiwum FEM](61-saved-fem-archive-roundtrip-route.md)
+— frozen kopia, native read lease, Archive export/import, receipt comparison
+i kontrolowana korupcja chunku; rzeczywisty roundtrip nadal otwarty.
+
 [P6-60 — bramka integralności zapisanego snapshotu FEM](60-saved-native-snapshot-integrity-gate.md)
 — read-only kontrola exact owner i historycznej próby, pełnego pola,
 native map oraz indexed geometry; runtime i FMS roundtrip otwarte.
