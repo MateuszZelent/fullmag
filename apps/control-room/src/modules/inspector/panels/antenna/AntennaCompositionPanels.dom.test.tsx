@@ -801,6 +801,13 @@ describe("AntennaCompositionPanel runtime results", () => {
       expect(container.textContent).toContain("Stage assetsasset-1");
       expect(container.textContent).toContain("Stage reusesolution-1: published");
       expect(container.textContent).toContain("Stage manifestsmanifest.json");
+      expect(container.textContent).toContain("Requested executionbackend=fem · device=auto · precision=double · mode=strict");
+      expect(container.textContent).toContain("Resolved executionbackend=fem · device=cpu · precision=double · mode=strict");
+      expect(container.textContent).toContain("Gauge policyzero_mean");
+      expect(container.textContent).toContain("Port port-1 measured current2.0000e+0 A");
+      expect(container.textContent).toContain("Port port-1 normalization1.0000e+0 A");
+      expect(container.textContent).toContain("Port port-1 current certificatesha256:certificate");
+      expect(container.textContent).toContain("Port port-1 magnetic basisA/m/A · 6 values");
       expect(findGroupBadge(container, "ready")).toBeDefined();
       mocks.fieldSolution.data = { ...fieldSolutionFixture(), content_digest: "sha256:other" };
       await act(async () => root.render(
@@ -808,6 +815,7 @@ describe("AntennaCompositionPanel runtime results", () => {
       ));
       expect(container.textContent).toContain("Runtime resultidentity mismatch");
       expect(container.textContent).not.toContain("Published solutionsolution-1");
+      expect(container.textContent).not.toContain("Port port-1 measured current");
       expect(findGroupBadge(container, "stale result")).toBeDefined();
       mocks.fieldSolution.data = fieldSolutionFixture();
       mocks.stageOutputCatalog.status = "loading";
@@ -839,7 +847,17 @@ function fieldSolutionFixture(): AntennaFieldSolutionResource {
   return {
     asset_id: "asset-1",
     assumptions: [],
-    bases: [],
+    bases: [{
+      port_mode_id: "port-1",
+      measured_positive_terminal_current_a: 2,
+      normalization_current_a: 1,
+      normalization_scale: 0.5,
+      current_balance_certificate_digest: "sha256:certificate",
+      electric_potential_per_ampere: { layout: "scalar", path: "potential.f64le", scalar_type: "f64", sha256: "sha256:potential", unit: "V/A", value_count: 2 },
+      current_density_per_ampere: { layout: "xyz", path: "current.f64le", scalar_type: "f64", sha256: "sha256:current-density", unit: "A/m^2/A", value_count: 6 },
+      magnetic_field_per_ampere: { layout: "xyz", path: "field.f64le", scalar_type: "f64", sha256: "sha256:field-basis", unit: "A/m/A", value_count: 6 },
+      quadrature_diagnostics: {},
+    }],
     component: "vector_basis",
     conductor_positions: {
       layout: "xyz",
@@ -856,8 +874,8 @@ function fieldSolutionFixture(): AntennaFieldSolutionResource {
     material_revision: "material-1",
     mesh_digest: "mesh-1",
     quantity: "H_ant_basis",
-    requested_execution: {},
-    resolved_execution: {},
+    requested_execution: { discretization: "fem", device: "auto", precision: "double", execution_mode: "strict" },
+    resolved_execution: { discretization: "fem", device: "cpu", precision: "double", execution_mode: "strict" },
     resource_id: "antenna/field-solution/solution-1",
     sample_positions: {
       layout: "xyz",

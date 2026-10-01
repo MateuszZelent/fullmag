@@ -103,6 +103,22 @@ function numberValue(value: unknown, unit = ""): string {
     : `unavailable${unit ? ` ${unit}` : ""}`;
 }
 
+function executionValue(value: unknown): string {
+  const execution = recordValue(value);
+  if (!execution) return "unavailable";
+  const fields = [
+    ["backend", execution.discretization ?? execution.backend],
+    ["device", execution.device],
+    ["precision", execution.precision],
+    ["mode", execution.execution_mode],
+  ];
+  return fields
+    .filter((field): field is [string, string] =>
+      typeof field[1] === "string" && field[1].length > 0)
+    .map(([label, field]) => `${label}=${field}`)
+    .join(" · ") || "unavailable";
+}
+
 function targetValue(target: AntennaTarget): string {
   if (target.kind === "global") return "global";
   if (target.kind === "object") return `object:${target.object_id}`;
@@ -672,6 +688,9 @@ function fieldSolutionRuntimeRows(
     { label: "Asset", value: data.asset_id, mono: true },
     { label: "Content digest", value: data.content_digest, mono: true },
     { label: "Quantity", value: `${data.quantity} / ${data.component}` },
+    { label: "Requested execution", value: executionValue(data.requested_execution) },
+    { label: "Resolved execution", value: executionValue(data.resolved_execution) },
+    { label: "Gauge policy", value: data.gauge_policy },
     {
       label: "Field signature",
       value: data.signatures.field_solution_signature,
@@ -686,6 +705,13 @@ function fieldSolutionRuntimeRows(
       label: "Sample payload",
       value: `${data.sample_positions.value_count} values · ${data.sample_positions.path}`,
     },
+    ...data.bases.flatMap((basis) => [
+      { label: `Port ${basis.port_mode_id} measured current`, value: numberValue(basis.measured_positive_terminal_current_a, "A") },
+      { label: `Port ${basis.port_mode_id} normalization`, value: numberValue(basis.normalization_current_a, "A") },
+      { label: `Port ${basis.port_mode_id} scale`, value: numberValue(basis.normalization_scale) },
+      { label: `Port ${basis.port_mode_id} current certificate`, value: basis.current_balance_certificate_digest, mono: true },
+      { label: `Port ${basis.port_mode_id} magnetic basis`, value: `${basis.magnetic_field_per_ampere.unit} · ${basis.magnetic_field_per_ampere.value_count} values` },
+    ]),
   );
   return rows;
 }
