@@ -57,8 +57,12 @@ export function SolvedAntennaDriveEditor({ driveId, scene, status, refetch }: Pr
       : status === "ready" && validRevision && revision !== conflict.baseRevision
         ? "refetched"
         : "refreshing"
+    : conflict?.phase === "rebased" && revision !== conflict.baseRevision
+      ? "conflict"
     : conflict?.phase;
-  const feedback = feedbackState?.id === driveId ? feedbackState.message : null;
+  const feedback = conflict?.phase === "rebased" && conflictPhase === "conflict"
+    ? "Scene changed again after rebase. Refetch and rebase the draft before saving."
+    : feedbackState?.id === driveId ? feedbackState.message : null;
   const canSave = status === "ready" && validRevision && !pending &&
     (!conflict || conflictPhase === "rebased");
   const dirtyKeySet = new Set(local?.id === driveId ? local.dirtyKeys : []);
@@ -88,10 +92,10 @@ export function SolvedAntennaDriveEditor({ driveId, scene, status, refetch }: Pr
   }
 
   function rebaseDraft() {
-    if (!initial || !local || local.id !== driveId || conflictPhase !== "refetched") return;
+    if (!initial || !local || local.id !== driveId || conflictPhase !== "refetched" || !validRevision || typeof revision !== "number") return;
     const edited = Object.fromEntries(local.dirtyKeys.map((key) => [key, local.draft[key]])) as Partial<SolvedDriveDraft>;
     setLocal({ ...local, draft: { ...initial, ...edited } });
-    setConflictState({ ...conflict!, phase: "rebased" });
+    setConflictState({ ...conflict!, baseRevision: revision, baseDraft: initial, phase: "rebased" });
     setFeedbackState({ id: driveId, message: "Draft rebased onto the latest scene. Review and retry Save." });
   }
 

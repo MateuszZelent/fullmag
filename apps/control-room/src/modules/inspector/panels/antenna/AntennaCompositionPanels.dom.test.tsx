@@ -355,7 +355,7 @@ describe("AntennaCompositionPanel runtime results", () => {
         waveform: { kind: "constant" }, activation: { kind: "all_time_evolution" },
       }],
     } as unknown as SceneResource;
-    mocks.commitTransaction.mockRejectedValueOnce({ status: 409 }).mockResolvedValueOnce({ scene_revision: 6 });
+    mocks.commitTransaction.mockRejectedValueOnce({ status: 409 }).mockResolvedValueOnce({ scene_revision: 8 });
     const dom = installSimulationPreparationTestDom();
     const container = dom.document.createElement("div");
     const root = createRoot(container as unknown as Element);
@@ -390,13 +390,28 @@ describe("AntennaCompositionPanel runtime results", () => {
       expect(container.textContent).toContain("Server peakCurrentA2");
       expect(container.textContent).toContain("Draft peakCurrentA3");
       await act(async () => find("BUTTON", "Rebase Draft").dispatchEvent(new TestEvent("click", { bubbles: true })));
+      mocks.scene.data = { ...mocks.scene.data!, revision: 6 } as SceneResource;
+      await act(async () => root.render(<AntennaCompositionPanel kind="drive" selection={driveSelection()} />));
+      expect(container.textContent).toContain("Scene changed again after rebase");
+      await act(async () => find("BUTTON", "Retry Save").dispatchEvent(new TestEvent("click", { bubbles: true })));
+      expect(mocks.commitTransaction).toHaveBeenCalledTimes(1);
+      await act(async () => find("BUTTON", "Refetch Scene").dispatchEvent(new TestEvent("click", { bubbles: true })));
+      mocks.scene.data = {
+        ...mocks.scene.data!, revision: 7,
+        solved_antenna_drives: [{
+          ...mocks.scene.data!.solved_antenna_drives![0],
+          waveform: { kind: "sinusoidal", frequency_hz: 1e9, phase_rad: 0.8, offset: 0.3 },
+        }],
+      } as SceneResource;
+      await act(async () => root.render(<AntennaCompositionPanel kind="drive" selection={driveSelection()} />));
+      await act(async () => find("BUTTON", "Rebase Draft").dispatchEvent(new TestEvent("click", { bubbles: true })));
       await act(async () => find("BUTTON", "Retry Save").dispatchEvent(new TestEvent("click", { bubbles: true })));
       expect(mocks.commitTransaction).toHaveBeenNthCalledWith(2, {
-        base_revision: 5,
+        base_revision: 7,
         kind: "merge_patch",
         merge_patch: { solved_antenna_drives: [expect.objectContaining({
           peak_current_a: 3,
-          waveform: { kind: "sinusoidal", frequency_hz: 1e9, phase_rad: 0.7, offset: 0.2 },
+          waveform: { kind: "sinusoidal", frequency_hz: 1e9, phase_rad: 0.8, offset: 0.3 },
         })] },
       });
     } finally {
