@@ -7,6 +7,10 @@ bounded data plane oraz jeden frontend analityczny oparty o pinned source.
 
 ## Przyrosty
 
+[P6-62 — aktualność źródeł natywnego buildu](62-managed-native-source-freshness.md)
+— usunięcie przyczyny wyboru starych zależności Cargo po materializacji
+kapsuły; testy Python PASS, managed build po poprawce otwarty.
+
 [P6-61 — trasa kontroli archiwum FEM](61-saved-fem-archive-roundtrip-route.md)
 — frozen kopia, native read lease, Archive export/import, receipt comparison
 i kontrolowana korupcja chunku; rzeczywisty roundtrip nadal otwarty.

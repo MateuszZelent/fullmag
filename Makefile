@@ -114,6 +114,8 @@ install-cli-dev: FULLMAG_BUILD_INCREMENTAL=1
 install-cli-static: FULLMAG_BUILD_INCREMENTAL=0
 
 install-cli install-cli-dev install-cli-static:
+	@set -e
+	python3 scripts/refresh_managed_source_mtimes.py
 	mkdir -p .fullmag/local
 	@set -e; \
 	cmake_bin=""; \

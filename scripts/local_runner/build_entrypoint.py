@@ -328,13 +328,15 @@ def materialize_capsule(manifest: Mapping[str, Any], source: Path, workspace: Pa
             if child.is_symlink():
                 raise BuildEntryPointError(f"source capsule contains a symlink: {child}")
             if child.is_dir():
-                shutil.copytree(child, destination, copy_function=shutil.copy2)
+                # Capsules may predate a previous job's Cargo fingerprints.
+                # Keep bytes/modes, but give the private source fresh mtimes.
+                shutil.copytree(child, destination, copy_function=shutil.copy)
                 # Only the private copy is writable. Never recurse into the
                 # persistent mountpoints or change the readonly capsule.
                 for current, _, _ in os.walk(destination, followlinks=False):
                     _private_directory(Path(current), 'materialized source directory')
             elif child.is_file():
-                shutil.copy2(child, destination)
+                shutil.copy(child, destination)
             else:
                 raise BuildEntryPointError(f"source capsule contains unsupported entry: {child}")
     except OSError as error:

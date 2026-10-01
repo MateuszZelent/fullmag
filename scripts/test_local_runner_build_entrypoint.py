@@ -241,6 +241,8 @@ class BuildEntryPointTests(unittest.TestCase):
             )
 
     def test_materialization_preserves_mode_and_does_not_create_git(self) -> None:
+        original = self.source / "tree" / "README.txt"
+        entrypoint.os.utime(original, (1000, 1000))
         manifest = entrypoint.verify_source(self.source, self.source_digest)
         entrypoint.materialize_capsule(manifest, self.source, self.workspace)
         source_mode = stat.S_IMODE((self.source / "tree" / "README.txt").stat().st_mode)
@@ -249,6 +251,8 @@ class BuildEntryPointTests(unittest.TestCase):
             self.assertEqual(target_mode, 0o755)
         self.assertEqual((self.workspace / "README.txt").read_text(encoding="utf-8"), "immutable source\n")
         self.assertFalse((self.workspace / ".git").exists())
+        self.assertGreater((self.workspace / "README.txt").stat().st_mtime, 1000)
+        self.assertEqual(original.stat().st_mtime, 1000)
 
     def test_materialization_makes_private_dirs_writable_without_changing_capsule(self) -> None:
         nested = self.source / "tree" / "readonly" / "nested"
