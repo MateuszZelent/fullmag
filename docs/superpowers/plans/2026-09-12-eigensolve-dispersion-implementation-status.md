@@ -5,6 +5,7 @@
 - `validate_shared_domain_modal_scope` dopuszcza skończone zerowe pole: brak pola statycznego nie dowodzi braku krzywizny. Ujemne/NaN/Inf amplitudy odrzucane; publiczny Ku guard zachowany.
 - Niezależny rachunek energii:4testy+12podprzypadkówPASS. Dwie regresje Rust przygotowane, nie uruchomione;2pliki parserPASS. Nota/source-map i public examples guardPASS. Runtime tej poprawki NOT VERIFIED, bo kapsuła188 jej nie zawiera.
 - Ten sam kontroler90201 i solver7df4be7c5ace nadal liczą Gamma, base subwindow4/50; aktywnośćCPU potwierdzona. Bez nowej zaakceptowanej częstotliwości, bez restartu.
+- Przyrost commit/push ab64bac46b7ceda295812da93244b2eba81174e4; niezależny review Rust/Python bez P1/P2. Uwagi do położenia wiersza źródeł w nocie poprawiono.
 - Audyt: docs/audits/2026-10-01-zero-field-modal-scope.md. Następnie canonical/raw material artifact migration oraz cały S00–S12: aktualne±k, zbieżność, COMSOL A1, interakcje, waveguide, GPU, browser i integracja.
 
 

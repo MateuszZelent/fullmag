@@ -41,3 +41,12 @@ artefaktów; pełne runtime Ku po odblokowaniu; aktualne DE/BV signed26punktów
 plus4kontrole grubości; residuale, profile, phase seam, phi/H_demag i branch;
 zbieżność, COMSOL A1, pozostałe interakcje, waveguide, GPU, browser, review,
 PR/integracja. Cały plan S00–S12 pozostaje aktywny.
+
+## Review i commit
+
+Przyrost źródeł zapisany i wysłany jako
+ab64bac46b7ceda295812da93244b2eba81174e4. Niezależne review nie znalazło
+P1/P2 w poprawce Rust/Python; wskazało błędne położenie wiersza noty.
+Wiersz przeniesiono do właściwego indeksu źródeł, sprawdzono siedem kolumn
+i dodano niezmienny link do commita. Review i poprawka dokumentacji nie
+zastępują kontroli typów ani managed FEM runtime.
