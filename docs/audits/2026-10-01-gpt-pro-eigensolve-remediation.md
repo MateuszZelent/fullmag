@@ -33,3 +33,25 @@ Zachować w planie: canonical/raw identity (źródła wdrożone, runtime oczekuj
 S00–S12 pozostają otwarte. Dokument rejestruje stan źródeł i plan odbioru; nie promuje solvera do scientifically-qualified. F02 ma poprawkę źródeł i przygotowane regresje; F03 poprawkę funkcji i wykonany direct source check. F01 pozostaje otwarty; managed runtime/browser F02/F03 nadal wymagają odrębnego dowodu. Sam dokument nie jest dowodem wykonania API lub solvera.
 
 SHA256 oryginalnego audytu: f266262a8828541fdecc5e50a9705bd7bc59046df61b55d3645b0da8e52a81c4
+
+## F01 — niezależne potwierdzenie, 2026-10-01
+
+Review źródeł potwierdził order1 w `assemble_native_magnetic_a_qq` i tę samą
+zaniżoną regułę w `independent_prism_exchange_oracle`: obecny test jest kołowy.
+Dla afinicznego prism6 skalarna macierz ma rangę najwyżej3 zamiast5. Wektor
+`[0,1,-1,0,-1,1]` ma przy regule jednopunktowej energię0, choć niezależna całka
+`∫|grad u|² dV=2/3` na jednostkowym pryzmacie. Dla K00 dokładne5/12 kontra11/36.
+
+Poprawka musi zmienić kwadraturę i niezależny oracle razem. Minimalny rząd dla
+afinicznego prism6 wynosi2; kandydat produkcyjny to wspólna reguła4 używana już
+w pozostałych blokach. Dla zdeformowanych elementów potrzebna jest osobna
+zbieżność4→5/7. Zachować CalcPhysDShape, Jacobian, mapy i transport tangent-frame.
+Regresje: exact matrix/rank5/constant-only nullspace/hourglass energy/PSD,
+orientacje i mapy oraz gauge k0 kontra invertible nonzero-k. F01 pozostaje
+OPEN; powyższa diagnoza nie jest naprawą ani natywnym wykonaniem.
+
+Niezależna kontrola matematyczna w Python stdlib/Fraction PASS: całkowanie
+momentów `x^i y^j z^l = i!j!/(i+j+2)!/(l+1)` potwierdziło rank5/rank3,
+stały nullspace, energię2/3 kontra0 i K005/12 kontra11/36. To dowód referencji
+analitycznej, nie wykonania produkcyjnego MFEM. Próba Sympy nie wystartowała
+(brak modułu); nie instalowano zależności ani nie zmieniano runtime.

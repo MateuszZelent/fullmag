@@ -4471,3 +4471,18 @@ Review EPS po poprawkach: brak blokera produkcyjnego. Przygotowana regresja
 akceptuje obie rzeczywiste przyczyny niepełnego EPS (diverged/not_converged),
 zamiast narzucać kod zależny od wersji SLEPc. Wymuszenie braku zbieżności przez
 limit jednej iteracji pozostaje do potwierdzenia natywnie; nie jest dowodem PASS.
+
+
+Checkpoint publikacji EPS: commit `1b017436f0738e24e84962b24b08cb30b4c32d3c`,
+branch `codex/eigensolve-dispersion-plan-20260912`; push oraz pełny SHA remote
+potwierdzone. 18 kontroli PASS i source-map/diff checks PASS. Native/runtime
+pozostają NOT VERIFIED. Końcowe review nie znalazło blokera produkcyjnego.
+Przygotowana regresja dopuszcza rzeczywiste diverged/not_converged; jej zachowanie
+na limicie jednej iteracji wymaga późniejszego natywnego wykonania.
+
+Kontroler 90201 i kontener 7df4be7c5ace sprawdzone live: solver pracuje około
+3h14min, CPU około213%; Γ refinement25/50, bez terminalnego nowego punktu.
+Nie zmieniono kapsuły #188 ani kolejki. F01 w implementacji w osobnych plikach;
+R4 w niezależnym review różnic. Robin open-axis helper jest już wspólny.
+Modal mixed-mesh fingerprint v3 i osobny handoff source identity mają pierwszeństwo
+przed starszą K0-only propozycją fingerprint v6; nie kopiować jej mechanicznie.
