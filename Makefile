@@ -259,11 +259,18 @@ install-cli install-cli-dev install-cli-static:
 	@mv -f .fullmag/local/bin/fullmag-api-accepted-worker.new .fullmag/local/bin/fullmag-api-accepted-worker
 	@cp "$${cargo_target_dir}/release/fullmag-api-accepted-supervisor" .fullmag/local/bin/fullmag-api-accepted-supervisor.new
 	@mv -f .fullmag/local/bin/fullmag-api-accepted-supervisor.new .fullmag/local/bin/fullmag-api-accepted-supervisor
+	@for binary in fullmag-api-accepted-scheduler fullmag-api-resource-pool fullmag-api-accepted-fem-preparer fullmag-api-accepted-fem-preparation-scheduler fullmag-api-preparation-resource-pool; do \
+		cp "$${cargo_target_dir}/release/$$binary" ".fullmag/local/bin/$$binary.new" || exit $$?; \
+		mv -f ".fullmag/local/bin/$$binary.new" ".fullmag/local/bin/$$binary" || exit $$?; \
+	done
 	@if command -v patchelf >/dev/null 2>&1; then \
 		patchelf --set-rpath '$$ORIGIN/../lib' .fullmag/local/bin/fullmag-bin; \
 		patchelf --set-rpath '$$ORIGIN/../lib' .fullmag/local/bin/fullmag-api; \
 		patchelf --set-rpath '$$ORIGIN/../lib' .fullmag/local/bin/fullmag-api-accepted-worker; \
 		patchelf --set-rpath '$$ORIGIN/../lib' .fullmag/local/bin/fullmag-api-accepted-supervisor; \
+		for binary in fullmag-api-accepted-scheduler fullmag-api-resource-pool fullmag-api-accepted-fem-preparer fullmag-api-accepted-fem-preparation-scheduler fullmag-api-preparation-resource-pool; do \
+			patchelf --set-rpath '$$ORIGIN/../lib' ".fullmag/local/bin/$$binary" || exit $$?; \
+		done; \
 	fi
 		@printf '%s\n' '#!/usr/bin/env bash' \
 			'SELF_DIR="$$(cd "$$(dirname "$$0")" && pwd)"' \

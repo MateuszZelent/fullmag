@@ -256,3 +256,7 @@ pamięci i wszystkich lane'ów pozostają otwarte. P6 wynosi **52%**.
 64b. [Luka accepted FEM execution](64b-accepted-fem-execution-gap.md)
     — preparation nie jest wykonaniem solvera; brakujące binaria i producer
     accepted FEM pozostawiają P6-60/P6-61 otwarte.
+
+64c. [Binaria accepted flow w pakiecie managed](64c-managed-accepted-runtime-binaries.md)
+    — pięć pominiętych programów w instalacji/rpath; kontrola źródeł PASS,
+    odbiór nowego pakietu i runtime pozostają otwarte.
