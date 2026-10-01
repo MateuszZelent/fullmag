@@ -49,8 +49,22 @@ częściowego zapisu po błędnym późniejszym węźle lub connectivity mismatc
 Unit tests nie są kompilowane ani uruchamiane zgodnie z aktualnym zakazem.
 Domyślny production source check nie kompiluje C++ ani native Rust feature.
 
-Build 190 jest queued na P6-57. Nie kwalifikuje nowego ABI P6-59.
-Nowe immutable źródło wymaga własnej produkcyjnej bramki kompilacji.
+Implementacja: `e56041781b439b23f47bbcceed43aaf54f39c708`.
+Zlecono build **191**, `78d0c52ecb0245aa85f9411d76f8b914`, profil
+`fem-cpu-release`, źródło dokładnie powyższego commita, bez dirty paths.
+Request key: `9eeaf6436de34768936cd5e157dd9f84`.
+Source capsule SHA-256: `8e583a8371eb895032100476ffa01bb70e217786917c450a40ad2e7204a8c853`.
+Native source snapshot SHA-256: `fa868082b2c122084adbe7ebf86ad347b92313fb6943efea0b093f07f6380e7c`.
+Odczyt po zgłoszeniu: **queued**, coordinator/exit code null.
+Native compilation oraz runtime: **NOT VERIFIED**.
+
+Starszy build 189 (`529ac93e81744c5faf50494306d50a11`) rozpoczął wykonanie
+i ma status **running**; pozostawiono go do zakończenia. Build 190
+(`c80236a8ce674d6e9709346363d86ea3`) rewalidowano jako nadal queued
+i anulowano dopiero po przyjęciu buildu 191. Stan końcowy 190: **cancelled**,
+coordinator/exit code null. Powód: zastąpienie starszych źródeł aktualnym
+commitem, nie timeout obserwatora ani błąd kompilacji. Nie zatrzymano
+żadnego wykonującego się zadania i nie usuwano jego danych.
 
 ## Pozostałe prace
 

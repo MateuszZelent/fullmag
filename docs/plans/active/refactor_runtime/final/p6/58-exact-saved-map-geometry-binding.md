@@ -49,6 +49,10 @@ Build 190 (`c80236a8ce674d6e9709346363d86ea3`) jest zleceniem natywnego
 P6-57 na `46636f3562d44afd74d3a6cd6f0585e2eab0c1a8`; queued nie kwalifikuje
 native ABI. P6-58 nie zmienia C++ ani feature-gated native wrappera.
 
+Aktualizacja P6-59: starszy build 189 running; build 190 cancelled jako
+zastąpiony nowszym źródłem, build 191 queued. Szczegóły w
+[P6-59](59-native-indexed-geometry-projection.md).
+
 ## Pozostałe prace
 
 Managed native compilation/runtime, dowód live geometry/index association,

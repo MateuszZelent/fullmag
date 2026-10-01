@@ -90,6 +90,10 @@ Nie anulowano wcześniejszego zadania ani nie zatrzymano istniejącego kontenera
 dyspersji, na który czekał koordynator. Build 190 obejmuje nowe źródła;
 nie jest ponowieniem tego samego requestu po timeout obserwatora.
 
+Aktualizacja P6-59: build 189 przeszedł do running. Nadal queued build 190
+zastąpiono nowym źródłem i anulowano po przyjęciu buildu 191. Aktualne
+dowody i identyfikatory: [P6-59](59-native-indexed-geometry-projection.md).
+
 ## Dalsze prace
 
 Uzyskać kompilację nowego immutable commita przez kolejkę i wykonać managed
