@@ -2141,11 +2141,8 @@ async fn synchronize_observation_quantities(state: &Arc<AppState>) -> Result<u64
     let mut selection = state.current_display_selection.write().await;
     let presentation = state.current_display_presentation.read().await;
     let live_snapshot = state.current_live_state.read().await;
-    let visualization = build_visualization_state_response(
-        &selection,
-        &presentation,
-        live_snapshot.as_ref(),
-    );
+    let visualization =
+        build_visualization_state_response(&selection, &presentation, live_snapshot.as_ref());
     let observation_quantities = observation_quantities_for_visualization_state(&visualization);
     // Every caller has already advanced the display revision for the
     // mutation that led here. Reconcile the derived demand under that same
@@ -2199,9 +2196,7 @@ fn observation_quantities_for_visualization_state(
     canonical.observation_quantities
 }
 
-fn target_requests_spatial_observation(
-    settings: &VisualizationResolvedTargetSettings,
-) -> bool {
+fn target_requests_spatial_observation(settings: &VisualizationResolvedTargetSettings) -> bool {
     settings.visible
         && ((settings.surface_visible
             && !matches!(settings.surface_color_source, SurfaceColorSource::Solid))

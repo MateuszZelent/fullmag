@@ -89,7 +89,7 @@ export function frequencySeriesRenderModel(
     },
     series: compatible.map((entry) => ({
       id: entry.id,
-      kind: "line",
+      kind: entry.kind ?? "line",
       label: entry.label,
       points: entry.points,
       unit: entry.unit,

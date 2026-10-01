@@ -751,6 +751,8 @@ function fieldSweepModeFromPayload(
   const modeId = nonEmptyString(mode.mode_id);
   const modeFieldId = nonEmptyString(mode.mode_field_id);
   const modeFieldResourceKey = nonEmptyString(mode.mode_field_resource_key);
+  const explicitModeFieldAvailable = (mode as { mode_field_available?: unknown })
+    .mode_field_available;
   const modeSourceRevision = nonEmptyString(mode.source_revision);
   const fieldStatus = normalizedStatusToken(mode.field_status);
   const sourceRevisionMatches = sourceRevision == null || modeSourceRevision === sourceRevision;
@@ -764,6 +766,7 @@ function fieldSweepModeFromPayload(
     hasStableModeIdentity
       && sourceRevisionMatches
       && (fieldStatus === "" || fieldStatus === "ready")
+      && explicitModeFieldAvailable !== false
       && modeFieldId
       && modeFieldResourceKey,
   );

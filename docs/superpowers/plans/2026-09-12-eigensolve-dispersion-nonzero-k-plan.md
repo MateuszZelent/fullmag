@@ -310,6 +310,7 @@ Szczegóły źródeł, kontrprzykładu i akceptacji: [R01–R05](2026-09-13-eige
 - [x] S05.R02a: owned bloki i helper rekonstrukcji kompleksowego potencjału; izolowany test passed.
 - [x] S05.R02b1: podłączenie dense nearest/window do rekonstrukcji real-split i kontroli oryginalnego równania magnetycznego; natywny JSON per-mode. Test oracle i diagnostyczna kompilacja adaptera passed.
 - [ ] S05.R02b2: rozwinięcie na pełnej siatce, geometryczne BC, binary publikacja runnera, contour i managed/physics V9.
+- [ ] S05.R08: zweryfikować managed mapowanie lokalnych ram `e1/e2` na periodicznych szwach; implementacja `T_member^T T_rep` i regresja są zapisane, lecz regresja nie została skompilowana ani uruchomiona. Obsługa niejednostkowego fizycznego `Q` wymaga osobnego payloadu i certyfikatu, nie wynika z tej poprawki.
 - [x] S12.R03a: recepta obejmuje siedem kontraktów Floquet, w tym modal/cross-section; składnia i zgodność targetów sprawdzone.
 - [ ] S12.R03b (P1): zgodny klient/profil kolejki, dokładny receipt MFEM/SLEPc i scenariusz f(k).
 - [ ] S03.R04/S04.R04 (P1): pełny native problem i skalowalny operator demag-k.

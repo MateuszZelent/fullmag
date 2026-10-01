@@ -156,7 +156,10 @@ pub(crate) fn offset_step_update(
         status.source_step = status.source_step.saturating_add(step_offset);
     }
     for field in update.preview_field.iter_mut().chain(
-        update.cached_preview_fields.iter_mut().flat_map(|fields| fields.iter_mut()),
+        update
+            .cached_preview_fields
+            .iter_mut()
+            .flat_map(|fields| fields.iter_mut()),
     ) {
         // Explicit capture coordinates are stage-local, just like StepStats.
         // Legacy unstamped fields inherit the adjusted stats at ingestion.

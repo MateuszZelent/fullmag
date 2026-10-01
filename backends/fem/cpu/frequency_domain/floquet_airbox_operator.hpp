@@ -83,6 +83,10 @@ struct FloquetAirboxSharedDomainBlockRequest {
     const FrequencyDomainFloquetPeriodicPair *periodic_pairs = nullptr;
     std::uint64_t periodic_pair_count = 0;
     std::array<double, 3> k_rad_per_m{};
+    // Numerical tolerance for validating equilibrium tangent frames and the
+    // coordinate rotation between periodic members of the same magnetic class;
+    // must be finite and in (0, 1).
+    double tangent_frame_tolerance = 1.0e-8;
     FloquetAirboxBoundaryKind boundary_kind = FloquetAirboxBoundaryKind::unknown;
     double robin_beta = 0.0;
     mfem::Array<int> *robin_boundary_marker = nullptr;
@@ -100,6 +104,11 @@ struct FloquetAirboxSharedDomainBlockResult {
     std::unique_ptr<mfem::ComplexSparseMatrix> scalar_constraint{};
     std::unique_ptr<mfem::ComplexSparseMatrix> tangent_source{};
     std::unique_ptr<mfem::ComplexSparseMatrix> tangent_constraint{};
+    // Unit-amplitude global-y/global-z perturbations projected into the
+    // representative tangent frames. The Floquet constraint supplies the
+    // phase on periodic members when the production operator is applied.
+    std::vector<double> uniform_transverse_probe_q_y{};
+    std::vector<double> uniform_transverse_probe_q_z{};
     char error_message[256]{};
 };
 

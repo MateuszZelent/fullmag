@@ -249,22 +249,47 @@ fn finite_frequency_score_values(
     score.is_finite().then(|| score.clamp(0.0, 1.0))
 }
 
-fn modal_overlap_views(
-    prev: TrackingModeView<'_>,
-    current: TrackingModeView<'_>,
-) -> Option<f64> {
+fn modal_overlap_views(prev: TrackingModeView<'_>, current: TrackingModeView<'_>) -> Option<f64> {
+    match (prev.consistent_p1_metric, current.consistent_p1_metric) {
+        (Some(a), Some(b)) => {
+            if !a.compatible(b)
+                || prev.node_mass_weights.is_some()
+                || current.node_mass_weights.is_some()
+            {
+                return None;
+            }
+            let normalize = |vector: &[Complex64]| -> Option<Vec<Complex64>> {
+                if vector
+                    .iter()
+                    .any(|v| !v.re.is_finite() || !v.im.is_finite())
+                {
+                    return None;
+                }
+                let scale = vector
+                    .iter()
+                    .map(|value| value.norm())
+                    .fold(0.0_f64, f64::max);
+                if !scale.is_finite() || scale <= 0.0 {
+                    return None;
+                }
+                Some(vector.iter().map(|v| *v / scale).collect())
+            };
+            let left = a.embed(&normalize(prev.reduced_vector?)?)?;
+            let right = b.embed(&normalize(current.reduced_vector?)?)?;
+            return normalized_complex_overlap(&left, &right);
+        }
+        (Some(_), None) | (None, Some(_)) => return None,
+        (None, None) => {}
+    }
     match (prev.reduced_vector, current.reduced_vector) {
         (Some(a), Some(b)) => match (prev.node_mass_weights, current.node_mass_weights) {
-            (Some(weights_a), Some(weights_b)) => match mass_weighted_overlap_outcome(
-                a,
-                b,
-                weights_a,
-                weights_b,
-            ) {
-                MassWeightedOverlapOutcome::Computed(value) => Some(value),
-                MassWeightedOverlapOutcome::LengthMismatch
-                | MassWeightedOverlapOutcome::NotComputable => None,
-            },
+            (Some(weights_a), Some(weights_b)) => {
+                match mass_weighted_overlap_outcome(a, b, weights_a, weights_b) {
+                    MassWeightedOverlapOutcome::Computed(value) => Some(value),
+                    MassWeightedOverlapOutcome::LengthMismatch
+                    | MassWeightedOverlapOutcome::NotComputable => None,
+                }
+            }
             (None, None) => normalized_complex_overlap(a, b),
             // A mass metric present on only one side cannot be compared
             // physically. Do not hide the asymmetric artifact contract by
@@ -277,6 +302,91 @@ fn modal_overlap_views(
 
 fn modal_overlap(prev: &SingleKModeResult, current: &SingleKModeResult) -> Option<f64> {
     modal_overlap_views(mode_view(prev), mode_view(current))
+}
+
+/// Describe the metric that actually produced a branch edge.  A present
+/// `overlap_prev` is not sufficient to call the score mass weighted: the
+/// tracker deliberately supports an unweighted vector overlap when neither
+/// side carries an FE mass metric, and a separate principal-angle transport
+/// for degenerate subspaces.
+pub(crate) fn tracking_score_source_for_modes(
+    previous: Option<&SingleKModeResult>,
+    current: Option<&SingleKModeResult>,
+    overlap_prev: Option<f64>,
+) -> &'static str {
+    let (Some(previous), Some(current)) = (previous, current) else {
+        return "modal_overlap_unavailable";
+    };
+
+    match (
+        previous.consistent_p1_metric.as_deref(),
+        current.consistent_p1_metric.as_deref(),
+    ) {
+        (Some(a), Some(b))
+            if a.compatible(b)
+                && previous.node_mass_weights.is_none()
+                && current.node_mass_weights.is_none() =>
+        {
+            return if overlap_prev.is_some() {
+                "modal_overlap_weighted_score"
+            } else if previous.reduced_vector.is_some() && current.reduced_vector.is_some() {
+                "modal_subspace_transport_score"
+            } else {
+                "frequency_score_fallback"
+            };
+        }
+        (None, None) => {}
+        _ => return "modal_overlap_unavailable",
+    }
+    if overlap_prev.is_some() {
+        return match (
+            previous.node_mass_weights.is_some(),
+            current.node_mass_weights.is_some(),
+        ) {
+            (true, true) => "modal_overlap_weighted_score",
+            (false, false) => "modal_overlap_unweighted_score",
+            (true, false) | (false, true) => "modal_overlap_unavailable",
+        };
+    }
+
+    if previous.reduced_vector.is_none() || current.reduced_vector.is_none() {
+        return "frequency_score_fallback";
+    }
+    if previous.node_mass_weights.is_some() && current.node_mass_weights.is_some() {
+        return "modal_subspace_transport_score";
+    }
+    "modal_overlap_unavailable"
+}
+
+/// Summarize per-point provenance without promoting unweighted overlap or
+/// subspace transport to the mass-weighted production acceptance source.
+pub(crate) fn tracking_score_source_summary(sources: &[&str]) -> (&'static str, bool) {
+    let saw_weighted = sources.contains(&"modal_overlap_weighted_score");
+    let saw_unweighted = sources.contains(&"modal_overlap_unweighted_score");
+    let saw_subspace = sources.contains(&"modal_subspace_transport_score");
+    let saw_fallback = sources.contains(&"frequency_score_fallback");
+    let modal_method_count =
+        usize::from(saw_weighted) + usize::from(saw_unweighted) + usize::from(saw_subspace);
+    let modal_available = modal_method_count > 0;
+
+    let summary = if modal_available && saw_fallback {
+        "mixed_modal_overlap_and_frequency_fallback"
+    } else if modal_method_count > 1 {
+        "mixed_modal_tracking_methods"
+    } else if saw_weighted {
+        "modal_overlap_weighted_score"
+    } else if saw_unweighted {
+        "modal_overlap_unweighted_score"
+    } else if saw_subspace {
+        "modal_subspace_transport_score"
+    } else if saw_fallback {
+        "frequency_score_fallback"
+    } else if sources.contains(&"modal_overlap_unavailable") {
+        "modal_overlap_unavailable"
+    } else {
+        "seed_only"
+    };
+    (summary, modal_available)
 }
 
 fn tracking_uses_frequency_fallback_views(
@@ -608,11 +718,7 @@ fn nearest_singleton_group(
         .filter_map(|entry_index| {
             let (_, real, imag) = *entries.get(entry_index)?;
             let distance = complex_frequency_distance(center.0, center.1, real, imag)?;
-            let score = finite_frequency_score_values(
-                center.0,
-                real,
-                frequency_window_hz,
-            )?;
+            let score = finite_frequency_score_values(center.0, real, frequency_window_hz)?;
             (score > 0.0).then_some((distance, entry_index))
         })
         .collect::<Vec<_>>();
@@ -694,8 +800,7 @@ fn candidate_groups_are_disjoint(
     lhs: &SubspaceClusterCandidate,
     rhs: &SubspaceClusterCandidate,
 ) -> bool {
-    !lhs
-        .branch_ids
+    !lhs.branch_ids
         .iter()
         .any(|branch_id| rhs.branch_ids.contains(branch_id))
         && !lhs
@@ -719,15 +824,18 @@ fn find_subspace_matches(
     let mut previous_entries = Vec::<(usize, f64, f64)>::new();
     let mut previous_sample_index = None;
     for branch in branches {
-        if !branch_is_eligible(result.samples.as_slice(), branch, sample_position, max_branch_gap) {
+        if !branch_is_eligible(
+            result.samples.as_slice(),
+            branch,
+            sample_position,
+            max_branch_gap,
+        ) {
             continue;
         }
         let Some(last_point) = branch.points.last() else {
             continue;
         };
-        if !last_point.frequency_real_hz.is_finite()
-            || !last_point.frequency_imag_hz.is_finite()
-        {
+        if !last_point.frequency_real_hz.is_finite() || !last_point.frequency_imag_hz.is_finite() {
             continue;
         }
         match previous_sample_index {
@@ -756,13 +864,7 @@ fn find_subspace_matches(
         .filter(|(_, mode)| {
             mode.frequency_real_hz.is_finite() && mode.frequency_imag_hz.is_finite()
         })
-        .map(|(mode_slot, mode)| {
-            (
-                mode_slot,
-                mode.frequency_real_hz,
-                mode.frequency_imag_hz,
-            )
-        })
+        .map(|(mode_slot, mode)| (mode_slot, mode.frequency_real_hz, mode.frequency_imag_hz))
         .collect::<Vec<_>>();
     let previous_clusters = frequency_clusters(&previous_entries);
     let current_clusters = frequency_clusters(&current_entries);
@@ -824,11 +926,9 @@ fn find_subspace_matches(
             if current_views.len() != current_cluster.len() {
                 continue;
             }
-            let Some(transport) = mass_weighted_subspace_transport(
-                &previous_views,
-                &current_views,
-                frequency_score,
-            ) else {
+            let Some(transport) =
+                mass_weighted_subspace_transport(&previous_views, &current_views, frequency_score)
+            else {
                 continue;
             };
             // The configured overlap floor is a principal-angle floor for a
@@ -907,11 +1007,9 @@ fn find_subspace_matches(
         if current_views.len() != current_cluster.len() {
             continue;
         }
-        let Some(transport) = mass_weighted_subspace_transport(
-            &previous_views,
-            &current_views,
-            frequency_score,
-        ) else {
+        let Some(transport) =
+            mass_weighted_subspace_transport(&previous_views, &current_views, frequency_score)
+        else {
             continue;
         };
         if transport.principal_minimum < cfg.overlap_floor {
@@ -994,11 +1092,9 @@ fn find_subspace_matches(
         if current_views.len() != current_group.len() {
             continue;
         }
-        let Some(transport) = mass_weighted_subspace_transport(
-            &previous_views,
-            &current_views,
-            frequency_score,
-        ) else {
+        let Some(transport) =
+            mass_weighted_subspace_transport(&previous_views, &current_views, frequency_score)
+        else {
             continue;
         };
         if transport.principal_minimum < cfg.overlap_floor {
@@ -1022,11 +1118,8 @@ fn find_subspace_matches(
         });
     }
 
-    let selected = assign_subspace_clusters(
-        previous_clusters.len(),
-        current_clusters.len(),
-        &candidates,
-    );
+    let selected =
+        assign_subspace_clusters(previous_clusters.len(), current_clusters.len(), &candidates);
     let mut selected_candidates = Vec::new();
     for candidate_index in selected {
         let Some(candidate) = candidates.get(candidate_index).cloned() else {
@@ -1227,43 +1320,43 @@ pub fn track_branches(result: &mut PathSolveResult, config: Option<&ModeTracking
             else {
                 continue;
             };
-            let (next_frame, edge_used_frequency_fallback, overlap_prev) =
-                if edge.subspace_transport {
-                    let frame = subspace_matches.iter().find_map(|cluster| {
-                        cluster
-                            .transport
-                            .assignments
-                            .iter()
-                            .find_map(|(previous_index, current_index)| {
-                                let branch_id = cluster.branch_ids.get(*previous_index).copied()?;
-                                let mode_slot = cluster.mode_slots.get(*current_index).copied()?;
-                                if branch_id != edge.branch_id || mode_slot != edge.mode_slot {
-                                    return None;
-                                }
-                                cluster
-                                    .transport
-                                    .transported_frames
-                                    .get(*previous_index)
-                                    .cloned()
-                                    .map(|vector| BranchTrackingFrame {
-                                        reduced_vector: Some(vector),
-                                        node_mass_weights: current_mode.node_mass_weights.clone(),
-                                    })
-                            })
-                    });
-                    (frame, false, None)
-                } else {
-                    let Some(previous_frame) = tracking_frames.get(edge.branch_id) else {
-                        continue;
-                    };
-                    let previous_view = previous_frame.view(last_point.frequency_real_hz);
-                    let current_view = mode_view(current_mode);
-                    (
-                        Some(BranchTrackingFrame::from_mode(current_mode)),
-                        tracking_uses_frequency_fallback_views(previous_view, current_view),
-                        modal_overlap_views(previous_view, current_view),
+            let (next_frame, edge_used_frequency_fallback, overlap_prev) = if edge
+                .subspace_transport
+            {
+                let frame = subspace_matches.iter().find_map(|cluster| {
+                    cluster.transport.assignments.iter().find_map(
+                        |(previous_index, current_index)| {
+                            let branch_id = cluster.branch_ids.get(*previous_index).copied()?;
+                            let mode_slot = cluster.mode_slots.get(*current_index).copied()?;
+                            if branch_id != edge.branch_id || mode_slot != edge.mode_slot {
+                                return None;
+                            }
+                            cluster
+                                .transport
+                                .transported_frames
+                                .get(*previous_index)
+                                .cloned()
+                                .map(|vector| BranchTrackingFrame {
+                                    reduced_vector: Some(vector),
+                                    node_mass_weights: current_mode.node_mass_weights.clone(),
+                                    consistent_p1_metric: current_mode.consistent_p1_metric.clone(),
+                                })
+                        },
                     )
+                });
+                (frame, false, None)
+            } else {
+                let Some(previous_frame) = tracking_frames.get(edge.branch_id) else {
+                    continue;
                 };
+                let previous_view = previous_frame.view(last_point.frequency_real_hz);
+                let current_view = mode_view(current_mode);
+                (
+                    Some(BranchTrackingFrame::from_mode(current_mode)),
+                    tracking_uses_frequency_fallback_views(previous_view, current_view),
+                    modal_overlap_views(previous_view, current_view),
+                )
+            };
             if next_frame.is_none() && edge.subspace_transport {
                 continue;
             }
@@ -1416,9 +1509,58 @@ mod tests {
             amplitude: None,
             phase: None,
             node_mass_weights: None,
+            consistent_p1_metric: None,
             component_participation:
                 crate::eigen::ModalParticipationObservable::unavailable_without_context("cpu"),
         }
+    }
+
+    #[test]
+    fn tracking_score_provenance_distinguishes_mass_metric_and_fallbacks() {
+        let mut previous = mode(
+            0,
+            1.0e9,
+            [
+                Complex64::new(1.0, 0.0),
+                Complex64::new(0.0, 0.0),
+                Complex64::new(0.0, 0.0),
+            ],
+        );
+        let mut current = previous.clone();
+
+        assert_eq!(
+            tracking_score_source_for_modes(Some(&previous), Some(&current), Some(0.9)),
+            "modal_overlap_unweighted_score"
+        );
+
+        previous.node_mass_weights = Some(vec![1.0]);
+        current.node_mass_weights = Some(vec![1.0]);
+        assert_eq!(
+            tracking_score_source_for_modes(Some(&previous), Some(&current), Some(0.9)),
+            "modal_overlap_weighted_score"
+        );
+        assert_eq!(
+            tracking_score_source_for_modes(Some(&previous), Some(&current), None),
+            "modal_subspace_transport_score"
+        );
+
+        let without_vector = frequency_only_mode(1, 1.0e9);
+        assert_eq!(
+            tracking_score_source_for_modes(Some(&without_vector), Some(&current), None),
+            "frequency_score_fallback"
+        );
+        assert_eq!(
+            tracking_score_source_summary(&[
+                "seed",
+                "modal_overlap_weighted_score",
+                "frequency_score_fallback",
+            ]),
+            ("mixed_modal_overlap_and_frequency_fallback", true)
+        );
+        assert_eq!(
+            tracking_score_source_summary(&["seed", "modal_overlap_unweighted_score"]),
+            ("modal_overlap_unweighted_score", true)
+        );
     }
 
     fn frequency_only_mode(raw_mode_index: usize, frequency_real_hz: f64) -> SingleKModeResult {
@@ -1446,6 +1588,7 @@ mod tests {
             amplitude: None,
             phase: None,
             node_mass_weights: None,
+            consistent_p1_metric: None,
             component_participation:
                 crate::eigen::ModalParticipationObservable::unavailable_without_context("cpu"),
         }
@@ -2134,6 +2277,41 @@ mod tests {
     }
 
     #[test]
+    fn subspace_transport_rejects_non_three_component_node_vectors() {
+        let mut previous_first = mode(
+            0,
+            1.0e9,
+            [
+                Complex64::new(1.0, 0.0),
+                Complex64::new(0.0, 0.0),
+                Complex64::new(0.0, 0.0),
+                Complex64::new(0.0, 0.0),
+            ],
+        );
+        let mut previous_second = mode(
+            1,
+            1.0e9,
+            [
+                Complex64::new(0.0, 0.0),
+                Complex64::new(1.0, 0.0),
+                Complex64::new(0.0, 0.0),
+                Complex64::new(0.0, 0.0),
+            ],
+        );
+        let mut current_first = previous_first.clone();
+        let mut current_second = previous_second.clone();
+        let weights = Some(vec![1.0, 1.0]);
+        previous_first.node_mass_weights = weights.clone();
+        previous_second.node_mass_weights = weights.clone();
+        current_first.node_mass_weights = weights.clone();
+        current_second.node_mass_weights = weights;
+
+        let previous = [mode_view(&previous_first), mode_view(&previous_second)];
+        let current = [mode_view(&current_first), mode_view(&current_second)];
+        assert!(mass_weighted_subspace_transport(&previous, &current, 1.0).is_none());
+    }
+
+    #[test]
     fn transported_degenerate_frame_survives_a_split_crossing() {
         let inverse_sqrt_two = 2.0_f64.sqrt().recip();
         let first = [
@@ -2318,5 +2496,87 @@ mod tests {
             .modes
             .iter()
             .all(|mode| mode.branch_id.unwrap_or_default() >= 2));
+    }
+
+    fn consistent_test_metric(
+        identity: &str,
+    ) -> std::sync::Arc<crate::eigen::types::ConsistentP1TrackingMetric> {
+        std::sync::Arc::new(
+            crate::eigen::types::ConsistentP1TrackingMetric::new(
+                identity.into(),
+                vec![0, 1, 2, 3],
+                vec![[0, 1, 2, 3]],
+                &[1e-24],
+            )
+            .unwrap(),
+        )
+    }
+
+    #[test]
+    fn exact_consistent_tracking_overlap_includes_offdiagonal_p1_mass() {
+        let mut x = [Complex64::new(0.0, 0.0); 12];
+        x[0] = Complex64::new(1.0, 0.0);
+        let mut y = [Complex64::new(0.0, 0.0); 12];
+        y[3] = Complex64::new(1.0, 0.0);
+        let mut previous = mode(0, 1e9, x);
+        let mut current = mode(0, 1e9, y);
+        assert_eq!(modal_overlap(&previous, &current), Some(0.0));
+        previous.consistent_p1_metric = Some(consistent_test_metric("mesh:a"));
+        current.consistent_p1_metric = previous.consistent_p1_metric.clone();
+        let overlap = modal_overlap(&previous, &current).unwrap();
+        assert!((overlap - 0.5).abs() < 1e-12);
+        assert_eq!(
+            tracking_score_source_for_modes(Some(&previous), Some(&current), Some(overlap)),
+            "modal_overlap_weighted_score"
+        );
+    }
+
+    #[test]
+    fn exact_consistent_tracking_rejects_mixed_or_different_mesh_metrics() {
+        let mut q = [Complex64::new(1.0, 0.0); 12];
+        q[1] = Complex64::new(0.0, 0.0);
+        let mut previous = mode(0, 1e9, q);
+        let mut current = mode(0, 1e9, q);
+        previous.consistent_p1_metric = Some(consistent_test_metric("mesh:a"));
+        assert!(modal_overlap(&previous, &current).is_none());
+        current.consistent_p1_metric = Some(consistent_test_metric("mesh:b"));
+        assert!(modal_overlap(&previous, &current).is_none());
+        current.consistent_p1_metric = previous.consistent_p1_metric.clone();
+        current.node_mass_weights = Some(vec![1.0; 4]);
+        assert!(modal_overlap(&previous, &current).is_none());
+    }
+
+    #[test]
+    fn consistent_mass_subspace_transport_preserves_rotated_degenerate_span() {
+        let mut x = [Complex64::new(0.0, 0.0); 12];
+        x[0] = Complex64::new(1.0, 0.0);
+        let mut y = [Complex64::new(0.0, 0.0); 12];
+        y[3] = Complex64::new(1.0, 0.0);
+        let metric = consistent_test_metric("mesh:a");
+        let mut previous = [mode(0, 1e9, x), mode(1, 1e9, y)];
+        let angle = std::f64::consts::FRAC_1_SQRT_2;
+        let p = std::array::from_fn::<_, 12, _>(|i| (x[i] + y[i]) * angle);
+        let q =
+            std::array::from_fn::<_, 12, _>(|i| Complex64::new(0.0, 1.0) * (x[i] - y[i]) * angle);
+        let mut current = [mode(0, 1e9, p), mode(1, 1e9, q)];
+        for m in previous.iter_mut().chain(&mut current) {
+            m.consistent_p1_metric = Some(metric.clone());
+        }
+        let transport = mass_weighted_subspace_transport(
+            &previous.each_ref().map(mode_view),
+            &current.each_ref().map(mode_view),
+            1.0,
+        )
+        .unwrap();
+        assert!(transport.principal_minimum > 1.0 - 1e-12);
+        assert!(transport
+            .transported_frames
+            .iter()
+            .all(|frame| frame.len() == 12));
+        for frame in &transport.transported_frames {
+            let embedded = metric.embed(frame).unwrap();
+            let norm = embedded.iter().map(Complex64::norm_sqr).sum::<f64>();
+            assert!((norm - 1.0).abs() < 1e-12);
+        }
     }
 }

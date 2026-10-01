@@ -1,3 +1,4 @@
+pub use super::tracking_mass::ConsistentP1TrackingMetric;
 use fullmag_ir::{FemEigenDispersionValidationIR, FemEigenK0KittelValidationIR};
 use num_complex::Complex64;
 use std::collections::{BTreeMap, BTreeSet};
@@ -420,6 +421,9 @@ pub struct SingleKModeResult {
     pub amplitude: Option<Vec<f64>>,
     pub phase: Option<Vec<f64>>,
     pub node_mass_weights: Option<Vec<f64>>,
+    /// Exact consistent P1 Cartesian metric, bound to physical magnetic nodes.
+    /// Never combine it with the legacy diagonal node_mass_weights field.
+    pub consistent_p1_metric: Option<std::sync::Arc<ConsistentP1TrackingMetric>>,
     pub component_participation: ModalParticipationObservable,
 }
 

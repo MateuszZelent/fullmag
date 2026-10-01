@@ -153,19 +153,11 @@ pub(super) fn project_complex_2x2_mode_to_tangent_basis_with_periodic_map(
         let u1_root = amplitudes[reduced_index];
         let u2_root = amplitudes[reduced_index + n];
         let bloch_phase = node_phases[node_index];
-        let u1 = bloch_phase
-            * (u1_root * transport[0][0] + u2_root * transport[0][1]);
-        let u2 = bloch_phase
-            * (u1_root * transport[1][0] + u2_root * transport[1][1]);
+        let u1 = bloch_phase * (u1_root * transport[0][0] + u2_root * transport[0][1]);
+        let u2 = bloch_phase * (u1_root * transport[1][0] + u2_root * transport[1][1]);
 
-        real[node_index] = add_vector(
-            scale_vector(node_e1, u1.re),
-            scale_vector(node_e2, u2.re),
-        );
-        imag[node_index] = add_vector(
-            scale_vector(node_e1, u1.im),
-            scale_vector(node_e2, u2.im),
-        );
+        real[node_index] = add_vector(scale_vector(node_e1, u1.re), scale_vector(node_e2, u2.re));
+        imag[node_index] = add_vector(scale_vector(node_e1, u1.im), scale_vector(node_e2, u2.im));
         let amp = (u1.norm_sqr() + u2.norm_sqr()).sqrt();
         amplitude[node_index] = amp;
         phase[node_index] = (u1.im + u2.im).atan2(u1.re + u2.re);

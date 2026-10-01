@@ -103,6 +103,7 @@ fn main() {
     rerun_if_changed_tree("../../backends/fem/include");
     println!("cargo:rerun-if-env-changed=FULLMAG_FEM_LIB_DIR");
     println!("cargo:rerun-if-env-changed=FULLMAG_USE_MFEM_STACK");
+    println!("cargo:rerun-if-env-changed=FULLMAG_FEM_NATIVE_CUDA");
     println!("cargo:rerun-if-env-changed=FULLMAG_FEM_REQUIRE_GPU");
     println!("cargo:rerun-if-env-changed=FULLMAG_FEM_WITH_SLEPC");
     println!("cargo:rerun-if-env-changed=FULLMAG_ENABLE_NVTX");
@@ -126,6 +127,21 @@ fn main() {
     };
     let use_mfem_stack = env_flag("FULLMAG_USE_MFEM_STACK");
     let require_gpu = env_flag("FULLMAG_FEM_REQUIRE_GPU");
+    let native_cuda = match std::env::var("FULLMAG_FEM_NATIVE_CUDA") {
+        Ok(value) => match value.trim().to_ascii_lowercase().as_str() {
+            "1" | "on" | "true" | "yes" => true,
+            "0" | "off" | "false" | "no" => false,
+            _ => panic!("FULLMAG_FEM_NATIVE_CUDA must be an explicit boolean"),
+        },
+        Err(std::env::VarError::NotPresent) => use_mfem_stack,
+        Err(error) => panic!("FULLMAG_FEM_NATIVE_CUDA is invalid: {error}"),
+    };
+    if native_cuda && !use_mfem_stack {
+        panic!("FULLMAG_FEM_NATIVE_CUDA requires FULLMAG_USE_MFEM_STACK=ON");
+    }
+    if require_gpu && !native_cuda {
+        panic!("FULLMAG_FEM_REQUIRE_GPU=1 requires FULLMAG_FEM_NATIVE_CUDA=ON");
+    }
     let enable_nvtx = env_flag("FULLMAG_ENABLE_NVTX");
     let with_slepc = std::env::var("FULLMAG_FEM_WITH_SLEPC").unwrap_or_else(|_| {
         if use_mfem_stack {
@@ -152,7 +168,7 @@ fn main() {
         ))
         .arg(format!(
             "-DFULLMAG_ENABLE_CUDA={}",
-            if use_mfem_stack { "ON" } else { "OFF" }
+            if native_cuda { "ON" } else { "OFF" }
         ))
         .arg("-DFULLMAG_ENABLE_FEM_GPU=ON")
         .arg(format!(

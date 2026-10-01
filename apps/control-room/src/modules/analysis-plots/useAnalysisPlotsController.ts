@@ -25,7 +25,10 @@ import {
 import type { AnalysisChartCursorPoint } from "@/shared/domain/analysis/chartCursorPoint";
 import type { ChartValueRange } from "./chartTableModel";
 import type { ChartDataPresentationState } from "@/shared/analysis-charts/chartPresentationState";
-import type { FrequencyDomainResultContext } from "@/shared/domain/analysis/frequencyDomainChartModels";
+import {
+  eigenModeFieldAvailable,
+  type FrequencyDomainResultContext,
+} from "@/shared/domain/analysis/frequencyDomainChartModels";
 
 const EMPTY_DISPLAY_UNITS: Record<string, string> = {};
 const EMPTY_STRING_LIST: readonly string[] = Object.freeze([]);
@@ -343,6 +346,7 @@ export function frequencyDomainSelectionFromPoint(input: {
   const mode = input.routeMode === "dispersion_modal"
     ? dispersionMode
     : input.spectrumModel.points[point.point.rowIndex];
+  const modeFieldAvailable = mode == null || eigenModeFieldAvailable(mode);
   return {
     kind: "results.eigen.mode",
     label: `${point.label} ${point.point.y} ${point.unit}`,
@@ -354,14 +358,16 @@ export function frequencyDomainSelectionFromPoint(input: {
       branchId: mode?.branchId ?? undefined,
       calculationMode: input.routeMode,
       chartId: input.chartId,
-      fieldId: mode?.modeFieldId ?? undefined,
+      fieldId: modeFieldAvailable ? mode?.modeFieldId ?? undefined : undefined,
       frequencyHz: mode?.frequencyHz,
       kPathCoordinateRadPerM: dispersionMode?.pathS,
       kind: "results.eigen.mode",
       modeId: mode?.modeId ?? undefined,
       modeIndex: mode?.rawModeIndex,
       nodeId,
-      resourceRef: mode?.modeFieldResourceKey ?? point.source.resourceKey,
+      resourceRef: modeFieldAvailable
+        ? mode?.modeFieldResourceKey ?? point.source.resourceKey
+        : point.source.resourceKey,
       sampleId: mode?.sampleId ?? undefined,
       sampleIndex: mode?.sampleIndex,
       source: "eigen-mode" as const,

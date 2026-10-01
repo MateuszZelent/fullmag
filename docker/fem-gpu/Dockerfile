@@ -87,7 +87,7 @@ RUN git clone --depth 1 --branch ${LIBCEED_REF} https://github.com/CEED/libCEED.
 RUN make -C /tmp/build/libCEED CUDA_DIR=${CUDA_HOME} -j"$(nproc)" && \
     make -C /tmp/build/libCEED CUDA_DIR=${CUDA_HOME} install prefix=${INSTALL_PREFIX}
 
-# S10: Build hypre (serial + CUDA) — required for CG+AMG Poisson solver
+# S10: Build hypre (serial + CUDA) â€” required for CG+AMG Poisson solver
 ENV UMPIRE_REF=v2024.07.0
 ARG FULLMAG_HYPRE_MEMORY_VARIANT="baseline"
 ENV FULLMAG_HYPRE_MEMORY_VARIANT=${FULLMAG_HYPRE_MEMORY_VARIANT}
@@ -208,6 +208,34 @@ RUN cmake -S /tmp/build/mfem -B /tmp/build/mfem/build \
     cmake --build /tmp/build/mfem/build -j"$(nproc)" && \
     cmake --install /tmp/build/mfem/build
 
+# CUDA-free MFEM requires a matching CUDA-free HYPRE; retain the GPU prefix.
+RUN cmake -S /tmp/build/hypre/src -B /tmp/build/hypre/build-cpu -G Ninja \
+      -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/opt/fullmag-mfem-cpu \
+      -DBUILD_SHARED_LIBS=ON -DHYPRE_ENABLE_MPI=ON -DHYPRE_ENABLE_OPENMP=ON \
+      -DHYPRE_ENABLE_CUDA=OFF -DHYPRE_BUILD_TESTS=OFF -DHYPRE_BUILD_EXAMPLES=OFF && \
+    cmake --build /tmp/build/hypre/build-cpu -j2 && \
+    cmake --install /tmp/build/hypre/build-cpu
+
+# The CPU FEM client is compiled with the host C++ compiler. Keep its MFEM
+# headers and library in a separate, CUDA-free prefix so SparseMatrix has the
+# same layout on both sides of the ABI. The GPU installation above is intact.
+RUN cmake -S /tmp/build/mfem -B /tmp/build/mfem/build-cpu -G Ninja \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_INSTALL_PREFIX=/opt/fullmag-mfem-cpu \
+      -DCMAKE_PREFIX_PATH=${INSTALL_PREFIX} \
+      -DBUILD_SHARED_LIBS=ON \
+      -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+      -DMFEM_USE_MPI=YES \
+      -DMFEM_USE_OPENMP=YES \
+      -DMFEM_USE_METIS=NO \
+      -DMFEM_USE_CUDA=NO \
+      -DMFEM_USE_CEED=YES \
+      -DCEED_DIR=${INSTALL_PREFIX} \
+            -DHYPRE_DIR=/opt/fullmag-mfem-cpu \
+      -DMFEM_ENABLE_TESTING=OFF && \
+    cmake --build /tmp/build/mfem/build-cpu --target mfem -j2 && \
+    cmake --install /tmp/build/mfem/build-cpu
+
 FROM cuda-base-normalized AS fem-gpu-dev
 
 ARG FULLMAG_CUDA_ARCHITECTURES="80-real;89-real;90-real;90-virtual"
@@ -315,6 +343,7 @@ RUN curl https://sh.rustup.rs -sSf | bash -s -- -y --default-toolchain nightly
 RUN corepack enable && corepack prepare pnpm@10.8.1 --activate
 
 COPY --from=deps /opt/fullmag-deps /opt/fullmag-deps
+COPY --from=deps /opt/fullmag-mfem-cpu /opt/fullmag-mfem-cpu
 
 # Nsight Systems/Compute are capture-time capabilities, not build prerequisites.
 # The managed runtime must remain buildable when the optional profiler packages

@@ -174,10 +174,7 @@ impl AcceptedFemRelaxStageHandoff {
         let source_magnetic_nodes =
             crate::preview::mesh_quantity_active_mask("m", &source_plan.mesh)
                 .expect("magnetization has a magnetic-only spatial domain");
-        validate_handoff_m0_norms(
-            &equilibrium_magnetization,
-            &source_magnetic_nodes,
-        )?;
+        validate_handoff_m0_norms(&equilibrium_magnetization, &source_magnetic_nodes)?;
         let source_signatures =
             crate::fem::equilibrium_identity::EquilibriumIdentitySignaturesV1::from_relax_plan(
                 source_plan,
@@ -936,9 +933,45 @@ pub(crate) fn accepted_relax_to_eigen_handoff_from_run(
                 message: format!("missing_relax_to_eigen_handoff_field: {field}"),
             })
     };
+    let schema = required("schema_version")?;
     let source_topology = required("source_mesh_topology_sha256")?;
-    let equilibrium_artifact = required("equilibrium_artifact_sha256")?;
-    let linearization_state = required("linearization_state_sha256")?;
+    let diagnostic_string =
+        |field: &str| diagnostics.get(field).and_then(serde_json::Value::as_str);
+    let (equilibrium_artifact, linearization_state, expected_declared_source_topology) =
+        match schema.as_str() {
+            "AcceptedFemEigenEquilibriumHandoff.v1" => (
+                required("equilibrium_artifact_sha256")?,
+                required("linearization_state_sha256")?,
+                plan.mesh.topology_fingerprint_v6(),
+            ),
+            "AcceptedFemRelaxStageHandoff.v3" => (
+                diagnostic_string("equilibrium_artifact_sha256")
+                    .map(str::to_string)
+                    .ok_or_else(|| RunError {
+                        message:
+                            "missing_relax_to_eigen_handoff_field: equilibrium_artifact_sha256"
+                                .to_string(),
+                    })?,
+                diagnostic_string("linearization_state_sha256")
+                    .map(str::to_string)
+                    .ok_or_else(|| RunError {
+                        message: "missing_relax_to_eigen_handoff_field: linearization_state_sha256"
+                            .to_string(),
+                    })?,
+                plan.mesh
+                    .mixed_topology_fingerprint_v3()
+                    .map_err(|error| RunError {
+                        message: format!(
+                            "relax_to_eigen_handoff_source_topology_fingerprint_failed: {error}"
+                        ),
+                    })?,
+            ),
+            _ => {
+                return Err(RunError {
+                    message: format!("unsupported_relax_to_eigen_handoff_schema: {schema}"),
+                });
+            }
+        };
     let declared_content = required("content_sha256")?;
     let handoff = AcceptedFemEigenEquilibriumHandoff::from_accepted_linearization(
         plan,
@@ -946,13 +979,17 @@ pub(crate) fn accepted_relax_to_eigen_handoff_from_run(
         equilibrium_artifact.clone(),
         linearization_state.clone(),
     )?;
-    let diagnostic_string =
-        |field: &str| diagnostics.get(field).and_then(serde_json::Value::as_str);
-    if source_topology != handoff.source_mesh_topology_sha256()
-        || declared_content != handoff.content_sha256()
+    let content_identity_matches = if schema == "AcceptedFemEigenEquilibriumHandoff.v1" {
+        declared_content == handoff.content_sha256()
+            && diagnostic_string("relax_to_eigen_handoff_sha256") == Some(declared_content.as_str())
+    } else {
+        is_sha256_digest(&declared_content)
+            && diagnostic_string("relax_to_eigen_handoff_sha256") == Some(declared_content.as_str())
+    };
+    if source_topology != expected_declared_source_topology
+        || !content_identity_matches
         || diagnostic_string("relax_to_eigen_source_mesh_topology_sha256")
             != Some(source_topology.as_str())
-        || diagnostic_string("relax_to_eigen_handoff_sha256") != Some(declared_content.as_str())
         || diagnostic_string("equilibrium_artifact_sha256") != Some(equilibrium_artifact.as_str())
         || diagnostic_string("linearization_state_sha256") != Some(linearization_state.as_str())
     {

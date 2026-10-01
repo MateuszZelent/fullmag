@@ -5566,10 +5566,7 @@ mod tests {
             std::env::remove_var("FULLMAG_FEM_EXECUTION");
         }
 
-        let result = validate_all_in_gpu_fem_runtime_contract(
-            "all_in_gpu_legacy_sparse",
-            &rk_plan,
-        );
+        let result = validate_all_in_gpu_fem_runtime_contract("all_in_gpu_legacy_sparse", &rk_plan);
 
         unsafe {
             std::env::remove_var("FULLMAG_FEM_ALL_IN_GPU");
@@ -6671,6 +6668,7 @@ mod tests {
                     amplitude: None,
                     phase: None,
                     node_mass_weights: Some(vec![2.0, 3.0]),
+                    consistent_p1_metric: None,
                     component_participation:
                         crate::eigen::ModalParticipationObservable::unavailable_without_context(
                             "cpu",
@@ -7654,6 +7652,7 @@ mod tests {
                     amplitude: None,
                     phase: None,
                     node_mass_weights: None,
+                    consistent_p1_metric: None,
                     component_participation:
                         crate::eigen::ModalParticipationObservable::unavailable_without_context(
                             "cpu",

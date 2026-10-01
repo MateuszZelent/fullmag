@@ -77,7 +77,7 @@ def collect_record(run, layers, expected_job, *, sampling=None):
         raise ValueError("comparison requires exactly one sample and mode")
     row=rows[0]
     k=float(row["ky_rad_per_m"] if geometry=="damon_eshbach" else row["kx_rad_per_m"])
-    if sampling is not None and k != SAMPLING[sampling][0]:
+    if sampling is not None and not math.isclose(k, SAMPLING[sampling][0], rel_tol=1e-12, abs_tol=1e-12):
         raise ValueError("actual signed wavevector differs from requested sample")
     frequency=positive(float(row["frequency_hz"]))
     mode_path=case/"eigen/modes/sample_0000/mode_0000.json"
@@ -181,12 +181,10 @@ def validate_gamma_control(run, job, model_source):
                 "de-smoke-k0/eigen/dispersion.csv", "de-smoke-k0/eigen/diagnostics/solver.v1.json")}}
 
 
-def main():
-    parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("control",type=Path)
-    parser.add_argument("output",type=Path)
-    args=parser.parse_args()
-    control=normalize_controller_report(args.control, read_json(args.control))
+def collect_control(control_path):
+    """Independently bind all six controls and Gamma before returning evidence."""
+    control_path = Path(control_path)
+    control=normalize_controller_report(control_path, read_json(control_path))
     if control.get("status")!="wrappers_terminal_requires_scientific_review":
         raise ValueError("batch is not terminal")
     cases=control["cases"]
@@ -199,15 +197,24 @@ def main():
     if any(r["model_source"].get("commit")!=control["model_ref"] for r in records):
         raise ValueError("batch model identity mismatch")
     output=collect_batch(records)
-    output.update(control_sha256=sha256(args.control),producer_sha256=sha256(Path(__file__)))
+    output.update(control_sha256=sha256(control_path),producer_sha256=sha256(Path(__file__)))
     if "controller_config_sha256" in control:
         output["controller_config_sha256"] = control["controller_config_sha256"]
     if "gamma_control" in control:
         output["gamma_control"] = {**control["gamma_control"], **validate_gamma_control(
             control["gamma_control"]["output_dir"], job, records[0]["model_source"])}
+    return output
+
+
+def main():
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("control",type=Path)
+    parser.add_argument("output",type=Path)
+    args=parser.parse_args()
+    output=collect_control(args.control)
     with args.output.open("x",encoding="utf-8") as stream:
         json.dump(output,stream,indent=2);stream.write("\n")
-    print(json.dumps({"records":len(records),"qualification":output["qualification"]}))
+    print(json.dumps({"records":len(output["records"]),"qualification":output["qualification"]}))
 
 
 if __name__=="__main__":

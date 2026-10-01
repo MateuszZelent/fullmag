@@ -138,11 +138,8 @@ fn bound_dynamic_structure_factor(
     if original_nf.saturating_mul(original_nk) <= max_cells {
         return resource;
     }
-    let (f_indices, k_indices) = dynamic_structure_factor_axis_indices(
-        original_nf,
-        original_nk,
-        max_cells,
-    );
+    let (f_indices, k_indices) =
+        dynamic_structure_factor_axis_indices(original_nf, original_nk, max_cells);
     let project = |values: &[f64]| {
         f_indices
             .iter()

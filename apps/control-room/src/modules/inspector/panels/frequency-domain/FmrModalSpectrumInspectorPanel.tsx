@@ -17,6 +17,7 @@ import {
 } from "@/kernel/resources/studyRuntimeResources";
 import {
   buildEigenSpectrumChartModel,
+  eigenModeFieldAvailable,
 } from "@/shared/domain/analysis/frequencyDomainChartModels";
 import type {
   EigenSpectrumPoint,
@@ -57,12 +58,18 @@ export function FmrModalSpectrumInspectorPanel(props: InspectorPanelProps) {
         nodeId,
         objectId: null,
         ref: {
-          fieldId: point.modeFieldId ?? undefined,
+          fieldId: eigenModeFieldAvailable(point)
+            ? point.modeFieldId ?? undefined
+            : undefined,
           kind: "results.eigen.mode",
+          modeId: point.modeId ?? undefined,
           modeIndex: point.rawModeIndex,
           nodeId,
-          resourceRef: point.modeFieldResourceKey ?? summary.spectrumResource,
+          resourceRef: eigenModeFieldAvailable(point)
+            ? point.modeFieldResourceKey ?? summary.spectrumResource
+            : summary.spectrumResource,
           sampleIndex: point.sampleIndex,
+          sampleId: point.sampleId ?? undefined,
           type: "frequency-domain",
         },
       },
@@ -77,7 +84,7 @@ export function FmrModalSpectrumInspectorPanel(props: InspectorPanelProps) {
       selectMode(point);
       return;
     }
-    if (!point.modeFieldId) return;
+    if (!eigenModeFieldAvailable(point) || !point.modeFieldId) return;
     void kernel.commands.execute(
       "analysis.eigen.plot-mode-3d",
       createCommandContext("inspector", kernel, {
@@ -215,7 +222,7 @@ function FmrResonanceBrowser({
       {sortedPoints.map((point) => (
         <article
           className="fm-frequency-domain-resonance-card"
-          data-status={point.modeFieldId ? "ready" : "missing"}
+          data-status={eigenModeFieldAvailable(point) ? "ready" : "missing"}
           key={`${point.sampleIndex}:${point.rawModeIndex}:${point.frequencyHz}`}
         >
           <div className="fm-frequency-domain-resonance-card__header">
@@ -226,7 +233,7 @@ function FmrResonanceBrowser({
               <h4>{formatFrequency(point.frequencyHz)}</h4>
             </div>
             <Badge variant="secondary">
-              {point.modeFieldId ? "3D-ready" : "field missing"}
+              {eigenModeFieldAvailable(point) ? "3D-ready" : "field missing"}
             </Badge>
           </div>
           <div className="fm-frequency-domain-resonance-card__grid">
@@ -249,7 +256,7 @@ function FmrResonanceBrowser({
             />
             <FieldRow
               label="Mode field"
-              value={point.modeFieldId ? "field-ready" : "missing"}
+              value={eigenModeFieldAvailable(point) ? "field-ready" : "missing"}
             />
           </div>
           <div className="fm-frequency-domain-resonance-card__actions">
@@ -266,10 +273,10 @@ function FmrResonanceBrowser({
             </Button>
             <Button
               className="fm-inspector-action-button"
-              disabled={!point.modeFieldId}
+              disabled={!eigenModeFieldAvailable(point)}
               size="sm"
               title={
-                point.modeFieldId
+                eigenModeFieldAvailable(point)
                   ? "Plot this modal resonance in 3D"
                   : "This mode has no linked 3D field payload"
               }
@@ -301,7 +308,7 @@ function useFmrModalSpectrumSummary() {
   const modalCapabilities = record(capabilities?.modal);
   const responseCapabilities = record(capabilities?.response);
   const modalFieldCount = spectrumModel.points.filter(
-    (point) => point.modeFieldId,
+    (point) => eigenModeFieldAvailable(point),
   ).length;
   const modalResidualCount = spectrumModel.points.filter(
     (point) => point.residualNorm != null,

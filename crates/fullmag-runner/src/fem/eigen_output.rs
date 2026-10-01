@@ -84,7 +84,7 @@ pub(super) fn mode_field_resource_key(sample_index: usize, raw_mode_index: u64) 
     )
 }
 
-fn modal_sample_id(plan: &FemEigenPlanIR, sample_index: usize) -> String {
+pub(super) fn modal_sample_id(plan: &FemEigenPlanIR, sample_index: usize) -> String {
     let prefix = if !plan.bias_field_samples.is_empty() {
         "bias-field-sample"
     } else {
@@ -170,7 +170,10 @@ fn mode_zarr_chunk_path(sample_index: usize, raw_mode_index: u64) -> String {
     )
 }
 
-fn mode_vector_entries(value: &serde_json::Value, field: &str) -> Result<Vec<[f64; 3]>, RunError> {
+pub(super) fn mode_vector_entries(
+    value: &serde_json::Value,
+    field: &str,
+) -> Result<Vec<[f64; 3]>, RunError> {
     let entries = value
         .get(field)
         .and_then(serde_json::Value::as_array)
@@ -423,14 +426,14 @@ fn modal_publication_contract(
         });
     }
 
-    let topology_fingerprint = plan
-        .mesh
-        .mixed_topology_fingerprint_v3()
-        .map_err(|error| RunError {
-            message: format!(
+    let topology_fingerprint =
+        plan.mesh
+            .mixed_topology_fingerprint_v3()
+            .map_err(|error| RunError {
+                message: format!(
                 "production modal publication requires a finite v3 source mesh identity: {error}"
             ),
-        })?;
+            })?;
     if production_k0
         && source_topology
             .as_deref()
@@ -599,6 +602,24 @@ fn parse_floquet_mode_metadata(
         .iter()
         .any(|key| mode.get(*key).is_some());
     if !has_any {
+        return Ok(None);
+    }
+    if mode
+        .get("potential_representation")
+        .and_then(serde_json::Value::as_str)
+        == Some("complex_coefficients")
+    {
+        if FLOQUET_REFERENCE_KEYS
+            .iter()
+            .any(|key| mode.get(*key).is_some())
+            || mode.get("potential_vector_real").is_some()
+            || mode.get("potential_vector_imag").is_some()
+        {
+            return Err(RunError {
+                message: "physical Floquet potential must not use the legacy doubled-real sidecar contract"
+                    .to_string(),
+            });
+        }
         return Ok(None);
     }
     let descriptor_certified = mode
@@ -889,12 +910,12 @@ pub(super) fn write_eigen_v2_bundle(
     sample_index: usize,
 ) -> Result<(), RunError> {
     let publication_contract = modal_publication_contract(plan, summary_payload)?;
-    let modal_source_topology_fingerprint = plan
-        .mesh
-        .mixed_topology_fingerprint_v3()
-        .map_err(|error| RunError {
-            message: format!("modal field source mesh identity is invalid: {error}"),
-        })?;
+    let modal_source_topology_fingerprint =
+        plan.mesh
+            .mixed_topology_fingerprint_v3()
+            .map_err(|error| RunError {
+                message: format!("modal field source mesh identity is invalid: {error}"),
+            })?;
     let modes = summary_payload
         .get("modes")
         .and_then(|value| value.as_array())
@@ -980,7 +1001,12 @@ pub(super) fn write_eigen_v2_bundle(
                     serde_json::json!(raw_mode_index),
                 );
                 object.insert("branch_id".to_string(), serde_json::json!(raw_mode_index));
-                if visualizable_mode_indices.contains(&raw_mode_index) {
+                let mode_field_available = visualizable_mode_indices.contains(&raw_mode_index);
+                object.insert(
+                    "mode_field_available".to_string(),
+                    serde_json::json!(mode_field_available),
+                );
+                if mode_field_available {
                     object.insert(
                         "mode_field_id".to_string(),
                         serde_json::json!(mode_field_id(sample_index, raw_mode_index)),
@@ -1065,6 +1091,11 @@ pub(super) fn write_eigen_v2_bundle(
                 serde_json::json!(raw_mode_index),
             );
             object.insert("branch_id".to_string(), serde_json::json!(raw_mode_index));
+            let mode_field_available = visualizable_mode_indices.contains(&raw_mode_index);
+            object.insert(
+                "mode_field_available".to_string(),
+                serde_json::json!(mode_field_available),
+            );
             object.insert(
                 "component_participation".to_string(),
                 serde_json::to_value(participation).map_err(|error| RunError {
@@ -1073,7 +1104,7 @@ pub(super) fn write_eigen_v2_bundle(
                     ),
                 })?,
             );
-            if visualizable_mode_indices.contains(&raw_mode_index) {
+            if mode_field_available {
                 object.insert(
                     "mode_field_id".to_string(),
                     serde_json::json!(mode_field_id(sample_index, raw_mode_index)),
@@ -1127,6 +1158,8 @@ pub(super) fn write_eigen_v2_bundle(
                 "multiplicity": mode["multiplicity"],
                 "label": format!("mode_{raw_mode_index:04}"),
                 "points": [{
+                    "sample_id": modal_sample_id(plan, sample_index),
+                    "mode_id": format!("sample-{sample_index:04}/mode-{raw_mode_index:04}"),
                     "sample_index": sample_index,
                     "raw_mode_index": raw_mode_index,
                     "frequency_hz": mode["frequency_hz"],
@@ -1137,6 +1170,7 @@ pub(super) fn write_eigen_v2_bundle(
                     "tracking_score_source": "seed",
                     "modal_overlap_available": false,
                     "overlap_prev": null,
+                    "mode_field_available": visualizable_mode_indices.contains(&raw_mode_index),
                 }],
             });
             if visualizable_mode_indices.contains(&raw_mode_index) {
@@ -1176,6 +1210,7 @@ pub(super) fn write_eigen_v2_bundle(
         auxiliary_artifacts.push(AuxiliaryArtifact {
             relative_path: "eigen/dispersion.csv".to_string(),
             bytes: dispersion_v2_csv(
+                &modal_sample_id(plan, 0),
                 plan.k_sampling.as_ref(),
                 &summary_payload["modes"],
                 &visualizable_mode_indices,
@@ -2080,6 +2115,7 @@ pub(super) fn dispersion_csv(
 }
 
 pub(super) fn dispersion_v2_csv(
+    sample_id: &str,
     k_sampling: Option<&KSamplingIR>,
     modes: &serde_json::Value,
     visualizable_mode_indices: &BTreeSet<u64>,
@@ -2095,20 +2131,20 @@ pub(super) fn dispersion_v2_csv(
         ""
     };
     let mut csv = String::from(
-        "sample_index,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,label,raw_mode_index,branch_id,frequency_hz,omega_rad_s,line_width_hz,residual_norm,overlap_score,tracking_score_source,mode_field_id,mode_field_resource_key\n",
+        "sample_index,sample_id,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,label,raw_mode_index,mode_id,branch_id,frequency_hz,omega_rad_s,line_width_hz,residual_norm,overlap_score,tracking_score_source,mode_field_available,mode_field_id,mode_field_resource_key\n",
     );
     if let Some(entries) = modes.as_array() {
         for entry in entries {
             let raw_mode_index = entry["index"].as_u64().unwrap_or(0);
-            let (field_id, field_resource_key) =
-                if visualizable_mode_indices.contains(&raw_mode_index) {
-                    (
-                        mode_field_id(0, raw_mode_index),
-                        mode_field_resource_key(0, raw_mode_index),
-                    )
-                } else {
-                    (String::new(), String::new())
-                };
+            let mode_field_available = visualizable_mode_indices.contains(&raw_mode_index);
+            let (field_id, field_resource_key) = if mode_field_available {
+                (
+                    mode_field_id(0, raw_mode_index),
+                    mode_field_resource_key(0, raw_mode_index),
+                )
+            } else {
+                (String::new(), String::new())
+            };
             let residual_norm = entry["residual_norm"]
                 .as_f64()
                 .map(|value| format!("{value:.16e}"))
@@ -2118,20 +2154,24 @@ pub(super) fn dispersion_v2_csv(
                 .filter(|value| value.is_finite() && *value > 0.0)
                 .map(|value| format!("{:.16e}", 2.0 * value))
                 .unwrap_or_default();
+            let mode_id = format!("sample-0000/mode-{raw_mode_index:04}");
             csv.push_str(&format!(
-                "0,{:.16e},{:.16e},{:.16e},{:.16e},{},{},{},{:.16e},{:.16e},{},{},{},seed,{},{}\n",
+                "0,{},{:.16e},{:.16e},{:.16e},{:.16e},{},{},{},{},{:.16e},{:.16e},{},{},{},seed,{},{},{}\n",
+                sample_id,
                 0.0,
                 k_vector[0],
                 k_vector[1],
                 k_vector[2],
                 label,
                 raw_mode_index,
+                mode_id,
                 raw_mode_index,
                 entry["frequency_hz"].as_f64().unwrap_or(0.0),
                 entry["angular_frequency_rad_per_s"].as_f64().unwrap_or(0.0),
                 line_width_hz,
                 residual_norm,
                 "",
+                mode_field_available,
                 field_id,
                 field_resource_key,
             ));
@@ -2253,6 +2293,30 @@ mod floquet_potential_tests {
         )
         .expect_err("non-certified mode must not publish a potential payload");
         assert!(error.message.contains("non-certified"));
+    }
+
+    #[test]
+    fn physical_floquet_potential_does_not_require_legacy_sidecar() {
+        let mode = serde_json::json!({
+            "index": 4,
+            "floquet_descriptor_certified": true,
+            "floquet_full_descriptor_certified": true,
+            "floquet_seam_frame_certified": true,
+            "floquet_gauge_policy_satisfied": true,
+            "floquet_geometric_bc_certified": false,
+            "potential_representation": "complex_coefficients",
+            "potential_dof_count": 51,
+            "magnetic_relative_residual": 1.0e-12,
+            "potential_relative_residual": 2.0e-12,
+        });
+
+        let (metadata, publications) =
+            collect_floquet_potential_publications(&[mode], &BTreeSet::from([4_u32]), &[], 2)
+                .expect(
+                    "physical potential is carried by the q/phi payload, not the legacy sidecar",
+                );
+        assert!(metadata.is_empty());
+        assert!(publications.is_empty());
     }
 
     #[test]

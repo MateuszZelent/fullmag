@@ -5,11 +5,15 @@ import { Activity, Download, Eye } from "lucide-react";
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import { useKernel } from "@/kernel/KernelContext";
 import { ANALYSIS_FREQUENCY_DOMAIN_EIGEN_BRANCHES_V2_PATH } from "@/kernel/api/apiPaths";
-import { useFrequencyDomainEigenBranchesResource } from "@/kernel/resources/studyRuntimeResources";
+import {
+  useFrequencyDomainEigenBranchesResource,
+  useFrequencyDomainEigenDispersionResource,
+} from "@/kernel/resources/studyRuntimeResources";
 import {
   buildEigenBranchDetailChartModel,
   buildEigenBranchPointModeSelectionRef,
   buildEigenBranchesModel,
+  eigenModeFieldAvailable,
 } from "@/shared/domain/analysis/frequencyDomainChartModels";
 import type {
   EigenBranch,
@@ -37,7 +41,7 @@ export function buildEigenBranchPointViewModel(
 ): EigenBranchPointViewModel {
   return {
     branchId,
-    fieldAvailable: Boolean(point.modeFieldId ?? point.modeFieldResourceKey),
+    fieldAvailable: eigenModeFieldAvailable(point),
     frequencyHz: point.frequencyRealHz,
     modeIndex: point.rawModeIndex,
     pointId: `results:eigen:branch:${branchId}:sample:${point.sampleIndex}:mode:${point.rawModeIndex}`,
@@ -174,7 +178,7 @@ function BranchSampleTable({ branch }: { branch: EigenBranch | null }) {
     );
   };
   const plotMode = (point: EigenBranchPoint): void => {
-    if (!point.modeFieldId) return;
+    if (!eigenModeFieldAvailable(point) || !point.modeFieldId) return;
     void kernel.commands.execute(
       "analysis.eigen.plot-mode-3d",
       createCommandContext("inspector", kernel, {
@@ -183,9 +187,13 @@ function BranchSampleTable({ branch }: { branch: EigenBranch | null }) {
       {
         fieldId: point.modeFieldId,
         label: `sample ${point.sampleIndex}, mode ${point.rawModeIndex}`,
+        kPathCoordinateRadPerM: point.pathS,
+        modeIndex: point.rawModeIndex,
         phaseRad: 0,
+        sampleIndex: point.sampleIndex,
         source: "eigen-mode",
         view: "phase_rotated_real",
+        wavevectorKf: point.wavevectorKf,
       },
     );
   };
@@ -295,17 +303,27 @@ function branchSamplesCsv(branch: EigenBranch): string {
       [
         branch.branchId,
         point.sampleIndex,
+        point.sampleId ?? `sample-${String(point.sampleIndex).padStart(4, "0")}`,
         point.rawModeIndex,
+        point.modeId ??
+          `sample-${String(point.sampleIndex).padStart(4, "0")}/mode-${String(point.rawModeIndex).padStart(4, "0")}`,
+        point.pathS ?? "",
+        point.wavevectorKf?.[0] ?? "",
+        point.wavevectorKf?.[1] ?? "",
+        point.wavevectorKf?.[2] ?? "",
         point.frequencyRealHz,
         point.frequencyImagHz ?? "",
         point.overlapPrev ?? "",
         point.residualNorm ?? "",
-        point.modeFieldId ?? point.modeFieldResourceKey ?? "",
+        eigenModeFieldAvailable(point),
+        eigenModeFieldAvailable(point)
+          ? point.modeFieldId ?? point.modeFieldResourceKey ?? ""
+          : "",
       ].join(","),
     );
 
   return [
-    "branch_id,sample_index,raw_mode_index,frequency_real_hz,frequency_imag_hz,overlap_prev,residual_norm,mode_field",
+    "branch_id,sample_index,sample_id,raw_mode_index,mode_id,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,frequency_real_hz,frequency_imag_hz,overlap_prev,residual_norm,mode_field_available,mode_field",
     ...rows,
   ].join("\n");
 }
@@ -314,7 +332,8 @@ function useEigenBranchSummary(selection: InspectorPanelProps["selection"]) {
   const ref = selection.ref?.type === "frequency-domain" ? selection.ref : null;
   const branchId = ref?.branchId ?? branchIdFromNodeId(selection.nodeId);
   const branches = useFrequencyDomainEigenBranchesResource();
-  const branchesModel = buildEigenBranchesModel(branches.data);
+  const dispersion = useFrequencyDomainEigenDispersionResource();
+  const branchesModel = buildEigenBranchesModel(branches.data, dispersion.data);
   const branch =
     branchesModel.branches.find((candidate) => candidate.branchId === branchId) ??
     branchesModel.branches[0] ??

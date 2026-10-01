@@ -145,6 +145,14 @@ study.save(
 )
 
 study.runtime_metadata("de_100nm_numeric_pilot", {
+    "schema": "fullmag.de100-pilot.v1",
+    "saturation_magnetization_a_per_m": MS_A_PER_M,
+    "exchange_stiffness_j_per_m": AEX_J_PER_M,
+    "gamma0_m_per_a_s": GAMMA_M_PER_A_S,
+    "external_induction_t": BIAS_FIELD_T[0],
+    "mu0_t_m_a": 1.25663706212e-6,
+    "outer_boundary_kind": "poisson_dirichlet",
+    "ky_rad_per_m": [k*1e6 for k in range(-40, 41, 10)],
     "film_thickness_m": 100e-9,
     "cell_period_m": 50e-9,
     "air_padding_each_side_m": 2e-6,

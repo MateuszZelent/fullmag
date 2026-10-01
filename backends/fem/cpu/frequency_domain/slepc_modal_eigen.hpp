@@ -2,7 +2,9 @@
 
 #include "frequency_domain/modal_eigen_request.hpp"
 
+#include <array>
 #include <complex>
+#include <limits>
 #include <vector>
 
 namespace fullmag::fem::frequency_domain {
@@ -49,9 +51,25 @@ struct SLEPcTinyGyrotropicModalEigenRequest {
 
 struct SLEPcModalAcceptedMode {
     bool floquet_descriptor_certified = false;
+    bool floquet_seam_frame_certified = false;
+    bool floquet_gauge_policy_satisfied = false;
     bool floquet_mode_vector_physical_complex = false;
+    std::array<char, 32> floquet_poisson_boundary_kind{};
+    std::array<char, 32> floquet_poisson_gauge_policy{};
     double floquet_magnetic_residual = 0.0;
     double floquet_potential_residual = 0.0;
+    double floquet_full_magnetic_residual =
+        std::numeric_limits<double>::quiet_NaN();
+    double floquet_full_potential_residual =
+        std::numeric_limits<double>::quiet_NaN();
+    double floquet_scalar_phase_seam_residual =
+        std::numeric_limits<double>::quiet_NaN();
+    double floquet_tangent_frame_seam_residual =
+        std::numeric_limits<double>::quiet_NaN();
+    double floquet_cartesian_seam_residual =
+        std::numeric_limits<double>::quiet_NaN();
+    double floquet_equilibrium_pair_residual =
+        std::numeric_limits<double>::quiet_NaN();
     std::vector<std::complex<double>> floquet_potential_real_split;
     int eigenpair_index = -1;
     int positive_frequency_pair_index = -1;
@@ -60,6 +78,67 @@ struct SLEPcModalAcceptedMode {
     double frequency_hz = 0.0;
     double relative_residual = 0.0;
     std::vector<std::complex<double>> mode_vector{};
+};
+
+struct FloquetDemagOperatorProbeSample {
+    bool attempted = false;
+    bool passed = false;
+    double q_l2_norm = 0.0;
+    double potential_relative_residual = 0.0;
+    double self_energy_j = 0.0;
+    double potential_energy_j = 0.0;
+    double energy_form_relative_defect = 0.0;
+};
+
+struct FloquetDemagOperatorProbeResult {
+    bool requested = false;
+    bool available = false;
+    bool passed = false;
+    double hermitian_relative_defect = 0.0;
+    FloquetDemagOperatorProbeSample global_y{};
+    FloquetDemagOperatorProbeSample global_z{};
+};
+
+/*
+ * Opt-in C2 diagnostic for the native shared-domain Floquet Schur pencil.
+ * The fields intentionally live on the result, not on the request: the
+ * environment switch is private and the diagnostic never changes production
+ * mode selection or the public solver contract.
+ */
+struct FloquetDenseOracleDiagnostics {
+    bool requested = false;
+    bool available = false;
+    bool candidate_found = false;
+    bool action_match = false;
+    bool st_shift_zero = false;
+    bool eps_converged_reason_available = false;
+    const char *status = "disabled";
+    const char *reason = "";
+    const char *eps_type = "lapack";
+    const char *problem_type = "gnhep";
+    const char *spectral_transform = "unshifted_shift_of_origin";
+    int q_complex_dof_count = 0;
+    int phi_dof_count = 0;
+    int real_split_dimension = 0;
+    int eps_converged_count = 0;
+    int eps_converged_reason = 0;
+    int action_probe_count = 0;
+    double operator_normalization_scale = 1.0;
+    double action_relative_error_max = std::numeric_limits<double>::quiet_NaN();
+    double poisson_relative_residual_max = std::numeric_limits<double>::quiet_NaN();
+    double eps_absolute_residual = std::numeric_limits<double>::quiet_NaN();
+    double rotated_omega_rad_s = std::numeric_limits<double>::quiet_NaN();
+    double rotated_imaginary_rad_s = std::numeric_limits<double>::quiet_NaN();
+    double frequency_hz = std::numeric_limits<double>::quiet_NaN();
+    double frequency_distance_hz = std::numeric_limits<double>::quiet_NaN();
+    double raw_lambda_real_per_s = std::numeric_limits<double>::quiet_NaN();
+    double raw_lambda_imag_rad_per_s = std::numeric_limits<double>::quiet_NaN();
+    double projected_lambda_real_per_s = std::numeric_limits<double>::quiet_NaN();
+    double projected_lambda_imag_rad_per_s = std::numeric_limits<double>::quiet_NaN();
+    double magnetic_residual_raw = std::numeric_limits<double>::quiet_NaN();
+    double magnetic_residual_projected = std::numeric_limits<double>::quiet_NaN();
+    double potential_residual = std::numeric_limits<double>::quiet_NaN();
+    double q_projection_ratio = std::numeric_limits<double>::quiet_NaN();
 };
 
 struct SLEPcTinyGyrotropicModalEigenResult {
@@ -78,6 +157,7 @@ struct SLEPcTinyGyrotropicModalEigenResult {
     const char *spectral_transform = "shift_invert";
     const char *which_eigenpairs = "target_magnitude";
     const char *ksp_type = "preonly";
+    const char *ksp_orthogonalization = "";
     const char *pc_type = "lu";
     const char *factorization_package = "petsc_lu_shift_nonzero";
     const char *factorization_shift_policy =
@@ -85,30 +165,77 @@ struct SLEPcTinyGyrotropicModalEigenResult {
     const char *poisson_ksp_type = "";
     const char *poisson_pc_type = "";
     const char *poisson_factorization_package = "";
+    const char *poisson_factorization_shift_policy = "not_applicable";
     const char *poisson_iteration_semantics = "";
     const char *nullspace_policy = "none";
     const char *unsupported_reason = "";
     int converged_eigenpair_count = 0;
+    bool eps_converged_reason_available = false;
+    int eps_converged_reason = 0;
+    bool eps_dimensions_available = false;
+    int eps_nev = 0;
+    int eps_ncv = 0;
+    int eps_mpd = 0;
+    int eps_monitor_iteration = 0;
+    double eps_first_unconverged_error_estimate =
+        std::numeric_limits<double>::quiet_NaN();
     int positive_frequency_candidate_count = 0;
     int frequency_window_candidate_count = 0;
     int residual_rejection_count = 0;
     int non_real_rotated_eigenvalue_count = 0;
+    int residual_evaluation_candidate_count = 0;
+    int eigenpair_evaluation_failure_count = 0;
+    int mode_vector_failure_count = 0;
+    int potential_reconstruction_failure_count = 0;
     int accepted_mode_count = 0;
     int selected_eigenpair_index = -1;
     int outer_iterations = 0;
     int max_outer_iterations = 0;
     int linear_iterations_total = 0;
+    int ksp_last_iterations = 0;
+    bool ksp_diagnostics_available = false;
+    bool ksp_converged_reason_available = false;
+    int ksp_converged_reason = 0;
     int ksp_max_iterations = 0;
+    int ksp_restart = 0;
+    double ksp_breakdown_tolerance =
+        std::numeric_limits<double>::quiet_NaN();
     int poisson_ksp_max_iterations = 0;
     double ksp_rtol = 0.0;
     double ksp_atol = 0.0;
     double poisson_ksp_rtol = 0.0;
     double poisson_ksp_atol = 0.0;
     double ksp_final_residual = 0.0;
+    bool ksp_last_true_residual_available = false;
+    double ksp_last_true_residual_norm =
+        std::numeric_limits<double>::quiet_NaN();
+    double ksp_last_rhs_norm = std::numeric_limits<double>::quiet_NaN();
+    double ksp_last_true_relative_residual =
+        std::numeric_limits<double>::quiet_NaN();
+    int ksp_true_residual_sample_count = 0;
+    int ksp_true_residual_measurement_failure_count = 0;
+    double ksp_max_true_relative_residual =
+        std::numeric_limits<double>::quiet_NaN();
+    int ksp_pc_side = -1;
+    int ksp_norm_type = -1;
     double factorization_shift_amount = 0.0;
     double operator_normalization_scale = 1.0;
     double preconditioner_normalization_scale = 1.0;
     double max_candidate_relative_residual = 0.0;
+    double eps_normalized_absolute_tolerance = 0.0;
+    double max_eps_normalized_absolute_residual = 0.0;
+    double max_floquet_magnetic_relative_residual = 0.0;
+    double max_floquet_potential_relative_residual = 0.0;
+    double worst_candidate_frequency_hz = 0.0;
+    double worst_candidate_eps_normalized_absolute_residual = 0.0;
+    double worst_candidate_floquet_magnetic_relative_residual = 0.0;
+    double worst_candidate_floquet_potential_relative_residual = 0.0;
+    double worst_candidate_unprojected_magnetic_relative_residual =
+        std::numeric_limits<double>::quiet_NaN();
+    double worst_candidate_rotated_imaginary_rad_s =
+        std::numeric_limits<double>::quiet_NaN();
+    double worst_candidate_q_projection_ratio =
+        std::numeric_limits<double>::quiet_NaN();
     double min_candidate_frequency_hz = 0.0;
     double max_candidate_frequency_hz = 0.0;
     double lambda_real = 0.0;
@@ -116,6 +243,8 @@ struct SLEPcTinyGyrotropicModalEigenResult {
     double frequency_hz = 0.0;
     double relative_residual = 0.0;
     double max_relative_residual = 0.0;
+    FloquetDemagOperatorProbeResult dynamic_demag_operator_probe{};
+    FloquetDenseOracleDiagnostics floquet_dense_oracle{};
     std::vector<SLEPcModalAcceptedMode> accepted_modes{};
 };
 

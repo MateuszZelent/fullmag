@@ -3420,10 +3420,7 @@ impl FemLlgProblem {
             .terms
             .rotated_interfacial_dmi
             .filter(|d| include_rotated && *d != 0.0);
-        let bulk_d = self
-            .terms
-            .bulk_dmi
-            .filter(|d| include_bulk && *d != 0.0);
+        let bulk_d = self.terms.bulk_dmi.filter(|d| include_bulk && *d != 0.0);
         if interfacial_d.is_none() && rotated_d.is_none() && bulk_d.is_none() {
             return;
         }
@@ -3656,10 +3653,7 @@ impl FemLlgProblem {
             .terms
             .rotated_interfacial_dmi
             .filter(|d| include_rotated && *d != 0.0);
-        let bulk_d = self
-            .terms
-            .bulk_dmi
-            .filter(|d| include_bulk && *d != 0.0);
+        let bulk_d = self.terms.bulk_dmi.filter(|d| include_bulk && *d != 0.0);
         if interfacial_d.is_none() && rotated_d.is_none() && bulk_d.is_none() {
             return 0.0;
         }
@@ -3743,14 +3737,8 @@ impl FemLlgProblem {
         bulk_tmp: &mut [Vector3],
     ) {
         let n_nodes = self.topology.n_nodes;
-        let interfacial_d = self
-            .terms
-            .interfacial_dmi
-            .filter(|d| *d != 0.0);
-        let rotated_d = self
-            .terms
-            .rotated_interfacial_dmi
-            .filter(|d| *d != 0.0);
+        let interfacial_d = self.terms.interfacial_dmi.filter(|d| *d != 0.0);
+        let rotated_d = self.terms.rotated_interfacial_dmi.filter(|d| *d != 0.0);
         let bulk_d = self.terms.bulk_dmi.filter(|d| *d != 0.0);
         if interfacial_d.is_none() && rotated_d.is_none() && bulk_d.is_none() {
             return;

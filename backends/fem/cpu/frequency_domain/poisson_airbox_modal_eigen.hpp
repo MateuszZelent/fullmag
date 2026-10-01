@@ -10,7 +10,37 @@
 
 namespace fullmag::fem::frequency_domain {
 
-constexpr std::uint32_t kPoissonAirboxEigenBlockProblemAbiVersion = 5;
+constexpr std::uint32_t kPoissonAirboxEigenBlockProblemAbiVersion = 6;
+
+struct PoissonAirboxK0DemagProbeAssembly;
+
+struct PoissonAirboxK0DemagProbeSample {
+    bool attempted = false;
+    bool passed = false;
+    double q_l2_norm = 0.0;
+    double potential_relative_residual = 0.0;
+    double potential_action_relative_residual = 0.0;
+    double gauge_constraint_abs = 0.0;
+    double mean_field_a_per_m = 0.0;
+    double mean_magnetization_a_per_m = 0.0;
+    double demag_factor = 0.0;
+    double potential_energy_j = 0.0;
+    double magnetic_energy_j = 0.0;
+    double energy_form_relative_defect = 0.0;
+};
+
+struct PoissonAirboxK0DemagProbeResult {
+    bool requested = false;
+    bool available = false;
+    bool passed = false;
+    double magnetic_volume_m3 = 0.0;
+    double mu0_t_m_a = 0.0;
+    double robin_beta = 0.0;
+    char outer_boundary_kind[32]{};
+    PoissonAirboxK0DemagProbeSample global_y{};
+    PoissonAirboxK0DemagProbeSample global_z{};
+    char failure_reason[96]{};
+};
 
 struct PoissonAirboxEigenBlockProblem {
     std::uint32_t abi_version = kPoissonAirboxEigenBlockProblemAbiVersion;
@@ -27,6 +57,10 @@ struct PoissonAirboxEigenBlockProblem {
 
     const double *phi_mean_weights = nullptr;
     std::uint64_t phi_mean_weights_count = 0;
+    // Optional source-assembled global transverse probes. Production K0
+    // shared-domain solves provide this descriptor so the same Poisson block
+    // can be checked before SLEPc starts; algebraic fixtures leave it null.
+    const PoissonAirboxK0DemagProbeAssembly *k0_demag_probe = nullptr;
 
     double target_frequency_hz = 0.0;
     const char *target_kind = "nearest_frequency";
@@ -239,6 +273,7 @@ struct PoissonAirboxModalEigenResult {
     double mass_scale = 1.0;
     double operator_scale = 1.0;
     double target_eigenvalue_scaled = 0.0;
+    PoissonAirboxK0DemagProbeResult k0_demag_operator_probe{};
 
     // The Schur operator remains a MatShell.  This records only the bounded
     // shifted-system preconditioner selected for the outer SLEPc transform.
@@ -338,6 +373,9 @@ struct PoissonAirboxModalEigenResult {
         std::vector<std::complex<double>> full_vector{};
     };
     std::vector<AcceptedMode> accepted_modes{};
+    // Signed original-descriptor-certified Ritz values for window coverage
+    // only. Negative guards are not published modes or branch-tracking data.
+    std::vector<double> certified_spectral_guard_frequencies_hz{};
 
     // The top-level diagnostics embed executed_subwindows_json verbatim.
     char diagnostics_json[524288]{};

@@ -5,7 +5,7 @@
   CPU Schur solver and GPU PETSc/SLEPc adapter are visible in source, but this
   page records no current-snapshot managed runtime or production qualification
 - Owners: Fullmag FEM frequency-domain backend
-- Last updated: 2026-07-12
+- Last updated: 2026-09-29
 - Related architecture:
   - `docs/architecture/backend-golden-masterplan.md`
 - Related physics notes:
@@ -139,7 +139,7 @@ algebraic realization of this complex contract, not another convention.
 | $t$ | time | $\mathrm{s}$ |
 | $\mathbf m$, $\mathbf m_0$, $\delta\mathbf m$ | normalized magnetization, accepted equilibrium and tangent perturbation | $1$ |
 | $T$, $T_{\mathrm{src}}$, $T_{\mathrm{dst}}$ | tangent-frame maps from local coefficients to physical perturbations | $1$ |
-| $q$, $q_{\mathrm{src}}$, $q_{\mathrm{dst}}$ | tangent-plane coefficient vectors | $1$ |
+| $q$, $q_r$, $q_{\mathrm{src}}$, $q_{\mathrm{dst}}$ | full and reduced tangent-plane coefficient vectors | $1$ |
 | $\mathbf H_{\mathrm{eff},0}$, $\delta\mathbf h$ | static effective field and RF field phasor | $\mathrm{A\,m^{-1}}$ |
 | $M_s$ | saturation magnetization | $\mathrm{A\,m^{-1}}$ |
 | $K_u$ | first-order uniaxial anisotropy energy density | $\mathrm{J\,m^{-3}}$ |
@@ -152,24 +152,27 @@ algebraic realization of this complex contract, not another convention.
 | $f$ | cyclic frequency, $f=\operatorname{Re}(\omega)/(2\pi)$ | $\mathrm{Hz}$ |
 | $\lambda$, $\sigma$ | generalized eigenvalue and complex spectral shift | $\mathrm{s^{-1}}$ |
 | $\sigma_{\mathrm{R}}$, $\sigma_{\mathrm{I}}$ | real and imaginary parts of the spectral shift | $\mathrm{s^{-1}}$, $\mathrm{rad\,s^{-1}}$ |
-| $L$, $K$, $A_{qq}$ | dynamic, energy-Hessian and magnetic restoring operators | $\mathrm{m^3\,s^{-1}}$ |
-| $B_\alpha$, $B_{qq}$, $G$ | damped gyrotropic/mass operators | $\mathrm{m^3}$ |
+| $L$, $K$, $A_{qq}$, $A_{qq}^{\mathrm{full}}$ | dynamic, energy-Hessian and full-space magnetic restoring operators | $\mathrm{m^3\,s^{-1}}$ |
+| $B_\alpha$, $B_{qq}$, $B_{qq}^{\mathrm{full}}$, $G$ | damped gyrotropic/mass operators | $\mathrm{m^3}$ |
 | $A_\omega$ | driven harmonic operator $\mathrm{i}\omega B_\alpha-L$ | $\mathrm{m^3\,s^{-1}}$ |
 | $b$ | projected tangent RF drive | $\mathrm{m^3\,s^{-1}}$ |
-| $\phi$, $\delta\phi$ | scalar-potential coefficient vector and perturbation | $\mathrm{A}$ |
-| $A_{q\phi}$ | potential-to-magnetic coupling block | $\mathrm{m^3\,A^{-1}\,s^{-1}}$ |
-| $A_{\phi q}$ | magnetic-to-potential coupling block | $\mathrm{A\,m}$ |
-| $P$ | scalar Poisson block | $\mathrm{m}$ |
+| $\phi$, $\phi_r$, $\delta\phi$ | full and reduced scalar-potential coefficient vectors and perturbation | $\mathrm{A}$ |
+| $A_{q\phi}$, $A_{q\phi}^{\mathrm{full}}$ | full/reduced potential-to-magnetic coupling blocks | $\mathrm{m^3\,A^{-1}\,s^{-1}}$ |
+| $A_{\phi q}$, $A_{\phi q}^{\mathrm{full}}$ | full/reduced magnetic-to-potential coupling blocks | $\mathrm{A\,m}$ |
+| $P$, $P^{\mathrm{full}}$ | reduced and full scalar Poisson blocks | $\mathrm{m}$ |
 | $c$, $\eta$ | mean-zero gauge vector and Lagrange multiplier | $\mathrm{m^3}$, $\mathrm{A\,m^{-2}}$ |
-| $r_q$, $r_\phi$, $r_g$ | magnetic, scalar and gauge residuals | $\mathrm{m^3\,s^{-1}}$, $\mathrm{A\,m}$, $\mathrm{A\,m^3}$ |
-| $\epsilon_q$, $\epsilon_\phi$, $\epsilon_g$, $\epsilon_{\mathrm{full}}$ | normalized block and full original-operator residuals | $1$ |
+| $r_q$, $r_q^{\mathrm{full}}$, $r_\phi$, $r_\phi^{\mathrm{full}}$, $r_g$ | reduced/full magnetic, reduced/full scalar and gauge residuals | $\mathrm{m^3\,s^{-1}}$, $\mathrm{A\,m}$, $\mathrm{A\,m^3}$ |
+| $\epsilon_{\phi,\mathrm{probe}}$ | maximum componentwise original potential-equation backward error in the K0 probe | $1$ |
+| $i$ | row index of original scalar potential equation | $1$ |
+| $\epsilon_q$, $\epsilon_\phi$, $\epsilon_{q,\mathrm{proj}}$, $\epsilon_{\phi,\mathrm{proj}}$, $\epsilon_g$, $\epsilon_{\mathrm{full}}$ | normalized reduced, projected full-block and gauge residuals | $1$ |
 | $V$, $W$, $y$ | trial basis, test basis and reduced coordinates | $1$ |
 | $Q$ | physical vector transformation across a periodic map | $1$ |
+| $R_{\mathrm{member}\leftarrow\mathrm{rep}}=T_{\mathrm{member}}^{\mathsf T}T_{\mathrm{rep}}$ | real coordinate map between local tangent bases for a pure-translation magnetic periodic class | $1$ |
 | $\mathbf k$ | Bloch wave vector | $\mathrm{rad\,m^{-1}}$ |
 | $\Delta\mathbf r$ | periodic lattice translation | $\mathrm{m}$ |
 | $p=\exp(-\mathrm{i}\mathbf k\cdot\Delta\mathbf r)$ | Floquet phase | $1$ |
 | $\mathbf u_{n\mathbf k}$ | periodic envelope of a full Bloch mode | $1$ |
-| $C(\mathbf k)$ | complex constraint or prolongation map for full Bloch fields | $1$ |
+| $C(\mathbf k)$, $C_q(\mathbf k)$, $C_\phi(\mathbf k)$ | complex constraint or prolongation maps from reduced to full Bloch fields | $1$ |
 | $\widetilde{\mathbf M}_{n\mathbf k}$ | dynamic magnetization phasor in A/m | $\mathrm{A\,m^{-1}}$ |
 | $\widetilde\phi_{n\mathbf k}$ | full Bloch scalar-potential phasor | $\mathrm{A}$ |
 | $\widetilde{\mathbf h}_{d,n\mathbf k}$ | dynamic demagnetizing-field phasor | $\mathrm{A\,m^{-1}}$ |
@@ -337,6 +340,118 @@ Every reported mode carries an `original_operator_residual` derived from these
 blockwise scaled residuals. It may not be capped by or reconstructed from the
 solver-reported residual. Driven solves similarly report tracked Krylov
 residuals and recomputed true unpreconditioned residuals against `A_omega`.
+
+For the native shared-domain Floquet eigensolver, the implemented reduced-block
+normalization is
+
+```{math}
+:label: eq-fem-floquet-block-residuals
+\begin{aligned}
+\epsilon_q&=\frac{\lVert A_{qq}q+A_{q\phi}\phi-\lambda B_{qq}q\rVert_2}
+{\lVert A_{qq}q\rVert_2+\lVert A_{q\phi}\phi\rVert_2+|\lambda|\lVert B_{qq}q\rVert_2},\\
+\epsilon_\phi&=\frac{\lVert P\phi+A_{\phi q}q\rVert_2}
+{\lVert P\phi\rVert_2+\lVert A_{\phi q}q\rVert_2}.
+\end{aligned}
+```
+
+These are dimensionless algebraic defects in Euclidean coefficient-vector
+norms. The implementation adds `numeric_limits<double>::min()` to each
+denominator as a numerical zero guard. Neither quantity is a relative
+frequency error or a mesh-convergence estimate. The requested `solver_rtol`
+limits their maximum; the DE-SMOKE value `1e-8` has not been calibrated against
+a frequency-error budget. Full descriptor and seam certification remain
+separate requirements.
+
+For the sparse shared-domain nonzero-$\mathbf k$ path, the native candidate
+must also pass an independent reconstruction from the retained full-field
+blocks. Let $C_q(\mathbf k)$ and $C_\phi(\mathbf k)$ prolong the reduced
+tangent and scalar coefficients to the unconstrained mesh. The admissible
+weak residuals are evaluated by applying each full block first and then
+testing with the adjoint constraint:
+
+```{math}
+:label: eq-fem-floquet-full-projected-residuals
+\begin{aligned}
+q&=C_q(\mathbf k)q_r,
+&\phi&=C_\phi(\mathbf k)\phi_r,\\
+r_q^{\mathrm{full}}
+&=A_{qq}^{\mathrm{full}}q
+  +A_{q\phi}^{\mathrm{full}}\phi
+  -\lambda B_{qq}^{\mathrm{full}}q,
+&\epsilon_{q,\mathrm{proj}}
+&=\frac{\lVert C_q^\mathsf{H}r_q^{\mathrm{full}}\rVert_2}
+{\lVert C_q^\mathsf{H}A_{qq}^{\mathrm{full}}q\rVert_2
+ +\lVert C_q^\mathsf{H}A_{q\phi}^{\mathrm{full}}\phi\rVert_2
+ +|\lambda|\lVert C_q^\mathsf{H}B_{qq}^{\mathrm{full}}q\rVert_2},\\
+r_\phi^{\mathrm{full}}
+&=A_{\phi q}^{\mathrm{full}}q+P^{\mathrm{full}}\phi,
+&\epsilon_{\phi,\mathrm{proj}}
+&=\frac{\lVert C_\phi^\mathsf{H}r_\phi^{\mathrm{full}}\rVert_2}
+{\lVert C_\phi^\mathsf{H}A_{\phi q}^{\mathrm{full}}q\rVert_2
+ +\lVert C_\phi^\mathsf{H}P^{\mathrm{full}}\phi\rVert_2}.
+\end{aligned}
+```
+
+Projection onto the admissible test spaces is intentional: the unprojected
+full-row residual may contain reactions associated with the periodic
+constraints. The certificate separately checks the scalar phase seam, the
+local tangent-frame transport, the reconstructed Cartesian magnetic seam,
+and equilibrium magnetization continuity on periodic node pairs. At least
+one active magnetic pair must be present. Each normalized weak residual and
+seam residual must be finite and no larger than the requested algebraic
+tolerance; the artifact keeps reduced-block and reconstructed full-field
+values in separate fields.
+
+At nonzero $\mathbf k$, the scalar block must use the boundary-matched policy:
+`pure_neumann` requires `require_invertible`, whereas `poisson_robin` and
+`poisson_dirichlet` require `none`. No mean-zero gauge residual is reported for
+this path; the gauge field is `null` and its applicability is represented by
+the policy evidence. The full-descriptor certificate does not certify the
+external geometric boundary or its flux condition, so
+`floquet_geometric_bc_certified` remains false.
+
+SLEPc's
+`EPSSetTrueResidual` with `EPS_CONV_ABS` controls convergence using the
+absolute 2-norm of the true pencil residual. `EPSComputeError(...,
+EPS_ERROR_ABSOLUTE)` reports the same kind of absolute quantity; it is not the
+per-mode normalized magnetic residual above. The pencil's global normalization
+does not remove this distinction because the physical residual denominator is
+formed from the current mode's magnetic and demagnetizing block actions. The
+EPS tolerance is currently a candidate-search prefilter, set to
+$\max(100\epsilon_{\rm machine},10^{-3}\,\mathrm{rtol}_{\rm requested})$.
+The multiplier is an uncalibrated heuristic, not a derived bound between the
+two residual definitions. It can exclude useful diagnostic candidates without
+improving their original residual. Final acceptance still requires each
+reconstructed original-block residual to meet the requested algebraic
+tolerance. See the SLEPc documentation for
+[`EPSSetConvergenceTest`](https://slepc.upv.es/release/manualpages/EPS/EPSSetConvergenceTest.html),
+[`EPSSetTrueResidual`](https://slepc.upv.es/release/manualpages/EPS/EPSSetTrueResidual.html),
+and [`EPS_ERROR_ABSOLUTE`](https://slepc.upv.es/release/manualpages/EPS/EPSErrorType.html).
+
+The inner Poisson `KSPPREONLY`/LU applies a factorization once: its recorded
+iterative tolerances do not control its accuracy. The shift-invert GMRES
+diagnostic from `KSPGetResidualNorm` may be approximate or preconditioned and
+is not an independently recomputed relative residual of the original linear
+system. The current path does not explicitly select or record the PC side and
+norm type. A positive KSP convergence reason does not resolve that missing
+measurement. See [`KSPPREONLY`](https://petsc.org/release/manualpages/KSP/KSPPREONLY/)
+and [`KSPGetResidualNorm`](https://petsc.org/release/manualpages/KSP/KSPGetResidualNorm/).
+
+For the small-mode shared-domain Floquet path, the solver currently requests
+`ncv = min(N, max(32, 2 nev))`, where `N` is the real-split operator dimension
+and `nev` is the number of requested Ritz values. This was a bounded convergence
+experiment for the observed interior-spectrum stagnation; it does not change
+the eigenproblem or acceptance criteria. The run records the resolved
+`nev`, `ncv`, and `mpd` returned by SLEPc. Larger `ncv` may increase memory and
+does not establish convergence by itself. Managed job #136 resolved `nev=8`,
+`ncv=32`, `mpd=32` but still reached 2000 iterations per window without a
+converged pair. The logged 100 tangent DOFs are complex coefficients; the
+real-split pencil has dimension 200. No FP64 accuracy floor or optimal residual
+threshold has been established. The next calibration compares the original
+small Schur pencil with a direct reference and measures the true inner-solve
+residual, before independently sweeping candidate and acceptance tolerances.
+Details and source-pinned evidence are in the
+[threshold audit](../audits/2026-09-25-de-residual-threshold-audit.md).
 
 ### 3.3 Direct modal expansion and projection ROMs
 
@@ -510,6 +625,31 @@ Constraint construction operates on complete corner/edge equivalence classes
 and checks cycle consistency. A phase-only tangent constraint is invalid for
 varying frames.
 
+The shared-domain CPU modal implementation currently supports pure translations
+(`Q=I`). It permits different local `e1/e2` coordinate bases when the physical
+equilibrium magnetization agrees across every member of a magnetic periodic
+class. With representative and member tangent maps `T_rep` and `T_member`, it
+forms the real coordinate rotation
+
+```{math}
+:label: eq-fem-modal-tangent-frame-rotation
+R_{\mathrm{member}\leftarrow\mathrm{rep}}
+=T_{\mathrm{member}}^{\mathsf T}T_{\mathrm{rep}},
+\qquad
+q_{\mathrm{member}}
+=\exp(-\mathrm{i}\mathbf k\cdot\Delta\mathbf r)
+R_{\mathrm{member}\leftarrow\mathrm{rep}}q_{\mathrm{rep}}.
+```
+
+This `R` changes tangent coordinates only; it is not a physical spin-space
+rotation `Q`. The modal importer requires finite, orthonormal, right-handed
+frames and matching equilibrium magnetization vectors within its declared
+frame tolerance (`0 < tolerance < 1`). A class with a physically different equilibrium or a
+nonidentity spin-space `Q` is rejected because the current modal periodic-pair
+payload carries no such `Q`. The separate driven-response Floquet validator
+still requires matching local frames; do not infer this modal coordinate-map
+support for that route.
+
 (nonzero-k-representations)=
 ### 3.5 Two nonzero-$k$ representations
 
@@ -581,8 +721,24 @@ The airbox seam phase, magnetic seam phase and opposite-normal flux condition
 must be checked as one corner/edge cycle. A scalar gauge is added only when
 the assembled scalar operator has an actual constant nullspace; a nonzero
 Bloch phase usually removes that nullspace, while an open or Robin exterior
-may already be coercive. The original residual is evaluated after reconstructing
-the full magnetic and potential fields, not only in reduced coordinates.
+may already be coercive. For a pure-Neumann Floquet block, invertibility must
+be decided from the actual phase-constrained Poisson operator and its
+factorization. A universal $|\mathbf k|L$ cutoff is not valid because phase
+equivalence depends on the periodic lattice vectors, while conditioning also
+depends on the assembled mesh and operator. The $\mathbf k=0$ path retains its
+mean-zero augmented gauge; the nonzero-$\mathbf k$ path must not inherit that
+gauge vector. Singular or numerically unusable blocks fail at factorization
+or residual certification.
+
+Residual scope is solver-path specific. The dense contour path reconstructs
+the potential and evaluates the coupled descriptor. The sparse SLEPc source
+now retains the unconstrained weak-form blocks and checks the projected
+full-field equations and reconstructed Floquet seams described by
+{eq}`eq-fem-floquet-full-projected-residuals`. This is a source-level contract,
+not runtime qualification: the latest managed build predates this check, so
+no nonzero-$\mathbf k$ result is certified by it yet. Even after runtime
+verification, geometric outer-boundary and flux certification remains a
+separate gate.
 
 (waveguide-envelope-operator-contract)=
 #### 3.5.2 Transverse waveguide envelope
@@ -655,6 +811,69 @@ shared-domain assembly and Schur solver are source-visible through
 `backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.hpp` +
 `solve_poisson_airbox_modal_eigen_cpu_schur`; managed qualification remains
 open and blocks production Poisson-airbox modal qualification.
+
+For the nonzero-$k$ shared-domain Floquet route, the scalar potential is
+eliminated with the original equation
+$P(\mathbf k)\phi=-A_{\phi q}(\mathbf k)q$. The inner PETSc solve is
+`KSPPREONLY` with `PCLU`, so it applies the LU
+factorization once; its factorization policy is `MAT_SHIFT_NONE`. A shifted LU
+factorization here would change the effective $P(\mathbf k)^{-1}$ inside the
+Schur action, even though the assembled matrix itself remains unchanged. A
+singular or numerically unusable Poisson block must fail the solve rather than
+regularize the physical operator. This is separate from the explicit,
+norm-scaled shift used only by the outer spectral-transform preconditioner.
+The policy is exposed as
+`SLEPcTinyGyrotropicModalEigenResult::poisson_factorization_shift_policy` and
+serialized in modal diagnostics. The implementation owner is
+`backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp` +
+`solve_floquet_shared_domain_sparse_modal_spectrum`; the regression assertion
+is in `backends/fem/tests/frequency_domain/floquet_modal_solver_test.cpp` +
+`executes_native_sparse_matshell_above_dense_bound`.
+
+The outer shift-invert preconditioner has two explicit size regimes. For a
+real-split magnetic Schur dimension no larger than 512, the CPU lane
+materializes the exact matrix-free Schur action and factors
+$S(\mathbf k)-\sigma B$ after norm scaling. This bounded validation regime
+contains the same dynamic-demag feedback as the operator and does not replace
+the operator or change any eigenpair acceptance residual. Above 512, the lane
+retains the sparse magnetic-only approximation
+$-iA_{qq}(\mathbf k)-\sigma B$; that scalable regime remains unqualified for
+the A1 campaign until a demag-aware block preconditioner and convergence
+evidence are available. Diagnostics distinguish the regimes through
+`factorization_shift_policy`. The cutoff is a resource bound, not a physical
+or accuracy threshold.
+
+For the CPU K0 frequency-window path, small real-split systems of at most
+512 degrees of freedom cache the unshifted normalized Schur action once in
+the window-owned operator context. Each spectral transform duplicates that
+cache and subtracts its own shift times the normalized mass matrix. This
+retains demag feedback in the preconditioner without repeating the basis
+applications for every subwindow. Larger windows keep the magnetic-only
+preconditioner; the existing single-shift reference cap of 8192 is unchanged.
+The cache has the lifetime of one frequency window and is destroyed with its
+operator context. Failed cache construction or duplication fails closed.
+Neither the eigensolver MatShell nor the physical residual and coverage gates
+are replaced. Source owner:
+`backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.cpp` +
+`create_production_cached_window_preconditioner`. Regression owner:
+`backends/fem/tests/frequency_domain/poisson_airbox_modal_eigen_slepc_test.cpp` +
+`FrequencyWindowRetainsDemagInBoundedCachedPreconditioner`. The coupled fixture
+retains a known Schur frequency while testing multiple shifts and fresh window
+contexts. This change is source-only until its managed build and runtime checks
+complete; the temporary native-test compilation prohibition remains in force.
+
+For a standalone Gamma control, the DE-SMOKE input requests
+`PeriodicBC(["x_faces", "y_faces"])` and
+`magnetostatic_bc="periodic_airbox_k0"`. The Floquet-airbox request is
+reserved for a nonzero single wavevector or an explicit path containing
+nonzero wavevectors; the path dispatcher resolves its Gamma samples to the
+K0 operator. This distinction changes authoring legality, not the physical
+periodic trace at zero wavevector, and must be preserved in Python-to-IR
+regressions. The owner is `examples/fem_de_smoke_numeric.py` +
+`study.stages.add_eigenmodes`; regression:
+`scripts/test_de_smoke_model.py` +
+`test_de_smoke_preserves_physical_problem`. It does not certify K0 window
+coverage or convergence.
 
 ### 3.7 FEM GPU ownership and truthful lane names
 
@@ -781,7 +1000,7 @@ study.stages.add_frequency_response(
 #### `study.stages.add_eigenmodes` parameters
 
 | Python parameter | Type | Default | SI unit | Validation domain and validation errors | Physical meaning | Backend support | ProblemIR destination and normalization |
-|---|---|---|---|---|---|---|---|
+|---|---|---|---|---|---|---|
 | `add_eigenmodes.count` | `int` | `10` | $1$ | Positive; non-positive values raise `ValueError`. | Maximum requested mode count. | FEM CPU/GPU authoring; runtime capability-gated | `study.count` as an integer. |
 | `add_eigenmodes.target` | `str` | `"lowest"` | $1$ | One of `lowest`, `nearest`, `frequency_window`; other values raise `ValueError`. | Spectral selection policy. | FEM CPU/GPU authoring; runtime capability-gated | `study.target.kind`. |
 | `add_eigenmodes.target_frequency` | `float \| None` | `None` | $\mathrm{Hz}$ | Required and positive for `nearest`; positive if supplied. With `frequency_window` it is currently accepted but not serialized and therefore must not be relied on. | Nearest-frequency target. | FEM CPU/GPU authoring; runtime capability-gated | `study.target.frequency_hz` only for `target="nearest"`; absent for `frequency_window`. |
@@ -962,6 +1181,7 @@ validated_scope = bounded workload description
 A synthetic algebra oracle or a narrow K0 macrospin result cannot promote a
 Poisson-airbox, nonzero-k, or general GPU capability.
 
+
 ### Kanoniczne klasy redukcji periodycznej FEM CPU
 
 Generator `modal_shared_domain_equivalence_classes` w
@@ -1001,6 +1221,16 @@ zachowuje kontrolę Γ, osobne zaakceptowane receipty i serie zbieżności warst
 Nowa seria signed-k używa L2/t3, tych samych SI materiału i tolerancji;
 wykres nie zastępuje bramki residuali, zgodności siatki, pól ani zbieżności.
 Przy pierwszym nieudanym punkcie dalsze przypadki są zatrzymywane do diagnozy.
+
+Odbiór signed-k wymaga zgodności hasha kontrolera z niezmienną kapsułą
+managed buildu oraz ścieżki kapsuły w każdym receipcie. Raport musi znajdować
+się pod identyfikatorem własnego joba. Osobny `collect_control` w
+`scripts/collect_de_bv_thickness_comparison.py` weryfikuje wszystkie sześć
+przypadków zbieżności i Γ; jego pełny wynik i hash konfiguracji są wymagane
+w raporcie signed-k. To dowód odbioru, nie automatyczny dowód zbieżności:
+różnice częstotliwości i profili nadal wymagają oceny. Porównanie signed k
+zachowuje tę samą tolerancję numeryczną co walidator CSV.
+
 Nie wprowadza to nowej realizacji GPU/FDM ani zmiany schematu ProblemIR.
 
 (implementation-mapping)=
@@ -1036,12 +1266,14 @@ managed physics evidence.
 | Canonical harmonic action | common native | `backends/fem/include/frequency_domain/linearized_dynamic_pencil.hpp` + `apply_Aomega` | Apply $A_\omega=\mathrm{i}\omega B_\alpha-L$ to a state. | source visible; managed physics unvalidated |
 | Real-frequency rotation | FEM CPU/GPU algebra | `backends/fem/src/frequency_domain/real_frequency_rotated_pencil.cpp` + `assemble_real_frequency_rotated_pencil` | Assemble the real-split target on the physical frequency axis. | source tested; managed physics unvalidated |
 | Real-frequency SLEPc adapter | FEM CPU modal adapter | `backends/fem/cpu/frequency_domain/slepc_modal_eigen.cpp` + `solve_slepc_gyrotropic_modal_eigen_with_matrices` | Lift the real stiffness/gyrotropic pencil to $R(A)y=\omega R(\mathrm{i}G)y$, apply the signed shift on the physical frequency axis, and map the split vector back to the complex tangent mode. | source contract tested; managed runtime unvalidated |
+| Native shared-domain Floquet selected spectrum | FEM CPU, nonzero-$k$ dynamic-demag modal route | `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp` + `solve_floquet_shared_domain_sparse_modal_spectrum` | Apply the reduced Schur action as a matrix-free SLEPc operator; the inner Poisson `KSPPREONLY`/LU uses `MAT_SHIFT_NONE`. Normalize the magnetic and gyrotropic pencil blocks by the same nonzero scalar. The separate shifted magnetic block is an LU preconditioner only. The EPS absolute prefilter currently uses an uncalibrated $10^{-3}$ multiplier; acceptance checks the original reduced magnetic and potential residuals and is not full descriptor certification. | Runtime-only builds #133–#136 succeeded. #133 produced a candidate with magnetic residual $2.17\times10^{-7}$, rejected at the requested $10^{-8}$. #134–#136 with EPS cutoff $10^{-11}$ produced no converged pair; the measured `ncv=32` experiment did not remove stagnation. KSP true-residual measurement and tolerance calibration remain pending. Physical qualification `NOT VERIFIED`. |
 | Floquet tangent source assembly | FEM CPU Floquet source | `backends/fem/cpu/frequency_domain/floquet_bloch_scalar.cpp` + `assemble_floquet_bloch_scalar_tangent_source` | Assemble the magnetization-to-scalar-potential source element-locally, including the shifted-envelope $\mathrm{i}\mathbf{k}\cdot\mathbf{m}$ term and magnetic-element mask. This is a source assembly boundary, not a production nonzero-$k$ demag qualification. | source contract tested; managed assembly and physics unvalidated |
 | CPU Schur selected spectrum | FEM CPU | `backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.hpp` + `solve_poisson_airbox_modal_eigen_cpu_schur` | Solve and certify the source-visible descriptor reduction. | source tested; managed qualification absent |
 | GPU PETSc/SLEPc selected spectrum | FEM GPU | `backends/fem/include/frequency_domain/modal_gpu_krylov.hpp` + `solve_poisson_airbox_modal_eigen_gpu_petsc_slepc` | Declare the GPU modal adapter. | source tested; device qualification absent |
 | Modal payload ownership | common native | `crates/fullmag-runner/src/native_fem/frequency_domain.rs` + `validate_native_modal_request_payload_ownership` | Reject ambiguous or missing operator payload ownership. | source tested; runtime unvalidated |
 | Driven method fail-closed policy | common runner | `crates/fullmag-runner/src/frequency_response.rs` + `frequency_response_solver_method_rejection_reason` | Reject unavailable method/device combinations before fallback. | source tested |
 | Native CPU driven boundary | FEM CPU | `crates/fullmag-runner/src/frequency_response.rs` + `try_execute_fem_frequency_response_native_production_cpu` | Build the native CPU response request and preserve explicit failure. | source tested; managed physics unvalidated |
+| Shared-domain Floquet modal frame guard | FEM CPU modal/demag | `backends/fem/cpu/frequency_domain/floquet_airbox_operator.cpp` + `validate_periodic_tangent_frames` | Before building the magnetic phase constraint, require finite and matching $m$, $e_1$, and $e_2$ components on each paired active magnetic seam (maximum component mismatch $10^{-10}$); reject unsupported tangent-frame rotations instead of applying an identity component map. | source regression added; managed runtime and physics unvalidated |
 | Floquet phase/frame checks | FEM response | `backends/fem/src/frequency_domain/driven_response_solver.cpp` + `validate_driven_response_floquet_phase_constraints` | Validate phase loops, tangent-frame matching and drive consistency. | source tested; demag-k bridge source-visible, managed/physics unvalidated |
 | Contract regression | documentation | `scripts/test_frequency_domain_math_contract_docs.py` + `test_canonical_fem_dynamic_solver_contract_freezes_algebra_units_and_claims` | Freeze algebra, units, lane names and honest claim vocabulary. | source tested; not numerical evidence |
 
@@ -1096,13 +1328,485 @@ absent. Nonzero-k dynamic demag is gated as unqualified, nonzero-k DMI remains
 unavailable, and fully 3D periodic demag remains unavailable; all unsupported
 combinations fail closed.
 
+The native shared-domain Floquet modal implementation keeps the Schur action
+in the SLEPc shell and uses `MAT_SHIFT_NONE` for the inner Poisson LU that
+computes $P(\mathbf k)^{-1}$. Its separate explicit shifted magnetic matrix is
+an approximate LU preconditioner for the outer spectral transform only; its
+norm-derived nonzero shift must not enter the generalized pencil or original
+block residual. The first managed nonzero-$k$ smoke reached candidate filtering
+after the outer LU zero pivot was removed, but no mode passed the reduced
+residual gate. Candidate residual breakdown was not present in that build's
+diagnostics. Local source changes add separate EPS, magnetic-block and
+potential-block measurements, count candidates with fully evaluated
+residuals, serialize unmeasured metrics as `null`, and now forbid an inner
+Poisson factorization shift. Those changes have not been rebuilt or executed
+through the managed runner. Until a new managed run passes, this route remains
+unqualified.
+
 The `target_frequency` plus `frequency_window` serialization loss documented
 in section 4.2 is an authoring/round-trip limitation. The policy vocabulary
 `modal_reduced` and `gpu_device_krylov` is also broader than currently
 qualified runtime scope; accepting an enum in Python or IR is not executable
 or production evidence.
 
+### Managed $k_2$ residual checkpoint — 2026-09-23
+
+Build job `d4a26468c5124354b9956ac5ddb92aef` finished successfully as a
+runtime-only `fem-cpu-slepc-runtime-v1` build for commit
+`479d5c5ca060ca7f8d00705fa96b62e52493bf3c` and source snapshot
+`8467417fdf6ce3265f00c5dd61b5390b1c32352dd6475421d39b74344b89d052`.
+The runtime attestation reported native FEM CPU available; no unit tests were
+compiled or run by that recipe.
+
+The managed `de-smoke-k2` run used FEM CPU/double/SLEPc, dynamic Floquet demag,
+$\mathbf k=(0,2\times10^6,0)\,\mathrm{rad\,m^{-1}}$, 1980 nodes, 5720
+tetrahedra, and 1195 Floquet pairs. It reached the modal solve and found an
+in-window candidate at $9.7233362727\,\mathrm{GHz}$, but produced no accepted
+mode. The magnetic original-block residual was
+$2.1678405358\times10^{-7}$ against the requested $10^{-8}$ gate; the
+potential residual was about $1.42\times10^{-14}$. No dispersion CSV row or
+plot is valid from this run.
+
+The diagnostics exposed a convergence-scale mismatch: the adapter used
+`EPS_ERROR_RELATIVE`, whose SLEPc definition is $\lVert r\rVert/|\lambda|$,
+and compared it with a dimensionless original-block residual. For this
+generalized SI pencil, the reported EPS value was $5.72\times10^{-20}$ while
+the physical magnetic residual was $2.17\times10^{-7}$. At that checkpoint,
+the source asked SLEPc to stop on an absolute true residual of the commonly normalized pencil,
+with internal tolerance
+$\max(100\epsilon_{\rm machine},10^{-2}\,\mathrm{rtol}_{\rm requested})$.
+The reported absolute EPS residual is diagnostic only; final mode acceptance
+still uses the original magnetic and potential residuals and the requested
+relative tolerance. This correction is **source changed, runtime not yet
+verified**. See the [SLEPc convergence-test documentation](https://slepc.upv.es/release/manualpages/EPS/EPSSetConvergenceTest.html),
+[true-residual documentation](https://slepc.upv.es/release/manualpages/EPS/EPSSetTrueResidual.html),
+and [error-type definitions](https://slepc.upv.es/release/manualpages/EPS/EPSErrorType.html).
+
+The same run now exported `H_demag` and `demag_phi`. The static periodic-seam
+diagnostic passed for six boundary-pair groups with zero measured magnetization,
+potential, field and normal-flux mismatch, and the recomputed final-state
+linearization certificate matched. This is a static $k=0$, uniform in-plane
+equilibrium check only; it does not qualify the dynamic nonzero-$k$ demag
+operator or the failed modal solve. The LLG qualification artifact remains
+`not_evaluated`.
+
+### Managed $k_2$ EPS cutoff follow-up — 2026-09-25
+
+Runtime job `60a2a77007e7462aa10bba1d6732588f` was accepted as a
+runtime-only FEM CPU/SLEPc build (14 artifacts, exit 0). Its first pilot
+`8787e6eac6434ef9a2ffcc3b1702c65f` used the SLEPc default limit of 100
+iterations. A follow-up run `ca448b26d8934e849c8bb50460e92612` used the same
+runtime, the versioned DE-SMOKE input from commit
+`7a8b57cf1ca6b64902cdee60945cebdda9e2bd4c`, and an explicit 500-iteration
+limit. Both frequency subwindows still ended with
+`EPS_DIVERGED_ITS` (`-1`) and zero converged or accepted modes. Their first
+unconverged absolute true-residual estimates were respectively
+$3.4957520\times10^{-9}$ and $6.0189714\times10^{-9}$, unchanged from the
+100-iteration attempt. The EPS cutoff was $10^{-10}$, while the independent
+requested physical residual gate was $10^{-8}$. The run therefore produced
+no frequency, CSV row, or valid plot. Increasing the iteration limit alone
+did not resolve the solve.
+
+The DE-SMOKE request used `include_demag=true`, nonzero
+$\mathbf k=(0,2\times10^6,0)\,\mathrm{rad\,m^{-1}}$, and reached the
+`floquet_shared_domain_sparse_matshell` operator with 1195 Floquet pairs. This
+proves the request reached the intended dynamic-demag modal path, not that its
+eigenmode was accepted or physically validated. The next source revision sets
+the EPS absolute true-residual prefilter to
+$\max(100\epsilon_{\rm machine},\mathrm{rtol}_{\rm requested})$. This only
+controls which Ritz candidates SLEPc returns; the independent original
+magnetic and potential residual checks remain the acceptance gate. The
+revision still requires a managed rebuild and another numerical pilot.
+
+### Managed $k_2$ physical-residual follow-up — 2026-09-25
+
+Runtime job `059f9538791346289316580c94ce4a36` (#133) succeeded as a
+runtime-only FEM CPU/SLEPc build for source digest
+`9c1312cad6b253fa0345e601de42d2fc2b11aeda0e497e934770a8bbb2714f6d` and
+snapshot SHA `11a754ab43488ba74a9684b4c9dddea72239089604c0787108647f7d9535ac1a`.
+The first `de-smoke-k2` run on that runtime used the committed standalone model
+from `7a8b57cf1ca6b64902cdee60945cebdda9e2bd4c` and ended without an accepted
+mode. The controlled repeat used model commit
+`673dc10b2704a0e12e193f145a86b33ae53ca13e`, which raised only the outer
+iteration limit from 500 to 2000 while leaving the requested physical gate at
+$10^{-8}$. Its run directory is
+`storage/runs/eigensolve-dispersion-plan-20260-c5dfad6d7f548079/059f9538791346289316580c94ce4a36/comsol-dispersion/f683308e79b449e7a2db987253ae9535`.
+
+The repeat again ended with `EPS_DIVERGED_ITS` and zero accepted modes. It
+returned two unaccepted candidates near $9.7233363\,\mathrm{GHz}$; their
+absolute true residual was $3.4957520\times10^{-9}$ while the reconstructed
+magnetic-block relative residual stayed at $2.1678405\times10^{-7}$, above the
+requested algebraic gate. The paired potential residual was
+$1.2442\times10^{-14}$; the maximum across candidates was
+$1.4175\times10^{-14}$. Increasing the iteration limit alone did not improve
+the original residual. The ratio between the reported residual measures shows
+that EPS absolute convergence does not guarantee the requested block residual.
+It does not establish whether that requested tolerance is necessary for a
+specified frequency accuracy.
+
+The source now sets the EPS prefilter to
+$\max(100\epsilon_{\rm machine},10^{-3}\,\mathrm{rtol}_{\rm requested})$ and
+keeps acceptance at the requested original-block relative residual. This
+heuristic was subsequently built and run in #134–#136. It did not resolve the
+plateau. No nonzero-$k$ mode is accepted at the requested tolerance. A plot of
+unaccepted candidates must explicitly identify them as diagnostic data; it
+cannot certify dispersion or silently change historical run status. The next
+step is the tolerance calibration in section 3.2, not an unchanged rebuild.
+
+The first follow-up runtime build was queued as job
+`f29dad61e46048ff934ada17e75cde53` with source digest
+`d90df5fb5da8eb13cd15326c1b44b527cd54dbd571645ca1ab636ffeab7e84a0` and
+snapshot SHA `8a7b9ff2e8c91609a925055d31ee51ae3c3135090bef40873c40c3336c6ecd5f`.
+The build later succeeded. The latest #136 pilot also completed but returned
+no converged pair with `ncv=32`. The audit linked in section 3.2 records the
+exact job/run identities and the unresolved true-residual measurements.
+
+The next source revision adds a direct diagnostic of the **last** shift-invert
+linear solve: it evaluates the actual shifted shell on the returned solution
+and records $\|b-A_\sigma x\|_2$, $\|b\|_2$, their ratio, and PETSc's resolved
+preconditioning side and norm type. This is distinct from
+`KSPGetResidualNorm`; it does not bound all earlier linear solves. For a
+reconstructed candidate, the diagnostic also records the imaginary part of
+the rotated eigenvalue, the original magnetic residual before projecting that
+part away, and the ratio of the physical-mode norm to the real-split vector
+norm. These measurements have no runtime evidence until a new managed build
+and pilot run; the acceptance rule and historical statuses remain unchanged.
+
+For an explicitly requested small-problem diagnostic, the source also
+materializes the original Schur action
+$S=A_{qq}-A_{q\phi}P^{-1}A_{\phi q}$ in its real-split representation and
+compares it with the production shell before solving $(S,B_{qq})$ by dense
+LAPACK without shift-invert. SLEPc 3.24 exposes this as `STSHIFT` with zero
+shift, not as a separate `STNONE` type. It uses a separate unshifted Poisson LU and is
+bounded to at most 512 real-split magnetic unknowns. The direct eigenpair's
+raw and projected original-block residuals are reported separately. This
+oracle does not supply a production mode or change acceptance, and it has
+no managed runtime evidence yet; the C1 build snapshot predates this source.
+
+The managed C1 runtime build #137 succeeded, but its first DE-SMOKE $k_y=2
+\times10^6\,\mathrm{rad\,m^{-1}}$ pilot crashed with PETSc signal 11 after
+`EPSSolve`. A bounded one-iteration diagnostic under Valgrind localized the
+invalid read to the new true-residual `MatMult`: the RHS/solution borrowed
+from SLEPc's KSP after `EPSSolve` were no longer valid. The source now copies
+the last RHS and solution in a `KSPSetPostSolve` callback while those vectors
+are live, then evaluates the shifted residual from the copies. A later source
+review also retained an owned PETSc reference to the shifted `Mat` until that
+measurement; otherwise its borrowed pointer could outlive the KSP owner.
+The vector-copy correction is in build #140, while the matrix-reference change
+still requires a subsequent managed build and pilot. Neither the physical tolerance
+nor scientific qualification changed. The diagnostic also reported earlier
+MFEM sparse-matrix writes outside allocated objects during initialization;
+that separate memory finding remains under investigation.
+
+For tolerance calibration only, DE-SMOKE single-k and multi-k pilots can request private,
+independent diagnostic values for the EPS absolute true-residual prefilter
+(`FULLMAG_FLOQUET_EPS_PREFILTER_ABS`) and the shifted KSP relative tolerance
+(`FULLMAG_FLOQUET_SHIFTED_KSP_RTOL`). Each accepts a bounded enumerated value;
+the request records it, and solver diagnostics record the resolved numeric
+settings. Neither changes the physical original-block acceptance tolerance
+unless the separate `solver_rtol` input is explicitly changed. This permits
+fixed-physics comparisons of returned Ritz candidates and inner-solve quality;
+it is not a calibrated accuracy policy or a production fallback.
+
+The #141 runtime resolved left-preconditioned GMRES and reported a configured
+residual near $10^{-24}$ while direct evaluation of its last shifted system
+gave $\|b-A_\sigma x\|_2/\|b\|_2\approx 5.10\times10^{-7}$. Here $b$ is the
+right-hand side of that one shift-invert solve, $A_\sigma$ its exact Schur
+operator, and $x$ the returned vector; all have the same normalized SI pencil
+scaling. This is an algebraic residual, separate from the reconstructed
+magnetic and potential mode residuals. The bounded C2 dense oracle on the
+same operator found $9.723336314058123$ GHz at $k_y=2\times10^6\,\mathrm{rad,m^{-1}}$
+with magnetic residual $1.68\times10^{-14}$, but the iterative route still
+returned no mode. For the next solver experiment, FEM CPU sets right GMRES
+preconditioning and explicitly requests `KSP_NORM_UNPRECONDITIONED`. PETSc
+[documents this supported GMRES norm/side pair](https://petsc.org/release/src/ksp/ksp/impls/gmres/gmres.c.html).
+The configured inner tolerance and the physical $10^{-8}$ original-block
+acceptance criterion remain unchanged. Right preconditioning removes the
+left-preconditioned norm ambiguity; it does not by itself certify a true
+residual for every inner iteration, repair an MFEM ABI mismatch, or qualify
+the dispersion. Managed build, pilot and memory checks remain required.
+Build #142 resolved right-preconditioned GMRES with the unpreconditioned norm,
+but its $k_y=2\times10^6\,\mathrm{rad\,m^{-1}}$ pilot still reached 2000 EPS
+iterations in each window without a converged mode. The final independently
+recomputed linear relative residuals were $3.30\times10^{-6}$ and
+$5.01\times10^{-7}$, while the GMRES recurrence reported absolute norms near
+$10^{-25}$. PETSc documents that
+[`KSPGetResidualNorm`](https://petsc.org/release/manualpages/KSP/KSPGetResidualNorm/)
+for GMRES may be an approximation rather than a direct evaluation of
+$b-A_\sigma x$.
+The next numerical experiment uses modified Gram--Schmidt orthogonalization
+for this right-preconditioned GMRES, following PETSc's
+[orthogonalization guidance](https://petsc.org/release/manualpages/KSP/KSPGMRESModifiedGramSchmidtOrthogonalization/).
+This can reduce loss of Krylov-basis
+orthogonality, but is not assumed to fix the discrepancy; the same physical
+$10^{-8}$ mode gate and independently recomputed linear residuals decide the
+outcome. The experiment applies only to the FEM CPU Floquet modal lane; FDM
+and FEM GPU semantics are unchanged. It changes no Python or `ProblemIR`
+parameter, and a managed source snapshot plus pilot receipt must identify
+which binary ran it. If the true residual plateau persists, inspect the
+conditioning and repeatability of the exact Schur MatShell and its Poisson
+inverse before changing tolerances.
+
+The next C1 source revision also evaluates $\|b-A_\sigma x\|_2/\|b\|_2$ in
+the KSP post-solve callback for every completed inner solve, recording the
+sample count, measurement failures, and maximum. This measures completed
+linear solves rather than every GMRES iteration and remains diagnostic; a
+missing measurement cannot silently become a zero maximum. Runtime evidence
+for these new fields is pending a subsequent managed build.
+
+Build #143 supplied that runtime evidence. Its MGS pilot at
+$k_y=2\times10^6\,\mathrm{rad\,m^{-1}}$ reduced the final true relative
+KSP residual in the first subwindow from #142's $3.30\times10^{-6}$ to
+$4.14\times10^{-8}$, but both subwindows still reached 2000 EPS iterations
+without an accepted mode. Across 32016 completed inner solves per subwindow,
+the largest measured true relative residuals were $1.05\times10^{-4}$ and
+$2.50\times10^{-5}$, with zero measurement failures. Relaxing only the
+diagnostic EPS prefilter to $10^{-8}$ exposed a $9.723336314$ GHz candidate,
+whose original magnetic residual was $2.80\times10^{-7}$; the unchanged
+$10^{-8}$ physical gate correctly rejected it. Thus neither the last KSP
+solve nor EPS's normalized absolute residual certifies the physical mode.
+
+Build #144 tested classical Gram--Schmidt with refinement on every GMRES
+orthogonalization step, using PETSc's
+[`KSPGMRESSetCGSRefinementType`](https://petsc.org/release/manualpages/KSP/KSPGMRESSetCGSRefinementType/).
+The managed $k_y=2\times10^6\,\mathrm{rad\,m^{-1}}$ pilot again returned zero
+accepted modes. Its last true relative KSP residuals were $8.74\times10^{-7}$
+and $1.09\times10^{-6}$, while the maxima across completed inner solves were
+$8.59\times10^{-5}$ and $5.83\times10^{-5}$. With only the diagnostic EPS
+prefilter changed to $10^{-8}$, a $9.723336314$ GHz candidate had original
+magnetic residual $2.60\times10^{-7}$ and was rejected by the unchanged
+$10^{-8}$ physical gate. Thus this orthogonalization change did not cure the
+inner-solve discrepancy.
+
+The next bounded FEM CPU experiment controls the GMRES restart length using
+PETSc's [`KSPGMRESSetRestart`](https://petsc.org/release/manualpages/KSP/KSPGMRESSetRestart/).
+The default length is 30, whereas the observed projected-convergence point
+was about 13--15 iterations. Diagnostic choices 8, 10, 12 and 16 force an
+earlier restart; the resolved value is reported with the subwindow solver
+policy. The experiment retains the same right preconditioning, shifts,
+tolerances, original-block gate and measurement of each completed inner solve.
+
+The shifted Floquet GMRES sets its default restart length to `8` and PETSc's
+restart-breakdown tolerance to `2.0`, reporting both values. At every restart,
+PETSc compares the explicitly recomputed residual with the recursive residual
+against the residual norm at the beginning of the cycle. The Floquet Schur
+`MatShell` contains a finite-tolerance inner Poisson solve, so the two residual
+histories need not agree to the default factor `0.1`. The earlier value `1.0`
+permitted residual replacement only while the discrepancy did not exceed the
+complete cycle-start residual. Signed-path pilots with restart `8` reached roundoff
+with observed discrepancy ratios `1.045` and `1.362` relative to the cycle-start
+residual, so `2.0` permits those bounded transients and restarts from the rebuilt
+residual. Larger discrepancies and actual KSP nonconvergence remain hard
+errors. This numerical policy does not relax any scientific acceptance
+criterion: every completed shifted solve is still measured independently, and
+the reconstructed original magnetic and potential residuals remain the mode
+acceptance gates.
+This tests whether an earlier recomputation improves the true linear residual,
+not whether the physical acceptance threshold should be relaxed. If it does
+not, the shifted Schur conditioning and the preconditioner's omission of
+demagnetizing feedback require direct investigation.
+
+Managed build #151 and run `b96f1961f51e4d34b038b689ee45caaf`
+resolve that bounded experiment for
+$k_y=2\times10^6\,\mathrm{rad\,m^{-1}}$. With restart length 10, SLEPc
+accepted the $9.723336314057247$ GHz mode after three outer iterations. The
+independent full projected weak-form residual was $2.18834\times10^{-10}$,
+the reduced magnetic residual was $8.85558\times10^{-14}$, and the physical
+potential residual was $1.25985\times10^{-14}$. All four periodic-seam
+residuals and both dynamic-demagnetizing operator probes passed. The open-film
+uniform-thickness $n=0$ reference is $9.725724281195415$ GHz, a difference of
+$-2.387967$ MHz ($-0.0245531\%$). This establishes a numerically accepted,
+unqualified nonzero-$k$ point; it does not replace mesh, airbox, spectral
+coverage, mode-profile, or COMSOL A1 validation.
+
+The managed pilot records restart length 10 explicitly in its request and
+subwindow diagnostics. Multi-point DE-SMOKE runs may request the same bounded
+restart value; the native solver default remains 30. The first 11-point run
+then exposed a separate provenance defect before the first modal solve:
+`AcceptedFemRelaxStageHandoff.v3` was parsed as
+`AcceptedFemEigenEquilibriumHandoff.v1`. The path adapter now distinguishes
+the schemas, verifies the stage-handoff content and topology identities, reads
+the equilibrium-artifact and linearization-state digests from the solver
+diagnostics, and constructs the eigen handoff used by subsequent $k$ points.
+That correction still requires a fresh managed build and multi-point runtime
+proof.
+
 (scientific-bibliography)=
+### K0 probe residual under cancellation — 2026-09-30
+
+Managed build #167 passed all nine modal contracts. The signed-path pilot with
+EPS prefilter $10^{-10}$ reached Gamma but the K0 in-plane operator probe
+failed intermittently: signed potential/source actions were close to zero,
+and their norm ratio was $0.08035$ although the mean field was approximately
+$10^{-25}\,\mathrm{A/m}$ and the probe energy approximately $10^{-49}\,\mathrm{J}$.
+This is a cancellation-sensitive diagnostic, not an eight-percent mode residual.
+
+The K0 probe now measures the original potential equation using this scale:
+
+```{math}
+:label: eq-fem-k0-probe-componentwise-residual
+\epsilon_{\phi,\mathrm{probe}} =
+\max_i
+\frac{|(r_\phi)_i|}
+{\bigl(|P|\,|\phi|+|A_{\phi q}|\,|q|+|c\eta|\bigr)_i}.
+```
+
+Absolute values are componentwise. The gauge term is omitted for Dirichlet.
+Zero numerator and denominator contribute zero; nonzero numerator with zero
+denominator fails closed. The denominator has units $\mathrm{A\,m}$, matching
+the original residual. This follows cancellation-safe scaling in
+[LAPACK DLA_LIN_BERR](https://www.netlib.org/lapack/explore-html/d0/df7/dla__lin__berr_8f_source.html);
+both coupled-block contributions participate because the source is a matrix
+action. The physical operators do not change.
+
+The unchanged probe gate is $10^{-8}$. Diagnostics identify
+potential_residual_normalization=componentwise_absolute_csr_action and keep
+the previous norm ratio in potential_action_relative_residual. Mean field,
+energy identity, positivity and gauge checks remain independent. This change
+applies only to the K0 diagnostic probe; modal full-block residuals and
+Floquet acceptance retain their definitions.
+
+Implementation: backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.hpp
++ poisson_probe_componentwise_residual, used by
+backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.cpp
++ run_k0_demag_probe_sample. Regression:
+backends/fem/tests/frequency_domain/poisson_airbox_modal_eigen_slepc_test.cpp
++ CertifiesChargeFreeProbeWithoutDividingByCancelledSource checks cancellation,
+material defects, exact-zero rows, gauge and nonfinite inputs.
+Managed execution of this correction and repetition of the signed path are
+pending; source presence does not qualify the physics.
+
+### Signed K0 spectral guards — source correction pending runtime
+
+The #167 Gamma window accepted a $9.299249697$ GHz mode with full descriptor
+backward error $4.20\times10^{-15}$, but eight refinement subwindows lacked a
+lower positive-frequency guard. A lower endpoint below the fundamental mode
+need not have a positive eigenvalue below it. Coverage must distinguish
+published positive modes from evidence on the signed rotated-pencil spectrum.
+
+For the existing empirical shift/NEV-refinement certificate, the source now
+retains signed Ritz frequencies in $\mathrm{Hz}$ only after the same original
+descriptor reconstruction and physical residual gate used for positive modes.
+The coverage extrema use these untruncated certified guards. Negative guards
+are never published as positive modes, never enter branch tracking, and never
+change the requested mode count. Uncertified, unreadable or nonfinite Ritz
+pairs still invalidate coverage. A one-sided saturated signed pool still fails.
+
+This relies on the configured
+[SLEPc EPS_TARGET_MAGNITUDE](https://slepc.upv.es/release/manualpages/EPS/EPSSetWhichEigenpairs.html)
+selection and the existing overlapping target/NEV perturbation checks.
+It is an empirical completeness certificate, not an exact spectral count.
+A negative Ritz value without a reconstructed physical residual cannot certify
+the endpoint. The real-split duplication and cluster-rank checks remain separate.
+
+Owner: backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.cpp +
+solve_poisson_airbox_modal_eigen_cpu_schur. Native regression exercises a
+fundamental-mode gap in a larger synthetic signed spectrum, while the
+existing one-sided saturated-spectrum regression must remain fail-closed.
+Managed execution of this correction is pending. The two SLEPc divergences in
+the #167 Gamma schedule are an additional unresolved numerical gate.
+
+### DE/BV single-point comparison at 25 rad per micrometre
+
+The user-requested expanded-range check uses the same uniform 10 nm film,
+40 nm lateral periodic cell, 2 micrometre air padding, 0.1 T bias along x,
+Ms = 800000 A/m, A = 13 pJ/m and gamma0 = 221100 m/(A s).
+DE uses k = (0, 25e6, 0) rad/m; BV uses k = (25e6, 0, 0) rad/m,
+with equilibrium magnetization along x in both cases. Exchange and dynamic
+Floquet demagnetization remain enabled. The wavevector is inside the first
+cell Brillouin zone (pi / 40 nm). Both calculations retain the original
+physical residual threshold 1e-8 and export complex mode fields.
+
+The DE frequency window is 12--16 GHz; BV uses 8.5--12 GHz.
+These are search intervals, not imposed eigenfrequencies. The existing
+uniform-thickness n=0 analytical reference is evaluated only after solving.
+Neither a close frequency nor a single-point match proves mesh/airbox
+convergence or mode-profile identity. Managed execution is pending.
+The standalone model input is versioned separately from the attested compiled
+runtime; both identities must be preserved in the run receipt.
+
+### Positive six-point DE/BV controls
+
+The expanded single-point comparison is followed by six physical samples
+k = 2, 5, 10, 15, 20 and 25 rad/micrometre for each orientation.
+The equilibrium, mesh, SI material parameters, airbox and physical residual
+threshold remain those of the preceding 25 rad/micrometre controls.
+DE propagates along y and searches 8.5--16 GHz; BV propagates along x and
+searches 8.5--12 GHz. One mode is requested at each sample, with native
+subspace branch tracking and a common relaxed equilibrium.
+Gamma is excluded from this control while its independent window/probe
+corrections await managed execution; it remains required by the full plan.
+All six samples need native descriptor/seam certification and demag probes.
+A multi-point plot is diagnostic until profile identity and mesh/airbox
+convergence are established. No analytical frequency is supplied to the solver.
+
+### Per-mode block-certificate transport along a k path
+
+Managed run 449fb744567a492db32b95329711ed08 computed six DE frequencies,
+but its aggregate spectrum.v3 omitted block_residuals and failed validation.
+The path adapter extracts per-mode quantities from each single-k native
+spectrum. It must retain that same mode's block certificate through the
+tracking/publication boundary, bound to sample index, raw mode index and
+frequency in Hz. The aggregate diagnostic block is not an admissible
+substitute: it can contain null values or describe another candidate.
+
+The source correction copies the unchanged per-mode certificate through a
+private native_mode_block_residuals diagnostic registry. Publication requires
+one unambiguous matching sample/mode/frequency record; absent, duplicated or
+mismatched records never synthesize certification. Both v2 and v3 carry the
+same residual scope, tolerances and Floquet seam evidence. No residual is
+recomputed or relaxed by this transport. Native regression and managed
+execution remain pending; independent single-k solves provide diagnostic
+points while the full multi-k gate remains open.
+
+### Inner-solve diagnostics on an EPS error
+
+FEM CPU queries the shift-invert KSP iteration count, reported norm and stop
+reason before returning an EPSSolve error. A hard PETSc error may leave the
+KSP stop reason at ITERATING; that value is reported as incomplete state,
+not as convergence. The original EPS/MatShell error remains authoritative,
+and no modes are accepted on this path. The reported KSP recurrence norm
+does not substitute for an independently measured true residual. If the
+post-solve hook never ran, the missing true residual remains unavailable.
+This changes failure observability only, not the operator, tolerances,
+window certificate, Python API or ProblemIR.
+
+### Signed single-point DE/BV control
+
+The standalone symmetric uniform-film fixture admits single points at
+positive and negative 25 rad/micrometre along the DE or BV axis. The signed
+wavevector is retained in Python/ProblemIR and metadata; negative k never
+means a negative requested frequency. Both signs use identical positive
+frequency windows, geometry, material, equilibrium and tolerances.
+Inversion symmetry of this centred film and air domain provides a reciprocal
+frequency control. An unstructured mesh may break that symmetry at finite
+resolution, so compare independently certified frequencies and retain their
+difference without imposing equality or fabricating the opposite-k point.
+This is a separate nonzero-k control, not a substitute for Gamma, signed-path
+publication, window completeness, or COMSOL A1 qualification.
+
+### Spatial convergence controls for the expanded DE/BV range
+
+Independent DE/BV points have certified discrete residuals below 3.41e-10,
+but their difference from the uniform n=0 reference grows with k.
+To test spatial discretization separately, the standalone model accepts
+explicit magnetic/interface mesh levels L0 = 10 nm, L1 = 7.5 nm and
+L2 = 5 nm and L3 = 3.75 nm. The material, film/cell dimensions, 2 micrometre air padding,
+outer air mesh bound 100 nm, P1 tetrahedra, three requested thin-film layers,
+relaxation criterion, frequency windows and physical tolerance 1e-8 remain
+fixed. Mesh level and requested element size are retained in runtime metadata.
+This is a magnetic/interface mesh study, not air-domain convergence.
+
+The first comparison uses DE and BV at 25 rad/micrometre. Each solve must
+still pass its original descriptor, Floquet seams, demag probes and potential
+reconstruction checks; frequencies from rejected modes do not close convergence.
+A higher degree count may exercise a different documented preconditioner,
+which must remain explicit in provenance and cannot change the physical
+operator or tolerances. These levels are inputs for a convergence experiment,
+not a claim that the resulting meshes or frequencies are already converged.
+Mesh construction may impose tighter local sizes; actual node/element counts
+and source topology hashes must therefore also be compared.
+
 ## 8. Scientific bibliography
 
 - T. L. Gilbert, “A phenomenological theory of damping in ferromagnetic
@@ -1138,6 +1842,7 @@ visibility into runtime qualification.
 
 | Equation/claim | Lane | Repository path + stable symbol | Responsibility | Tests/evidence | Evidence status | Immutable link |
 |---|---|---|---|---|---|---|
+| Full thickness control evidence | FEM CPU diagnostic | `scripts/collect_de_bv_thickness_comparison.py` + `collect_control` | Bind six thickness runs and Gamma before signed collection accepts convergence evidence. | `scripts/test_signed_de_bv_dispersion.py` + `test_signed_collector_requires_controller_and_separate_convergence_binding` | Synthetic contracts; not convergence qualification | Pending scoped commit |
 | Signed-k solver series | FEM CPU | `scripts/run_nonzero_k_validation_controller.py` + `validation_cases` | Actual 13-point DE and BV series, plus unchanged thickness controls. | `scripts/test_signed_de_bv_dispersion.py` + `test_signed_series_has_actual_paired_samples_and_retains_convergence` | Authoring/contracts tested; runtime pending | Pending scoped commit |
 | Signed-k scientific collection | FEM CPU diagnostic | `scripts/collect_signed_de_bv_dispersion.py` + `collect` | Require all actual points, bound sources, original residuals, fields, signed coordinates; measure reciprocity without imposing it. | `scripts/test_signed_de_bv_dispersion.py` + `test_signed_collector_measures_asymmetry_without_reflecting_frequencies` | Synthetic contract fixtures only; not FEM proof | Pending scoped commit |
 | Kanoniczna numeracja klas periodycznych | FEM CPU preparation | `crates/fullmag-runner/src/fem/eigen_shared_domain_geometry.rs` + `modal_shared_domain_equivalence_classes` | Minimum member representative; direction/order invariant magnetic and scalar maps. | `canonical_periodic_maps_are_pair_order_and_direction_invariant`; `scripts/replay_modal_periodic_reduction_maps.py` + `replay` | Source/replay only; managed runtime required | Pending scoped commit |
@@ -1158,6 +1863,12 @@ visibility into runtime qualification.
 | Ku material identity (source-uniaxial-equilibrium-material-identity) | FEM CPU runner | `crates/fullmag-runner/src/fem/equilibrium_identity.rs` + `equilibrium_material_signature` | Shared producer/consumer v2 Ku signature; exact Ku-free v1 preserved | Rust regression source; runtime pending | NOT VERIFIED | working tree |
 | Ku equilibrium field owner (source-uniaxial-equilibrium-field-owner) | FEM CPU reference observer | `crates/fullmag-runner/src/fem/eigen_equilibrium.rs` + `materialize_equilibrium` | Typed anisotropy channel, separate Zeeman energy and fields | Managed runtime pending; public guards retained | NOT VERIFIED | working tree |
 | {eq}`eq-fem-modal-static-field-frame-transport` (source-static-field-frame-transport) | FEM CPU | `backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp` + `FrequencyDomainStatus assemble_native_magnetic_a_qq` | Cross-node static-field tangent projection | Native covariance regression prepared, not compiled | source-visible / runtime NOT VERIFIED | working tree |
+| {eq}`eq-fem-k0-probe-componentwise-residual` | FEM CPU | `backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.hpp` + `poisson_probe_componentwise_residual` | K0 probe cancellation-safe backward error | Native regression pending | source-visible / unvalidated | working tree |
+| K0 probe regression | FEM CPU | `backends/fem/tests/frequency_domain/poisson_airbox_modal_eigen_slepc_test.cpp` + `main` | Invokes CertifiesChargeFreeProbeWithoutDividingByCancelledSource | Managed modal contract pending | source-visible / unvalidated | working tree |
+| {eq}`eq-fem-floquet-block-residuals` | FEM CPU Floquet | `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp` + `solve_floquet_shared_domain_sparse_modal_spectrum` | Evaluate `floquet_magnetic_residual` and `floquet_potential_residual` from original block actions for acceptance. | #133 candidate residuals; #136 convergence diagnostics; threshold audit | current source inspected; optimal tolerance and physics unvalidated | working-tree source hashes in `docs/audits/2026-09-25-de-residual-threshold-evidence.json`; not a published immutable source link |
+| {eq}`eq-fem-floquet-full-projected-residuals` | FEM CPU Floquet | `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp` + `certify_floquet_full_descriptor` | Reconstruct the full weak equations, project into admissible test spaces, and check periodic seams and boundary-matched gauge policy. | Source review; managed build and pilot pending | source-visible; runtime certification NOT VERIFIED | repository working tree |
+| {eq}`eq-fem-floquet-full-projected-residuals` | FEM CPU runner | `crates/fullmag-runner/src/fem/eigen_native_result.rs` + `native_floquet_physical_mode_certificate_from_json` | Validate physical complex-coefficient certificate flags, residuals, and boundary/gauge provenance; preserve the inapplicable gauge residual as null. | Source review; Rust compilation pending managed build | source-visible; runtime propagation NOT VERIFIED | repository working tree |
+| {eq}`eq-fem-floquet-full-projected-residuals` | FEM CPU runner | `crates/fullmag-runner/src/fem/eigen_native_artifacts.rs` + `floquet_certificate_summary` | Publish the physical Floquet certificate summary without promoting an uncertified mode; keep the legacy doubled-real payload contract separate. | Source review; artifact validation pending managed execution | source-visible; runtime artifacts NOT VERIFIED | repository working tree |
 | Stage-first modal capture | common | `packages/fullmag-py/src/fullmag/world.py` + `eigenmodes_stage` | Build the public modal stage specification. | Python API round-trip tests | source tested | [blob](https://github.com/MateuszZelent/fullmag/blob/70636fa61fcdf32b6f61b7544f347172ef36a219/packages/fullmag-py/src/fullmag/world.py) |
 | Stage-first driven capture | common | `packages/fullmag-py/src/fullmag/world.py` + `frequency_response_stage` | Build the public driven stage and normalized solver policy. | Python API round-trip tests | source tested | [blob](https://github.com/MateuszZelent/fullmag/blob/70636fa61fcdf32b6f61b7544f347172ef36a219/packages/fullmag-py/src/fullmag/world.py) |
 | Modal validation and lowering | common | `packages/fullmag-py/src/fullmag/model/study.py` + `class Eigenmodes` | Validate and serialize the modal request. | `test_study_stage_builder_eigenmodes_operator_roundtrips` | source tested | [blob](https://github.com/MateuszZelent/fullmag/blob/70636fa61fcdf32b6f61b7544f347172ef36a219/packages/fullmag-py/src/fullmag/model/study.py) |
@@ -1173,6 +1884,7 @@ visibility into runtime qualification.
 | Method/device rejection | common runner | `crates/fullmag-runner/src/frequency_response.rs` + `frequency_response_solver_method_rejection_reason` | Fail unsupported response methods before fallback. | policy rejection tests | source tested | [blob](https://github.com/MateuszZelent/fullmag/blob/70636fa61fcdf32b6f61b7544f347172ef36a219/crates/fullmag-runner/src/frequency_response.rs) |
 | Native CPU response boundary | FEM CPU | `crates/fullmag-runner/src/frequency_response.rs` + `try_execute_fem_frequency_response_native_production_cpu` | Build the native request and preserve native failure/provenance. | focused runner/native tests | source tested; managed physics unvalidated | [blob](https://github.com/MateuszZelent/fullmag/blob/70636fa61fcdf32b6f61b7544f347172ef36a219/crates/fullmag-runner/src/frequency_response.rs) |
 | {eq}`eq-fem-dynamic-floquet-constraint` validation | FEM response | `backends/fem/src/frequency_domain/driven_response_solver.cpp` + `validate_driven_response_floquet_phase_constraints` | Validate phase cycles, tangent-frame equality and drive consistency. | focused Floquet response tests | source tested; demag-k bridge source-visible, managed/physics unvalidated | [blob](https://github.com/MateuszZelent/fullmag/blob/70636fa61fcdf32b6f61b7544f347172ef36a219/backends/fem/src/frequency_domain/driven_response_solver.cpp) |
+| {eq}`eq-fem-modal-tangent-frame-rotation` | FEM CPU modal | `backends/fem/cpu/frequency_domain/floquet_airbox_operator.cpp` + `build_tangent_constraint_entries` | Apply `T_member^T T_rep` and Floquet phase for local tangent-coordinate transport; fail closed on invalid frames or a different equilibrium. | regression authored for rotated basis and mismatch rejection; not compiled | source visible; runtime unvalidated | repository source |
 | Contract text regression | documentation | `scripts/test_frequency_domain_math_contract_docs.py` + `test_canonical_fem_dynamic_solver_contract_freezes_algebra_units_and_claims` | Freeze canonical algebra, units, lane names and claim status. | same symbol | source tested; not numerical evidence | [blob](https://github.com/MateuszZelent/fullmag/blob/70636fa61fcdf32b6f61b7544f347172ef36a219/scripts/test_frequency_domain_math_contract_docs.py) |
 | {eq}`eq-fem-full-bloch-ansatz`, {eq}`eq-fem-full-bloch-demag`, {eq}`eq-fem-full-bloch-weak` | FEM CPU/GPU planned | `docs/physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md` + `DOC-ANCHOR:full-bloch-operator-contract` | Freeze the 3D full Bloch field, ordinary-gradient demagnetization and weak-form boundary before production assembly. | S03/S04 and V0/V4 are pending | planned contract; no runtime evidence | repository note |
 | {eq}`eq-fem-waveguide-envelope-demag` | FEM CPU/GPU planned | `docs/physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md` + `DOC-ANCHOR:waveguide-envelope-operator-contract` | Freeze the separate 2.5D waveguide envelope and shifted-gradient demagnetization equations. | S09/V5 pending | planned contract; no runtime evidence | repository note |
@@ -1182,6 +1894,40 @@ visibility into runtime qualification.
 | MFEM Floquet airbox bridge | FEM CPU planned | `backends/fem/cpu/frequency_domain/floquet_airbox_operator.hpp` + `assemble_floquet_airbox_dynamic_demag_k` | Materialize bounded `C(k)^H P_full(k) C(k)` and `C(k)^H A_{phi q}` blocks, then delegate Schur elimination to the dynamic demag-k provider; production mesh assembly and capability promotion remain separate. | `fem_floquet_airbox_operator_contract` source is present; compile/runtime unvalidated | source visible; uncompiled/unvalidated | repository source |
 | Waveguide nonzero-k demagnetization oracle | FEM CPU planned | `backends/fem/include/frequency_domain/floquet_waveguide_demag_k.hpp` + `build_floquet_waveguide_demag_k_real_split` | Provide the bounded 2.5D modified-Helmholtz and Schur oracle; transverse MFEM assembly and open-boundary convergence remain separate. | `fem_floquet_waveguide_demag_k_contract` source is present; compile/runtime unvalidated | source visible; uncompiled/unvalidated | repository source |
 | Existing shared-domain Poisson owner | FEM CPU | `backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.hpp` + `assemble_poisson_airbox_shared_domain` | Preserve the existing K0/shared-domain assembly boundary while nonzero-k demag remains gated. | existing source contract tests | source visible; nonzero-k physics unvalidated | repository source |
+| Floquet pure-Neumann invertibility policy | FEM CPU | `backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp` + `assemble_poisson_airbox_shared_domain_payload` | For Floquet k, clear the k=0 gauge and defer scalar solvability to the phase-constrained operator factorization and residual checks; do not use a universal $|k|L$ cutoff. | source review; managed nonzero-k physics still unvalidated | source visible; nonzero-k physics unvalidated | [blob](https://github.com/MateuszZelent/fullmag/blob/7a8b57cf1ca6b64902cdee60945cebdda9e2bd4c/backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp) |
+| Cached K0 window preconditioning | FEM CPU | `backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.cpp` + `create_production_cached_window_preconditioner` | Retain demag in bounded cached preconditioning across shifts. | Managed runtime pending | source-visible / unvalidated | working tree |
+| Coupled cached-window regression | FEM CPU | `backends/fem/tests/frequency_domain/poisson_airbox_modal_eigen_slepc_test.cpp` + `void FrequencyWindowRetainsDemagInBoundedCachedPreconditioner` | Known Schur frequency across shifts and fresh windows. | Native compilation prohibited; pending | source-visible / unvalidated | working tree |
+
+### Anulowanie podczas materializacji preconditionera K0
+
+Jeśli przerwanie zostanie zaobserwowane podczas budowania dokładnego
+preconditionera Schura, solver zwraca `interrupted` z `cancel_requested`.
+Nie przechodzi do zastępczego preconditionera magnetycznego i nie klasyfikuje
+anulowania jako awarii operatora. Nie zmienia to operatora eigenproblemu,
+równań fizycznych ani progów residualu. Regresja native wymaga managed
+kompilacji i uruchomienia; stan tej nowej ścieżki pozostaje NOT VERIFIED.
+
+Materializacja sprawdza callback anulowania przed każdą kolumną, niezależnie
+od tego, czy bezpośredni solve Poissona wywołuje callback iteracyjny KSP.
+
+| Source ID | Plik | Symbol | Odpowiedzialność |
+|---|---|---|---|
+| `source-k0-cached-window-cancellation-regression` | `backends/fem/tests/frequency_domain/poisson_airbox_modal_eigen_slepc_test.cpp` | `void FrequencyWindowCancellationDuringCachedPreconditionerPreservesStopReason` | Anulowanie podczas materializacji cache przed EPS; native runtime NOT VERIFIED. |
+
+### Tożsamość modu podczas agregacji multi-k
+
+Przejście z single-k do multi-k wymaga jawnego indeksu modu mieszczącego
+się w typie hosta i jawnej skończonej częstotliwości w Hz. Powtórzone
+indeksy w jednym punkcie są błędem. Brak indeksu ani częstotliwości nie
+może tworzyć fikcyjnego modu 0 lub punktu 0 Hz. Jawne 0 Hz pozostaje
+legalne; walidacja tożsamości nie stanowi dowodu fizycznego trybu zerowego.
+Niezmieniony certyfikat native pozostaje związany z punktem, indeksem i
+częstotliwością. Nowa regresja Rust wymaga kompilacji: NOT VERIFIED.
+
+| Source ID | Plik | Symbol | Odpowiedzialność |
+|---|---|---|---|
+| `source-multi-k-native-mode-identity` | `crates/fullmag-runner/src/fem/eigen_path.rs` | `eigen_path_native_mode_identities` | Jawne indeksy i częstotliwości przed trackingiem; brak domyślnego modu 0. |
+| `source-multi-k-native-mode-identity-regression` | `crates/fullmag-runner/src/fem/eigen_path.rs` | `native_mode_identity_rejects_missing_fields_and_duplicates` | Brak/błędny typ/powtórzony indeks; legalne jawne zero i zachowanie kolejności. Rust runtime NOT VERIFIED. |
 
 
 ## Diagnostyka consistent-mass zapisanych modów DE/BV
@@ -1243,6 +1989,7 @@ nowego native runtime i nie kwalifikacja A1/COMSOL ani GPU.
 | `source-profile-overlap` | `scripts/compare_de_bv_mode_profiles.py` | `normalized_overlap` | Phase- and scale-invariant squared overlap |
 | `source-profile-mass-regression` | `scripts/test_compare_de_bv_mode_profiles.py` | `test_exact_p1_basis_mass_differs_from_lumping` | Independent analytical P1 basis mass check distinguishes consistent from lumped mass |
 
+
 ## Zagęszczona ścieżka walidacyjna DE/BV
 
 Wejście examples/fem_de_smoke_numeric.py obsługuje teraz żądanie
@@ -1296,6 +2043,217 @@ test_dense_certificate_inventory_and_scope_are_strict.
 | `source-dense-row-preflight` | `scripts/validate_de_smoke_rows.py` | `validate_rows` | Dense path completeness, Gamma/nonzero operator scope and frozen residual admission |
 | `source-dense-contract-regression` | `scripts/test_de_smoke_dense_sampling.py` | `test_dense_certificate_inventory_and_scope_are_strict` | Reject loose or misplaced certificates and extra spectrum records |
 | `source-dense-input-regression` | `scripts/test_de_smoke_dense_sampling.py` | `test_dense_path_has_26_samples_and_one_shared_relaxation` | Public DE/BV KPath export and one shared source relaxation |
+
+
+## Przygotowanie wektora produkcyjnego trackingu — kontrola payloadu i fazy
+
+Dla ścieżki Floqueta przestrzenny mod delta_m zawiera exp(-i k·r).
+Tracker ma porównywać nodalny envelope exp(+i k·r) delta_m, w globalnym
+układzie Cartesian XYZ, zgodnie z wcześniej zdefiniowanym porównaniem profili.
+Zmiana fazy jest postprocessingiem trackingu; publikowane pola, równania
+solvera i temporalny phasor exp(+i omega t) pozostają oddzielnymi kontraktami.
+Dla Gamma i niefloquetowych granic nie usuwa się przestrzennej fazy.
+
+Adapter wymaga pełnego indeksowania siatki dla obu tablic real/imag,
+dokładnie trzech skończonych komponentów na węzeł oraz zgodnego surowego
+ID modu i wektora k. Nie usuwa wadliwego wiersza ani nie zastępuje brakującego
+komponentu zerem. Wybrane aktywne węzły muszą być unikalne i w zakresie.
+Duplikat artefaktu, uszkodzony JSON lub obecne lecz wadliwe pole są błędem runu.
+Brak artefaktu lub obu pól pozostawia jawnie niedostępny modal overlap;
+obsługa frequency fallback nadal nie jest dowodem ciągłości fizycznej gałęzi.
+
+Źródła: crates/fullmag-runner/src/fem/eigen_path_artifacts.rs +
+eigen_path_mode_tracking_vector i crates/fullmag-runner/src/fem/eigen_output.rs +
+mode_vector_entries. Realizacja jest przygotowaniem źródeł FEM CPU/GPU
+postprocessingu na CPU; kompilacja i managed runtime tych zmian NOT VERIFIED.
+FDM CPU/GPU nie są realizowane przez ten adapter.
+
+Poprawka payload/fazy opisana w tej sekcji sama nie zmienia diagonalnego/lumped
+iloczynu skalarnego. Oddzielny przyrost consistent P1 opisano poniżej.
+S06 wymaga nadal metryki consistent P1, kontroli tożsamości mesh/equilibrium,
+transportu podprzestrzeni oraz runtime na pełnej ścieżce. Offline consistent-mass
+profile pozostają diagnostyką, nie produkcyjnym zaliczeniem tej bramki.
+
+
+## Indeks źródeł przygotowania envelope
+
+| Source ID | Path | Symbol | Responsibility |
+|---|---|---|---|
+| `source-tracking-envelope-payload` | `crates/fullmag-runner/src/fem/eigen_path_artifacts.rs` | `eigen_path_mode_tracking_vector` | Strict full-node Cartesian payload binding and spatial Bloch envelope preparation |
+| `source-tracking-cartesian-parser` | `crates/fullmag-runner/src/fem/eigen_output.rs` | `mode_vector_entries` | Shared finite XYZ parser preserving exact node indices |
+| `source-tracking-envelope-regression` | `crates/fullmag-runner/src/fem/eigen_path_artifacts.rs` | `tracking_unwinds_spatial_bloch_phase_in_selected_node_order` | Uncompiled regression for periodic-envelope reconstruction and node order |
+
+
+## Produkcyjna realizacja consistent P1 mass dla trackingu (źródła WIP)
+
+Docelowy iloczyn skalarnego i norma są te same co w
+`eq-de-bv-profile-consistent-mass`, ale overlap produkcyjny jest modułem
+znormalizowanego iloczynu, a diagnostyka offline zapisuje jego kwadrat.
+Implementacja ma zachować wszystkie fizyczne węzły magnetyczne, również
+slave nodes na periodycznych granicach; nie zastępuje consistent mass sumą
+wag klas Floqueta. Wektory pozostają globalnymi XYZ nodalnymi envelope.
+
+Realizacja używa liniowego embeddingu lokalnego na tetraedrze: cztery
+wektory węzłowe oraz ich suma, każdy przemnożony przez pierwiastek lokalnej
+wagi consistent mass. Wspólne skalowanie przez największą objętość
+stabilizuje obliczenie i kasuje się w znormalizowanych overlapach.
+Iloczyn euklidesowy embeddingów odtwarza dokładnie consistent P1 mass
+z dokładnością do tego wspólnego skalowania; nie buduje gęstej macierzy.
+Transport zdegenerowanych podprzestrzeni ortonormalizuje embeddingi,
+wykonuje dotychczasowe SVD/Procrustes i odzyskuje nodalne envelope.
+
+Metryka wiąże się z tożsamością pełnej uporządkowanej siatki, kolejnością
+węzłów magnetycznych, tetraedrami i objętościami. Niezgodność lub metryka
+obecna tylko po jednej stronie zabrania fallbacku euklidesowego. Ścieżki
+legacy bez tego kontekstu zachowują swoje jawnie odróżnione stare metryki.
+Pełna identity equilibrium pozostaje osobną wymaganą kontrolą S06.
+
+Kod: crates/fullmag-runner/src/eigen/tracking_mass.rs + ConsistentP1TrackingMetric;
+integracja: tracking.rs + modal_overlap_views oraz tracking_subspace.rs +
+mass_weighted_subspace_transport i fem/eigen_path.rs. Rust/backend runtime
+NOT VERIFIED; FEM CPU/GPU używają postprocessingu CPU, bez dowodu GPU parity.
+FDM CPU/GPU nie korzystają z tego adaptera. Nie zmienia się publicznego Python
+ani IR, liczby modów, residualu, fizycznych pól i wyników solvera.
+
+Metryka jest współdzielona przez Arc w całej ścieżce; adapter nie kopiuje
+siatki do każdego modu ani punktu. Zmiana tożsamości siatki pomiędzy próbkami
+zatrzymuje tracking. Ocena jednorodnego modu Gamma używa projekcji na
+przestrzennie stały wektor w tej samej consistent mass, bez fallbacku nodalnego.
+Do diagnostyki trafia definition_id oraz source_mesh_topology_sha256;
+persisted reconstruction kontekstu metryki i niezależna pełna identity
+równowagi pozostają wymaganiami przed zaliczeniem S06/S07.
+
+## Indeks źródeł produkcyjnej metryki consistent mass
+
+| Source ID | Path | Symbol | Responsibility |
+|---|---|---|---|
+| `source-tracking-consistent-metric` | `crates/fullmag-runner/src/eigen/tracking_mass.rs` | `ConsistentP1TrackingMetric` | Exact consistent tet4 Cartesian embedding and nodal recovery |
+| `source-tracking-consistent-pair` | `crates/fullmag-runner/src/eigen/tracking.rs` | `modal_overlap_views` | Use the bound exact metric before pair assignment without mixed-metric fallback |
+| `source-tracking-consistent-subspace` | `crates/fullmag-runner/src/eigen/tracking_subspace.rs` | `mass_weighted_subspace_transport` | Consistent-mass orthonormalization, principal angles and recovered branch frames |
+| `source-tracking-consistent-fem-adapter` | `crates/fullmag-runner/src/fem/eigen_path.rs` | `eigen_path_consistent_tracking_metric` | Construct a shared exact metric on every physical magnetic node |
+| `source-tracking-consistent-basis-regression` | `crates/fullmag-runner/src/eigen/tracking.rs` | `exact_consistent_tracking_overlap_includes_offdiagonal_p1_mass` | Uncompiled analytic regression distinguishes consistent and diagonal mass |
+
+
+## Odtwarzanie metryki trackingu z artefaktów (S07, źródła WIP)
+
+Zapis pola Cartesian global_xyz i metryka trackingu są oddzielne. Pole
+obejmuje pełną siatkę; metryka identyfikuje uporządkowane fizyczne węzły
+magnetyczne, tetrahedry w ich indeksacji kompaktowej i objętości w m³.
+Przy odczycie adapter Gamma wybiera te same węzły z pełnego pola; nie
+obcina pola do liczby węzłów i nie zastępuje metryki normą euklidesową.
+Rekord tracking_consistent_p1_metric.v1 ma jawny definition_id, tożsamość
+siatki, physical_node_indices, tetra oraz volumes_m3. Konstruktor
+ponownie sprawdza dodatniość objętości, pokrycie i indeksy. Wadliwy rekord,
+niezgodna tożsamość siatki, nieznana wersja lub jednoczesne wagi diagonalne
+kończą odczyt błędem. Brak rekordu w starszych artefaktach zachowuje ich
+jawny legacy zakres; nie dowodzi consistent-mass qualification.
+
+Równania pozostają eq-de-bv-profile-consistent-mass i eq-de-bv-profile-overlap.
+Nie zmienia to fizyki, publicznego Python/ProblemIR ani solvera FEM CPU/GPU.
+To postprocessing CPU. Parametry i jednostki pozostają jak w powyższej
+sekcji consistent P1; objętości mają SI m³, indeksy są bezwymiarowe.
+Bramki: roundtrip metryki, odrzucenie uszkodzonego rekordu i poprawna
+selekcja węzłów Gamma, następnie kompilacja/runtime i walidacja naukowa.
+Źródła WIP nie stanowią dowodu wykonania tych bramek.
+
+| Source ID | Źródło | Symbol |
+|---|---|---|
+| source-tracking-consistent-persist | `crates/fullmag-runner/src/eigen/tracking_mass.rs` | `from_artifact_json` |
+| source-tracking-consistent-reload | `crates/fullmag-runner/src/eigen/artifacts/kittel.rs` | `parse_bias_field_mode_vectors` |
+| source-tracking-consistent-publication | `crates/fullmag-runner/src/eigen/artifacts/mode_bundle.rs` | `ModeArtifact` |
+
+
+### Integralność legacy odczytu pól i wag
+
+Odczyt Kittel nie może usuwać wadliwych wag, dopisywać zerowych
+komponentów ani obcinać globalnego pola do arbitralnej długości wag.
+Legacy diagonalne wagi wymagają dodatnich, skończonych wartości oraz
+dokładnie jednego wpisu na węzeł odczytanego pola. Artefakt z krótszym
+wektorem wag bez jawnego odwzorowania jest odrzucany jako niejednoznaczny,
+a nie reinterpretowany jako prefix węzłów magnetycznych. Jawnie podane
+real/imag muszą występować razem i być niepuste; binary jest alternatywą
+dla nieobecnych pól, nie naprawą wadliwych tablic. Sample/raw identity
+z metadanych musi zgadzać się z żądanym modem. Adapter Gamma odrzuca
+metadane z niezerowym k. Te reguły dotyczą integralności postprocessingu
+CPU, nie dowodzą solvera ani zgodności z analityką.
+
+| Source ID | Źródło | Symbol |
+|---|---|---|
+| source-kittel-mode-identity-reader | `crates/fullmag-runner/src/eigen/artifacts/kittel.rs` | `find_bias_field_mode_metadata` |
+
+
+### Selekcja Gamma z metryką zadeklarowaną w pamięci
+
+Zadeklarowane wagi diagonalne obowiązują także przed zapisem artefaktów.
+Nieudana projekcja ważona zwraca brak obserwabli, nigdy wynik
+euklidesowy ani wynik z innego pola. Podobnie niepoprawny reduced_vector
+nie przełącza selektora na lifted payload. Lifted real/imag muszą mieć
+tę samą dodatnią liczbę węzłów; brak części zespolonego pola nie jest
+synonimem pola zerowego. Gałąź bez obserwabli jednorodności jest
+niekwalifikowalna przez selektor Kittel. Jest to integralność metryki,
+nie nowa fizyka ani zmiana API/ProblemIR. Runtime pozostaje nieweryfikowany.
+
+| Source ID | Źródło | Symbol |
+|---|---|---|
+| source-kittel-declared-metric-selector | `crates/fullmag-runner/src/eigen/artifacts/kittel.rs` | `k0_kittel_mode_uniformity_score` |
+
+
+### Nieobliczony certyfikat periodycznego modu
+
+max_periodic_seam_mismatch dotyczy zespolonego modu, nie stanu równowagi
+ani certyfikatu geometrii. Bez niezależnego obliczenia na sparowanych
+węzłach nie wolno podstawiać zera. Eksport CSV pozostawia nieobliczoną
+miarę pustą, a summary ma status partial i qualification NOT VERIFIED.
+Osobny frequency_comparison_status opisuje wyłącznie zgodność z
+analityką. Pełna bramka artefaktów nadal odrzuca brak tej wymaganej
+miary. Nie zmienia to progu residual ani częstotliwości solvera.
+Implementacja obliczenia seam z par/pełnego pola pozostaje otwarta.
+
+| Source ID | Źródło | Symbol |
+|---|---|---|
+| source-kittel-unmeasured-seam-publication | `crates/fullmag-runner/src/eigen/artifacts/kittel.rs` | `k0_kittel_validation_auxiliary_artifacts` |
+
+
+### Pomiar seam magnetycznego pola modu (źródła WIP)
+
+Dla klas periodycznych porównujemy fizyczny zespolony wektor Cartesian
+węzła slave z polem reprezentanta pomnożonym przez stosunek faz
+mapy redukcji. Envelope przywracamy do pola fizycznego zgodnie z
+eq-fem-dynamic-ansatz i przyjętym exp(-i k·r). Defekt to maksimum
+normy różnicy XYZ podzielone przez maksimum normy XYZ pola na fizycznych
+węzłach magnetycznych. Jest bezwymiarowy i niezależny od globalnej
+amplitudy/fazy modu. Skalowanie przed obliczeniem ogranicza overflow.
+Brak sparowanych węzłów lub pola nie daje certyfikatu zerowego.
+Rekord jest związany z mesh fingerprint, sample/raw ID, k i częstotliwością.
+To kontrola magnetycznego pola, nie phi ani certyfikat airboxu lub
+równowagi. Działa w postprocessingu CPU; solver i publiczny Python/IR
+pozostają bez zmian. Wymaga kompilacji, regresji fazy i runtime;
+nie kwalifikuje pełnej ścieżki ani GPU.
+
+
+```{math}
+:label: eq-periodic-mode-seam-relative
+\epsilon_{\mathrm{seam}} =
+\frac{\max_{j\ne r(j)}\left\|\mathbf v_j-
+\frac{p_j}{p_{r(j)}}\mathbf v_{r(j)}\right\|_2}
+{\max_j\left\|\mathbf v_j\right\|_2}.
+```
+
+| Symbol | Znaczenie | Jednostka SI |
+|---|---|---|
+| $\mathbf v_j$ | Fizyczny Cartesian mod na węźle magnetycznym, wspólna dowolna amplituda | $1$ |
+| $p_j$ | Faza klasy periodycznej | $1$ |
+| $r(j)$ | Indeks reprezentanta klasy | $1$ |
+| $\epsilon_{\mathrm{seam}}$ | Względny defekt magnetycznego seam | $1$ |
+
+Pomiar jest odrębnym dowodem od akceptacji: sam dodatni skończony wynik
+nie dowodzi dostatecznie małego defektu. Bramka tolerancji, phi/airbox i
+runtime pozostają otwarte. Qualification pozostaje NOT VERIFIED.
+
+| Source ID | Źródło | Symbol |
+|---|---|---|
+| source-periodic-mode-seam-metric | `crates/fullmag-runner/src/eigen/tracking_mass.rs` | `periodic_seam_relative` |
+| source-periodic-mode-seam-reader | `crates/fullmag-runner/src/eigen/artifacts/kittel.rs` | `k0_kittel_mode_periodic_seam` |
 
 
 ## Niezależny pomiar fazy 19 archiwalnych modów DE/BV
@@ -1711,6 +2669,7 @@ układu. Próg akceptacji solvera i równania nie zostały zmienione.
 | source-de-csv-native-coverage | `scripts/compare_de_100nm_pilot.py::read_modes` | Dokładna zgodność indeksów CSV/widma i zachowanie scope; postprocessing FEM CPU |
 | source-de-csv-native-coverage-test | `scripts/test_compare_de_100nm_pilot.py::test_csv_cannot_omit_a_mode_present_in_native_spectrum` | Odrzucenie niepełnego eksportu, regression check |
 
+
 ## Niezależny oracle profilu przez grubość filmu — kontrakt diagnostyczny
 
 Ten mały solver spektralny kontroluje przybliżenie jednorodnego profilu n=0.
@@ -1842,6 +2801,7 @@ Porównanie do aktualnego #179 i zbieżność FEM nadal NOT VERIFIED.
 | source-thickness-oracle-matrices | `scripts/thin_film_thickness_oracle.py` | `modal_matrices` | całkowy demag i baza wymiany |
 | source-thickness-oracle-solve | `scripts/thin_film_thickness_oracle.py` | `solve_thickness_modes` | mały oracle LL, częstotliwości i residual własnego operatora |
 
+
 (physical-potential-declared-mode-binding)=
 ## Powiązanie fizycznego potencjału z opublikowanym modem
 
@@ -1875,6 +2835,7 @@ nie modyfikuje kapsuły ani receipt #182.
 | scripts/run_de_100nm_pilot.py | validate_smoke_potential_fields | Obowiązkowe związanie każdego opublikowanego modu |
 | scripts/test_de_physical_potential.py | class PhysicalPotentialValidatorTests | Zmienione indeksy/hash, błędne typy i duplicate JSON |
 
+
 (physical-potential-source-mesh-binding)=
 ## Przeliczenie tożsamości siatki rekonstrukcji
 
@@ -1893,6 +2854,7 @@ FDM CPU/GPU: nie dotyczy artefaktu Tet4. Kwalifikacja nadal NOT VERIFIED.
 |---|---|---|
 | scripts/validate_de_physical_potential.py | _validate_source_mesh_binding | Fingerprint kanonicznej topologii z metadata |
 | packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py | topology_fingerprint_v3 | Istniejący kontrakt v3; bez kopii algorytmu |
+
 
 (oracle-exchange-free-de-limit)=
 ## Kontrola dokładnej granicy magnetostatycznej DE

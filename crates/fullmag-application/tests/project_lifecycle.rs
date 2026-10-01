@@ -169,7 +169,10 @@ fn detached_save_publishes_bytes_to_a_new_target_without_overwrite() {
 
     assert_eq!(receipt.project_id, created.project_id);
     assert!(!receipt.save_as);
-    assert_eq!(application.current().unwrap().target, Some(target("detached.fms")));
+    assert_eq!(
+        application.current().unwrap().target,
+        Some(target("detached.fms"))
+    );
     assert!(!application.current().unwrap().dirty);
     assert_eq!(application.repository().commit_count(), 1);
 }

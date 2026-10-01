@@ -230,6 +230,193 @@ struct PhaseEdge {
     std::array<double, 3> translation{};
 };
 
+struct FloquetTangentConstraintEntry {
+    std::uint64_t full_node = 0;
+    std::uint64_t reduced_node = 0;
+    std::array<double, 3> translation_m{};
+    // Row-major map from representative tangent coordinates to this node's
+    // local tangent coordinates. The complex Bloch phase is applied separately.
+    std::array<double, 4> tangent_rotation{1.0, 0.0, 0.0, 1.0};
+};
+
+double dot3_raw(const double left[3], const double right[3]) noexcept
+{
+    return left[0] * right[0] + left[1] * right[1] + left[2] * right[2];
+}
+
+bool tangent_frame_is_orthonormal(const TangentFrameNode &frame, double tolerance) noexcept
+{
+    const double *vectors[] = {frame.e1, frame.e2, frame.m};
+    for (const double *vector : vectors) {
+        for (int axis = 0; axis < 3; ++axis) {
+            if (!std::isfinite(vector[axis])) {
+                return false;
+            }
+        }
+        if (std::abs(dot3_raw(vector, vector) - 1.0) > tolerance) {
+            return false;
+        }
+    }
+    const double cross_e1_e2[3] = {
+        frame.e1[1] * frame.e2[2] - frame.e1[2] * frame.e2[1],
+        frame.e1[2] * frame.e2[0] - frame.e1[0] * frame.e2[2],
+        frame.e1[0] * frame.e2[1] - frame.e1[1] * frame.e2[0]};
+    return std::abs(dot3_raw(frame.e1, frame.e2)) <= tolerance &&
+        std::abs(dot3_raw(frame.e1, frame.m)) <= tolerance &&
+        std::abs(dot3_raw(frame.e2, frame.m)) <= tolerance &&
+        std::abs(dot3_raw(cross_e1_e2, frame.m) - 1.0) <= tolerance;
+}
+
+bool build_tangent_constraint_entries(
+    const FloquetAirboxSharedDomainBlockRequest &request,
+    const std::vector<FloquetBlochScalarConstraintEntry> &phase_entries,
+    std::vector<FloquetTangentConstraintEntry> &out_entries,
+    std::string &error)
+{
+    constexpr std::uint32_t inactive = std::numeric_limits<std::uint32_t>::max();
+    const double tolerance = request.tangent_frame_tolerance;
+    if (!std::isfinite(tolerance) || tolerance <= 0.0 || tolerance >= 1.0 ||
+        phase_entries.empty() ||
+        phase_entries.size() != request.tangent_frame_count) {
+        error = "Floquet tangent-frame tolerance or phase-entry shape is invalid";
+        return false;
+    }
+
+    const std::uint64_t unset = std::numeric_limits<std::uint64_t>::max();
+    std::vector<std::uint64_t> representatives(
+        static_cast<std::size_t>(request.magnetic_reduced_node_count), unset);
+    for (std::uint64_t node = 0u; node < request.tangent_frame_count; ++node) {
+        const std::uint32_t class_id = request.magnetic_reduced_node[node];
+        if (class_id == inactive) {
+            continue;
+        }
+        if (class_id >= request.magnetic_reduced_node_count ||
+            !tangent_frame_is_orthonormal(request.tangent_frames[node], tolerance)) {
+            error = "Floquet magnetic tangent frame is invalid or non-orthonormal";
+            return false;
+        }
+        std::uint64_t &representative = representatives[class_id];
+        if (representative == unset) {
+            representative = node;
+        }
+    }
+
+    out_entries.assign(static_cast<std::size_t>(request.tangent_frame_count), {});
+    for (std::uint64_t node = 0u; node < request.tangent_frame_count; ++node) {
+        const FloquetBlochScalarConstraintEntry &phase = phase_entries[node];
+        FloquetTangentConstraintEntry &entry = out_entries[node];
+        entry.full_node = phase.full_dof;
+        entry.reduced_node = phase.reduced_dof;
+        entry.translation_m = phase.translation_m;
+
+        if (request.magnetic_reduced_node[node] == inactive) {
+            continue;
+        }
+        const std::uint64_t representative = representatives[phase.reduced_dof];
+        if (representative == unset) {
+            error = "Floquet magnetic tangent class has no representative frame";
+            return false;
+        }
+        const TangentFrameNode &source = request.tangent_frames[representative];
+        const TangentFrameNode &destination = request.tangent_frames[node];
+        for (int axis = 0; axis < 3; ++axis) {
+            if (std::abs(destination.m[axis] - source.m[axis]) > tolerance) {
+                error =
+                    "Floquet periodic magnetic class has mismatched equilibrium magnetization vectors";
+                return false;
+            }
+        }
+
+        const double *source_basis[] = {source.e1, source.e2};
+        const double *destination_basis[] = {destination.e1, destination.e2};
+        for (int row = 0; row < 2; ++row) {
+            for (int column = 0; column < 2; ++column) {
+                entry.tangent_rotation[static_cast<std::size_t>(2 * row + column)] =
+                    dot3_raw(destination_basis[row], source_basis[column]);
+            }
+        }
+        const auto &rotation = entry.tangent_rotation;
+        const double first_column_norm = rotation[0] * rotation[0] + rotation[2] * rotation[2];
+        const double second_column_norm = rotation[1] * rotation[1] + rotation[3] * rotation[3];
+        const double column_dot = rotation[0] * rotation[1] + rotation[2] * rotation[3];
+        if (std::abs(first_column_norm - 1.0) > tolerance ||
+            std::abs(second_column_norm - 1.0) > tolerance ||
+            std::abs(column_dot) > tolerance) {
+            error = "Floquet periodic tangent-coordinate rotation is not orthonormal";
+            return false;
+        }
+    }
+    return true;
+}
+
+bool build_uniform_transverse_probe_vectors(
+    const FloquetAirboxSharedDomainBlockRequest &request,
+    std::vector<double> &out_q_y,
+    std::vector<double> &out_q_z,
+    std::string &error)
+{
+    constexpr std::uint32_t inactive = std::numeric_limits<std::uint32_t>::max();
+    const std::uint64_t unset = std::numeric_limits<std::uint64_t>::max();
+    if (request.tangent_frames == nullptr || request.magnetic_reduced_node == nullptr ||
+        request.magnetic_reduced_node_count == 0u ||
+        request.magnetic_reduced_node_count >
+            static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max() / 2u)) {
+        error = "Floquet transverse probe has invalid magnetic tangent-frame maps";
+        return false;
+    }
+
+    std::vector<std::uint64_t> representatives(
+        static_cast<std::size_t>(request.magnetic_reduced_node_count), unset);
+    for (std::uint64_t node = 0u; node < request.tangent_frame_count; ++node) {
+        const std::uint32_t class_id = request.magnetic_reduced_node[node];
+        if (class_id == inactive) {
+            continue;
+        }
+        if (class_id >= request.magnetic_reduced_node_count) {
+            error = "Floquet transverse probe found an out-of-range magnetic class";
+            return false;
+        }
+        std::uint64_t &representative = representatives[class_id];
+        if (representative == unset) {
+            representative = node;
+        }
+    }
+
+    out_q_y.assign(static_cast<std::size_t>(2u * request.magnetic_reduced_node_count), 0.0);
+    out_q_z.assign(static_cast<std::size_t>(2u * request.magnetic_reduced_node_count), 0.0);
+    const std::array<double, 3> global_y{0.0, 1.0, 0.0};
+    const std::array<double, 3> global_z{0.0, 0.0, 1.0};
+    for (std::uint64_t class_id = 0u;
+         class_id < request.magnetic_reduced_node_count;
+         ++class_id) {
+        const std::uint64_t representative = representatives[class_id];
+        if (representative == unset) {
+            error = "Floquet transverse probe found a magnetic class without a representative";
+            return false;
+        }
+        const TangentFrameNode &frame = request.tangent_frames[representative];
+        if (!tangent_frame_is_orthonormal(frame, request.tangent_frame_tolerance)) {
+            error = "Floquet transverse probe representative frame is invalid";
+            return false;
+        }
+        const std::array<double, 3> magnetization{frame.m[0], frame.m[1], frame.m[2]};
+        const std::array<double, 3> basis_1{frame.e1[0], frame.e1[1], frame.e1[2]};
+        const std::array<double, 3> basis_2{frame.e2[0], frame.e2[1], frame.e2[2]};
+        const std::size_t q_offset = static_cast<std::size_t>(2u * class_id);
+        for (const auto &[direction, output] :
+             {std::pair{global_y, &out_q_y}, std::pair{global_z, &out_q_z}}) {
+            const double longitudinal = dot3_raw(magnetization.data(), direction.data());
+            const std::array<double, 3> transverse{
+                direction[0] - longitudinal * magnetization[0],
+                direction[1] - longitudinal * magnetization[1],
+                direction[2] - longitudinal * magnetization[2]};
+            (*output)[q_offset] = dot3_raw(basis_1.data(), transverse.data());
+            (*output)[q_offset + 1u] = dot3_raw(basis_2.data(), transverse.data());
+        }
+    }
+    return true;
+}
+
 double dot3_array(const std::array<double, 3> &left, const std::array<double, 3> &right) noexcept
 {
     return left[0] * right[0] + left[1] * right[1] + left[2] * right[2];
@@ -401,7 +588,7 @@ bool build_phase_entries(
 }
 
 std::unique_ptr<mfem::ComplexSparseMatrix> build_tangent_constraint_matrix(
-    const std::vector<FloquetBlochScalarConstraintEntry> &entries,
+    const std::vector<FloquetTangentConstraintEntry> &entries,
     std::uint64_t reduced_node_count,
     const std::array<double, 3> &k_rad_per_m)
 {
@@ -409,7 +596,7 @@ std::unique_ptr<mfem::ComplexSparseMatrix> build_tangent_constraint_matrix(
     const int reduced_count = static_cast<int>(reduced_node_count);
     auto real = std::make_unique<mfem::SparseMatrix>(2 * full_node_count, 2 * reduced_count);
     auto imaginary = std::make_unique<mfem::SparseMatrix>(2 * full_node_count, 2 * reduced_count);
-    for (const FloquetBlochScalarConstraintEntry &entry : entries) {
+    for (const FloquetTangentConstraintEntry &entry : entries) {
         double phase_argument = 0.0;
         for (int axis = 0; axis < 3; ++axis) {
             phase_argument += k_rad_per_m[static_cast<std::size_t>(axis)] *
@@ -417,15 +604,22 @@ std::unique_ptr<mfem::ComplexSparseMatrix> build_tangent_constraint_matrix(
         }
         const double phase_real = std::cos(phase_argument);
         const double phase_imaginary = -std::sin(phase_argument);
-        for (int component = 0; component < 2; ++component) {
-            real->Add(
-                2 * static_cast<int>(entry.full_dof) + component,
-                2 * static_cast<int>(entry.reduced_dof) + component,
-                phase_real);
-            imaginary->Add(
-                2 * static_cast<int>(entry.full_dof) + component,
-                2 * static_cast<int>(entry.reduced_dof) + component,
-                phase_imaginary);
+        for (int row_component = 0; row_component < 2; ++row_component) {
+            for (int column_component = 0; column_component < 2; ++column_component) {
+                const double rotation = entry.tangent_rotation[
+                    static_cast<std::size_t>(2 * row_component + column_component)];
+                if (rotation == 0.0) {
+                    continue;
+                }
+                real->Add(
+                    2 * static_cast<int>(entry.full_node) + row_component,
+                    2 * static_cast<int>(entry.reduced_node) + column_component,
+                    phase_real * rotation);
+                imaginary->Add(
+                    2 * static_cast<int>(entry.full_node) + row_component,
+                    2 * static_cast<int>(entry.reduced_node) + column_component,
+                    phase_imaginary * rotation);
+            }
         }
     }
     real->Finalize();
@@ -525,6 +719,7 @@ FrequencyDomainStatus assemble_floquet_airbox_shared_domain_blocks(
     try {
         std::vector<FloquetBlochScalarConstraintEntry> scalar_entries;
         std::vector<FloquetBlochScalarConstraintEntry> magnetic_entries;
+        std::vector<FloquetTangentConstraintEntry> tangent_entries;
         std::string error;
         if (!build_phase_entries(
                 request.scalar_reduced_node,
@@ -546,6 +741,10 @@ FrequencyDomainStatus assemble_floquet_airbox_shared_domain_blocks(
                 request.k_rad_per_m,
                 magnetic_entries,
                 error)) {
+            copy_block_error(out_result, error.c_str());
+            return FrequencyDomainStatus::validation_error;
+        }
+        if (!build_tangent_constraint_entries(request, magnetic_entries, tangent_entries, error)) {
             copy_block_error(out_result, error.c_str());
             return FrequencyDomainStatus::validation_error;
         }
@@ -626,9 +825,17 @@ FrequencyDomainStatus assemble_floquet_airbox_shared_domain_blocks(
         out_result->scalar_constraint = std::move(scalar_constraint_result.constraint_matrix);
         out_result->tangent_source = std::move(source_result.source_matrix);
         out_result->tangent_constraint = build_tangent_constraint_matrix(
-            magnetic_entries,
+            tangent_entries,
             request.magnetic_reduced_node_count,
             request.k_rad_per_m);
+        if (!build_uniform_transverse_probe_vectors(
+                request,
+                out_result->uniform_transverse_probe_q_y,
+                out_result->uniform_transverse_probe_q_z,
+                error)) {
+            copy_block_error(out_result, error.c_str());
+            return FrequencyDomainStatus::validation_error;
+        }
         if (out_result->scalar_operator == nullptr || out_result->scalar_constraint == nullptr ||
             out_result->tangent_source == nullptr || out_result->tangent_constraint == nullptr) {
             copy_block_error(out_result, "Floquet shared-domain block assembly returned an empty block");

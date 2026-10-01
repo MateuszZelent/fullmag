@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <mutex>
@@ -145,39 +146,97 @@ bool complex_sparse_view_is_valid(
     return true;
 }
 
-bool floquet_shared_operator_is_valid(
+const char *floquet_shared_operator_invalid_reason(
     const FloquetSharedDomainSparseModalOperator *operator_view,
     int spectral_dimension) noexcept
 {
-    if (operator_view == nullptr || operator_view->q_complex_dof_count == 0u ||
-        operator_view->phi_dof_count == 0u ||
-        operator_view->q_complex_dof_count >
+    if (operator_view == nullptr) {
+        return "floquet_shared_domain_operator_missing";
+    }
+    const bool has_probe_y = operator_view->uniform_transverse_probe_q_y != nullptr;
+    const bool has_probe_z = operator_view->uniform_transverse_probe_q_z != nullptr;
+    if (operator_view->q_complex_dof_count == 0u) {
+        return "floquet_shared_domain_magnetic_dof_count_is_zero";
+    }
+    if (operator_view->phi_dof_count == 0u) {
+        return "floquet_shared_domain_scalar_dof_count_is_zero";
+    }
+    if (has_probe_y != has_probe_z) {
+        return "floquet_shared_domain_demag_probe_pair_is_incomplete";
+    }
+    if (has_probe_y &&
+        (operator_view->uniform_transverse_probe_q_y->size() !=
+             operator_view->q_complex_dof_count ||
+         operator_view->uniform_transverse_probe_q_z->size() !=
+             operator_view->q_complex_dof_count)) {
+        return "floquet_shared_domain_demag_probe_shape_mismatch";
+    }
+    if (has_probe_y &&
+        (!std::all_of(
+             operator_view->uniform_transverse_probe_q_y->begin(),
+             operator_view->uniform_transverse_probe_q_y->end(),
+             [](double value) { return std::isfinite(value); }) ||
+         !std::all_of(
+             operator_view->uniform_transverse_probe_q_z->begin(),
+             operator_view->uniform_transverse_probe_q_z->end(),
+             [](double value) { return std::isfinite(value); }))) {
+        return "floquet_shared_domain_demag_probe_contains_nonfinite_values";
+    }
+    if (has_probe_y &&
+        (!std::isfinite(operator_view->mu0_T_m_A) ||
+         operator_view->mu0_T_m_A <= 0.0)) {
+        return "floquet_shared_domain_demag_probe_requires_positive_mu0";
+    }
+    if (operator_view->q_complex_dof_count >
             static_cast<std::uint64_t>(std::numeric_limits<int>::max() / 2) ||
         operator_view->phi_dof_count >
-            static_cast<std::uint64_t>(std::numeric_limits<int>::max() / 2) ||
-        (spectral_dimension !=
-             static_cast<int>(operator_view->q_complex_dof_count) &&
-         spectral_dimension !=
-             static_cast<int>(2u * operator_view->q_complex_dof_count)) ||
-        !complex_sparse_view_is_valid(operator_view->a_qq) ||
-        !complex_sparse_view_is_valid(operator_view->b_qq) ||
-        !complex_sparse_view_is_valid(operator_view->p) ||
-        !complex_sparse_view_is_valid(operator_view->a_qphi) ||
-        !complex_sparse_view_is_valid(operator_view->a_phiq)) {
-        return false;
+            static_cast<std::uint64_t>(std::numeric_limits<int>::max() / 2)) {
+        return "floquet_shared_domain_dof_count_exceeds_slepc_limit";
+    }
+    if (spectral_dimension !=
+            static_cast<int>(operator_view->q_complex_dof_count) &&
+        spectral_dimension !=
+            static_cast<int>(2u * operator_view->q_complex_dof_count)) {
+        return "floquet_shared_domain_spectral_dimension_mismatch";
+    }
+    if (!complex_sparse_view_is_valid(operator_view->a_qq)) {
+        return "floquet_shared_domain_a_qq_csr_is_invalid";
+    }
+    if (!complex_sparse_view_is_valid(operator_view->b_qq)) {
+        return "floquet_shared_domain_b_qq_csr_is_invalid";
+    }
+    if (!complex_sparse_view_is_valid(operator_view->p)) {
+        return "floquet_shared_domain_p_csr_is_invalid";
+    }
+    if (!complex_sparse_view_is_valid(operator_view->a_qphi)) {
+        return "floquet_shared_domain_a_qphi_csr_is_invalid";
+    }
+    if (!complex_sparse_view_is_valid(operator_view->a_phiq)) {
+        return "floquet_shared_domain_a_phiq_csr_is_invalid";
     }
     const std::uint64_t q = operator_view->q_complex_dof_count;
     const std::uint64_t phi = operator_view->phi_dof_count;
-    return operator_view->a_qq->row_count == q &&
-        operator_view->a_qq->column_count == q &&
-        operator_view->b_qq->row_count == q &&
-        operator_view->b_qq->column_count == q &&
-        operator_view->p->row_count == phi &&
-        operator_view->p->column_count == phi &&
-        operator_view->a_qphi->row_count == q &&
-        operator_view->a_qphi->column_count == phi &&
-        operator_view->a_phiq->row_count == phi &&
-        operator_view->a_phiq->column_count == q;
+    if (operator_view->a_qq->row_count != q ||
+        operator_view->a_qq->column_count != q) {
+        return "floquet_shared_domain_a_qq_dimension_mismatch";
+    }
+    if (operator_view->b_qq->row_count != q ||
+        operator_view->b_qq->column_count != q) {
+        return "floquet_shared_domain_b_qq_dimension_mismatch";
+    }
+    if (operator_view->p->row_count != phi ||
+        operator_view->p->column_count != phi) {
+        return "floquet_shared_domain_p_dimension_mismatch";
+    }
+    if (operator_view->a_qphi->row_count != q ||
+        operator_view->a_qphi->column_count != phi) {
+        return "floquet_shared_domain_a_qphi_dimension_mismatch";
+    }
+    if (operator_view->a_phiq->row_count != phi ||
+        operator_view->a_phiq->column_count != q) {
+        return "floquet_shared_domain_a_phiq_dimension_mismatch";
+    }
+    return nullptr;
 }
 
 bool dense_matrix_payload_is_valid(
@@ -248,6 +307,12 @@ bool frequency_window_is_valid(
 }
 
 using Complex = std::complex<double>;
+
+// The DE minimal-validation plan uses 1e-8 as the original-equation
+// acceptance threshold for both the potential solve and the physical Schur
+// energy checks. Keep this separate from EPS's transformed-pencil tolerance.
+constexpr double kFloquetDemagProbeRelativeTolerance = 1.0e-8;
+constexpr double kFloquetEpsTrueResidualSafetyFactor = 1.0e-3;
 
 std::vector<Complex> complex_csr_matvec(
     const PoissonAirboxSharedDomainComplexCsrMatrix &matrix,
@@ -342,13 +407,489 @@ double floquet_potential_residual(
          std::numeric_limits<double>::min());
 }
 
+#if FULLMAG_HAS_MFEM_STACK
+
+std::vector<Complex> real_csr_matvec(
+    const PoissonAirboxSharedDomainCsrMatrix &matrix,
+    const std::vector<Complex> &x)
+{
+    if (matrix.row_count == 0u || matrix.column_count != x.size() ||
+        matrix.row_offsets.size() != static_cast<std::size_t>(matrix.row_count + 1u) ||
+        matrix.column_indices.size() != matrix.values.size() ||
+        matrix.row_offsets.empty() || matrix.row_offsets.front() != 0u ||
+        matrix.row_offsets.back() != matrix.values.size()) {
+        return {};
+    }
+    std::vector<Complex> result(static_cast<std::size_t>(matrix.row_count), Complex{});
+    for (std::uint64_t row = 0u; row < matrix.row_count; ++row) {
+        const std::uint32_t begin = matrix.row_offsets[static_cast<std::size_t>(row)];
+        const std::uint32_t end = matrix.row_offsets[static_cast<std::size_t>(row + 1u)];
+        if (begin > end || end > matrix.values.size()) {
+            return {};
+        }
+        Complex value{};
+        for (std::uint32_t entry = begin; entry < end; ++entry) {
+            const std::uint32_t column = matrix.column_indices[entry];
+            if (column >= matrix.column_count || !std::isfinite(matrix.values[entry])) {
+                return {};
+            }
+            value += matrix.values[entry] * x[static_cast<std::size_t>(column)];
+        }
+        result[static_cast<std::size_t>(row)] = value;
+    }
+    return result;
+}
+
+std::vector<Complex> mfem_complex_matvec(
+    const mfem::ComplexSparseMatrix &matrix,
+    const std::vector<Complex> &x)
+{
+    const mfem::SparseMatrix &real = matrix.real();
+    const mfem::SparseMatrix &imaginary = matrix.imag();
+    if (real.Width() <= 0 || real.Height() <= 0 ||
+        real.Width() != imaginary.Width() || real.Height() != imaginary.Height() ||
+        static_cast<std::size_t>(real.Width()) != x.size()) {
+        return {};
+    }
+    std::vector<Complex> result(static_cast<std::size_t>(real.Height()), Complex{});
+    mfem::Array<int> columns;
+    mfem::Vector values;
+    for (int row = 0; row < real.Height(); ++row) {
+        Complex value{};
+        real.GetRow(row, columns, values);
+        if (columns.Size() != values.Size()) {
+            return {};
+        }
+        for (int entry = 0; entry < columns.Size(); ++entry) {
+            if (columns[entry] < 0 || columns[entry] >= real.Width() ||
+                !std::isfinite(values[entry])) {
+                return {};
+            }
+            value += values[entry] * x[static_cast<std::size_t>(columns[entry])];
+        }
+        imaginary.GetRow(row, columns, values);
+        if (columns.Size() != values.Size()) {
+            return {};
+        }
+        for (int entry = 0; entry < columns.Size(); ++entry) {
+            if (columns[entry] < 0 || columns[entry] >= real.Width() ||
+                !std::isfinite(values[entry])) {
+                return {};
+            }
+            value += Complex(0.0, values[entry]) *
+                x[static_cast<std::size_t>(columns[entry])];
+        }
+        result[static_cast<std::size_t>(row)] = value;
+    }
+    return result;
+}
+
+std::vector<Complex> mfem_complex_adjoint_matvec(
+    const mfem::ComplexSparseMatrix &matrix,
+    const std::vector<Complex> &x)
+{
+    const mfem::SparseMatrix &real = matrix.real();
+    const mfem::SparseMatrix &imaginary = matrix.imag();
+    if (real.Width() <= 0 || real.Height() <= 0 ||
+        real.Width() != imaginary.Width() || real.Height() != imaginary.Height() ||
+        static_cast<std::size_t>(real.Height()) != x.size()) {
+        return {};
+    }
+    std::vector<Complex> result(static_cast<std::size_t>(real.Width()), Complex{});
+    mfem::Array<int> columns;
+    mfem::Vector values;
+    for (int row = 0; row < real.Height(); ++row) {
+        real.GetRow(row, columns, values);
+        if (columns.Size() != values.Size()) {
+            return {};
+        }
+        for (int entry = 0; entry < columns.Size(); ++entry) {
+            if (columns[entry] < 0 || columns[entry] >= real.Width() ||
+                !std::isfinite(values[entry])) {
+                return {};
+            }
+            result[static_cast<std::size_t>(columns[entry])] +=
+                values[entry] * x[static_cast<std::size_t>(row)];
+        }
+        imaginary.GetRow(row, columns, values);
+        if (columns.Size() != values.Size()) {
+            return {};
+        }
+        for (int entry = 0; entry < columns.Size(); ++entry) {
+            if (columns[entry] < 0 || columns[entry] >= real.Width() ||
+                !std::isfinite(values[entry])) {
+                return {};
+            }
+            result[static_cast<std::size_t>(columns[entry])] +=
+                Complex(0.0, -values[entry]) * x[static_cast<std::size_t>(row)];
+        }
+    }
+    return result;
+}
+
+double relative_residual(
+    const std::vector<Complex> &residual,
+    const std::vector<Complex> &term_a,
+    const std::vector<Complex> &term_b,
+    const std::vector<Complex> *term_c = nullptr,
+    double term_c_scale = 1.0) noexcept
+{
+    if (residual.empty() || residual.size() != term_a.size() ||
+        residual.size() != term_b.size() ||
+        (term_c != nullptr && residual.size() != term_c->size())) {
+        return std::numeric_limits<double>::infinity();
+    }
+    const double norm_a = complex_vector_norm(term_a);
+    const double norm_b = complex_vector_norm(term_b);
+    const double norm_c = term_c != nullptr
+        ? std::abs(term_c_scale) * complex_vector_norm(*term_c)
+        : 0.0;
+    const double denominator = norm_a + norm_b + norm_c;
+    if (!std::isfinite(denominator) || !(denominator > 0.0)) {
+        return std::numeric_limits<double>::infinity();
+    }
+    return complex_vector_norm(residual) / denominator;
+}
+
+struct FloquetFullDescriptorDiagnostics {
+    bool available = false;
+    bool full_descriptor_certified = false;
+    bool seam_frame_certified = false;
+    bool gauge_policy_satisfied = false;
+    double magnetic_relative_residual = std::numeric_limits<double>::quiet_NaN();
+    double potential_relative_residual = std::numeric_limits<double>::quiet_NaN();
+    double scalar_phase_seam_relative_residual =
+        std::numeric_limits<double>::quiet_NaN();
+    double tangent_frame_seam_relative_residual =
+        std::numeric_limits<double>::quiet_NaN();
+    double cartesian_magnetic_seam_relative_residual =
+        std::numeric_limits<double>::quiet_NaN();
+    double equilibrium_pair_relative_residual =
+        std::numeric_limits<double>::quiet_NaN();
+};
+
+FloquetFullDescriptorDiagnostics certify_floquet_full_descriptor(
+    const FloquetSharedDomainSparseModalOperator &operator_view,
+    const std::vector<Complex> &q_reduced,
+    const std::vector<Complex> &phi_reduced,
+    Complex lambda,
+    double tolerance)
+{
+    FloquetFullDescriptorDiagnostics diagnostics{};
+    const PoissonAirboxSharedDomainAssemblyResult *assembly =
+        operator_view.full_descriptor_assembly;
+    const bool finite_k = std::all_of(
+        operator_view.k_rad_per_m.begin(),
+        operator_view.k_rad_per_m.end(),
+        [](double value) { return std::isfinite(value); });
+    const bool nonzero_k = finite_k && std::any_of(
+        operator_view.k_rad_per_m.begin(),
+        operator_view.k_rad_per_m.end(),
+        [](double value) { return value != 0.0; });
+    const bool poisson_policy_matches =
+        operator_view.boundary_kind != nullptr &&
+        operator_view.gauge_policy != nullptr &&
+        ((std::strcmp(operator_view.boundary_kind, "pure_neumann") == 0 &&
+          std::strcmp(operator_view.gauge_policy, "require_invertible") == 0) ||
+         ((std::strcmp(operator_view.boundary_kind, "poisson_robin") == 0 ||
+           std::strcmp(operator_view.boundary_kind, "poisson_dirichlet") == 0) &&
+          std::strcmp(operator_view.gauge_policy, "none") == 0));
+    if (assembly == nullptr || !assembly->floquet_sparse_operator_ready ||
+        !nonzero_k || !poisson_policy_matches ||
+        assembly->floquet_tangent_frames.empty() ||
+        assembly->floquet_periodic_pairs.empty() ||
+        assembly->floquet_full_field_blocks.scalar_operator == nullptr ||
+        assembly->floquet_full_field_blocks.scalar_constraint == nullptr ||
+        assembly->floquet_full_field_blocks.tangent_source == nullptr ||
+        assembly->floquet_full_field_blocks.tangent_constraint == nullptr ||
+        !(std::isfinite(tolerance) && tolerance > 0.0)) {
+        return diagnostics;
+    }
+
+    const std::uint64_t node_count = assembly->floquet_tangent_frames.size();
+    const std::uint64_t full_q_count = 2u * node_count;
+    const auto &blocks = assembly->floquet_full_field_blocks;
+    const mfem::SparseMatrix &p_real = blocks.scalar_operator->real();
+    const mfem::SparseMatrix &p_imag = blocks.scalar_operator->imag();
+    const mfem::SparseMatrix &phi_c_real = blocks.scalar_constraint->real();
+    const mfem::SparseMatrix &phi_c_imag = blocks.scalar_constraint->imag();
+    const mfem::SparseMatrix &q_c_real = blocks.tangent_constraint->real();
+    const mfem::SparseMatrix &q_c_imag = blocks.tangent_constraint->imag();
+    const mfem::SparseMatrix &source_real = blocks.tangent_source->real();
+    const mfem::SparseMatrix &source_imag = blocks.tangent_source->imag();
+    if (assembly->floquet_full_a_qq.row_count != full_q_count ||
+        assembly->floquet_full_a_qq.column_count != full_q_count ||
+        assembly->floquet_full_b_qq.row_count != full_q_count ||
+        assembly->floquet_full_b_qq.column_count != full_q_count ||
+        p_real.Height() != p_imag.Height() || p_real.Width() != p_imag.Width() ||
+        p_real.Height() != static_cast<int>(node_count) ||
+        p_real.Width() != static_cast<int>(node_count) ||
+        phi_c_real.Height() != phi_c_imag.Height() ||
+        phi_c_real.Width() != phi_c_imag.Width() ||
+        phi_c_real.Height() != static_cast<int>(node_count) ||
+        phi_c_real.Width() != static_cast<int>(phi_reduced.size()) ||
+        q_c_real.Height() != q_c_imag.Height() || q_c_real.Width() != q_c_imag.Width() ||
+        q_c_real.Height() != static_cast<int>(full_q_count) ||
+        q_c_real.Width() != static_cast<int>(q_reduced.size()) ||
+        source_real.Height() != source_imag.Height() ||
+        source_real.Width() != source_imag.Width() ||
+        source_real.Height() != static_cast<int>(node_count) ||
+        source_real.Width() != static_cast<int>(full_q_count) ||
+        q_reduced.size() != operator_view.q_complex_dof_count ||
+        phi_reduced.size() != operator_view.phi_dof_count ||
+        assembly->floquet_periodic_pairs.empty()) {
+        return diagnostics;
+    }
+    for (const FloquetDescriptorPeriodicPair &pair : assembly->floquet_periodic_pairs) {
+        if (pair.node_a >= node_count || pair.node_b >= node_count ||
+            pair.node_a == pair.node_b) {
+            return diagnostics;
+        }
+    }
+    diagnostics.available = true;
+    diagnostics.gauge_policy_satisfied = true;
+
+    const std::vector<Complex> q_full = mfem_complex_matvec(
+        *blocks.tangent_constraint,
+        q_reduced);
+    const std::vector<Complex> phi_full = mfem_complex_matvec(
+        *blocks.scalar_constraint,
+        phi_reduced);
+    const std::vector<Complex> a_qq_q = real_csr_matvec(
+        assembly->floquet_full_a_qq,
+        q_full);
+    const std::vector<Complex> b_q = real_csr_matvec(
+        assembly->floquet_full_b_qq,
+        q_full);
+    const std::vector<Complex> p_phi = mfem_complex_matvec(
+        *blocks.scalar_operator,
+        phi_full);
+    const std::vector<Complex> source_q = mfem_complex_matvec(
+        *blocks.tangent_source,
+        q_full);
+    const std::vector<Complex> source_adjoint_phi = mfem_complex_adjoint_matvec(
+        *blocks.tangent_source,
+        phi_full);
+    if (q_full.size() != full_q_count || phi_full.size() != node_count ||
+        a_qq_q.size() != full_q_count || b_q.size() != full_q_count ||
+        p_phi.size() != node_count || source_q.size() != node_count ||
+        source_adjoint_phi.size() != full_q_count) {
+        diagnostics.magnetic_relative_residual = std::numeric_limits<double>::infinity();
+        diagnostics.potential_relative_residual = std::numeric_limits<double>::infinity();
+        return diagnostics;
+    }
+
+    std::vector<Complex> magnetic_feedback(source_adjoint_phi.size(), Complex{});
+    for (std::size_t index = 0u; index < magnetic_feedback.size(); ++index) {
+        magnetic_feedback[index] = operator_view.mu0_T_m_A * source_adjoint_phi[index];
+    }
+    std::vector<Complex> magnetic_residual_full(full_q_count, Complex{});
+    for (std::size_t index = 0u; index < magnetic_residual_full.size(); ++index) {
+        magnetic_residual_full[index] =
+            a_qq_q[index] + magnetic_feedback[index] - lambda * b_q[index];
+    }
+    std::vector<Complex> potential_residual_full(node_count, Complex{});
+    for (std::size_t index = 0u; index < potential_residual_full.size(); ++index) {
+        potential_residual_full[index] = p_phi[index] - source_q[index];
+    }
+
+    const std::vector<Complex> projected_magnetic_residual = mfem_complex_adjoint_matvec(
+        *blocks.tangent_constraint,
+        magnetic_residual_full);
+    const std::vector<Complex> projected_a_qq = mfem_complex_adjoint_matvec(
+        *blocks.tangent_constraint,
+        a_qq_q);
+    const std::vector<Complex> projected_feedback = mfem_complex_adjoint_matvec(
+        *blocks.tangent_constraint,
+        magnetic_feedback);
+    const std::vector<Complex> projected_b = mfem_complex_adjoint_matvec(
+        *blocks.tangent_constraint,
+        b_q);
+    const std::vector<Complex> projected_potential_residual = mfem_complex_adjoint_matvec(
+        *blocks.scalar_constraint,
+        potential_residual_full);
+    const std::vector<Complex> projected_p_phi = mfem_complex_adjoint_matvec(
+        *blocks.scalar_constraint,
+        p_phi);
+    const std::vector<Complex> projected_source = mfem_complex_adjoint_matvec(
+        *blocks.scalar_constraint,
+        source_q);
+    std::vector<Complex> projected_lambda_b(projected_b.size(), Complex{});
+    for (std::size_t index = 0u; index < projected_lambda_b.size(); ++index) {
+        projected_lambda_b[index] = lambda * projected_b[index];
+    }
+    diagnostics.magnetic_relative_residual = relative_residual(
+        projected_magnetic_residual,
+        projected_a_qq,
+        projected_feedback,
+        &projected_lambda_b);
+    diagnostics.potential_relative_residual = relative_residual(
+        projected_potential_residual,
+        projected_p_phi,
+        projected_source);
+
+    long double scalar_difference_squared = 0.0L;
+    long double scalar_scale_squared = 0.0L;
+    long double tangent_difference_squared = 0.0L;
+    long double tangent_scale_squared = 0.0L;
+    long double cartesian_difference_squared = 0.0L;
+    long double cartesian_scale_squared = 0.0L;
+    double equilibrium_pair_residual = 0.0;
+    std::size_t active_magnetic_pair_count = 0u;
+    constexpr double min_scale = std::numeric_limits<double>::min();
+    const auto phase_for_pair = [&assembly](const FloquetDescriptorPeriodicPair &pair) {
+        const double argument =
+            assembly->floquet_k_rad_per_m[0] * pair.translation_m[0] +
+            assembly->floquet_k_rad_per_m[1] * pair.translation_m[1] +
+            assembly->floquet_k_rad_per_m[2] * pair.translation_m[2];
+        return std::polar(1.0, -argument);
+    };
+    for (const FloquetDescriptorPeriodicPair &pair : assembly->floquet_periodic_pairs) {
+        const Complex phase = phase_for_pair(pair);
+        const Complex phi_a = phi_full[static_cast<std::size_t>(pair.node_a)];
+        const Complex phi_b = phi_full[static_cast<std::size_t>(pair.node_b)];
+        const Complex phi_expected = phase * phi_a;
+        scalar_difference_squared += static_cast<long double>(std::norm(phi_b - phi_expected));
+        scalar_scale_squared += static_cast<long double>(std::norm(phi_b) + std::norm(phi_expected));
+        if (!pair.magnetic_active) {
+            continue;
+        }
+        ++active_magnetic_pair_count;
+        const TangentFrameNode &frame_a =
+            assembly->floquet_tangent_frames[static_cast<std::size_t>(pair.node_a)];
+        const TangentFrameNode &frame_b =
+            assembly->floquet_tangent_frames[static_cast<std::size_t>(pair.node_b)];
+        const Complex qa[2] = {
+            q_full[static_cast<std::size_t>(2u * pair.node_a)],
+            q_full[static_cast<std::size_t>(2u * pair.node_a + 1u)]};
+        const Complex qb[2] = {
+            q_full[static_cast<std::size_t>(2u * pair.node_b)],
+            q_full[static_cast<std::size_t>(2u * pair.node_b + 1u)]};
+        double equilibrium_difference_squared = 0.0;
+        double equilibrium_scale_squared = 0.0;
+        for (int axis = 0; axis < 3; ++axis) {
+            const double difference = frame_b.m[axis] - frame_a.m[axis];
+            equilibrium_difference_squared += difference * difference;
+            equilibrium_scale_squared +=
+                frame_a.m[axis] * frame_a.m[axis] + frame_b.m[axis] * frame_b.m[axis];
+        }
+        const double pair_equilibrium_residual =
+            std::sqrt(equilibrium_difference_squared) /
+            std::max(std::sqrt(equilibrium_scale_squared), min_scale);
+        equilibrium_pair_residual = std::max(
+            equilibrium_pair_residual,
+            pair_equilibrium_residual);
+        Complex cartesian_a[3] = {Complex{}, Complex{}, Complex{}};
+        Complex cartesian_b[3] = {Complex{}, Complex{}, Complex{}};
+        for (int axis = 0; axis < 3; ++axis) {
+            cartesian_a[axis] = frame_a.e1[axis] * qa[0] + frame_a.e2[axis] * qa[1];
+            cartesian_b[axis] = frame_b.e1[axis] * qb[0] + frame_b.e2[axis] * qb[1];
+        }
+        for (int row = 0; row < 2; ++row) {
+            Complex expected = Complex{};
+            const double *basis_b = row == 0 ? frame_b.e1 : frame_b.e2;
+            for (int column = 0; column < 2; ++column) {
+                const double *basis_a = column == 0 ? frame_a.e1 : frame_a.e2;
+                const double rotation =
+                    basis_b[0] * basis_a[0] + basis_b[1] * basis_a[1] +
+                    basis_b[2] * basis_a[2];
+                expected += phase * rotation * qa[column];
+            }
+            tangent_difference_squared += static_cast<long double>(std::norm(qb[row] - expected));
+            tangent_scale_squared +=
+                static_cast<long double>(std::norm(qb[row]) + std::norm(expected));
+        }
+        for (int axis = 0; axis < 3; ++axis) {
+            const Complex expected = phase * cartesian_a[axis];
+            cartesian_difference_squared +=
+                static_cast<long double>(std::norm(cartesian_b[axis] - expected));
+            cartesian_scale_squared += static_cast<long double>(
+                std::norm(cartesian_b[axis]) + std::norm(expected));
+        }
+    }
+    const auto normalized_pair_residual = [](long double difference, long double scale) {
+        if (!std::isfinite(static_cast<double>(difference)) ||
+            !std::isfinite(static_cast<double>(scale))) {
+            return std::numeric_limits<double>::infinity();
+        }
+        if (!(scale > 0.0L)) {
+            return difference == 0.0L
+                ? 0.0
+                : std::numeric_limits<double>::infinity();
+        }
+        return std::sqrt(static_cast<double>(difference / scale));
+    };
+    diagnostics.scalar_phase_seam_relative_residual = normalized_pair_residual(
+        scalar_difference_squared,
+        scalar_scale_squared);
+    diagnostics.tangent_frame_seam_relative_residual = normalized_pair_residual(
+        tangent_difference_squared,
+        tangent_scale_squared);
+    diagnostics.cartesian_magnetic_seam_relative_residual = normalized_pair_residual(
+        cartesian_difference_squared,
+        cartesian_scale_squared);
+    diagnostics.equilibrium_pair_relative_residual = equilibrium_pair_residual;
+    const auto below_tolerance = [tolerance](double value) {
+        return std::isfinite(value) && value >= 0.0 && value <= tolerance;
+    };
+    diagnostics.seam_frame_certified =
+        active_magnetic_pair_count > 0u &&
+        below_tolerance(diagnostics.scalar_phase_seam_relative_residual) &&
+        below_tolerance(diagnostics.tangent_frame_seam_relative_residual) &&
+        below_tolerance(diagnostics.cartesian_magnetic_seam_relative_residual) &&
+        below_tolerance(diagnostics.equilibrium_pair_relative_residual);
+    diagnostics.full_descriptor_certified =
+        diagnostics.gauge_policy_satisfied &&
+        below_tolerance(diagnostics.magnetic_relative_residual) &&
+        below_tolerance(diagnostics.potential_relative_residual) &&
+        diagnostics.seam_frame_certified;
+    return diagnostics;
+}
+
+#endif // FULLMAG_HAS_MFEM_STACK
+
 #if FULLMAG_FEM_WITH_SLEPC
+
+// PETSc compares the explicitly rebuilt residual at a restart against the
+// residual at the beginning of the preceding cycle.  The real-split Schur
+// action can reach roundoff with a bounded transient increase in that rebuilt
+// residual.  The signed-path pilots observed discrepancy ratios of 1.045 and
+// 1.362 relative to the complete cycle-start residual.  Permit at most twice
+// that residual, then restart from the explicitly rebuilt vector.  This does
+// not relax convergence: KSP remains error-if-not-converged and independent
+// shifted-system and original-descriptor residuals remain mandatory below.
+constexpr PetscReal kFloquetShiftedGmresBreakdownTolerance = 2.0;
+constexpr PetscInt kFloquetShiftedGmresDefaultRestart = 8;
+// Materializing the exact Schur action is bounded to the small validation
+// systems for which it is inexpensive.  It gives shift-invert an LU
+// preconditioner containing the dynamic-demag feedback that the sparse
+// magnetic-only approximation omits.  Larger production systems retain the
+// sparse approximation until a scalable block preconditioner is available.
+constexpr PetscInt kFloquetExactSchurPreconditionerMaxDimension = 512;
 
 #if defined(PETSC_USE_COMPLEX)
 // The modal production contract uses a real PETSc build and performs the
 // complex Floquet algebra in a real split.  A complex PETSc build would make
 // the pair-vector interpretation ambiguous, so fail explicitly.
 #endif
+
+// Retain one bounded diagnostic sample; estimates are not accepted modes.
+PetscErrorCode monitor_native_floquet_eps(
+    EPS, PetscInt iteration, PetscInt converged,
+    PetscScalar[], PetscScalar[], PetscReal estimates[], PetscInt count,
+    void *raw_result)
+{
+    if (raw_result == nullptr) {
+        return PETSC_ERR_ARG_NULL;
+    }
+    auto *result = static_cast<SLEPcTinyGyrotropicModalEigenResult *>(raw_result);
+    result->eps_monitor_iteration = static_cast<int>(iteration);
+    result->eps_first_unconverged_error_estimate =
+        estimates != nullptr && converged >= 0 && converged < count
+            ? static_cast<double>(estimates[converged])
+            : std::numeric_limits<double>::quiet_NaN();
+    return 0;
+}
 
 struct NativeFloquetMatShellContext {
     Mat a_qq = nullptr;
@@ -368,6 +909,75 @@ struct NativeFloquetMatShellContext {
     int phase_sign = 1;
     char error_message[256]{};
 };
+
+struct LastFloquetShiftedSolveSnapshot {
+    Mat shifted_operator = nullptr; // Owns one PETSc reference.
+    Vec rhs = nullptr;
+    Vec solution = nullptr;
+    Vec true_residual = nullptr;
+    bool available = false;
+    int true_residual_sample_count = 0;
+    int true_residual_measurement_failure_count = 0;
+    double maximum_true_relative_residual = 0.0;
+};
+
+PetscErrorCode capture_last_floquet_shifted_solve(
+    KSP ksp, Vec rhs, Vec solution, void *raw_snapshot)
+{
+    auto *snapshot = static_cast<LastFloquetShiftedSolveSnapshot *>(raw_snapshot);
+    if (snapshot == nullptr) {
+        return PETSC_ERR_ARG_NULL;
+    }
+    snapshot->available = false;
+    Mat shifted_operator = nullptr;
+    if (rhs == nullptr || solution == nullptr ||
+        KSPGetOperators(ksp, &shifted_operator, nullptr) != 0 ||
+        shifted_operator == nullptr ||
+        (snapshot->rhs == nullptr && VecDuplicate(rhs, &snapshot->rhs) != 0) ||
+        (snapshot->solution == nullptr &&
+         VecDuplicate(solution, &snapshot->solution) != 0) ||
+        VecCopy(rhs, snapshot->rhs) != 0 ||
+        VecCopy(solution, snapshot->solution) != 0) {
+        ++snapshot->true_residual_measurement_failure_count;
+        return 0; // A diagnostic failure must not alter the eigensolve.
+    }
+    if (snapshot->shifted_operator != shifted_operator) {
+        if (PetscObjectReference(
+                reinterpret_cast<PetscObject>(shifted_operator)) != 0) {
+            ++snapshot->true_residual_measurement_failure_count;
+            return 0;
+        }
+        Mat previous = snapshot->shifted_operator;
+        snapshot->shifted_operator = shifted_operator;
+        if (previous != nullptr) {
+            MatDestroy(&previous);
+        }
+    }
+    snapshot->available = true;
+    PetscReal rhs_norm = 0.0;
+    PetscReal residual_norm = 0.0;
+    const bool measured =
+        (snapshot->true_residual != nullptr ||
+         VecDuplicate(rhs, &snapshot->true_residual) == 0) &&
+        MatMult(shifted_operator, solution, snapshot->true_residual) == 0 &&
+        VecAYPX(snapshot->true_residual, -1.0, rhs) == 0 &&
+        VecNorm(rhs, NORM_2, &rhs_norm) == 0 &&
+        VecNorm(snapshot->true_residual, NORM_2, &residual_norm) == 0 &&
+        std::isfinite(static_cast<double>(rhs_norm)) &&
+        std::isfinite(static_cast<double>(residual_norm));
+    if (measured) {
+        const double relative_residual =
+            static_cast<double>(residual_norm) /
+            std::max(static_cast<double>(rhs_norm),
+                     std::numeric_limits<double>::min());
+        snapshot->maximum_true_relative_residual = std::max(
+            snapshot->maximum_true_relative_residual, relative_residual);
+        ++snapshot->true_residual_sample_count;
+    } else {
+        ++snapshot->true_residual_measurement_failure_count;
+    }
+    return 0;
+}
 
 std::mutex &native_floquet_solver_mutex()
 {
@@ -493,24 +1103,41 @@ bool create_real_split_matrix(
     return true;
 }
 
-// The shifted operator is a real-frequency rotation of the magnetic block
-// minus sigma times the gyrotropic block. Keep this sparse matrix separate
-// from the MatShell used for the exact Schur action: it is the preconditioner
-// only, while the shell still performs the scalar-field feedback solve.
+// Build the shifted right preconditioner without replacing the matrix-free
+// eigensolver operator. Small validation systems materialize the exact Schur
+// action; larger systems retain the sparse magnetic-only approximation.
 bool create_native_floquet_shifted_preconditioner(
+    Mat schur_shell,
     Mat rotated_a_qq,
     Mat gyrotropic,
     PetscScalar shift,
     Mat *out_matrix,
-    double *normalization_scale)
+    double *normalization_scale,
+    bool *exact_schur_materialized)
 {
-    if (rotated_a_qq == nullptr || gyrotropic == nullptr || out_matrix == nullptr ||
-        normalization_scale == nullptr) {
+    if (schur_shell == nullptr || rotated_a_qq == nullptr || gyrotropic == nullptr ||
+        out_matrix == nullptr || normalization_scale == nullptr ||
+        exact_schur_materialized == nullptr) {
         return false;
     }
     *out_matrix = nullptr;
     *normalization_scale = 1.0;
-    if (MatDuplicate(rotated_a_qq, MAT_COPY_VALUES, out_matrix) != 0 ||
+    *exact_schur_materialized = false;
+    PetscInt row_count = 0;
+    PetscInt column_count = 0;
+    if (MatGetSize(schur_shell, &row_count, &column_count) != 0 ||
+        row_count <= 0 || row_count != column_count) {
+        return false;
+    }
+    if (row_count <= kFloquetExactSchurPreconditionerMaxDimension) {
+        if (MatComputeOperator(schur_shell, MATAIJ, out_matrix) != 0) {
+            return false;
+        }
+        *exact_schur_materialized = true;
+    } else if (MatDuplicate(rotated_a_qq, MAT_COPY_VALUES, out_matrix) != 0) {
+        return false;
+    }
+    if (
         MatAXPY(
             *out_matrix,
             static_cast<PetscScalar>(-shift),
@@ -730,6 +1357,199 @@ bool solve_native_floquet_phi_for_vector(
     return true;
 }
 
+Complex complex_inner_product(
+    const std::vector<Complex> &left,
+    const std::vector<Complex> &right) noexcept
+{
+    if (left.size() != right.size()) {
+        return Complex(std::numeric_limits<double>::infinity(), 0.0);
+    }
+    Complex value{};
+    for (std::size_t index = 0u; index < left.size(); ++index) {
+        value += std::conj(left[index]) * right[index];
+    }
+    return value;
+}
+
+bool solve_floquet_demag_probe_sample(
+    NativeFloquetMatShellContext *context,
+    const FloquetSharedDomainSparseModalOperator &operator_view,
+    const std::vector<double> &probe_values,
+    FloquetDemagOperatorProbeSample *out_sample,
+    std::vector<Complex> &out_q,
+    std::vector<Complex> &out_phi)
+{
+    if (context == nullptr || out_sample == nullptr ||
+        probe_values.size() != static_cast<std::size_t>(context->q_complex_count) ||
+        context->q_physical_real == nullptr) {
+        return false;
+    }
+    out_q.assign(probe_values.size(), Complex{});
+    for (std::size_t index = 0u; index < probe_values.size(); ++index) {
+        out_q[index] = Complex(probe_values[index], 0.0);
+    }
+    out_sample->q_l2_norm = complex_vector_norm(out_q);
+    const double zero_threshold = 64.0 * std::numeric_limits<double>::epsilon() *
+        std::sqrt(static_cast<double>(probe_values.size()));
+    if (!std::isfinite(out_sample->q_l2_norm)) {
+        return false;
+    }
+    if (out_sample->q_l2_norm <= zero_threshold) {
+        out_sample->attempted = false;
+        return true;
+    }
+
+    PetscInt split_size = 0;
+    if (VecGetSize(context->q_physical_real, &split_size) != 0 ||
+        split_size != 2 * context->q_complex_count ||
+        VecSet(context->q_physical_real, static_cast<PetscScalar>(0.0)) != 0) {
+        return false;
+    }
+    PetscScalar *split_values = nullptr;
+    if (VecGetArray(context->q_physical_real, &split_values) != 0) {
+        return false;
+    }
+    for (PetscInt index = 0; index < context->q_complex_count; ++index) {
+        split_values[index] = static_cast<PetscScalar>(
+            probe_values[static_cast<std::size_t>(index)]);
+        split_values[context->q_complex_count + index] = static_cast<PetscScalar>(0.0);
+    }
+    const PetscErrorCode restore_code =
+        VecRestoreArray(context->q_physical_real, &split_values);
+    if (restore_code != 0) {
+        return false;
+    }
+
+    std::vector<double> phi_split;
+    if (!solve_native_floquet_phi_for_vector(
+            context, context->q_physical_real, phi_split) ||
+        phi_split.size() != static_cast<std::size_t>(context->phi_split_count) ||
+        context->phi_split_count != 2 * static_cast<PetscInt>(operator_view.phi_dof_count)) {
+        return false;
+    }
+    out_phi.resize(static_cast<std::size_t>(operator_view.phi_dof_count));
+    for (std::size_t index = 0u; index < out_phi.size(); ++index) {
+        out_phi[index] = Complex(
+            phi_split[index], phi_split[out_phi.size() + index]);
+    }
+
+    out_sample->attempted = true;
+    out_sample->potential_relative_residual =
+        floquet_potential_residual(operator_view, out_q, out_phi);
+    const std::vector<Complex> p_phi = complex_csr_matvec(*operator_view.p, out_phi);
+    const std::vector<Complex> a_qphi_phi =
+        complex_csr_matvec(*operator_view.a_qphi, out_phi);
+    if (p_phi.size() != out_phi.size() || a_qphi_phi.size() != out_q.size()) {
+        return false;
+    }
+    const Complex potential_quadratic = complex_inner_product(out_phi, p_phi);
+    const Complex feedback_quadratic = complex_inner_product(out_q, a_qphi_phi);
+    out_sample->potential_energy_j =
+        0.5 * operator_view.mu0_T_m_A * potential_quadratic.real();
+    out_sample->self_energy_j = 0.5 * feedback_quadratic.real();
+    out_sample->passed = std::isfinite(out_sample->potential_relative_residual) &&
+        out_sample->potential_relative_residual <= kFloquetDemagProbeRelativeTolerance &&
+        std::isfinite(potential_quadratic.real()) &&
+        std::isfinite(feedback_quadratic.real()) &&
+        std::isfinite(out_sample->potential_energy_j) &&
+        std::isfinite(out_sample->self_energy_j);
+    return true;
+}
+
+bool run_floquet_demag_operator_probe(
+    NativeFloquetMatShellContext *context,
+    const FloquetSharedDomainSparseModalOperator &operator_view,
+    FloquetDemagOperatorProbeResult *out_probe)
+{
+    if (context == nullptr || out_probe == nullptr) {
+        return false;
+    }
+    *out_probe = FloquetDemagOperatorProbeResult{};
+    if (operator_view.uniform_transverse_probe_q_y == nullptr &&
+        operator_view.uniform_transverse_probe_q_z == nullptr) {
+        return true;
+    }
+    out_probe->requested = true;
+    if (operator_view.uniform_transverse_probe_q_y == nullptr ||
+        operator_view.uniform_transverse_probe_q_z == nullptr) {
+        return false;
+    }
+
+    std::vector<Complex> q_y;
+    std::vector<Complex> q_z;
+    std::vector<Complex> phi_y;
+    std::vector<Complex> phi_z;
+    if (!solve_floquet_demag_probe_sample(
+            context,
+            operator_view,
+            *operator_view.uniform_transverse_probe_q_y,
+            &out_probe->global_y,
+            q_y,
+            phi_y) ||
+        !solve_floquet_demag_probe_sample(
+            context,
+            operator_view,
+            *operator_view.uniform_transverse_probe_q_z,
+            &out_probe->global_z,
+            q_z,
+            phi_z)) {
+        return false;
+    }
+
+    const bool both_directions_observable =
+        out_probe->global_y.attempted && out_probe->global_z.attempted;
+    out_probe->available = both_directions_observable;
+    if ((out_probe->global_y.attempted && !out_probe->global_y.passed) ||
+        (out_probe->global_z.attempted && !out_probe->global_z.passed)) {
+        out_probe->passed = false;
+        return false;
+    }
+    if (!both_directions_observable) {
+        out_probe->passed = false;
+        return true;
+    }
+
+    const std::vector<Complex> a_qphi_phi_y =
+        complex_csr_matvec(*operator_view.a_qphi, phi_y);
+    const std::vector<Complex> a_qphi_phi_z =
+        complex_csr_matvec(*operator_view.a_qphi, phi_z);
+    if (a_qphi_phi_y.size() != q_y.size() || a_qphi_phi_z.size() != q_z.size()) {
+        return false;
+    }
+    const Complex cross_yz = complex_inner_product(q_y, a_qphi_phi_z);
+    const Complex cross_zy = complex_inner_product(q_z, a_qphi_phi_y);
+    const double cross_scale = std::max(
+        {std::abs(cross_yz), std::abs(cross_zy),
+         std::abs(out_probe->global_y.self_energy_j),
+         std::abs(out_probe->global_z.self_energy_j),
+         std::numeric_limits<double>::min()});
+    out_probe->hermitian_relative_defect =
+        std::abs(cross_yz - std::conj(cross_zy)) / cross_scale;
+
+    const double energy_scale = std::max(
+        {std::abs(out_probe->global_y.self_energy_j),
+         std::abs(out_probe->global_z.self_energy_j),
+         std::abs(out_probe->global_y.potential_energy_j),
+         std::abs(out_probe->global_z.potential_energy_j),
+         std::numeric_limits<double>::min()});
+    const double negative_energy_tolerance =
+        kFloquetDemagProbeRelativeTolerance * energy_scale;
+    for (FloquetDemagOperatorProbeSample *sample :
+         {&out_probe->global_y, &out_probe->global_z}) {
+        sample->energy_form_relative_defect =
+            std::abs(sample->self_energy_j - sample->potential_energy_j) / energy_scale;
+        sample->passed = sample->passed &&
+            sample->self_energy_j >= -negative_energy_tolerance &&
+            sample->potential_energy_j >= -negative_energy_tolerance &&
+            sample->energy_form_relative_defect <=
+                kFloquetDemagProbeRelativeTolerance;
+    }
+    out_probe->passed = out_probe->global_y.passed && out_probe->global_z.passed &&
+        std::isfinite(out_probe->hermitian_relative_defect) &&
+        out_probe->hermitian_relative_defect <= kFloquetDemagProbeRelativeTolerance;
+    return out_probe->passed;
+}
+
 bool solve_native_floquet_phi_for_physical_mode(
     NativeFloquetMatShellContext *context,
     Vec xr,
@@ -837,6 +1657,721 @@ bool copy_native_floquet_eigenvector(
     }
     VecRestoreArrayRead(xr, &real_values);
     VecRestoreArrayRead(xi, &imag_values);
+    return true;
+}
+
+bool floquet_dense_oracle_requested() noexcept
+{
+    const char *value = std::getenv("FULLMAG_FLOQUET_DENSE_ORACLE");
+    return value != nullptr && std::strcmp(value, "1") == 0;
+}
+
+bool floquet_diagnostic_tolerance(
+    const char *environment_name,
+    PetscReal default_value,
+    PetscReal *out_value) noexcept
+{
+    if (out_value == nullptr) {
+        return false;
+    }
+    const char *value = std::getenv(environment_name);
+    if (value == nullptr) {
+        *out_value = default_value;
+        return true;
+    }
+    constexpr const char *choices[] = {
+        "1e-6", "1e-7", "1e-8", "1e-9", "1e-10", "1e-11", "1e-12", "1e-13"};
+    constexpr PetscReal tolerances[] = {
+        1.0e-6, 1.0e-7, 1.0e-8, 1.0e-9,
+        1.0e-10, 1.0e-11, 1.0e-12, 1.0e-13};
+    for (std::size_t index = 0;
+         index < sizeof(choices) / sizeof(choices[0]); ++index) {
+        if (std::strcmp(value, choices[index]) == 0) {
+            *out_value = tolerances[index];
+            return true;
+        }
+    }
+    return false;
+}
+
+bool floquet_diagnostic_gmres_restart(PetscInt *out_value) noexcept
+{
+    if (out_value == nullptr) {
+        return false;
+    }
+    const char *value = std::getenv("FULLMAG_FLOQUET_GMRES_RESTART");
+    if (value == nullptr) {
+        *out_value = kFloquetShiftedGmresDefaultRestart;
+        return true;
+    }
+    constexpr const char *choices[] = {"8", "10", "12", "16", "30"};
+    constexpr PetscInt restarts[] = {8, 10, 12, 16, 30};
+    for (std::size_t index = 0;
+         index < sizeof(choices) / sizeof(choices[0]); ++index) {
+        if (std::strcmp(value, choices[index]) == 0) {
+            *out_value = restarts[index];
+            return true;
+        }
+    }
+    return false;
+}
+
+bool copy_sparse_matrix_to_dense(
+    Mat sparse,
+    PetscInt dimension,
+    Mat *dense) noexcept
+{
+    if (sparse == nullptr || dense == nullptr || dimension <= 0 ||
+        MatCreateSeqDense(PETSC_COMM_SELF, dimension, dimension, nullptr, dense) != 0) {
+        return false;
+    }
+    for (PetscInt row = 0; row < dimension; ++row) {
+        PetscInt nonzero_count = 0;
+        const PetscInt *columns = nullptr;
+        const PetscScalar *values = nullptr;
+        if (MatGetRow(sparse, row, &nonzero_count, &columns, &values) != 0) {
+            MatDestroy(dense);
+            return false;
+        }
+        bool ok = true;
+        for (PetscInt entry = 0; entry < nonzero_count; ++entry) {
+            if (MatSetValue(
+                    *dense,
+                    row,
+                    columns[entry],
+                    values[entry],
+                    INSERT_VALUES) != 0) {
+                ok = false;
+                break;
+            }
+        }
+        if (MatRestoreRow(
+                sparse, row, &nonzero_count, &columns, &values) != 0 || !ok) {
+            MatDestroy(dense);
+            return false;
+        }
+    }
+    if (MatAssemblyBegin(*dense, MAT_FINAL_ASSEMBLY) != 0 ||
+        MatAssemblyEnd(*dense, MAT_FINAL_ASSEMBLY) != 0) {
+        MatDestroy(dense);
+        return false;
+    }
+    return true;
+}
+
+bool set_real_split_vector_from_complex(
+    Vec vector,
+    const std::vector<Complex> &values) noexcept
+{
+    if (vector == nullptr || values.empty()) {
+        return false;
+    }
+    PetscInt dimension = 0;
+    if (VecGetSize(vector, &dimension) != 0 ||
+        dimension != static_cast<PetscInt>(2u * values.size()) ||
+        VecSet(vector, static_cast<PetscScalar>(0.0)) != 0) {
+        return false;
+    }
+    for (std::size_t index = 0u; index < values.size(); ++index) {
+        if (VecSetValue(
+                vector,
+                static_cast<PetscInt>(index),
+                static_cast<PetscScalar>(values[index].real()),
+                INSERT_VALUES) != 0 ||
+            VecSetValue(
+                vector,
+                static_cast<PetscInt>(values.size() + index),
+                static_cast<PetscScalar>(values[index].imag()),
+                INSERT_VALUES) != 0) {
+            return false;
+        }
+    }
+    return VecAssemblyBegin(vector) == 0 && VecAssemblyEnd(vector) == 0;
+}
+
+bool read_real_split_complex_vector(
+    Vec vector,
+    std::uint64_t complex_count,
+    std::vector<Complex> &out) noexcept
+{
+    if (vector == nullptr || complex_count == 0u) {
+        return false;
+    }
+    PetscInt dimension = 0;
+    if (VecGetSize(vector, &dimension) != 0 ||
+        dimension != static_cast<PetscInt>(2u * complex_count)) {
+        return false;
+    }
+    const PetscScalar *values = nullptr;
+    if (VecGetArrayRead(vector, &values) != 0) {
+        return false;
+    }
+    out.resize(static_cast<std::size_t>(complex_count));
+    for (std::uint64_t index = 0u; index < complex_count; ++index) {
+        out[static_cast<std::size_t>(index)] = Complex(
+            static_cast<double>(PetscRealPart(values[index])),
+            static_cast<double>(PetscRealPart(values[complex_count + index])));
+    }
+    return VecRestoreArrayRead(vector, &values) == 0;
+}
+
+bool run_floquet_dense_original_oracle(
+    NativeFloquetMatShellContext *context,
+    Mat shell,
+    const FloquetSharedDomainSparseModalOperator &operator_view,
+    const SLEPcSparseGyrotropicModalEigenRequest &spectral_request,
+    double operator_normalization_scale,
+    FloquetDenseOracleDiagnostics *out_diagnostics) noexcept
+{
+    if (out_diagnostics == nullptr) {
+        return false;
+    }
+    *out_diagnostics = FloquetDenseOracleDiagnostics{};
+    if (!floquet_dense_oracle_requested()) {
+        return true;
+    }
+    out_diagnostics->requested = true;
+    out_diagnostics->status = "unavailable";
+    out_diagnostics->q_complex_dof_count =
+        operator_view.q_complex_dof_count <=
+                static_cast<std::uint64_t>(std::numeric_limits<int>::max())
+            ? static_cast<int>(operator_view.q_complex_dof_count)
+            : 0;
+    out_diagnostics->phi_dof_count =
+        operator_view.phi_dof_count <=
+                static_cast<std::uint64_t>(std::numeric_limits<int>::max())
+            ? static_cast<int>(operator_view.phi_dof_count)
+            : 0;
+    out_diagnostics->operator_normalization_scale = operator_normalization_scale;
+
+    if (context == nullptr || shell == nullptr ||
+        operator_view.q_complex_dof_count == 0u ||
+        operator_view.q_complex_dof_count > 256u ||
+        context->q_split_count !=
+            static_cast<PetscInt>(2u * operator_view.q_complex_dof_count)) {
+        out_diagnostics->reason = "real_split_dimension_exceeds_512_or_invalid";
+        return false;
+    }
+    out_diagnostics->real_split_dimension = context->q_split_count;
+
+    Mat direct_a_qq = nullptr;
+    Mat direct_b_qq = nullptr;
+    Mat direct_p = nullptr;
+    Mat direct_a_qphi = nullptr;
+    Mat direct_a_phiq = nullptr;
+    Mat dense_schur = nullptr;
+    Mat dense_rotated_schur = nullptr;
+    Mat dense_b_qq = nullptr;
+    KSP oracle_p_ksp = nullptr;
+    EPS oracle_eps = nullptr;
+    ST oracle_st = nullptr;
+    Vec basis = nullptr;
+    Vec rhs_phi = nullptr;
+    Vec phi_solution = nullptr;
+    Vec poisson_residual = nullptr;
+    Vec a_qq_column = nullptr;
+    Vec feedback_column = nullptr;
+    Vec schur_column = nullptr;
+    Vec probe = nullptr;
+    Vec shell_action = nullptr;
+    Vec dense_action = nullptr;
+    Vec action_difference = nullptr;
+    Vec eigenvector_real = nullptr;
+    Vec eigenvector_imag = nullptr;
+    Vec physical_q = nullptr;
+
+    auto destroy = [&]() noexcept {
+        if (physical_q != nullptr) {
+            VecDestroy(&physical_q);
+        }
+        if (eigenvector_real != nullptr) {
+            VecDestroy(&eigenvector_real);
+        }
+        if (eigenvector_imag != nullptr) {
+            VecDestroy(&eigenvector_imag);
+        }
+        if (action_difference != nullptr) {
+            VecDestroy(&action_difference);
+        }
+        if (dense_action != nullptr) {
+            VecDestroy(&dense_action);
+        }
+        if (shell_action != nullptr) {
+            VecDestroy(&shell_action);
+        }
+        if (probe != nullptr) {
+            VecDestroy(&probe);
+        }
+        if (schur_column != nullptr) {
+            VecDestroy(&schur_column);
+        }
+        if (feedback_column != nullptr) {
+            VecDestroy(&feedback_column);
+        }
+        if (a_qq_column != nullptr) {
+            VecDestroy(&a_qq_column);
+        }
+        if (poisson_residual != nullptr) {
+            VecDestroy(&poisson_residual);
+        }
+        if (phi_solution != nullptr) {
+            VecDestroy(&phi_solution);
+        }
+        if (rhs_phi != nullptr) {
+            VecDestroy(&rhs_phi);
+        }
+        if (basis != nullptr) {
+            VecDestroy(&basis);
+        }
+        if (oracle_eps != nullptr) {
+            EPSDestroy(&oracle_eps);
+        }
+        if (oracle_p_ksp != nullptr) {
+            KSPDestroy(&oracle_p_ksp);
+        }
+        if (dense_b_qq != nullptr) {
+            MatDestroy(&dense_b_qq);
+        }
+        if (dense_rotated_schur != nullptr) {
+            MatDestroy(&dense_rotated_schur);
+        }
+        if (dense_schur != nullptr) {
+            MatDestroy(&dense_schur);
+        }
+        if (direct_a_phiq != nullptr) {
+            MatDestroy(&direct_a_phiq);
+        }
+        if (direct_a_qphi != nullptr) {
+            MatDestroy(&direct_a_qphi);
+        }
+        if (direct_p != nullptr) {
+            MatDestroy(&direct_p);
+        }
+        if (direct_b_qq != nullptr) {
+            MatDestroy(&direct_b_qq);
+        }
+        if (direct_a_qq != nullptr) {
+            MatDestroy(&direct_a_qq);
+        }
+    };
+    auto fail = [&](const char *reason) noexcept {
+        out_diagnostics->status = "error";
+        out_diagnostics->reason = reason;
+        destroy();
+        return false;
+    };
+
+    const PetscInt q_split_count = context->q_split_count;
+    const PetscInt phi_split_count = context->phi_split_count;
+    const double normalization_scale =
+        std::isfinite(operator_normalization_scale) &&
+                operator_normalization_scale != 0.0
+            ? operator_normalization_scale
+            : 1.0;
+    if (!create_real_split_matrix(*operator_view.a_qq, &direct_a_qq) ||
+        !create_real_split_matrix(*operator_view.b_qq, &direct_b_qq) ||
+        !create_real_split_matrix(*operator_view.p, &direct_p) ||
+        !create_real_split_matrix(*operator_view.a_qphi, &direct_a_qphi) ||
+        !create_real_split_matrix(*operator_view.a_phiq, &direct_a_phiq) ||
+        MatScale(direct_a_qq, static_cast<PetscScalar>(normalization_scale)) != 0 ||
+        MatScale(direct_a_qphi, static_cast<PetscScalar>(normalization_scale)) != 0 ||
+        MatScale(direct_b_qq, static_cast<PetscScalar>(normalization_scale)) != 0 ||
+        MatCreateSeqDense(
+            PETSC_COMM_SELF,
+            q_split_count,
+            q_split_count,
+            nullptr,
+            &dense_schur) != 0 ||
+        MatCreateSeqDense(
+            PETSC_COMM_SELF,
+            q_split_count,
+            q_split_count,
+            nullptr,
+            &dense_rotated_schur) != 0 ||
+        !copy_sparse_matrix_to_dense(direct_b_qq, q_split_count, &dense_b_qq)) {
+        return fail("dense_oracle_matrix_creation_failed");
+    }
+
+    PC oracle_pc = nullptr;
+    if (KSPCreate(PETSC_COMM_SELF, &oracle_p_ksp) != 0 ||
+        KSPSetOperators(oracle_p_ksp, direct_p, direct_p) != 0 ||
+        KSPSetType(oracle_p_ksp, KSPPREONLY) != 0 ||
+        KSPGetPC(oracle_p_ksp, &oracle_pc) != 0 ||
+        PCSetType(oracle_pc, PCLU) != 0 ||
+        PCFactorSetShiftType(oracle_pc, MAT_SHIFT_NONE) != 0 ||
+        KSPSetErrorIfNotConverged(oracle_p_ksp, PETSC_TRUE) != 0 ||
+        KSPSetUp(oracle_p_ksp) != 0 ||
+        VecCreateSeq(PETSC_COMM_SELF, q_split_count, &basis) != 0 ||
+        VecCreateSeq(PETSC_COMM_SELF, phi_split_count, &rhs_phi) != 0 ||
+        VecDuplicate(rhs_phi, &phi_solution) != 0 ||
+        VecDuplicate(rhs_phi, &poisson_residual) != 0 ||
+        VecDuplicate(basis, &a_qq_column) != 0 ||
+        VecDuplicate(basis, &feedback_column) != 0 ||
+        VecDuplicate(basis, &schur_column) != 0) {
+        return fail("dense_oracle_poisson_lu_setup_failed");
+    }
+
+    double poisson_residual_max = 0.0;
+    for (PetscInt column = 0; column < q_split_count; ++column) {
+        if (VecSet(basis, static_cast<PetscScalar>(0.0)) != 0 ||
+            VecSetValue(basis, column, static_cast<PetscScalar>(1.0), INSERT_VALUES) != 0 ||
+            VecAssemblyBegin(basis) != 0 || VecAssemblyEnd(basis) != 0 ||
+            MatMult(direct_a_phiq, basis, rhs_phi) != 0 ||
+            VecScale(rhs_phi, static_cast<PetscScalar>(-1.0)) != 0 ||
+            KSPSolve(oracle_p_ksp, rhs_phi, phi_solution) != 0) {
+            return fail("dense_oracle_poisson_lu_solve_failed");
+        }
+        KSPConvergedReason reason = KSP_CONVERGED_ITERATING;
+        if (KSPGetConvergedReason(oracle_p_ksp, &reason) != 0 || reason < 0 ||
+            MatMult(direct_p, phi_solution, poisson_residual) != 0 ||
+            VecAXPY(poisson_residual, static_cast<PetscScalar>(-1.0), rhs_phi) != 0) {
+            return fail("dense_oracle_poisson_lu_not_converged");
+        }
+        PetscReal residual_norm = 0.0;
+        PetscReal rhs_norm = 0.0;
+        if (VecNorm(poisson_residual, NORM_2, &residual_norm) != 0 ||
+            VecNorm(rhs_phi, NORM_2, &rhs_norm) != 0) {
+            return fail("dense_oracle_poisson_residual_measurement_failed");
+        }
+        poisson_residual_max = std::max(
+            poisson_residual_max,
+            static_cast<double>(residual_norm) /
+                std::max(static_cast<double>(rhs_norm), std::numeric_limits<double>::min()));
+        if (MatMult(direct_a_qq, basis, a_qq_column) != 0 ||
+            MatMult(direct_a_qphi, phi_solution, feedback_column) != 0 ||
+            VecCopy(a_qq_column, schur_column) != 0 ||
+            VecAXPY(schur_column, static_cast<PetscScalar>(1.0), feedback_column) != 0) {
+            return fail("dense_oracle_schur_action_failed");
+        }
+        const PetscScalar *column_values = nullptr;
+        if (VecGetArrayRead(schur_column, &column_values) != 0) {
+            return fail("dense_oracle_schur_column_read_failed");
+        }
+        bool column_ok = true;
+        for (PetscInt row = 0; row < q_split_count; ++row) {
+            if (MatSetValue(
+                    dense_schur,
+                    row,
+                    column,
+                    column_values[row],
+                    INSERT_VALUES) != 0) {
+                column_ok = false;
+                break;
+            }
+        }
+        if (VecRestoreArrayRead(schur_column, &column_values) != 0 || !column_ok) {
+            return fail("dense_oracle_schur_column_write_failed");
+        }
+    }
+    out_diagnostics->poisson_relative_residual_max = poisson_residual_max;
+    if (!std::isfinite(poisson_residual_max)) {
+        return fail("dense_oracle_nonfinite_poisson_residual");
+    }
+    if (MatAssemblyBegin(dense_schur, MAT_FINAL_ASSEMBLY) != 0 ||
+        MatAssemblyEnd(dense_schur, MAT_FINAL_ASSEMBLY) != 0) {
+        return fail("dense_oracle_schur_assembly_failed");
+    }
+
+    const PetscInt q_complex_count = static_cast<PetscInt>(
+        operator_view.q_complex_dof_count);
+    for (PetscInt row = 0; row < q_split_count; ++row) {
+        for (PetscInt column = 0; column < q_split_count; ++column) {
+            PetscScalar value = 0.0;
+            const PetscInt source_row = row < q_complex_count
+                ? q_complex_count + row
+                : row - q_complex_count;
+            if (MatGetValue(dense_schur, source_row, column, &value) != 0 ||
+                MatSetValue(
+                    dense_rotated_schur,
+                    row,
+                    column,
+                    static_cast<PetscScalar>(context->phase_sign) *
+                        (row < q_complex_count ? value : -value),
+                    INSERT_VALUES) != 0) {
+                return fail("dense_oracle_rotation_failed");
+            }
+        }
+    }
+    if (MatAssemblyBegin(dense_rotated_schur, MAT_FINAL_ASSEMBLY) != 0 ||
+        MatAssemblyEnd(dense_rotated_schur, MAT_FINAL_ASSEMBLY) != 0) {
+        return fail("dense_oracle_rotation_assembly_failed");
+    }
+
+    if (VecCreateSeq(PETSC_COMM_SELF, q_split_count, &probe) != 0 ||
+        VecDuplicate(probe, &shell_action) != 0 ||
+        VecDuplicate(probe, &dense_action) != 0 ||
+        VecDuplicate(probe, &action_difference) != 0) {
+        return fail("dense_oracle_action_vector_creation_failed");
+    }
+    const PetscInt probe_count = std::min<PetscInt>(8, q_split_count);
+    double action_error_max = 0.0;
+    for (PetscInt probe_index = 0; probe_index < probe_count; ++probe_index) {
+        if (VecSet(probe, static_cast<PetscScalar>(0.0)) != 0) {
+            return fail("dense_oracle_action_probe_reset_failed");
+        }
+        if (probe_index < 4) {
+            const PetscInt index = probe_index == 2
+                ? q_complex_count
+                : probe_index == 3 ? q_complex_count + 1 : probe_index;
+            if (index < q_split_count &&
+                (VecSetValue(
+                     probe,
+                     index,
+                     static_cast<PetscScalar>(1.0),
+                     INSERT_VALUES) != 0)) {
+                return fail("dense_oracle_basis_probe_failed");
+            }
+        } else {
+            for (PetscInt index = 0; index < q_split_count; ++index) {
+                const int pattern = static_cast<int>(
+                    ((index + 1) * (probe_index + 3)) % 17) - 8;
+                if (VecSetValue(
+                        probe,
+                        index,
+                        static_cast<PetscScalar>(pattern) / 8.0,
+                        INSERT_VALUES) != 0) {
+                    return fail("dense_oracle_dense_probe_failed");
+                }
+            }
+        }
+        if (VecAssemblyBegin(probe) != 0 || VecAssemblyEnd(probe) != 0 ||
+            MatMult(shell, probe, shell_action) != 0 ||
+            MatMult(dense_rotated_schur, probe, dense_action) != 0 ||
+            VecCopy(shell_action, action_difference) != 0 ||
+            VecAXPY(action_difference, static_cast<PetscScalar>(-1.0), dense_action) != 0) {
+            return fail("dense_oracle_action_comparison_failed");
+        }
+        PetscReal difference_norm = 0.0;
+        PetscReal direct_norm = 0.0;
+        if (VecNorm(action_difference, NORM_2, &difference_norm) != 0 ||
+            VecNorm(dense_action, NORM_2, &direct_norm) != 0) {
+            return fail("dense_oracle_action_norm_failed");
+        }
+        action_error_max = std::max(
+            action_error_max,
+            static_cast<double>(difference_norm) /
+                std::max(static_cast<double>(direct_norm), std::numeric_limits<double>::min()));
+    }
+    out_diagnostics->action_probe_count = static_cast<int>(probe_count);
+    out_diagnostics->action_relative_error_max = action_error_max;
+    out_diagnostics->action_match = std::isfinite(action_error_max) && action_error_max <= 1.0e-10;
+    if (!out_diagnostics->action_match) {
+        return fail("dense_oracle_shell_action_mismatch");
+    }
+
+    if (EPSCreate(PETSC_COMM_SELF, &oracle_eps) != 0 ||
+        EPSSetOperators(oracle_eps, dense_rotated_schur, dense_b_qq) != 0 ||
+        EPSSetProblemType(oracle_eps, EPS_GNHEP) != 0 ||
+        EPSSetType(oracle_eps, EPSLAPACK) != 0 ||
+        EPSGetST(oracle_eps, &oracle_st) != 0 ||
+        STSetType(oracle_st, STSHIFT) != 0 ||
+        STSetShift(oracle_st, static_cast<PetscScalar>(0.0)) != 0 ||
+        EPSSetTrueResidual(oracle_eps, PETSC_TRUE) != 0 ||
+        EPSSetDimensions(oracle_eps, q_split_count, PETSC_DEFAULT, PETSC_DEFAULT) != 0 ||
+        VecCreateSeq(PETSC_COMM_SELF, q_split_count, &eigenvector_real) != 0 ||
+        VecCreateSeq(PETSC_COMM_SELF, q_split_count, &eigenvector_imag) != 0 ||
+        EPSSolve(oracle_eps) != 0) {
+        return fail("dense_oracle_eps_lapack_failed");
+    }
+    const char *resolved_st_type = nullptr;
+    PetscScalar resolved_shift = 0.0;
+    if (STGetType(oracle_st, &resolved_st_type) != 0 ||
+        resolved_st_type == nullptr ||
+        std::strcmp(resolved_st_type, STSHIFT) != 0 ||
+        STGetShift(oracle_st, &resolved_shift) != 0 ||
+        PetscAbsScalar(resolved_shift) != 0.0) {
+        return fail("dense_oracle_nonzero_spectral_shift");
+    }
+    out_diagnostics->st_shift_zero = true;
+    PetscInt converged_count = 0;
+    EPSConvergedReason converged_reason = EPS_CONVERGED_ITERATING;
+    if (EPSGetConverged(oracle_eps, &converged_count) != 0 ||
+        EPSGetConvergedReason(oracle_eps, &converged_reason) != 0) {
+        return fail("dense_oracle_eps_convergence_query_failed");
+    }
+    out_diagnostics->available = true;
+    out_diagnostics->eps_converged_count = static_cast<int>(converged_count);
+    out_diagnostics->eps_converged_reason_available = true;
+    out_diagnostics->eps_converged_reason = static_cast<int>(converged_reason);
+    if (converged_reason <= EPS_CONVERGED_ITERATING) {
+        return fail("dense_oracle_eps_not_converged");
+    }
+    if (converged_count <= 0) {
+        return fail("dense_oracle_eps_returned_no_eigenpairs");
+    }
+
+    const double target_omega = omega_rad_s_from_frequency_hz(
+        std::max(0.0, spectral_request.target_frequency_hz));
+    const bool filter_window = spectral_request.frequency_max_hz >
+        spectral_request.frequency_min_hz && spectral_request.frequency_max_hz > 0.0;
+    const double eigenvalue_imaginary_limit =
+        std::max(1.0e-8, 10.0e-12);
+    PetscInt selected_index = -1;
+    PetscScalar selected_kr = 0.0;
+    PetscScalar selected_ki = 0.0;
+    double selected_omega = 0.0;
+    double selected_imaginary = 0.0;
+    double selected_distance = std::numeric_limits<double>::infinity();
+    for (PetscInt index = 0; index < converged_count; ++index) {
+        PetscScalar kr = 0.0;
+        PetscScalar ki = 0.0;
+        if (EPSGetEigenpair(
+                oracle_eps,
+                index,
+                &kr,
+                &ki,
+                eigenvector_real,
+                eigenvector_imag) != 0) {
+            continue;
+        }
+        const double omega = static_cast<double>(PetscRealPart(kr));
+        const double imaginary = static_cast<double>(PetscRealPart(ki));
+        if (!std::isfinite(omega) || !std::isfinite(imaginary) ||
+            std::abs(imaginary) > eigenvalue_imaginary_limit *
+                std::max(1.0, std::abs(omega))) {
+            continue;
+        }
+        const ModeKinematics kinematics = map_eigenvalue(
+            {0.0, static_cast<double>(context->phase_sign) * omega},
+            spectral_request.phase_convention);
+        if (!select_positive_frequency_mode(
+                kinematics,
+                ZeroFrequencyModePolicy::exclude) ||
+            (filter_window &&
+             (kinematics.frequency_hz < spectral_request.frequency_min_hz ||
+              kinematics.frequency_hz > spectral_request.frequency_max_hz))) {
+            continue;
+        }
+        std::vector<Complex> trial_split;
+        if (!copy_native_floquet_eigenvector(
+                eigenvector_real, eigenvector_imag, q_split_count, trial_split)) {
+            continue;
+        }
+        const std::vector<Complex> trial_q = physical_complex_vector_from_split(
+            trial_split, operator_view.q_complex_dof_count);
+        const double trial_q_norm = complex_vector_norm(trial_q);
+        const double trial_split_norm = complex_vector_norm(trial_split);
+        if (trial_q.size() != static_cast<std::size_t>(operator_view.q_complex_dof_count) ||
+            !std::isfinite(trial_q_norm) || !std::isfinite(trial_split_norm) ||
+            trial_q_norm <= std::numeric_limits<double>::epsilon() ||
+            trial_q_norm / std::max(
+                trial_split_norm, std::numeric_limits<double>::min()) <=
+                std::sqrt(std::numeric_limits<double>::epsilon())) {
+            continue;
+        }
+        const double distance = std::abs(kinematics.omega_rad_s - target_omega);
+        if (selected_index < 0 || distance < selected_distance) {
+            selected_index = index;
+            selected_kr = kr;
+            selected_ki = ki;
+            selected_omega = omega;
+            selected_imaginary = imaginary;
+            selected_distance = distance;
+        }
+    }
+    if (selected_index < 0) {
+        out_diagnostics->reason = "dense_oracle_no_positive_frequency_candidate";
+        destroy();
+        return false;
+    }
+    if (EPSGetEigenpair(
+            oracle_eps,
+            selected_index,
+            &selected_kr,
+            &selected_ki,
+            eigenvector_real,
+            eigenvector_imag) != 0) {
+        return fail("dense_oracle_selected_eigenvector_query_failed");
+    }
+    std::vector<Complex> split_eigenvector;
+    std::vector<Complex> q;
+    if (!copy_native_floquet_eigenvector(
+            eigenvector_real,
+            eigenvector_imag,
+            q_split_count,
+            split_eigenvector) ||
+        (q = physical_complex_vector_from_split(
+             split_eigenvector,
+             operator_view.q_complex_dof_count)).size() !=
+            static_cast<std::size_t>(operator_view.q_complex_dof_count) ||
+        VecCreateSeq(PETSC_COMM_SELF, q_split_count, &physical_q) != 0 ||
+        !set_real_split_vector_from_complex(physical_q, q)) {
+        return fail("dense_oracle_selected_mode_reconstruction_failed");
+    }
+    if (MatMult(direct_a_phiq, physical_q, rhs_phi) != 0 ||
+        VecScale(rhs_phi, static_cast<PetscScalar>(-1.0)) != 0 ||
+        KSPSolve(oracle_p_ksp, rhs_phi, phi_solution) != 0) {
+        return fail("dense_oracle_selected_poisson_solve_failed");
+    }
+    KSPConvergedReason selected_poisson_reason = KSP_CONVERGED_ITERATING;
+    if (KSPGetConvergedReason(oracle_p_ksp, &selected_poisson_reason) != 0 ||
+        selected_poisson_reason < 0) {
+        return fail("dense_oracle_selected_poisson_not_converged");
+    }
+    std::vector<Complex> phi;
+    if (!read_real_split_complex_vector(
+            phi_solution,
+            operator_view.phi_dof_count,
+            phi)) {
+        return fail("dense_oracle_selected_phi_reconstruction_failed");
+    }
+    PetscReal eps_residual = 0.0;
+    if (EPSComputeError(
+            oracle_eps,
+            selected_index,
+            EPS_ERROR_ABSOLUTE,
+            &eps_residual) != 0) {
+        return fail("dense_oracle_selected_eps_residual_failed");
+    }
+    const double raw_lambda_real =
+        -static_cast<double>(context->phase_sign) * selected_imaginary;
+    const double raw_lambda_imag =
+        static_cast<double>(context->phase_sign) * selected_omega;
+    const double projected_lambda_imag = raw_lambda_imag;
+    const double magnetic_raw = floquet_magnetic_residual(
+        operator_view,
+        q,
+        phi,
+        Complex(raw_lambda_real, raw_lambda_imag));
+    const double magnetic_projected = floquet_magnetic_residual(
+        operator_view,
+        q,
+        phi,
+        Complex(0.0, projected_lambda_imag));
+    const double potential = floquet_potential_residual(operator_view, q, phi);
+    const ModeKinematics projected_kinematics = map_eigenvalue(
+        {0.0, projected_lambda_imag},
+        spectral_request.phase_convention);
+    const double split_norm = complex_vector_norm(split_eigenvector);
+    const double q_norm = complex_vector_norm(q);
+    if (!std::isfinite(static_cast<double>(eps_residual)) ||
+        !std::isfinite(magnetic_raw) ||
+        !std::isfinite(magnetic_projected) ||
+        !std::isfinite(potential) ||
+        !std::isfinite(projected_kinematics.frequency_hz) ||
+        !std::isfinite(split_norm) || !std::isfinite(q_norm) ||
+        !(q_norm > std::numeric_limits<double>::epsilon())) {
+        return fail("dense_oracle_nonfinite_or_null_physical_mode");
+    }
+    out_diagnostics->candidate_found = true;
+    out_diagnostics->reason = "";
+    out_diagnostics->status = "ok";
+    out_diagnostics->eps_absolute_residual = static_cast<double>(eps_residual);
+    out_diagnostics->rotated_omega_rad_s = selected_omega;
+    out_diagnostics->rotated_imaginary_rad_s = selected_imaginary;
+    out_diagnostics->frequency_hz = projected_kinematics.frequency_hz;
+    out_diagnostics->frequency_distance_hz = selected_distance /
+        (2.0 * std::acos(-1.0));
+    out_diagnostics->raw_lambda_real_per_s = raw_lambda_real;
+    out_diagnostics->raw_lambda_imag_rad_per_s = raw_lambda_imag;
+    out_diagnostics->projected_lambda_real_per_s = 0.0;
+    out_diagnostics->projected_lambda_imag_rad_per_s = projected_lambda_imag;
+    out_diagnostics->magnetic_residual_raw = magnetic_raw;
+    out_diagnostics->magnetic_residual_projected = magnetic_projected;
+    out_diagnostics->potential_residual = potential;
+    out_diagnostics->q_projection_ratio = q_norm /
+        std::max(split_norm, std::numeric_limits<double>::min());
+    destroy();
     return true;
 }
 
@@ -956,11 +2491,10 @@ FloquetModalSolverAdmission admit_floquet_modal_sparse_request(
         return admission;
     }
     if (spectral_request.floquet_shared_domain_operator != nullptr) {
-        if (!floquet_shared_operator_is_valid(
-                spectral_request.floquet_shared_domain_operator,
-                spectral_request.tangent_dof_count)) {
-            admission.reason =
-                "floquet_modal_shared_domain_sparse_operator_is_invalid";
+        admission.reason = floquet_shared_operator_invalid_reason(
+            spectral_request.floquet_shared_domain_operator,
+            spectral_request.tangent_dof_count);
+        if (admission.reason != nullptr) {
             return admission;
         }
     } else if (!sparse_view_is_valid(spectral_request.stiffness_csr) ||
@@ -1018,21 +2552,34 @@ solve_floquet_shared_domain_sparse_modal_spectrum(
     result.spectral_transform = "shift_invert";
     result.which_eigenpairs = "target_magnitude";
     result.ksp_type = "gmres";
+    result.ksp_orthogonalization = "classical_gram_schmidt_refine_always";
+    result.ksp_breakdown_tolerance =
+        static_cast<double>(kFloquetShiftedGmresBreakdownTolerance);
     result.pc_type = "lu";
     result.factorization_package = "petsc_default_lu";
-    result.factorization_shift_policy = "none";
+    result.factorization_shift_policy = "pending_preconditioner_norm";
     result.poisson_ksp_type = "preonly";
     result.poisson_pc_type = "lu";
     result.poisson_factorization_package = "petsc_default_lu";
+    result.poisson_factorization_shift_policy = "MAT_SHIFT_NONE";
     result.poisson_iteration_semantics =
         "preonly_factorization_no_iterative_convergence";
     result.nullspace_policy = "nonzero_k_invertible_poisson";
     result.unsupported_reason = "";
+    const double not_measured = std::numeric_limits<double>::quiet_NaN();
+    result.ksp_final_residual = not_measured;
+    result.max_candidate_relative_residual = not_measured;
+    result.eps_normalized_absolute_tolerance = not_measured;
+    result.max_eps_normalized_absolute_residual = not_measured;
+    result.max_floquet_magnetic_relative_residual = not_measured;
+    result.max_floquet_potential_relative_residual = not_measured;
 
     const int advertised_dimension = spectral_request.tangent_dof_count;
-    if (!floquet_shared_operator_is_valid(&operator_view, advertised_dimension)) {
+    const char *operator_invalid_reason =
+        floquet_shared_operator_invalid_reason(&operator_view, advertised_dimension);
+    if (operator_invalid_reason != nullptr) {
         result.status = "validation_error";
-        result.unsupported_reason = "invalid_shared_domain_floquet_sparse_operator";
+        result.unsupported_reason = operator_invalid_reason;
         return result;
     }
 
@@ -1069,18 +2616,33 @@ solve_floquet_shared_domain_sparse_modal_spectrum(
     Mat shell = nullptr;
     Mat gyrotropic = nullptr;
     Mat shifted_preconditioner = nullptr;
+    bool exact_schur_preconditioner_materialized = false;
     EPS eps = nullptr;
+    bool eps_cleanup_is_safe = true;
     Vec xr = nullptr;
     Vec xi = nullptr;
+    LastFloquetShiftedSolveSnapshot last_shifted_solve{};
     auto destroy_all = [&]() noexcept {
+        if (last_shifted_solve.rhs != nullptr) {
+            VecDestroy(&last_shifted_solve.rhs);
+        }
+        if (last_shifted_solve.solution != nullptr) {
+            VecDestroy(&last_shifted_solve.solution);
+        }
+        if (last_shifted_solve.true_residual != nullptr) {
+            VecDestroy(&last_shifted_solve.true_residual);
+        }
         if (xr != nullptr) {
             VecDestroy(&xr);
         }
         if (xi != nullptr) {
             VecDestroy(&xi);
         }
-        if (eps != nullptr) {
+        if (eps != nullptr && eps_cleanup_is_safe) {
             EPSDestroy(&eps);
+        }
+        if (last_shifted_solve.shifted_operator != nullptr) {
+            MatDestroy(&last_shifted_solve.shifted_operator);
         }
         if (shell != nullptr) {
             MatDestroy(&shell);
@@ -1144,9 +2706,12 @@ solve_floquet_shared_domain_sparse_modal_spectrum(
             ? static_cast<PetscInt>(spectral_request.max_linear_iterations)
             : PETSC_DEFAULT;
     PC poisson_pc = nullptr;
+    // This preonly LU computes P(k)^-1 inside the physical Schur operator.
+    // A factorization shift would change that inverse, so an unusable P(k)
+    // must fail closed instead of regularizing the physical Poisson block.
     if (KSPGetPC(context.p_ksp, &poisson_pc) != 0 ||
         PCSetType(poisson_pc, PCLU) != 0 ||
-        PCFactorSetShiftType(poisson_pc, MAT_SHIFT_NONZERO) != 0 ||
+        PCFactorSetShiftType(poisson_pc, MAT_SHIFT_NONE) != 0 ||
         KSPSetTolerances(
             context.p_ksp,
             poisson_ksp_rtol,
@@ -1186,6 +2751,18 @@ solve_floquet_shared_domain_sparse_modal_spectrum(
     result.poisson_ksp_max_iterations = poisson_actual_max_iterations > 0
         ? static_cast<int>(poisson_actual_max_iterations)
         : 0;
+    if (operator_view.uniform_transverse_probe_q_y != nullptr ||
+        operator_view.uniform_transverse_probe_q_z != nullptr) {
+        if (!run_floquet_demag_operator_probe(
+                &context,
+                operator_view,
+                &result.dynamic_demag_operator_probe)) {
+            result.status = "solve_error";
+            result.unsupported_reason = "floquet_dynamic_demag_operator_probe_failed";
+            destroy_all();
+            return result;
+        }
+    }
     if (MatCreateShell(
             PETSC_COMM_SELF,
             context.q_split_count,
@@ -1197,8 +2774,24 @@ solve_floquet_shared_domain_sparse_modal_spectrum(
         MatShellSetOperation(
             shell,
             MATOP_MULT,
-            reinterpret_cast<void (*)(void)>(native_floquet_matmult)) != 0 ||
-        EPSCreate(PETSC_COMM_SELF, &eps) != 0 ||
+            reinterpret_cast<void (*)(void)>(native_floquet_matmult)) != 0) {
+        result.status = "solve_error";
+        result.unsupported_reason = "floquet_matshell_creation_failed";
+        destroy_all();
+        return result;
+    }
+    if (floquet_dense_oracle_requested()) {
+        // C2 is explicitly diagnostic.  Its failure must never change the
+        // production Schur/Krylov path or introduce a fallback solver.
+        (void)run_floquet_dense_original_oracle(
+            &context,
+            shell,
+            operator_view,
+            spectral_request,
+            result.operator_normalization_scale,
+            &result.floquet_dense_oracle);
+    }
+    if (EPSCreate(PETSC_COMM_SELF, &eps) != 0 ||
         EPSSetOperators(eps, shell, gyrotropic) != 0 ||
         EPSSetProblemType(eps, EPS_GNHEP) != 0 ||
         EPSSetType(eps, EPSKRYLOVSCHUR) != 0) {
@@ -1213,6 +2806,17 @@ solve_floquet_shared_domain_sparse_modal_spectrum(
         static_cast<PetscInt>(std::max(1, spectral_request.requested_mode_count) * 2));
     const PetscInt nev = std::min<PetscInt>(
         std::max<PetscInt>(1, split_dimension - 1), requested_pairs);
+    // The default Krylov subspace can be too narrow for the clustered
+    // interior spectrum produced by the Floquet Schur pencil. Use a bounded
+    // 32-vector floor for the current small-mode path, while preserving the
+    // usual >= 2*nev relation and never exceeding the operator dimension.
+    // This is a solver-convergence experiment; original-pencil residual gates
+    // remain unchanged and decide physical acceptance.
+    const PetscInt doubled_nev = nev > split_dimension / 2
+        ? split_dimension
+        : static_cast<PetscInt>(2 * nev);
+    const PetscInt ncv = std::min<PetscInt>(
+        split_dimension, std::max<PetscInt>(32, doubled_nev));
     ST spectral_transform = nullptr;
     KSP shifted_ksp = nullptr;
     PC shifted_pc = nullptr;
@@ -1220,18 +2824,51 @@ solve_floquet_shared_domain_sparse_modal_spectrum(
         spectral_request.residual_tolerance > 0.0
             ? spectral_request.residual_tolerance
             : 1.0e-10);
-    const PetscReal shifted_ksp_tolerance = std::max(
+    // The generalized pencil has been normalized by its global operator
+    // scale, while the physical acceptance gate uses a per-mode backward
+    // residual formed from the magnetic and demag blocks. Those scales can
+    // differ substantially when airbox modes dominate the global norm. Use a
+    // conservative 1e-3 safety factor for EPS's absolute true-residual
+    // prefilter; the independent original-block residual below remains the
+    // only physical acceptance gate. EPS_ERROR_RELATIVE divides by |lambda|
+    // and is not a dimensionless residual for this SI-valued pencil.
+    const PetscReal default_eps_absolute_tolerance = std::max(
+        static_cast<PetscReal>(100.0 * PETSC_MACHINE_EPSILON),
+        static_cast<PetscReal>(kFloquetEpsTrueResidualSafetyFactor) *
+            eigen_tolerance);
+    const PetscReal default_shifted_ksp_tolerance = std::max(
         static_cast<PetscReal>(1.0e-13),
         std::min(static_cast<PetscReal>(1.0e-8),
                  static_cast<PetscReal>(1.0e-3 * eigen_tolerance)));
+    PetscReal eps_absolute_tolerance = default_eps_absolute_tolerance;
+    PetscReal shifted_ksp_tolerance = default_shifted_ksp_tolerance;
+    PetscInt requested_gmres_restart = kFloquetShiftedGmresDefaultRestart;
+    if (!floquet_diagnostic_tolerance(
+            "FULLMAG_FLOQUET_EPS_PREFILTER_ABS",
+            default_eps_absolute_tolerance,
+            &eps_absolute_tolerance) ||
+        !floquet_diagnostic_tolerance(
+            "FULLMAG_FLOQUET_SHIFTED_KSP_RTOL",
+            default_shifted_ksp_tolerance,
+            &shifted_ksp_tolerance) ||
+        !floquet_diagnostic_gmres_restart(&requested_gmres_restart)) {
+        result.status = "validation_error";
+        result.unsupported_reason = "floquet_diagnostic_ksp_option_invalid";
+        destroy_all();
+        return result;
+    }
+    result.eps_normalized_absolute_tolerance =
+        static_cast<double>(eps_absolute_tolerance);
     const PetscInt max_outer = spectral_request.max_outer_iterations > 0
         ? static_cast<PetscInt>(spectral_request.max_outer_iterations)
         : PETSC_DEFAULT;
-    if (EPSSetDimensions(eps, nev, PETSC_DEFAULT, PETSC_DEFAULT) != 0 ||
+    if (EPSSetDimensions(eps, nev, ncv, PETSC_DEFAULT) != 0 ||
         EPSSetWhichEigenpairs(eps, EPS_TARGET_MAGNITUDE) != 0 ||
         EPSSetTarget(eps, static_cast<PetscScalar>(target_shift)) != 0 ||
         EPSSetTrueResidual(eps, PETSC_TRUE) != 0 ||
-        EPSSetTolerances(eps, eigen_tolerance, max_outer) != 0 ||
+        EPSSetConvergenceTest(eps, EPS_CONV_ABS) != 0 ||
+        EPSMonitorSet(eps, monitor_native_floquet_eps, &result, nullptr) != 0 ||
+        EPSSetTolerances(eps, eps_absolute_tolerance, max_outer) != 0 ||
         EPSGetST(eps, &spectral_transform) != 0 ||
         STSetType(spectral_transform, STSINVERT) != 0 ||
         // Keep the generalized shift-invert action matrix-free.  With the
@@ -1241,29 +2878,98 @@ solve_floquet_shared_domain_sparse_modal_spectrum(
         STSetMatMode(spectral_transform, ST_MATMODE_SHELL) != 0 ||
         STSetShift(spectral_transform, static_cast<PetscScalar>(target_shift)) != 0 ||
         !create_native_floquet_shifted_preconditioner(
+            shell,
             context.rotated_a_qq,
             gyrotropic,
             static_cast<PetscScalar>(target_shift),
             &shifted_preconditioner,
-            &result.preconditioner_normalization_scale) ||
-        // The explicit magnetic shifted pencil keeps the matrix-free Schur
-        // action as the operator while giving GMRES a factored, nonzero
-        // shifted block. A Jacobi diagonal is invalid here because the
-        // real-frequency rotation puts the magnetic and gyrotropic terms in
-        // off-diagonal real-split slots.
+            &result.preconditioner_normalization_scale,
+            &exact_schur_preconditioner_materialized)) {
+        result.status = "solve_error";
+        result.unsupported_reason = "floquet_slepc_configuration_failed";
+        destroy_all();
+        return result;
+    }
+    PetscReal shifted_preconditioner_norm = 0.0;
+    if (MatNorm(shifted_preconditioner, NORM_INFINITY,
+                &shifted_preconditioner_norm) != 0 ||
+        !std::isfinite(static_cast<double>(shifted_preconditioner_norm)) ||
+        shifted_preconditioner_norm <= 0.0) {
+        result.status = "solve_error";
+        result.unsupported_reason = "floquet_shifted_preconditioner_norm_failed";
+        destroy_all();
+        return result;
+    }
+    // This shift regularizes only the LU factorization used as a
+    // preconditioner for the exact matrix-free Schur shift-invert action. The
+    // preconditioner is norm-scaled above; sqrt(machine epsilon) times its
+    // measured norm is large enough to clear PETSc's zero-pivot threshold but
+    // remains a small relative perturbation. EPS/KSP still applies the exact
+    // shell operator and accepted modes must pass the original-pencil residual.
+    const PetscReal factorization_shift_amount =
+        std::sqrt(static_cast<PetscReal>(PETSC_MACHINE_EPSILON)) *
+        shifted_preconditioner_norm;
+    if (!std::isfinite(static_cast<double>(factorization_shift_amount)) ||
+        factorization_shift_amount <= 0.0) {
+        result.status = "solve_error";
+        result.unsupported_reason = "floquet_factorization_shift_invalid";
+        destroy_all();
+        return result;
+    }
+    result.factorization_shift_policy = exact_schur_preconditioner_materialized
+        ? "exact_schur_materialized_MAT_SHIFT_NONZERO_sqrt_machine_epsilon_times_norm"
+        : "magnetic_only_MAT_SHIFT_NONZERO_sqrt_machine_epsilon_times_norm";
+    result.factorization_shift_amount =
+        static_cast<double>(factorization_shift_amount);
+    // The explicit magnetic shifted pencil remains a preconditioner only; the
+    // shell is the eigensolver operator. A Jacobi diagonal is invalid here
+    // because the real-frequency rotation puts magnetic and gyrotropic terms
+    // in off-diagonal real-split slots.
+    if (
         STSetPreconditionerMat(spectral_transform, shifted_preconditioner) != 0 ||
         STGetKSP(spectral_transform, &shifted_ksp) != 0 ||
         KSPSetType(shifted_ksp, KSPGMRES) != 0 ||
+        KSPGMRESSetRestart(shifted_ksp, requested_gmres_restart) != 0 ||
+        // The Schur MatShell contains a finite-tolerance inner Poisson solve,
+        // so the recursive GMRES norm can drift from the explicitly
+        // recomputed norm at restart. Permit residual replacement while the
+        // rebuilt norm stays within twice the norm at the beginning of the
+        // cycle. PETSc still reports larger discrepancies and all actual
+        // nonconvergence as hard errors; the independent true-residual and
+        // original-pencil gates below remain authoritative.
+        KSPGMRESSetBreakdownTolerance(
+            shifted_ksp,
+            kFloquetShiftedGmresBreakdownTolerance) != 0 ||
+        // The CGS refinement pilot did not clear the physical mode gate.
+        // The restart option tests whether recomputing the residual before
+        // projected convergence improves the true shifted-solve residual.
+        KSPGMRESSetOrthogonalization(
+            shifted_ksp,
+            KSPGMRESClassicalGramSchmidtOrthogonalization) != 0 ||
+        KSPGMRESSetCGSRefinementType(
+            shifted_ksp,
+            KSP_GMRES_CGS_REFINE_ALWAYS) != 0 ||
+        // A left-preconditioned norm can be tiny even when the original
+        // shifted Schur equation has a large residual.  Right GMRES measures
+        // the unpreconditioned equation; physical mode acceptance still uses
+        // the independently reconstructed original block residuals.
+        KSPSetPCSide(shifted_ksp, PC_RIGHT) != 0 ||
+        KSPSetNormType(shifted_ksp, KSP_NORM_UNPRECONDITIONED) != 0 ||
         KSPGetPC(shifted_ksp, &shifted_pc) != 0 ||
         PCSetType(shifted_pc, PCLU) != 0 ||
         PCFactorReorderForNonzeroDiagonal(shifted_pc, 1.0e-12) != 0 ||
-        PCFactorSetShiftType(shifted_pc, MAT_SHIFT_NONE) != 0 ||
+        PCFactorSetShiftType(shifted_pc, MAT_SHIFT_NONZERO) != 0 ||
+        PCFactorSetShiftAmount(shifted_pc, factorization_shift_amount) != 0 ||
         KSPSetTolerances(
             shifted_ksp,
             shifted_ksp_tolerance,
             PETSC_DEFAULT,
             PETSC_DEFAULT,
             requested_linear_iterations) != 0 ||
+        KSPSetPostSolve(
+            shifted_ksp,
+            capture_last_floquet_shifted_solve,
+            &last_shifted_solve) != 0 ||
         KSPSetErrorIfNotConverged(shifted_ksp, PETSC_TRUE) != 0 ||
         VecCreateSeq(PETSC_COMM_SELF, split_dimension, &xr) != 0 ||
         VecCreateSeq(PETSC_COMM_SELF, split_dimension, &xi) != 0) {
@@ -1276,12 +2982,16 @@ solve_floquet_shared_domain_sparse_modal_spectrum(
     PetscReal shifted_actual_atol = 0.0;
     PetscReal shifted_actual_dtol = 0.0;
     PetscInt shifted_actual_max_iterations = 0;
+    PetscInt shifted_actual_gmres_restart = 0;
     if (KSPGetTolerances(
             shifted_ksp,
             &shifted_actual_rtol,
             &shifted_actual_atol,
             &shifted_actual_dtol,
-            &shifted_actual_max_iterations) != 0) {
+            &shifted_actual_max_iterations) != 0 ||
+        KSPGMRESGetRestart(shifted_ksp,
+                           &shifted_actual_gmres_restart) != 0 ||
+        shifted_actual_gmres_restart != requested_gmres_restart) {
         result.status = "solve_error";
         result.unsupported_reason = "floquet_shifted_ksp_tolerance_query_failed";
         destroy_all();
@@ -1289,12 +2999,86 @@ solve_floquet_shared_domain_sparse_modal_spectrum(
     }
     (void)shifted_actual_dtol;
     result.ksp_rtol = static_cast<double>(shifted_actual_rtol);
+    result.ksp_restart = static_cast<int>(shifted_actual_gmres_restart);
     result.ksp_atol = static_cast<double>(shifted_actual_atol);
     result.ksp_max_iterations = shifted_actual_max_iterations > 0
         ? static_cast<int>(shifted_actual_max_iterations)
         : 0;
 
-    if (EPSSolve(eps) != 0) {
+    const PetscErrorCode eps_solve_error = EPSSolve(eps);
+    // A KSP error can unwind through Krylov--Schur while SLEPc owns a
+    // DSGetMat() view.  SLEPc 3.24 then cannot safely destroy that EPS because
+    // DSReset() attempts to destroy the still-borrowed dense parent.  Keep the
+    // first error authoritative and leave this one process-bounded EPS object
+    // for OS reclamation; the runtime fails closed immediately afterwards.
+    eps_cleanup_is_safe = eps_solve_error == 0;
+    result.ksp_true_residual_sample_count =
+        last_shifted_solve.true_residual_sample_count;
+    result.ksp_true_residual_measurement_failure_count =
+        last_shifted_solve.true_residual_measurement_failure_count;
+    if (last_shifted_solve.true_residual_sample_count > 0) {
+        result.ksp_max_true_relative_residual =
+            last_shifted_solve.maximum_true_relative_residual;
+    }
+    PetscInt resolved_nev = 0;
+    PetscInt resolved_ncv = 0;
+    PetscInt resolved_mpd = 0;
+    if (EPSGetDimensions(eps, &resolved_nev, &resolved_ncv, &resolved_mpd) == 0 &&
+        resolved_nev > 0 && resolved_ncv >= resolved_nev) {
+        const PetscInt int_max = static_cast<PetscInt>(
+            std::numeric_limits<int>::max());
+        const PetscInt int_min = static_cast<PetscInt>(
+            std::numeric_limits<int>::min());
+        result.eps_nev = static_cast<int>(
+            std::min(std::max<PetscInt>(int_min, resolved_nev), int_max));
+        result.eps_ncv = static_cast<int>(
+            std::min(std::max<PetscInt>(int_min, resolved_ncv), int_max));
+        result.eps_mpd = static_cast<int>(
+            std::min(std::max<PetscInt>(int_min, resolved_mpd), int_max));
+        result.eps_dimensions_available = true;
+    }
+    // These values describe the inner shift-invert KSP, separately from the
+    // EPS outer iteration count. KSPGetTotalIterations accumulates over every
+    // linear solve made by this KSP object; the last-solve values identify
+    // whether the final shift-invert action itself converged.
+    PetscInt shifted_total_iterations = 0;
+    PetscInt shifted_last_iterations = 0;
+    PetscReal shifted_final_residual = PETSC_INFINITY;
+    KSPConvergedReason shifted_converged_reason = KSP_CONVERGED_ITERATING;
+    PetscErrorCode ksp_diagnostics_code =
+        KSPGetTotalIterations(shifted_ksp, &shifted_total_iterations);
+    if (ksp_diagnostics_code == 0) {
+        ksp_diagnostics_code =
+            KSPGetIterationNumber(shifted_ksp, &shifted_last_iterations);
+    }
+    if (ksp_diagnostics_code == 0) {
+        ksp_diagnostics_code =
+            KSPGetResidualNorm(shifted_ksp, &shifted_final_residual);
+    }
+    if (ksp_diagnostics_code == 0) {
+        ksp_diagnostics_code =
+            KSPGetConvergedReason(shifted_ksp, &shifted_converged_reason);
+    }
+    if (ksp_diagnostics_code == 0 &&
+        (shifted_converged_reason != KSP_CONVERGED_ITERATING ||
+         eps_solve_error != 0)) {
+        const PetscInt int_max = static_cast<PetscInt>(
+            std::numeric_limits<int>::max());
+        result.linear_iterations_total = static_cast<int>(
+            std::min(std::max<PetscInt>(0, shifted_total_iterations), int_max));
+        result.ksp_last_iterations = static_cast<int>(
+            std::min(std::max<PetscInt>(0, shifted_last_iterations), int_max));
+        result.ksp_final_residual =
+            static_cast<double>(shifted_final_residual);
+        result.ksp_diagnostics_available = true;
+        result.ksp_converged_reason_available = true;
+        result.ksp_converged_reason =
+            static_cast<int>(shifted_converged_reason);
+    }
+    // Retain observable KSP state even when a hard PETSc error leaves its
+    // reason at ITERATING. Preserve the first EPS/MatShell error and do not
+    // treat a recurrence norm as an independently measured true residual.
+    if (eps_solve_error != 0) {
         result.status = "solve_error";
         result.unsupported_reason =
             context.error_message[0] != '\0'
@@ -1304,19 +3088,63 @@ solve_floquet_shared_domain_sparse_modal_spectrum(
         return result;
     }
 
+    // SLEPc may release the KSP's borrowed rhs and solution when EPSSolve
+    // returns. The post-solve hook copied the last pair while both were live.
+    // PETSc's reported norm may also be preconditioned, so compute the true
+    // residual against the shifted operator with those owned copies.
+    if (result.ksp_diagnostics_available && last_shifted_solve.available) {
+        Vec true_residual = nullptr;
+        PetscReal rhs_norm = 0.0;
+        PetscReal residual_norm = 0.0;
+        PCSide pc_side = PC_LEFT;
+        KSPNormType norm_type = KSP_NORM_DEFAULT;
+        const bool residual_measured =
+            VecDuplicate(last_shifted_solve.rhs, &true_residual) == 0 &&
+            MatMult(
+                last_shifted_solve.shifted_operator,
+                last_shifted_solve.solution,
+                true_residual) == 0 &&
+            VecAYPX(true_residual, -1.0, last_shifted_solve.rhs) == 0 &&
+            VecNorm(last_shifted_solve.rhs, NORM_2, &rhs_norm) == 0 &&
+            VecNorm(true_residual, NORM_2, &residual_norm) == 0 &&
+            KSPGetPCSide(shifted_ksp, &pc_side) == 0 &&
+            KSPGetNormType(shifted_ksp, &norm_type) == 0;
+        if (true_residual != nullptr) {
+            VecDestroy(&true_residual);
+        }
+        if (residual_measured &&
+            std::isfinite(static_cast<double>(rhs_norm)) &&
+            std::isfinite(static_cast<double>(residual_norm))) {
+            result.ksp_last_true_residual_available = true;
+            result.ksp_last_rhs_norm = static_cast<double>(rhs_norm);
+            result.ksp_last_true_residual_norm =
+                static_cast<double>(residual_norm);
+            result.ksp_last_true_relative_residual =
+                static_cast<double>(residual_norm) /
+                std::max(static_cast<double>(rhs_norm),
+                         std::numeric_limits<double>::min());
+            result.ksp_pc_side = static_cast<int>(pc_side);
+            result.ksp_norm_type = static_cast<int>(norm_type);
+        }
+    }
+
     // EPSGetIterationNumber/EPSGetConverged require PetscInt lvalues.  The
     // result fields are intentionally ABI-sized ints, so retrieve the values
     // again through local variables before candidate filtering.
     PetscInt outer_iterations = 0;
     PetscInt converged_eigenpair_count = 0;
+    EPSConvergedReason converged_reason = EPS_CONVERGED_ITERATING;
     if (EPSGetIterationNumber(eps, &outer_iterations) != 0 ||
-        EPSGetConverged(eps, &converged_eigenpair_count) != 0) {
+        EPSGetConverged(eps, &converged_eigenpair_count) != 0 ||
+        EPSGetConvergedReason(eps, &converged_reason) != 0) {
         result.status = "solve_error";
         result.unsupported_reason = "floquet_slepc_convergence_query_failed";
         destroy_all();
         return result;
     }
     result.outer_iterations = static_cast<int>(outer_iterations);
+    result.eps_converged_reason_available = true;
+    result.eps_converged_reason = static_cast<int>(converged_reason);
     result.converged_eigenpair_count = static_cast<int>(converged_eigenpair_count);
 
     struct Candidate {
@@ -1337,9 +3165,10 @@ solve_floquet_shared_domain_sparse_modal_spectrum(
     for (PetscInt index = 0; index < converged_eigenpair_count; ++index) {
         PetscScalar kr = 0.0;
         PetscScalar ki = 0.0;
-        PetscReal eps_residual = 0.0;
+        PetscReal eps_absolute_residual = 0.0;
         if (EPSGetEigenpair(eps, index, &kr, &ki, xr, xi) != 0 ||
-            EPSComputeError(eps, index, EPS_ERROR_RELATIVE, &eps_residual) != 0) {
+            EPSComputeError(eps, index, EPS_ERROR_ABSOLUTE, &eps_absolute_residual) != 0) {
+            ++result.eigenpair_evaluation_failure_count;
             continue;
         }
         const double rotated_omega = static_cast<double>(PetscRealPart(kr));
@@ -1348,6 +3177,7 @@ solve_floquet_shared_domain_sparse_modal_spectrum(
             std::abs(rotated_imaginary) >
                 std::max(1.0e-8, 10.0 * static_cast<double>(eigen_tolerance)) *
                     std::max(1.0, std::abs(rotated_omega))) {
+            ++result.non_real_rotated_eigenvalue_count;
             continue;
         }
         // The native operator is rotated to the real-frequency pencil
@@ -1366,52 +3196,196 @@ solve_floquet_shared_domain_sparse_modal_spectrum(
             continue;
         }
         saw_positive_frequency = true;
+        ++result.positive_frequency_candidate_count;
+        if (result.positive_frequency_candidate_count == 1) {
+            result.min_candidate_frequency_hz = kinematics.frequency_hz;
+            result.max_candidate_frequency_hz = kinematics.frequency_hz;
+        } else {
+            result.min_candidate_frequency_hz = std::min(
+                result.min_candidate_frequency_hz,
+                kinematics.frequency_hz);
+            result.max_candidate_frequency_hz = std::max(
+                result.max_candidate_frequency_hz,
+                kinematics.frequency_hz);
+        }
         if (filter_window &&
             (kinematics.frequency_hz < spectral_request.frequency_min_hz ||
              kinematics.frequency_hz > spectral_request.frequency_max_hz)) {
             continue;
         }
         saw_window_candidate = true;
+        ++result.frequency_window_candidate_count;
         std::vector<Complex> split_eigenvector;
         if (!copy_native_floquet_eigenvector(xr, xi, split_dimension, split_eigenvector)) {
+            ++result.mode_vector_failure_count;
             continue;
         }
         const std::vector<Complex> q = physical_complex_vector_from_split(
             split_eigenvector,
             operator_view.q_complex_dof_count);
         const double q_norm = complex_vector_norm(q);
+        const double split_norm = complex_vector_norm(split_eigenvector);
         if (q.size() != static_cast<std::size_t>(operator_view.q_complex_dof_count) ||
             !std::isfinite(q_norm) ||
             !(q_norm > std::numeric_limits<double>::epsilon())) {
+            ++result.mode_vector_failure_count;
             continue;
         }
         std::vector<Complex> phi;
         if (!solve_native_floquet_phi_for_physical_mode(&context, xr, xi, phi)) {
             saw_phi_failure = true;
+            ++result.potential_reconstruction_failure_count;
             continue;
         }
         const Complex lambda(lambda_real, lambda_imag);
         const double magnetic_residual = floquet_magnetic_residual(
             operator_view, q, phi, lambda);
+        const double unprojected_magnetic_residual =
+            floquet_magnetic_residual(
+                operator_view,
+                q,
+                phi,
+                Complex(
+                    -static_cast<double>(context.phase_sign) * rotated_imaginary,
+                    lambda_imag));
         const double potential_residual = floquet_potential_residual(
             operator_view, q, phi);
-        const double residual = std::max({
-            static_cast<double>(eps_residual),
+        FloquetFullDescriptorDiagnostics full_descriptor{};
+#if FULLMAG_HAS_MFEM_STACK
+        const double full_certificate_tolerance = std::min(
+            spectral_request.residual_tolerance,
+            kFloquetPotentialResidualTolerance);
+        full_descriptor = certify_floquet_full_descriptor(
+            operator_view,
+            q,
+            phi,
+            lambda,
+            full_certificate_tolerance);
+#endif
+        const bool full_descriptor_required =
+            operator_view.full_descriptor_assembly != nullptr;
+        const double eps_normalized_absolute_residual =
+            static_cast<double>(eps_absolute_residual);
+        bool residual_components_finite =
+            std::isfinite(eps_normalized_absolute_residual) &&
+            std::isfinite(magnetic_residual) &&
+            std::isfinite(potential_residual);
+        double residual = residual_components_finite
+            ? std::max({magnetic_residual, potential_residual})
+            : std::numeric_limits<double>::infinity();
+        if (full_descriptor_required) {
+            if (!full_descriptor.available) {
+                residual_components_finite = false;
+                residual = std::numeric_limits<double>::infinity();
+            } else {
+                const double full_residual = std::max({
+                    full_descriptor.magnetic_relative_residual,
+                    full_descriptor.potential_relative_residual,
+                    full_descriptor.scalar_phase_seam_relative_residual,
+                    full_descriptor.tangent_frame_seam_relative_residual,
+                    full_descriptor.cartesian_magnetic_seam_relative_residual,
+                    full_descriptor.equilibrium_pair_relative_residual});
+                residual_components_finite =
+                    residual_components_finite && std::isfinite(full_residual) &&
+                    full_descriptor.full_descriptor_certified;
+                residual = residual_components_finite
+                    ? std::max(residual, full_residual)
+                    : std::numeric_limits<double>::infinity();
+            }
+        }
+        const auto update_residual_max = [](double candidate, double &maximum) {
+            if (!std::isfinite(candidate)) {
+                maximum = std::numeric_limits<double>::infinity();
+            } else if (std::isnan(maximum)) {
+                maximum = candidate;
+            } else if (std::isfinite(maximum)) {
+                maximum = std::max(maximum, candidate);
+            }
+        };
+        update_residual_max(
+            eps_normalized_absolute_residual,
+            result.max_eps_normalized_absolute_residual);
+        update_residual_max(
             magnetic_residual,
-            potential_residual});
+            result.max_floquet_magnetic_relative_residual);
+        update_residual_max(
+            potential_residual,
+            result.max_floquet_potential_relative_residual);
+        const bool first_residual_candidate =
+            result.residual_evaluation_candidate_count == 0;
+        const bool residual_is_worse = std::isfinite(residual)
+            ? std::isfinite(result.max_candidate_relative_residual) &&
+                  residual > result.max_candidate_relative_residual
+            : std::isfinite(result.max_candidate_relative_residual);
+        if (first_residual_candidate || residual_is_worse) {
+            result.worst_candidate_frequency_hz = kinematics.frequency_hz;
+            result.worst_candidate_eps_normalized_absolute_residual =
+                eps_normalized_absolute_residual;
+            result.worst_candidate_floquet_magnetic_relative_residual =
+                magnetic_residual;
+            result.worst_candidate_floquet_potential_relative_residual =
+                potential_residual;
+            result.worst_candidate_unprojected_magnetic_relative_residual =
+                unprojected_magnetic_residual;
+            result.worst_candidate_rotated_imaginary_rad_s =
+                rotated_imaginary;
+            result.worst_candidate_q_projection_ratio =
+                q_norm / std::max(split_norm, std::numeric_limits<double>::min());
+        }
+        ++result.residual_evaluation_candidate_count;
+        if (std::isfinite(residual)) {
+            if (std::isnan(result.max_candidate_relative_residual)) {
+                result.max_candidate_relative_residual = residual;
+            } else if (std::isfinite(result.max_candidate_relative_residual)) {
+                result.max_candidate_relative_residual = std::max(
+                    result.max_candidate_relative_residual,
+                    residual);
+            }
+        } else {
+            result.max_candidate_relative_residual =
+                std::numeric_limits<double>::infinity();
+        }
         if (!std::isfinite(residual) || residual > eigen_tolerance) {
             saw_residual_rejection = true;
+            ++result.residual_rejection_count;
             continue;
         }
         Candidate candidate{};
-        // The native Schur residuals certify the reduced original complex
-        // blocks.  Boundary seams, frame constraints, and the pre-Schur
-        // reconstruction are intentionally outside this operator's scope;
-        // keep the physical q/phi payload available without claiming a full
-        // descriptor certificate.
-        candidate.mode.floquet_descriptor_certified = false;
+        // Production shared-domain solves must also pass the independently
+        // reconstructed weak-form and periodic seam checks. Direct sparse
+        // fixtures without full assembly data remain explicitly uncertified.
+        candidate.mode.floquet_descriptor_certified =
+            full_descriptor.full_descriptor_certified;
+        candidate.mode.floquet_seam_frame_certified =
+            full_descriptor.seam_frame_certified;
+        candidate.mode.floquet_gauge_policy_satisfied =
+            full_descriptor.gauge_policy_satisfied;
+        if (operator_view.boundary_kind != nullptr) {
+            std::strncpy(
+                candidate.mode.floquet_poisson_boundary_kind.data(),
+                operator_view.boundary_kind,
+                candidate.mode.floquet_poisson_boundary_kind.size() - 1u);
+        }
+        if (operator_view.gauge_policy != nullptr) {
+            std::strncpy(
+                candidate.mode.floquet_poisson_gauge_policy.data(),
+                operator_view.gauge_policy,
+                candidate.mode.floquet_poisson_gauge_policy.size() - 1u);
+        }
         candidate.mode.floquet_magnetic_residual = magnetic_residual;
         candidate.mode.floquet_potential_residual = potential_residual;
+        candidate.mode.floquet_full_magnetic_residual =
+            full_descriptor.magnetic_relative_residual;
+        candidate.mode.floquet_full_potential_residual =
+            full_descriptor.potential_relative_residual;
+        candidate.mode.floquet_scalar_phase_seam_residual =
+            full_descriptor.scalar_phase_seam_relative_residual;
+        candidate.mode.floquet_tangent_frame_seam_residual =
+            full_descriptor.tangent_frame_seam_relative_residual;
+        candidate.mode.floquet_cartesian_seam_residual =
+            full_descriptor.cartesian_magnetic_seam_relative_residual;
+        candidate.mode.floquet_equilibrium_pair_residual =
+            full_descriptor.equilibrium_pair_relative_residual;
         candidate.mode.floquet_potential_real_split = std::move(phi);
         candidate.mode.eigenpair_index = static_cast<int>(index);
         candidate.mode.lambda_real = lambda_real;
@@ -1428,7 +3402,11 @@ solve_floquet_shared_domain_sparse_modal_spectrum(
 
     if (candidates.empty()) {
         result.status = "solve_error";
-        if (!saw_positive_frequency) {
+        if (converged_eigenpair_count == 0 && converged_reason < 0) {
+            result.unsupported_reason = converged_reason == EPS_DIVERGED_ITS
+                ? "floquet_slepc_iteration_limit_reached"
+                : "floquet_slepc_no_converged_eigenpairs";
+        } else if (!saw_positive_frequency) {
             result.unsupported_reason = "no_positive_frequency_eigenpair";
         } else if (filter_window && !saw_window_candidate) {
             result.unsupported_reason = "no_positive_frequency_eigenpair_in_window";

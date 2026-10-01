@@ -8,9 +8,9 @@ use super::eigen_native_result::NativeModalEigenpair;
 use super::eigen_output::{
     classify_polarization, damping_policy_label, demag_realization_label, dispersion_csv,
     dispersion_v2_csv, equilibrium_source_json, floquet_potential_payload_bytes,
-    floquet_potential_payload_path, json_artifact, k_vector_json, normalization_label,
-    requested_mode_indices, solver_kind_label, spin_wave_bc_json, spin_wave_bc_label,
-    write_eigen_v2_bundle,
+    floquet_potential_payload_path, json_artifact, k_vector_json, modal_sample_id,
+    normalization_label, requested_mode_indices, solver_kind_label, spin_wave_bc_json,
+    spin_wave_bc_label, write_eigen_v2_bundle,
 };
 use super::eigen_policy::resolved_demag_realization;
 use super::eigen_projection::project_complex_2x2_mode_to_tangent_basis_with_periodic_map;
@@ -36,29 +36,127 @@ pub(super) fn native_modal_block_residuals(
     let reduced_ok = [
         mode.block_residual_q,
         mode.block_residual_phi,
-        mode.block_residual_gauge,
         mode.residual_relative_l2,
     ]
     .iter()
     .all(|value| value.is_finite() && (0.0..=1.0e-8).contains(value));
+    let gauge_residual_ok = mode.block_residual_gauge.map_or(true, |value| {
+        value.is_finite() && (0.0..=1.0e-8).contains(&value)
+    });
+    let full_residual = match (
+        mode.floquet_full_magnetic_relative_residual,
+        mode.floquet_full_potential_relative_residual,
+    ) {
+        (Some(magnetic), Some(potential)) => Some(magnetic.max(potential)),
+        _ => None,
+    };
+    let reduced_residual = mode
+        .block_residual_q
+        .max(mode.block_residual_phi)
+        .max(mode.block_residual_gauge.unwrap_or(0.0));
+    let floquet_full_descriptor_certified = reduced_only
+        && mode.floquet_descriptor_certified
+        && mode.floquet_full_descriptor_certified
+        && mode.floquet_seam_frame_certified
+        && mode.floquet_gauge_policy_satisfied
+        && gauge_residual_ok
+        && full_residual.is_some_and(|value| value.is_finite() && (0.0..=1.0e-8).contains(&value));
+    let full_descriptor_certified = if reduced_only {
+        floquet_full_descriptor_certified
+    } else {
+        reduced_ok && gauge_residual_ok
+    };
+    let certified = full_descriptor_certified && reduced_ok && gauge_residual_ok;
     serde_json::json!({
         "eps_q": mode.block_residual_q,
         "eps_phi": mode.block_residual_phi,
         "eps_gauge": mode.block_residual_gauge,
-        "eps_full": (!reduced_only).then_some(mode.residual_relative_l2),
-        "eps_reduced": reduced_only.then_some(mode.residual_relative_l2),
-        "scope": if reduced_only { "reduced_original_blocks_only" } else { "native_descriptor" },
+        "eps_full": if reduced_only { full_residual } else { Some(mode.residual_relative_l2) },
+        "eps_reduced": reduced_only.then_some(reduced_residual),
+        "scope": if floquet_full_descriptor_certified {
+            "full_projected_weak_form_and_periodic_seams"
+        } else if reduced_only {
+            "reduced_original_blocks_only"
+        } else {
+            "native_descriptor"
+        },
         "backend_reported_residual": mode.backend_reported_residual,
         "certification_tolerance": 1.0e-8,
-        "certified": !reduced_only && reduced_ok,
-        "reduced_pencil_certified": reduced_only && reduced_ok,
-        "full_descriptor_certified": !reduced_only && reduced_ok,
+        "certified": certified,
+        "reduced_pencil_certified": reduced_only && reduced_ok && gauge_residual_ok,
+        "full_descriptor_certified": full_descriptor_certified,
+        "floquet_seam_frame_certified": mode.floquet_seam_frame_certified,
+        "floquet_gauge_policy_satisfied": mode.floquet_gauge_policy_satisfied,
+        "floquet_full_magnetic_relative_residual": mode.floquet_full_magnetic_relative_residual,
+        "floquet_full_potential_relative_residual": mode.floquet_full_potential_relative_residual,
+        "floquet_scalar_phase_seam_relative_residual": mode.floquet_scalar_phase_seam_relative_residual,
+        "floquet_tangent_frame_seam_relative_residual": mode.floquet_tangent_frame_seam_relative_residual,
+        "floquet_cartesian_magnetic_seam_relative_residual": mode.floquet_cartesian_magnetic_seam_relative_residual,
+        "floquet_equilibrium_pair_relative_residual": mode.floquet_equilibrium_pair_relative_residual,
     })
 }
 
 fn floquet_certificate_summary(
     mode: &NativeModalEigenpair,
 ) -> Result<Option<serde_json::Value>, RunError> {
+    if mode.floquet_potential_representation.as_deref() == Some("complex_coefficients") {
+        if mode.floquet_geometric_bc_certified || !mode.floquet_potential_real_split.is_empty() {
+            return Err(RunError {
+                message: "physical Floquet potential has an incompatible certificate flag or real-split payload".to_string(),
+            });
+        }
+        if mode.floquet_descriptor_certified != mode.floquet_full_descriptor_certified {
+            return Err(RunError {
+                message: "physical Floquet descriptor certification flags disagree".to_string(),
+            });
+        }
+        if mode.floquet_full_descriptor_certified {
+            let residuals = [
+                mode.floquet_full_magnetic_relative_residual,
+                mode.floquet_full_potential_relative_residual,
+                mode.floquet_scalar_phase_seam_relative_residual,
+                mode.floquet_tangent_frame_seam_relative_residual,
+                mode.floquet_cartesian_magnetic_seam_relative_residual,
+                mode.floquet_equilibrium_pair_relative_residual,
+            ];
+            if !mode.floquet_seam_frame_certified
+                || !mode.floquet_gauge_policy_satisfied
+                || residuals.into_iter().any(|value| {
+                    !value.is_some_and(|value| value.is_finite() && (0.0..=1.0e-8).contains(&value))
+                })
+            {
+                return Err(RunError {
+                    message: "physical Floquet full-descriptor certificate is missing a finite in-tolerance weak-form, seam, or gauge-policy proof".to_string(),
+                });
+            }
+        }
+        if mode.phi_vector.is_empty() {
+            return Err(RunError {
+                message: "physical Floquet certificate summary requires the reconstructed scalar potential".to_string(),
+            });
+        }
+        return Ok(Some(serde_json::json!({
+            "floquet_descriptor_certified": mode.floquet_descriptor_certified,
+            "floquet_full_descriptor_certified": mode.floquet_full_descriptor_certified,
+            "floquet_seam_frame_certified": mode.floquet_seam_frame_certified,
+            "floquet_gauge_policy_satisfied": mode.floquet_gauge_policy_satisfied,
+            "floquet_geometric_bc_certified": false,
+            "potential_representation": "complex_coefficients",
+            "gauge_constraint_backward_error": mode.block_residual_gauge,
+            "gauge_constraint_policy": "nonzero_k_poisson_without_mean_constraint",
+            "poisson_boundary_kind": mode.floquet_poisson_boundary_kind,
+            "poisson_gauge_policy": mode.floquet_poisson_gauge_policy,
+            "magnetic_relative_residual": mode.floquet_magnetic_relative_residual,
+            "potential_relative_residual": mode.floquet_potential_relative_residual,
+            "floquet_full_magnetic_relative_residual": mode.floquet_full_magnetic_relative_residual,
+            "floquet_full_potential_relative_residual": mode.floquet_full_potential_relative_residual,
+            "floquet_scalar_phase_seam_relative_residual": mode.floquet_scalar_phase_seam_relative_residual,
+            "floquet_tangent_frame_seam_relative_residual": mode.floquet_tangent_frame_seam_relative_residual,
+            "floquet_cartesian_magnetic_seam_relative_residual": mode.floquet_cartesian_magnetic_seam_relative_residual,
+            "floquet_equilibrium_pair_relative_residual": mode.floquet_equilibrium_pair_relative_residual,
+            "potential_dof_count": mode.phi_vector.len(),
+        })));
+    }
     if !mode.floquet_descriptor_certified {
         if mode.floquet_geometric_bc_certified
             || mode.floquet_potential_representation.is_some()
@@ -163,12 +261,12 @@ pub(super) fn native_modal_artifacts(
     let mu0_t_m_per_a = MU0;
     let mut auxiliary_artifacts = Vec::new();
     let mut solver_diagnostics = solver_diagnostics;
-    let modal_source_mesh_topology = plan
-        .mesh
-        .mixed_topology_fingerprint_v3()
-        .map_err(|error| RunError {
-            message: format!("modal source mesh identity is invalid: {error}"),
-        })?;
+    let modal_source_mesh_topology =
+        plan.mesh
+            .mixed_topology_fingerprint_v3()
+            .map_err(|error| RunError {
+                message: format!("modal source mesh identity is invalid: {error}"),
+            })?;
     if let Some(object) = solver_diagnostics.as_object_mut() {
         // The native diagnostics payload reports candidate/accepted counts,
         // while artifacts-v2 needs the exact number of modes that survived
@@ -687,12 +785,21 @@ pub(super) fn native_modal_artifacts(
             });
             if let Some(certificate) = floquet_certificate.as_ref() {
                 merge_object_fields(&mut payload, certificate);
-                let potential_bytes =
-                    floquet_potential_payload_bytes(&mode.floquet_potential_real_split)?;
-                auxiliary_artifacts.push(AuxiliaryArtifact {
-                    relative_path: floquet_potential_payload_path(sample_index, mode_index as u64),
-                    bytes: potential_bytes,
-                });
+                if certificate
+                    .get("potential_representation")
+                    .and_then(serde_json::Value::as_str)
+                    == Some("doubled_real_split_complex_coefficients")
+                {
+                    let potential_bytes =
+                        floquet_potential_payload_bytes(&mode.floquet_potential_real_split)?;
+                    auxiliary_artifacts.push(AuxiliaryArtifact {
+                        relative_path: floquet_potential_payload_path(
+                            sample_index,
+                            mode_index as u64,
+                        ),
+                        bytes: potential_bytes,
+                    });
+                }
             }
             auxiliary_artifacts.push(json_artifact(
                 format!("eigen/modes/mode_{mode_index:04}.json"),
@@ -785,6 +892,7 @@ pub(super) fn native_modal_artifacts(
         auxiliary_artifacts.push(AuxiliaryArtifact {
             relative_path: "eigen/dispersion.csv".to_string(),
             bytes: dispersion_v2_csv(
+                &modal_sample_id(plan, sample_index),
                 plan.k_sampling.as_ref(),
                 &summary_payload["modes"],
                 &visualizable_mode_indices,

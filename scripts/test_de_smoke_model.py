@@ -13,9 +13,15 @@ import fullmag as fm
     ("two", [0, 2e6], 4),
     ("five", [0, 1e6, 2e6, 3e6, 5e6], 4),
     ("k2", [2e6], 1),
+    ("k25", [25e6], 1),
+    ("bv-k25", [25e6], 1),
+    ("k0", [0], 1),
+    ("signed-eleven", [-3e6, -2e6, -1.5e6, -1e6, -0.5e6, 0, 0.5e6,
+                       1e6, 1.5e6, 2e6, 3e6], 1),
 ])
 def test_de_smoke_preserves_physical_problem(monkeypatch, sampling, ky, mode_count):
     monkeypatch.setenv("FULLMAG_DE_SMOKE_SAMPLING", sampling)
+    monkeypatch.delenv("FULLMAG_DE_SMOKE_SOLVER_RTOL", raising=False)
     # Canonical benchmark settings must not silently change this small control.
     monkeypatch.setenv("FULLMAG_COMSOL_DISPERSION_CASE", "a1")
     fm.reset()
@@ -54,14 +60,19 @@ def test_de_smoke_preserves_physical_problem(monkeypatch, sampling, ky, mode_cou
     e = eigen["study"]
     assert e["operator"] == {"kind": "full_2x2", "include_demag": True}
     assert e["count"] == mode_count
-    assert e["target"] == {"kind": "frequency_window", "frequency_min_hz": 8.5e9, "frequency_max_hz": 12e9}
+    assert e["target"] == {"kind": "frequency_window", "frequency_min_hz": 12e9 if sampling == "k25" else 8.5e9, "frequency_max_hz": 16e9 if sampling == "k25" else 12e9}
     assert e["equilibrium"] == {"kind": "relaxed_initial_state"}
     assert e["damping_policy"] == "ignore"
-    assert e["magnetostatic_bc"] == "floquet_airbox"
-    assert e["spin_wave_bc"] == {"kind": "floquet", "pair_ids": ["x_faces", "y_faces"],
-                                   "phase_convention": "exp_minus_i_k_dot_delta_r"}
-    if sampling == "k2":
-        assert e["k_sampling"] == {"kind": "single", "k_vector": [0, ky[0], 0]}
+    assert e["magnetostatic_bc"] == ("periodic_airbox_k0" if sampling == "k0" else "floquet_airbox")
+    expected_bc = {"kind": "periodic", "pair_ids": ["x_faces", "y_faces"]} if sampling == "k0" else {
+        "kind": "floquet", "pair_ids": ["x_faces", "y_faces"],
+        "phase_convention": "exp_minus_i_k_dot_delta_r"}
+    assert e["spin_wave_bc"] == expected_bc
+    if sampling in ("k0", "k2", "k25", "bv-k25"):
+        expected_vector = [ky[0], 0, 0] if sampling == "bv-k25" else [0, ky[0], 0]
+        assert e["k_sampling"] == {"kind": "single", "k_vector": expected_vector}
+        assert meta["de_smoke"]["k_vectors_rad_per_m"] == [expected_vector]
+        assert meta["de_smoke"]["orientation"] == ("M0=x,k=x,normal=z" if sampling == "bv-k25" else "M0=x,k=y,normal=z")
     else:
         assert [p["k_vector"] for p in e["k_sampling"]["points"]] == [[0, k, 0] for k in ky]
         assert e["k_sampling"]["samples_per_segment"] == [1] * (len(ky) - 1)
@@ -79,3 +90,109 @@ def test_invalid_sampling_is_rejected(monkeypatch):
             fm.load_problem_from_script(ROOT / "examples/fem_de_smoke_numeric.py", lightweight_assets=True)
     finally:
         fm.reset()
+
+
+def test_de100_comparison_metadata_matches_lowered_physics():
+    fm.reset()
+    try:
+        loaded = fm.load_problem_from_script(
+            ROOT / "examples/fem_de_film_100nm_numeric_pilot.py", lightweight_assets=True)
+        ir = loaded.stages[-1].problem.to_ir(
+            requested_backend="fem", execution_mode="strict",
+            execution_precision="double", include_geometry_assets=False)
+    finally:
+        fm.reset()
+
+
+    meta = ir["problem_meta"]["runtime_metadata"]
+    model = meta["de_100nm_numeric_pilot"]
+    material = ir["materials"][0]
+    assert model["schema"] == "fullmag.de100-pilot.v1"
+    assert model["saturation_magnetization_a_per_m"] == material["saturation_magnetisation"]
+    assert model["exchange_stiffness_j_per_m"] == material["exchange_stiffness"]
+    assert model["gamma0_m_per_a_s"] == ir["study"]["dynamics"]["gyromagnetic_ratio"]
+    field = next(t for t in ir["energy_terms"] if t["kind"] == "zeeman")["B"]
+    assert field == [model["external_induction_t"], 0, 0]
+    assert model["film_thickness_m"] == ir["geometry"]["entries"][0]["size"][2]
+    height = meta["study_universe"]["size"][2]
+    assert (height-model["film_thickness_m"])/2 == pytest.approx(model["air_padding_each_side_m"])
+    demag = next(t for t in ir["energy_terms"] if t["kind"] == "demag")
+    assert model["outer_boundary_kind"] == demag["realization"]
+    sampling = ir["study"]["k_sampling"]
+    points = sampling["points"]
+    ky = []
+    for j, count in enumerate(sampling["samples_per_segment"]):
+        first, last = points[j]["k_vector"][1], points[j+1]["k_vector"][1]
+        ky.extend(first+(last-first)*i/count for i in range(count))
+    ky.append(points[-1]["k_vector"][1])
+    assert model["ky_rad_per_m"] == ky
+
+
+@pytest.mark.parametrize("requested,expected", [("1e-8", 1e-8), ("1e-7", 1e-7), ("1e-6", 1e-6)])
+def test_k2_tolerance_sweep_is_explicit_in_ir(monkeypatch, requested, expected):
+    monkeypatch.setenv("FULLMAG_DE_SMOKE_SAMPLING", "k2")
+    monkeypatch.setenv("FULLMAG_DE_SMOKE_SOLVER_RTOL", requested)
+    fm.reset()
+    try:
+        loaded = fm.load_problem_from_script(ROOT / "examples/fem_de_smoke_numeric.py", lightweight_assets=True)
+        ir = loaded.stages[-1].problem.to_ir(
+            requested_backend="fem", execution_mode="strict",
+            execution_precision="double", include_geometry_assets=False)
+    finally:
+        fm.reset()
+    metadata = ir["problem_meta"]["runtime_metadata"]
+    assert metadata["de_smoke"]["eigen_solver_rtol"] == expected
+    assert metadata["modal_solver_policy"]["residual_tolerance"] == expected
+
+
+def test_invalid_tolerance_sweep_is_rejected(monkeypatch):
+    monkeypatch.setenv("FULLMAG_DE_SMOKE_SOLVER_RTOL", "0.01")
+    fm.reset()
+    try:
+        with pytest.raises(Exception, match="FULLMAG_DE_SMOKE_SOLVER_RTOL"):
+            fm.load_problem_from_script(ROOT / "examples/fem_de_smoke_numeric.py", lightweight_assets=True)
+    finally:
+        fm.reset()
+
+
+def test_dense_oracle_is_explicitly_bounded_to_k2_pilot(monkeypatch):
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import run_de_100nm_pilot as pilot
+
+    monkeypatch.setattr(
+        pilot.managed, "_compose_command",
+        lambda *_args, **_kwargs: ["docker", "run", "placeholder"],
+    )
+    command = pilot.compose_command(None, ROOT, pilot="de-smoke-k2", dense_oracle=True)
+    assert "export FULLMAG_FLOQUET_DENSE_ORACLE=1" in command[-1]
+    ordinary = pilot.compose_command(None, ROOT, pilot="de-smoke-k2")
+    assert "FULLMAG_FLOQUET_DENSE_ORACLE" not in ordinary[-1]
+    with pytest.raises(pilot.managed.BenchmarkError, match="restricted"):
+        pilot.compose_command(None, ROOT, pilot="de-smoke-five", dense_oracle=True)
+    tolerance_command = pilot.compose_command(None, ROOT, pilot="de-smoke-k2", solver_rtol="1e-7")
+    assert "export FULLMAG_DE_SMOKE_SOLVER_RTOL=1e-7" in tolerance_command[-1]
+    with pytest.raises(pilot.managed.BenchmarkError, match="restricted"):
+        pilot.compose_command(None, ROOT, pilot="de-smoke-five", solver_rtol="1e-7")
+    with pytest.raises(pilot.managed.BenchmarkError, match="unsupported"):
+        pilot.compose_command(None, ROOT, pilot="de-smoke-k2", solver_rtol="0.01")
+    independent = pilot.compose_command(
+        None, ROOT, pilot="de-smoke-k2",
+        eps_prefilter="1e-8", shifted_ksp_rtol="1e-11")
+    assert "export FULLMAG_FLOQUET_EPS_PREFILTER_ABS=1e-8" in independent[-1]
+    assert "export FULLMAG_FLOQUET_SHIFTED_KSP_RTOL=1e-11" in independent[-1]
+    assert "FULLMAG_DE_SMOKE_SOLVER_RTOL" not in independent[-1]
+    restart_command = pilot.compose_command(
+        None, ROOT, pilot="de-smoke-k2", gmres_restart="10")
+    assert "export FULLMAG_FLOQUET_GMRES_RESTART=10" in restart_command[-1]
+    assert "FULLMAG_FLOQUET_GMRES_RESTART" not in ordinary[-1]
+    multi_point = pilot.compose_command(
+        None, ROOT, pilot="de-smoke-five", gmres_restart="10")
+    assert "export FULLMAG_FLOQUET_GMRES_RESTART=10" in multi_point[-1]
+    with pytest.raises(pilot.managed.BenchmarkError, match="restricted"):
+        pilot.compose_command(None, ROOT, pilot="de100", gmres_restart="10")
+    with pytest.raises(pilot.managed.BenchmarkError, match="unsupported"):
+        pilot.compose_command(None, ROOT, pilot="de-smoke-k2", gmres_restart="100")
+    multi_eps = pilot.compose_command(None, ROOT, pilot="de-smoke-five", eps_prefilter="1e-8")
+    assert "export FULLMAG_FLOQUET_EPS_PREFILTER_ABS=1e-8" in multi_eps[-1]
+    with pytest.raises(pilot.managed.BenchmarkError, match="unsupported"):
+        pilot.compose_command(None, ROOT, pilot="de-smoke-k2", shifted_ksp_rtol="0.01")

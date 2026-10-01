@@ -336,6 +336,7 @@ export function frequencyResponseSeriesUnit(
 }
 
 export interface FrequencyDomainChartPoint {
+  breakBefore?: boolean;
   label?: string | null;
   linewidthHz?: number | null;
   rowIndex: number;
@@ -345,6 +346,7 @@ export interface FrequencyDomainChartPoint {
 
 export interface FrequencyDomainChartSeries {
   id: string;
+  kind?: "line" | "scatter";
   label: string;
   points: readonly FrequencyDomainChartPoint[];
   quantity: string;
@@ -361,6 +363,13 @@ export interface EigenSpectrumPoint {
   frequencyHz: number;
   imaginaryFrequencyHz: number | null;
   modeFieldId: string | null;
+  /**
+   * Explicit producer truth for the mode-field handoff. It stays optional
+   * on the public model so hand-authored fixtures can omit it; parsed payloads
+   * require a published resource key, since an ID alone does not prove a field
+   * resource can be loaded.
+   */
+  modeFieldAvailable?: boolean;
   modeFieldResourceKey: string | null;
   modeId: string | null;
   rawModeIndex: number;
@@ -377,6 +386,7 @@ export interface EigenSpectrumPayloadMode {
   frequencyHz: number | null;
   imaginaryFrequencyHz: number | null;
   modeFieldId: string | null;
+  modeFieldAvailable?: boolean;
   modeFieldResourceKey: string | null;
   modeId: string | null;
   rawModeIndex: number;
@@ -396,6 +406,7 @@ export interface EigenDispersionPoint {
   frequencyHz: number;
   linewidthHz: number | null;
   modeFieldId: string | null;
+  modeFieldAvailable?: boolean;
   modeFieldResourceKey: string | null;
   overlap: number | null;
   pathS: number;
@@ -413,13 +424,18 @@ export interface EigenDispersionPoint {
 export interface EigenBranchPoint {
   frequencyImagHz: number | null;
   frequencyRealHz: number;
+  modeId?: string | null;
   modeFieldId: string | null;
+  modeFieldAvailable?: boolean;
   modeFieldResourceKey: string | null;
   overlapPrev: number | null;
+  pathS?: number | null;
   rawModeIndex: number;
   residualNorm: number | null;
+  sampleId?: string | null;
   sampleIndex: number;
   trackingConfidence: number | null;
+  wavevectorKf?: readonly [number, number, number] | null;
 }
 
 export interface EigenBranch {
@@ -566,6 +582,15 @@ function finiteNumberList(value: unknown): number[] {
   });
 }
 
+function finiteVector3(value: unknown): readonly [number, number, number] | null {
+  const values = array(value);
+  if (values.length !== 3) return null;
+  const x = finiteNumber(values[0]);
+  const y = finiteNumber(values[1]);
+  const z = finiteNumber(values[2]);
+  return x == null || y == null || z == null ? null : [x, y, z];
+}
+
 function frequencyChartScale(valuesHz: readonly number[]): FrequencyChartScale {
   let maxAbs = 0;
   for (const value of valuesHz) {
@@ -603,6 +628,45 @@ function finiteInteger(value: unknown, fallback = 0): number {
 
 function stringValue(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function booleanValue(value: unknown): boolean | null {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number" && (value === 0 || value === 1)) {
+    return value === 1;
+  }
+  if (typeof value !== "string") return null;
+  switch (value.trim().toLowerCase()) {
+    case "true":
+    case "1":
+    case "yes":
+      return true;
+    case "false":
+    case "0":
+    case "no":
+      return false;
+    default:
+      return null;
+  }
+}
+
+export function eigenModeFieldAvailable(
+  point: Pick<
+    EigenSpectrumPoint | EigenDispersionPoint | EigenBranchPoint,
+    "modeFieldAvailable" | "modeFieldId" | "modeFieldResourceKey"
+  >,
+): boolean {
+  return point.modeFieldAvailable !== false &&
+    Boolean(point.modeFieldId && point.modeFieldResourceKey);
+}
+
+function parsedModeFieldAvailability(
+  value: JsonRecord,
+  modeFieldId: string | null,
+  modeFieldResourceKey: string | null,
+): boolean {
+  return booleanValue(value.mode_field_available ?? value.modeFieldAvailable) !== false &&
+    Boolean(modeFieldId && modeFieldResourceKey);
 }
 
 export function frequencyDomainManifestPayload(manifestResource: unknown): unknown {
@@ -803,6 +867,14 @@ export function readEigenSpectrumPayload(
     const displayModeIndex = sampleRanks.get(sampleIndex) ?? 0;
     sampleRanks.set(sampleIndex, displayModeIndex + 1);
     const modeFieldId = stringValue(item.mode_field_id ?? item.modeFieldId);
+    const rawModeFieldResourceKey = stringValue(
+      item.mode_field_resource_key ?? item.modeFieldResourceKey,
+    );
+    const modeFieldAvailable = parsedModeFieldAvailability(
+      item,
+      modeFieldId,
+      rawModeFieldResourceKey,
+    );
     return [{
       branchId: stringValue(item.branch_id ?? item.branchId),
       dampingRateHz: finiteNumber(item.damping_rate_hz ?? item.dampingRateHz),
@@ -821,9 +893,8 @@ export function readEigenSpectrumPayload(
           item.imaginary_frequency_hz,
       ),
       modeFieldId,
-      modeFieldResourceKey:
-        stringValue(item.mode_field_resource_key ?? item.modeFieldResourceKey) ??
-        (modeFieldId ? fieldVectorResourceKey(modeFieldId) : null),
+      modeFieldAvailable,
+      modeFieldResourceKey: modeFieldAvailable ? rawModeFieldResourceKey : null,
       modeId,
       rawModeIndex,
       residualNorm: finiteNumber(item.residual_norm ?? item.relative_residual_norm),
@@ -857,6 +928,7 @@ export function buildEigenSpectrumChartModel(
       frequencyHz: mode.frequencyHz,
       imaginaryFrequencyHz: mode.imaginaryFrequencyHz,
       modeFieldId: mode.modeFieldId,
+      modeFieldAvailable: mode.modeFieldAvailable,
       modeFieldResourceKey: mode.modeFieldResourceKey,
       modeId: mode.modeId,
       rawModeIndex: mode.rawModeIndex,
@@ -903,6 +975,7 @@ export function buildEigenModeSelectionRef(
   point: EigenSpectrumPoint,
   context: FrequencyDomainSelectionContext = {},
 ): SelectionRef {
+  const fieldAvailable = eigenModeFieldAvailable(point);
   return cleanFrequencyDomainSelectionRef({
     analysisRunId: context.analysisRunId ?? undefined,
     analysisStageId: context.analysisStageId ?? undefined,
@@ -912,7 +985,7 @@ export function buildEigenModeSelectionRef(
     artifactPath: context.artifactPath ?? undefined,
     branchId: point.branchId ?? undefined,
     calculationMode: context.calculationMode ?? "free_modes",
-    fieldId: point.modeFieldId ?? undefined,
+    fieldId: fieldAvailable ? point.modeFieldId ?? undefined : undefined,
     frequencyHz: point.frequencyHz,
     equilibriumId: context.equilibriumId ?? undefined,
     kContextKind: context.kContextKind ?? undefined,
@@ -920,7 +993,9 @@ export function buildEigenModeSelectionRef(
     modeId: point.modeId ?? undefined,
     modeIndex: point.rawModeIndex,
     nodeId: context.nodeId ?? frequencyDomainModeNodeId(point),
-    resourceRef: context.resourceRef ?? point.modeFieldResourceKey ?? undefined,
+    resourceRef: fieldAvailable
+      ? context.resourceRef ?? point.modeFieldResourceKey ?? undefined
+      : undefined,
     representation: context.representation ?? undefined,
     sampleId: point.sampleId ?? undefined,
     sampleIndex: point.sampleIndex,
@@ -936,12 +1011,12 @@ export function buildEigenDispersionChartModel(
   branchesModel?: EigenBranchesModel | null,
 ): FrequencyDomainChartBuildResult<EigenDispersionPoint> {
   const parsed = parseDispersionCsv(resource?.text ?? "");
-  const pointsWithPathLabels = applyDispersionPathMetadataLabels(
+  const pointsWithPathMetadata = applyDispersionPathMetadata(
     parsed.points,
     resource?.path_metadata,
   );
   const points = applyBranchIdentityFromBranches(
-    pointsWithPathLabels,
+    pointsWithPathMetadata,
     branchesModel?.branches ?? [],
   );
   const branchIds = new Set(points.map((point) => point.branchId ?? "raw"));
@@ -959,45 +1034,61 @@ export function buildEigenDispersionChartModel(
   const status = resource?.status === "ready" ? "ready" as const : "stale" as const;
   const series = [...branchIds].flatMap((branchId) => {
     const branchLabel = branchId === "raw" ? "Raw modes" : `Branch ${branchId}`;
+    const branchPoints = points
+      .flatMap((point, rowIndex) =>
+        (point.branchId ?? "raw") === branchId ? [{ point, rowIndex }] : [],
+      )
+      .toSorted((left, right) =>
+        left.point.sampleIndex - right.point.sampleIndex ||
+        left.point.pathS - right.point.pathS ||
+        left.point.rawModeIndex - right.point.rawModeIndex,
+      );
+    const dispersionSeriesKind: NonNullable<FrequencyDomainChartSeries["kind"]> =
+      branchId === "raw" ? "scatter" : "line";
     const numericalSeries = {
       id: `analysis.frequency-domain:eigen:dispersion:${branchId}`,
+      kind: dispersionSeriesKind,
       label: branchLabel,
-      points: points.flatMap((point, rowIndex) =>
-        (point.branchId ?? "raw") === branchId
-          ? [
-              {
-                ...(point.sampleLabel ? { label: point.sampleLabel } : {}),
-                ...(point.linewidthHz != null ? { linewidthHz: point.linewidthHz } : {}),
-                rowIndex,
-                x: point.pathS,
-                y: point.frequencyHz / frequencyScale.divisor,
-              },
-            ]
-          : [],
-      ),
+      points: branchPoints.map(({ point, rowIndex }, index) => {
+        const previous = branchPoints[index - 1]?.point;
+        return {
+          ...(previous && point.sampleIndex !== previous.sampleIndex + 1
+            ? { breakBefore: true }
+            : {}),
+          ...(point.sampleLabel ? { label: point.sampleLabel } : {}),
+          ...(point.linewidthHz != null ? { linewidthHz: point.linewidthHz } : {}),
+          rowIndex,
+          x: point.pathS,
+          y: point.frequencyHz / frequencyScale.divisor,
+        };
+      }),
       quantity: "frequency",
       source,
       status,
       unit: frequencyScale.unit,
       xUnit: "rad/m",
     };
-    const analyticPoints = points.flatMap((point, rowIndex) =>
-      (point.branchId ?? "raw") === branchId && point.analyticFrequencyHz != null
-        ? [
-            {
-              ...(point.sampleLabel ? { label: point.sampleLabel } : {}),
-              rowIndex,
-              x: point.pathS,
-              y: point.analyticFrequencyHz / frequencyScale.divisor,
-            },
-          ]
-        : [],
+    const analyticBranchPoints = branchPoints.filter(
+      ({ point }) => point.analyticFrequencyHz != null,
     );
+    const analyticPoints = analyticBranchPoints.map(({ point, rowIndex }, index) => {
+      const previous = analyticBranchPoints[index - 1]?.point;
+      return {
+        ...(previous && point.sampleIndex !== previous.sampleIndex + 1
+          ? { breakBefore: true }
+          : {}),
+        ...(point.sampleLabel ? { label: point.sampleLabel } : {}),
+        rowIndex,
+        x: point.pathS,
+        y: point.analyticFrequencyHz! / frequencyScale.divisor,
+      };
+    });
     if (analyticPoints.length === 0) return [numericalSeries];
     return [
       numericalSeries,
       {
         id: `analysis.frequency-domain:eigen:dispersion:${branchId}:analytic`,
+        kind: dispersionSeriesKind,
         label: `${branchLabel} analytic`,
         points: analyticPoints,
         quantity: "analytic_frequency",
@@ -1021,6 +1112,7 @@ export function buildEigenDispersionPointSelectionRef(
   point: EigenDispersionPoint,
   context: FrequencyDomainSelectionContext = {},
 ): SelectionRef {
+  const fieldAvailable = eigenModeFieldAvailable(point);
   const identity = {
     artifactRevision: context.artifactRevision == null
       ? undefined
@@ -1036,7 +1128,7 @@ export function buildEigenDispersionPointSelectionRef(
     // The clicked row wins over a previous selection's wavevector.
     wavevectorKf: point.wavevectorKf ?? context.wavevectorKf ?? undefined,
   };
-  if (point.modeFieldId) {
+  if (fieldAvailable && point.modeFieldId && point.modeFieldResourceKey) {
     return cleanFrequencyDomainSelectionRef({
       ...identity,
       analysisRunId: context.analysisRunId ?? undefined,
@@ -1048,9 +1140,7 @@ export function buildEigenDispersionPointSelectionRef(
       kind: "results.eigen.mode",
       modeIndex: point.rawModeIndex,
       nodeId: context.nodeId ?? frequencyDomainDispersionPointNodeId(point),
-      resourceRef:
-        point.modeFieldResourceKey ??
-        fieldVectorResourceKey(point.modeFieldId),
+      resourceRef: point.modeFieldResourceKey,
       sampleIndex: point.sampleIndex,
       type: "frequency-domain",
     });
@@ -1094,22 +1184,27 @@ export function buildEigenBranchPointModeSelectionRef(
   point: EigenBranchPoint,
   context: FrequencyDomainSelectionContext = {},
 ): SelectionRef {
+  const fieldAvailable = eigenModeFieldAvailable(point);
   return cleanFrequencyDomainSelectionRef({
     analysisRunId: context.analysisRunId ?? undefined,
     analysisStageId: context.analysisStageId ?? undefined,
     artifactPath: context.artifactPath ?? undefined,
     branchId,
     calculationMode: context.calculationMode ?? "dispersion_modal",
-    fieldId: point.modeFieldId ?? undefined,
+    fieldId: fieldAvailable ? point.modeFieldId ?? undefined : undefined,
     kind: "results.eigen.mode",
+    kPathCoordinateRadPerM: point.pathS ?? undefined,
     modeIndex: point.rawModeIndex,
     nodeId: context.nodeId ?? frequencyDomainBranchPointModeNodeId(point),
-    resourceRef:
-      context.resourceRef ??
-      point.modeFieldResourceKey ??
-      (point.modeFieldId ? fieldVectorResourceKey(point.modeFieldId) : undefined),
+    resourceRef: fieldAvailable
+      ? context.resourceRef ??
+        point.modeFieldResourceKey ?? undefined
+      : undefined,
+    modeId: point.modeId ?? undefined,
+    sampleId: point.sampleId ?? undefined,
     sampleIndex: point.sampleIndex,
     type: "frequency-domain",
+    wavevectorKf: point.wavevectorKf ?? context.wavevectorKf ?? undefined,
   });
 }
 
@@ -1146,12 +1241,26 @@ export function buildEigenBranchDetailChartModel(
 
 export function buildEigenBranchesModel(
   resource: FrequencyDomainJsonArtifactLike | null | undefined,
+  dispersionResource?: FrequencyDomainTextArtifactLike | null,
 ): EigenBranchesModel {
   const root = record(resource?.payload);
   const branches: EigenBranch[] = [];
   const diagnostics: string[] = [];
   let droppedBranchCount = 0;
   let droppedPointCount = 0;
+  const dispersionPointByIdentity = new Map<string, EigenDispersionPoint>();
+  if (dispersionResource) {
+    const dispersionPoints = applyDispersionPathMetadata(
+      parseDispersionCsv(dispersionResource.text ?? "").points,
+      dispersionResource.path_metadata,
+    );
+    for (const point of dispersionPoints) {
+      dispersionPointByIdentity.set(
+        dispersionPointIdentityKey(point.sampleIndex, point.rawModeIndex),
+        point,
+      );
+    }
+  }
 
   array(root?.branches ?? record(root?.payload)?.branches).forEach((entry) => {
     const branch = record(entry);
@@ -1174,24 +1283,58 @@ export function buildEigenBranchesModel(
         droppedPointCount += 1;
         return;
       }
+      const modeFieldId = stringValue(point?.mode_field_id ?? point?.modeFieldId);
+      const rawModeFieldResourceKey = stringValue(
+        point?.mode_field_resource_key ?? point?.modeFieldResourceKey,
+      );
+      const modeFieldAvailable = parsedModeFieldAvailability(
+        point ?? {},
+        modeFieldId,
+        rawModeFieldResourceKey,
+      );
+      const rawModeIndex = finiteInteger(
+        point?.raw_mode_index ?? point?.rawModeIndex ?? point?.mode_index,
+      );
+      const sampleIndex = finiteInteger(point?.sample_index ?? point?.sampleIndex);
+      const dispersionPoint = dispersionPointByIdentity.get(
+        dispersionPointIdentityKey(sampleIndex, rawModeIndex),
+      );
+      const explicitWavevector =
+        finiteVector3(
+          point?.wavevector_kf ??
+            point?.wavevectorKf ??
+            point?.k_vector_rad_per_m ??
+            point?.k_vector,
+        ) ??
+        finiteVector3([
+          point?.kx_rad_per_m ?? point?.kx,
+          point?.ky_rad_per_m ?? point?.ky,
+          point?.kz_rad_per_m ?? point?.kz,
+        ]);
+      const pathS = finiteNumber(
+        point?.path_s_rad_per_m ?? point?.pathS ?? point?.path_s,
+      ) ?? dispersionPoint?.pathS;
       points.push({
         frequencyImagHz: finiteNumber(
           point?.frequency_imag_hz ?? point?.frequencyImagHz,
         ),
         frequencyRealHz,
-        modeFieldId: stringValue(point?.mode_field_id ?? point?.modeFieldId),
-        modeFieldResourceKey: stringValue(
-          point?.mode_field_resource_key ?? point?.modeFieldResourceKey,
-        ),
+        modeId: stringValue(point?.mode_id ?? point?.modeId),
+        modeFieldId,
+        modeFieldAvailable,
+        modeFieldResourceKey: modeFieldAvailable ? rawModeFieldResourceKey : null,
         overlapPrev: finiteNumber(point?.overlap_prev ?? point?.overlapPrev),
-        rawModeIndex: finiteInteger(
-          point?.raw_mode_index ?? point?.rawModeIndex ?? point?.mode_index,
-        ),
+        ...(pathS != null ? { pathS } : {}),
+        rawModeIndex,
         residualNorm: finiteNumber(point?.residual_norm ?? point?.residualNorm),
-        sampleIndex: finiteInteger(point?.sample_index ?? point?.sampleIndex),
+        sampleId: stringValue(point?.sample_id ?? point?.sampleId),
+        sampleIndex,
         trackingConfidence: finiteNumber(
           point?.tracking_confidence ?? point?.trackingConfidence,
         ),
+        ...((explicitWavevector ?? dispersionPoint?.wavevectorKf)
+          ? { wavevectorKf: explicitWavevector ?? dispersionPoint?.wavevectorKf }
+          : {}),
       });
     });
 
@@ -1452,8 +1595,10 @@ export function buildFmrPeakTableModel({
       amplitude: null,
       amplitudeUnit: NOT_PUBLISHED_UNIT,
       absorbedPowerDensityUnit: NOT_PUBLISHED_UNIT,
-      fieldId: point.modeFieldId,
-      fieldResourceKey: point.modeFieldResourceKey,
+      fieldId: eigenModeFieldAvailable(point) ? point.modeFieldId : null,
+      fieldResourceKey: eigenModeFieldAvailable(point)
+        ? point.modeFieldResourceKey
+        : null,
       frequencyHz: point.frequencyHz,
       frequencyPointIndex: null,
       linewidthHz: null,
@@ -1726,51 +1871,95 @@ function responseDataSourceVersion(
   return "unknown";
 }
 
-function applyDispersionPathMetadataLabels(
+function applyDispersionPathMetadata(
   points: readonly EigenDispersionPoint[],
   pathMetadata: FrequencyDomainKPathMetadataResource | null | undefined,
 ): EigenDispersionPoint[] {
-  const labelsBySampleIndex =
-    dispersionControlPointLabelsBySampleIndex(pathMetadata);
-  if (labelsBySampleIndex.size === 0) return [...points];
+  const metadataBySampleIndex = dispersionPathSamplesBySampleIndex(pathMetadata);
+  if (metadataBySampleIndex.size === 0) return [...points];
   return points.map((point) => {
-    if (point.sampleLabel) return point;
-    const label = labelsBySampleIndex.get(point.sampleIndex);
-    return label ? { ...point, sampleLabel: label } : point;
+    const metadata = metadataBySampleIndex.get(point.sampleIndex);
+    if (!metadata) return point;
+    const sampleLabel = point.sampleLabel ?? metadata.label;
+    const wavevectorKf = point.wavevectorKf ?? metadata.wavevectorKf;
+    return sampleLabel || wavevectorKf
+      ? {
+          ...point,
+          ...(sampleLabel ? { sampleLabel } : {}),
+          ...(wavevectorKf ? { wavevectorKf } : {}),
+        }
+      : point;
   });
 }
 
-function dispersionControlPointLabelsBySampleIndex(
+function dispersionPathSamplesBySampleIndex(
   pathMetadata: FrequencyDomainKPathMetadataResource | null | undefined,
-): Map<number, string> {
+): Map<
+  number,
+  { label?: string; wavevectorKf?: readonly [number, number, number] }
+> {
   const sampling = pathMetadata?.sampling;
+  if (sampling?.kind !== "path") return new Map();
   const controlPoints = array(sampling?.points).map(record);
-  const samplesPerSegment = finiteNumberList(sampling?.samples_per_segment)
-    .map((sampleCount) => Math.max(0, Math.trunc(sampleCount)));
-  const labels = new Map<number, string>();
-  if (controlPoints.length === 0 || samplesPerSegment.length === 0) {
-    return labels;
+  const samplesPerSegment = array(sampling?.samples_per_segment).map(finiteNumber);
+  const metadataBySampleIndex = new Map<
+    number,
+    { label?: string; wavevectorKf?: readonly [number, number, number] }
+  >();
+  if (
+    controlPoints.length === 0 ||
+    samplesPerSegment.some(
+      (sampleCount) =>
+        sampleCount == null ||
+        !Number.isSafeInteger(sampleCount) ||
+        sampleCount < 0,
+    )
+  ) {
+    return metadataBySampleIndex;
   }
 
-  const firstLabel = stringValue(controlPoints[0]?.label);
-  if (firstLabel) labels.set(0, firstLabel);
+  const firstPoint = controlPoints[0];
+  const firstLabel = stringValue(firstPoint?.label);
+  const firstWavevector = finiteVector3(firstPoint?.k_vector);
+  if (firstLabel || firstWavevector) {
+    metadataBySampleIndex.set(0, {
+      ...(firstLabel ? { label: firstLabel } : {}),
+      ...(firstWavevector ? { wavevectorKf: firstWavevector } : {}),
+    });
+  }
 
   let sampleIndex = 0;
   for (let segmentIndex = 0; segmentIndex < samplesPerSegment.length; segmentIndex += 1) {
     const segmentSampleCount = samplesPerSegment[segmentIndex] ?? 0;
-    const targetControlPoint =
-      controlPoints[
-        (segmentIndex + 1) % controlPoints.length
-      ];
+    const startWavevector = finiteVector3(controlPoints[segmentIndex]?.k_vector);
+    const targetControlPoint = controlPoints[(segmentIndex + 1) % controlPoints.length];
+    const targetWavevector = finiteVector3(targetControlPoint?.k_vector);
     for (let offset = 1; offset <= segmentSampleCount; offset += 1) {
       sampleIndex += 1;
-      if (offset !== segmentSampleCount) continue;
-      const label = stringValue(targetControlPoint?.label);
-      if (label) labels.set(sampleIndex, label);
+      const fraction = segmentSampleCount > 0 ? offset / segmentSampleCount : 0;
+      const candidateWavevector = startWavevector && targetWavevector
+        ? [
+            startWavevector[0] + (targetWavevector[0] - startWavevector[0]) * fraction,
+            startWavevector[1] + (targetWavevector[1] - startWavevector[1]) * fraction,
+            startWavevector[2] + (targetWavevector[2] - startWavevector[2]) * fraction,
+          ] as const
+        : null;
+      const label = offset === segmentSampleCount
+        ? stringValue(targetControlPoint?.label)
+        : null;
+      const wavevectorKf = candidateWavevector?.every(Number.isFinite)
+        ? candidateWavevector
+        : null;
+      if (label || wavevectorKf) {
+        metadataBySampleIndex.set(sampleIndex, {
+          ...(label ? { label } : {}),
+          ...(wavevectorKf ? { wavevectorKf } : {}),
+        });
+      }
     }
   }
 
-  return labels;
+  return metadataBySampleIndex;
 }
 
 function applyBranchIdentityFromBranches(
@@ -1840,6 +2029,15 @@ function parseDispersionCsv(csv: string): {
     }
     const sampleId = stringValue(row.sample_id ?? row.sampleId);
     const modeId = stringValue(row.mode_id ?? row.modeId);
+    const modeFieldId = stringValue(row.mode_field_id ?? row.modeFieldId);
+    const rawModeFieldResourceKey = stringValue(
+      row.mode_field_resource_key ?? row.modeFieldResourceKey,
+    );
+    const modeFieldAvailable = parsedModeFieldAvailability(
+      row,
+      modeFieldId,
+      rawModeFieldResourceKey,
+    );
     const kx = finiteCsvNumber(row.kx_rad_per_m);
     const ky = finiteCsvNumber(row.ky_rad_per_m);
     const kz = finiteCsvNumber(row.kz_rad_per_m);
@@ -1857,10 +2055,9 @@ function parseDispersionCsv(csv: string): {
       linewidthHz: finiteCsvNumber(
         row.line_width_hz ?? row.linewidth_hz ?? row.linewidthHz,
       ),
-      modeFieldId: stringValue(row.mode_field_id ?? row.modeFieldId),
-      modeFieldResourceKey: stringValue(
-        row.mode_field_resource_key ?? row.modeFieldResourceKey,
-      ),
+      modeFieldId,
+      modeFieldAvailable,
+      modeFieldResourceKey: modeFieldAvailable ? rawModeFieldResourceKey : null,
       overlap: finiteCsvNumber(row.overlap_score ?? row.overlapScore ?? row.overlap),
       pathS,
       rawModeIndex,

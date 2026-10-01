@@ -1,4 +1,7 @@
-use super::eigen_constants::{GAMMA_K_TOLERANCE_RAD_PER_M, TANGENT_FRAME_IDENTITY_TOLERANCE};
+use super::eigen_constants::{
+    GAMMA_K_TOLERANCE_RAD_PER_M, PERIODIC_TANGENT_TRANSPORT_TOLERANCE,
+    TANGENT_FRAME_IDENTITY_TOLERANCE,
+};
 use super::eigen_math::dot;
 use super::eigen_projection::tangent_bases;
 use crate::types::RunError;
@@ -146,14 +149,11 @@ pub(super) fn validate_tangent_frame_transport_support(
     reject_nonidentity_tangent_frame_transport(topology, &selected_pairs, equilibrium)
 }
 
-/// Validate the transport used by the native shared-domain Full2x2 payload.
-///
-/// The shared-domain native constraint currently carries one scalar Bloch
-/// phase per tangent component.  That representation is valid only when the
-/// local tangent frames on every identified magnetic pair are identical.  The
-/// older reduced operator has its own guard above, but it deliberately skips
-/// Full2x2; keep this check explicit so that the native demag path cannot
-/// silently apply a scalar phase to non-identical local frames.
+/// Validate physical equilibrium continuity for the native shared-domain
+/// Full2x2 payload. Local tangent coordinates may rotate across a periodic
+/// pair; the native constraint transports them with `T_dst^T T_src` before
+/// applying the Bloch phase. The physical equilibrium itself must still match
+/// because this route supports pure translations (`Q = I`) only.
 pub(super) fn validate_shared_domain_tangent_frame_transport(
     plan: &FemEigenPlanIR,
     topology: &MeshTopology,
@@ -185,7 +185,44 @@ pub(super) fn validate_shared_domain_tangent_frame_transport(
     if selected_pairs.is_empty() {
         return Ok(());
     }
-    reject_nonidentity_tangent_frame_transport(topology, &selected_pairs, equilibrium)
+    if equilibrium.len() < topology.n_nodes {
+        return Err(RunError {
+            message: format!(
+                "shared-domain Floquet tangent transport cannot be validated: equilibrium has {} nodes but mesh has {} nodes",
+                equilibrium.len(),
+                topology.n_nodes
+            ),
+        });
+    }
+    for (pair_id, node_a, node_b) in selected_pairs {
+        let node_a = node_a as usize;
+        let node_b = node_b as usize;
+        if node_a >= topology.n_nodes || node_b >= topology.n_nodes {
+            return Err(RunError {
+                message: format!(
+                    "shared-domain Floquet tangent transport pair '{pair_id}' has an endpoint outside the mesh"
+                ),
+            });
+        }
+        if topology.magnetic_node_volumes[node_a] <= 0.0
+            || topology.magnetic_node_volumes[node_b] <= 0.0
+        {
+            continue;
+        }
+        let left = equilibrium[node_a];
+        let right = equilibrium[node_b];
+        let mismatch = (left[0] - right[0])
+            .hypot(left[1] - right[1])
+            .hypot(left[2] - right[2]);
+        if !mismatch.is_finite() || mismatch > PERIODIC_TANGENT_TRANSPORT_TOLERANCE {
+            return Err(RunError {
+                message: format!(
+                    "shared-domain Floquet tangent transport requires matching physical equilibrium vectors for pure translation Q=I; pair_id='{pair_id}' node_a={node_a} node_b={node_b} m0_mismatch={mismatch:.6e} tolerance={PERIODIC_TANGENT_TRANSPORT_TOLERANCE:.6e}"
+                ),
+            });
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone)]

@@ -12,6 +12,7 @@ import {
 } from "@/kernel/resources/studyRuntimeResources";
 import {
   buildEigenSpectrumChartModel,
+  eigenModeFieldAvailable,
   frequencyDomainManifestPayload,
 } from "@/shared/domain/analysis/frequencyDomainChartModels";
 import { buildEigenResidualSummary, readEigenModeResourcePayload } from "@/shared/domain/analysis/eigenResidualSummary";
@@ -316,16 +317,17 @@ function useEigenModeSummary(selection: InspectorPanelProps["selection"]) {
     finiteNumber(modePayload?.tangent_leakage_max_abs) ??
     spectrumPoint?.tangentLeakageMax ??
     null;
-  const fieldId =
-    ref?.fieldId ??
-    fieldMeta.data?.field_id ??
-    spectrumPoint?.modeFieldId ??
-    null;
-  const fieldResource =
-    ref?.resourceRef ??
-    fieldMeta.data?.resource_key ??
-    spectrumPoint?.modeFieldResourceKey ??
-    null;
+  const spectrumFieldAvailable =
+    spectrumPoint == null || eigenModeFieldAvailable(spectrumPoint);
+  const fieldId = spectrumFieldAvailable
+    ? ref?.fieldId ?? fieldMeta.data?.field_id ?? spectrumPoint?.modeFieldId ?? null
+    : null;
+  const fieldResource = spectrumFieldAvailable
+    ? ref?.resourceRef ??
+      fieldMeta.data?.resource_key ??
+      spectrumPoint?.modeFieldResourceKey ??
+      null
+    : null;
   const identity = buildEigenModeIdentityViewModel({
     branchId: ref?.branchId,
     fieldId,

@@ -1,5 +1,8 @@
 import type { InspectorMetadataItem } from "../../inspectorDescriptor";
-import type { EigenSpectrumPoint } from "@/shared/domain/analysis/frequencyDomainChartModels";
+import {
+  eigenModeFieldAvailable,
+  type EigenSpectrumPoint,
+} from "@/shared/domain/analysis/frequencyDomainChartModels";
 
 export type FmrModalSpectrumTrust = "partial" | "qualified" | "unknown";
 
@@ -36,11 +39,12 @@ export function buildFmrModalSpectrumViewModel({
   status: string;
 }): FmrModalSpectrumViewModel {
   const modes = points.map((point) => {
-    const fieldAvailable = Boolean(point.modeFieldId && point.modeFieldResourceKey);
+    const fieldAvailable = eigenModeFieldAvailable(point) &&
+      Boolean(point.modeFieldId);
     return {
       fieldAvailable,
-      fieldId: point.modeFieldId,
-      fieldResourceKey: point.modeFieldResourceKey,
+      fieldId: fieldAvailable ? point.modeFieldId : null,
+      fieldResourceKey: fieldAvailable ? point.modeFieldResourceKey : null,
       frequencyHz: point.frequencyHz,
       modeIndex: point.rawModeIndex,
       modeKey: `${point.sampleIndex}:${point.rawModeIndex}`,

@@ -307,3 +307,324 @@ w Gamma oraz -0.990059656628 A/m dla ky=2e6 rad/m (12 warstw filmu,
 rozwiązań były poniżej 2e-15. Te liczby są wyłącznie referencją 1D.
 Nadal trzeba wyeksportować i porównać pola natywnego operatora, kontrolować
 jego siatkę i wykonać T5–T7; nie policzono nowych częstości Fullmag.
+
+## Checkpoint wykonania native Floquet — 2026-09-23
+
+Branch `codex/eigensolve-dispersion-plan-20260912` ma HEAD
+`479d5c5ca060ca7f8d00705fa96b62e52493bf3c`; najnowszy pobrany `origin/master`
+(`93f11dbc564c00b725d174ccb2fd0ff9a96493c`) jest jego przodkiem. Główny
+checkout nie został zmieniony.
+
+Managed runtime-only build `2439cca257fb49ffb42bc8adba739623` zakończył się
+`succeeded`, `exit_code=0`, profilem `fem-cpu-slepc-runtime-v1`, obrazem
+`sha256:e5f70bd632011f9a0d8163430dab81bc6f248e07e4af086dfdf77bcd087471d7`
+i source capsule `929e43712e1b4eba9b83cb585e1c26390125eb519df9702b977739963aaaa968`
+(snapshot `1b08965de92b603f016f6905f736a7cbd0d7321289125b8776143726247d0c11`,
+HEAD `479d5c5...`). Receipt jawnie ma `runtime_only=true`, pustą listę
+`unit_test_targets` i `qualification=NOT VERIFIED`: jest to dowód kompilacji,
+nie testów ani fizyki.
+
+Smoke `de-smoke-k2` (`run id d1ec2507a7fc493db96e5761208a3a3e`) uruchomił
+FEM CPU/double/SLEPc z dynamicznym demagiem dla
+$\mathbf k=(0,2\times10^6,0)\,\mathrm{rad\,m^{-1}}$, mesh 1980 węzłów / 5720
+tetraedrów i 1195 par Floqueta. Nowa konfiguracja LU ominęła wcześniejszy
+zero-pivot; solver zwrócił 23 kandydatów SLEPc, ale żaden mod nie został
+zaakceptowany. Okno 8.5–10.25 GHz zgłosiło
+`floquet_original_descriptor_residual_not_met`; okno 10.25–12 GHz nie miało
+dodatniego kandydata wewnątrz okna. Nie powstał poprawny punkt częstotliwości,
+wiersz CSV ani wykres. Wartości `residual_rejections=0` i residualów `0` w tym
+starym runie nie są pomiarami: źródło nie wypełniało tych pól diagnostycznych.
+
+W lokalnym źródle dodano teraz liczniki kandydatów i liczby kandydatów z
+pełnym wyliczonym residualem, rozdzielne maksima EPS/bloku magnetycznego/
+potencjału oraz breakdown najgorszego kandydata. Wartości residualu zaczynają
+się jako „nie zmierzono” i są serializowane jako `null`, a nie zero, dopóki
+nie ma próbki. Dodano też asercje do istniejącego testu źródłowego;
+zgodnie z bieżącym zakazem testy jednostkowe nie są kompilowane ani uruchamiane.
+Ten przyrost nie wszedł do joba `2439...` i wymaga nowego managed runtime
+builda przed interpretacją liczb residualu.
+
+Koordynator jest zdrowy, ale kolejkę zajmuje aktywny job
+`b0635ee724444977bae6402221f82990` z worktree
+`eigensolve-k0-finalization-db0fde795ab86411`; aktualny allowlist nie zawiera
+profilu runtime-only. Nie restartować ani nie przekonfigurowywać współdzielonego
+runnera podczas tego joba. Po zwolnieniu kolejki trzeba odtworzyć/zweryfikować
+runtime-only profil, zbudować bieżący snapshot, uruchomić ponownie `k2`, odczytać
+nowy breakdown residuali i naprawić jego przyczynę przed drugim punktem $k$.
+
+Stan bramek: T3 — częściowo wykonana poprawka LU, otwarta diagnostyka i
+akceptacja residualu; T4 — operatorowy test pola nadal otwarty; T5 — pierwszy
+punkt $k\ne0$ wykonany, ale bez zaakceptowanej częstotliwości, zatem niezaliczony;
+pozostałe trzy punkty, zbieżność T6, wykres/pakiet T7 i pełny C1 T8 pozostają
+otwarte. Nadal nie istnieje numeryczna relacja dyspersji do wykreślenia.
+
+### Uzupełnienie kontroli demag seams — 2026-09-23
+
+Artefakt `periodic_pairs.v1` z tego runu potwierdza topologię parowania:
+`validation_status=ok`, sześć grup parowanych ścian, 3585 sparowanych węzłów,
+zerowy maksymalny residual translacji i fingerprint
+`sha256:2fde44d7d0e2f8ba58de35c3055ae167866e18fbdd90a41ad5f7302110f8fa2e`.
+`pair_count=6` liczy grupy ścian, nie pojedyncze pary węzłów, a certyfikat
+topologii nie weryfikuje fizyki pola demagnetyzującego.
+
+Diagnostyka `fem_static_pbc_demag_seams.v1` zakończyła się statusem
+`failed`, ponieważ w końcowych snapshotach relaksacji brakowało pól
+`H_demag` i `demag_phi`; seamów nie dało się obliczyć. To jest brak danych do
+oceny, a nie wykazany błąd fizyczny operatora. Kontrola statycznego demagu
+przez szwy pozostaje `NOT VERIFIED` i wymaga runu eksportującego oba pola.
+
+Wejściowy `examples/fem_de_smoke_numeric.py` żąda teraz terminalnych
+artefaktów `H_demag` oraz `demag_phi`; okres zapisu jest wyprowadzony z kroku
+i limitu czasu relaksacji, aby nie tworzyć gęstej historii pól. Jest to zmiana
+źródłowa. Dopiero następny managed run może potwierdzić oba snapshoty na tym
+samym kroku i rozstrzygnąć kontrolę szwów.
+
+### Aktualizacja kolejki runnera — 2026-09-23
+
+Job `b0635ee724444977bae6402221f82990` (profile `fem-cpu-slepc-modal-v1`,
+worktree `eigensolve-k0-finalization`) zakończył się `failed`, exit code 2,
+po około 31 min natywnego builda. Błąd jest poza tym worktree:
+`crates/fullmag-runner/src/fem/eigen_equilibrium_contract.rs:345` przekazuje
+`&Vec<f64>` do argumentu `&[bool]` (`E0308`). Nie wprowadzano tam zmian.
+Koordynator wrócił do `idle`, `active_jobs=[]`; jego allowlist nadal nie
+zawiera `fem-cpu-slepc-runtime-v1`. Następny krok to bezpieczne przywrócenie
+tego profilu, potem managed build aktualnego snapshotu z telemetrią.
+
+Profil przywrócono przez nowy obraz koordynatora
+`sha256:eed020f1664bde606b20412968681094a885f3e7080679c6d21c90a4160253e4`;
+health potwierdził `worker_alive=true`, `accepting_jobs=true`, allowlistę
+z runtime-only oraz `active_jobs=[]`. Job 109
+`d4a26468c5124354b9956ac5ddb92aef` przyjął snapshot tego worktree:
+`source_digest=054d139d6474a378c587974c5652af65eda4fad922afa241eabeba58efd2eec8`,
+`source_snapshot_sha256=8467417fdf6ce3265f00c5dd61b5390b1c32352dd6475421d39b74344b89d052`,
+HEAD `479d5c5ca060ca7f8d00705fa96b62e52493bf3c`. Job przeszedł do `running`;
+wynik builda i jego receipt są jeszcze niedostępne. Snapshot obejmuje pięć zmienionych
+plików runtime/wejściowego modelu DE; doc-only zmiany pozostają poza nim.
+
+### Checkpoint po jobie 109 i pierwszym nowym `k2` — 2026-09-23
+
+**Odświeżenie mastera.** Worktree
+`C:\git\fullmag\worktrees\eigensolve-dispersion-plan-20260912` ma branch
+`codex/eigensolve-dispersion-plan-20260912`, HEAD
+`479d5c5ca060ca7f8d00705fa96b62e52493bf3c`, i zawiera świeżo pobrany
+`origin/master` `93f11dbc564c00b725d174ccb2fd0ff9a96493c` jako przodka. Ma 209
+commitów tylko po stronie brancha i 0 tylko po stronie mastera. Nie wykonano
+merge, rebase ani resetu; lokalne zmiany pozostają zachowane.
+
+**Build 109 — wykonany i zaliczony jako build.** Job
+`d4a26468c5124354b9956ac5ddb92aef`, sequence 109, profil
+`fem-cpu-slepc-runtime-v1`, zakończył się `succeeded`, exit 0. Source digest:
+`054d139d6474a378c587974c5652af65eda4fad922afa241eabeba58efd2eec8`, snapshot
+`8467417fdf6ce3265f00c5dd61b5390b1c32352dd6475421d39b74344b89d052`, HEAD
+`479d5c5ca060ca7f8d00705fa96b62e52493bf3c`. `runtime-attestation.json` ma
+`status=pass` i `native_fem_cpu_available=true`; receipt oznacza
+`runtime_only=true`, `unit_test_targets=[]` i `qualification=NOT VERIFIED`.
+Build potwierdza kompilację natywnego runtime/CLI, nie testy ani poprawność
+fizyki. Pomocniczy odczyt wersji Rust w receipt zwrócił permission error na
+zamontowanym rustup, ale etap właściwego `native-build` zakończył się 0.
+
+**T5 — punkt k2 uruchomiony, ale niezaliczony.** Pilot
+`de-smoke-k2` (`50d824f803ef45d1a9bedb0b647ac8a5`) działał jako FEM CPU,
+double, SLEPc, strict, z dynamicznym Floquet demagiem i
+$\mathbf k=(0,2\times10^6,0)\,\mathrm{rad\,m^{-1}}$. Model utworzył siatkę
+1980 węzłów / 5720 tetraedrów, 1195 par Floqueta; relaksacja zakończyła się po
+3 krokach i dostarczyła pola wejściowe do modalnego solve. SLEPc zwrócił 23
+kandydatów; kandydat 9.7233362727 GHz miał magnetic residual
+`2.1678405357802513e-7` przy limicie `1e-8`, a potencjał residual
+`1.4175187550539143e-14`. Zaakceptowanych modów: zero. Wynik `failed`, cleanup
+kontenera `verified_absent`, CSV częstotliwości pusty/brak, wykres nieważny.
+
+**Kontrola demagu — statyczna kontrola szwów wykonana.** W tym runie oba pola
+`H_demag` i `demag_phi` są obecne. `fem_static_pbc_demag_seams.v1` ma
+`status=ok`; dla sześciu grup par graniczne różnice `m`, `H_demag`, `demag_phi`
+i normalnego strumienia B wyniosły zero (jedno podsumowanie ładunku bocznego
+ma tylko `3.28e-47 A·m`). Certyfikat przeliczonej liniaryzacji stanu końcowego
+ma `status=matched`, różnica `H_demag` `1.67e-24 A/m`, różnica potencjału
+`1.10e-30 A`. To jest tylko kontrola statycznej, jednorodnej równowagi
+in-plane przy $k=0$, nie walidacja dynamicznego demagu Floqueta dla
+niezerowego $k$. Artefakt relaksacji ma `status=not_evaluated`; nie jest to
+kwalifikacja naukowa.
+
+**N2 — poprawka w źródle, czeka na runtime.** Stary adapter zatrzymywał EPS
+na `EPS_ERROR_RELATIVE = ||r||/|lambda|` i tę wartość mieszał z relatywnym
+residualem bloków oryginalnego pencil. W runie pierwsza wartość wyniosła
+`5.72e-20`, ale bezpośrednia reszta magnetyczna `2.17e-7`. Źródło zmieniono
+na absolutny true residual znormalizowanego pencil (`EPS_CONV_ABS`), z
+wewnętrzną tolerancją
+`max(100*epsilon_machine, 0.01*requested_rtol)`. Twarda bramka wynikowa
+pozostaje `max(magnetic_relative_residual, potential_relative_residual) <=
+requested_rtol`. Nowe pola diagnostyczne określają metrykę jasno; regresję
+źródłową uzupełniono, ale testów nie wolno kompilować ani uruchamiać.
+
+**Następny krok wykonawczy:** zlecić nowy managed runtime-only build bieżącego
+snapshotu, zweryfikować receipt i source identity, potem ponownie wykonać
+`de-smoke-k2`. Sukces oznacza zaakceptowany mod z residualami poniżej `1e-8`
+oraz niepusty wiersz artefaktu. Dopiero potem porównać wynik z odrębnym
+analitycznym modelem DE uwzględniającym dynamiczny demag; nie dopasowywać ani
+nie stroić analityki do wyniku numerycznego. Jeśli residual nadal nie przejdzie,
+zebrać nowy breakdown zamiast luzować limit.
+
+Status bramek po tym checkpointcie: T1 managed runtime build — **wykonany**;
+T4 statyczny seam/control snapshot — **wykonany w ograniczonym zakresie**, LLG
+formalnie `not_evaluated`; T5 nonzero-k frequency — **uruchomiony, niezaliczony**;
+N2 — **poprawka źródłowa, runtime pending**; analityka, dalsze k-punkty,
+zbieżność, wykres/T7 i pełna kwalifikacja C1 — **otwarte**. Nie ma jeszcze
+zweryfikowanej numerycznej relacji dyspersji.
+
+### Blokada runnera — 2026-09-23
+
+Job `8dead9c4716741bba741e72055a756b2` z innego worktree nadal działa na
+współdzielonym koordynatorze. Jego natywny build przeszedł (`exit_code=0`), lecz
+cały job pozostał `running` podczas instalacji zależności frontendowych.
+Runner jest w graceful stop i ma wyłączone przyjmowanie zadań. Nie zmieniać
+allowlisty ani obrazu i nie anulować joba, dopóki jego receipt nie będzie
+terminalny, a `active_jobs` puste.
+
+Po zakończeniu joba włączyć `fem-cpu-slepc-runtime-v1` dla bieżącego obrazu
+`sha256:e9f46ae4690d96dfcdfa915584265733b6d9930fdecf60b16b95f6bfb26101fc`,
+bez budowania testów. Następnie wykonać managed build snapshotu worktree,
+zweryfikować jego receipt/source identity i ponowić jeden punkt `k2`. Dopiero
+zaakceptowany mod z residualami poniżej `1e-8` i niepustym wierszem wyniku
+odblokuje porównanie numeryczne z analityką DE oraz wykres kilku punktów.
+
+### Najnowszy stan kolejki — 2026-09-23
+
+Live runner działa i zgłasza `accepting_jobs=true`, ale jego aktywna allowlista
+nie zawiera `fem-cpu-slepc-runtime-v1`, którego potrzebuje build tej poprawki.
+W kolejce jest aktywny job #111 (`e087d668915e4e6099d5404d5b8ebc0c`) z innego
+worktree. FIFO może kolejkować dozwolone profile, lecz nie przyjmie profilu
+spoza allowlisty. Nasza poprzednia próba zakończyła się HTTP 503 i wpisu N2
+brak. Poprzedni wpis o jobie #110 jest historyczny i nie opisuje bieżącego
+stanu.
+
+Dwa odczyty statusu oddalone o około 30 s pozostawiły #111 bez zmian;
+`updated_at` wskazuje 21:26:09 czasu lokalnego. Live health nadal widzi go jako
+`running`, podczas gdy `coordinator.active_job_ids=[]` i `waiting_until` to
+21:26:08. Worker jest żywy i nie zgłasza błędu. To nierozstrzygnięta
+niespójność stanu, nie dowód wolnego slotu. Nie restartować, anulować ani
+automatycznie odzyskiwać joba innego worktree.
+
+Późniejszy odczyt rozstrzygnął, że sam worker jest aktywny: kontener
+`337f0cae831ede0d92e46a4714ddeafd49bf45f6934669df295ce7ed1af0361f` ma
+`running=true`, a `docker top` pokazał `cargo`. `runner-wait` po 30 s nie
+zakończył zadania. Wolne storage wynosiło `8,650,276,864` bajtów, około
+60 MB ponad próg 8 GiB; podgląd retencji timeoutował i nie uzasadnia żadnego
+usunięcia. Profil runtime ma skonfigurowany i dostępny obraz workera
+`sha256:e5f70bd632011f9a0d8163430dab81bc6f248e07e4af086dfdf77bcd087471d7`
+z limitami 2 CPU/8 GiB RAM, lecz aktywny koordynator nadal go nie dopuszcza.
+
+Po zakończeniu #111: potwierdzić brak aktywnych zadań, bezpiecznie przywrócić
+zweryfikowany obraz koordynatora z obsługą runtime-only oraz allowlistę,
+sprawdzić je przez live health API i przesłać snapshot worktree do kolejki.
+Nie zmieniać wspólnego runnera w trakcie obcego joba. Do uzyskania managed
+runtime receipt N2 jest `NOT VERIFIED`; ponowne `de-smoke-k2`, porównanie z
+analityką, kolejne punkty i wykres pozostają otwarte.
+
+### Aktualizacja kolejki — 2026-09-23
+
+Live `/health` potwierdza `accepting_jobs=true`, ale uruchomiony koordynator
+nie dopuszcza `fem-cpu-slepc-runtime-v1`, mimo że hostowy plik konfiguracji go
+wymienia. Aktywny job #111 należy do innego worktree. Snapshot z kluczem
+`24aa119e7f5848e1b927dc12b3a24f82` zwrócił HTTP 400; wpisu nie ma w kolejce.
+Wolne miejsce to `5,807,996,928` bajtów, poniżej progu 8 GiB.
+
+Po zakończeniu #111 i odzyskaniu wymaganego miejsca zastosować hostową
+allowlistę przez wspierany cykl koordynatora, potwierdzić ją w live health i
+ponowić zgłoszenie snapshotu. Nie zmieniać koordynatora podczas aktywnego joba.
+Do przyjęcia buildu, poprawnego wyniku `k2` i porównania z analityką kilka
+punktów oraz wykres pozostają `NOT VERIFIED`.
+
+Kontrola o 20:24 UTC: job #111 nadal `running`; `runner-wait` timeoutował na
+API, nie kończąc zadania. Wolne miejsce wynosi `4,866,473,984` bajtów. Nie
+przeładowywać koordynatora i nie ponawiać buildu przed terminalnym #111,
+przywróceniem live allowlisty oraz odzyskaniem progu 8 GiB.
+
+Kolejny odczyt o 20:27 UTC nadal pokazuje aktywny #111 i brak profilu runtime;
+wolne miejsce wynosi `4,772,020,224` bajty.
+
+### Snapshot bieżących poprawek w kolejce — 2026-09-24
+
+Runner przyjął #123 (`c62f1d5990ec4806bba82d8fb33beda3`) z profilem `fem-cpu-slepc-modal-v1`, stan `queued`, za aktywnym #122. Snapshot: digest `c5768e4253f359e16e993af2d4a91ab1ae1a349f7713df1801c3d6d3eb5abeb0`, capture `6fcb48331d8e48028c1e42fea2da021a`, SHA `f05ba3d65e0cf3f0be98d01aabfa6a8fa1c6b0cd6d02bfeb75dbaab4304775af`, HEAD `479d5c5ca060ca7f8d00705fa96b62e52493bf3c`. Odczyt zdrowia runnera: `health.ok=true`, worker przyjmuje joby, wolne ok. 29 GB; `active_jobs` zawierał #122 mimo pustego `active_job_ids`. Zachowano kolejkę i nie przerwano joba. Po buildzie nadal wymagane są receipt oraz uruchomienie DE-SMOKE z dokładnie tego runtime. Wyniku `k != 0`, porównania z analityką i wykresu jeszcze nie ma.
+
+### Wynik joba #123 i stan runnera — 2026-09-24
+
+Job #123 osiągnął stan terminalny `failed`, `exit_code=2`. `native-build` i instalacja zależności frontendu zakończyły się sukcesem; `web-build-static` dwukrotnie zatrzymał się na błędzie TypeScript w `frequencyDomainChartModels.ts:1106` (`kind: string` zamiast `"line" | "scatter"`). Źródło poprawiono przez jawne zachowanie typu literalnego, ale poprawka nie była częścią snapshotu #123.
+
+Po odczycie listy kolejki nie ma aktywnego joba. `just runner-container-status` z ograniczonego środowiska nie mógł poświadczyć kontekstu Docker Desktop. Odczyt tej samej, wspieranej recepty z dostępem hosta potwierdził istniejący kontener `Fullmag_build_runner`: `health.ok=true`, `worker_alive=true`, `accepting_jobs=true`, `active_jobs=[]`, profil `fem-cpu-slepc-modal-v1` dozwolony, wolne miejsce 14,895,345,664 B. Można wysłać świeży snapshot do wspólnej kolejki; przed capture wstrzymać edycję.
+
+Następny krok to managed build snapshotu zawierającego poprawkę typów i fail-closed probe K0. Sukces builda nie zastąpi wykonania Gamma/k2, odbioru residuali i pola demagu, porównania z analityką ani wykresu.
+
+### Job #124 — świeży snapshot po poprawkach — 2026-09-24
+
+Job #124 (`40e05e4a2bff497fbcd6f1c853a24221`) został przyjęty przez istniejącą
+wspólną kolejkę, profil `fem-cpu-slepc-modal-v1`. Digest źródeł:
+`30cc17ad49fdd7df6ad9876bc006187a1f3b5724f92cea397496ea3475c067fc`, capture:
+`ff908a7894f94d1faaa2e3af61ccd895`, snapshot SHA:
+`453398d2c4b6d96d8131a2864946b88d0b52a78ed92c73a864327194c503613d`, bazowy
+HEAD `479d5c5ca060ca7f8d00705fa96b62e52493bf3c`. Odczyt potwierdził, że job
+przeszedł do stanu `running`. Build zawiera poprawkę TypeScript i fail-closed
+agregację obu kierunków probe K0; nie dowodzi jeszcze żadnej częstotliwości
+solverowej ani poprawności naukowej.
+
+Po terminalnym buildu należy zweryfikować receipt i hashe, a przy sukcesie
+uruchomić Gamma oraz `k_y=2e6 rad/m` na tym runtime. Nie ma jeszcze zaakceptowanej
+częstotliwości `k != 0`, porównania z analityką ani wykresu.
+### Wynik #124 i świeży build po poprawce — 2026-09-24
+
+Job #124 zakończył się `failed`, `exit_code=2`, w `native-build` po
+592414 ms. Kompilator wskazał błędne łączenie dwóch literałów `const char[]`
+w `backends/fem/src/frequency_domain/modal_eigen_solver.cpp:467`. Pierwszy
+operand zmieniono na `std::string`, a kontrola `git diff --check` przeszła.
+Błąd wystąpił przed receipt runtime; nie uruchomiono pilota z #124.
+
+Wspólna kolejka przyjęła #125 (`b03024288adc4cf0849a1b9c51b375be`), profil
+`fem-cpu-slepc-modal-v1`, digest
+`a21e7963914525b5c635f4130e6aad3b3473fc08d64df3473e0145fb21e2bee3`, capture
+`195d849d85b34eca8405fcffa575ed0f`, snapshot SHA
+`2f53f1eface1e332aa37b07f1b79cf243273f8ba0db099dbd964b3a215613b3c`, HEAD
+`479d5c5ca060ca7f8d00705fa96b62e52493bf3c`. Job przeszedł do `running`.
+Po sukcesie wymagane są kontrola receipt/tożsamości oraz ponowny
+`de-smoke-k2` z dokładnie tego runtime. Częstotliwości dla niezerowego k,
+porównania analitycznego ani wykresu nadal nie ma.
+
+### Aktualizacja T3/T5 — EPS absolutny a fizyczny residual — 2026-09-25
+
+Nowszy runtime-only build #133 zakończył się poprawnie, lecz pilot `k_y=2e6 rad/m` nie przyjął żadnego modu. Powtórka z limitem 2000 iteracji nadal dała residual magnetyczny `2.1678405e-7` wobec wymagania `1e-8`, mimo że EPS raportował absolutny true residual `3.4957520e-9`. Limit iteracji zwiększono bez zmiany progu fizycznego; wynik potwierdza, że sama dłuższa iteracja nie rozwiązuje problemu.
+
+Wniosek T3: absolutny residual pencila po globalnym skalowaniu nie jest tym samym co znormalizowany residual per modu. W źródle zaostrzono wyłącznie wewnętrzny EPS prefilter do `max(100*machine_epsilon, 1e-3*requested_rtol)`; fizyczna bramka oryginalnych bloków pozostała `1e-8`. Ta zmiana jest jeszcze **niezbudowana i niezweryfikowana runtime**. Następnie wykonać jeden świeży managed build i ponownie pilot `k2`. T5 pozostaje **uruchomione, niezaliczone**: brak zaakceptowanego punktu niezerowego k, więc nie przechodzić jeszcze do pięciu punktów ani wykresu.
+
+Job #134 (`f29dad61e46048ff934ada17e75cde53`) przyjęto do kolejki profilu `fem-cpu-slepc-runtime-v1`. Snapshot SHA `8a7b9ff2e8c91609a925055d31ee51ae3c3135090bef40873c40c3336c6ecd5f`, source digest `d90df5fb5da8eb13cd15326c1b44b527cd54dbd571645ca1ab636ffeab7e84a0`, stan początkowy `queued`; receipt jeszcze nie istnieje. Po zakończeniu builda i kontroli hashy powtórzyć tylko punkt `k2`.
+
+Aktualizacja 2026-09-25 01:53 UTC: koordynator zalogował `job_claimed` o 01:40:48 UTC, a worker potwierdzono jako aktywny. Materializacja 7413 plików (304198252 B) i kontrola ich hashy trwały około 12 min; następnie pojawiły się logi `native-build` oraz procesy `make install-cli-dev` i Cargo. Job nadal `running`; końcowy receipt jeszcze nie istnieje. Nie uruchomiono pilota i nie wysłano duplikatu. Po buildzie nadal obowiązuje odbiór receipt/hashy, dry-run, a potem jeden rzeczywisty pilot `k2`.
+
+### Aktualizacja T3/T5 — próba kontrolowanego `ncv` — 2026-09-25
+
+Po wynikach #135 (EPS `DIVERGED_ITS`, 2000 iteracji; ostatni KSP zakończył się `KSP_CONVERGED_RTOL`) podjęto pojedynczą zmianę algorytmu Krylov–Schura: `ncv=min(N,max(32,2*nev))`, z `N` równym rozmiarowi real-split. Wartość rzeczywistą zwróci `EPSGetDimensions` i raportuje ją artefakt. EPS cutoff `1e-11` oraz obie bramki fizycznego residualu pozostają niezmienione. To hipoteza diagnostyczna o rozmiarze podprzestrzeni, nie zatwierdzona przyczyna plateau.
+
+Job #136 `b1e00ef90b494fa08801036bd4d4f17a` (#136) jest `running` w istniejącej kolejce, profil `fem-cpu-slepc-runtime-v1`; source digest `1b7ee7adbeb2b83260277eb5285d7f2460b633ff5c7c74440d84d7173704f96b`, snapshot SHA `c26f2f6f2890cde8955398e91e9d4e50542d31a1d63a152965c67eea4ccf344c`, capture `f26b01f74dcd4d9ba49769873bb6b54b`, HEAD `4e7ab1528d008ed487c1ed2789f976ba6c8bf3af`. Bramka `runtime build → receipt/hash → dry-run → jeden k2` pozostaje otwarta. Nie ma zaakceptowanego punktu niezerowego k, porównania z analityką ani wykresu.
+
+### Aktualizacja T3/T5 — wynik #136 i korekta statusu — 2026-09-25
+
+Job #136 zbudował runtime-only CPU/SLEPc poprawnie (exit 0, source digest 1b7ee7adbeb2b83260277eb5285d7f2460b633ff5c7c74440d84d7173704f96b, snapshot c26f2f6f2890cde8955398e91e9d4e50542d31a1d63a152965c67eea4ccf344c). Kontrolowany większy ncv=32 został zmierzony przez EPSGetDimensions; następny pilot de-smoke-k2 zakończył się jednak failed, exit 1. Oba podokna wyczerpały limit 2000 iteracji (EPS_DIVERGED_ITS), przy nev=8, ncv=32, mpd=32, bez zbieżnej pary i bez częstotliwości.
+
+Dynamiczny demag był włączony w operatorze modalnym (include_demag=true, floquet_airbox). Informacja demag_mode=none dotyczy wyłącznie kroku relaksacji LLG. Ostatni KSP w każdym oknie zbiegał się (KSP_CONVERGED_RTOL), ale EPS nie zwrócił eigenpary; nie wolno interpretować estymat błędu jako zaakceptowanego residualu fizycznego.
+
+Próba ncv=32 nie odblokowała T3. T5 pozostaje uruchomione i niezaliczone: 0 zaakceptowanych punktów, 0 wierszy CSV, brak wykresu. Następny krok to odrębna diagnoza dokładnego operatora Schura Floqueta oraz preconditionera shift-invert; progi fizyczne pozostają bez zmian. Analityczna referencja dla t=10 nm, ky=2e6 rad/m wynosi 9.725724 GHz (otwarty film), a szacunek Gamma dla airboxu 2 µm wynosi 9.299250 GHz. Żadna z tych wartości nie jest wynikiem numerycznym Fullmaga.
+
+### Korekta T3/T5 — kalibracja progu zamiast założenia `1e-8` — 2026-09-25
+
+[Audyt tolerancji](../../audits/2026-09-25-de-residual-threshold-audit.md) zastępuje wcześniejsze traktowanie `1e-8` jako bezwzględnego wymogu fizycznego. To próg algebraiczny w konkretnej normie; nie wykazano jego konieczności dla żądanej dokładności częstotliwości ani nieosiągalności w double. Obecny cutoff EPS `1e-11` pochodzi z nieskalibrowanego mnożnika `1e-3`. #132–#136 pokazują stagnację obecnej metody, nie dowód granicy precyzji.
+
+Korekta diagnostyki: `KSP_CONVERGED_RTOL` oznacza zbieżność według skonfigurowanej normy. Zapisywany `KSPGetResidualNorm` może być przybliżony/preconditioned; bez niezależnego `b-Ax` nie wyklucza błędu shift-invert. `PREONLY/LU` Poissona nie stosuje iteracyjnego `rtol`.
+
+| Podzadanie | Sposób wykonania | Stan |
+|---|---|---|
+| T3-C1 | Zmierzyć true residual KSP, RHS, resolved stronę/normę, pełną wartość własną oraz defekt rekonstrukcji real-split | Do wykonania |
+| T3-C2 | Jawna mała referencja oryginalnego Schura z demagiem i `B`, zgodność z MatShell; bez badanego shift-invert i bez ukrytego fallbacku produkcyjnego | Do wykonania |
+| T3-C3 | Rozdzielić próg EPS od akceptacji, porównać `1e-6/1e-7/1e-8` przy kontrolowanej dokładności inner solves; ocenić błąd częstotliwości względem C2 | Do wykonania |
+| T5-C4 | Policzyć 3–5 k po kalibracji; wykres może odróżniać punkty diagnostyczne od zaakceptowanych, z residualem każdego punktu | Do wykonania |
+| T5-C5 | Oddzielnie potwierdzić zbieżność siatki/airboxu, identyfikację modów i adekwatność referencji `n=0` | Do wykonania |
+
+Roboczy budżet do kalibracji: 1 MHz dokładności fizycznej oceny w okolicy 10 GHz, z wkładem algebraicznym ≤0.1 MHz. To propozycja, nie zmierzona niepewność ani bezpośrednie przeliczenie residualu na Hz. Jeśli jawny próg `1e-6` zapewni ten zapas względem niezależnej referencji i stabilny profil, można uzasadnić jego użycie w pilocie. Samo ustawienie `solver_rtol=1e-6` obecnie zmienia również EPS i KSP; bez rozdzielenia polityk nie jest kontrolowanym eksperymentem.
+
+Nadal 0 punktów przyjętych przy żądanym `1e-8`. Kandydat #133 przy 9.723336272685 GHz pozostaje odrzucony w historycznym runie; może być pokazany jako wynik diagnostyczny z oznaczeniem jakości. Analiza, evidence JSON i korekta planu są wykonane; C1–C5 nie zostały wykonane w tej aktualizacji. Nie uruchomiono nowego buildu ani kompilacji testów.

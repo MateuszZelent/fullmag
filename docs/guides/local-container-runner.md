@@ -112,6 +112,15 @@ akceptuje oba profile SLEPc, a źródło `fullmag-bin` i `libfullmag_fem` w tras
 runtime-only jest powiązane hashami. Sam receipt pozostaje `NOT VERIFIED` i nie
 jest dowodem CTest ani kwalifikacji fizycznej.
 
+Profil `fem-cpu-slepc-runtime-v2` oddziela ABI trasy CPU: obraz zawiera drugi
+MFEM v4.9 zbudowany bez CUDA pod `/opt/fullmag-mfem-cpu`, a natywny klient FEM
+jest kompilowany z `FULLMAG_ENABLE_CUDA=OFF`. Trusted receipt wymaga zarówno
+`MFEM_DIR` z tego prefiksu w cache CMake, jak i rzeczywistego `libmfem.so`
+rozwiązanego przez loader z tego samego prefiksu; zapisuje ścieżkę i hash
+biblioteki w `cmake-attestation.json`. Profil v1 pozostaje dostępny dla
+historycznych wyników. v2 nie stanowi dowodu naprawy ABI, dopóki nowy obraz,
+managed build, pomiar pamięci i pilot nie przejdą weryfikacji.
+
 
 Aktywacja wyłącznie profilu runtime-v2 odbywa się przez
 `container-configure --image-id <immutable-coordinator-id> --enable-slepc-runtime-v2`.

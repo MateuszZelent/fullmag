@@ -103,7 +103,7 @@ run-comsol-dispersion-benchmark job_id cases="c0,c1,a1" timeout_seconds="21600":
 run-de-100nm-pilot job_id:
     {{storage_python}} "{{repo_root}}/scripts/run_de_100nm_pilot.py" --repo-root "{{repo_root}}" --job-id {{quote(job_id)}}
 
-# Frozen 10 nm DE control; sampling is two or five (validated by the client).
+# Frozen 10 nm DE control; sampling is k0, k2, two, five or signed-eleven.
 run-de-smoke job_id sampling="two" model_ref="":
     {{storage_python}} "{{repo_root}}/scripts/run_de_100nm_pilot.py" --repo-root "{{repo_root}}" --job-id {{quote(job_id)}} --pilot {{quote("de-smoke-" + sampling)}} {{if model_ref == "" { "" } else { "--model-ref " + quote(model_ref) }}}
 
@@ -5424,7 +5424,7 @@ run-headless script:
     just build fullmag
     PATH="{{local_bin}}:$PATH" FULLMAG_PYTHON="{{repo_python}}" fullmag {{script}} --headless --json
 
-# Run headless without 3D preview or chart data (no rendering overhead — good for benchmarks)
+# Run headless without 3D preview or chart data (no rendering overhead â€” good for benchmarks)
 run-headless-bench script:
     just ensure-python
     just build fullmag
@@ -6770,7 +6770,7 @@ build-all-fem-hypre-memory-variants:
 rebuild-gpu-runtime:
     just rebuild-fem-runtime
 
-# ── Benchmarks ──────────────────────────────────────────────────────────
+# â”€â”€ Benchmarks â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 # Run the Box500 FEM CPU/GPU consistency matrix.
 # Writes CSV rows and a CPU/GPU summary JSON. Override defaults with

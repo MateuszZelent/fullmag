@@ -3628,7 +3628,12 @@ impl Default for NativeFrequencyDomainContractFfiResult {
 #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 impl NativeFrequencyDomainContractFfiResult {
     fn to_owned_result(&self) -> NativeFrequencyDomainContractResult {
-        let modal_eigen = if self.inner.mode_count == 0 {
+        // An empty spectrum is still a modal solve. Keep its native execution
+        // attestation so the caller can report the actual solver outcome.
+        let modal_eigen = if self.inner.mode_count == 0
+            && self.inner.resolved_execution_target
+                == ffi::fullmag_fem_modal_execution_target::FULLMAG_FEM_MODAL_EXECUTION_AUTO
+        {
             None
         } else {
             Some(NativeModalEigenTypedResult {
@@ -4094,6 +4099,23 @@ mod tests {
             ffi::FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION,
             "request/shared-payload v19 must not leak into the frozen by-value result"
         );
+    }
+
+    #[test]
+    #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
+    fn empty_modal_spectrum_preserves_native_execution_attestation() {
+        let mut result = NativeFrequencyDomainContractFfiResult::default();
+        assert!(result.to_owned_result().modal_eigen.is_none());
+
+        result.inner.status = ffi::FullmagFemFrequencyDomainStatus::FULLMAG_FEM_FD_OK;
+        result.inner.resolved_execution_target =
+            ffi::fullmag_fem_modal_execution_target::FULLMAG_FEM_MODAL_EXECUTION_PRODUCTION_CPU;
+        let owned = result.to_owned_result();
+        let modal = owned
+            .modal_eigen
+            .expect("an empty modal solve retains its attestation");
+        assert!(modal.mode_lambda.is_empty());
+        assert_eq!(modal.resolved_execution_target, 1);
     }
 
     #[test]

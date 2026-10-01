@@ -483,12 +483,22 @@ pub(crate) struct EigenModeQuery {
 #[derive(Debug, Serialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct EigenDispersionRow {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sample_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode_id: Option<String>,
     pub mode_index: u32,
     pub kx: f64,
     pub ky: f64,
     pub kz: f64,
     pub frequency_hz: f64,
     pub angular_frequency_rad_per_s: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode_field_available: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode_field_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode_field_resource_key: Option<String>,
 }
 
 #[derive(Debug, Serialize, Clone)]

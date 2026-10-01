@@ -5,7 +5,8 @@ pub(super) const NATIVE_CPU_MODAL_WINDOW_SOLVER_KIND: &str =
     "slepc_multi_shift_invert_production_cpu_dense";
 pub(super) const NATIVE_GPU_MODAL_SHARED_DOMAIN_SOLVER_KIND: &str = "gpu_modal_device_krylov";
 pub(super) const NATIVE_GPU_K0_KITTEL_SOLVER_KIND: &str = "gpu_dense_k0_macrospin_modal_eigen";
-pub(super) const TANGENT_FRAME_IDENTITY_TOLERANCE: f64 = 1.0e-8;
+pub(super) const PERIODIC_TANGENT_TRANSPORT_TOLERANCE: f64 = 1.0e-8;
+pub(super) const TANGENT_FRAME_IDENTITY_TOLERANCE: f64 = PERIODIC_TANGENT_TRANSPORT_TOLERANCE;
 pub(super) const MODAL_LINEARIZATION_TERM_EXCHANGE: u32 = 1 << 0;
 pub(super) const MODAL_LINEARIZATION_TERM_FIELD: u32 = 1 << 1;
 pub(super) const MODAL_LINEARIZATION_TERM_ANISOTROPY: u32 = 1 << 2;

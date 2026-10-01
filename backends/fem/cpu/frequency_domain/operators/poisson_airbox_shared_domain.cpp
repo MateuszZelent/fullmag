@@ -2347,6 +2347,131 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain(
             return out_result->status;
         }
 
+        if (request.magnetic_phase_constraint == nullptr) {
+            const char *boundary_name = request.boundary_kind == PoissonAirboxBoundaryKind::dirichlet
+                ? "poisson_dirichlet"
+                : request.boundary_kind == PoissonAirboxBoundaryKind::robin
+                    ? "poisson_robin"
+                    : "pure_neumann";
+            std::strncpy(
+                out_result->k0_demag_probe.outer_boundary_kind,
+                boundary_name,
+                sizeof(out_result->k0_demag_probe.outer_boundary_kind) - 1u);
+            out_result->k0_demag_probe.robin_beta = request.robin_beta;
+        }
+
+        // Build k=0 global-direction perturbations once in the same reduced
+        // tangent coordinates used by the production pencil. The probe is
+        // omitted for phase-reduced Floquet assembly, which has its own probe.
+        if (request.magnetic_phase_constraint == nullptr) {
+            PoissonAirboxK0DemagProbeAssembly &probe = out_result->k0_demag_probe;
+            probe.mu0_t_m_a = request.mu0_T_m_A;
+            const std::uint64_t magnetic_class_count =
+                request.magnetic_reduced_node_count;
+            if (magnetic_class_count == 0u ||
+                magnetic_class_count >
+                    static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max() / 2u)) {
+                copy_error(out_result->error_message,
+                           "shared-domain K0 demag probe has invalid magnetic classes");
+                return out_result->status;
+            }
+            constexpr std::uint64_t unset_representative =
+                std::numeric_limits<std::uint64_t>::max();
+            std::vector<std::uint64_t> representatives(
+                static_cast<std::size_t>(magnetic_class_count),
+                unset_representative);
+            for (std::uint64_t node = 0u; node < node_count; ++node) {
+                const std::uint32_t class_id = request.magnetic_reduced_node[node];
+                if (class_id == kInactiveMagneticClass) {
+                    continue;
+                }
+                if (class_id >= magnetic_class_count) {
+                    copy_error(out_result->error_message,
+                               "shared-domain K0 demag probe found an invalid magnetic class");
+                    return out_result->status;
+                }
+                std::uint64_t &representative = representatives[class_id];
+                if (representative == unset_representative) {
+                    representative = node;
+                }
+            }
+            const std::size_t q_size =
+                static_cast<std::size_t>(2u * magnetic_class_count);
+            probe.q_global_y.assign(q_size, 0.0);
+            probe.q_global_z.assign(q_size, 0.0);
+            const auto project_global_direction = [](const TangentFrameNode &frame,
+                                                     const double direction[3],
+                                                     double output[2]) noexcept {
+                const double longitudinal = dot3(frame.m, direction);
+                const double transverse[3] = {
+                    direction[0] - longitudinal * frame.m[0],
+                    direction[1] - longitudinal * frame.m[1],
+                    direction[2] - longitudinal * frame.m[2]};
+                output[0] = dot3(frame.e1, transverse);
+                output[1] = dot3(frame.e2, transverse);
+            };
+            constexpr double global_y[3] = {0.0, 1.0, 0.0};
+            constexpr double global_z[3] = {0.0, 0.0, 1.0};
+            bool global_y_consistent = true;
+            bool global_z_consistent = true;
+            long double global_y_norm_squared = 0.0L;
+            long double global_z_norm_squared = 0.0L;
+            for (std::uint64_t class_id = 0u;
+                 class_id < magnetic_class_count;
+                 ++class_id) {
+                const std::uint64_t representative = representatives[class_id];
+                if (representative == unset_representative) {
+                    copy_error(out_result->error_message,
+                               "shared-domain K0 demag probe found a magnetic class without a representative");
+                    return out_result->status;
+                }
+                double projected_y[2]{};
+                double projected_z[2]{};
+                project_global_direction(
+                    request.tangent_frames[representative], global_y, projected_y);
+                project_global_direction(
+                    request.tangent_frames[representative], global_z, projected_z);
+                const std::size_t offset = static_cast<std::size_t>(2u * class_id);
+                probe.q_global_y[offset] = projected_y[0];
+                probe.q_global_y[offset + 1u] = projected_y[1];
+                probe.q_global_z[offset] = projected_z[0];
+                probe.q_global_z[offset + 1u] = projected_z[1];
+                global_y_norm_squared +=
+                    static_cast<long double>(projected_y[0]) * projected_y[0] +
+                    static_cast<long double>(projected_y[1]) * projected_y[1];
+                global_z_norm_squared +=
+                    static_cast<long double>(projected_z[0]) * projected_z[0] +
+                    static_cast<long double>(projected_z[1]) * projected_z[1];
+            }
+            for (std::uint64_t node = 0u; node < node_count; ++node) {
+                const std::uint32_t class_id = request.magnetic_reduced_node[node];
+                if (class_id == kInactiveMagneticClass) {
+                    continue;
+                }
+                double projected_y[2]{};
+                double projected_z[2]{};
+                project_global_direction(
+                    request.tangent_frames[node], global_y, projected_y);
+                project_global_direction(
+                    request.tangent_frames[node], global_z, projected_z);
+                const std::size_t offset = static_cast<std::size_t>(2u * class_id);
+                global_y_consistent = global_y_consistent &&
+                    std::abs(projected_y[0] - probe.q_global_y[offset]) <= 1.0e-8 &&
+                    std::abs(projected_y[1] - probe.q_global_y[offset + 1u]) <= 1.0e-8;
+                global_z_consistent = global_z_consistent &&
+                    std::abs(projected_z[0] - probe.q_global_z[offset]) <= 1.0e-8 &&
+                    std::abs(projected_z[1] - probe.q_global_z[offset + 1u]) <= 1.0e-8;
+            }
+            probe.global_y_observable = global_y_consistent &&
+                global_y_norm_squared > 1.0e-24L;
+            probe.global_z_observable = global_z_consistent &&
+                global_z_norm_squared > 1.0e-24L;
+            probe.h_functional_global_y.assign(
+                static_cast<std::size_t>(request.scalar_reduced_node_count), 0.0);
+            probe.h_functional_global_z.assign(
+                static_cast<std::size_t>(request.scalar_reduced_node_count), 0.0);
+        }
+
         std::unique_ptr<mfem::ConstantCoefficient> robin_coefficient;
         mfem::BilinearForm scalar_form(request.scalar_space);
         scalar_form.AddDomainIntegrator(new mfem::DiffusionIntegrator());
@@ -2440,6 +2565,63 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain(
                 m0[0] /= m0_norm;
                 m0[1] /= m0_norm;
                 m0[2] /= m0_norm;
+                if (request.magnetic_phase_constraint == nullptr) {
+                    PoissonAirboxK0DemagProbeAssembly &probe = out_result->k0_demag_probe;
+                    double delta_m_y[3] = {0.0, 0.0, 0.0};
+                    double delta_m_z[3] = {0.0, 0.0, 0.0};
+                    for (int local = 0; local < dofs.Size(); ++local) {
+                        const std::uint64_t node = static_cast<std::uint64_t>(
+                            dofs[local] >= 0 ? dofs[local] : -1 - dofs[local]);
+                        const double dof_sign = dofs[local] >= 0 ? 1.0 : -1.0;
+                        const std::uint32_t class_id = request.magnetic_reduced_node[node];
+                        if (class_id == kInactiveMagneticClass) {
+                            continue;
+                        }
+                        const std::size_t q_offset = static_cast<std::size_t>(2u * class_id);
+                        const TangentFrameNode &frame = request.tangent_frames[node];
+                        const double local_y[3] = {
+                            frame.e1[0] * probe.q_global_y[q_offset] +
+                                frame.e2[0] * probe.q_global_y[q_offset + 1u],
+                            frame.e1[1] * probe.q_global_y[q_offset] +
+                                frame.e2[1] * probe.q_global_y[q_offset + 1u],
+                            frame.e1[2] * probe.q_global_y[q_offset] +
+                                frame.e2[2] * probe.q_global_y[q_offset + 1u]};
+                        const double local_z[3] = {
+                            frame.e1[0] * probe.q_global_z[q_offset] +
+                                frame.e2[0] * probe.q_global_z[q_offset + 1u],
+                            frame.e1[1] * probe.q_global_z[q_offset] +
+                                frame.e2[1] * probe.q_global_z[q_offset + 1u],
+                            frame.e1[2] * probe.q_global_z[q_offset] +
+                                frame.e2[2] * probe.q_global_z[q_offset + 1u]};
+                        for (int axis = 0; axis < 3; ++axis) {
+                            delta_m_y[axis] += shape[local] * dof_sign * local_y[axis];
+                            delta_m_z[axis] += shape[local] * dof_sign * local_z[axis];
+                        }
+                        const std::uint32_t scalar_class =
+                            request.scalar_reduced_node[node];
+                        probe.h_functional_global_y[scalar_class] +=
+                            -dof_sign * physical_dshape(local, 1) * weight;
+                        probe.h_functional_global_z[scalar_class] +=
+                            -dof_sign * physical_dshape(local, 2) * weight;
+                    }
+                    const double delta_y_norm_squared =
+                        delta_m_y[0] * delta_m_y[0] +
+                        delta_m_y[1] * delta_m_y[1] +
+                        delta_m_y[2] * delta_m_y[2];
+                    const double delta_z_norm_squared =
+                        delta_m_z[0] * delta_m_z[0] +
+                        delta_m_z[1] * delta_m_z[1] +
+                        delta_m_z[2] * delta_m_z[2];
+                    probe.magnetic_volume_m3 += weight;
+                    probe.magnetization_integral_global_y_a_per_m_m3 +=
+                        ms * delta_m_y[1] * weight;
+                    probe.magnetization_integral_global_z_a_per_m_m3 +=
+                        ms * delta_m_z[2] * weight;
+                    probe.magnetic_energy_scale_global_y_j +=
+                        request.mu0_T_m_A * ms * ms * delta_y_norm_squared * weight;
+                    probe.magnetic_energy_scale_global_z_j +=
+                        request.mu0_T_m_A * ms * ms * delta_z_norm_squared * weight;
+                }
                 for (int local_test = 0; local_test < dofs.Size(); ++local_test) {
                     const std::uint64_t test_node = static_cast<std::uint64_t>(
                         dofs[local_test] >= 0 ? dofs[local_test] : -1 - dofs[local_test]);
@@ -2576,12 +2758,15 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain(
                 copy_error(out_result->error_message, error.c_str());
                 return out_result->status;
             }
+            b_qq_full.finish(out_result->floquet_full_b_qq);
         }
         a_phiq_reduced.finish(out_result->a_phiq);
         a_qphi_reduced.finish(out_result->a_qphi);
         b_qq_reduced.finish(out_result->b_qq);
 
-        if (request.boundary_kind == PoissonAirboxBoundaryKind::pure_neumann) {
+        if (request.boundary_kind == PoissonAirboxBoundaryKind::pure_neumann &&
+            request.pure_neumann_gauge_policy ==
+                PoissonAirboxPureNeumannGaugePolicy::mean_zero_augmented) {
             mfem::ConstantCoefficient one(1.0);
             mfem::LinearForm mean_form(request.scalar_space);
             mean_form.AddDomainIntegrator(new mfem::DomainLFIntegrator(one));
@@ -2610,6 +2795,12 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain(
             for (double &weight : out_result->phi_mean_weights) {
                 weight *= inverse_weight_sum;
             }
+        } else if (request.boundary_kind == PoissonAirboxBoundaryKind::pure_neumann &&
+                   request.pure_neumann_gauge_policy !=
+                       PoissonAirboxPureNeumannGaugePolicy::require_invertible) {
+            copy_error(out_result->error_message,
+                       "pure-Neumann shared-domain assembly uses an unknown gauge policy");
+            return out_result->status;
         } else if (request.boundary_kind == PoissonAirboxBoundaryKind::dirichlet) {
             std::set<std::uint32_t> reduced_dofs;
             for (int index = 0; index < essential.Size(); ++index) {
@@ -2617,6 +2808,12 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain(
                     static_cast<std::size_t>(essential[index])]);
             }
             out_result->dirichlet_dofs.assign(reduced_dofs.begin(), reduced_dofs.end());
+            for (std::uint32_t dof : reduced_dofs) {
+                if (dof < out_result->k0_demag_probe.h_functional_global_y.size()) {
+                    out_result->k0_demag_probe.h_functional_global_y[dof] = 0.0;
+                    out_result->k0_demag_probe.h_functional_global_z[dof] = 0.0;
+                }
+            }
             eliminate_rows_and_columns(
                 out_result->a_phiq,
                 reduced_dofs,
@@ -2632,9 +2829,12 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain(
             : request.boundary_kind == PoissonAirboxBoundaryKind::dirichlet
                 ? "poisson_dirichlet"
                 : "pure_neumann";
-        const char *gauge = request.boundary_kind == PoissonAirboxBoundaryKind::pure_neumann
-            ? "mean_zero_augmented"
-            : "none";
+        const char *gauge = request.boundary_kind != PoissonAirboxBoundaryKind::pure_neumann
+            ? "none"
+            : request.pure_neumann_gauge_policy ==
+                  PoissonAirboxPureNeumannGaugePolicy::require_invertible
+                ? "require_invertible"
+                : "mean_zero_augmented";
         std::strncpy(out_result->boundary_kind, boundary, sizeof(out_result->boundary_kind) - 1u);
         std::strncpy(out_result->gauge_policy, gauge, sizeof(out_result->gauge_policy) - 1u);
         std::strncpy(out_result->assembly_kind, "mfem_weak_form_shared_domain",
@@ -3149,6 +3349,10 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain_payload(
         request.boundary_kind = boundary_kind;
         request.robin_beta = payload.robin_beta;
         request.robin_boundary_marker = boundary_marker.Size() > 0 ? &boundary_marker : nullptr;
+        if (has_floquet_wavevector) {
+            request.pure_neumann_gauge_policy =
+                PoissonAirboxPureNeumannGaugePolicy::require_invertible;
+        }
         const auto assemble_k0 = [&]() noexcept {
             return assemble_poisson_airbox_shared_domain(request, out_result);
         };
@@ -3204,7 +3408,6 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain_payload(
             out_result->status = block_status;
             return block_status;
         }
-
         /*
          * Assemble the static magnetic blocks through the same shared-domain
          * importer and phase constraint as the scalar blocks.  This is the
@@ -3217,6 +3420,27 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain_payload(
             assemble_poisson_airbox_shared_domain(request, out_result);
         if (static_status != FrequencyDomainStatus::ok) {
             return static_status;
+        }
+        // Retain the unprojected magnetic stiffness for an independent
+        // full-field residual after the eigensolver returns. The static
+        // assembler has finished consuming this owner at this point.
+        out_result->floquet_full_a_qq = std::move(native_magnetic_a_qq);
+
+        // The k=0 assembler resets the output record, so publish probes only
+        // after it has produced the phase-constrained Floquet tangent blocks.
+        out_result->floquet_uniform_transverse_probe_q_y =
+            std::move(floquet_blocks.uniform_transverse_probe_q_y);
+        out_result->floquet_uniform_transverse_probe_q_z =
+            std::move(floquet_blocks.uniform_transverse_probe_q_z);
+        if (out_result->floquet_uniform_transverse_probe_q_y.size() !=
+                out_result->floquet_a_qq.row_count ||
+            out_result->floquet_uniform_transverse_probe_q_z.size() !=
+                out_result->floquet_a_qq.row_count) {
+            copy_error(
+                out_result->error_message,
+                "Floquet shared-domain demag probe vectors do not match the tangent operator size");
+            out_result->status = FrequencyDomainStatus::operator_error;
+            return out_result->status;
         }
 
         PoissonAirboxSharedDomainComplexCsrMatrix scalar_operator{};
@@ -3256,8 +3480,19 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain_payload(
                 scalar_constraint_adjoint,
                 scalar_operator_times_constraint,
                 out_result->floquet_p,
-                error) ||
-            !complex_csr_multiply(
+                error)) {
+            copy_error(out_result->error_message, error.c_str());
+            out_result->status = FrequencyDomainStatus::operator_error;
+            return out_result->status;
+        }
+        // The weak Poisson equation is P phi = S q, while the modal
+        // descriptor is A_phiq q + P phi = 0.  Therefore A_phiq = -S.
+        // Apply the descriptor sign before either Floquet constraint is
+        // projected so the reconstructed physical potential keeps its sign.
+        for (auto &value : tangent_source.values) {
+            value = -value;
+        }
+        if (!complex_csr_multiply(
                 tangent_source,
                 tangent_constraint,
                 source_times_constraint,
@@ -3307,49 +3542,12 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain_payload(
         out_result->floquet_sparse_operator_ready = true;
 
         if (boundary_kind == PoissonAirboxBoundaryKind::pure_neumann) {
-            // P_red(k) = C(k)^H P_full(k) C(k) is exactly singular at k=0
-            // and becomes numerically ill-conditioned (condition number
-            // growing like 1/(|k|*L)^2) as |k| -> 0 for a pure-Neumann
-            // boundary, because the constant-potential null space is only
-            // suppressed by the periodic phase factor to order |k|*L.  The
-            // downstream require_invertible factorization uses a fixed
-            // pivot tolerance (see floquet_dynamic_demag_k.cpp /
-            // floquet_waveguide_demag_k.cpp), so silently proceeding here
-            // would produce numerically meaningless results instead of
-            // failing.  Fail closed instead of attempting a k-aware gauge
-            // construction, which is out of scope here.
-            mfem::Vector floquet_bb_min;
-            mfem::Vector floquet_bb_max;
-            mesh->GetBoundingBox(floquet_bb_min, floquet_bb_max);
-            double floquet_characteristic_length = 0.0;
-            for (int axis = 0; axis < mesh->Dimension(); ++axis) {
-                floquet_characteristic_length = std::max(
-                    floquet_characteristic_length,
-                    floquet_bb_max(axis) - floquet_bb_min(axis));
-            }
-            const double floquet_k_magnitude = std::sqrt(
-                (*floquet_k_rad_per_m)[0] * (*floquet_k_rad_per_m)[0] +
-                (*floquet_k_rad_per_m)[1] * (*floquet_k_rad_per_m)[1] +
-                (*floquet_k_rad_per_m)[2] * (*floquet_k_rad_per_m)[2]);
-            constexpr double kMinimumPureNeumannKTimesLength = 1.0e-3;
-            if (!std::isfinite(floquet_characteristic_length) ||
-                !(floquet_characteristic_length > 0.0) ||
-                !std::isfinite(floquet_k_magnitude) ||
-                !(floquet_k_magnitude * floquet_characteristic_length >
-                  kMinimumPureNeumannKTimesLength)) {
-                copy_error(
-                    out_result->error_message,
-                    "pure_neumann Floquet gauge is ill-conditioned for k close to "
-                    "zero (k*L below safe threshold); use a Dirichlet or Robin "
-                    "boundary for small-k dispersion points, or increase |k|");
-                out_result->status = FrequencyDomainStatus::validation_error;
-                return out_result->status;
-            }
-            // phi_mean_weights above is the k=0 integral(N_i) dV gauge
-            // weight populated by the real k=0 pure-Neumann null-space
-            // projection a few hundred lines earlier; it does not describe
-            // the Floquet/nonzero-k null space and must not be threaded
-            // through into this Floquet result as if it did.
+            // A pure-Neumann Floquet scalar block is handled by the actual
+            // phase-constrained P(k) factorization and its original residual.
+            // A universal |k|*L cutoff is not a valid invertibility test:
+            // phase equivalence depends on the periodic lattice vectors, and
+            // the conditioning also depends on the assembled mesh/operator.
+            // Never carry the k=0 mean-zero gauge into this Floquet block.
             out_result->phi_mean_weights.clear();
         }
 
@@ -3375,6 +3573,19 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain_payload(
                 return dynamic_status;
             }
         }
+        out_result->floquet_tangent_frames = std::move(tangent_frames);
+        out_result->floquet_periodic_pairs.reserve(
+            static_cast<std::size_t>(floquet_periodic_pair_count));
+        for (std::uint64_t index = 0u; index < floquet_periodic_pair_count; ++index) {
+            const FrequencyDomainFloquetPeriodicPair &pair = floquet_periodic_pairs[index];
+            out_result->floquet_periodic_pairs.push_back(FloquetDescriptorPeriodicPair{
+                pair.node_a,
+                pair.node_b,
+                {pair.translation_m[0], pair.translation_m[1], pair.translation_m[2]},
+                payload.magnetic_reduced_node[pair.node_a] != kInactiveMagneticClass});
+        }
+        out_result->floquet_k_rad_per_m = *floquet_k_rad_per_m;
+        out_result->floquet_full_field_blocks = std::move(floquet_blocks);
         // The nonzero-k route deliberately does not populate the legacy K0
         // CSR blocks above.  Mark the result explicitly so a future caller
         // cannot mistake an otherwise successful dynamic provider for a K0

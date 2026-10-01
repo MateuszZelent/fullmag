@@ -76,34 +76,48 @@ def test_collector_keeps_negative_coordinate_and_checks_requested_sign(tmp_path,
 
 
 def signed_controller_fixture(tmp_path):
+    storage = tmp_path
+    tmp_path = storage / "runs/test-wt/scientific-batches/nonzero-k-validation" / ("a" * 32)
+    tmp_path.mkdir(parents=True)
+    capsule_relative = "runs/test-wt/" + "d" * 32 + "/source"
+    capsule = storage / capsule_relative / "tree"
+    source = capsule / "scripts/run_nonzero_k_validation_controller.py"
+    source.parent.mkdir(parents=True)
+    source.write_bytes((ROOT / "scripts/run_nonzero_k_validation_controller.py").read_bytes())
+    from compare_de_bv_mode_profiles import sha256
     job = {"job_id": "a" * 32, "source_digest": "b" * 64}
-    config = {**job, "model_ref": "c" * 40, "series": "signed-13"}
+    config = {**job, "model_ref": "c" * 40, "series": "signed-13",
+              "capsule": str(capsule), "controller_sha256": sha256(source)}
     (tmp_path / "controller-config.json").write_text(json.dumps(config))
     results = []
     for name, pilot, layers in validation_cases("signed-13"):
         output = tmp_path / name
         output.mkdir()
-        (output / "run-request.json").write_text(json.dumps({"job": job}))
+        (output / "run-request.json").write_text(json.dumps({"job": job, "source": {"capsule_relative": capsule_relative}}))
         results.append({"case": name, "wrapper_exit": 0, "output": str(output.resolve())})
     control = tmp_path / "controller-results.json"
     control.write_text(json.dumps({**job, "results": results}))
     return control
 
 
-def test_signed_collector_measures_asymmetry_without_reflecting_frequencies(tmp_path):
+@pytest.mark.parametrize("relative_k_offset", [0.0, 2e-13])
+def test_signed_collector_measures_asymmetry_without_reflecting_frequencies(tmp_path, relative_k_offset):
     from collect_signed_de_bv_dispersion import collect
     control = signed_controller_fixture(tmp_path)
 
     def accepted_record(output, layers, job, *, sampling):
         k = SAMPLING[sampling][0]
         return {"geometry": "backward_volume" if sampling.startswith("bv-") else "damon_eshbach",
-                "k_rad_per_m": k, "frequency_hz": 12e9 if k < 0 else 13e9,
+                "k_rad_per_m": k * (1 + relative_k_offset), "frequency_hz": 12e9 if k < 0 else 13e9,
                 "model_source": {"commit": "c" * 40}, "parameters": {"Ms": 800000},
                 "mesh_level": "L2", "air_padding_each_side_m": 2e-6,
                 "magnetic_xy_sha256": "d" * 64}
 
-    with patch("collect_signed_de_bv_dispersion.collect_record", side_effect=accepted_record) as reader:
+    from compare_de_bv_mode_profiles import sha256
+    with patch("collect_signed_de_bv_dispersion.collect_record", side_effect=accepted_record) as reader, \
+         patch("collect_signed_de_bv_dispersion.collect_control", return_value={"controller_config_sha256": sha256(control.parent / "controller-config.json")}) as convergence:
         report = collect(control)
+    convergence.assert_called_once_with(control.parent / "convergence-results.json")
     assert reader.call_count == 26
     assert len(report["records"]) == 26
     assert len(report["symmetry_measurements"]) == 12
@@ -132,3 +146,43 @@ def test_signed_collector_rejects_incomplete_or_unbound_series(tmp_path, mutatio
                 "magnetic_xy_sha256": "d" * 64}
     with patch("collect_signed_de_bv_dispersion.collect_record", side_effect=record):
         with pytest.raises(ValueError): collect(control)
+
+
+@pytest.mark.parametrize("mutation", ["hash", "capsule", "missing_convergence", "different_convergence_config"])
+def test_signed_collector_requires_controller_and_separate_convergence_binding(tmp_path, mutation):
+    from collect_signed_de_bv_dispersion import collect
+    from compare_de_bv_mode_profiles import sha256
+    control = signed_controller_fixture(tmp_path)
+    config_path = control.parent / "controller-config.json"
+    config = json.loads(config_path.read_text())
+    if mutation == "hash":
+        config["controller_sha256"] = "e" * 64
+        config_path.write_text(json.dumps(config))
+    if mutation == "capsule":
+        request_path = control.parent / "gamma-t3/run-request.json"
+        request = json.loads(request_path.read_text())
+        request["source"]["capsule_relative"] = "runs/test-wt/" + "e" * 32 + "/source"
+        request_path.write_text(json.dumps(request))
+
+    def record(*args, **kwargs):
+        sampling = kwargs["sampling"]
+        return {"geometry": "backward_volume" if sampling.startswith("bv-") else "damon_eshbach",
+                "k_rad_per_m": SAMPLING[sampling][0], "frequency_hz": 10e9,
+                "model_source": {"commit": "c" * 40}, "parameters": {},
+                "mesh_level": "L2", "air_padding_each_side_m": 2e-6,
+                "magnetic_xy_sha256": "d" * 64}
+    convergence = {"controller_config_sha256": "f" * 64 if mutation == "different_convergence_config" else sha256(config_path)}
+    error = FileNotFoundError("missing convergence results") if mutation == "missing_convergence" else None
+    with patch("collect_signed_de_bv_dispersion.collect_record", side_effect=record), \
+         patch("collect_signed_de_bv_dispersion.collect_control", return_value=convergence, side_effect=error):
+        with pytest.raises((ValueError, FileNotFoundError)):
+            collect(control)
+
+
+def test_signed_collector_rejects_copied_controller_under_another_job(tmp_path):
+    from collect_signed_de_bv_dispersion import collect
+    control = signed_controller_fixture(tmp_path)
+    other_root = control.parent.parent / ("e" * 32)
+    control.parent.rename(other_root)
+    with pytest.raises(ValueError, match="canonical batch"):
+        collect(other_root / "controller-results.json")

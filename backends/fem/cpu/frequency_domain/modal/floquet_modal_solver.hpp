@@ -3,11 +3,14 @@
 #include "cpu/frequency_domain/slepc_modal_eigen.hpp"
 #include "frequency_domain/modal_eigen_request.hpp"
 
+#include <array>
 #include <cstdint>
+#include <vector>
 
 namespace fullmag::fem::frequency_domain {
 
 struct PoissonAirboxSharedDomainComplexCsrMatrix;
+struct PoissonAirboxSharedDomainAssemblyResult;
 
 /*
  * Native shared-domain Floquet owner.  All five blocks are phase-reduced
@@ -24,6 +27,11 @@ struct FloquetSharedDomainSparseModalOperator {
     const PoissonAirboxSharedDomainComplexCsrMatrix *a_phiq = nullptr;
     std::uint64_t q_complex_dof_count = 0;
     std::uint64_t phi_dof_count = 0;
+    const std::vector<double> *uniform_transverse_probe_q_y = nullptr;
+    const std::vector<double> *uniform_transverse_probe_q_z = nullptr;
+    const PoissonAirboxSharedDomainAssemblyResult *full_descriptor_assembly = nullptr;
+    std::array<double, 3> k_rad_per_m{};
+    double mu0_T_m_A = 0.0;
     const char *boundary_kind = nullptr;
     const char *gauge_policy = nullptr;
 };

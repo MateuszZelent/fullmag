@@ -28,9 +28,8 @@ use super::eigen_policy::{
     native_cpu_modal_window_has_bloch_floquet_payload_path, native_modal_damping_policy,
     native_modal_equilibrium_source_kind, native_modal_floquet_periodic_pairs,
     native_modal_frequency_max_hz, native_modal_frequency_min_hz, native_modal_k_vector,
-    native_modal_solver_policy,
-    native_modal_spin_wave_bc_kind, native_modal_target_frequency_hz, native_modal_target_kind,
-    resolved_demag_realization, shared_domain_k0_modal_requested,
+    native_modal_solver_policy, native_modal_spin_wave_bc_kind, native_modal_target_frequency_hz,
+    native_modal_target_kind, resolved_demag_realization, shared_domain_k0_modal_requested,
 };
 use super::eigen_progress::{
     emit_fem_eigen_progress, native_modal_progress_event, FemEigenProgress,
@@ -383,15 +382,16 @@ pub(super) fn execute_native_modal_window(
     } else {
         None
     };
-    let runner_sparse_operator = runner_sparse_storage
-        .as_ref()
-        .map(|(stiffness, gyrotropic, mass)| {
-            native_fem::NativeModalEigenSparseOperatorProblem {
-                stiffness_csr: stiffness.view(),
-                gyrotropic_csr: gyrotropic.view(),
-                mass_csr: mass.view(),
-            }
-        });
+    let runner_sparse_operator =
+        runner_sparse_storage
+            .as_ref()
+            .map(|(stiffness, gyrotropic, mass)| {
+                native_fem::NativeModalEigenSparseOperatorProblem {
+                    stiffness_csr: stiffness.view(),
+                    gyrotropic_csr: gyrotropic.view(),
+                    mass_csr: mass.view(),
+                }
+            });
     let runner_native_modal_topology = runner_operator
         .map(|_| {
             MeshTopology::from_ir(&plan.mesh).map_err(|error| RunError {
@@ -689,11 +689,7 @@ pub(super) fn execute_native_modal_window(
         relax_to_eigen_handoff.as_ref(),
         artifact_sample_index,
     )?;
-    if shared_domain_mode
-        && !interrupted
-        && plan.enable_demag
-        && plan.operator.include_demag
-    {
+    if shared_domain_mode && !interrupted && plan.enable_demag && plan.operator.include_demag {
         let (_, _, _, scalar_classes, scalar_class_count) =
             shared_mode_context_data.as_ref().ok_or_else(|| RunError {
                 message: "shared-domain scalar class map was not constructed".to_string(),
@@ -1873,9 +1869,14 @@ pub(super) fn native_solver_diagnostics_json(
         .get("production_solver_available")
         .and_then(serde_json::Value::as_bool)
         == Some(true)
-        && object.get("execution_lane").and_then(serde_json::Value::as_str)
+        && object
+            .get("execution_lane")
+            .and_then(serde_json::Value::as_str)
             == Some("production_cpu")
-        && object.get("validation_only").and_then(serde_json::Value::as_bool) != Some(true);
+        && object
+            .get("validation_only")
+            .and_then(serde_json::Value::as_bool)
+            != Some(true);
     if native_production_cpu {
         object.insert(
             "production_native_solver_available".to_string(),
@@ -2150,11 +2151,19 @@ fn insert_native_poisson_airbox_hardened_contract(
         });
     }
     let cpu_schur = adapter == "k0_poisson_airbox_cpu_schur_slepc";
-    let eps_q = diagnostics_number(diagnostics, "magnetic_block_backward_error").unwrap_or(0.0);
-    let eps_phi = diagnostics_number(diagnostics, "poisson_block_backward_error").unwrap_or(0.0);
-    let eps_gauge =
-        diagnostics_number(diagnostics, "gauge_constraint_backward_error").unwrap_or(0.0);
-    let eps_full = eps_q.max(eps_phi).max(eps_gauge);
+    let eps_q = diagnostics_number(diagnostics, "magnetic_block_backward_error");
+    let eps_phi = diagnostics_number(diagnostics, "poisson_block_backward_error");
+    let eps_gauge = diagnostics_number(diagnostics, "gauge_constraint_backward_error");
+    let eps_full = match (eps_q, eps_phi, eps_gauge) {
+        (Some(q), Some(phi), Some(gauge))
+            if [q, phi, gauge]
+                .iter()
+                .all(|value| value.is_finite() && *value >= 0.0) =>
+        {
+            Some(q.max(phi).max(gauge))
+        }
+        _ => None,
+    };
     let certification_tolerance = diagnostics_number(diagnostics, "residual_tolerance")
         .filter(|value| value.is_finite() && *value > 0.0)
         .unwrap_or(1.0e-8_f64);
@@ -2347,6 +2356,10 @@ fn insert_native_poisson_airbox_hardened_contract(
             "tau_rad_per_s": target_tau_rad_s,
         }),
     );
+    let backend_reported_residual =
+        diagnostics_number(diagnostics, "slepc_reported_backward_error")
+            .or_else(|| diagnostics_number(diagnostics, "last_residual_relative"))
+            .filter(|value| value.is_finite() && *value >= 0.0);
     diagnostics.insert(
         "block_residuals".to_string(),
         serde_json::json!({
@@ -2354,9 +2367,9 @@ fn insert_native_poisson_airbox_hardened_contract(
             "eps_phi": eps_phi,
             "eps_gauge": eps_gauge,
             "eps_full": eps_full,
-            "backend_reported_residual": diagnostics_number(diagnostics, "slepc_reported_backward_error").unwrap_or_else(|| diagnostics_number(diagnostics, "last_residual_relative").unwrap_or(eps_full)),
+            "backend_reported_residual": backend_reported_residual,
             "certification_tolerance": certification_tolerance,
-            "certified": eps_full <= certification_tolerance,
+            "certified": eps_full.is_some_and(|value| value <= certification_tolerance),
         }),
     );
     diagnostics.insert(

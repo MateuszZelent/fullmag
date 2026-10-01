@@ -268,6 +268,7 @@ mod output_publication_tests {
             amplitude: None,
             phase: None,
             node_mass_weights: None,
+            consistent_p1_metric: None,
             component_participation:
                 crate::eigen::ModalParticipationObservable::unavailable_without_context("cpu"),
         }
@@ -321,6 +322,67 @@ mod output_publication_tests {
         );
         assert!(missing_v2["residual_relative_l2"].is_null());
         assert!(missing_v3["residual_relative_l2"].is_null());
+
+        let mut unavailable_absolute = residual_transport_test_mode(Some(2.5e-10));
+        unavailable_absolute.residual_norm = None;
+        unavailable_absolute.residual_linf = None;
+        let unavailable_v2 = eigen_path_mode_json(
+            &plan,
+            &sample,
+            &unavailable_absolute,
+            crate::eigen::EigenSolverModel::ReferenceScalarTangent,
+            None,
+        );
+        assert!(unavailable_v2["residual_norm"].is_null());
+        assert!(unavailable_v2["residual_absolute_l2"].is_null());
+        assert!(unavailable_v2["residual_linf"].is_null());
+        assert_eq!(unavailable_v2["residual_relative_l2"], 2.5e-10);
+    }
+
+    #[test]
+    fn eigen_path_transports_only_the_matching_native_block_certificate() {
+        let plan = residual_transport_test_plan();
+        let sample = KSampleDescriptor {
+            sample_index: 2,
+            label: None,
+            segment_index: None,
+            path_s: 0.0,
+            t_in_segment: 0.0,
+            k_vector: [0.0, 1.0e7, 0.0],
+        };
+        let mode = residual_transport_test_mode(Some(2.5e-10));
+        let blocks = serde_json::json!({
+            "eps_q": 2.0e-10, "eps_phi": 1.0e-14, "eps_full": 2.5e-10,
+            "scope": "full_projected_weak_form_and_periodic_seams",
+            "certification_tolerance": 1.0e-8,
+            "floquet_seam_frame_certified": true, "certified": true,
+        });
+        let record = serde_json::json!({
+            "sample_index": 2, "raw_mode_index": 0, "frequency_hz": 1.0e9,
+            "block_residuals": blocks,
+        });
+        let mut diagnostics = serde_json::json!({
+            "block_residuals": {"certified": false},
+            "native_mode_block_residuals": [record.clone()],
+        });
+        let publish = |diagnostics: &serde_json::Value| {
+            eigen_path_mode_v3_json(
+                &plan,
+                &sample,
+                &mode,
+                crate::eigen::EigenSolverModel::ProductionCpuShiftInvert,
+                Some(diagnostics),
+            )
+        };
+        assert_eq!(publish(&diagnostics)["block_residuals"], blocks);
+        diagnostics["native_mode_block_residuals"][0]["frequency_hz"] = serde_json::json!(2.0e9);
+        assert!(publish(&diagnostics).get("block_residuals").is_none());
+        diagnostics["native_mode_block_residuals"] =
+            serde_json::json!([record.clone(), record.clone()]);
+        assert!(publish(&diagnostics).get("block_residuals").is_none());
+        diagnostics["native_mode_block_residuals"] = serde_json::json!([record]);
+        diagnostics["native_mode_block_residuals"][0]["sample_index"] = serde_json::json!(1);
+        assert!(publish(&diagnostics).get("block_residuals").is_none());
     }
 
     #[test]
@@ -870,76 +932,127 @@ pub(super) fn eigen_path_mode_tracking_vector(
     artifacts: &[crate::types::AuxiliaryArtifact],
     raw_mode_index: usize,
     active_nodes: Option<&[usize]>,
-) -> Option<Vec<num_complex::Complex64>> {
-    let legacy_path = format!("eigen/modes/mode_{raw_mode_index:04}.json");
-    let mode = artifacts
-        .iter()
-        .find(|artifact| artifact.relative_path == legacy_path)
-        .and_then(|artifact| serde_json::from_slice::<serde_json::Value>(&artifact.bytes).ok())?;
-    let real = eigen_path_mode_vector_entries(&mode, "real");
-    let imag = eigen_path_mode_vector_entries(&mode, "imag");
-    let sample_count = real.len().max(imag.len());
-    if sample_count == 0 {
-        return None;
-    }
-
-    let indices: Vec<usize> = match active_nodes {
-        Some(nodes) => {
-            if nodes.iter().any(|node| *node >= sample_count) {
-                return None;
-            }
-            nodes.to_vec()
-        }
-        None => (0..sample_count).collect(),
+    coordinates_m: &[[f64; 3]],
+    k_vector_rad_per_m: [f64; 3],
+    remove_bloch_phase: bool,
+    expected_mesh_identity: &str,
+) -> Result<Option<Vec<num_complex::Complex64>>, RunError> {
+    let invalid = |detail: &str| RunError {
+        message: format!("eigen path tracking mode {raw_mode_index}: {detail}"),
     };
-    if indices.is_empty() {
-        return None;
+    let legacy_path = format!("eigen/modes/mode_{raw_mode_index:04}.json");
+    let mut matching = artifacts
+        .iter()
+        .filter(|artifact| artifact.relative_path == legacy_path);
+    let Some(artifact) = matching.next() else {
+        return Ok(None);
+    };
+    if matching.next().is_some() {
+        return Err(invalid("duplicate mode payload artifacts"));
     }
-
-    let mut vector = Vec::with_capacity(indices.len() * 3);
-    for index in indices {
-        let real_sample = real.get(index).copied().unwrap_or([0.0, 0.0, 0.0]);
-        let imag_sample = imag.get(index).copied().unwrap_or([0.0, 0.0, 0.0]);
-        for component in 0..3 {
-            vector.push(num_complex::Complex64::new(
-                real_sample[component],
-                imag_sample[component],
+    let mode: serde_json::Value = serde_json::from_slice(&artifact.bytes)
+        .map_err(|_| invalid("invalid mode payload JSON"))?;
+    if !mode.is_object() {
+        return Err(invalid("mode payload must be an object"));
+    }
+    if mode.get("real").is_none() && mode.get("imag").is_none() {
+        return Ok(None);
+    }
+    if expected_mesh_identity.is_empty()
+        || mode
+            .get("source_mesh_topology_sha256")
+            .and_then(Value::as_str)
+            != Some(expected_mesh_identity)
+    {
+        return Err(invalid(
+            "mode payload topology identity disagrees with the full tracking mesh",
+        ));
+    }
+    let expected_index = u64::try_from(raw_mode_index)
+        .map_err(|_| invalid("raw mode index cannot be represented as u64"))?;
+    if mode.get("index").and_then(Value::as_u64) != Some(expected_index) {
+        return Err(invalid("mode payload has a mismatched raw mode index"));
+    }
+    if coordinates_m.is_empty()
+        || coordinates_m
+            .iter()
+            .flatten()
+            .any(|value| !value.is_finite())
+        || k_vector_rad_per_m.iter().any(|value| !value.is_finite())
+    {
+        return Err(invalid(
+            "tracking coordinates and wavevector must be finite and nonempty",
+        ));
+    }
+    let declared_k = mode
+        .get("k_vector")
+        .and_then(Value::as_array)
+        .filter(|values| values.len() == 3)
+        .ok_or_else(|| invalid("mode payload is missing its wavevector"))?;
+    for (value, expected) in declared_k.iter().zip(k_vector_rad_per_m) {
+        let declared = value
+            .as_f64()
+            .filter(|number| number.is_finite())
+            .ok_or_else(|| invalid("mode payload wavevector must be finite"))?;
+        if declared != expected {
+            return Err(invalid(
+                "mode payload wavevector disagrees with its path sample",
             ));
         }
     }
-    Some(vector)
-}
-
-pub(super) fn eigen_path_mode_vector_entries(
-    value: &serde_json::Value,
-    field: &str,
-) -> Vec<[f64; 3]> {
-    value
-        .get(field)
-        .and_then(|field_value| field_value.as_array())
-        .map(|entries| {
-            entries
+    // Share strict Cartesian parsing with field publication. Never drop rows
+    // or synthesize missing components, which would corrupt node indexing.
+    let real = crate::fem::eigen_output::mode_vector_entries(&mode, "real")?;
+    let imag = crate::fem::eigen_output::mode_vector_entries(&mode, "imag")?;
+    if real.len() != coordinates_m.len() || imag.len() != coordinates_m.len() {
+        return Err(invalid(
+            "real/imag payload lengths disagree with the full tracking mesh",
+        ));
+    }
+    let indices = active_nodes.map_or_else(
+        || (0..coordinates_m.len()).collect::<Vec<_>>(),
+        <[usize]>::to_vec,
+    );
+    if indices.is_empty() {
+        return Err(invalid("tracking active-node selection is empty"));
+    }
+    let mut seen = BTreeSet::new();
+    let capacity = indices
+        .len()
+        .checked_mul(3)
+        .ok_or_else(|| invalid("tracking vector length overflows usize"))?;
+    let mut vector = Vec::with_capacity(capacity);
+    for index in indices {
+        if index >= coordinates_m.len() || !seen.insert(index) {
+            return Err(invalid(
+                "tracking active-node selection is duplicated or out of range",
+            ));
+        }
+        let phase_angle = if remove_bloch_phase {
+            coordinates_m[index]
                 .iter()
-                .filter_map(|entry| {
-                    let components = entry.as_array()?;
-                    Some([
-                        components
-                            .first()
-                            .and_then(|value| value.as_f64())
-                            .unwrap_or(0.0),
-                        components
-                            .get(1)
-                            .and_then(|value| value.as_f64())
-                            .unwrap_or(0.0),
-                        components
-                            .get(2)
-                            .and_then(|value| value.as_f64())
-                            .unwrap_or(0.0),
-                    ])
-                })
-                .collect()
-        })
-        .unwrap_or_default()
+                .zip(k_vector_rad_per_m)
+                .map(|(coordinate, wavevector)| coordinate * wavevector)
+                .sum::<f64>()
+        } else {
+            0.0
+        };
+        if !phase_angle.is_finite() {
+            return Err(invalid("Bloch envelope phase is not finite"));
+        }
+        // Spatial convention exp(-i k.r): the periodic envelope is obtained
+        // with exp(+i k.r). This is independent of the temporal phasor sign.
+        let unwind = num_complex::Complex64::new(phase_angle.cos(), phase_angle.sin());
+        for component in 0..3 {
+            let value = num_complex::Complex64::new(real[index][component], imag[index][component])
+                * unwind;
+            if !value.re.is_finite() || !value.im.is_finite() {
+                return Err(invalid("Bloch envelope contains a non-finite component"));
+            }
+            vector.push(value);
+        }
+    }
+    Ok(Some(vector))
 }
 
 pub(super) fn eigen_path_branch_point_for_mode<'a>(
@@ -968,23 +1081,12 @@ pub(super) fn eigen_path_branch_point_modal_overlap_available(
     branch: &crate::eigen::TrackedBranch,
     point_index: usize,
 ) -> bool {
-    if point_index == 0 {
-        return false;
-    }
-    let Some(previous_point) = branch.points.get(point_index - 1) else {
-        return false;
-    };
-    let Some(current_point) = branch.points.get(point_index) else {
-        return false;
-    };
-    let previous_vector = eigen_path_mode_for_branch_point(path_result, previous_point)
-        .and_then(|mode| mode.reduced_vector.as_ref());
-    let current_vector = eigen_path_mode_for_branch_point(path_result, current_point)
-        .and_then(|mode| mode.reduced_vector.as_ref());
-    match (previous_vector, current_vector) {
-        (Some(previous), Some(current)) => !previous.is_empty() && previous.len() == current.len(),
-        _ => false,
-    }
+    matches!(
+        eigen_path_branch_point_tracking_score_source(path_result, branch, point_index),
+        "modal_overlap_weighted_score"
+            | "modal_overlap_unweighted_score"
+            | "modal_subspace_transport_score"
+    )
 }
 
 pub(super) fn eigen_path_branch_point_tracking_score_source(
@@ -998,34 +1100,31 @@ pub(super) fn eigen_path_branch_point_tracking_score_source(
     if point_index == 0 {
         return "seed";
     }
-    if eigen_path_branch_point_modal_overlap_available(path_result, branch, point_index) {
-        "modal_overlap_weighted_score"
-    } else {
-        "frequency_score_fallback"
-    }
+    let previous_mode = branch
+        .points
+        .get(point_index - 1)
+        .and_then(|previous| eigen_path_mode_for_branch_point(path_result, previous));
+    let current_mode = eigen_path_mode_for_branch_point(path_result, point);
+    crate::eigen::tracking::tracking_score_source_for_modes(
+        previous_mode,
+        current_mode,
+        point.overlap_prev,
+    )
 }
 
 pub(super) fn eigen_path_tracking_score_summary(
     path_result: &crate::eigen::PathSolveResult,
 ) -> (&'static str, bool) {
-    let mut saw_modal_overlap = false;
-    let mut saw_frequency_fallback = false;
-    for branch in &path_result.branches {
-        for point_index in 0..branch.points.len() {
-            match eigen_path_branch_point_tracking_score_source(path_result, branch, point_index) {
-                "modal_overlap_weighted_score" => saw_modal_overlap = true,
-                "frequency_score_fallback" => saw_frequency_fallback = true,
-                _ => {}
-            }
-        }
-    }
-    let source = match (saw_modal_overlap, saw_frequency_fallback) {
-        (true, true) => "mixed_modal_overlap_and_frequency_fallback",
-        (true, false) => "modal_overlap_weighted_score",
-        (false, true) => "frequency_score_fallback",
-        (false, false) => "seed_only",
-    };
-    (source, saw_modal_overlap)
+    let sources = path_result
+        .branches
+        .iter()
+        .flat_map(|branch| {
+            (0..branch.points.len()).map(|point_index| {
+                eigen_path_branch_point_tracking_score_source(path_result, branch, point_index)
+            })
+        })
+        .collect::<Vec<_>>();
+    crate::eigen::tracking::tracking_score_source_summary(&sources)
 }
 
 pub(super) fn eigen_path_mode_field_id(sample_index: usize, raw_mode_index: usize) -> String {
@@ -1136,11 +1235,15 @@ pub(super) fn eigen_path_mode_json(
     solver_model: crate::eigen::EigenSolverModel,
     solver_diagnostics: Option<&serde_json::Value>,
 ) -> serde_json::Value {
-    let residual_absolute_l2 = finite_or_default(mode.residual_norm, 0.0);
+    let residual_absolute_l2 = mode
+        .residual_norm
+        .filter(|value| value.is_finite() && *value >= 0.0);
     let residual_relative_l2 = mode
         .residual_relative_l2
         .filter(|value| value.is_finite() && *value >= 0.0);
-    let residual_linf = finite_or_default(mode.residual_linf, residual_absolute_l2);
+    let residual_linf = mode
+        .residual_linf
+        .filter(|value| value.is_finite() && *value >= 0.0);
     let tangent_leakage_mean_abs = finite_or_default(mode.tangent_leakage_mean_abs, 0.0);
     let tangent_leakage_max_abs =
         finite_or_default(mode.tangent_leakage_max_abs, tangent_leakage_mean_abs)
@@ -1214,8 +1317,41 @@ pub(super) fn eigen_path_mode_json(
             mode.raw_mode_index,
         ),
     });
+    // A solver-level aggregate is not a per-mode residual certificate.
+    // Bind the unchanged native certificate to the sample and raw mode,
+    // rejecting ambiguity and a changed frequency instead of inventing proof.
+    if let Some(records) = solver_diagnostics
+        .and_then(|diagnostics| diagnostics.get("native_mode_block_residuals"))
+        .and_then(serde_json::Value::as_array)
+    {
+        let mut matching = records.iter().filter(|record| {
+            record["sample_index"].as_u64() == Some(sample.sample_index as u64)
+                && record["raw_mode_index"].as_u64() == Some(mode.raw_mode_index as u64)
+        });
+        if let Some(record) = matching.next() {
+            if matching.next().is_none() {
+                if let (Some(frequency), Some(blocks)) = (
+                    record["frequency_hz"].as_f64(),
+                    record
+                        .get("block_residuals")
+                        .filter(|blocks| blocks.is_object()),
+                ) {
+                    if frequency.is_finite()
+                        && mode.frequency_real_hz.is_finite()
+                        && (frequency - mode.frequency_real_hz).abs()
+                            <= 1.0e-12 * frequency.abs().max(1.0)
+                    {
+                        value["block_residuals"] = blocks.clone();
+                    }
+                }
+            }
+        }
+    }
     if let Some(weights) = mode.node_mass_weights.as_ref() {
         value["node_mass_weights"] = serde_json::json!(weights);
+    }
+    if let Some(metric) = mode.consistent_p1_metric.as_ref() {
+        value["tracking_consistent_p1_metric"] = metric.artifact_json();
     }
     if let Ok(modal_source_mesh_topology) = plan.mesh.mixed_topology_fingerprint_v3() {
         value["source_mesh_topology_sha256"] = serde_json::json!(modal_source_mesh_topology);
@@ -1913,4 +2049,254 @@ pub(super) fn deduplicate_auxiliary_artifacts_by_path(
 ) {
     let mut seen = HashSet::new();
     artifacts.retain(|artifact| seen.insert(artifact.relative_path.clone()));
+}
+
+#[cfg(test)]
+mod tracking_payload_tests {
+    use super::eigen_path_mode_tracking_vector;
+    use crate::types::AuxiliaryArtifact;
+    use num_complex::Complex64;
+    use serde_json::{json, Value};
+
+    fn artifact(mode: Value) -> AuxiliaryArtifact {
+        AuxiliaryArtifact {
+            relative_path: "eigen/modes/mode_0000.json".into(),
+            bytes: serde_json::to_vec(&mode).unwrap(),
+        }
+    }
+
+    fn mode() -> Value {
+        json!({"index": 0, "source_mesh_topology_sha256": "sha256:test", "k_vector": [0.0, 2.0, 0.0],
+               "real": [[0.0, 1.0, 0.3], [0.0, 1.0, 0.3]],
+               "imag": [[0.0, 0.0, 0.4], [0.0, 0.0, 0.4]]})
+    }
+
+    #[test]
+    fn tracking_unwinds_spatial_bloch_phase_in_selected_node_order() {
+        let coords = [[0.0, 0.3, 0.0], [0.0, 0.8, 0.0]];
+        let envelope = [
+            Complex64::new(0.0, 0.0),
+            Complex64::new(1.0, 0.0),
+            Complex64::new(0.3, 0.4),
+        ];
+        let mut physical = mode();
+        for (node, coordinate) in coords.iter().enumerate() {
+            let angle: f64 = -2.0 * coordinate[1];
+            let phase = Complex64::new(angle.cos(), angle.sin());
+            for component in 0..3 {
+                let value = envelope[component] * phase;
+                physical["real"][node][component] = json!(value.re);
+                physical["imag"][node][component] = json!(value.im);
+            }
+        }
+        let vector = eigen_path_mode_tracking_vector(
+            &[artifact(physical)],
+            0,
+            Some(&[1, 0]),
+            &coords,
+            [0.0, 2.0, 0.0],
+            true,
+            "sha256:test",
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(vector.len(), 6);
+        for (value, expected) in vector.iter().zip(envelope.iter().cycle()) {
+            assert!((*value - *expected).norm() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn tracking_preserves_gamma_cartesian_field() {
+        let mut gamma = mode();
+        gamma["k_vector"] = json!([0.0, 0.0, 0.0]);
+        let vector = eigen_path_mode_tracking_vector(
+            &[artifact(gamma)],
+            0,
+            None,
+            &[[0.0; 3]; 2],
+            [0.0; 3],
+            false,
+            "sha256:test",
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            vector,
+            vec![
+                Complex64::new(0.0, 0.0),
+                Complex64::new(1.0, 0.0),
+                Complex64::new(0.3, 0.4),
+                Complex64::new(0.0, 0.0),
+                Complex64::new(1.0, 0.0),
+                Complex64::new(0.3, 0.4)
+            ]
+        );
+    }
+
+    #[test]
+    fn tracking_rejects_malformed_xyz_without_dropping_rows_or_zero_padding() {
+        for row in [
+            Value::Null,
+            json!([0.0, 1.0]),
+            json!([0.0, 1.0, 0.3, 9.0]),
+            json!([0.0, "not-a-number", 0.3]),
+        ] {
+            for field in ["real", "imag"] {
+                let mut malformed = mode();
+                malformed[field][0] = row.clone();
+                assert!(eigen_path_mode_tracking_vector(
+                    &[artifact(malformed)],
+                    0,
+                    None,
+                    &[[0.0; 3]; 2],
+                    [0.0, 2.0, 0.0],
+                    true,
+                    "sha256:test",
+                )
+                .is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn tracking_rejects_partial_complex_or_wrong_mesh_length_payload() {
+        for field in ["real", "imag"] {
+            for replacement in [json!([]), json!([[0.0, 0.0, 0.0]]), Value::Null] {
+                let mut malformed = mode();
+                malformed[field] = replacement;
+                assert!(eigen_path_mode_tracking_vector(
+                    &[artifact(malformed)],
+                    0,
+                    None,
+                    &[[0.0; 3]; 2],
+                    [0.0, 2.0, 0.0],
+                    true,
+                    "sha256:test",
+                )
+                .is_err());
+            }
+            let mut missing = mode();
+            missing.as_object_mut().unwrap().remove(field);
+            assert!(eigen_path_mode_tracking_vector(
+                &[artifact(missing)],
+                0,
+                None,
+                &[[0.0; 3]; 2],
+                [0.0, 2.0, 0.0],
+                true,
+                "sha256:test",
+            )
+            .is_err());
+        }
+    }
+
+    #[test]
+    fn tracking_rejects_stale_mode_identity_or_wavevector() {
+        for (field, value) in [
+            ("index", json!(1)),
+            ("index", json!(-1)),
+            ("k_vector", json!([0.0, 3.0, 0.0])),
+            ("k_vector", json!([0.0, 2.0])),
+        ] {
+            let mut wrong = mode();
+            wrong[field] = value;
+            assert!(eigen_path_mode_tracking_vector(
+                &[artifact(wrong)],
+                0,
+                None,
+                &[[0.0; 3]; 2],
+                [0.0, 2.0, 0.0],
+                true,
+                "sha256:test",
+            )
+            .is_err());
+        }
+    }
+
+    #[test]
+    fn tracking_rejects_duplicate_empty_or_invalid_active_nodes() {
+        for selected in [vec![0, 0], vec![0, 2], vec![]] {
+            assert!(eigen_path_mode_tracking_vector(
+                &[artifact(mode())],
+                0,
+                Some(&selected),
+                &[[0.0; 3]; 2],
+                [0.0, 2.0, 0.0],
+                true,
+                "sha256:test",
+            )
+            .is_err());
+        }
+    }
+
+    #[test]
+    fn tracking_rejects_nonfinite_coordinates_or_phase() {
+        let cases = [
+            ([[0.0, f64::NAN, 0.0]; 2], [0.0, 2.0, 0.0]),
+            ([[0.0; 3]; 2], [0.0, f64::INFINITY, 0.0]),
+            ([[0.0, 1e308, 0.0]; 2], [0.0, 1e308, 0.0]),
+        ];
+        for (coords, k) in cases {
+            let mut matching = mode();
+            matching["k_vector"] = json!(k);
+            assert!(eigen_path_mode_tracking_vector(
+                &[artifact(matching)],
+                0,
+                None,
+                &coords,
+                k,
+                true,
+                "sha256:test",
+            )
+            .is_err());
+        }
+    }
+
+    #[test]
+    fn only_absent_fields_can_leave_modal_tracking_unavailable() {
+        let coords = [[0.0; 3]; 2];
+        let k = [0.0, 2.0, 0.0];
+        assert!(
+            eigen_path_mode_tracking_vector(&[], 0, None, &coords, k, true, "sha256:test",)
+                .unwrap()
+                .is_none()
+        );
+        assert!(eigen_path_mode_tracking_vector(
+            &[artifact(json!({"index": 0}))],
+            0,
+            None,
+            &coords,
+            k,
+            true,
+            "sha256:test",
+        )
+        .unwrap()
+        .is_none());
+        let good = artifact(mode());
+        assert!(eigen_path_mode_tracking_vector(
+            &[good.clone(), good],
+            0,
+            None,
+            &coords,
+            k,
+            true,
+            "sha256:test",
+        )
+        .is_err());
+        let malformed = AuxiliaryArtifact {
+            relative_path: "eigen/modes/mode_0000.json".into(),
+            bytes: b"{invalid".to_vec(),
+        };
+        assert!(eigen_path_mode_tracking_vector(
+            &[malformed],
+            0,
+            None,
+            &coords,
+            k,
+            true,
+            "sha256:test",
+        )
+        .is_err());
+    }
 }

@@ -235,6 +235,27 @@ void assembles_shared_domain_floquet_blocks_with_one_phase_graph()
     check(blocks.scalar_operator != nullptr && blocks.scalar_constraint != nullptr &&
               blocks.tangent_source != nullptr && blocks.tangent_constraint != nullptr,
           "shared-domain Floquet block producer returns all four blocks");
+    check(blocks.uniform_transverse_probe_q_y.size() == 2u * reduced_node_count &&
+              blocks.uniform_transverse_probe_q_z.size() == 2u * reduced_node_count,
+          "shared-domain Floquet producer returns reduced transverse probe vectors");
+    for (std::uint64_t class_id = 0u; class_id < reduced_node_count; ++class_id) {
+        check_close(
+            blocks.uniform_transverse_probe_q_y[2u * class_id],
+            0.0,
+            "global-y perturbation is projected into the first representative tangent axis");
+        check_close(
+            blocks.uniform_transverse_probe_q_y[2u * class_id + 1u],
+            1.0,
+            "global-y perturbation is projected into the second representative tangent axis");
+        check_close(
+            blocks.uniform_transverse_probe_q_z[2u * class_id],
+            0.0,
+            "longitudinal global-z perturbation is removed for the default +z equilibrium");
+        check_close(
+            blocks.uniform_transverse_probe_q_z[2u * class_id + 1u],
+            0.0,
+            "longitudinal global-z perturbation has no tangent component");
+    }
     check(blocks.scalar_constraint->real().Width() == static_cast<int>(reduced_node_count),
           "shared-domain scalar constraint uses the reduced class count");
     check(blocks.tangent_source->real().Width() == static_cast<int>(2u * node_count),
@@ -252,6 +273,38 @@ void assembles_shared_domain_floquet_blocks_with_one_phase_graph()
                   "shared-domain full-field scalar operator has no shifted k block");
         }
     }
+
+    std::vector<fd::TangentFrameNode> x_equilibrium_frames(
+        static_cast<std::size_t>(node_count));
+    for (auto &frame : x_equilibrium_frames) {
+        frame.m[0] = 1.0;
+        frame.m[1] = 0.0;
+        frame.m[2] = 0.0;
+        frame.e1[0] = 0.0;
+        frame.e1[1] = 1.0;
+        frame.e1[2] = 0.0;
+        frame.e2[0] = 0.0;
+        frame.e2[1] = 0.0;
+        frame.e2[2] = 1.0;
+    }
+    request.tangent_frames = x_equilibrium_frames.data();
+    fd::FloquetAirboxSharedDomainBlockResult x_equilibrium_blocks{};
+    check(
+        fd::assemble_floquet_airbox_shared_domain_blocks(
+            request,
+            &x_equilibrium_blocks) == fd::FrequencyDomainStatus::ok,
+        "shared-domain Floquet probe accepts transverse y/z directions for +x equilibrium");
+    for (std::uint64_t class_id = 0u; class_id < reduced_node_count; ++class_id) {
+        check_close(
+            x_equilibrium_blocks.uniform_transverse_probe_q_y[2u * class_id],
+            1.0,
+            "global-y probe maps to the first tangent axis for +x equilibrium");
+        check_close(
+            x_equilibrium_blocks.uniform_transverse_probe_q_z[2u * class_id + 1u],
+            1.0,
+            "global-z probe maps to the second tangent axis for +x equilibrium");
+    }
+    request.tangent_frames = frames.data();
 
     fd::FloquetAirboxDynamicDemagKProblem schur_request{};
     schur_request.scalar_operator = blocks.scalar_operator.get();
@@ -291,6 +344,55 @@ void assembles_shared_domain_floquet_blocks_with_one_phase_graph()
             fd::FrequencyDomainStatus::validation_error,
         "shared-domain Floquet block producer rejects phase inconsistent with k dot translation");
     pair.phase_rad = -0.5;
+
+    frames[1].e1[0] = 0.0;
+    frames[1].e1[1] = 1.0;
+    frames[1].e2[0] = -1.0;
+    frames[1].e2[1] = 0.0;
+    fd::FloquetAirboxSharedDomainBlockResult rotated_frames{};
+    check(
+        fd::assemble_floquet_airbox_shared_domain_blocks(request, &rotated_frames) ==
+            fd::FrequencyDomainStatus::ok,
+        "shared-domain Floquet block producer accepts a rotated tangent basis at a periodic seam");
+    if (rotated_frames.tangent_constraint != nullptr) {
+        const mfem::ComplexSparseMatrix &constraint = *rotated_frames.tangent_constraint;
+        const double cosine = std::cos(0.5);
+        const double sine = std::sin(0.5);
+        check_close(
+            constraint.real()(2, 1), cosine,
+            "rotated tangent basis maps the second reduced component into the first full component");
+        check_close(
+            constraint.imag()(2, 1), -sine,
+            "rotated tangent basis retains the negative Floquet phase in the imaginary block");
+        check_close(
+            constraint.real()(3, 0), -cosine,
+            "rotated tangent basis maps the first reduced component into the second full component");
+        check_close(
+            constraint.imag()(3, 0), sine,
+            "rotated tangent basis applies Floquet phase to the signed component map");
+    }
+    frames[1] = fd::TangentFrameNode{};
+
+    frames[1].m[0] = 0.0;
+    frames[1].m[1] = 1.0;
+    frames[1].m[2] = 0.0;
+    frames[1].e1[0] = 1.0;
+    frames[1].e1[1] = 0.0;
+    frames[1].e1[2] = 0.0;
+    frames[1].e2[0] = 0.0;
+    frames[1].e2[1] = 0.0;
+    frames[1].e2[2] = -1.0;
+    fd::FloquetAirboxSharedDomainBlockResult mismatched_equilibrium{};
+    check(
+        fd::assemble_floquet_airbox_shared_domain_blocks(request, &mismatched_equilibrium) ==
+            fd::FrequencyDomainStatus::validation_error,
+        "shared-domain Floquet block producer rejects a physically mismatched seam equilibrium");
+    check(
+        std::strstr(
+            mismatched_equilibrium.error_message,
+            "mismatched equilibrium magnetization vectors") != nullptr,
+        "mismatched periodic equilibrium reports the physical seam contract");
+    frames[1] = fd::TangentFrameNode{};
 
     request.periodic_pairs = nullptr;
     request.periodic_pair_count = 0u;

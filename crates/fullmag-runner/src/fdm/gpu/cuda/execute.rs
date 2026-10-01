@@ -703,9 +703,8 @@ pub(crate) fn execute_cuda_fdm(
                 } else {
                     None
                 };
-                let mut observation_publication = display_selection
-                    .as_ref()
-                    .and_then(|display_selection| {
+                let mut observation_publication =
+                    display_selection.as_ref().and_then(|display_selection| {
                         live_observations.as_mut().map(|scheduler| {
                             scheduler.observe(
                                 &backend,

@@ -159,8 +159,15 @@ def compare_frequencies(reference: dict[int, list[float]], numeric_path: Path) -
         "schema_version": "fullmag.comsol-a1-frequency-comparison.v1",
         "status": "frequency_only_unqualified",
         "comparison_policy": "local_ascending_frequency_rank_no_gap_filling",
+        "wavevector_semantics": {
+            "fullmag_spatial_phase": "exp(-i*k_dot_r)",
+            "comsol_handoff_magnetization_source_phase": "exp(+i*k_dot_r)",
+            "comsol_handoff_potential_phase": "exp(-i*k_dot_r)",
+            "equivalence_status": "unresolved_mixed_sign_reference_convention",
+        },
         "limitations": [
             "independent COMSOL provenance and resolved mesh/airbox/equilibrium evidence, imaginary frequencies and complex mode fields are unavailable",
+            "the supplied COMSOL model description uses opposite spatial phases for the magnetization source and scalar potential and does not document the dmX/dmY/dmZ Bloch boundary condition; identical operator semantics are therefore unverified",
             "frequency_order is local sorting, not a tracked physical band",
             "frequency rank comparison does not prove spectral completeness or mode identity",
         ],

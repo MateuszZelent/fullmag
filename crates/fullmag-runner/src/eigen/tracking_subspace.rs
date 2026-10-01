@@ -6,7 +6,7 @@
 //! an internal gauge choice into an artifact contract by accident.
 
 use super::hungarian_min_cost;
-use crate::eigen::types::SingleKModeResult;
+use crate::eigen::types::{ConsistentP1TrackingMetric, SingleKModeResult};
 use nalgebra::DMatrix;
 use num_complex::Complex64;
 
@@ -28,6 +28,7 @@ pub(super) struct TrackingModeView<'a> {
     pub(super) frequency_real_hz: f64,
     pub(super) reduced_vector: Option<&'a [Complex64]>,
     pub(super) node_mass_weights: Option<&'a [f64]>,
+    pub(super) consistent_p1_metric: Option<&'a ConsistentP1TrackingMetric>,
 }
 
 pub(super) fn mode_view(mode: &SingleKModeResult) -> TrackingModeView<'_> {
@@ -35,6 +36,7 @@ pub(super) fn mode_view(mode: &SingleKModeResult) -> TrackingModeView<'_> {
         frequency_real_hz: mode.frequency_real_hz,
         reduced_vector: mode.reduced_vector.as_deref(),
         node_mass_weights: mode.node_mass_weights.as_deref(),
+        consistent_p1_metric: mode.consistent_p1_metric.as_deref(),
     }
 }
 
@@ -42,6 +44,7 @@ pub(super) fn mode_view(mode: &SingleKModeResult) -> TrackingModeView<'_> {
 pub(super) struct BranchTrackingFrame {
     pub(super) reduced_vector: Option<Vec<Complex64>>,
     pub(super) node_mass_weights: Option<Vec<f64>>,
+    pub(super) consistent_p1_metric: Option<std::sync::Arc<ConsistentP1TrackingMetric>>,
 }
 
 impl BranchTrackingFrame {
@@ -49,6 +52,7 @@ impl BranchTrackingFrame {
         Self {
             reduced_vector: mode.reduced_vector.clone(),
             node_mass_weights: mode.node_mass_weights.clone(),
+            consistent_p1_metric: mode.consistent_p1_metric.clone(),
         }
     }
 
@@ -57,6 +61,7 @@ impl BranchTrackingFrame {
             frequency_real_hz,
             reduced_vector: self.reduced_vector.as_deref(),
             node_mass_weights: self.node_mass_weights.as_deref(),
+            consistent_p1_metric: self.consistent_p1_metric.as_deref(),
         }
     }
 }
@@ -112,17 +117,22 @@ fn mass_weights_match(lhs: &[f64], rhs: &[f64]) -> bool {
         })
 }
 
+fn vector_matches_mass_weights(vector_len: usize, node_mass_weight_count: usize) -> bool {
+    node_mass_weight_count.checked_mul(super::TRACKING_VECTOR_COMPONENTS_PER_NODE)
+        == Some(vector_len)
+}
+
 fn weighted_normalized_vector(
     vector: &[Complex64],
     node_mass_weights: &[f64],
 ) -> Option<Vec<Complex64>> {
     if vector.is_empty()
         || node_mass_weights.is_empty()
-        || vector.len() % node_mass_weights.len() != 0
+        || !vector_matches_mass_weights(vector.len(), node_mass_weights.len())
     {
         return None;
     }
-    let components_per_node = vector.len() / node_mass_weights.len();
+    let components_per_node = super::TRACKING_VECTOR_COMPONENTS_PER_NODE;
     let scale = vector
         .iter()
         .map(|value| value.norm())
@@ -180,13 +190,75 @@ fn weighted_dot(lhs: &[Complex64], rhs: &[Complex64]) -> Option<Complex64> {
     (result.re.is_finite() && result.im.is_finite()).then_some(result)
 }
 
+#[derive(Clone, Copy)]
+enum TrackingMassView<'a> {
+    Consistent(&'a ConsistentP1TrackingMetric),
+    Diagonal(&'a [f64]),
+}
+
+impl<'a> TrackingMassView<'a> {
+    fn from_mode(mode: TrackingModeView<'a>) -> Option<Self> {
+        match (mode.consistent_p1_metric, mode.node_mass_weights) {
+            (Some(metric), None) => Some(Self::Consistent(metric)),
+            (None, Some(weights)) if !weights.is_empty() => Some(Self::Diagonal(weights)),
+            _ => None,
+        }
+    }
+    fn matches(self, other: Self) -> bool {
+        match (self, other) {
+            (Self::Consistent(a), Self::Consistent(b)) => a.compatible(b),
+            (Self::Diagonal(a), Self::Diagonal(b)) => mass_weights_match(a, b),
+            _ => false,
+        }
+    }
+    fn normalize(self, vector: &[Complex64]) -> Option<Vec<Complex64>> {
+        match self {
+            Self::Diagonal(weights) => weighted_normalized_vector(vector, weights),
+            Self::Consistent(metric) => {
+                if vector
+                    .iter()
+                    .any(|v| !v.re.is_finite() || !v.im.is_finite())
+                {
+                    return None;
+                }
+                let scale = vector
+                    .iter()
+                    .map(|value| value.norm())
+                    .fold(0.0_f64, f64::max);
+                if !scale.is_finite() || scale <= 0.0 {
+                    return None;
+                }
+                let scaled = vector
+                    .iter()
+                    .map(|value| *value / scale)
+                    .collect::<Vec<_>>();
+                let mut embedded = metric.embed(&scaled)?;
+                let norm = embedded.iter().map(Complex64::norm_sqr).sum::<f64>().sqrt();
+                if !norm.is_finite() || norm <= 0.0 {
+                    return None;
+                }
+                for value in &mut embedded {
+                    *value /= norm;
+                }
+                Some(embedded)
+            }
+        }
+    }
+    fn recover(self, weighted: &[Complex64]) -> Option<Vec<Complex64>> {
+        match self {
+            Self::Diagonal(weights) => unweight_vector(weighted, weights),
+            Self::Consistent(metric) => metric.recover(weighted),
+        }
+    }
+}
+
 fn weighted_orthonormal_basis(
     modes: &[TrackingModeView<'_>],
-    node_mass_weights: &[f64],
+    metric: TrackingMassView<'_>,
 ) -> Option<Vec<Vec<Complex64>>> {
     let mut basis = Vec::<Vec<Complex64>>::with_capacity(modes.len());
     for mode in modes {
-        let vector = weighted_normalized_vector(mode.reduced_vector?, node_mass_weights)?;
+        let vector = metric.normalize(mode.reduced_vector?)?;
         let mut candidate = vector;
         // Reorthogonalization matters for nearly degenerate modes whose
         // solver vectors can be close to linearly dependent after weighting.
@@ -214,11 +286,11 @@ fn weighted_orthonormal_basis(
 fn unweight_vector(weighted: &[Complex64], node_mass_weights: &[f64]) -> Option<Vec<Complex64>> {
     if weighted.is_empty()
         || node_mass_weights.is_empty()
-        || weighted.len() % node_mass_weights.len() != 0
+        || !vector_matches_mass_weights(weighted.len(), node_mass_weights.len())
     {
         return None;
     }
-    let components_per_node = weighted.len() / node_mass_weights.len();
+    let components_per_node = super::TRACKING_VECTOR_COMPONENTS_PER_NODE;
     let mut result = Vec::with_capacity(weighted.len());
     for (node, weight) in node_mass_weights.iter().copied().enumerate() {
         if !weight.is_finite() || weight <= 0.0 {
@@ -262,19 +334,14 @@ pub(super) fn mass_weighted_subspace_transport(
     if previous.len() < 2 || previous.len() != current.len() || !frequency_score.is_finite() {
         return None;
     }
-    let node_mass_weights = previous
-        .first()?
-        .node_mass_weights
-        .filter(|weights| !weights.is_empty())?;
+    let metric = TrackingMassView::from_mode(*previous.first()?)?;
     for mode in previous.iter().chain(current) {
-        let weights = mode.node_mass_weights?;
-        if !mass_weights_match(node_mass_weights, weights) {
+        if !metric.matches(TrackingMassView::from_mode(*mode)?) {
             return None;
         }
     }
-
-    let previous_basis = weighted_orthonormal_basis(previous, node_mass_weights)?;
-    let current_basis = weighted_orthonormal_basis(current, node_mass_weights)?;
+    let previous_basis = weighted_orthonormal_basis(previous, metric)?;
+    let current_basis = weighted_orthonormal_basis(current, metric)?;
     let dimension = previous_basis.len();
     if dimension < 2 || current_basis.len() != dimension {
         return None;
@@ -341,7 +408,7 @@ pub(super) fn mass_weighted_subspace_transport(
                 *value += coefficient * *basis_value;
             }
         }
-        transported_frames.push(unweight_vector(&transported, node_mass_weights)?);
+        transported_frames.push(metric.recover(&transported)?);
     }
 
     Some(SubspaceTransport {

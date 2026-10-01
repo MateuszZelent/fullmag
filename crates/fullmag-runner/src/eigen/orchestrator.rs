@@ -11,8 +11,8 @@
 //! tangent-plane LLG assembly is ready.
 
 use crate::eigen::artifacts::{
-    write_branch_bundle, write_frequency_domain_eigen_manifest, write_mode_bundle,
-    write_path_bundle_with_sample_namespace,
+    write_branch_bundle_with_sample_namespace, write_frequency_domain_eigen_manifest,
+    write_mode_bundle, write_path_bundle_with_sample_namespace,
 };
 use crate::eigen::path::expand_k_sampling;
 use crate::eigen::tracking::track_branches;
@@ -115,7 +115,12 @@ pub fn run_path_or_single<S: SingleKSolver>(
         .map_err(|error| RunError {
             message: format!("failed to write path bundle: {error}"),
         })?;
-        write_branch_bundle(output_dir, &result).map_err(|error| RunError {
+        write_branch_bundle_with_sample_namespace(
+            output_dir,
+            &result,
+            !plan.bias_field_samples.is_empty(),
+        )
+        .map_err(|error| RunError {
             message: format!("failed to write branch bundle: {error}"),
         })?;
         write_mode_bundle(output_dir, &result).map_err(|error| RunError {
@@ -197,6 +202,7 @@ mod tests {
                     amplitude: Some(vec![1.0]),
                     phase: Some(vec![0.0]),
                     node_mass_weights: None,
+                    consistent_p1_metric: None,
                     component_participation:
                         crate::eigen::ModalParticipationObservable::unavailable_without_context(
                             "cpu",
@@ -380,6 +386,7 @@ mod tests {
                     amplitude: Some(vec![1.0]),
                     phase: Some(vec![0.0]),
                     node_mass_weights: None,
+                    consistent_p1_metric: None,
                     component_participation:
                         crate::eigen::ModalParticipationObservable::unavailable_without_context(
                             "cpu",

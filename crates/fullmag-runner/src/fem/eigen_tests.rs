@@ -1562,6 +1562,91 @@ fn accepted_relax_handoff_round_trips_through_summary_provenance() {
 }
 
 #[test]
+fn accepted_relax_handoff_promotes_stage_provenance_for_path_reuse() {
+    let plan = minimal_native_modal_plan();
+    let equilibrium = plan.equilibrium_magnetization.clone();
+    let equilibrium_artifact = format!("sha256:{}", "a".repeat(64));
+    let linearization_state = format!("sha256:{}", "b".repeat(64));
+    let stage_handoff_content = format!("sha256:{}", "c".repeat(64));
+    let source_topology = plan
+        .mesh
+        .mixed_topology_fingerprint_v3()
+        .expect("fixture topology should be fingerprintable");
+    assert_ne!(source_topology, plan.mesh.topology_fingerprint_v6());
+    let diagnostics = serde_json::json!({
+        "source_mesh_topology_sha256": plan.mesh.mixed_topology_fingerprint_v3().unwrap(),
+        "relax_to_eigen_source_mesh_topology_sha256": source_topology,
+        "relax_to_eigen_handoff_sha256": stage_handoff_content,
+        "equilibrium_artifact_sha256": equilibrium_artifact,
+        "linearization_state_sha256": linearization_state,
+        "relax_to_eigen_handoff": {
+            "schema_version": "AcceptedFemRelaxStageHandoff.v3",
+            "source_mesh_topology_sha256": source_topology,
+            "content_sha256": stage_handoff_content,
+        },
+    });
+    let run = ExecutedRun {
+        result: RunResult {
+            status: RunStatus::Completed,
+            steps: Vec::new(),
+            final_magnetization: equilibrium,
+            completion: None,
+        },
+        initial_magnetization: Vec::new(),
+        field_snapshots: Vec::new(),
+        field_snapshot_count: 0,
+        auxiliary_artifacts: vec![json_artifact(
+            "eigen/metadata/eigen_summary.json",
+            &serde_json::json!({"solver_diagnostics": diagnostics}),
+        )
+        .expect("summary fixture should serialize")],
+        provenance: ExecutionProvenance::default(),
+    };
+
+    let restored = accepted_relax_to_eigen_handoff_from_run(&plan, &run)
+        .expect("accepted stage handoff should be promoted for path reuse");
+
+    assert_eq!(
+        restored.source_mesh_topology_sha256(),
+        plan.mesh.topology_fingerprint_v6()
+    );
+    assert_ne!(restored.content_sha256(), stage_handoff_content);
+}
+
+#[test]
+fn k_path_reuses_original_relax_certificate_for_every_wavevector() {
+    let plan = minimal_native_modal_plan();
+    let handoff = relax_handoff_from_completion(&plan, &accepted_relax_completion())
+        .expect("accepted relaxation should create a reusable path certificate");
+
+    assert!(
+        super::eigen_path::relax_stage_handoff_for_path_sample(&plan, Some(&handoff)).is_some(),
+        "a k path must retain the accepted Relax evidence after its first sample"
+    );
+    assert!(
+        !super::eigen_path::reuse_promoted_eigen_handoff(true, true),
+        "the promoted Eigen identity must not change a stage-certified point to Provided"
+    );
+    assert!(
+        super::eigen_path::reuse_promoted_eigen_handoff(false, true),
+        "artifact-backed paths without a Relax-stage certificate may reuse the promoted identity"
+    );
+
+    let mut field_sweep = plan;
+    field_sweep.bias_field_samples = vec![bias_field_sample(
+        0,
+        [10_000.0, 0.0, 0.0],
+        fullmag_ir::BiasFieldSweepEquilibriumPolicyIR::RelaxEach,
+        fullmag_ir::BiasFieldSweepContinuationSeedIR::InitialState,
+    )];
+    assert!(
+        super::eigen_path::relax_stage_handoff_for_path_sample(&field_sweep, Some(&handoff))
+            .is_none(),
+        "a field sweep must compute and certify its own equilibrium per sample"
+    );
+}
+
+#[test]
 fn native_modal_progress_json_maps_to_runtime_progress() {
     let event = native_modal_progress_event(
             r#"{"schema_version":"fem_frequency_domain_progress.v1","solver_phase":"solving_shift_invert","candidate_mode_count":4,"accepted_mode_count":2,"outer_iteration":7,"max_outer_iterations":300,"linear_iteration":11,"current_residual_relative_l2":1.25e-9}"#,
@@ -5072,7 +5157,7 @@ fn dispersion_csv_maps_positive_imaginary_frequency_to_fwhm_linewidth() {
         }
     ]);
 
-    let csv = dispersion_v2_csv(None, &modes, &BTreeSet::from([3_u64]));
+    let csv = dispersion_v2_csv("k-sample-0000", None, &modes, &BTreeSet::from([3_u64]));
     let header = csv
         .lines()
         .next()
@@ -5086,13 +5171,15 @@ fn dispersion_csv_maps_positive_imaginary_frequency_to_fwhm_linewidth() {
         .expect("dispersion CSV should include one data row");
     let columns: Vec<&str> = row.split(',').collect();
 
-    assert_eq!(columns[6], "3");
+    assert_eq!(columns[1], "k-sample-0000");
     assert_eq!(columns[7], "3");
-    assert_eq!(columns[10], "5.0000000000000000e6");
-    assert_eq!(columns[13], "seed");
-    assert_eq!(columns[14], "analysis:eigen:sample-0000:mode-0003");
+    assert_eq!(columns[8], "sample-0000/mode-0003");
+    assert_eq!(columns[12], "5.0000000000000000e6");
+    assert_eq!(columns[15], "seed");
+    assert_eq!(columns[16], "true");
+    assert_eq!(columns[17], "analysis:eigen:sample-0000:mode-0003");
     assert_eq!(
-            columns[15],
+            columns[18],
             "/v2/sessions/current/data/fields/analysis:eigen:sample-0000:mode-0003/samples/vector?view=phase_rotated_real&phase_rad=0"
         );
 }
@@ -5252,6 +5339,65 @@ fn native_frequency_window_solver_diagnostics_publish_mode_count() {
             .and_then(|value| value.as_u64()),
         Some(10)
     );
+}
+
+#[test]
+fn native_floquet_window_diagnostics_do_not_invent_missing_block_residuals() {
+    let mut plan = minimal_native_modal_plan();
+    plan.target = fullmag_ir::EigenTargetIR::FrequencyWindow {
+        frequency_min_hz: 8.5e9,
+        frequency_max_hz: 12.0e9,
+    };
+    let raw = serde_json::json!({
+        "solver_adapter": "floquet_airbox_cpu_schur_slepc",
+        "production_implication": false,
+        "status": "ok",
+        "accepted_mode_count": 1,
+        "requested_window_hz": [8.5e9, 12.0e9],
+        "resolved_search_window_hz": [8.0625e9, 12.4375e9],
+    });
+
+    let missing = native_solver_diagnostics_json(&plan, &raw.to_string(), None, None)
+        .expect("missing block residuals must remain representable as unavailable");
+    assert_eq!(missing["block_residuals"]["eps_q"], serde_json::Value::Null);
+    assert_eq!(
+        missing["block_residuals"]["eps_phi"],
+        serde_json::Value::Null
+    );
+    assert_eq!(
+        missing["block_residuals"]["eps_gauge"],
+        serde_json::Value::Null
+    );
+    assert_eq!(
+        missing["block_residuals"]["eps_full"],
+        serde_json::Value::Null
+    );
+    assert_eq!(
+        missing["block_residuals"]["backend_reported_residual"],
+        serde_json::Value::Null
+    );
+    assert_eq!(missing["block_residuals"]["certified"], false);
+
+    let mut partial_raw = raw;
+    partial_raw["metrics"] = serde_json::json!({
+        "magnetic_block_backward_error": 2.0e-9,
+    });
+    let partial = native_solver_diagnostics_json(&plan, &partial_raw.to_string(), None, None)
+        .expect("partial block residual diagnostics must remain unqualified");
+    assert_eq!(partial["block_residuals"]["eps_q"], 2.0e-9);
+    assert_eq!(
+        partial["block_residuals"]["eps_phi"],
+        serde_json::Value::Null
+    );
+    assert_eq!(
+        partial["block_residuals"]["eps_gauge"],
+        serde_json::Value::Null
+    );
+    assert_eq!(
+        partial["block_residuals"]["eps_full"],
+        serde_json::Value::Null
+    );
+    assert_eq!(partial["block_residuals"]["certified"], false);
 }
 
 #[test]
@@ -5756,7 +5902,7 @@ fn native_shared_domain_modes_require_phi_and_block_residuals() {
         .expect("complete shared-domain mode should be accepted");
     assert_eq!(accepted.block_residual_q, 3.0e-12);
     assert_eq!(accepted.block_residual_phi, 4.0e-12);
-    assert_eq!(accepted.block_residual_gauge, 0.0);
+    assert_eq!(accepted.block_residual_gauge, Some(0.0));
     let phases = [Complex64::new(1.0, 0.0), Complex64::new(0.0, -1.0)];
     let phase_context = SharedDomainModeContext {
         node_phases: Some(&phases),
@@ -5771,7 +5917,15 @@ fn native_shared_domain_modes_require_phi_and_block_residuals() {
     mode["potential_representation"] = serde_json::json!("complex_coefficients");
     mode["potential_dof_count"] = serde_json::json!(2);
     mode["floquet_descriptor_certified"] = serde_json::json!(false);
+    mode["floquet_full_descriptor_certified"] = serde_json::json!(false);
+    mode["floquet_seam_frame_certified"] = serde_json::json!(false);
+    mode["floquet_gauge_policy_satisfied"] = serde_json::json!(true);
     mode["floquet_geometric_bc_certified"] = serde_json::json!(false);
+    mode["gauge_constraint_backward_error"] = serde_json::Value::Null;
+    mode["gauge_constraint_policy"] =
+        serde_json::json!("nonzero_k_poisson_without_mean_constraint");
+    mode["poisson_boundary_kind"] = serde_json::json!("pure_neumann");
+    mode["poisson_gauge_policy"] = serde_json::json!("require_invertible");
     let full_result = serde_json::json!({
         "solver_adapter": "floquet_airbox_cpu_schur_slepc", "modes": [mode],
     });
@@ -5793,6 +5947,77 @@ fn native_shared_domain_modes_require_phi_and_block_residuals() {
     assert_eq!(residuals["certified"], false);
     assert_eq!(residuals["full_descriptor_certified"], false);
     assert_eq!(residuals["reduced_pencil_certified"], true);
+
+    let mut certified_mode = mode.clone();
+    certified_mode["floquet_descriptor_certified"] = serde_json::json!(true);
+    certified_mode["floquet_full_descriptor_certified"] = serde_json::json!(true);
+    certified_mode["floquet_seam_frame_certified"] = serde_json::json!(true);
+    certified_mode["magnetic_relative_residual"] = serde_json::json!(3.0e-12);
+    certified_mode["potential_relative_residual"] = serde_json::json!(4.0e-12);
+    certified_mode["relative_residual"] = serde_json::json!(4.0e-12);
+    for key in [
+        "floquet_full_magnetic_relative_residual",
+        "floquet_full_potential_relative_residual",
+        "floquet_scalar_phase_seam_relative_residual",
+        "floquet_tangent_frame_seam_relative_residual",
+        "floquet_cartesian_magnetic_seam_relative_residual",
+        "floquet_equilibrium_pair_relative_residual",
+    ] {
+        certified_mode[key] = serde_json::json!(2.0e-12);
+    }
+    let certified_result = serde_json::json!({
+        "solver_adapter": "floquet_airbox_cpu_schur_slepc",
+        "modes": [certified_mode],
+    });
+    let certified_modes = native_modal_modes_from_result_json(
+        &plan,
+        &certified_result.to_string(),
+        None,
+        Some(&phase_context),
+    )
+    .expect("a mode with full projected equations, seams, and gauge policy should parse");
+    let certified_residuals = super::eigen_native_artifacts::native_modal_block_residuals(
+        &certified_modes[0],
+        Some("floquet_airbox_cpu_schur_slepc"),
+    );
+    assert_eq!(
+        certified_residuals["scope"],
+        "full_projected_weak_form_and_periodic_seams"
+    );
+    assert_eq!(certified_residuals["full_descriptor_certified"], true);
+    assert_eq!(certified_residuals["certified"], true);
+    assert!((certified_residuals["eps_full"].as_f64().unwrap() - 2.0e-12).abs() < 1.0e-24);
+    assert!((certified_residuals["eps_reduced"].as_f64().unwrap() - 4.0e-12).abs() < 1.0e-24);
+    assert!(certified_residuals["eps_gauge"].is_null());
+
+    let mut invalid_mode = mode;
+    invalid_mode["floquet_descriptor_certified"] = serde_json::json!(true);
+    invalid_mode["floquet_full_descriptor_certified"] = serde_json::json!(true);
+    invalid_mode["floquet_seam_frame_certified"] = serde_json::json!(true);
+    invalid_mode["floquet_gauge_policy_satisfied"] = serde_json::json!(true);
+    invalid_mode["magnetic_relative_residual"] = serde_json::json!(2.0e-12);
+    invalid_mode["potential_relative_residual"] = serde_json::json!(2.0e-12);
+    invalid_mode["floquet_full_magnetic_relative_residual"] = serde_json::json!(2.0e-12);
+    invalid_mode["floquet_full_potential_relative_residual"] = serde_json::json!(2.0e-12);
+    invalid_mode["floquet_scalar_phase_seam_relative_residual"] = serde_json::json!(2.0e-12);
+    invalid_mode["floquet_tangent_frame_seam_relative_residual"] = serde_json::json!(2.0e-12);
+    invalid_mode["floquet_cartesian_magnetic_seam_relative_residual"] = serde_json::json!(2.0e-12);
+    invalid_mode["floquet_equilibrium_pair_relative_residual"] = serde_json::json!(2.0e-12);
+    invalid_mode["floquet_full_potential_relative_residual"] = serde_json::json!(1.0e-5);
+    let invalid_result = serde_json::json!({
+        "solver_adapter": "floquet_airbox_cpu_schur_slepc",
+        "modes": [invalid_mode],
+    });
+    let invalid = native_modal_modes_from_result_json(
+        &plan,
+        &invalid_result.to_string(),
+        None,
+        Some(&phase_context),
+    )
+    .expect_err("an out-of-tolerance full weak residual must reject certification");
+    assert!(invalid
+        .message
+        .contains("floquet_full_potential_relative_residual"));
 }
 
 #[test]
@@ -5822,11 +6047,11 @@ fn shared_domain_modal_scope_allows_normalized_texture_inside_the_unit_cell() {
 }
 
 #[test]
-fn shared_domain_full2x2_guard_rejects_tangent_frame_reference_axis_jump() {
+fn shared_domain_full2x2_guard_accepts_tangent_frame_reference_axis_jump() {
     let mut plan = bounded_k0_execution_plan();
     add_x_floquet_pair_to_plan(&mut plan);
     let topology = MeshTopology::from_ir(&plan.mesh).expect("periodic FEM mesh is valid");
-    let (pair_id, node_a, node_b) = topology
+    let (_, node_a, node_b) = topology
         .periodic_node_pairs
         .first()
         .expect("fixture must contain a Floquet pair")
@@ -5836,9 +6061,9 @@ fn shared_domain_full2x2_guard_rejects_tangent_frame_reference_axis_jump() {
 
     // Keep the equilibrium seam below the 1e-8 m0 tolerance while placing the
     // two otherwise nearly equal vectors on opposite sides of the
-    // tangent_bases() |m_z|=0.9 reference-axis branch.  A scalar phase cannot
-    // transport the resulting frames, so the shared-domain payload must fail
-    // closed until the native 2x2 transport is implemented.
+    // tangent_bases() |m_z|=0.9 reference-axis branch. Native shared-domain
+    // constraints transport the resulting local coordinates with
+    // T_dst^T T_src, so the Rust preflight must allow this valid chart change.
     let z_a: f64 = 0.9 - 1.0e-10;
     let z_b: f64 = 0.9 + 1.0e-10;
     let mut equilibrium = vec![[1.0, 0.0, 0.0]; plan.mesh.nodes.len()];
@@ -5851,15 +6076,29 @@ fn shared_domain_full2x2_guard_rejects_tangent_frame_reference_axis_jump() {
         "fixture seam must pass the m0 periodic tolerance"
     );
 
+    validate_shared_domain_tangent_frame_transport(&plan, &topology, &equilibrium)
+        .expect("a local tangent-frame rotation is valid when physical m0 is periodic");
+}
+
+#[test]
+fn shared_domain_full2x2_guard_rejects_physical_equilibrium_mismatch() {
+    let mut plan = bounded_k0_execution_plan();
+    add_x_floquet_pair_to_plan(&mut plan);
+    let topology = MeshTopology::from_ir(&plan.mesh).expect("periodic FEM mesh is valid");
+    let (_, node_a, node_b) = topology
+        .periodic_node_pairs
+        .first()
+        .expect("fixture must contain a Floquet pair")
+        .clone();
+    let mut equilibrium = vec![[1.0, 0.0, 0.0]; plan.mesh.nodes.len()];
+    equilibrium[node_a as usize] = [1.0, 0.0, 0.0];
+    equilibrium[node_b as usize] = [0.0, 1.0, 0.0];
+
     let error = validate_shared_domain_tangent_frame_transport(&plan, &topology, &equilibrium)
-        .expect_err(
-            "non-identity tangent frames must be rejected before native shared-domain assembly",
-        );
+        .expect_err("pure-translation Floquet pairs must preserve physical m0");
     assert!(error
         .message
-        .contains("requires full phase*(T_dst^T T_src) support"));
-    let pair_message = format!("pair_id='{pair_id}'");
-    assert!(error.message.contains(pair_message.as_str()));
+        .contains("matching physical equilibrium vectors"));
 }
 
 #[test]
@@ -8008,6 +8247,41 @@ fn sparse_shared_domain_mass_preserves_dense_reference_and_full_node_weights() {
     for (a, b) in weights.iter().zip(&sparse.node_diagonal_weights) {
         assert!((a - b).abs() <= a.abs() * 1e-13);
     }
+}
+
+#[test]
+fn eigen_path_mass_weights_sum_physical_nodes_into_floquet_classes() {
+    let mut plan = minimal_native_modal_plan();
+    add_minimal_shared_domain_periodic_airbox(&mut plan);
+    plan.k_sampling = Some(KSamplingIR::Single {
+        k_vector: [1.0e6, 0.0, 0.0],
+    });
+    let topology = MeshTopology::from_ir(&plan.mesh).expect("test mesh is valid");
+    let reduction = build_reduction_map(&topology, &plan.spin_wave_bc, plan.k_sampling.as_ref())
+        .expect("Floquet reduction should be valid");
+    let physical_nodes = topology
+        .magnetic_node_volumes
+        .iter()
+        .enumerate()
+        .filter_map(|(node, volume)| (*volume > 0.0).then_some(node))
+        .collect::<Vec<_>>();
+    assert!(reduction.active_nodes.len() < physical_nodes.len());
+    let physical_weights = (1..=physical_nodes.len())
+        .map(|value| value as f64)
+        .collect::<Vec<_>>();
+
+    let reduced = super::eigen_path::eigen_path_reduced_node_mass_weights(
+        &topology,
+        &reduction,
+        &physical_weights,
+    )
+    .expect("physical FE weights should reduce onto Floquet classes");
+    let mut expected = vec![0.0; reduction.active_nodes.len()];
+    for (node, weight) in physical_nodes.into_iter().zip(physical_weights) {
+        expected[reduction.node_map[node].expect("magnetic node should map to a class")] += weight;
+    }
+    assert_eq!(reduced, expected);
+    assert!((reduced.iter().sum::<f64>() - expected.iter().sum::<f64>()).abs() < f64::EPSILON);
 }
 
 #[test]

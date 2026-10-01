@@ -1262,6 +1262,73 @@ int main()
     check(matrix_value(result.p, 0, 0) > 0.0, "Robin P has positive diagonal");
     check(result.a_phiq.values.size() > 0, "shared-domain scalar coupling is nonzero");
     check(result.a_qphi.values.size() > 0, "shared-domain tangent feedback is nonzero");
+    check(result.k0_demag_probe.q_global_y.size() == q_count &&
+              result.k0_demag_probe.q_global_z.size() == q_count,
+          "K0 demag probe vectors use the assembled reduced tangent layout");
+    check(result.k0_demag_probe.global_y_observable &&
+              !result.k0_demag_probe.global_z_observable,
+          "K0 demag probe identifies transverse and longitudinal global directions");
+    check(result.k0_demag_probe.h_functional_global_y.size() == node_count &&
+              result.k0_demag_probe.h_functional_global_z.size() == node_count &&
+              result.k0_demag_probe.magnetic_volume_m3 > 0.0,
+          "K0 demag probe carries field functionals and magnetic measure");
+    for (std::uint64_t node = 0; node < node_count; ++node) {
+        check(result.k0_demag_probe.q_global_y[2u * node] == 0.0 &&
+                  result.k0_demag_probe.q_global_y[2u * node + 1u] == 1.0 &&
+                  result.k0_demag_probe.q_global_z[2u * node] == 0.0 &&
+                  result.k0_demag_probe.q_global_z[2u * node + 1u] == 0.0,
+              "K0 demag probe projects global directions into the local tangent frame");
+    }
+    long double field_integral_from_y = 0.0L;
+    long double field_integral_from_z = 0.0L;
+    for (std::uint64_t node = 0; node < node_count; ++node) {
+        const double *vertex = mesh.GetVertex(static_cast<int>(node));
+        field_integral_from_y +=
+            result.k0_demag_probe.h_functional_global_y[node] * vertex[1];
+        field_integral_from_z +=
+            result.k0_demag_probe.h_functional_global_z[node] * vertex[2];
+    }
+    check(std::abs(static_cast<double>(field_integral_from_y) /
+                        result.k0_demag_probe.magnetic_volume_m3 + 1.0) < 1.0e-12 &&
+              std::abs(static_cast<double>(field_integral_from_z) /
+                           result.k0_demag_probe.magnetic_volume_m3 + 1.0) < 1.0e-12,
+          "K0 demag field functionals reconstruct minus the exact P1 gradient");
+
+    std::vector<fd::TangentFrameNode> de_frames = frames;
+    for (fd::TangentFrameNode &frame : de_frames) {
+        frame.m[0] = 1.0;
+        frame.m[1] = 0.0;
+        frame.m[2] = 0.0;
+        frame.e1[0] = 0.0;
+        frame.e1[1] = 1.0;
+        frame.e1[2] = 0.0;
+        frame.e2[0] = 0.0;
+        frame.e2[1] = 0.0;
+        frame.e2[2] = 1.0;
+    }
+    fd::PoissonAirboxSharedDomainAssemblyRequest de_request = request;
+    de_request.tangent_frames = de_frames.data();
+    fd::PoissonAirboxSharedDomainAssemblyResult de_result{};
+    check(fd::assemble_poisson_airbox_shared_domain(de_request, &de_result) ==
+              fd::FrequencyDomainStatus::ok,
+          de_result.error_message);
+    check(de_result.k0_demag_probe.global_y_observable &&
+              de_result.k0_demag_probe.global_z_observable,
+          "DE equilibrium makes both global transverse demag probes observable");
+    for (std::uint64_t node = 0; node < node_count; ++node) {
+        check(de_result.k0_demag_probe.q_global_y[2u * node] == 1.0 &&
+                  de_result.k0_demag_probe.q_global_y[2u * node + 1u] == 0.0 &&
+                  de_result.k0_demag_probe.q_global_z[2u * node] == 0.0 &&
+                  de_result.k0_demag_probe.q_global_z[2u * node + 1u] == 1.0,
+              "DE global y/z perturbations map to their expected tangent components");
+    }
+    check(std::abs(
+              de_result.k0_demag_probe.magnetization_integral_global_y_a_per_m_m3 /
+                  de_result.k0_demag_probe.magnetic_volume_m3 - 2.0) < 1.0e-12 &&
+              std::abs(
+                  de_result.k0_demag_probe.magnetization_integral_global_z_a_per_m_m3 /
+                      de_result.k0_demag_probe.magnetic_volume_m3 - 2.0) < 1.0e-12,
+          "DE probe integrates the applied perturbation magnetization with SI Ms");
 
     // Independent P1 tetrahedron oracle for A_phiq.  The production path
     // integrates this block with MFEM quadrature; this reference uses the
@@ -1474,6 +1541,19 @@ int main()
           "pure-Neumann gauge vector is normalized to unit measure");
     check(std::strcmp(pure_neumann_result.gauge_policy, "mean_zero_augmented") == 0,
           "pure-Neumann assembly publishes the mean-zero gauge policy");
+
+    fd::PoissonAirboxSharedDomainAssemblyRequest floquet_gauge = pure_neumann;
+    floquet_gauge.pure_neumann_gauge_policy =
+        fd::PoissonAirboxPureNeumannGaugePolicy::require_invertible;
+    fd::PoissonAirboxSharedDomainAssemblyResult floquet_gauge_result{};
+    check(
+        fd::assemble_poisson_airbox_shared_domain(floquet_gauge, &floquet_gauge_result) ==
+            fd::FrequencyDomainStatus::ok,
+        floquet_gauge_result.error_message);
+    check(floquet_gauge_result.phi_mean_weights.empty(),
+          "require-invertible pure-Neumann assembly must not publish a k=0 gauge vector");
+    check(std::strcmp(floquet_gauge_result.gauge_policy, "require_invertible") == 0,
+          "require-invertible pure-Neumann assembly publishes its explicit policy");
 
     fd::PoissonAirboxSharedDomainAssemblyRequest dirichlet = request;
     dirichlet.boundary_kind = fd::PoissonAirboxBoundaryKind::dirichlet;
@@ -2551,9 +2631,22 @@ int main()
         floquet_reciprocity_result.error_message);
     check(floquet_reciprocity_result.floquet_sparse_operator_ready,
           "Floquet sparse reciprocity fixture must publish the sparse operator");
+    check(floquet_reciprocity_result.floquet_a_qq.row_count > 0u &&
+              floquet_reciprocity_result.floquet_uniform_transverse_probe_q_y.size() ==
+                  floquet_reciprocity_result.floquet_a_qq.row_count &&
+              floquet_reciprocity_result.floquet_uniform_transverse_probe_q_z.size() ==
+                  floquet_reciprocity_result.floquet_a_qq.row_count,
+          "Floquet shared-domain assembly must retain probes matching its constrained tangent layout");
     check(floquet_reciprocity_result.floquet_a_qphi.values.size() > 0u &&
               floquet_reciprocity_result.floquet_a_phiq.values.size() > 0u,
           "Floquet sparse reciprocity fixture must exercise nonzero demag blocks");
+    // For the unit tetrahedron and kx=0.5 rad/m, the positive weak source
+    // S projects to a negative real (phi class 0, e1 class 0) entry. The
+    // descriptor convention A_phiq q + P phi = 0 requires A_phiq=-S.
+    check(
+        complex_matrix_value(
+            floquet_reciprocity_result.floquet_a_phiq, 0u, 0u).real() > 0.0,
+        "Floquet A_phiq must use the descriptor sign opposite to the weak source");
     // Matches request.mu0_T_m_A as hard-coded by
     // assemble_poisson_airbox_shared_domain_payload for the Floquet lane.
     const double floquet_vacuum_permeability = 1.25663706212e-6;
@@ -2585,11 +2678,10 @@ int main()
         "Floquet demag feedback A_qphi(k) must be -mu0 times the conjugate transpose "
         "of A_phiq(k) so the Schur Hessian is positive");
 
-    // pure_neumann gauge policy regression (M2): P_red(k) is exactly
-    // singular at k=0 and only lifted to invertibility by the periodic
-    // phase factor at order |k|*L, so a k too close to zero must be
-    // rejected fail-closed rather than silently factorized with a fixed
-    // absolute pivot tolerance.
+    // A pure-Neumann Floquet block has no k=0 mean-zero gauge unless the
+    // assembled scalar operator actually retains that nullspace. Do not
+    // reject nonzero k using a geometry-independent |k|*L proxy; the actual
+    // scalar factorization and original potential residual own that decision.
     FullmagFemModalSharedDomainPayload floquet_pure_neumann_payload = film_air_payload;
     floquet_pure_neumann_payload.boundary_kind = "pure_neumann";
     // pure_neumann forbids Robin data in both the k=0 and Floquet block
@@ -2605,14 +2697,17 @@ int main()
             3u,
             &floquet_tiny_k,
             nullptr,
-            false) == fd::FrequencyDomainStatus::validation_error,
-        "pure_neumann Floquet gauge must be rejected fail-closed when k*L is below "
-        "the safe threshold");
+            false) == fd::FrequencyDomainStatus::ok,
+        "nonzero pure_neumann Floquet assembly must not use a fixed k*L cutoff");
     check(
-        std::strstr(
-            floquet_pure_neumann_result.error_message,
-            "pure_neumann Floquet gauge is ill-conditioned") != nullptr,
-        "pure_neumann small-k rejection must use the documented stable reason");
+        floquet_pure_neumann_result.floquet_sparse_operator_ready,
+        "pure_neumann small-k assembly must expose the actual scalar operator for factorization");
+    check(
+        floquet_pure_neumann_result.phi_mean_weights.empty(),
+        "nonzero-k Floquet assembly must not carry the k=0 mean-zero gauge");
+    check(
+        std::strcmp(floquet_pure_neumann_result.gauge_policy, "require_invertible") == 0,
+        "pure_neumann Floquet metadata must report the actual no-gauge factorization policy");
 #endif
     return 0;
 }

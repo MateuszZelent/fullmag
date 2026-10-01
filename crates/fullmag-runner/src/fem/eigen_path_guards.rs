@@ -307,6 +307,7 @@ pub(super) fn solve_k0_kittel_synthetic_demag_factor_single_k(
             amplitude: Some(vec![1.0]),
             phase: Some(vec![0.0]),
             node_mass_weights: None,
+            consistent_p1_metric: None,
             component_participation:
                 crate::eigen::ModalParticipationObservable::unavailable_without_context("cpu"),
         }],

@@ -1,5 +1,6 @@
 #include "cpu/frequency_domain/poisson_airbox_schur_matshell.hpp"
 #include "cpu/frequency_domain/mode_deduplication.hpp"
+#include "cpu/frequency_domain/operators/poisson_airbox_shared_domain.hpp"
 #include "frequency_domain/mode_kinematics.hpp"
 #include "frequency_domain/real_frequency_rotated_pencil.hpp"
 
@@ -1840,6 +1841,230 @@ bool solve_production_phi(
     return true;
 }
 
+bool apply_probe_csr(
+    const CsrMatrixView &matrix,
+    const std::vector<double> &input,
+    std::vector<double> *output)
+{
+    if (output == nullptr || matrix.row_offsets == nullptr ||
+        matrix.column_indices == nullptr || matrix.values == nullptr ||
+        matrix.column_count != input.size() ||
+        matrix.row_offsets_len != matrix.row_count + 1u ||
+        matrix.column_indices_len != matrix.values_len ||
+        matrix.row_offsets[0] != 0u ||
+        matrix.row_offsets[matrix.row_count] != matrix.values_len) {
+        return false;
+    }
+    output->assign(static_cast<std::size_t>(matrix.row_count), 0.0);
+    for (std::uint64_t row = 0u; row < matrix.row_count; ++row) {
+        const std::uint32_t begin = matrix.row_offsets[row];
+        const std::uint32_t end = matrix.row_offsets[row + 1u];
+        if (begin > end || end > matrix.values_len) {
+            return false;
+        }
+        long double value = 0.0L;
+        for (std::uint32_t entry = begin; entry < end; ++entry) {
+            const std::uint32_t column = matrix.column_indices[entry];
+            if (column >= matrix.column_count ||
+                !std::isfinite(matrix.values[entry]) ||
+                !std::isfinite(input[column])) {
+                return false;
+            }
+            value += static_cast<long double>(matrix.values[entry]) * input[column];
+        }
+        (*output)[static_cast<std::size_t>(row)] = static_cast<double>(value);
+        if (!std::isfinite((*output)[static_cast<std::size_t>(row)])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+double probe_vector_dot(
+    const std::vector<double> &left,
+    const std::vector<double> &right) noexcept
+{
+    if (left.size() != right.size()) {
+        return std::numeric_limits<double>::quiet_NaN();
+    }
+    long double sum = 0.0L;
+    for (std::size_t index = 0; index < left.size(); ++index) {
+        sum += static_cast<long double>(left[index]) * right[index];
+    }
+    return static_cast<double>(sum);
+}
+
+double probe_vector_l2(const std::vector<double> &values) noexcept
+{
+    long double sum = 0.0L;
+    for (double value : values) {
+        if (!std::isfinite(value)) {
+            return std::numeric_limits<double>::quiet_NaN();
+        }
+        sum += static_cast<long double>(value) * value;
+    }
+    return std::sqrt(static_cast<double>(sum));
+}
+
+bool run_k0_demag_probe_sample(
+    ProductionSchurContext *context,
+    const PoissonAirboxEigenBlockProblem &problem,
+    const std::vector<double> &q_values,
+    const std::vector<double> &field_functional,
+    double magnetization_integral,
+    double energy_scale,
+    double magnetic_volume,
+    bool observable,
+    PoissonAirboxK0DemagProbeSample *sample,
+    char failure_reason[96])
+{
+    if (sample == nullptr) {
+        copy_message(failure_reason, 96, "probe_result_missing");
+        return false;
+    }
+    *sample = PoissonAirboxK0DemagProbeSample{};
+    if (!observable) {
+        return true;
+    }
+    sample->attempted = true;
+    sample->q_l2_norm = probe_vector_l2(q_values);
+    if (context == nullptr || problem.k0_demag_probe == nullptr ||
+        q_values.size() != static_cast<std::size_t>(problem.q_dof_count) ||
+        field_functional.size() != static_cast<std::size_t>(problem.phi_dof_count) ||
+        !std::isfinite(sample->q_l2_norm) || sample->q_l2_norm <= 1.0e-12 ||
+        !std::isfinite(magnetization_integral) ||
+        !std::isfinite(energy_scale) || energy_scale <= 0.0 ||
+        !std::isfinite(magnetic_volume) || magnetic_volume <= 0.0 ||
+        !std::isfinite(problem.k0_demag_probe->mu0_t_m_a) ||
+        problem.k0_demag_probe->mu0_t_m_a <= 0.0) {
+        copy_message(failure_reason, 96, "probe_input_invalid");
+        return false;
+    }
+
+    Vec q = nullptr;
+    if (VecCreateSeq(PETSC_COMM_SELF, context->q_count, &q) != 0) {
+        copy_message(failure_reason, 96, "probe_q_vector_create_failed");
+        return false;
+    }
+    PetscScalar *q_array = nullptr;
+    bool q_copied = VecGetArray(q, &q_array) == 0;
+    if (q_copied) {
+        for (PetscInt index = 0; index < context->q_count; ++index) {
+            q_array[index] = static_cast<PetscScalar>(
+                q_values[static_cast<std::size_t>(index)]);
+        }
+        q_copied = VecRestoreArray(q, &q_array) == 0;
+    }
+    std::vector<double> phi;
+    double eta = 0.0;
+    const bool solved = q_copied &&
+        solve_production_phi(context, q, &phi, &eta);
+    VecDestroy(&q);
+    if (!solved) {
+        copy_message(failure_reason, 96, "probe_poisson_solve_failed");
+        return false;
+    }
+
+    std::vector<double> a_phiq_q;
+    std::vector<double> p_phi;
+    std::vector<double> a_qphi_phi;
+    if (!apply_probe_csr(problem.A_phiq, q_values, &a_phiq_q) ||
+        !apply_probe_csr(problem.A_phiphi, phi, &p_phi) ||
+        !apply_probe_csr(problem.A_qphi, phi, &a_qphi_phi)) {
+        copy_message(failure_reason, 96, "probe_original_csr_action_failed");
+        return false;
+    }
+    std::vector<double> potential_residual(p_phi.size(), 0.0);
+    for (std::size_t index = 0; index < potential_residual.size(); ++index) {
+        potential_residual[index] = p_phi[index] + a_phiq_q[index];
+        if (context->gauge_augmented) {
+            if (problem.phi_mean_weights == nullptr ||
+                problem.phi_mean_weights_count != potential_residual.size()) {
+                copy_message(failure_reason, 96, "probe_gauge_weights_missing");
+                return false;
+            }
+            potential_residual[index] +=
+                problem.phi_mean_weights[index] * eta;
+        }
+    }
+    double gauge_weight_l2 = 0.0;
+    if (context->gauge_augmented) {
+        long double gauge_weight_squared = 0.0L;
+        for (std::size_t index = 0; index < phi.size(); ++index) {
+            gauge_weight_squared +=
+                static_cast<long double>(problem.phi_mean_weights[index]) *
+                problem.phi_mean_weights[index];
+        }
+        gauge_weight_l2 = std::sqrt(static_cast<double>(gauge_weight_squared));
+    }
+    const double residual_denominator =
+        probe_vector_l2(p_phi) + probe_vector_l2(a_phiq_q) +
+        (context->gauge_augmented ? std::abs(eta) * gauge_weight_l2 : 0.0);
+    sample->potential_action_relative_residual = probe_vector_l2(potential_residual) /
+        std::max(residual_denominator, 1.0e-300);
+    std::vector<double> poisson_scale;
+    std::vector<double> source_scale;
+    if (!poisson_probe_absolute_csr_action(problem.A_phiphi, phi, &poisson_scale) ||
+        !poisson_probe_absolute_csr_action(problem.A_phiq, q_values, &source_scale)) {
+        copy_message(failure_reason, 96, "probe_residual_scale_failed");
+        return false;
+    }
+    // Componentwise backward error remains meaningful for a charge-free
+    // in-plane probe, where signed source terms cancel to roundoff.
+    sample->potential_relative_residual = poisson_probe_componentwise_residual(
+        potential_residual, poisson_scale, source_scale,
+        context->gauge_augmented ? problem.phi_mean_weights : nullptr, eta);
+    if (context->gauge_augmented) {
+        long double gauge_value = 0.0L;
+        for (std::size_t index = 0; index < phi.size(); ++index) {
+            gauge_value += static_cast<long double>(problem.phi_mean_weights[index]) *
+                phi[index];
+        }
+        sample->gauge_constraint_abs = std::abs(static_cast<double>(gauge_value));
+    }
+    const double field_integral = probe_vector_dot(field_functional, phi);
+    sample->mean_field_a_per_m = field_integral / magnetic_volume;
+    sample->mean_magnetization_a_per_m = magnetization_integral / magnetic_volume;
+    if (std::abs(sample->mean_magnetization_a_per_m) <= 1.0e-14) {
+        copy_message(failure_reason, 96, "probe_magnetization_not_observable");
+        return false;
+    }
+    sample->demag_factor = -sample->mean_field_a_per_m /
+        sample->mean_magnetization_a_per_m;
+    const double potential_quadratic = probe_vector_dot(phi, p_phi);
+    const double magnetic_quadratic = probe_vector_dot(q_values, a_qphi_phi);
+    const double mu0 = problem.k0_demag_probe->mu0_t_m_a;
+    sample->potential_energy_j = 0.5 * mu0 * potential_quadratic;
+    sample->magnetic_energy_j = 0.5 * magnetic_quadratic;
+    sample->energy_form_relative_defect =
+        std::abs(sample->potential_energy_j - sample->magnetic_energy_j) /
+        std::max({energy_scale,
+                  std::abs(sample->potential_energy_j),
+                  std::abs(sample->magnetic_energy_j),
+                  1.0e-300});
+    const double gauge_scale = context->gauge_augmented
+        ? std::max(probe_vector_l2(phi) * gauge_weight_l2, 1.0e-300)
+        : 1.0;
+    sample->passed =
+        std::isfinite(sample->potential_relative_residual) &&
+        sample->potential_relative_residual <= 1.0e-8 &&
+        std::isfinite(sample->gauge_constraint_abs) &&
+        sample->gauge_constraint_abs <= 1.0e-8 * gauge_scale &&
+        std::isfinite(sample->mean_field_a_per_m) &&
+        std::isfinite(sample->mean_magnetization_a_per_m) &&
+        std::isfinite(sample->demag_factor) &&
+        std::isfinite(sample->potential_energy_j) &&
+        std::isfinite(sample->magnetic_energy_j) &&
+        std::isfinite(sample->energy_form_relative_defect) &&
+        sample->energy_form_relative_defect <= 1.0e-8 &&
+        sample->potential_energy_j >= -1.0e-8 * energy_scale &&
+        sample->magnetic_energy_j >= -1.0e-8 * energy_scale;
+    if (!sample->passed) {
+        copy_message(failure_reason, 96, "probe_physical_operator_check_failed");
+    }
+    return sample->passed;
+}
+
 // Apply the Schur operator while retaining the reconstructed scalar solution
 // in the persistent phi vector.
 PetscErrorCode production_schur_apply_vec(
@@ -1989,6 +2214,7 @@ struct ProductionCpuOperatorContext {
     ProductionSplitContext split{};
     Mat schur_shell = nullptr;
     Mat split_mass = nullptr;
+    Mat cached_window_schur = nullptr;
     PetscInt split_count = 0;
     double descriptor_mass_norm = 0.0;
     double descriptor_operator_norm = 0.0;
@@ -1998,6 +2224,8 @@ struct ProductionCpuOperatorContext {
     std::uint32_t operator_context_setup_count = 0;
     std::uint32_t poisson_factorization_setup_count = 0;
     std::uint32_t shift_solver_setup_count = 0;
+    bool k0_demag_probe_completed = false;
+    PoissonAirboxK0DemagProbeResult k0_demag_operator_probe{};
     bool ready = false;
 
     ProductionCpuOperatorContext() = default;
@@ -2007,6 +2235,66 @@ struct ProductionCpuOperatorContext {
     ProductionCpuOperatorContext &operator=(ProductionCpuOperatorContext &&) = delete;
 };
 
+bool run_k0_demag_operator_probe(
+    const PoissonAirboxEigenBlockProblem &problem,
+    ProductionCpuOperatorContext *context) noexcept
+{
+    if (context == nullptr || problem.k0_demag_probe == nullptr) {
+        return false;
+    }
+    PoissonAirboxK0DemagProbeResult &result = context->k0_demag_operator_probe;
+    result = PoissonAirboxK0DemagProbeResult{};
+    result.requested = true;
+    try {
+        const PoissonAirboxK0DemagProbeAssembly &assembly = *problem.k0_demag_probe;
+        result.magnetic_volume_m3 = assembly.magnetic_volume_m3;
+        result.mu0_t_m_a = assembly.mu0_t_m_a;
+        result.robin_beta = assembly.robin_beta;
+        copy_message(
+            result.outer_boundary_kind,
+            sizeof(result.outer_boundary_kind),
+            problem.outer_boundary_kind != nullptr ? problem.outer_boundary_kind : "");
+        const bool global_y_ok = run_k0_demag_probe_sample(
+            &context->schur,
+            problem,
+            assembly.q_global_y,
+            assembly.h_functional_global_y,
+            assembly.magnetization_integral_global_y_a_per_m_m3,
+            assembly.magnetic_energy_scale_global_y_j,
+            assembly.magnetic_volume_m3,
+            assembly.global_y_observable,
+            &result.global_y,
+            result.failure_reason);
+        const bool global_z_ok = run_k0_demag_probe_sample(
+            &context->schur,
+            problem,
+            assembly.q_global_z,
+            assembly.h_functional_global_z,
+            assembly.magnetization_integral_global_z_a_per_m_m3,
+            assembly.magnetic_energy_scale_global_z_j,
+            assembly.magnetic_volume_m3,
+            assembly.global_z_observable,
+            &result.global_z,
+            result.failure_reason);
+        result.available = result.global_y.attempted || result.global_z.attempted;
+        result.passed = result.available && assembly.global_y_observable &&
+            assembly.global_z_observable && global_y_ok && global_z_ok;
+        if (!result.available) {
+            copy_message(result.failure_reason, sizeof(result.failure_reason),
+                         "no_global_transverse_direction_observable");
+        } else if (!result.passed && result.failure_reason[0] == '\0') {
+            copy_message(result.failure_reason, sizeof(result.failure_reason),
+                         "global_direction_probe_failed");
+        }
+    } catch (...) {
+        result.available = false;
+        result.passed = false;
+        copy_message(result.failure_reason, sizeof(result.failure_reason),
+                     "probe_allocation_or_diagnostic_failure");
+    }
+    return result.passed;
+}
+
 void destroy_production_cpu_operator_context(
     ProductionCpuOperatorContext *context) noexcept
 {
@@ -2014,6 +2302,9 @@ void destroy_production_cpu_operator_context(
         return;
     }
     context->solve_control.disarm();
+    if (context->cached_window_schur != nullptr) {
+        MatDestroy(&context->cached_window_schur);
+    }
     if (context->schur_shell != nullptr) {
         MatDestroy(&context->schur_shell);
     }
@@ -2150,12 +2441,13 @@ bool create_production_exact_shift_preconditioner(
     Mat split_mass,
     PetscInt dimension,
     double shift,
-    Mat *matrix)
+    Mat *matrix,
+    ProductionCpuSolveControl *solve_control)
 {
     // This bounded exact materialization is used for a single selected shift
     // (nearest_frequency) as a qualification/reference path.  A frequency
-    // window keeps the scalable magnetic preconditioner and persistent
-    // operator context; it must not repeat this O(n^2) setup per subwindow.
+    // window uses this helper only once at zero shift for its bounded cache;
+    // larger windows retain the scalable magnetic preconditioner.
     constexpr PetscInt kMaximumDimension = 8192;
     if (matrix == nullptr || schur_shell == nullptr || split_mass == nullptr ||
         dimension <= 0 || dimension > kMaximumDimension || !std::isfinite(shift)) {
@@ -2199,6 +2491,15 @@ bool create_production_exact_shift_preconditioner(
     const PetscScalar *schur_values = nullptr;
     const PetscScalar *mass_values = nullptr;
     for (PetscInt column = 0; column < dimension && ok; ++column) {
+        // Direct Poisson solves need not invoke iterative KSP callbacks.
+        // Poll explicitly so cancellation is observed during materialization.
+        if (solve_control != nullptr && solve_control->armed &&
+            solve_control->cancel_poll_enabled &&
+            poisson_airbox_modal_cancel_requested(solve_control->callback_problem)) {
+            solve_control->cancellation_observed = true;
+            ok = false;
+            break;
+        }
         ok = VecGetArray(basis, &basis_values) == 0;
         if (!ok) {
             break;
@@ -2247,6 +2548,45 @@ bool create_production_exact_shift_preconditioner(
     if (!ok || MatAssemblyBegin(*matrix, MAT_FINAL_ASSEMBLY) != 0 ||
         MatAssemblyEnd(*matrix, MAT_FINAL_ASSEMBLY) != 0) {
         MatDestroy(matrix);
+        return false;
+    }
+    return true;
+}
+
+constexpr PetscInt kProductionWindowExactPreconditionerMaxDimension = 512;
+
+// Cache only the small-window preconditioner. EPS continues to apply the
+// original MatShell, and every shift has its own independently owned matrix.
+bool create_production_cached_window_preconditioner(
+    ProductionCpuOperatorContext *context,
+    double shift,
+    Mat *matrix)
+{
+    if (context == nullptr || matrix == nullptr || *matrix != nullptr ||
+        context->split_count <= 0 ||
+        context->split_count > kProductionWindowExactPreconditionerMaxDimension ||
+        !std::isfinite(shift)) {
+        return false;
+    }
+    if (context->cached_window_schur == nullptr &&
+        !create_production_exact_shift_preconditioner(
+            context->schur_shell,
+            context->split_mass,
+            context->split_count,
+            0.0,
+            &context->cached_window_schur,
+            &context->solve_control)) {
+        return false;
+    }
+    if (MatDuplicate(context->cached_window_schur, MAT_COPY_VALUES, matrix) != 0 ||
+        MatAXPY(
+            *matrix,
+            static_cast<PetscScalar>(-shift),
+            context->split_mass,
+            DIFFERENT_NONZERO_PATTERN) != 0) {
+        if (*matrix != nullptr) {
+            MatDestroy(matrix);
+        }
         return false;
     }
     return true;
@@ -3474,6 +3814,20 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                             selected_frequency_max_hz,
                             mode.frequency_hz);
                     }
+                    // Publication truncation and positive-branch filtering
+                    // must not discard an independently certified lower guard
+                    // below the fundamental positive frequency.
+                    for (double guard_frequency_hz :
+                         attempted_result.certified_spectral_guard_frequencies_hz) {
+                        selected_frequency_min_hz = std::min(
+                            selected_frequency_min_hz, guard_frequency_hz);
+                        selected_frequency_max_hz = std::max(
+                            selected_frequency_max_hz, guard_frequency_hz);
+                        selected_coverage_radius_hz = std::max(
+                            selected_coverage_radius_hz,
+                            std::abs(guard_frequency_hz -
+                                     shifted_problem.target_frequency_hz));
+                    }
                     const double local_coverage_tolerance_hz = std::max(
                         1.0,
                         1.0e-8 * std::max({
@@ -3514,7 +3868,8 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                     const bool nev_limit_reached =
                         attempted_nev >= maximum_nev;
                     const bool selected_frequency_range_available =
-                        !attempted_result.accepted_modes.empty() &&
+                        (!attempted_result.accepted_modes.empty() ||
+                         !attempted_result.certified_spectral_guard_frequencies_hz.empty()) &&
                         std::isfinite(selected_frequency_min_hz) &&
                         std::isfinite(selected_frequency_max_hz);
                     const bool lower_edge_covered =
@@ -3716,6 +4071,8 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                     "\"selected_coverage_radius_hz\":%.17g,"
                     "\"selected_frequency_min_hz\":%.17g,"
                     "\"selected_frequency_max_hz\":%.17g,"
+                    "\"coverage_guard_kind\":\"original_descriptor_certified_signed_ritz\","
+                    "\"certified_spectral_guard_count\":%zu,"
                     "\"result_truncated_at_requested_count\":%s,"
                     "\"raw_ritz_pool_saturated\":%s,"
                     "\"accepted_candidate_pool_saturated\":%s,"
@@ -3765,6 +4122,7 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                     final_selected_coverage_radius_hz,
                     final_selected_frequency_min_hz,
                     final_selected_frequency_max_hz,
+                    shifted_result.certified_spectral_guard_frequencies_hz.size(),
                     final_result_truncated_at_requested_count ? "true" : "false",
                     final_raw_ritz_pool_saturated ? "true" : "false",
                     final_accepted_candidate_pool_saturated ? "true" : "false",
@@ -4665,6 +5023,8 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
             sizeof(aggregate.executed_subwindows_json),
             executed_subwindows_json.data());
         *out_result = std::move(aggregate);
+        out_result->k0_demag_operator_probe =
+            window_operator_context.k0_demag_operator_probe;
         write_production_schur_diagnostics(
             problem,
             *out_result,
@@ -4713,6 +5073,25 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
             FrequencyDomainStatus::operator_error,
             "production shared-domain K0 Schur Poisson factorization setup failed",
             "poisson_factorization_setup_failed");
+    }
+    if (problem.k0_demag_probe != nullptr &&
+        !operator_context->k0_demag_probe_completed) {
+        const bool probe_passed =
+            run_k0_demag_operator_probe(problem, operator_context);
+        operator_context->k0_demag_probe_completed = true;
+        out_result->k0_demag_operator_probe =
+            operator_context->k0_demag_operator_probe;
+        if (!probe_passed) {
+            return fail_production_schur(
+                problem,
+                out_result,
+                FrequencyDomainStatus::operator_error,
+                "production shared-domain K0 demag operator probe failed before SLEPc",
+                "k0_demag_operator_probe_failed");
+        }
+    } else if (operator_context->k0_demag_probe_completed) {
+        out_result->k0_demag_operator_probe =
+            operator_context->k0_demag_operator_probe;
     }
     ++operator_context->shift_solver_setup_count;
 
@@ -4773,13 +5152,41 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
         ? static_cast<PetscInt>(problem.max_outer_iterations)
         : PETSC_DEFAULT;
     Mat shifted_preconditioner = nullptr;
-    bool exact_shifted_preconditioner = !borrowed_window_operator &&
-        create_production_exact_shift_preconditioner(
+    const bool bounded_window_preconditioner =
+        borrowed_window_operator &&
+        split_count <= kProductionWindowExactPreconditionerMaxDimension;
+    bool exact_shifted_preconditioner = bounded_window_preconditioner
+        ? create_production_cached_window_preconditioner(
+              operator_context, target_eigenvalue, &shifted_preconditioner)
+        : (!borrowed_window_operator &&
+           create_production_exact_shift_preconditioner(
                 schur_shell,
                 split_mass,
                 split_count,
                 target_eigenvalue,
-                &shifted_preconditioner);
+                &shifted_preconditioner,
+                &operator_context->solve_control));
+    if (!exact_shifted_preconditioner &&
+        (operator_context->solve_control.cancellation_observed ||
+         poisson_airbox_modal_cancel_requested(problem))) {
+        if (shifted_preconditioner != nullptr) {
+            MatDestroy(&shifted_preconditioner);
+        }
+        return fail_production_schur(
+            problem,
+            out_result,
+            FrequencyDomainStatus::interrupted,
+            "production shared-domain K0 Schur preconditioner setup was cancelled",
+            "cancel_requested");
+    }
+    if (bounded_window_preconditioner && !exact_shifted_preconditioner) {
+        return fail_production_schur(
+            problem,
+            out_result,
+            FrequencyDomainStatus::operator_error,
+            "production shared-domain K0 cached window preconditioner setup failed",
+            "cached_window_preconditioner_setup_failed");
+    }
     if (!exact_shifted_preconditioner) {
         exact_shifted_preconditioner = false;
         if (!create_production_shift_preconditioner(
@@ -5144,13 +5551,18 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                 scaled_imaginary,
                 in_window ? "positive_in_window" : "positive_out_of_window");
         }
-        if (!select_positive_frequency_mode(
-                kinematics,
-                ZeroFrequencyModePolicy::exclude)) {
+        const bool publish_positive = select_positive_frequency_mode(
+            kinematics, ZeroFrequencyModePolicy::exclude);
+        const bool certify_signed_guard =
+            problem.progress_total_subwindows > 0u &&
+            !kinematics.zero_frequency_mode;
+        if (!publish_positive && !certify_signed_guard) {
             continue;
         }
-        saw_positive = true;
-        ++out_result->positive_frequency_eigenpair_count;
+        if (publish_positive) {
+            saw_positive = true;
+            ++out_result->positive_frequency_eigenpair_count;
+        }
         if (frequency_window &&
             (kinematics.frequency_hz < problem.frequency_min_hz ||
              kinematics.frequency_hz > problem.frequency_max_hz)) {
@@ -5340,6 +5752,15 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
         if (metrics.reconstructed_full_descriptor_backward_error >
             problem.residual_tolerance) {
             ++out_result->full_residual_rejected_count;
+            continue;
+        }
+        if (certify_signed_guard) {
+            out_result->certified_spectral_guard_frequencies_hz.push_back(
+                kinematics.frequency_hz);
+        }
+        if (!publish_positive) {
+            // This eigenpair proves signed spectral coverage only. Keep it
+            // out of public positive modes, cluster ranks and branch tracking.
             continue;
         }
         ++out_result->full_residual_accepted_count;

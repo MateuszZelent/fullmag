@@ -433,6 +433,74 @@ std::string format_double(double value) noexcept
     return buffer;
 }
 
+std::string k0_demag_operator_probe_json_field(
+    const PoissonAirboxK0DemagProbeResult &probe)
+{
+    if (!probe.requested) {
+        return {};
+    }
+    const auto sample_json = [](const char *name,
+                                const PoissonAirboxK0DemagProbeSample &sample) {
+        return "\"" + std::string(name) + "\":{" +
+            "\"attempted\":" + (sample.attempted ? "true" : "false") +
+            ",\"passed\":" + (sample.passed ? "true" : "false") +
+            ",\"q_l2_norm\":" + format_double(sample.q_l2_norm) +
+            ",\"potential_relative_residual\":" +
+                format_double(sample.potential_relative_residual) +
+            ",\"potential_residual_normalization\":\"componentwise_absolute_csr_action\"" +
+            ",\"potential_action_relative_residual\":" +
+                format_double(sample.potential_action_relative_residual) +
+            ",\"gauge_constraint_abs\":" +
+                format_double(sample.gauge_constraint_abs) +
+            ",\"mean_field_a_per_m\":" +
+                format_double(sample.mean_field_a_per_m) +
+            ",\"mean_magnetization_a_per_m\":" +
+                format_double(sample.mean_magnetization_a_per_m) +
+            ",\"demag_factor\":" + format_double(sample.demag_factor) +
+            ",\"potential_energy_j\":" +
+                format_double(sample.potential_energy_j) +
+            ",\"magnetic_energy_j\":" +
+                format_double(sample.magnetic_energy_j) +
+            ",\"energy_form_relative_defect\":" +
+                format_double(sample.energy_form_relative_defect) + "}";
+    };
+    const char *status = probe.passed
+        ? "passed"
+        : probe.available ? "failed" : "not_observable";
+    return std::string("\"poisson_airbox_k0_demag_operator_probe\":{") +
+        "\"schema_version\":\"poisson_airbox_k0_demag_operator_probe.v1\"," +
+        "\"status\":\"" + std::string(status) + "\"," +
+        "\"potential_equation\":\"P_phi_plus_A_phiq_q_equals_zero\"," +
+        "\"potential_coefficient_unit\":\"A\"," +
+        "\"field_unit\":\"A/m\"," +
+        "\"energy_unit\":\"J\"," +
+        "\"relative_tolerance\":1e-8," +
+        "\"outer_boundary_kind\":\"" +
+            escape_json_string(probe.outer_boundary_kind) + "\"," +
+        "\"robin_beta\":" + format_double(probe.robin_beta) + "," +
+        "\"mu0_t_m_a\":" + format_double(probe.mu0_t_m_a) + "," +
+        "\"magnetic_volume_m3\":" +
+            format_double(probe.magnetic_volume_m3) + "," +
+        sample_json("global_y", probe.global_y) + "," +
+        sample_json("global_z", probe.global_z) + "," +
+        "\"failure_reason\":\"" +
+        escape_json_string(probe.failure_reason) + "\"}";
+}
+
+std::string append_json_field(std::string json, const std::string &field)
+{
+    if (field.empty() || json.empty() || json.back() != '}') {
+        return json;
+    }
+    json.pop_back();
+    if (json.size() > 1u) {
+        json += ',';
+    }
+    json += field;
+    json += '}';
+    return json;
+}
+
 bool append_shared_domain_cartesian_modes(
     const FullmagFemModalSharedDomainPayload &payload,
     const PoissonAirboxModalEigenResult &poisson_result,
@@ -1866,6 +1934,15 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
             native_floquet_sparse_assembly.floquet_a_qq.row_count;
         native_floquet_sparse_operator.phi_dof_count =
             native_floquet_sparse_assembly.floquet_p.row_count;
+        native_floquet_sparse_operator.uniform_transverse_probe_q_y =
+            &native_floquet_sparse_assembly.floquet_uniform_transverse_probe_q_y;
+        native_floquet_sparse_operator.uniform_transverse_probe_q_z =
+            &native_floquet_sparse_assembly.floquet_uniform_transverse_probe_q_z;
+        native_floquet_sparse_operator.full_descriptor_assembly =
+            &native_floquet_sparse_assembly;
+        native_floquet_sparse_operator.k_rad_per_m = floquet_k;
+        native_floquet_sparse_operator.mu0_T_m_A =
+            request.operator_request.mu0_T_m_A;
         native_floquet_sparse_operator.boundary_kind =
             native_floquet_sparse_assembly.boundary_kind;
         native_floquet_sparse_operator.gauge_policy =
@@ -2052,6 +2129,10 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
         problem.A_phiq = request.poisson_airbox_a_phiq_csr;
         problem.A_phiphi = request.poisson_airbox_a_phiphi_csr;
         problem.B_qq = request.poisson_airbox_b_qq_csr;
+        if (request.execution_target != ModalExecutionTarget::production_gpu &&
+            !shared_domain_assembly.k0_demag_probe.q_global_y.empty()) {
+            problem.k0_demag_probe = &shared_domain_assembly.k0_demag_probe;
+        }
         problem.phi_mean_weights = request.poisson_airbox_phi_mean_weights;
         problem.phi_mean_weights_count =
             request.poisson_airbox_phi_mean_weights_count;
@@ -2405,6 +2486,12 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
         result.status = status;
         result.error_message = poisson_result.error_message;
         result.diagnostics_json = poisson_result.diagnostics_json;
+        const std::string k0_demag_probe_json =
+            k0_demag_operator_probe_json_field(
+                poisson_result.k0_demag_operator_probe);
+        result.diagnostics_json = append_json_field(
+            std::move(result.diagnostics_json),
+            k0_demag_probe_json);
         result.modal_gpu_attestation.hypre_policy_observed =
             poisson_result.hypre_device_policy_observed;
         result.modal_gpu_attestation.hypre_policy_configured =
@@ -2520,6 +2607,9 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
             "},\"modes\":" +
             format_poisson_airbox_modes_json(poisson_result) +
             "}";
+        result.result_json = append_json_field(
+            std::move(result.result_json),
+            k0_demag_probe_json);
         if ((status == FrequencyDomainStatus::ok ||
              status == FrequencyDomainStatus::interrupted) &&
             !poisson_result.accepted_modes.empty()) {

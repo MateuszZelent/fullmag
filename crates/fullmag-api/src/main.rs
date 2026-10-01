@@ -3303,7 +3303,7 @@ where
                 })
         } else {
             None
-    };
+        };
     if state.current_live_session_epoch.load(Ordering::Relaxed) != admission_epoch {
         return Err(ApiError::conflict("current_live_session_transitioned"));
     }
@@ -3844,8 +3844,7 @@ pub(crate) async fn get_or_load_current_live_scene_document(
     // Scene export invokes the Python helper and must not run while the
     // current-state write lock is held. Otherwise one slow helper request
     // blocks the session list and the browser reports no local session.
-    let mut current_scene =
-        load_scene_document_state_async(state, Path::new(&script_path)).await?;
+    let mut current_scene = load_scene_document_state_async(state, Path::new(&script_path)).await?;
     normalize_scene_document_magnetization_assets(&mut current_scene);
     let builder_adapter = scene_document_builder_projection(&current_scene).ok();
 
@@ -3918,7 +3917,13 @@ pub(crate) async fn commit_current_live_scene_document(
             }
         }
     }
-    let (scene_document, realtime_snapshot, display_revision, preset_texture_change_logs, live_rebuild_stats) = {
+    let (
+        scene_document,
+        realtime_snapshot,
+        display_revision,
+        preset_texture_change_logs,
+        live_rebuild_stats,
+    ) = {
         let mut current = state.current_live_state.write().await;
         let snapshot = current
             .as_mut()
@@ -4020,12 +4025,9 @@ pub(crate) async fn commit_current_live_scene_document(
             live_rebuild_stats,
         )
     };
-    let realtime_state = current_live_realtime_state_from_snapshot(
-        state,
-        &realtime_snapshot,
-        display_revision,
-    )
-    .await;
+    let realtime_state =
+        current_live_realtime_state_from_snapshot(state, &realtime_snapshot, display_revision)
+            .await;
 
     publish_current_live_realtime_batch_changed(state, &realtime_state, false, 0).await?;
     eprintln!(

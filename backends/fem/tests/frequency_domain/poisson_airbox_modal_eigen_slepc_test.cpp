@@ -1619,6 +1619,90 @@ void FrequencyWindowRetriesUntilBothClippedEdgesAreCovered()
           "upper refinement subwindow must certify both interval endpoints independently");
 }
 
+void FrequencyWindowUsesCertifiedSignedGuardBelowFundamentalMode()
+{
+    std::vector<double> frequencies_hz{9.3e9};
+    for (unsigned int index = 0; index < 31; ++index) {
+        frequencies_hz.push_back(32.1e9 + index * 2.0e9);
+    }
+    const WindowSpectrumFixture fixture = make_window_spectrum_fixture(frequencies_hz);
+    const fd::PoissonAirboxEigenBlockProblem problem = fixture.problem(
+        8.5e9, 12.0e9, 1);
+    fd::PoissonAirboxModalEigenResult result{};
+    check(fd::solve_poisson_airbox_modal_eigen_cpu_schur(problem, &result) ==
+              fd::FrequencyDomainStatus::ok && result.window_complete,
+          "signed physical guards certify a gap below the fundamental positive mode");
+    check(result.accepted_modes.size() == 1 &&
+              std::abs(result.accepted_modes[0].frequency_hz - 9.3e9) < 1.0e4,
+          "negative guards never become published positive modes");
+    check(contains(result.executed_subwindows_json,
+                   "\"coverage_guard_kind\":\"original_descriptor_certified_signed_ritz\"") &&
+              contains(result.executed_subwindows_json, "\"lower_edge_covered\":true"),
+          "window diagnostics identify signed coverage evidence");
+}
+
+void FrequencyWindowRetainsDemagInBoundedCachedPreconditioner()
+{
+    std::vector<double> frequencies_hz{9.3e9};
+    for (unsigned int index = 0; index < 31; ++index) {
+        frequencies_hz.push_back(32.1e9 + index * 2.0e9);
+    }
+    WindowSpectrumFixture fixture = make_window_spectrum_fixture(frequencies_hz);
+    // Preserve the known Schur spectrum while making omitted demag feedback
+    // material: Aqq - Aqphi P^-1 Aphiq must retain the original first diagonal.
+    const double coupling = std::sqrt(0.2 * kTwoPi * frequencies_hz.front());
+    fixture.a_qphi.values.front() = coupling;
+    fixture.a_phiq.values.front() = coupling;
+    fixture.a_qq.values.front() += coupling * coupling;
+    for (const double lower_edge_hz : {8.5e9, 9.0e9}) {
+        const fd::PoissonAirboxEigenBlockProblem problem =
+            fixture.problem(lower_edge_hz, 12.0e9, 1);
+        fd::PoissonAirboxModalEigenResult result{};
+        check(fd::solve_poisson_airbox_modal_eigen_cpu_schur(problem, &result) ==
+                  fd::FrequencyDomainStatus::ok && result.window_complete,
+              "coupled small windows must retain the known certified Schur spectrum");
+        check(result.accepted_modes.size() == 1 &&
+                  std::abs(result.accepted_modes[0].frequency_hz - 9.3e9) < 1.0e4,
+              "cached shifts must not accumulate or replace the physical operator");
+        check(std::strcmp(result.shifted_preconditioner_kind,
+                          "exact_shifted_schur_action") == 0,
+              "small K0 windows must include demag in the shifted preconditioner");
+        check(result.operator_context_setup_count == 1u &&
+                  result.poisson_factorization_setup_count == 1u &&
+                  result.shift_solver_setup_count > 1u,
+              "multiple shifts must reuse one window-owned Poisson context");
+        check(result.full_residual_certified,
+              "cached preconditioning never substitutes for physical certification");
+    }
+}
+
+void FrequencyWindowCancellationDuringCachedPreconditionerPreservesStopReason()
+{
+    std::vector<double> frequencies_hz;
+    for (unsigned int index = 0; index < 32; ++index) {
+        frequencies_hz.push_back(9.3e9 + index * 2.0e9);
+    }
+    WindowSpectrumFixture fixture = make_window_spectrum_fixture(frequencies_hz);
+    fd::PoissonAirboxEigenBlockProblem problem = fixture.problem(8.5e9, 12.0e9, 1);
+    unsigned int cancel_polls = 0;
+    problem.cancel_user_data = &cancel_polls;
+    problem.cancel_requested = [](void *user_data) -> int {
+        return ++(*static_cast<unsigned int *>(user_data)) >= 8u ? 1 : 0;
+    };
+    fd::PoissonAirboxModalEigenResult result{};
+    check(fd::solve_poisson_airbox_modal_eigen_cpu_schur(problem, &result) ==
+              fd::FrequencyDomainStatus::interrupted,
+          "cancellation during cached Schur construction must preserve interruption");
+    check(result.shift_solver_setup_count > 0u && result.outer_iterations == 0u,
+          "the cancellation fixture must enter shift setup before starting EPS");
+    check(result.window_cancelled && !result.window_complete &&
+              !result.window_failed_subwindow && result.window_failed_subwindow_count == 0u,
+          "cancelled cache construction is neither coverage nor an operator failure");
+    check(std::strcmp(result.stop_reason, "cancel_requested") == 0 &&
+              result.accepted_modes.empty(),
+          "cancelled cache construction must not publish accepted modes");
+}
+
 void FrequencyWindowFailsClosedWhenMaximumRequestCannotCoverBothEdges()
 {
     std::vector<double> one_sided_frequencies_hz;
@@ -2629,10 +2713,46 @@ void SolvesSharedDomainGpuArnoldiModalFixture()
           "GPU Arnoldi modal fixture must publish only modes inside the requested window");
 }
 
+void CertifiesChargeFreeProbeWithoutDividingByCancelledSource()
+{
+    const std::uint32_t offsets[] = {0, 2};
+    const std::uint32_t columns[] = {0, 1};
+    const double values[] = {1.0, -1.0};
+    fd::CsrMatrixView matrix{};
+    matrix.row_count = 1;
+    matrix.column_count = 2;
+    matrix.row_offsets = offsets;
+    matrix.row_offsets_len = 2;
+    matrix.column_indices = columns;
+    matrix.column_indices_len = 2;
+    matrix.values = values;
+    matrix.values_len = 2;
+    std::vector<double> scale;
+    check(fd::poisson_probe_absolute_csr_action(matrix, {1.0, 1.0}, &scale) &&
+              scale.size() == 1 && scale[0] == 2.0,
+          "charge-free signed cancellation retains the original assembly scale");
+    check(fd::poisson_probe_componentwise_residual({1.0e-16}, {0.0}, scale) < 1.0e-8,
+          "roundoff in a zero-charge probe passes the unchanged backward-error gate");
+    check(fd::poisson_probe_componentwise_residual({1.0e-4}, {0.0}, scale) > 1.0e-8,
+          "a material potential-equation defect remains rejected");
+    check(fd::poisson_probe_componentwise_residual({0.0}, {0.0}, {0.0}) == 0.0 &&
+              std::isinf(fd::poisson_probe_componentwise_residual(
+                  {1.0e-16}, {0.0}, {0.0})),
+          "exact zero rows pass only for an exactly zero residual");
+    const double weights[] = {2.0};
+    check(std::abs(fd::poisson_probe_componentwise_residual(
+              {1.0}, {0.0}, {0.0}, weights, 1.0) - 0.5) < 1.0e-15,
+          "augmented gauge action participates in the equation scale");
+    check(!fd::poisson_probe_absolute_csr_action(
+              matrix, {1.0, std::numeric_limits<double>::quiet_NaN()}, &scale),
+          "nonfinite probe coefficients fail closed");
+}
+
 } // namespace
 
 int main()
 {
+    CertifiesChargeFreeProbeWithoutDividingByCancelledSource();
     // Hosts without a CUDA driver may run the CPU/SLEPc contract explicitly;
     // GPU qualification remains a separate device-backed test lane.
     const bool skip_gpu_tests = std::getenv("FULLMAG_SKIP_GPU_TESTS") != nullptr;
@@ -2656,6 +2776,9 @@ int main()
         FrequencyWindowCancellationPreservesStopReason();
         return 0;
     }
+    FrequencyWindowUsesCertifiedSignedGuardBelowFundamentalMode();
+    FrequencyWindowRetainsDemagInBoundedCachedPreconditioner();
+    FrequencyWindowCancellationDuringCachedPreconditionerPreservesStopReason();
     ReturnsRequestedSharedDomainCpuSchurModes();
     SolvesSharedDomainCpuSchurModalFixture();
     SolvesSharedDomainCpuSchurModalFixtureAboveExactPreconditionerCap();

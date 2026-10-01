@@ -106,6 +106,119 @@ std::string format_double(double value) noexcept
     return buffer;
 }
 
+std::string floquet_demag_operator_probe_json_field(
+    const FloquetDemagOperatorProbeResult &probe)
+{
+    if (!probe.requested) {
+        return {};
+    }
+    const auto sample_json = [](const char *direction,
+                                const FloquetDemagOperatorProbeSample &sample) {
+        return "\"" + std::string(direction) + "\":{"
+            "\"attempted\":" + (sample.attempted ? "true" : "false") +
+            ",\"passed\":" + (sample.passed ? "true" : "false") +
+            ",\"q_l2_norm\":" + format_double(sample.q_l2_norm) +
+            ",\"potential_relative_residual\":" +
+            format_double(sample.potential_relative_residual) +
+            ",\"self_energy_j\":" + format_double(sample.self_energy_j) +
+            ",\"potential_energy_j\":" +
+            format_double(sample.potential_energy_j) +
+            ",\"energy_form_relative_defect\":" +
+            format_double(sample.energy_form_relative_defect) + "}";
+    };
+    const char *status = probe.passed
+        ? "passed"
+        : probe.available ? "failed" : "not_observable";
+    return "\"dynamic_demag_operator_probe\":{"
+        "\"schema_version\":\"floquet_dynamic_demag_operator_probe.v1\","
+        "\"status\":\"" + std::string(status) + "\","
+        "\"potential_equation\":\"P_phi_plus_A_phiq_q_equals_zero\","
+        "\"potential_coefficient_unit\":\"A\","
+        "\"energy_unit\":\"J\","
+        "\"relative_tolerance\":1e-8,"
+        "\"field_reconstruction\":\"not_included_in_this_probe\","
+        "\"hermitian_relative_defect\":" +
+        format_double(probe.hermitian_relative_defect) + "," +
+        sample_json("global_y", probe.global_y) + "," +
+        sample_json("global_z", probe.global_z) + "}";
+}
+
+std::string floquet_dense_oracle_json_field(
+    const FloquetDenseOracleDiagnostics &oracle)
+{
+    if (!oracle.requested) {
+        return "\"floquet_dense_oracle\":null";
+    }
+    return std::string("\"floquet_dense_oracle\":{") +
+        "\"schema_version\":\"floquet_dense_original_schur_oracle.v1\"," +
+        "\"status\":\"" + std::string(oracle.status != nullptr ? oracle.status : "unknown") +
+        "\",\"reason\":\"" + std::string(oracle.reason != nullptr ? oracle.reason : "") +
+        "\",\"available\":" + std::string(oracle.available ? "true" : "false") +
+        ",\"candidate_found\":" + std::string(oracle.candidate_found ? "true" : "false") +
+        ",\"action_match\":" + std::string(oracle.action_match ? "true" : "false") +
+        ",\"st_type\":\"" +
+        std::string(oracle.st_shift_zero ? "shift" : "unverified") +
+        "\",\"st_shift\":" +
+        std::string(oracle.st_shift_zero ? "0" : "null") +
+        ",\"eps_type\":\"" + std::string(oracle.eps_type) +
+        "\",\"problem_type\":\"" + std::string(oracle.problem_type) +
+        "\",\"spectral_transform\":\"" +
+        std::string(oracle.spectral_transform) +
+        "\",\"q_complex_dof_count\":" + std::to_string(oracle.q_complex_dof_count) +
+        ",\"phi_dof_count\":" + std::to_string(oracle.phi_dof_count) +
+        ",\"real_split_dimension\":" + std::to_string(oracle.real_split_dimension) +
+        ",\"eps_converged_count\":" + std::to_string(oracle.eps_converged_count) +
+        ",\"eps_converged_reason\":" +
+        (oracle.eps_converged_reason_available
+             ? std::to_string(oracle.eps_converged_reason)
+             : std::string("null")) +
+        ",\"action_probe_count\":" + std::to_string(oracle.action_probe_count) +
+        ",\"operator_normalization_scale\":" +
+        format_double(oracle.operator_normalization_scale) +
+        ",\"action_relative_error_max\":" +
+        format_double(oracle.action_relative_error_max) +
+        ",\"poisson_relative_residual_max\":" +
+        format_double(oracle.poisson_relative_residual_max) +
+        ",\"eps_absolute_residual\":" +
+        format_double(oracle.eps_absolute_residual) +
+        ",\"rotated_omega_rad_s\":" +
+        format_double(oracle.rotated_omega_rad_s) +
+        ",\"rotated_imaginary_rad_s\":" +
+        format_double(oracle.rotated_imaginary_rad_s) +
+        ",\"frequency_hz\":" + format_double(oracle.frequency_hz) +
+        ",\"frequency_distance_hz\":" +
+        format_double(oracle.frequency_distance_hz) +
+        ",\"raw_lambda_real_per_s\":" +
+        format_double(oracle.raw_lambda_real_per_s) +
+        ",\"raw_lambda_imag_rad_per_s\":" +
+        format_double(oracle.raw_lambda_imag_rad_per_s) +
+        ",\"projected_lambda_real_per_s\":" +
+        format_double(oracle.projected_lambda_real_per_s) +
+        ",\"projected_lambda_imag_rad_per_s\":" +
+        format_double(oracle.projected_lambda_imag_rad_per_s) +
+        ",\"magnetic_residual_raw\":" +
+        format_double(oracle.magnetic_residual_raw) +
+        ",\"magnetic_residual_projected\":" +
+        format_double(oracle.magnetic_residual_projected) +
+        ",\"potential_residual\":" +
+        format_double(oracle.potential_residual) +
+        ",\"q_projection_ratio\":" +
+        format_double(oracle.q_projection_ratio) + "}";
+}
+
+void append_optional_json_field(std::string &json, const std::string &field)
+{
+    if (field.empty() || json.empty() || json.back() != '}') {
+        return;
+    }
+    json.pop_back();
+    if (json.size() > 1u) {
+        json += ",";
+    }
+    json += field;
+    json += "}";
+}
+
 std::string mode_kinematics_json_fields(ComplexEigenvalue lambda)
 {
     const ModeKinematics kinematics = map_eigenvalue(
@@ -475,9 +588,22 @@ std::string format_slepc_modes_json(
                 mode.floquet_potential_residual);
             modes += ",\"floquet_descriptor_certified\":" +
                 std::string(mode.floquet_descriptor_certified ? "true" : "false") +
-                ",\"floquet_geometric_bc_certified\":false,"
-                "\"floquet_full_descriptor_certified\":false,"
-                "\"floquet_certificate_scope\":\"reduced_original_blocks_only\","
+                ",\"floquet_seam_frame_certified\":" +
+                std::string(mode.floquet_seam_frame_certified ? "true" : "false") +
+                ",\"floquet_gauge_policy_satisfied\":" +
+                std::string(mode.floquet_gauge_policy_satisfied ? "true" : "false") +
+                ",\"poisson_boundary_kind\":\"" +
+                escape_json_string(mode.floquet_poisson_boundary_kind.data()) +
+                "\",\"poisson_gauge_policy\":\"" +
+                escape_json_string(mode.floquet_poisson_gauge_policy.data()) +
+                "\",\"floquet_geometric_bc_certified\":false,"
+                "\"floquet_full_descriptor_certified\":" +
+                std::string(mode.floquet_descriptor_certified ? "true" : "false") +
+                ",\"floquet_certificate_scope\":\"" +
+                std::string(mode.floquet_descriptor_certified
+                    ? "full_projected_weak_form_and_periodic_seams"
+                    : "reduced_original_blocks_only") +
+                "\","
                 "\"potential_representation\":\"complex_coefficients\","
                 "\"magnetic_relative_residual\":" +
                 format_double(mode.floquet_magnetic_residual) +
@@ -489,12 +615,24 @@ std::string format_slepc_modes_json(
                 format_double(mode.floquet_potential_residual) +
                 ",\"reduced_descriptor_relative_residual\":" +
                 format_double(reduced_descriptor_residual) +
+                ",\"floquet_full_magnetic_relative_residual\":" +
+                format_double(mode.floquet_full_magnetic_residual) +
+                ",\"floquet_full_potential_relative_residual\":" +
+                format_double(mode.floquet_full_potential_residual) +
+                ",\"floquet_scalar_phase_seam_relative_residual\":" +
+                format_double(mode.floquet_scalar_phase_seam_residual) +
+                ",\"floquet_tangent_frame_seam_relative_residual\":" +
+                format_double(mode.floquet_tangent_frame_seam_residual) +
+                ",\"floquet_cartesian_magnetic_seam_relative_residual\":" +
+                format_double(mode.floquet_cartesian_seam_residual) +
+                ",\"floquet_equilibrium_pair_relative_residual\":" +
+                format_double(mode.floquet_equilibrium_pair_residual) +
                 ",\"magnetic_block_backward_error\":" +
                 format_double(mode.floquet_magnetic_residual) +
                 ",\"poisson_block_backward_error\":" +
                 format_double(mode.floquet_potential_residual) +
-                ",\"gauge_constraint_backward_error\":0,"
-                "\"gauge_constraint_policy\":\"not_applicable_nonzero_k_invertible_poisson\","
+                ",\"gauge_constraint_backward_error\":null,"
+                "\"gauge_constraint_policy\":\"nonzero_k_poisson_without_mean_constraint\","
                 "\"reduced_original_block_residuals\":{"
                 "\"magnetic\":" +
                 format_double(mode.floquet_magnetic_residual) +
@@ -1049,6 +1187,8 @@ std::string production_window_diagnostics_json(
         json +=
             "\"ksp_type\":\"" +
             std::string(policy.ksp_type) +
+            "\",\"ksp_orthogonalization\":\"" +
+            std::string(policy.ksp_orthogonalization) +
             "\",\"pc_type\":\"" +
             std::string(policy.pc_type) +
             "\",\"max_outer_iterations\":" +
@@ -1059,6 +1199,10 @@ std::string production_window_diagnostics_json(
             format_double(policy.ksp_atol) +
             ",\"ksp_max_iterations\":" +
             std::to_string(policy.ksp_max_iterations) +
+            ",\"ksp_restart\":" +
+            std::to_string(policy.ksp_restart) +
+            ",\"ksp_breakdown_tolerance\":" +
+            format_double(policy.ksp_breakdown_tolerance) +
             ",\"ksp_final_residual\":" +
             format_double(ksp_final_residual) +
             ",\"factorization_package\":\"" +
@@ -1106,6 +1250,11 @@ std::string production_window_diagnostics_json(
         if (i != 0) {
             json += ",";
         }
+        const bool has_floquet_candidate_diagnostics =
+            solve.result.solver_adapter != nullptr &&
+            std::strcmp(
+                solve.result.solver_adapter,
+                "floquet_airbox_cpu_schur_slepc") == 0;
         json +=
             "{\"index\":" +
             std::to_string(subwindow.index) +
@@ -1142,7 +1291,119 @@ std::string production_window_diagnostics_json(
             ",\"non_real_rotated_eigenvalues\":" +
             std::to_string(solve.result.non_real_rotated_eigenvalue_count) +
             ",\"candidate_relative_residual_max\":" +
-            format_double(solve.result.max_candidate_relative_residual) +
+            format_double(solve.result.max_candidate_relative_residual);
+        if (has_floquet_candidate_diagnostics) {
+            json +=
+                ",\"residual_evaluation_candidates\":" +
+                std::to_string(
+                    solve.result.residual_evaluation_candidate_count) +
+                ",\"ksp_diagnostics_available\":" +
+                std::string(solve.result.ksp_diagnostics_available ? "true" : "false") +
+                ",\"ksp_last_iterations\":" +
+                std::to_string(solve.result.ksp_last_iterations) +
+                ",\"ksp_final_residual\":" +
+                format_double(solve.result.ksp_final_residual) +
+                ",\"ksp_last_true_residual_available\":" +
+                std::string(solve.result.ksp_last_true_residual_available
+                    ? "true" : "false") +
+                ",\"ksp_last_true_residual_norm\":" +
+                format_double(solve.result.ksp_last_true_residual_norm) +
+                ",\"ksp_last_rhs_norm\":" +
+                format_double(solve.result.ksp_last_rhs_norm) +
+                ",\"ksp_last_true_relative_residual\":" +
+                format_double(solve.result.ksp_last_true_relative_residual) +
+                ",\"ksp_true_residual_sample_count\":" +
+                std::to_string(solve.result.ksp_true_residual_sample_count) +
+                ",\"ksp_true_residual_measurement_failure_count\":" +
+                std::to_string(solve.result.ksp_true_residual_measurement_failure_count) +
+                ",\"ksp_max_true_relative_residual\":" +
+                format_double(solve.result.ksp_max_true_relative_residual) +
+                ",\"ksp_pc_side\":" +
+                (solve.result.ksp_last_true_residual_available
+                    ? std::to_string(solve.result.ksp_pc_side)
+                    : std::string("null")) +
+                ",\"ksp_norm_type\":" +
+                (solve.result.ksp_last_true_residual_available
+                    ? std::to_string(solve.result.ksp_norm_type)
+                    : std::string("null")) +
+                ",\"ksp_converged_reason\":" +
+                (solve.result.ksp_converged_reason_available
+                    ? std::to_string(solve.result.ksp_converged_reason)
+                    : std::string("null")) +
+                ",\"ksp_residual_norm_semantics\":\"petsc_configured_norm_from_last_shift_invert_solve\"" +
+                ",\"eps_converged_reason\":" +
+                (solve.result.eps_converged_reason_available
+                    ? std::to_string(solve.result.eps_converged_reason)
+                    : std::string("null")) +
+                ",\"eps_dimensions_available\":" +
+                std::string(solve.result.eps_dimensions_available ? "true" : "false") +
+                ",\"eps_nev\":" +
+                (solve.result.eps_dimensions_available
+                    ? std::to_string(solve.result.eps_nev)
+                    : std::string("null")) +
+                ",\"eps_ncv\":" +
+                (solve.result.eps_dimensions_available
+                    ? std::to_string(solve.result.eps_ncv)
+                    : std::string("null")) +
+                ",\"eps_mpd\":" +
+                (solve.result.eps_dimensions_available && solve.result.eps_mpd > 0
+                    ? std::to_string(solve.result.eps_mpd)
+                    : std::string("null")) +
+                ",\"eps_monitor_iteration\":" +
+                std::to_string(solve.result.eps_monitor_iteration) +
+                ",\"eps_first_unconverged_error_estimate\":" +
+                format_double(solve.result.eps_first_unconverged_error_estimate) +
+                ",\"eps_convergence_test\":\"absolute_true_residual\"" +
+                ",\"eps_normalized_absolute_tolerance\":" +
+                format_double(solve.result.eps_normalized_absolute_tolerance) +
+                ",\"eps_normalized_absolute_residual_max\":" +
+                format_double(solve.result.max_eps_normalized_absolute_residual) +
+                ",\"floquet_magnetic_relative_residual_max\":" +
+                format_double(
+                    solve.result.max_floquet_magnetic_relative_residual) +
+                ",\"floquet_potential_relative_residual_max\":" +
+                format_double(
+                    solve.result.max_floquet_potential_relative_residual) +
+                ",\"worst_candidate_frequency_hz\":" +
+                format_double(solve.result.worst_candidate_frequency_hz) +
+                ",\"worst_candidate_residuals\":{\"eps_normalized_absolute\":" +
+                format_double(
+                    solve.result.worst_candidate_eps_normalized_absolute_residual) +
+                ",\"magnetic\":" +
+                format_double(
+                    solve.result.worst_candidate_floquet_magnetic_relative_residual) +
+                ",\"potential\":" +
+                format_double(
+                    solve.result.worst_candidate_floquet_potential_relative_residual) +
+                ",\"magnetic_unprojected\":" +
+                format_double(
+                    solve.result.worst_candidate_unprojected_magnetic_relative_residual) +
+                ",\"rotated_imaginary_rad_s\":" +
+                format_double(
+                    solve.result.worst_candidate_rotated_imaginary_rad_s) +
+                ",\"q_projection_ratio\":" +
+                format_double(
+                    solve.result.worst_candidate_q_projection_ratio) +
+                "}" +
+                ",\"eigenpair_evaluation_failures\":" +
+                std::to_string(
+                    solve.result.eigenpair_evaluation_failure_count) +
+                ",\"mode_vector_failures\":" +
+                std::to_string(solve.result.mode_vector_failure_count) +
+                ",\"potential_reconstruction_failures\":" +
+                std::to_string(
+                    solve.result.potential_reconstruction_failure_count) +
+                "," +
+                floquet_dense_oracle_json_field(solve.result.floquet_dense_oracle);
+        }
+        const std::string demag_probe_json_field =
+            floquet_demag_operator_probe_json_field(
+                solve.result.dynamic_demag_operator_probe);
+        if (!demag_probe_json_field.empty()) {
+            json += ",";
+            json += demag_probe_json_field;
+        }
+        json +=
             ",\"candidate_frequency_hz\":[" +
             format_double(solve.result.min_candidate_frequency_hz) + "," +
             format_double(solve.result.max_candidate_frequency_hz) + "]" +
@@ -2087,6 +2348,8 @@ FrequencyDomainContractResult solve_dense_production_modal_payload(
         std::string(slepc_result.poisson_pc_type) +
         "\",\"poisson_factorization_package\":\"" +
         std::string(slepc_result.poisson_factorization_package) +
+        "\",\"poisson_factorization_shift_policy\":\"" +
+        std::string(slepc_result.poisson_factorization_shift_policy) +
         "\",\"poisson_iteration_semantics\":\"" +
         std::string(slepc_result.poisson_iteration_semantics) +
         "\",\"poisson_ksp_rtol\":" +
@@ -2114,6 +2377,10 @@ FrequencyDomainContractResult solve_dense_production_modal_payload(
         format_double(slepc_result.ksp_atol) +
         ",\"ksp_max_iterations\":" +
         std::to_string(slepc_result.ksp_max_iterations) +
+        ",\"ksp_restart\":" +
+        std::to_string(slepc_result.ksp_restart) +
+        ",\"ksp_breakdown_tolerance\":" +
+        format_double(slepc_result.ksp_breakdown_tolerance) +
         ",\"ksp_final_residual\":" +
         format_double(slepc_result.ksp_final_residual) +
         ",\"factorization_package\":\"" +
@@ -2228,6 +2495,9 @@ FrequencyDomainContractResult solve_sparse_production_modal_payload(
     const char *kSparseSolverModel = native_floquet_sparse
         ? "floquet_real_frequency_slepc_sparse"
         : "slepc_shift_invert_production_cpu_sparse_csr";
+    const std::string demag_probe_json_field =
+        floquet_demag_operator_probe_json_field(
+            slepc_result.dynamic_demag_operator_probe);
     if (!slepc_result.ok) {
         const char *stop_reason = stop_reason_or_default(slepc_result);
         result.status = FrequencyDomainStatus::solve_error;
@@ -2279,6 +2549,8 @@ FrequencyDomainContractResult solve_sparse_production_modal_payload(
             ",\"shift_omega_rad_s\":" +
             format_double(shift.shift_omega_rad_s) +
             "}";
+        append_optional_json_field(result.diagnostics_json, demag_probe_json_field);
+        append_optional_json_field(result.result_json, demag_probe_json_field);
         return result;
     }
 
@@ -2325,6 +2597,8 @@ FrequencyDomainContractResult solve_sparse_production_modal_payload(
         std::string(slepc_result.poisson_pc_type) +
         "\",\"poisson_factorization_package\":\"" +
         std::string(slepc_result.poisson_factorization_package) +
+        "\",\"poisson_factorization_shift_policy\":\"" +
+        std::string(slepc_result.poisson_factorization_shift_policy) +
         "\",\"poisson_iteration_semantics\":\"" +
         std::string(slepc_result.poisson_iteration_semantics) +
         "\",\"poisson_ksp_rtol\":" +
@@ -2351,6 +2625,10 @@ FrequencyDomainContractResult solve_sparse_production_modal_payload(
         format_double(slepc_result.ksp_atol) +
         ",\"ksp_max_iterations\":" +
         std::to_string(slepc_result.ksp_max_iterations) +
+        ",\"ksp_restart\":" +
+        std::to_string(slepc_result.ksp_restart) +
+        ",\"ksp_breakdown_tolerance\":" +
+        format_double(slepc_result.ksp_breakdown_tolerance) +
         ",\"ksp_final_residual\":" +
         format_double(slepc_result.ksp_final_residual) +
         ",\"factorization_package\":\"" +
@@ -2409,6 +2687,8 @@ FrequencyDomainContractResult solve_sparse_production_modal_payload(
         format_double(shift.shift_omega_rad_s) +
         ",\"modes\":" +
         format_slepc_modes_json(slepc_result) + "}";
+    append_optional_json_field(result.diagnostics_json, demag_probe_json_field);
+    append_optional_json_field(result.result_json, demag_probe_json_field);
     result.artifact_manifest_path.clear();
     return result;
 }

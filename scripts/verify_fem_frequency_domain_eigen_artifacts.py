@@ -42,16 +42,26 @@ ALLOWED_TRACKING_SCORE_SUMMARY_SOURCES = {
     "seed_only",
     "frequency_score_fallback",
     "modal_overlap_weighted_score",
+    "modal_overlap_unweighted_score",
+    "modal_subspace_transport_score",
+    "modal_overlap_unavailable",
     "mixed_modal_overlap_and_frequency_fallback",
+    "mixed_modal_tracking_methods",
 }
 ALLOWED_TRACKING_SCORE_POINT_SOURCES = {
     "seed",
     "frequency_score_fallback",
     "modal_overlap_weighted_score",
+    "modal_overlap_unweighted_score",
+    "modal_subspace_transport_score",
+    "modal_overlap_unavailable",
 }
 TRACKING_SOURCES_REQUIRING_MODAL_OVERLAP = {
     "modal_overlap_weighted_score",
+    "modal_overlap_unweighted_score",
+    "modal_subspace_transport_score",
     "mixed_modal_overlap_and_frequency_fallback",
+    "mixed_modal_tracking_methods",
 }
 PRODUCTION_MODAL_K_PATH_SUMMARY_TRACKING_SOURCES = {
     "modal_overlap_weighted_score",
@@ -563,6 +573,106 @@ def require_mode_field_handoff(
         expected_resource_key,
         f"{name}.mode_field_resource_key",
     )
+
+
+def expected_mode_id(sample_index: int, raw_mode_index: int) -> str:
+    return f"sample-{sample_index:04d}/mode-{raw_mode_index:04d}"
+
+
+def validate_artifact_mode_identity(
+    payload: dict,
+    name: str,
+    sample_index: int,
+    raw_mode_index: int,
+    sample_ids_by_index: dict[int, str],
+    *,
+    required: bool = False,
+) -> None:
+    publishes_identity = "sample_id" in payload or "mode_id" in payload
+    if not required and not publishes_identity:
+        return
+    expected_sample_id = sample_ids_by_index.get(sample_index)
+    if expected_sample_id is None:
+        fail(
+            f"{name}.sample_id cannot be verified because spectrum sample "
+            f"{sample_index} has no stable sample_id"
+        )
+    require_equal(payload.get("sample_id"), expected_sample_id, f"{name}.sample_id")
+    require_equal(
+        payload.get("mode_id"),
+        expected_mode_id(sample_index, raw_mode_index),
+        f"{name}.mode_id",
+    )
+
+
+def validate_json_mode_field_availability(
+    payload: dict,
+    name: str,
+    sample_index: int,
+    raw_mode_index: int,
+) -> bool:
+    if "mode_field_available" in payload:
+        available = require_boolean(
+            payload.get("mode_field_available"),
+            f"{name}.mode_field_available",
+        )
+    else:
+        # Legacy artifacts did not carry an explicit availability bit. Their
+        # resource key remains the strongest indicator; a stable ID alone is
+        # not a resolvable field handoff.
+        available = payload.get("mode_field_resource_key") is not None
+    expected_field_id = mode_field_id(sample_index, raw_mode_index)
+    resource_key = payload.get("mode_field_resource_key")
+    if available:
+        require_mode_field_handoff(payload, name, sample_index, raw_mode_index)
+    else:
+        field_id = payload.get("mode_field_id")
+        if field_id is not None:
+            require_equal(field_id, expected_field_id, f"{name}.mode_field_id")
+        if resource_key is not None:
+            fail(
+                f"{name}.mode_field_resource_key must be null when "
+                "mode_field_available is false"
+            )
+    return available
+
+
+def require_csv_boolean(value: object, name: str) -> bool:
+    if value == "true":
+        return True
+    if value == "false":
+        return False
+    fail(f"{name} must be the CSV boolean 'true' or 'false'")
+
+
+def validate_csv_mode_field_availability(
+    row: dict[str, str],
+    name: str,
+    sample_index: int,
+    raw_mode_index: int,
+    expected_available: bool,
+    *,
+    has_explicit_availability: bool,
+) -> None:
+    available = (
+        require_csv_boolean(row.get("mode_field_available"), f"{name}.mode_field_available")
+        if has_explicit_availability
+        else expected_available
+    )
+    require_equal(available, expected_available, f"{name}.mode_field_available")
+    expected_field_id = mode_field_id(sample_index, raw_mode_index)
+    field_id = row.get("mode_field_id", "").strip()
+    resource_key = row.get("mode_field_resource_key", "").strip()
+    if available:
+        require_mode_field_handoff(row, name, sample_index, raw_mode_index)
+    else:
+        if field_id:
+            require_equal(field_id, expected_field_id, f"{name}.mode_field_id")
+        if resource_key:
+            fail(
+                f"{name}.mode_field_resource_key must be empty when "
+                "mode_field_available is false"
+            )
 
 
 def require_tracking_summary(payload: dict, name: str) -> None:
@@ -1239,16 +1349,31 @@ def validate_mode_summary(
     expected_resource_key = mode_field_resource_key(expected_field_id)
     has_field_id = mode.get("mode_field_id") is not None
     has_resource_key = mode.get("mode_field_resource_key") is not None
-    if has_field_id != has_resource_key:
-        missing_name = "mode.mode_field_resource_key" if has_field_id else "mode.mode_field_id"
-        fail(f"{missing_name} requires the paired mode field handoff")
-    if has_field_id:
+    if "mode_field_available" in mode:
+        field_available = require_boolean(
+            mode.get("mode_field_available"),
+            "mode.mode_field_available",
+        )
+    else:
+        if has_field_id != has_resource_key:
+            missing_name = "mode.mode_field_resource_key" if has_field_id else "mode.mode_field_id"
+            fail(f"{missing_name} requires the paired mode field handoff")
+        field_available = has_field_id and has_resource_key
+    if field_available:
         require_equal(mode.get("mode_field_id"), expected_field_id, "mode.mode_field_id")
         require_equal(
             mode.get("mode_field_resource_key"),
             expected_resource_key,
             "mode.mode_field_resource_key",
         )
+    else:
+        if has_field_id:
+            require_equal(mode.get("mode_field_id"), expected_field_id, "mode.mode_field_id")
+        if has_resource_key:
+            fail(
+                "mode.mode_field_resource_key must be null when "
+                "mode.mode_field_available is false"
+            )
     frequency_hz = require_finite_number(mode.get("frequency_hz"), "mode.frequency_hz")
     require_frequency_inside_window(frequency_hz, requested_window_hz, "mode.frequency_hz")
     frequency_real_hz = require_finite_number(mode.get("frequency_real_hz"), "mode.frequency_real_hz")
@@ -1270,7 +1395,7 @@ def validate_mode_summary(
     validate_mode_diagnostics_fields(mode, "mode", frequency_hz)
     require_non_empty_string(mode.get("dominant_polarization"), "mode.dominant_polarization")
 
-    if not has_field_id:
+    if not field_available:
         return (
             sample_index,
             raw_mode_index,
@@ -2713,6 +2838,37 @@ def validate_production_k_path_solver_subwindows(
                 f"got {residual!r}, "
                 f"expected <= {PRODUCTION_K_PATH_MAX_RESIDUAL_RELATIVE_L2!r}"
             )
+
+
+def validate_assignment_ambiguity_metric(diagnostics: dict, prefix: str) -> None:
+    metric_fields = (
+        "ambiguous_assignment_count",
+        "ambiguous_assignment_count_available",
+        "ambiguous_assignment_count_unavailable_reason",
+    )
+    if not any(field in diagnostics for field in metric_fields):
+        return
+    available = diagnostics.get("ambiguous_assignment_count_available")
+    if not isinstance(available, bool):
+        fail(f"{prefix}.ambiguous_assignment_count_available must be boolean")
+    count = diagnostics.get("ambiguous_assignment_count")
+    reason = diagnostics.get("ambiguous_assignment_count_unavailable_reason")
+    if available:
+        require_non_negative_int(count, f"{prefix}.ambiguous_assignment_count")
+        if reason not in (None, ""):
+            fail(
+                f"{prefix}.ambiguous_assignment_count_unavailable_reason must be "
+                "null or empty when the metric is available"
+            )
+    else:
+        if count is not None:
+            fail(
+                f"{prefix}.ambiguous_assignment_count must be null when unavailable"
+            )
+        require_non_empty_string(
+            reason,
+            f"{prefix}.ambiguous_assignment_count_unavailable_reason",
+        )
 
 
 def validate_production_modal_k_path_branch_tracking(
@@ -4269,9 +4425,12 @@ def validate_dispersion(
     known_modes: dict[tuple[int, int], tuple[float, float, float, float]],
     known_mode_summaries: dict[tuple[int, int], dict],
     known_samples: dict[int, tuple[float, tuple[float, float, float], str]],
+    sample_ids_by_index: dict[int, str],
     branch_ids_by_mode: dict[tuple[int, int], int],
     tracking_sources_by_mode: dict[tuple[int, int], str],
     overlap_by_mode: dict[tuple[int, int], float],
+    *,
+    require_stable_ids: bool,
 ) -> dict[tuple[int, int], dict[str, str]]:
     path = root / "eigen/dispersion.csv"
     require_file(path)
@@ -4295,6 +4454,10 @@ def validate_dispersion(
         "mode_field_id",
         "mode_field_resource_key",
     }
+    identity_columns = {"sample_id", "mode_id", "mode_field_available"}
+    publishes_identity_columns = bool(identity_columns.intersection(reader.fieldnames or []))
+    if require_stable_ids or publishes_identity_columns:
+        required_columns.update(identity_columns)
     missing = required_columns.difference(reader.fieldnames or [])
     if missing:
         fail(f"eigen/dispersion.csv missing columns: {sorted(missing)!r}")
@@ -4328,6 +4491,14 @@ def validate_dispersion(
                 "eigen/dispersion.csv references unknown sample "
                 f"sample={sample_index}"
             )
+        validate_artifact_mode_identity(
+            row,
+            f"dispersion row {row_index}",
+            sample_index,
+            raw_mode_index,
+            sample_ids_by_index,
+            required=require_stable_ids,
+        )
         expected_path_s, expected_k_vector, expected_label = sample_metadata
         path_s = require_finite_number(
             float(row["path_s_rad_per_m"]),
@@ -4391,10 +4562,13 @@ def validate_dispersion(
             f"dispersion row {row_index}.tracking_score_source",
         )
         overlap_score_text = row.get("overlap_score", "").strip()
-        if tracking_score_source == "modal_overlap_weighted_score" and not overlap_score_text:
+        if tracking_score_source in {
+            "modal_overlap_weighted_score",
+            "modal_overlap_unweighted_score",
+        } and not overlap_score_text:
             fail(
                 f"dispersion row {row_index}.overlap_score must be present "
-                "for modal_overlap_weighted_score"
+                f"for {tracking_score_source}"
             )
         if overlap_score_text:
             overlap_score = require_finite_number(
@@ -4416,30 +4590,20 @@ def validate_dispersion(
                     f"dispersion row {row_index}.overlap_score",
                     absolute_tolerance=1.0e-12,
                 )
-        if known_mode_summaries[mode_key].get("mode_field_id") is None:
-            require_equal(
-                row.get("mode_field_id"),
-                "",
-                f"dispersion row {row_index}.mode_field_id",
-            )
-            require_equal(
-                row.get("mode_field_resource_key"),
-                "",
-                f"dispersion row {row_index}.mode_field_resource_key",
-            )
-        else:
-            expected_field_id = mode_field_id(sample_index, raw_mode_index)
-            expected_resource_key = mode_field_resource_key(expected_field_id)
-            require_equal(
-                row.get("mode_field_id"),
-                expected_field_id,
-                f"dispersion row {row_index}.mode_field_id",
-            )
-            require_equal(
-                row.get("mode_field_resource_key"),
-                expected_resource_key,
-                f"dispersion row {row_index}.mode_field_resource_key",
-            )
+        expected_field_available = validate_json_mode_field_availability(
+            known_mode_summaries[mode_key],
+            f"spectrum mode {sample_index}/{raw_mode_index}",
+            sample_index,
+            raw_mode_index,
+        )
+        validate_csv_mode_field_availability(
+            row,
+            f"dispersion row {row_index}",
+            sample_index,
+            raw_mode_index,
+            expected_field_available,
+            has_explicit_availability="mode_field_available" in (reader.fieldnames or []),
+        )
         frequency_hz = require_finite_number(
             float(row["frequency_hz"]),
             f"dispersion row {row_index}.frequency_hz",
@@ -4929,6 +5093,13 @@ def main(argv: list[str] | None = None) -> int:
 
     require_equal(spectrum.get("schema_version"), "eigen_spectrum.v2", "spectrum.schema_version")
     require_equal(branches.get("schema_version"), "eigen_branches.v2", "branches.schema_version")
+    spectrum_diagnostics_summary = spectrum.get("diagnostics_summary")
+    if spectrum_diagnostics_summary is not None:
+        if not isinstance(spectrum_diagnostics_summary, dict):
+            fail("spectrum.diagnostics_summary must be an object")
+        validate_assignment_ambiguity_metric(
+            spectrum_diagnostics_summary, "spectrum.diagnostics_summary"
+        )
     require_equal(
         manifest.get("schema_version"),
         "frequency_domain_manifest.v1",
@@ -5059,6 +5230,8 @@ def main(argv: list[str] | None = None) -> int:
     known_modes: dict[tuple[int, int], tuple[float, float, float, float]] = {}
     known_mode_summaries: dict[tuple[int, int], dict] = {}
     known_samples: dict[int, tuple[float, tuple[float, float, float], str]] = {}
+    sample_ids_by_index: dict[int, str] = {}
+    sample_indices_by_id: dict[str, int] = {}
     published_mode_counts: list[int] = []
     for sample_position, sample in enumerate(samples):
         sample_index = require_non_negative_int(
@@ -5082,6 +5255,15 @@ def main(argv: list[str] | None = None) -> int:
         if not isinstance(label, str):
             fail(f"spectrum.samples[{sample_position}].label must be a string or null")
         known_samples[sample_index] = (path_s, k_vector, label)
+        if "sample_id" in sample or args.require_production_modal_k_path or args.require_production_gamma_k_path:
+            sample_id = require_non_empty_string(
+                sample.get("sample_id"),
+                f"spectrum.samples[{sample_position}].sample_id",
+            )
+            if sample_id in sample_indices_by_id and sample_indices_by_id[sample_id] != sample_index:
+                fail(f"duplicate spectrum sample_id {sample_id!r}")
+            sample_ids_by_index[sample_index] = sample_id
+            sample_indices_by_id[sample_id] = sample_index
         modes = require_object_list(sample.get("modes"), f"spectrum.samples[{sample_position}].modes")
         published_mode_counts.append(len(modes))
         for mode in modes:
@@ -5113,8 +5295,14 @@ def main(argv: list[str] | None = None) -> int:
     if mode_field_storage_format == "none":
         if manifest_mode_paths or manifest_mode_resources:
             fail("spectrum-only manifest must not declare mode metadata paths or field resources")
-        if any(mode.get("mode_field_id") is not None for mode in known_mode_summaries.values()):
-            fail("spectrum-only manifest must not publish mode field handoffs")
+        for (sample_index, raw_mode_index), mode in known_mode_summaries.items():
+            if validate_json_mode_field_availability(
+                mode,
+                f"spectrum mode {sample_index}/{raw_mode_index}",
+                sample_index,
+                raw_mode_index,
+            ):
+                fail("spectrum-only manifest must not publish available mode fields")
     spectrum_mode_count = require_non_negative_int(
         spectrum.get("mode_count"),
         "spectrum.mode_count",
@@ -5169,6 +5357,9 @@ def main(argv: list[str] | None = None) -> int:
     if not isinstance(branch_diagnostics, dict):
         fail("branches.diagnostics must be an object")
     require_tracking_summary(branch_diagnostics, "branches.diagnostics")
+    validate_assignment_ambiguity_metric(
+        branch_diagnostics, "branches.diagnostics"
+    )
     for branch_index, branch in enumerate(require_object_list(branches.get("branches"), "branches.branches")):
         branch_id = require_non_negative_int(branch.get("branch_id"), f"branches[{branch_index}].branch_id")
         for point in require_object_list(branch.get("points"), f"branches[{branch_index}].points"):
@@ -5178,6 +5369,17 @@ def main(argv: list[str] | None = None) -> int:
                 "branch point.raw_mode_index",
             )
             branch_mode_key = (sample_index, raw_mode_index)
+            validate_artifact_mode_identity(
+                point,
+                "branch point",
+                sample_index,
+                raw_mode_index,
+                sample_ids_by_index,
+                required=(
+                    args.require_production_modal_k_path
+                    or args.require_production_gamma_k_path
+                ),
+            )
             branch_modes.add(branch_mode_key)
             existing_branch_id = branch_ids_by_mode.get(branch_mode_key)
             if existing_branch_id is not None and existing_branch_id != branch_id:
@@ -5195,8 +5397,11 @@ def main(argv: list[str] | None = None) -> int:
             if tracking_confidence < 0.0 or tracking_confidence > 1.0:
                 fail("branch point.tracking_confidence must be in [0, 1]")
             overlap_prev = point.get("overlap_prev")
-            if tracking_source == "modal_overlap_weighted_score" and overlap_prev is None:
-                fail("branch point.overlap_prev is required for modal_overlap_weighted_score")
+            if tracking_source in {
+                "modal_overlap_weighted_score",
+                "modal_overlap_unweighted_score",
+            } and overlap_prev is None:
+                fail(f"branch point.overlap_prev is required for {tracking_source}")
             if overlap_prev is not None:
                 overlap_by_mode[branch_mode_key] = require_finite_number(
                     overlap_prev,
@@ -5213,16 +5418,23 @@ def main(argv: list[str] | None = None) -> int:
                     )
             if branch_mode_key in known_modes:
                 spectrum_mode = known_mode_summaries[branch_mode_key]
-                if spectrum_mode.get("mode_field_id") is None:
-                    if point.get("mode_field_id") is not None or point.get("mode_field_resource_key") is not None:
-                        fail("spectrum-only mode must not acquire a branch mode field handoff")
-                else:
-                    require_mode_field_handoff(
-                        point,
-                        "branch point",
-                        sample_index,
-                        raw_mode_index,
-                    )
+                spectrum_field_available = validate_json_mode_field_availability(
+                    spectrum_mode,
+                    f"spectrum mode {sample_index}/{raw_mode_index}",
+                    sample_index,
+                    raw_mode_index,
+                )
+                branch_field_available = validate_json_mode_field_availability(
+                    point,
+                    "branch point",
+                    sample_index,
+                    raw_mode_index,
+                )
+                require_equal(
+                    branch_field_available,
+                    spectrum_field_available,
+                    "branch point.mode_field_available",
+                )
                 frequency_hz = require_finite_number(
                     point.get("frequency_hz"),
                     "branch point.frequency_hz",
@@ -5273,9 +5485,14 @@ def main(argv: list[str] | None = None) -> int:
         known_modes,
         known_mode_summaries,
         known_samples,
+        sample_ids_by_index,
         branch_ids_by_mode,
         tracking_sources_by_mode,
         overlap_by_mode,
+        require_stable_ids=(
+            args.require_production_modal_k_path
+            or args.require_production_gamma_k_path
+        ),
     )
     validate_typed_modal_field_sweep(
         root,

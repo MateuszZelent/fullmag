@@ -51,6 +51,13 @@ def test_comparison_matches_local_spectrum_without_claiming_branches(tmp_path: P
     assert report["samples"][0]["matches"][0]["raw_mode_index"] == 3
     assert report["samples"][0]["matches"][0]["comsol_frequency_hz"] == 9e9
     assert report["samples"][0]["uncompared_reference_modes"] == 22
+    assert report["wavevector_semantics"] == {
+        "fullmag_spatial_phase": "exp(-i*k_dot_r)",
+        "comsol_handoff_magnetization_source_phase": "exp(+i*k_dot_r)",
+        "comsol_handoff_potential_phase": "exp(-i*k_dot_r)",
+        "equivalence_status": "unresolved_mixed_sign_reference_convention",
+    }
+    assert any("dmX/dmY/dmZ" in item for item in report["limitations"])
 
 
 def test_reference_rejects_duplicate_or_missing_modes(tmp_path: Path) -> None:

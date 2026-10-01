@@ -124,12 +124,12 @@ pub(super) fn bind_stage_continuation_artifacts(
         "content_sha256": handoff.content_sha256,
         "equilibrium_content_sha256": handoff.equilibrium_content_sha256,
     });
-    let modal_source_mesh_topology = plan
-        .mesh
-        .mixed_topology_fingerprint_v3()
-        .map_err(|error| RunError {
-            message: format!("modal source mesh identity is invalid: {error}"),
-        })?;
+    let modal_source_mesh_topology =
+        plan.mesh
+            .mixed_topology_fingerprint_v3()
+            .map_err(|error| RunError {
+                message: format!("modal source mesh identity is invalid: {error}"),
+            })?;
     let handoff_source_mesh_topology = handoff.source_mesh_topology_sha256.clone();
     let mut bound_summary = false;
     for artifact in &mut run.auxiliary_artifacts {

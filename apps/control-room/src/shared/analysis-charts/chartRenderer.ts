@@ -31,6 +31,7 @@ export type ChartRenderStatus =
 
 export interface ChartRenderPoint {
   branchId?: string | null;
+  breakBefore?: boolean;
   itemId?: string | null;
   rowIndex: number;
   sampleId?: string | null;
@@ -330,7 +331,12 @@ export function chartRenderModelToEChartsOption(
       return {
         // NOTE: No `sampling` property — data is already server-decimated.
         connectNulls: false,
-        data: series.points.map((point) => [point.x, point.y, point.rowIndex]),
+        data: series.points.flatMap((point) => [
+          ...(series.kind === "line" && point.breakBefore
+            ? [[point.x, null, null]]
+            : []),
+          [point.x, point.y, point.rowIndex],
+        ]),
         emphasis: {
           lineStyle: { color, width: 3 },
           scale: false,

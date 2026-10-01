@@ -3,11 +3,10 @@ use fullmag_ir::{
     EnergyTermIR, ExchangeBoundaryCondition, ExecutionPlanIR, ExecutionPrecision,
     FemEigenBiasFieldSamplePlanIR, FemEigenDispersionValidationIR, FemEigenEngineIR,
     FemEigenExecutionResolutionIR, FemEigenK0KittelValidationIR, FemEigenPlanIR,
-    FemEigenSolverPolicyIR,
-    FemFrequencyDomainEquilibriumProvenanceIR, FemFrequencyResponsePlanIR, FemMagnetoelasticPlanIR,
-    FemMechanicalModeIR, FemMechanicalPlanIR, FemPlanIR, GeometryEntryIR, MagnetostrictionLawIR,
-    MechanicalLoadIR, OutputPlanIR, ProblemIR, ProvenancePlanIR, SeedPolicy, ThermalSeedConfig,
-    TimeDependenceIR, IR_VERSION,
+    FemEigenSolverPolicyIR, FemFrequencyDomainEquilibriumProvenanceIR, FemFrequencyResponsePlanIR,
+    FemMagnetoelasticPlanIR, FemMechanicalModeIR, FemMechanicalPlanIR, FemPlanIR, GeometryEntryIR,
+    MagnetostrictionLawIR, MechanicalLoadIR, OutputPlanIR, ProblemIR, ProvenancePlanIR, SeedPolicy,
+    ThermalSeedConfig, TimeDependenceIR, IR_VERSION,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -1247,9 +1246,7 @@ fn eigen_k0_kittel_validation(
     Ok(Some(validation))
 }
 
-fn eigen_solver_policy(
-    problem: &ProblemIR,
-) -> Result<Option<FemEigenSolverPolicyIR>, PlanError> {
+fn eigen_solver_policy(problem: &ProblemIR) -> Result<Option<FemEigenSolverPolicyIR>, PlanError> {
     let Some(value) = problem
         .problem_meta
         .runtime_metadata
@@ -1257,13 +1254,14 @@ fn eigen_solver_policy(
     else {
         return Ok(None);
     };
-    let policy = serde_json::from_value::<FemEigenSolverPolicyIR>(value.clone()).map_err(|error| {
-        PlanError {
-            reasons: vec![format!(
-                "runtime_metadata.modal_solver_policy is invalid: {error}"
-            )],
-        }
-    })?;
+    let policy =
+        serde_json::from_value::<FemEigenSolverPolicyIR>(value.clone()).map_err(|error| {
+            PlanError {
+                reasons: vec![format!(
+                    "runtime_metadata.modal_solver_policy is invalid: {error}"
+                )],
+            }
+        })?;
     let mut errors = Vec::new();
     if let Some(tolerance) = policy.residual_tolerance {
         if !tolerance.is_finite() || tolerance <= 0.0 {
@@ -1279,7 +1277,10 @@ fn eigen_solver_policy(
                 .to_string(),
         );
     }
-    if policy.max_outer_iterations.is_some_and(|value| value > i32::MAX as u32) {
+    if policy
+        .max_outer_iterations
+        .is_some_and(|value| value > i32::MAX as u32)
+    {
         errors.push(
             "runtime_metadata.modal_solver_policy.max_outer_iterations must fit the native signed iteration limit"
                 .to_string(),
@@ -1291,7 +1292,10 @@ fn eigen_solver_policy(
                 .to_string(),
         );
     }
-    if policy.max_linear_iterations.is_some_and(|value| value > i32::MAX as u32) {
+    if policy
+        .max_linear_iterations
+        .is_some_and(|value| value > i32::MAX as u32)
+    {
         errors.push(
             "runtime_metadata.modal_solver_policy.max_linear_iterations must fit the native signed iteration limit"
                 .to_string(),
@@ -1453,9 +1457,7 @@ fn validate_eigen_dispersion_validation(
                 .to_string(),
         );
     }
-    if !(validation.max_k_rad_per_m.is_finite()
-        && validation.max_k_rad_per_m > 0.0)
-    {
+    if !(validation.max_k_rad_per_m.is_finite() && validation.max_k_rad_per_m > 0.0) {
         errors.push(
             "runtime_metadata.dispersion_validation.max_k_rad_per_m must be finite and positive"
                 .to_string(),
@@ -1625,6 +1627,46 @@ fn floquet_airbox_dynamic_demag_cpu_plan_supported(
         && problem.validation_profile.execution_mode == fullmag_ir::ExecutionMode::Strict
         && !runtime_requests_cuda(problem)
         && requested_demag_realization.requires_airbox()
+}
+
+/// Keep the planner boundary aligned with the local terms currently assembled
+/// by the shared-domain Floquet Schur operator in the native runner.
+fn first_unsupported_floquet_airbox_local_interaction(
+    material: &fullmag_ir::MaterialIR,
+    interfacial_dmi: Option<f64>,
+    bulk_dmi: Option<f64>,
+    spin_wave_bc: &fullmag_ir::SpinWaveBoundaryConditionIR,
+) -> Option<&'static str> {
+    if material.uniaxial_anisotropy.is_some()
+        || material.uniaxial_anisotropy_k2.is_some()
+        || material.anisotropy_axis.is_some()
+        || material.cubic_anisotropy_kc1.is_some()
+        || material.cubic_anisotropy_kc2.is_some()
+        || material.cubic_anisotropy_kc3.is_some()
+        || material.cubic_anisotropy_axis1.is_some()
+        || material.cubic_anisotropy_axis2.is_some()
+        || material.ku_field.is_some()
+        || material.ku2_field.is_some()
+        || material.kc1_field.is_some()
+        || material.kc2_field.is_some()
+        || material.kc3_field.is_some()
+    {
+        return Some("anisotropy");
+    }
+    if material.a_field.is_some() {
+        return Some("elementwise exchange stiffness");
+    }
+    if material.dind_field.is_some()
+        || material.dbulk_field.is_some()
+        || interfacial_dmi.is_some()
+        || bulk_dmi.is_some()
+    {
+        return Some("DMI");
+    }
+    if spin_wave_bc.surface_anisotropy_ks().is_some() {
+        return Some("surface anisotropy");
+    }
+    None
 }
 
 fn vector_dot(lhs: [f64; 3], rhs: [f64; 3]) -> f64 {
@@ -5328,6 +5370,20 @@ pub(crate) fn plan_fem_eigen(
 
     let material =
         selected_material.expect("validation should have caught missing FEM eigen material");
+    if floquet_airbox_dynamic_demag_cpu_path {
+        if let Some(interaction) = first_unsupported_floquet_airbox_local_interaction(
+            &material,
+            interfacial_dmi,
+            bulk_dmi,
+            spin_wave_bc,
+        ) {
+            return Err(PlanError {
+                reasons: vec![format!(
+                    "fem_eigen.floquet_airbox_dynamic_demag_unsupported_local_interaction: '{interaction}'; fallback=none"
+                )],
+            });
+        }
+    }
     if bias_field_sweep.is_some() && material.damping != 0.0 {
         return Err(PlanError {
             reasons: vec![

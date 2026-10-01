@@ -76,6 +76,7 @@ fn sample_result_with_solver_model(solver_model: EigenSolverModel) -> PathSolveR
                 amplitude: Some(vec![1.0]),
                 phase: Some(vec![0.0]),
                 node_mass_weights: None,
+                consistent_p1_metric: None,
                 component_participation:
                     crate::eigen::ModalParticipationObservable::unavailable_without_context("cpu"),
             }],
@@ -110,6 +111,85 @@ fn sample_result_with_solver_model(solver_model: EigenSolverModel) -> PathSolveR
         dispersion_analytic_reference: None,
         k0_kittel_periodic_airbox_demag: None,
     }
+}
+
+#[test]
+fn sample_diagnostics_never_fall_back_to_another_sample() {
+    let mut result = sample_result();
+    result.samples[0].sample.sample_index = 3;
+    for entries in [
+        serde_json::json!([{ "sample_index": 0, "diagnostics": {"owner": "wrong"} }]),
+        serde_json::json!([
+            { "sample_index": 0, "diagnostics": {"owner": "wrong"} },
+            { "sample_index": 1, "diagnostics": {"owner": "also-wrong"} }
+        ]),
+        serde_json::json!([{ "diagnostics": {"owner": "unindexed"} }]),
+    ] {
+        result.samples[0].solver_diagnostics = Some(serde_json::json!({
+            "relax_to_eigen_handoff_sha256": "wrong-root",
+            "sample_solver_diagnostics": entries,
+        }));
+        assert!(sample_native_solver_diagnostics(&result.samples[0]).is_none());
+    }
+}
+
+#[test]
+fn sample_diagnostics_reject_duplicate_or_malformed_identity_records() {
+    let mut result = sample_result();
+    for entries in [
+        serde_json::json!([
+            { "sample_index": 0, "diagnostics": {"owner": "first"} },
+            { "sample_index": 0, "diagnostics": {"owner": "duplicate"} }
+        ]),
+        serde_json::json!({"sample_index": 0}),
+        serde_json::json!([{ "sample_index": 0, "diagnostics": null }]),
+    ] {
+        result.samples[0].solver_diagnostics = Some(serde_json::json!({
+            "sample_solver_diagnostics": entries,
+        }));
+        assert!(sample_native_solver_diagnostics(&result.samples[0]).is_none());
+    }
+}
+
+#[test]
+fn enriched_sample_diagnostics_require_valid_selected_diagnostics() {
+    for diagnostics in [serde_json::Value::Null, serde_json::json!([]), serde_json::json!(7)] {
+        let root = serde_json::json!({
+            "solver_adapter": "native",
+            "sample_solver_diagnostics": [{"sample_index": 3, "diagnostics": diagnostics}],
+        });
+        assert!(native_solver_diagnostics_for_sample(&root, 3).is_none());
+    }
+    assert!(native_solver_diagnostics_for_sample(&serde_json::Value::Null, 0).is_none());
+    assert!(native_solver_diagnostics_for_sample(&serde_json::json!([]), 0).is_none());
+}
+
+#[test]
+fn native_diagnostics_selector_preserves_local_and_enriched_records() {
+    let local = serde_json::json!({"owner": "local"});
+    assert_eq!(native_solver_diagnostics_for_sample(&local, 3), Some(&local));
+    let enriched = serde_json::json!({
+        "solver_adapter": "native",
+        "sample_solver_diagnostics": [{"sample_index": 3, "diagnostics": {"owner": "selected"}}],
+    });
+    assert_eq!(native_solver_diagnostics_for_sample(&enriched, 3), Some(&enriched));
+    assert!(native_solver_diagnostics_for_sample(&enriched, 0).is_none());
+}
+
+#[test]
+fn sample_diagnostics_select_unique_matching_sample() {
+    let mut result = sample_result();
+    result.samples[0].sample.sample_index = 3;
+    result.samples[0].solver_diagnostics = Some(serde_json::json!({
+        "sample_solver_diagnostics": [
+            { "sample_index": 0, "diagnostics": {"owner": "wrong"} },
+            { "sample_index": 3, "diagnostics": {"owner": "selected"} }
+        ],
+    }));
+    assert_eq!(
+        sample_native_solver_diagnostics(&result.samples[0]).unwrap()["owner"],
+        "selected"
+    );
 }
 
 #[test]
@@ -258,10 +338,7 @@ fn eigen_artifact_writer_emits_v2_contract_files() {
     .expect("spectrum.v2.json should be valid JSON");
     assert_eq!(spectrum["schema_version"], "eigen_spectrum.v2");
     assert_eq!(spectrum["sample_count"], 1);
-    assert_eq!(
-        spectrum["samples"][0]["sample_id"],
-        "k-path-sample-0000"
-    );
+    assert_eq!(spectrum["samples"][0]["sample_id"], "k-path-sample-0000");
     assert_eq!(
         spectrum["samples"][0]["modes"][0]["mode_id"],
         "sample-0000/mode-0000"
@@ -319,6 +396,18 @@ fn eigen_artifact_writer_emits_v2_contract_files() {
         false
     );
     assert_eq!(
+        branches["branches"][0]["points"][0]["sample_id"],
+        "k-path-sample-0000"
+    );
+    assert_eq!(
+        branches["branches"][0]["points"][0]["mode_id"],
+        "sample-0000/mode-0000"
+    );
+    assert_eq!(
+        branches["branches"][0]["points"][0]["mode_field_available"],
+        true
+    );
+    assert_eq!(
         branches["branches"][0]["points"][0]["mode_field_id"],
         "analysis:eigen:sample-0000:mode-0000"
     );
@@ -336,7 +425,7 @@ fn eigen_artifact_writer_emits_v2_contract_files() {
     assert_eq!(
             Some(dispersion_header),
             Some(
-                "sample_index,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,label,raw_mode_index,branch_id,frequency_hz,omega_rad_s,analytic_frequency_hz,relative_error,validation_geometry,line_width_hz,residual_norm,overlap_score,tracking_score_source,mode_field_id,mode_field_resource_key"
+                "sample_index,sample_id,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,label,raw_mode_index,mode_id,branch_id,frequency_hz,omega_rad_s,analytic_frequency_hz,relative_error,validation_geometry,line_width_hz,residual_norm,overlap_score,tracking_score_source,mode_field_available,mode_field_id,mode_field_resource_key"
             )
         );
     let dispersion_row = dispersion_lines
@@ -359,6 +448,18 @@ fn eigen_artifact_writer_emits_v2_contract_files() {
     assert_eq!(
         dispersion_columns.get(column("tracking_score_source")),
         Some(&"seed")
+    );
+    assert_eq!(
+        dispersion_columns.get(column("sample_id")),
+        Some(&"k-path-sample-0000")
+    );
+    assert_eq!(
+        dispersion_columns.get(column("mode_id")),
+        Some(&"sample-0000/mode-0000")
+    );
+    assert_eq!(
+        dispersion_columns.get(column("mode_field_available")),
+        Some(&"true")
     );
     assert_eq!(
         dispersion_columns.get(column("mode_field_id")),
@@ -841,6 +942,7 @@ fn eigen_manifest_preserves_native_gpu_execution_and_hardened_provenance() {
     result.include_demag = true;
     result.samples[0].solver_diagnostics = Some(serde_json::json!({
         "sample_solver_diagnostics": [{
+            "sample_index": 0,
             "diagnostics": {
                 "physics_contract_version": "micromagnetics_frequency_domain_v5",
                 "operator_dictionary_version": "FrequencyOperatorDictionary.v1",
@@ -963,7 +1065,10 @@ fn eigen_artifacts_write_k0_kittel_summary_and_points() {
         summary["schema_version"],
         "frequency_domain_kittel_k0_validation.v1"
     );
-    assert_eq!(summary["status"], "passed");
+    assert_eq!(summary["status"], "partial");
+    assert_eq!(summary["frequency_comparison_status"], "passed");
+    assert_eq!(summary["periodic_mode_seam_metrics_complete"], false);
+    assert_eq!(summary["qualification"], "NOT VERIFIED");
     assert_eq!(summary["model"], "macrospin_larmor");
     assert_eq!(summary["sweep_point_count"], 3);
     assert!(
@@ -1257,7 +1362,10 @@ fn k0_kittel_artifacts_accept_periodic_airbox_with_real_metrics() {
         .expect("summary should be emitted");
     let summary: Value =
         serde_json::from_slice(&summary_artifact.bytes).expect("summary should be valid JSON");
-    assert_eq!(summary["status"], "passed");
+    assert_eq!(summary["status"], "partial");
+    assert_eq!(summary["frequency_comparison_status"], "passed");
+    assert_eq!(summary["periodic_mode_seam_metrics_complete"], false);
+    assert_eq!(summary["qualification"], "NOT VERIFIED");
     assert_eq!(summary["case_id"], "K0-3");
     assert_eq!(summary["demag_kind"], "periodic_airbox_k0");
     assert_eq!(summary["demag"]["gauge_policy"], "mean_zero_augmented");
@@ -1710,7 +1818,10 @@ fn field_sweep_topology_preserves_verified_mesh_identity_for_result_fields() {
         topology.topology_fingerprint.as_deref(),
         Some("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
     );
-    assert_eq!(topology.mesh_generation_id.as_deref(), Some("generation:test"));
+    assert_eq!(
+        topology.mesh_generation_id.as_deref(),
+        Some("generation:test")
+    );
 
     let numeric_revision = topology_from_diagnostics(Some(&serde_json::json!({
         "mesh_id": "mesh:test",

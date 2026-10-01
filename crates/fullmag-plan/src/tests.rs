@@ -11158,10 +11158,15 @@ fn fem_eigen_backend_with_mesh_asset_plans_successfully() {
     c1_validation["film_thickness_m"] = serde_json::json!(10e-9);
     c1_validation["max_k_rad_per_m"] = serde_json::json!(std::f64::consts::PI / 200e-9);
     c1_validation["frequency_window_hz"]["max"] = serde_json::json!(15e9);
-    c1.problem_meta.runtime_metadata.insert("dispersion_validation".to_string(), c1_validation.clone());
+    c1.problem_meta
+        .runtime_metadata
+        .insert("dispersion_validation".to_string(), c1_validation.clone());
     let c1_plan = plan(&c1).expect("C1 comparison range must not be capped by the low-k preset");
     match c1_plan.backend_plan {
-        BackendPlanIR::FemEigen(fem) => assert_eq!(serde_json::to_value(fem.dispersion_validation).unwrap(), c1_validation),
+        BackendPlanIR::FemEigen(fem) => assert_eq!(
+            serde_json::to_value(fem.dispersion_validation).unwrap(),
+            c1_validation
+        ),
         other => panic!("expected FEM eigen plan, got {other:?}"),
     }
 
@@ -11193,8 +11198,8 @@ fn fem_eigen_backend_with_mesh_asset_plans_successfully() {
             ]
         }),
     );
-    let err =
-        plan(&invalid).expect_err("FEM eigen dispersion validation must reject nonpositive k range");
+    let err = plan(&invalid)
+        .expect_err("FEM eigen dispersion validation must reject nonpositive k range");
     assert!(err
         .reasons
         .iter()
@@ -11508,9 +11513,10 @@ fn fem_eigen_allows_k0_kittel_synthetic_demag_factor_floquet_path() {
     );
     let err = plan(&mixed)
         .expect_err("synthetic K0 demag and dispersion validation must not share one plan");
-    assert!(err.reasons.iter().any(|reason| {
-        reason.contains("dispersion_validation cannot be combined")
-    }));
+    assert!(err
+        .reasons
+        .iter()
+        .any(|reason| { reason.contains("dispersion_validation cannot be combined") }));
 }
 
 fn k0_periodic_airbox_fem_eigen_ir() -> ProblemIR {
@@ -12887,6 +12893,27 @@ fn fem_eigen_floquet_dynamic_demag_requires_explicit_airbox_cpu_path() {
         }
         other => panic!("expected FEM eigen plan, got {other:?}"),
     }
+
+    let mut unsupported_anisotropy = ir.clone();
+    unsupported_anisotropy.materials[0].uniaxial_anisotropy = Some(1.0e5);
+    unsupported_anisotropy.materials[0].anisotropy_axis = Some([0.0, 0.0, 1.0]);
+    let anisotropy_error = plan(&unsupported_anisotropy)
+        .expect_err("Floquet airbox Schur lane must reject unsupported anisotropy during planning");
+    assert!(anisotropy_error.reasons.iter().any(|reason| {
+        reason.contains("floquet_airbox_dynamic_demag_unsupported_local_interaction")
+            && reason.contains("anisotropy")
+    }));
+
+    let mut unsupported_dmi = ir.clone();
+    unsupported_dmi
+        .energy_terms
+        .push(fullmag_ir::EnergyTermIR::BulkDmi { d: 1.0e-3 });
+    let dmi_error = plan(&unsupported_dmi)
+        .expect_err("Floquet airbox Schur lane must reject unsupported DMI during planning");
+    assert!(dmi_error.reasons.iter().any(|reason| {
+        reason.contains("floquet_airbox_dynamic_demag_unsupported_local_interaction")
+            && reason.contains("DMI")
+    }));
 
     if let fullmag_ir::StudyIR::Eigenmodes { k_sampling, .. } = &mut ir.study {
         *k_sampling = Some(fullmag_ir::KSamplingIR::Path {

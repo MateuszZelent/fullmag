@@ -10,7 +10,7 @@ use crate::eigen::output_selection::{select_eigen_outputs, SampleModeId};
 use crate::eigen::KSampleDescriptor;
 use crate::fem::eigen_capability::native_cpu_modal_window_enabled;
 use crate::fem::eigen_execution_resolution::{FemEigenExecutionLane, PlannedFemEigenExecution};
-use crate::fem::eigen_reduction::build_reduction_map;
+use crate::fem::eigen_reduction::{build_reduction_map, ReductionMap};
 use crate::fem_eigen;
 use crate::types::{AuxiliaryArtifact, ExecutedRun, RunError};
 use fullmag_engine::fem::MeshTopology;
@@ -25,20 +25,212 @@ use eigen_path_artifacts::*;
 use eigen_path_guards::*;
 use eigen_path_manifest::*;
 
-fn eigen_path_sample_id(plan: &FemEigenPlanIR, sample: &KSampleDescriptor) -> String {
-    let prefix = if bias_field_sweep_requested(plan) {
+fn eigen_path_sample_id_prefix(plan: &FemEigenPlanIR) -> &'static str {
+    if bias_field_sweep_requested(plan) {
         "bias-field-sample"
     } else if matches!(plan.k_sampling, Some(fullmag_ir::KSamplingIR::Path { .. })) {
         "k-path-sample"
     } else {
         "k-sample"
+    }
+}
+
+pub(super) fn eigen_path_reduced_node_mass_weights(
+    topology: &MeshTopology,
+    reduction: &ReductionMap,
+    physical_node_weights: &[f64],
+) -> Result<Vec<f64>, RunError> {
+    if physical_node_weights.len() == reduction.active_nodes.len() {
+        return Ok(physical_node_weights.to_vec());
+    }
+    let physical_nodes = topology
+        .magnetic_node_volumes
+        .iter()
+        .enumerate()
+        .filter_map(|(node, volume)| (*volume > 0.0).then_some(node))
+        .collect::<Vec<_>>();
+    if physical_node_weights.len() != physical_nodes.len() {
+        return Err(RunError {
+            message: format!(
+                "eigen path FE mass metadata has {} weights for {} physical and {} reduced tracking nodes",
+                physical_node_weights.len(),
+                physical_nodes.len(),
+                reduction.active_nodes.len(),
+            ),
+        });
+    }
+
+    let mut reduced_weights = vec![0.0; reduction.active_nodes.len()];
+    for (node, weight) in physical_nodes.into_iter().zip(physical_node_weights) {
+        if !(weight.is_finite() && *weight > 0.0) {
+            return Err(RunError {
+                message: "eigen path FE mass metadata contains a non-positive or non-finite weight"
+                    .to_string(),
+            });
+        }
+        if let Some(reduced_index) = reduction.node_map[node] {
+            reduced_weights[reduced_index] += *weight;
+        }
+    }
+    if reduced_weights
+        .iter()
+        .any(|weight| !(weight.is_finite() && *weight > 0.0))
+    {
+        return Err(RunError {
+            message:
+                "eigen path FE mass reduction produced a non-positive or non-finite class weight"
+                    .to_string(),
+        });
+    }
+    Ok(reduced_weights)
+}
+
+fn eigen_path_consistent_tracking_metric(
+    topology: &MeshTopology,
+    mesh: &fullmag_ir::MeshIR,
+) -> Result<std::sync::Arc<crate::eigen::types::ConsistentP1TrackingMetric>, RunError> {
+    let fail = |message: String| RunError {
+        message: format!("eigen path consistent mass: {message}"),
     };
-    format!("{prefix}-{:04}", sample.sample_index)
+    let nodes = topology
+        .magnetic_node_volumes
+        .iter()
+        .enumerate()
+        .filter_map(|(node, volume)| (*volume > 0.0).then_some(node))
+        .collect::<Vec<_>>();
+    let mut mapping = vec![None; topology.n_nodes];
+    for (local, node) in nodes.iter().copied().enumerate() {
+        mapping[node] = Some(local);
+    }
+    let mut tetra = Vec::new();
+    let mut volumes = Vec::new();
+    for (index, cell) in topology.elements.iter().enumerate() {
+        if !topology.magnetic_element_mask[index] {
+            continue;
+        }
+        let mut mapped = [0; 4];
+        for (slot, node) in cell.iter().copied().enumerate() {
+            mapped[slot] = mapping
+                .get(node as usize)
+                .copied()
+                .flatten()
+                .ok_or_else(|| {
+                    fail("magnetic tetra node is not in the physical indexing".into())
+                })?;
+        }
+        tetra.push(mapped);
+        volumes.push(topology.element_volumes[index]);
+    }
+    let identity = mesh.mixed_topology_fingerprint_v3().map_err(fail)?;
+    let metric =
+        crate::eigen::types::ConsistentP1TrackingMetric::new(identity, nodes, tetra, &volumes)
+            .map_err(fail)?;
+    Ok(std::sync::Arc::new(metric))
+}
+
+fn eigen_path_sample_id(plan: &FemEigenPlanIR, sample: &KSampleDescriptor) -> String {
+    format!(
+        "{}-{:04}",
+        eigen_path_sample_id_prefix(plan),
+        sample.sample_index
+    )
+}
+
+fn eigen_path_sample_id_for_index(plan: &FemEigenPlanIR, sample_index: usize) -> String {
+    format!("{}-{sample_index:04}", eigen_path_sample_id_prefix(plan))
+}
+
+fn eigen_path_native_mode_identities(
+    native_modes: &[Value],
+    sample_index: usize,
+) -> Result<Vec<(usize, f64)>, RunError> {
+    let mut seen = BTreeSet::new();
+    native_modes
+        .iter()
+        .enumerate()
+        .map(|(position, mode)| {
+            let raw_mode_index = mode["index"]
+                .as_u64()
+                .and_then(|index| usize::try_from(index).ok())
+                .ok_or_else(|| RunError {
+                    message: format!(
+                        "single-k spectrum sample={sample_index} mode_position={position} has no valid raw mode index"
+                    ),
+                })?;
+            if !seen.insert(raw_mode_index) {
+                return Err(RunError {
+                    message: format!(
+                        "single-k spectrum sample={sample_index} repeats raw mode index {raw_mode_index}"
+                    ),
+                });
+            }
+            let frequency_hz = mode["frequency_real_hz"]
+                .as_f64()
+                .filter(|frequency| frequency.is_finite())
+                .ok_or_else(|| RunError {
+                    message: format!(
+                        "single-k spectrum sample={sample_index} raw_mode={raw_mode_index} has no finite frequency_real_hz"
+                    ),
+                })?;
+            Ok((raw_mode_index, frequency_hz))
+        })
+        .collect()
+}
+
+fn eigen_path_mode_id(sample_index: usize, raw_mode_index: usize) -> String {
+    format!("sample-{sample_index:04}/mode-{raw_mode_index:04}")
+}
+
+pub(super) fn relax_stage_handoff_for_path_sample<'a>(
+    path_plan: &FemEigenPlanIR,
+    source_relax_handoff: Option<&'a fem_eigen::AcceptedFemRelaxStageHandoff>,
+) -> Option<&'a fem_eigen::AcceptedFemRelaxStageHandoff> {
+    if bias_field_sweep_requested(path_plan) {
+        None
+    } else {
+        source_relax_handoff
+    }
+}
+
+pub(super) fn reuse_promoted_eigen_handoff(
+    source_relax_handoff_available: bool,
+    promoted_eigen_handoff_available: bool,
+) -> bool {
+    promoted_eigen_handoff_available && !source_relax_handoff_available
 }
 
 #[cfg(test)]
 pub(crate) mod test_support {
     use super::*;
+
+    #[test]
+    fn native_mode_identity_rejects_missing_fields_and_duplicates() {
+        for invalid in [
+            serde_json::json!({"frequency_real_hz": 1.0e9}),
+            serde_json::json!({"index": -1, "frequency_real_hz": 1.0e9}),
+            serde_json::json!({"index": 1.5, "frequency_real_hz": 1.0e9}),
+            serde_json::json!({"index": 2}),
+            serde_json::json!({"index": 2, "frequency_real_hz": "1e9"}),
+            serde_json::json!({"index": 2, "frequency_real_hz": null}),
+        ] {
+            assert!(super::eigen_path_native_mode_identities(&[invalid], 3).is_err());
+        }
+        let explicit_zero = serde_json::json!({"index": 7, "frequency_real_hz": 0.0});
+        assert_eq!(
+            super::eigen_path_native_mode_identities(&[explicit_zero.clone()], 3).unwrap(),
+            vec![(7, 0.0)]
+        );
+        let duplicate = serde_json::json!({"index": 7, "frequency_real_hz": 1.0e9});
+        assert!(super::eigen_path_native_mode_identities(&[explicit_zero, duplicate], 3).is_err());
+        let unordered = [
+            serde_json::json!({"index": 9, "frequency_real_hz": 2.0e9}),
+            serde_json::json!({"index": 1, "frequency_real_hz": 1.0e9}),
+        ];
+        assert_eq!(
+            super::eigen_path_native_mode_identities(&unordered, 3).unwrap(),
+            vec![(9, 2.0e9), (1, 1.0e9)]
+        );
+    }
 
     pub(crate) fn bind_eigen_path_handoff_diagnostics(
         diagnostics: &mut serde_json::Value,
@@ -317,6 +509,8 @@ pub(crate) fn execute_fem_eigen_path(
         engine: FemEngine,
         mode_artifacts: RefCell<Vec<AuxiliaryArtifact>>,
         publication_outputs: Vec<OutputIR>,
+        tracking_metric:
+            RefCell<Option<std::sync::Arc<crate::eigen::types::ConsistentP1TrackingMetric>>>,
         source_relax_handoff: Option<fem_eigen::AcceptedFemRelaxStageHandoff>,
         relax_handoff: RefCell<Option<fem_eigen::AcceptedFemEigenEquilibriumHandoff>>,
         periodic_airbox_k0_metrics:
@@ -350,30 +544,58 @@ pub(crate) fn execute_fem_eigen_path(
 
             let existing_handoff = self.relax_handoff.borrow().clone();
             let mut accepted_handoff = existing_handoff.clone();
+            let source_stage_handoff =
+                relax_stage_handoff_for_path_sample(plan, self.source_relax_handoff.as_ref());
             let point_plan = eigen_path_single_k_point_plan(
                 plan,
                 sample,
-                existing_handoff.is_some(),
+                reuse_promoted_eigen_handoff(
+                    source_stage_handoff.is_some(),
+                    existing_handoff.is_some(),
+                ),
                 existing_handoff.as_ref(),
             )?;
-            let tracking_active_nodes = MeshTopology::from_ir(&point_plan.mesh)
-                .map_err(|error| RunError {
+            let tracking_topology =
+                MeshTopology::from_ir(&point_plan.mesh).map_err(|error| RunError {
                     message: format!("eigen path tracking mesh topology: {error}"),
-                })
-                .and_then(|topology| {
-                    build_reduction_map(
-                        &topology,
-                        &point_plan.spin_wave_bc,
-                        point_plan.k_sampling.as_ref(),
-                    )
-                })?
-                .active_nodes;
-            let initial_stage_handoff = if existing_handoff.is_none() {
-                self.source_relax_handoff.as_ref()
-            } else {
-                None
+                })?;
+            let tracking_reduction = build_reduction_map(
+                &tracking_topology,
+                &point_plan.spin_wave_bc,
+                point_plan.k_sampling.as_ref(),
+            )?;
+            let expected_tracking_mesh =
+                point_plan
+                    .mesh
+                    .mixed_topology_fingerprint_v3()
+                    .map_err(|message| RunError {
+                        message: format!("eigen path tracking mesh identity: {message}"),
+                    })?;
+            let cached_tracking_metric = self.tracking_metric.borrow().clone();
+            let tracking_metric = match cached_tracking_metric {
+                Some(metric) if metric.mesh_identity() != expected_tracking_mesh.as_str() => {
+                    return Err(RunError {
+                        message: "eigen path tracking mesh changed between samples".into(),
+                    });
+                }
+                Some(metric) => metric,
+                None => {
+                    let metric = eigen_path_consistent_tracking_metric(
+                        &tracking_topology,
+                        &point_plan.mesh,
+                    )?;
+                    *self.tracking_metric.borrow_mut() = Some(metric.clone());
+                    metric
+                }
             };
-
+            let tracking_active_nodes = tracking_metric.node_indices();
+            // Every k sample linearizes the same certified static equilibrium.
+            // Keep the original Relax-stage certificate available after the
+            // first point: the promoted Eigen handoff carries identity hashes
+            // for path continuity, but it does not contain the accepted
+            // completion and certified static fields needed to reconstruct an
+            // equilibrium_artifact.v7. Field sweeps are distinct physical
+            // equilibria and therefore must not reuse this certificate.
             let progress_sink = &self.progress;
             // Keep cancellation and native EPS/KSP telemetry connected for every
             // path sample, including the first relax-stage continuation.
@@ -386,7 +608,7 @@ pub(crate) fn execute_fem_eigen_path(
                 Err(_) => crate::types::StepAction::Stop,
             };
             let executed = if self.execution.resolution().is_some() {
-                if let Some(handoff) = initial_stage_handoff {
+                if let Some(handoff) = source_stage_handoff {
                     fem_eigen::execute_planned_fem_eigen_with_progress_and_stage_handoff(
                         self.execution,
                         &point_plan,
@@ -406,7 +628,7 @@ pub(crate) fn execute_fem_eigen_path(
             } else {
                 match self.engine {
                     FemEngine::CpuNative => {
-                        if let Some(handoff) = initial_stage_handoff {
+                        if let Some(handoff) = source_stage_handoff {
                             fem_eigen::execute_cpu_fem_eigen_with_progress_and_stage_handoff(
                                 &point_plan,
                                 outputs,
@@ -423,7 +645,7 @@ pub(crate) fn execute_fem_eigen_path(
                         }
                     }
                     FemEngine::NativeGpu => {
-                        if let Some(handoff) = initial_stage_handoff {
+                        if let Some(handoff) = source_stage_handoff {
                             fem_eigen::execute_gpu_fem_eigen_with_progress_and_stage_handoff(
                                 &point_plan,
                                 outputs,
@@ -499,22 +721,12 @@ pub(crate) fn execute_fem_eigen_path(
                     .ok_or_else(|| crate::types::RunError {
                         message: "spectrum.json has no modes array".to_string(),
                     })?;
-            let node_mass_weights =
-                eigen_path_node_mass_weights_from_json(&spectrum["node_mass_weights"]);
-            if let Some(weights) = node_mass_weights.as_ref() {
-                if weights.len() != tracking_active_nodes.len() {
-                    return Err(RunError {
-                        message: format!(
-                            "eigen path FE mass metadata has {} weights for {} active tracking nodes",
-                            weights.len(),
-                            tracking_active_nodes.len()
-                        ),
-                    });
-                }
-            }
-
+            let native_mode_identities =
+                eigen_path_native_mode_identities(modes_array, sample.sample_index)?;
             let mut modes = Vec::with_capacity(modes_array.len());
-            for mode_json in modes_array {
+            for (mode_json, (raw_mode_index, frequency_real_hz)) in
+                modes_array.iter().zip(native_mode_identities)
+            {
                 let solver_device = if self.engine == FemEngine::NativeGpu {
                     "gpu"
                 } else {
@@ -525,9 +737,9 @@ pub(crate) fn execute_fem_eigen_path(
                     solver_device,
                 )?;
                 modes.push(SingleKModeResult {
-                    raw_mode_index: mode_json["index"].as_u64().unwrap_or(0) as usize,
+                    raw_mode_index,
                     branch_id: None,
-                    frequency_real_hz: mode_json["frequency_real_hz"].as_f64().unwrap_or(0.0),
+                    frequency_real_hz,
                     frequency_imag_hz: mode_json["frequency_imag_hz"].as_f64().unwrap_or(0.0),
                     angular_frequency_rad_per_s: mode_json["angular_frequency_rad_per_s"]
                         .as_f64()
@@ -551,19 +763,97 @@ pub(crate) fn execute_fem_eigen_path(
                         .to_string(),
                     reduced_vector: eigen_path_mode_tracking_vector(
                         &executed.auxiliary_artifacts,
-                        mode_json["index"].as_u64().unwrap_or(0) as usize,
-                        Some(&tracking_active_nodes),
-                    ),
+                        raw_mode_index,
+                        Some(tracking_active_nodes),
+                        &tracking_topology.coords,
+                        sample.k_vector,
+                        matches!(
+                            point_plan.spin_wave_bc.kind(),
+                            fullmag_ir::SpinWaveBoundaryKindIR::Floquet
+                        ),
+                        tracking_metric.mesh_identity(),
+                    )?,
                     lifted_real: None,
                     lifted_imag: None,
                     amplitude: None,
                     phase: None,
-                    node_mass_weights: node_mass_weights.clone(),
+                    node_mass_weights: None,
+                    consistent_p1_metric: Some(tracking_metric.clone()),
                     component_participation,
                 });
             }
 
+            let mut seam_records = Vec::new();
+            if matches!(
+                point_plan.spin_wave_bc.kind(),
+                fullmag_ir::SpinWaveBoundaryKindIR::Periodic
+                    | fullmag_ir::SpinWaveBoundaryKindIR::Floquet
+            ) {
+                for mode in &modes {
+                    if let Some(vector) = mode.reduced_vector.as_deref() {
+                        if let Some((checked_nodes, relative)) = tracking_metric
+                            .periodic_seam_relative(
+                                vector,
+                                &tracking_topology.coords,
+                                sample.k_vector,
+                                &tracking_reduction.node_map,
+                                &tracking_reduction.active_nodes,
+                                &tracking_reduction.node_phases,
+                            )
+                            .map_err(|message| RunError { message })?
+                        {
+                            seam_records.push(serde_json::json!({
+                            "definition_id": "magnetic_cartesian_periodic_seam_max_relative.v1",
+                            "sample_index": sample.sample_index, "raw_mode_index": mode.raw_mode_index,
+                            "frequency_hz": mode.frequency_real_hz, "k_vector": sample.k_vector,
+                            "source_mesh_topology_sha256": tracking_metric.mesh_identity(),
+                            "checked_slave_node_count": checked_nodes, "max_relative_mismatch": relative,
+                            "scope": "magnetic_cartesian_field_only", "execution_lane": "postprocess_cpu",
+                        }));
+                        }
+                    }
+                }
+            }
             let mut solver_diagnostics = spectrum.get("solver_diagnostics").cloned();
+            // Preserve the original per-mode certificate before tracking
+            // collapses the single-k result into common modal quantities.
+            if let Some(diagnostics) = solver_diagnostics
+                .as_mut()
+                .and_then(serde_json::Value::as_object_mut)
+            {
+                let records = modes_array
+                    .iter()
+                    .filter_map(|native_mode| {
+                        let blocks = native_mode.get("block_residuals")?;
+                        Some(serde_json::json!({
+                            "sample_index": sample.sample_index,
+                            "raw_mode_index": native_mode["index"],
+                            "frequency_hz": native_mode["frequency_real_hz"],
+                            "block_residuals": blocks,
+                        }))
+                    })
+                    .collect::<Vec<_>>();
+                diagnostics.insert(
+                    "mode_periodic_seam_measurements".into(),
+                    serde_json::Value::Array(seam_records),
+                );
+                diagnostics.insert(
+                    "tracking_mass_metric".into(),
+                    serde_json::json!({
+                        "definition_id": "consistent_p1_tet4_cartesian_nodal_envelope.v1",
+                        "source_mesh_topology_sha256": tracking_metric.mesh_identity(),
+                        "physical_magnetic_node_count": tracking_active_nodes.len(),
+                        "projection_scope": "nodal_P1_envelope",
+                        "execution_lane": "postprocess_cpu",
+                        "qualification": "runtime_unqualified"
+                    }),
+                );
+                diagnostics.insert(
+                    "native_mode_block_residuals".into(),
+                    serde_json::Value::Array(records),
+                );
+            }
+
             if let (Some(diagnostics), Some(handoff)) =
                 (solver_diagnostics.as_mut(), accepted_handoff.as_ref())
             {
@@ -606,6 +896,7 @@ pub(crate) fn execute_fem_eigen_path(
         engine,
         mode_artifacts: RefCell::new(Vec::new()),
         publication_outputs: outputs.to_vec(),
+        tracking_metric: RefCell::new(None),
         source_relax_handoff: source_relax_handoff.cloned(),
         relax_handoff: RefCell::new(None),
         periodic_airbox_k0_metrics: RefCell::new(None),
@@ -662,6 +953,7 @@ pub(crate) fn execute_fem_eigen_path(
         .iter()
         .map(|s| {
             serde_json::json!({
+                "sample_id": eigen_path_sample_id(plan, &s.sample),
                 "sample_index": s.sample.sample_index,
                 "label": s.sample.label,
                 "k_vector": s.sample.k_vector,
@@ -744,7 +1036,10 @@ pub(crate) fn execute_fem_eigen_path(
             "modal_overlap_available": modal_overlap_available,
             "modal_overlap_unavailable_reason": modal_overlap_unavailable_reason,
             "gap_count": gap_count,
-            "ambiguous_assignment_count": 0,
+            "ambiguous_assignment_count": Option::<u64>::None,
+            "ambiguous_assignment_count_available": false,
+            "ambiguous_assignment_count_unavailable_reason":
+                "assignment_ambiguity_metric_not_computed",
         },
     });
     let spectrum_v2 = serde_json::json!({
@@ -822,6 +1117,8 @@ pub(crate) fn execute_fem_eigen_path(
                     let point_modal_overlap_available =
                         eigen_path_branch_point_modal_overlap_available(&path_result, b, point_index);
                     serde_json::json!({
+                        "sample_id": eigen_path_sample_id_for_index(plan, p.sample_index),
+                        "mode_id": eigen_path_mode_id(p.sample_index, p.raw_mode_index),
                         "sample_index": p.sample_index,
                         "raw_mode_index": p.raw_mode_index,
                         "frequency_hz": p.frequency_real_hz,
@@ -878,7 +1175,10 @@ pub(crate) fn execute_fem_eigen_path(
             "modal_overlap_available": modal_overlap_available,
             "modal_overlap_unavailable_reason": modal_overlap_unavailable_reason,
             "gap_count": gap_count,
-            "ambiguous_assignment_count": 0,
+            "ambiguous_assignment_count": Option::<u64>::None,
+            "ambiguous_assignment_count_available": false,
+            "ambiguous_assignment_count_unavailable_reason":
+                "assignment_ambiguity_metric_not_computed",
         },
     });
     if branch_table_requested {
@@ -980,8 +1280,10 @@ pub(crate) fn execute_fem_eigen_path(
 
         if wants_dispersion {
             // Legacy dispersion CSV with all samples × modes
-            let mut csv_lines =
-                vec!["mode_index,kx,ky,kz,frequency_hz,angular_frequency_rad_per_s".to_string()];
+            let mut csv_lines = vec![
+                "mode_index,kx,ky,kz,frequency_hz,angular_frequency_rad_per_s,sample_id,mode_id"
+                    .to_string(),
+            ];
             for sample_result in &path_result.samples {
                 let k = sample_result.sample.k_vector;
                 for mode in &sample_result.modes {
@@ -992,13 +1294,15 @@ pub(crate) fn execute_fem_eigen_path(
                         continue;
                     }
                     csv_lines.push(format!(
-                        "{},{},{},{},{},{}",
+                        "{},{},{},{},{},{},{},{}",
                         mode.raw_mode_index,
                         k[0],
                         k[1],
                         k[2],
                         mode.frequency_real_hz,
                         mode.angular_frequency_rad_per_s,
+                        eigen_path_sample_id(plan, &sample_result.sample),
+                        eigen_path_mode_id(sample_result.sample.sample_index, mode.raw_mode_index,),
                     ));
                 }
             }
@@ -1010,7 +1314,7 @@ pub(crate) fn execute_fem_eigen_path(
             }
 
             let mut dispersion_v2_lines = vec![
-            "sample_index,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,label,raw_mode_index,branch_id,frequency_hz,omega_rad_s,analytic_frequency_hz,relative_error,validation_geometry,line_width_hz,residual_norm,overlap_score,tracking_score_source,mode_field_id,mode_field_resource_key"
+            "sample_index,sample_id,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,label,raw_mode_index,mode_id,branch_id,frequency_hz,omega_rad_s,analytic_frequency_hz,relative_error,validation_geometry,line_width_hz,residual_norm,overlap_score,tracking_score_source,mode_field_available,mode_field_id,mode_field_resource_key"
                 .to_string(),
         ];
             for sample_result in &path_result.samples {
@@ -1045,17 +1349,23 @@ pub(crate) fn execute_fem_eigen_path(
                         .unwrap_or_default();
                     let line_width_hz =
                         eigen_path_line_width_hz(mode.frequency_imag_hz).unwrap_or_default();
+                    let mode_field_available = selection.contains_field_mode(
+                        sample_result.sample.sample_index,
+                        mode.raw_mode_index,
+                    );
                     let validation_columns =
                         eigen_path_de_bv_analytic_csv_columns(plan, &sample_result.sample, mode);
                     dispersion_v2_lines.push(format!(
-                        "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+                        "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
                         sample_result.sample.sample_index,
+                        eigen_path_sample_id(plan, &sample_result.sample),
                         sample_result.sample.path_s,
                         k[0],
                         k[1],
                         k[2],
                         label,
                         mode.raw_mode_index,
+                        eigen_path_mode_id(sample_result.sample.sample_index, mode.raw_mode_index,),
                         mode.branch_id
                             .map(|branch_id| branch_id.to_string())
                             .unwrap_or_default(),
@@ -1070,14 +1380,12 @@ pub(crate) fn execute_fem_eigen_path(
                             .unwrap_or_default(),
                         overlap_score,
                         tracking_score_source,
+                        mode_field_available,
                         eigen_path_mode_field_id(
                             sample_result.sample.sample_index,
                             mode.raw_mode_index,
                         ),
-                        if selection.contains_field_mode(
-                            sample_result.sample.sample_index,
-                            mode.raw_mode_index
-                        ) {
+                        if mode_field_available {
                             eigen_path_mode_field_resource_key(
                                 sample_result.sample.sample_index,
                                 mode.raw_mode_index,

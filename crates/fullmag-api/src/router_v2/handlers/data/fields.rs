@@ -8303,10 +8303,10 @@ mod tests {
     use super::{
         analysis_complex_vector_view_values, analysis_frequency_response_view_values,
         apply_field_scope, decode_complex_f64_pairs_little_endian,
-        insert_field_vector_binary_headers, is_fem_runtime, parse_analysis_eigen_mode_field_id,
-        parse_analysis_frequency_response_field_id, parse_component, preview_cache_is_fresher,
-        project_values, push_field_descriptor, resolve_field_scope,
-        resolve_target_field_availability, resolve_transport_spatial_field, materializer_status,
+        insert_field_vector_binary_headers, is_fem_runtime, materializer_status,
+        parse_analysis_eigen_mode_field_id, parse_analysis_frequency_response_field_id,
+        parse_component, preview_cache_is_fresher, project_values, push_field_descriptor,
+        resolve_field_scope, resolve_target_field_availability, resolve_transport_spatial_field,
         serialize_analysis_field_vector_binary, FieldFreshness, FieldMaterializationState,
         FieldVectorQuery, ResolvedFieldScopeDomain, TargetFieldAvailabilityQuery,
     };

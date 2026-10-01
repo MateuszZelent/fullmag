@@ -1,12 +1,19 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
+## S02/S12 — odbiór review signed-k i aktualny Γ
+
+- #188 terminalny succeeded/exit0, source digest b2edf2fbc0295c83f6d768ad8bd3391904017c5f871d0244afe15c4b3a1a4a46;14artefaktów receipt size/SHA PASS. Receipt SHA0bf0ea60b99b550767331c6bd231a0979a79d49fe15ead150eeb06c31c70daae.
+- Kontroler90201/145d8503bba24dc3abfaec6aaaf72819 wykonuje Gamma. Kontener7df4be7c5ace potwierdzony mountami i pracąCPU; min-root mapa nie blokuje już wejścia do SLEPc. Brak terminalnego wyniku i nowej częstotliwości w chwili checkpointu.
+- Po review odbiór signed wymaga hasha kontrolera z kapsuły, wspólnego capsule_relative w receipcie, canonical batch/job root i pełnej niezależnej walidacji6przypadków zbieżności+Γ; k używa tolerancjiCSV.64lekkie testyPythonPASS. Zmiana postprocessingu nie wymaga nowego solver builda.
+- Dalej: ten sam pilotΓ -> signed26punktów+4kontrole -> pełne pola/residuale/profile/seam/branch -> wykres i zbieżność. Pełny cel S00–S12, Ku canonical/raw identity, COMSOL A1, inne interakcje, waveguide, GPU, browser i integracja pozostają otwarte.
+
+
 ## S02/S12 — rzeczywiste signed-k DE/BV, 2026-10-01
 
 - Naprawa mapy jest commit/push f33ca4e5c3c96c408eef5ca6d8edb31dea656f87; niezależne review bez P1/P2. Uzupełniony replay wiąże również kolejność runtime par (6d932e997d5e5012191270ac2066c70a25dc776e).
 - Dodano serię signed-13: 26rzeczywistych punktówDE/BV (0,±2,±5,±10,±15,±20,±25rad/µm) +4kontrole6/9warstw, sekwencyjnie. Jeden model Python, indywidualne signed wektory i wyniki; bez odbicia częstotliwości.
 - Signed kolektor zachowuje bramki źródeł, pól, residuali i mierzy symetrię. 35nowych lekkich testówPASS,49istniejącychPASS i21subtestówPASS; native testów nie kompilowano. Wykres gotowy do faktycznych ujemnych danych.
 - Wymagany nowy snapshot runtime-v2 i terminalny receipt, potem30runów i signed scatterplot. Aktualnie bez nowych częstotliwości; Ku canonical/raw migration, COMSOL A1, zbieżność, inne interakcje, GPU, browser i integracja pełnego S00–S12 pozostają otwarte.
-
 
 
 ## S02/S12 — kanoniczne mapy periodyczne, 2026-10-01
@@ -16,7 +23,6 @@
 - Naprawiono generator przed składaniem operatorów, bez osłabienia certyfikatu lub residuali. Trzy regresje Rust przygotowane, niekompilowane; parser i replay PASS. Audyt docs/audits/2026-10-01-modal-periodic-map-canonical-numbering.md.
 - Przyrost Ku v2 jest już commit/push813fec3948e3994551834a06721f1ac357a9ea3b. Poprzedni wpis WIP jest historyczny. Canonical/raw material artifact migration pozostaje otwarta.
 - Następny krok: nowy managed snapshot runtime-v2 -> Γ -> DE/BV k25 L2/t3/t6/t9 -> bramki pól/residuali/analizy. Pełny cel S00–S12 i wszystkie bramki nauki/integracji pozostają otwarte.
-
 
 
 
@@ -30,7 +36,6 @@
 - Review v2: poprawiono hardkodowane v1 w bias sweepie i orchestratorze, wspólny selector plików, early scope guard, null oraz strict digest; source-only frozen refresh-v1 i ścieżki Ku=0 przygotowane. Końcowy review CPU bez nowego P1; GPU copy dostaje accepted-cache guard. Import DeError zachowany jako wymagany trait dla D::Error::custom.
 - Następny runtime blocker: kanoniczne numerowanie map producenta; trzeba wyjaśnić i naprawić producer_reduction_map_not_canonical, następnie ponowić Γ i pełną serię DE/BV na nowym źródle.
 - Przyrost v2 pozostaje WIP: regresje Rust przygotowane (niekompilowane), review CPU bez nowego P1, exact staged nauka56plików i Rust8plików parser PASS. Pozostaje commit/push oraz nowy managed runtime. Pełny zakres S00–S12, zbieżność, COMSOL A1, interakcje, waveguide, GPU, UI i integracja pozostaje otwarty.
-
 
 ## S10/S12 — Ku w źródłach; ten sam job #187
 
@@ -472,6 +477,238 @@ Ta sekcja zastępuje wcześniejsze statusy #176 oraz sesji 69118.
   Nie ma jeszcze częstotliwości z nowej siatki; cały cel nieukończony.
 
 
+## Realizacja warstw Box — nowy checkpoint 2026-09-30
+
+- Naprawiono rzeczywiste warstwy Tet4 Box/shared-domain oraz zewnętrzne
+  szwy periodyczne. Pełny publiczny przykład DE realizuje 6 warstw;
+  testy obejmują 3/6/9, niezależne płaszczyzny powietrza i ring.
+- 70 interpretowanych testów + 15 subtests PASS; dokument naukowy
+  i dokładnie staged mapa źródeł przeszły walidator.
+- Commit i remote: 61a53f4afa668d55311ead9de7b1b659d2a41706.
+- Managed #176, job f1b0ffd6a64c4202864fbcb92f9cb8fd, runtime-v2,
+  snapshot digest 7fe584ed5a115a68449a5eb75629880bd3dc27c728693d4cc3fb321fd533710e.
+  Zgłoszenie potwierdzone, oczekuje za obcym jobem #175. Nie restartować
+  po timeoutach obserwatora. Brak jeszcze wyniku solvera z nowego generatora.
+- Po succeeded: zweryfikować receipt/ABI/hash, uruchomić DE/BV k25
+  dla 3/6/9 warstw przy stałym hmax i airboxie, sprawdzić rzeczywisty
+  pionowy span, Poissona i pełny residual; następnie zbieżność i ścieżkę k.
+- Raport actual_method poprawiony: geo_layered_tetrahedral, realizacja z.
+  Linear jawnie odrzucane przed Gmsh; obsługa linear nadal niezaimplementowana.
+  Błędne kontrole n_layers/hmax też odrzucane przed Gmsh.
+  74 testy + 15 subtests PASS, starszy raport feature-aware: 1 PASS.
+  Commit i remote: d050d46fc6165f348a3a301b1333862685133e9f.
+  #176 nie zawiera tego uzupełnienia raportowania; metoda geometryczna
+  benchmarku geometric jest taka sama. Nie przypisywać #176 nowego HEAD.
+- Audyt: docs/audits/2026-09-30-box-film-layer-realization.md.
+  Cały cel S00–S12 nadal nieukończony; Γ, BV, COMSOL/A1, tracking,
+  UI/GPU i integracja pozostają odrębnymi bramkami.
+
+## Aktualny checkpoint zbieżności — 2026-09-30
+
+Ta sekcja zastępuje wcześniejsze informacje o aktywnych pilotach 64887/11042.
+Oba procesy są zakończone; nie pozostał aktywny pilot.
+
+- k25: DE L0/L1/L2/L3 = 13.384204251/13.436508613/13.578981799/13.596286127 GHz.
+  Różnica wobec n=0: -2.118/-1.736/-0.694/-0.567%.
+- BV L0/L2 = 9.664769493/9.740140954 GHz; -0.981/-0.209% wobec n=0.
+  BV L1/L3 niezaakceptowane: pełny residual lub awaria SLEPc.
+- Niezależny Poisson dla sześciu zaakceptowanych punktów: max 2.45e-14.
+- Γ L0: sonda demagu passed, lecz certyfikat okna failed (48/50 podokien).
+  Brak zaakceptowanego punktu Γ; nie zamykać S00.
+- Nowy parametr 3/6/9 warstw, commit d68496b55eb36e1e89544ef9803e8e6a8f704d02,
+  wysłany; 59 testów + 15 subtests PASS. Rzeczywisty run t6 ujawnił
+  ignorowanie warstw przez Box free-tet: identyczna siatka jak t3.
+- Naprawiono bramkę: pomiar rzeczywistego pionowego span Tet4 odrzuca t6
+  (10 nm zamiast <=1.666667 nm). Metadane nie dowodzą realizacji.
+  Same badania zbieżności przez grubość nadal NOT VERIFIED.
+- Naprawa bramki i audyt zapisane oraz wysłane:
+  2cea9bc4cfc7d5acd8d44b0a576802d944c49354.
+  59 testów + 15 subtests PASS; rzeczywisty run t6 odrzucony przez nową kontrolę.
+- Raport: docs/audits/2026-09-30-de-bv-mesh-convergence.md.
+- Dalej: realizacja warstw Box/shared-domain, awarie BV i Γ, airbox,
+  pełna ścieżka, A1/COMSOL, tracking/API/UI/GPU i integracja S00–S12.
+
+
+## Aktualny odbiór runtime — 2026-09-30
+
+Ta sekcja zastępuje historyczne informacje o trwającym buildzie #173
+oraz oczekującym wdrożeniu panelu kolejki.
+
+- #173: succeeded, exit 0; receipt/hash/source sprawdzone przed solve.
+- DE/BV k7 L0: nowe completed_unqualified, eps_full 2.37e-10/2.27e-10.
+- Niezależny Poisson z obu zapisanych pól: max 7.62e-15.
+  Naprawa wspólnej skali q/phi potwierdzona w tych dwóch przypadkach.
+- f: DE 10.669228396 GHz, BV 9.235504955 GHz.
+  Różnica wobec n=0 odpowiednio -0.228451% i -0.085740%.
+- Koordynator b8b00a8e wdrożony; zachowano profile i obcy job,
+  kolejka wznowiona. Browser pokazuje tabelę bez response_too_large.
+- k25 L0: DE 13.384204251 GHz, BV 9.664769493 GHz, zaakceptowane.
+- DE k25 L1: pierwszy pilot zatrzymany przez filtr EPS 1e-11
+  (estimate 1.66e-11). Retry z EPS 1e-10: 13.436508613 GHz,
+  eps_full 1.93e-9; końcowy próg 1e-8 zachowany.
+- Niezależny Poisson dla tych trzech punktów: max 7.81e-15.
+  Różnica DE wobec n=0 maleje 2.12% -> 1.74%; L2 nadal potrzebne.
+- BV L1 EPS 1e-10 zakończył się failed: pierwsze okno estimate 5.07e-10,
+  brak zaakceptowanego moda; drugi kandydat poza swoim oknem.
+  Nie traktować wartości kandydata 9.692659902 GHz jako wyniku.
+- Proces 64887 wykonuje DE L2 EPS 1e-10, BV L1/L2 EPS 1e-9,
+  z dokładniejszym shifted KSP 1e-12. Końcowy próg nadal 1e-8.
+  Sesja 77607 jest terminalna; nowych runów nie nadpisano.
+  Nie restartować 64887 na podstawie timeoutu obserwacji.
+- Poprawka q/phi z raportem runtime zacommitowana i wysłana:
+  e014283d22c062722d5e1699fb005976c31d2f4a.
+- 10 interpretowanych regresji Poissona PASS; brak kompilacji unit tests.
+- Raport: docs/audits/2026-09-30-de-bv-coupled-normalization-runtime.md.
+- Pozostałe bramki S00–S12 otwarte; kwalifikacja NOT VERIFIED.
+
+
+## Checkpoint integralności porównania — 2026-09-30
+
+Parametry diagnostyki są teraz porównywane z dokładnie hash-bound metadata.json
+runu: Ms, A, gamma0, grubość, pole bias, orientacja DE/BV i Dirichlet.
+Brak/duplikat hasha lub zmiana bajtów między kontrolą a parserem są odrzucane.
+9 interpretowanych regresji PASS (w tym subcases parametrów), rzeczywisty
+archiwalny mod PASS, staged scientific source-map exit 0.
+Ponowna kontrola 19 archiwów z walidacją parametrów zachowała poprzednią
+wynikową diagnozę; max Poisson residual 0.16636683689726586, brak fitowania.
+Commit ce778712cb177bc814ab0502fd35215b292bd02d wysłany na branch zadania.
+To przyrost diagnostyki; nie jest nową częstotliwością ani kwalifikacją solvera.
+
+#173: pierwszy release launcher/FEM zakończył kompilację w 15m 58s;
+API nadal w budowie. Brak terminalnego receipt. Wdrożenie UI i piloci nadal
+oczekują; aktywny job oraz obserwator wdrożenia nie są restartowani.
+
+
+## Dodatkowa naprawa runner UI — 2026-09-30
+
+response_too_large: kompaktowe podsumowania list API v1, filtr aktywnej kolejki
+przed pagination, wszystkie strony FIFO w widoku. 23 testy backend + 13 API
+oraz suite JS PASS. Commit 9cd5d9939 wysłany. Obraz b8b00a8e gotowy.
+Graceful drain zachowuje aktywny build #173 i oczekujący obcy job.
+Wdrożenie i browser proof oczekują; nie jest to ukończona bramka solvera.
+Raport: docs/audits/2026-09-30-runner-queue-response.md.
+
+
+
+
+
+## Najnowszy checkpoint — 2026-09-30: diagnoza f(k), runtime-v2
+
+Ta sekcja ma pierwszeństwo przed starszymi checkpointami w tym zakresie.
+
+- Niezależne równanie magnetyczne na archiwalnych polach: 13 spójnych par,
+  max residual 2.7733e-10. Sześć niespójnych q/phi nadal odrzuconych.
+- Niezależna dwufunkcyjna projekcja Ritz na tej samej siatce odtwarza niemal
+  cały spadek częstotliwości względem analityki: przy k25 DE 13.393452 GHz
+  vs Fullmag 13.384204 GHz vs analityka 13.673868 GHz. Główny trop: P1 demag.
+  Oba narzędzia eksploracyjne; nie zastępują produkcyjnego solve ani zbieżności.
+- Ciągły kernel z Dirichletem i 2 µm paddingu przy k25 zgadza się z otwartą
+  analityką do pokazanej precyzji. Duży spadek Nzz w FEM nie wynika z tego
+  zewnętrznego warunku. Weryfikacja Gamma/małych k i pełnej zbieżności otwarta.
+- Użytkownik jawnie zezwolił na runtime-v2 i potrzebną aktualizację runnera.
+  Zbudowano toolchain CPU: f12e618dce9e212fc7f1be5947fa1e92acbb9736d4820eca892b5b7dbc2eebcc.
+  MFEM i HYPRE bez CUDA, rzeczywisty loader HYPRE w prefixie CPU sprawdzony.
+  Kod źródłowy kanonicznego obrazu również poprawiono: CPU MFEM nie może
+  używać HYPRE z CUDA. Pełny kanoniczny Dockerfile nie był osobno przebudowany.
+- Aktywacja tylko runtime-v2 zachowuje wcześniejsze profile/token/tożsamość;
+  również po późniejszym upgrade current-contracts. 23 testy + 4 subtests PASS.
+- Nowy koordynator: 24c6f2f856f18d4bff5a6ca036b8ef1a96dc235619e5a5cf506c53fcc9a7cb66.
+  Wymiana zakończona po terminalnym zakończeniu cudzego joba #172.
+  Live health: ok=true, worker_alive=true, accepting_jobs=true, worker_error=null.
+  Wcześniejsze profile zachowane; dodano wyłącznie runtime-v2.
+  Build #173 (1b7399298fe9453eba0c432eef1a2f62) działa w runtime-v2;
+  snapshot ddf56cfe3b8f1db7b23c0026f7018803c734c07d866cdcdaa4140ab0f39b86b7,
+  baza 12f90bd08be257116ed2797cf3e62c42d8f06202, tracking_mass.rs w kapsule.
+  Brak terminalnego receipt i nowych wyników solvera; kwalifikacja otwarta.
+  Kontener f6e089418f1cb1e14432465514cb86d07df5363bb271af88ac81322b403d26d1
+  running=true; start 2026-09-30T10:37:50Z. Przygotowanie kapsuły zakończone.
+  Przyrost aktywacji profili zapisany i wysłany:
+  f60fc7e3f796bd434dcae90cd4cd428dd451624d (23 testy + 4 subtests PASS).
+  Snapshot buildu zachowuje poprzednią bazę; commit nie zmienia jego kapsuły.
+- Po wymianie: konfiguracja immutable toolchain ID, snapshot z tracking_mass.rs,
+  build runtime-v2 bez unit tests, weryfikacja receipt/loader/source, DE/BV k7 L0,
+  następnie DE/BV k25 L0/L1/L2 z tym samym modelem i pierwotnym progiem 1e-8.
+  Nowych produkcyjnych częstotliwości jeszcze nie ma.
+- Raport: docs/audits/2026-09-30-de-bv-frequency-discrepancy.md.
+
+
+## Najnowszy checkpoint — 2026-09-30: błąd skali q/phi (WIP)
+
+Ta sekcja ma pierwszeństwo w zakresie spójności sprzężonych pól.
+Niezależny Poisson: 13/19 par zgodnych do ~1e-14; 6/19 residual
+0.089…0.1664. BV k=7,15,20,22,25 i DE k=7 rad/µm.
+Potwierdzony błąd źródła: window dedup normalizował tylko q, pozostawiając
+phi i certyfikaty w starej skali. Poprawka zachowuje cały oryginalny mod;
+normalizowane kopie są tylko do overlap. C++ pozostaje WIP bez managed
+wykonania. Częstotliwości niezmienione; ich różnica z analityką nadal otwarta.
+Nie zmieniono progu residualu, nie naprawiano archiwów przez fit skali.
+Szczegóły i dalsze bramki: docs/audits/2026-09-30-de-bv-coupled-normalization.md.
+Audyt/narzędzie/notę zapisano i wysłano: 86f784bb9224bf68fc84dd020515409699f309dd.
+10 interpretowanych regresji PASS; staged source-map exit 0. Poprawka C++
+pozostaje poza commitem, jako WIP. Brak nowego uruchomienia solvera.
+
+
+## Najnowszy checkpoint — 2026-09-30: S07 persisted consistent P1 (WIP)
+
+Ta sekcja ma pierwszeństwo przed starszymi checkpointami poniżej.
+
+- Oba writery metadanych zapisują wersjonowany rekord metryki consistent P1.
+  Odtwarzanie waliduje definicję, siatkę, uporządkowane węzły, tetra i objętości.
+- Adapter Kittel wybiera fizyczne węzły z pełnego pola i zachowuje pełne lifted
+  real/imag; nie traci metryki podczas ponownego odczytu. Wadliwe/mieszane
+  dane są odrzucane. Starsze artefakty mają jawny legacy zakres.
+- Rustfmt parse/check exit 0, source-map exit 0, 32 testy dokumentacji PASS.
+  Cztery nowe regresje Rust NOT RUN; źródła pozostają niezacommitowanym WIP.
+- Kolejny przyrost S07 usuwa ciche filtrowanie/obcinanie pól i wag legacy,
+  wymusza unique binary/metadata oraz sample/raw/Gamma identity.
+  Dodano 4 dalsze regresje Rust NOT RUN (łącznie 8 dla persistence/reader).
+  Focused source-map, Rustfmt parse/check i diff check: exit 0.
+- Dalszy przyrost usuwa Euclidean/lifted fallback po błędzie zadeklarowanej
+  metryki w samym selektorze Gamma i wymaga kompletnych lifted real/imag.
+  Dwie dalsze regresje Rust NOT RUN (łącznie 10 persistence/reader/selector).
+  Rustfmt parse/check, source-map i diff check exit 0. Źródła nadal WIP.
+- Usunięto hardkodowany zerowy seam modu. Brak pomiaru daje pustą komórkę
+  CSV oraz status partial; frequency_comparison_status jest oddzielny.
+  Nowa interpretowana regresja bramki + kompletny fixture: 2 PASS.
+  Dwie zmienione regresje Rust NOT RUN. Obliczenie seam nadal otwarte.
+- Aktualny live runner ma 8 950 689 792 B, powyżej 8 GiB, bez aktywnych
+  jobów. Blokada miejsca ustąpiła. Nadal blokuje runtime-only poza allow-list
+  oraz zakaz kompilacji unit tests; nie zmieniono runnera ani nie zlecono joba.
+- Pomiar magnetycznego seam jest teraz w źródłowym adapterze periodic/floquet:
+  fizyczne Cartesian pole, rzeczywiste slave/root phase, normalizacja amplitudy.
+  Rekordy są związane z mesh/sample/raw/k/frequency; Kittel odczytuje tylko
+  zgodny pojedynczy rekord. Brak par/pola nie daje zera. Dwie regresje Rust
+  NOT RUN. Rustfmt/source-map/diff exit 0. Źródła WIP, nie wykonanie solvera.
+- Sama dostępność pomiaru nadal daje partial/NOT VERIFIED: tolerancja seam,
+  phi/airbox i managed runtime pozostają otwarte. Nowych częstotliwości brak.
+- Niezależnie zbadano 19 archiwalnych modów na jawnych parach siatki:
+  28 magnetycznych par/mod; max względny defekt fazowego zszycia
+  3.3852323788985243e-16. Odwrócony znak daje 0.1598…1.68294,
+  pominięta faza 0.07997…0.95885. Narzędzie Python: 7 PASS.
+  To rzeczywiste historyczne pola, nie wykonanie nowego Rust ani phi.
+  Nie zmieniono częstotliwości i nie zwiększono liczby punktów.
+- Zweryfikowany przyrost narzędzia audytu i jego naukowej dokumentacji zapisano
+  i wysłano: bd70b6d9215662fe10b5a21180402fb95b253593. Staged source-map
+  exit 0; staged źródła narzędzi zgodne z przetestowanymi. Pozostały solver
+  WIP nie został dołączony. Cały plan i integracja pozostają nieukończone.
+- Archiwalne phi/H_demag z 19 modów: pełne phi na 1980 węzłach,
+  1195 par/mod, defekt Floqueta ≤2.2887833992611187e-16; phi=0 na
+  obu zewnętrznych płaszczyznach z. Niezależny P1 -grad(phi) zgodny
+  z elementowym H_demag: max względny L2=1.6741805960076105e-15.
+  Interpretowane regresje: 6 PASS. To spójność historycznych pól,
+  nie niezależny Poisson, weak flux, zbieżność ani nowy Rust/solve.
+- Kontrolę archiwalnego phi/H_demag i jej dokumentację zapisano i wysłano:
+  3d7690c1a39adfed4bbc4757b060a5f257cf9694. Staged source-map exit 0, staged
+  narzędzia zgodne z przetestowanymi; solver WIP poza tym commitem.
+- S07 pozostaje otwarty: kompilacja/runtime, pełna identity i odtwarzanie
+  nonzero-k branch transport, współdzielony artefakt metryki/API provenance.
+- Nowych częstotliwości brak; nadal 19 punktów. Runtime-only niedopuszczony,
+  zakaz kompilacji unit tests trwa. Aktualny live odczyt miejsca podano wyżej.
+  Nie usuwano danych ani nie zmieniano runnera.
+- Cały S00–S12 pozostaje aktywny; ten checkpoint nie zamyka celu.
+
+Dowody: [S07 persistence](../../audits/2026-09-30-s07-consistent-mass-persistence.md).
+
 ## Najnowszy checkpoint — 2026-09-30: produkcyjna metryka consistent P1 (WIP)
 
 Ta sekcja ma pierwszeństwo przed starszymi checkpointami poniżej.
@@ -556,7 +793,7 @@ Dowody: [gęsta ścieżka](../../audits/2026-09-30-de-bv-dense-sampling.md).
 Ta sekcja ma pierwszeństwo przed starszymi checkpointami poniżej.
 
 - Kontrola source snapshot z query biblioteki działa przy publikacji runtime,
-  walidacji receipt i starcie benchmarku. 64 testy Python PASS; etap zapisany
+  walidacji receipt i starcie benchmarku. 65 testów Python PASS; etap zapisany
   na remote w 58252aa7d6c0aa3f1f8e15c6e5469fb6b0201a32.
 - S06: odtworzono końcową kolejność siatki przez pack_mesh_by_analysis;
   fingerprint v3 zgadza się bitowo dla wszystkich 19 zapisanych modów.
@@ -581,6 +818,274 @@ Dowody: [dopuszczanie runtime](../../audits/2026-09-30-managed-fem-runtime-admis
 i [tożsamość siatki oraz profile](../../audits/2026-09-30-de-bv-mode-mesh-preflight.md).
 Wynik odtwarzalny skryptem scripts/compare_de_bv_mode_profiles.py:
 consistent-mass-mode-profiles-final.json w katalogu wizualizacji de-bv-ten-20260930.
+
+
+## Bieżący stan — 2026-09-30, 19 punktów DE/BV; zbieżność siatki i stabilizacja multi-k
+
+Ta sekcja ma pierwszeństwo chronologiczne przed historycznymi checkpointami poniżej.
+
+
+S06 — nowy dowód diagnostyczny: odtworzono pack_mesh_by_analysis;
+końcowy fingerprint siatki zgadza się bitowo dla wszystkich 19 modów.
+Obliczono 17 par consistent-mass: minimum nakładania squared DE 0.9990210151,
+BV 0.9999361810. 7 regresji Python PASS, source-map exit 0, 10 kontroli
+matematycznej dokumentacji PASS. To dowód podobieństwa profili P1 po
+odfazowaniu Blocha, nie pełna kwalifikacja gałęzi ani produkcyjnego trackera.
+[Audyt i wynik](../../audits/2026-09-30-de-bv-mode-mesh-preflight.md).
+Starszy checkpoint 0/19 bezpośrednich zgodności cache poniżej jest
+wyjaśniony przez wymagane pakowanie kolejności węzłów; nie pozostaje blokadą
+tej diagnostyki. Runtime nowych poprawek nadal wymaga buildu.
+
+Etap dopuszczania runtime zapisany i wysłany na remote:
+58252aa7d6c0aa3f1f8e15c6e5469fb6b0201a32.
+
+Najnowszy checkpoint dopuszczania runtime: kontrole native bindingu działają
+w publikacji, receipt i benchmarku; 65 testów Python PASS, w tym ponowne
+hashowanie receipt ze starą biblioteką. Oddzielny CPU MFEM ABI v2 jest
+zdefiniowany w źródłach, ale nie aktywowano profilu ani nie zmieniono runnera.
+Managed wykonanie aktualnego native bindingu i ABI nadal NOT VERIFIED.
+Audyt: [dopuszczanie runtime](../../audits/2026-09-30-managed-fem-runtime-admission.md).
+Stan #171: terminalny succeeded/exit 0; historyczne wzmianki running poniżej
+nie opisują aktualnego stanu. Ostatni odczyt miejsca: 4 931 870 720 B.
+Plan zagęszczenia: 52 punkty (DE/BV po 26, 0–25 rad/µm co 1),
+19 istniejących zaakceptowanych wyników i 33 punkty oczekujące na solver.
+Nie oznacza to wykonania nowych runów ani kwalifikacji istniejącej krzywej.
+
+Kontrola wejść S06: 19 payloadów modów i członkowie cache siatki mają
+zgodne hashe, ale 0/19 manifestów cache deklaruje modalny fingerprint.
+Przed consistent-mass overlap trzeba odzyskać końcową siatkę i kolejność
+węzłów; różnica hashy sama nie dowodzi błędu fizycznego.
+[Audyt wejść profili](../../audits/2026-09-30-de-bv-mode-mesh-preflight.md).
+
+Najnowszy preflight: #171 terminalnie succeeded/exit 0, lecz native bundle
+pozostał identyczny z #169/#170. Kolejny build czeka na dostępność
+runtime-only (profil nadal poza allow-list; zakaz kompilacji unit tests obowiązuje)
+i miejsce: wolne 4 963 586 048 B, próg 8 GiB. Przygotowano odczyt/dry-run
+10 dokładnych katalogów execution, 4 474 033 582 B, bez aktywnych mountów;
+wysłano osobne pytanie o zgodę. Nie usunięto danych i nie zmieniono runnera.
+Lista: [preflight miejsca](../../audits/2026-09-30-runner-space-preflight.md).
+Managed instalacja wybiera teraz bibliotekę FEM z cache zgodnego z hashem
+snapshotu, zamiast najnowszego mtime, i nie ignoruje błędu kopiowania.
+9 regresji Python/shell PASS; managed runtime NOT VERIFIED.
+Szczegóły: [wybór biblioteki](../../audits/2026-09-30-managed-fem-library-selection.md).
+
+Niezależna poprawka multi-k usuwa domyślny indeks 0/częstotliwość 0
+przy brakach spectrum.json oraz odrzuca powtórzone indeksy. Jawne 0 Hz
+pozostaje legalne. Rust parsing PASS; kompilacja i regresja NOT VERIFIED.
+Szczegóły: [tożsamość modu](../../audits/2026-09-30-multi-k-mode-identity.md).
+
+Nowe poprawki native pozostają NOT VERIFIED. Historyczne odczyty running
+poniżej nie opisują aktualnego stanu #171.
+
+
+Aktualizacja zagęszczenia: 19 punktów z pełnym certyfikatem (9 DE, 10 BV),
+L0, k=2–25 rad/µm. Nowe wejścia: 251c4a63a2f80e84860a7709e4bba271533bb25b.
+DE k12 nie przeszedł trzech konfiguracji solvera i nie trafia na wykres.
+Dokładna tabela i dowody: [audyt zagęszczenia](../../audits/2026-09-30-de-bv-dense-sampling.md).
+Kwalifikacja naukowa nadal NOT VERIFIED.
+
+K0: naprawiono standalone Gamma (5749897f71d6e0e9d9dff65951cccdeaf479c836),
+46 testów Python/IR PASS. #169 terminalnie succeeded, exit 0; poprawny
+run 78721295af26413680a1b863406e4a30 potwierdza sondę demagu PASS
+(Nz=0.9975062344), lecz fail-closed na pokryciu i dwóch divergences SLEPc.
+Dodano źródłowy cache preconditionera z demagiem dla okien <=512 DOF;
+natywna kompilacja/runtime nadal NOT VERIFIED. Historyczny odczyt
+#170 running / #171 queued został zastąpiony poniższą korektą. Szczegóły:
+[audyt k0](../../audits/2026-09-30-k0-control-and-window-preconditioner.md).
+
+Krytyczna korekta dowodów: #170 zakończył build exit 0, ale dostarczona
+libfullmag_fem.so ma ten sam hash co #169 i nie zawiera nowych signed guards,
+obecnych w kapsule. Kontrolny run k0 e048e072613e408792416acc2b381692
+nie jest dowodem wykonania tej poprawki. Dodano źródłowe powiązanie
+Cargo/CMake z hashem snapshotu; nowy build, regresja cache i native runtime
+NOT VERIFIED. #171 rozpoczął pracę, lecz poprzedza ten nowy mechanizm.
+Nie promować receipt do dowodu aktualności solvera.
+
+Ostatni terminalny odczyt #171: succeeded, exit 0, 9/9 kontraktow PASS;
+wszystkie hashe artefaktow zgodne. Native library nadal identyczna z #169/#170,
+bez nowych signed guards; integralnosc NIE zamyka bramki aktualnosci native.
+Nowa poprawka zachowuje interrupted/cancel_requested podczas budowania
+preconditionera i sprawdza przerwanie przed kazda kolumna. Source-map exit 0,
+10 testow dokumentacji PASS; nowa regresja C++ pozostaje NOT VERIFIED.
+Nastepny runtime musi pochodzić z buildu z bindingiem snapshotu biblioteki.
+
+
+Kontrola bindingu zostala dopisana do dependency query biblioteki, runtime-only,
+modal-contract i walidatora benchmarku. 47 testow Python PASS, w tym regresja
+swiezy Rust / stara biblioteka; parser 5 blokow Python w shell PASS.
+C++/Cargo/CMake wymagaja nowego managed buildu: NOT VERIFIED. #171 nadal
+running, kontener potwierdzony jako aktywny; nie zawiera nowego bindingu.
+Nie uruchomiono nowej kompilacji testow ani nie zmieniono profili runnera.
+Niezalezny validator receipt i benchmark runtime-only v1/v2 rowniez
+sprawdzaja native binding. Trzy zestawy Python: 64 PASS, w tym ponowne
+hashowanie starego receipt nie omija kontroli. Nowy native build nadal
+NOT VERIFIED; #171 aktywny, etap native-build zakonczony wedlug logu.
+
+
+
+
+
+| Bramka | Bieżący dowód | Pozostała praca |
+|---|---|---|
+| Porównanie referencyjne COMSOL C0 w Γ | Fullmag #143: `2.8002642129151073 GHz`; dostarczone notatki modelu COMSOL podają `Reference value: 2.8002642 GHz`, różnica ok. `12.9 Hz`. | To zgodność z wartością referencyjną w notatkach, nie surowy wynik solvera COMSOL. Model C0 nie zawiera demagu i nie potwierdza A1 ani niezerowego `k`. |
+| DE-SMOKE, `k_y=2e6 rad/m` | Run #151 `b96f1961f51e4d34b038b689ee45caaf`: `9.723336314057247 GHz`, pełny residual `2.18834e-10`, zredukowany `8.85558e-14`; wszystkie cztery szwy i obie sondy demagu przechodzą. Analityczny DE `n=0` daje `9.725724281195415 GHz`, różnica `-0.0245531%`. | Status `completed_unqualified`: pierwszy zaakceptowany punkt nonzero-k z pełnym certyfikatem, lecz nadal jeden punkt bez zbieżności siatki/airboxu/modów i bez porównania A1–COMSOL. |
+| Certyfikat natywnego nonzero-k | Źródło C++ rekonstruuje pełne równania słabe i sprawdza cztery residuale szwów. Serializer Rust wylicza `eps_reduced=max(eps_q,eps_phi[,eps_gauge])`, oddzielnie od pełnego residualu i szwów. Build #151 oraz pilot k2 potwierdziły publikację i walidację tego certyfikatu w managed runtime. | Ścieżka pojedynczego `k` jest potwierdzona. Ścieżka multi-k ujawniła kolejne błędy orkiestracji handoffu i redukcji wag. Bieżąca poprawka zachowania certyfikatu relaksacji oraz poprawnego źródła równowagi czeka na managed build #157. |
+| Dokumentacja kontraktu | Nota 0831, source-map i spec artefaktów rozdzielają legacy `doubled_real_split_complex_coefficients` od fizycznego `complex_coefficients`; spec opisuje zakres pełnych równań i szwów. Walidator scientific-docs: exit 0; test kontraktu dokumentacji matematycznej: 10 passed; `git diff --check`: exit 0 (ostrzeżenia wyłącznie o końcach linii w istniejącym dirty tree). | Build i artefakty runtime są osobną bramką; dokumentacja nie dowodzi działającego parsera ani poprawności fizycznej. |
+| Managed build #148 | Job `1478482dc0824b8d8d0bc2333336060a` terminalnie `succeeded`, exit 0; profil `fem-cpu-slepc-runtime-v1`; źródło ma digest `3f2085e9e31ef4adbc3b7fb22d468e1dd082a53c95792c50539e7faf2f942e2f`. | Snapshot poprzedza bieżący certyfikat full-field i propagację Rust. Nie weryfikuje dzisiejszego kodu; wymagany nowy build. Kwalifikacja fizyczna pozostaje `NOT VERIFIED`. |
+| Managed build #149 | Job `8a46bd70acba4ac1a97534de24e33659`, request key `f7ff9e2a26f9407a8fd4e8370428e9ba`, profil `fem-cpu-slepc-runtime-v1`, digest źródła `3ed48a013fc2d7a2ee76b0ee2e1670d681324521cea7674ea3c2fd14bfd19c72`; terminalny stan `succeeded`, exit `0`, obraz `sha256:e5f70bd632011f9a0d8163430dab81bc6f248e07e4af086dfdf77bcd087471d7`. | Receipt koordynatora ma zaufane hashe entrypointów i kontekstu oraz oczekiwane `qualification: NOT VERIFIED`. Snapshot jest sprzed poprawki semantyki `eps_reduced`, więc nie jest podstawą następnego pilota. |
+| Managed build #150 | Job `177d59ec92164d529d42e5ff9e1e2f07`, request key `949917e896a2407c8181b2dd836e4aa7`, profil `fem-cpu-slepc-runtime-v1`, digest źródła `0a80827543f636511d9e8987cdb8c5ce7e5f0a62690d2878a507dc79ec68ba13`; terminalny stan `succeeded`, exit `0`; 14/14 artefaktów zweryfikowano ponownie według rozmiaru i SHA-256. | Dry-run k2 przeszedł. Build potwierdza kompilację poprawki residuali, lecz sam nie kwalifikuje fizyki. |
+| Pilot #150, domyślny `restart=30` | Run `a1bc955c8c154953a86d68f46d430159` zakończył się fail-closed: zero modów, limit 2000 iteracji w obu oknach; sondy demagu przeszły, lecz ostatnie rzeczywiste residuale KSP wyniosły `8.74e-7` i `1.09e-6`. | Nie jest punktem dyspersji. Domyślny restart pozostaje numerycznie nieskuteczny dla tego smoke'a. |
+| Pilot #150, diagnostyczny `restart=10` | Run `567e854bea8241c6b72dc4c927a1eb85` dotarł do kandydata, lecz publikacja przerwała się komunikatem `native Floquet potential payload requires a non-empty even coefficient count, got 0`. | Przyczyna: fizyczny `complex_coefficients` błędnie kierowano także do legacy `potential_real_split.bin`. Writer rozdziela teraz fizyczny payload q/phi od legacy sidecara; dodano regresję Rust. |
+| Managed build #151 | Job `a4c6abc28ede4399b2de07b6e6fc4779`, request key `79fdf5dccedf4e3d81dc64d242c1a9c0`, profil `fem-cpu-slepc-runtime-v1`, digest źródła `4b3e9d3f87a618b21c51d1cc14ed53319896668d048f4fc0b46e9ebb4589f376`; terminalny `succeeded`, exit `0`; 14/14 artefaktów ponownie zgodnych co do rozmiaru i SHA-256. | Build kompiluje poprawkę fizycznego payloadu i pełnych residuali, ale nie zawiera późniejszej naprawy promocji handoffu pierwszego punktu ścieżki multi-k. |
+| Pilot #151, `k_y=2e6 rad/m`, `restart=10` | Run `b96f1961f51e4d34b038b689ee45caaf` ma `completed_unqualified`, 1 mod i `9.723336314057247 GHz`. Pełny residual wynosi `2.18834e-10`, zredukowany `8.85558e-14`, potencjału `1.25985e-14`; cztery residuale szwów przechodzą, obie sondy dynamicznego demagu przechodzą, a fizyczny `complex_coefficients` zapisuje potencjał bez legacy sidecara. Analityka `n=0`: `9.725724281195415 GHz`, różnica `-2.387967 MHz` (`-0.0245531%`). | To pierwszy poprawnie opublikowany punkt nonzero-k z demagiem i pełnym certyfikatem algebraicznym. Nadal `NOT VERIFIED`: brak zbieżności siatki/airboxu/modów, identyfikacji profilu gałęzi i porównania A1–COMSOL. |
+| Pilot 11-punktowy | Run `f8a80a4c704e44a8b5dc6ac2e360df61` zatrzymał się fail-closed przed solve'em pierwszego punktu: `missing_relax_to_eigen_handoff_field: equilibrium_artifact_sha256`. | Przyczyna: `AcceptedFemRelaxStageHandoff.v3` pierwszego punktu interpretowano jak `AcceptedFemEigenEquilibriumHandoff.v1`. Parser rozróżnia teraz oba schematy, bierze zweryfikowane digests równowagi/linearyzacji z diagnostyki i promuje handoff do ponownego użycia. Dodano regresję Rust; wymagany nowy managed build i powtórzenie 11 punktów. |
+| Managed build #152 i retry 11 punktów | Job `0c9c1d2f8ff641a0bac5b8702c9a3739` zakończył się `succeeded`, exit `0`; 14/14 artefaktów zweryfikowano co do rozmiaru i SHA-256. Run `399ebfffd4bf4b68b9935769d8df4063` przeszedł brakujące pola handoffu, lecz zatrzymał się na `relax_to_eigen_handoff_summary_identity_mismatch`. | Walidator porównywał fingerprint mieszanego handoffu v3 z fingerprintem periodycznym v6. Walidacja rozróżnia teraz schematy: v3 sprawdza `mixed_topology_fingerprint_v3()`, a dopiero promocja zapisuje periodyczne v6. |
+| Managed build #153 i retry 11 punktów | Job `633165889dcc4d7fbb13fcad1d9abea7` zakończył się `succeeded`, exit `0`; 14/14 artefaktów ponownie zweryfikowano. Run `5040f60bfb1241eeb37e6f78385e9642` przeszedł obie wcześniejsze bramki handoffu, a następnie zatrzymał się na `eigen path FE mass metadata has 76 weights for 50 active tracking nodes`. | 76 wag odpowiada fizycznym węzłom magnetycznym, a 50 węzłów aktywnych klasom równoważności Floqueta. Ścieżka sumuje teraz dodatnie, skończone wagi fizyczne według `reduction.node_map`, zachowując całkowitą masę komórki zamiast wybierać wyłącznie reprezentantów. Dodano regresję Rust; testu nie kompilowano zgodnie z czasowym zakazem. |
+| Managed build #154 | Job `e0c43cd266fa4c8ebbd14bce46d3cfd4`, request `924df1cc1f3d457b963591dbff173a04`, profil `fem-cpu-slepc-runtime-v1`, source digest `4b9c92f57c720f8a6affc279b6124b5f20d25a355ccc87ddcfbceeac4cf0fe3a`, snapshot `960022bced279486ea1d3c6ddc84d631c3b3aa8bf8123eaf679be02883706dc7`. Build zakończył się `succeeded`, exit `0`, na przypiętym obrazie `sha256:e5f70bd632011f9a0d8163430dab81bc6f248e07e4af086dfdf77bcd087471d7`; niezależnie sprawdzono rozmiar i SHA-256 wszystkich 14/14 artefaktów. | Build potwierdza kompilację redukcji wag masy. Kwalifikacja receipt pozostaje zgodnie z kontraktem `NOT VERIFIED`; dowód runtime opisuje następny wiersz. |
+| Pilot #154, 11 punktów | Run `bca7c3174e1d4f079d1296961e7a2b60` poprawnie zbudował siatkę (`1980` węzłów, `5720` tetraedrów, `76` węzłów filmu) i zaakceptował relaksację po 3 krokach (`max_torque=4.4063e-11 A/m < 1 A/m`), lecz zatrzymał się podczas przygotowania ścieżki: `equilibrium_artifact_v7_uncertified: accepted relaxation completion evidence is required`. | Przyczyna jest w orkiestracji kolejnych próbek: promowany handoff zachowuje hashe tożsamości, ale nie zawiera certyfikatu ukończenia ani certyfikowanych pól potrzebnych do ponownego utworzenia `equilibrium_artifact.v7`. Ścieżka zachowuje teraz oryginalny `AcceptedFemRelaxStageHandoff.v3` dla każdej próbki `k` tego samego problemu statycznego i pozostawia wtedy źródło jako `RelaxedInitialState`; dopiero ścieżka bez certyfikatu etapu może przejść na promowany `Provided`. Sweep pola nadal nie może współdzielić tego certyfikatu. Dodano regresję źródłową, bez kompilowania testów zgodnie z czasowym zakazem. |
+| Managed build #156 | Snapshot `c35850cd95d43e4b62ff92849306ceda08f0e9ce2dc4c485717ebbef7227318d`, job `f8b5511786364666ad2e7ae14b220c08`, został anulowany jeszcze w stanie `queued`. | Przed startem workera wykryto, że snapshot zachowywał certyfikat, ale przełączał następną próbkę na niedozwolone dla tego handoffu `Provided`. Anulowanie oszczędziło pełny build znanego błędnego stanu. Następny snapshot zawiera poprawioną kolejność wyboru źródła równowagi. |
+| Managed build #157 | Job `22a97631a3434d5fbe640fe3d3143417`, source digest `70726b3c21288f81d1c05fbf2e0d93ad33d3cf2dfda5afbfc861ae2c82116619`, snapshot `a06701cf2e98ff10ff3667453c7b67d416081452cecb415261d82009d904ca2b`, zbudował runtime na przypiętym obrazie `sha256:e5f70bd632011f9a0d8163430dab81bc6f248e07e4af086dfdf77bcd087471d7`. Worker zakończył się kodem `0`, build receipt ma stan `succeeded`, a niezależna kontrola potwierdziła rozmiary i SHA-256 wszystkich 14/14 artefaktów. Po restarcie wyłącznie koordynatora startup reconciliation poprawnie uzgodnił terminalny stan kolejki na `succeeded`, exit `0`. | Build jest wiarygodnym źródłem runtime dla pilota, lecz nie zawiera późniejszej poprawki progu diagnostycznego restarta GMRES. |
+| Pilot #157, 11 punktów | Run `1323aa47305b4eb48d7fd2830ffb2337` uruchomił `de-smoke-signed-eleven` z `restart=10`. Siatka (`1980` węzłów, `5720` tetraedrów, `76` węzłów filmu) i relaksacja (3 kroki, `4.4063e-11 A/m`) przeszły. Przy `k_y=-0.5e6 rad/m` PETSc przerwał pierwsze okno: residual rekurencyjny `3.07e-17`, jawnie przeliczony `5.18e-14`, początek cyklu `1.12e-13`; różnica to ok. `0.464` normy początkowej wobec domyślnego progu `0.1`. Drugi błąd `MatDenseRestoreSubMatrix` był skutkiem sprzątania SLEPc po pierwszym twardym błędzie. Run zakończył się `failed`, exit `1`, a kontener jest zweryfikowanie nieobecny. | Ustawić jawny próg PETSc `1.0` dla zagnieżdżonego GMRES Floqueta, zachować twardy błąd powyżej całej normy początku cyklu oraz niezmienione niezależne residuale i bramki fizyczne. Po managed buildzie powtórzyć identyczne 11 punktów. |
+| Poprawka po pilocie #157 | Solver ustawia nazwany próg `ksp_breakdown_tolerance=1.0`, publikuje go w diagnostyce zbiorczej i obu wariantach wyniku, zachowuje `KSPSetErrorIfNotConverged(PETSC_TRUE)`, niezależny pomiar każdego zakończonego solve'u oraz niezmienione bramki oryginalnego pencila. Dodano regresję natywną i opis w nocie 0831/source-map. Walidator dokumentacji, `68` testów interpretowanych i `11` podtestów przeszło; `git diff --check` exit `0`. Natywnego testu jednostkowego nie kompilowano zgodnie z czasowym zakazem. | Świeży managed build i powtórzenie pilota są wymagane; dowód źródłowy nie zastępuje wykonania PETSc/SLEPc. |
+| Próg storage przed następcą #157 | Blokada została rozwiązana zewnętrznie przez operatora. Runner raportował następnie około `45.5 GB` wolnego miejsca, `accepting_jobs=true` i brak aktywnych jobów w chwili preflightu. | Wykonane. Zachować zwykły monitoring wolnego miejsca podczas kolejnych buildów i runów. |
+| Managed build #159 | Job `320a1f270cf54c5da4340cf12ec9fe09`, profil `fem-cpu-slepc-modal-v1`, source digest `804263ea6967d31b5b84d62bd3a3ce731f5814c7e9c450e8b47e392dc4d48d6b`, snapshot `885b645461e60ca3ce063ce245e980b2bfc594e3133d1c7b98280022cd749693`, obraz `sha256:829cef07222b7a108883ba0d0ff25d311e38b6b46885cf371eb4723af1e3cadf`, zakończył się `succeeded`, exit `0`. `native-build` oraz `contract-slepc-modal` przeszły; JUnit raportuje 9/9 testów, 0 failures/skips, receipt zawiera 25 artefaktów. Rekonsyliacja po kontrolowanym restarcie koordynatora uzgodniła ten sam terminalny wynik. | Jest wiarygodnym runtime dla jawnej polityki progu `1.0`, ale nie zawiera późniejszej korekty restartu `8` i progu `1.1`. |
+| Rozjazd trusted bundle przed #159 | Worker #158 (`1428a957c5f74aeaa208555e89fe37cf`) ujawnił, że poprzedni koordynator przekazał starszy `build_entrypoint.py`: profil `fem-cpu-slepc-modal-v1` został wykonany jak release (`native-build`, `frontend-dependencies`, `frontend-build`) zamiast aktualnego `native-build + contract-slepc-modal`. #158 zakończył workerem `exit 0` i zachował receipt z `109` artefaktami, lecz stary koordynator pozostawił lease jako `running`. Po sprawdzeniu braku aktywnego workera i zachowaniu receiptu wymuszono terminalną rekonsyliację; nowy koordynator oznaczył #158 jako `cancelled`, `exit_code=0`. Aktualny koordynator ma kontener `b589a2b0aaa5...` i obraz `sha256:e976ea943cd8267163a81c4271e7720c4c647d9325de198b3ce748e6ac6bfa14`; profil modalny wskazuje toolchain `sha256:829cef07222b7a108883ba0d0ff25d311e38b6b46885cf371eb4723af1e3cadf`. | Replacement i health są wykonane, kolejka została wznowiona, a #159 uruchomił właściwy worker. Wyniku #158 nadal nie wolno traktować jako dowodu aktualnego kontraktu modalnego. |
+| Pilotaż ścieżki po #159 | Pierwszy run z restartem `10` trafił przy `k_y=-0.5e6 rad/m` na różnicę residualu `2.58×` normy początku cyklu. Kontrolny run `f0d9de662ac748f49b15ef9bbc7e9c1a` z restartem `8` zmniejszył ją do `1.045×`; drugie podokno zbiegło w 3 iteracjach, z maksymalnym niezależnym residualem liniowym `3.0634e-9`. Pierwsze podokno nadal zostało przerwane przy progu `1.0`. Błąd `MatDenseRestoreSubMatrix` jest wtórnym skutkiem destrukcji EPS po wcześniejszym błędzie KSP. | Bieżące źródło ustawia domyślny restart `8`, próg `1.1`, zachowuje `KSPSetErrorIfNotConverged(PETSC_TRUE)` i bramkę fizyczną `1e-8`, a po błędzie EPSSolve nie wywołuje niebezpiecznego cleanupu SLEPc 3.24. Potrzebny nowy managed build i powtórzenie identycznych 11 punktów. |
+| Managed build #161 | Job `22b181f6309d49199c4471938f18dcf5`, request key `nonzero-k-gmres-restart-policy-20260927-v1`, profil `fem-cpu-slepc-modal-v1`, source digest `90c5446ccbe56aee6fc5acbbee85509b878208e17a579580563c1ac9308e3dad`, capture `de68871b5697435ca51392cb2893a5ba`, zakończył się `blocked` przed utworzeniem workera z powodu bramki miejsca. | Nie ma receipt ani build proof; nie wznawiać tego terminalnego joba. Zastąpił go świeży snapshot #163. |
+| Managed build #163 | Job `ee4e4f3310984623993cb908416d303d`, request key `nonzero-k-gmres-restart-policy-20260927-v2`, profil `fem-cpu-slepc-modal-v1`, source digest `f05f9ccbb624ba10608ebaefeaddcf61583388f0660a7010e630f3ed45d8c992`, capture `ea0ab61f544d439494ed289c468b9aca`, zakończył się `failed`, exit `2`. `native-build` przeszedł, a JUnit kontraktu modalnego raportuje `8/9`; jedyną porażką był `fem_floquet_modal_solver_contract`. | Test ujawnił rozjazd konfiguracji: stała domyślna wynosiła `8`, lecz parser braku `FULLMAG_FLOQUET_GMRES_RESTART` nadal zwracał `30`. Parser używa teraz jednej stałej domyślnej `8`, zachowując jawne `30` jako opcję diagnostyczną. Wymagany następny managed build i dopiero po `9/9` pilot 11-punktowy. |
+| Managed build #164 | Job `24694a78889945628e811132ccb5b999`, request key `nonzero-k-gmres-restart-policy-20260929-v3`, profil `fem-cpu-slepc-modal-v1`, source digest `3c5ed2692700e54d82979ad0fd8093d34ee73ce165054bc58811281569a84918`, capture `13b5e28e2af440bd867afe7b3b113a17`, snapshot `954923282c5cef92ac94b9761fa1cb2c0aee348322138ca25f1e6caab392635f`, zakończył się `succeeded`, exit `0`, na obrazie `sha256:829cef07222b7a108883ba0d0ff25d311e38b6b46885cf371eb4723af1e3cadf`. `native-build` oraz `contract-slepc-modal` przeszły; JUnit raportuje `9/9`, bez porażek i pominięć, a terminalny receipt publikuje hashe 25 artefaktów. | To wiarygodny runtime parsera restartu `8` i progu `1.1`; nie zawiera późniejszej korekty progu na `2.0` ujawnionej przez pilot #164. |
+| Pilot #164, 11 punktów | Run `a7ee1f06f26b466f8eb7adbcb377b2c1` uruchomił `de-smoke-signed-eleven --gmres-restart 8`. Siatka (`1980` węzłów, `5720` tetraedrów, `76` węzłów filmu), relaksacja (`4.4063e-11 A/m`) i obie sondy dynamicznego demagu przeszły. Przy `k_y=-0.5e6 rad/m` pierwsze podokno dotarło do restarta z residualem rekurencyjnym `1.79429e-17`, jawnym `1.64042e-13` i normą początku cyklu `1.20423e-13`; stosunek różnicy do normy początku wyniósł ok. `1.362`, więc PETSc przerwał solve przy progu `1.1`. Drugie podokno zbiegło w 3 iteracjach, z maksymalnym niezależnym residualem liniowym `3.06338e-9`, lecz nie zawierało modu w swoim zakresie. Run zakończył się fail-closed, exit `1`, bez zaakceptowanego punktu. | Próg wymiany residualu wynosi teraz `2.0`: pozwala wznowić cykl od jawnie przeliczonego residualu, lecz zachowuje `KSPSetErrorIfNotConverged`, pomiar rzeczywistego residualu oraz wszystkie progi fizyczne. Potrzebny managed build i identyczny retry 11 punktów. |
+| Managed build #165 | Job `c82cfe1cc05747f4b173b5c0cf73b3b0`, request key `nonzero-k-gmres-breakdown-policy-20260929-v4`, profil `fem-cpu-slepc-modal-v1`, source digest `ed0a74580d1cd16f9363b86ff48b613bd9743cf5df30cb9295cde920305083bf`, capture `ec5755e07e044251ac6c03e1f4158cb6`, snapshot `e61372cdd80fb49a8a3c418e4b4f6da374a32ee3a16a1308c1534be7c9522ea3`, zakończył się `succeeded`, exit `0`; `native-build` i JUnit `9/9` przeszły na obrazie `sha256:829cef07222b7a108883ba0d0ff25d311e38b6b46885cf371eb4723af1e3cadf`. | Build potwierdza próg breakdown `2.0`, lecz nie kwalifikuje fizyki. |
+| Piloty #165, 11 punktów | Restart `8`, run `6b37260569b042cf8603f347cdde0659`, przerwał pierwszy punkt na stosunku rozbieżności około `2.039`. Restart `10`, run `cdec8aa9e514406f8fd358ff94e25cf6`, przeszedł wcześniejszy restart, lecz później osiągnął około `2.584` i zakończył się fail-closed. Restart `16`, run `5cac291db2ac4dde8c64566122d5c198`, uniknął breakdown, ale oba podokna osiągnęły limit `2000` iteracji bez kandydatów; ostatnie jawne residuale względne KSP wyniosły około `6.68e-7` i `1.86e-6`. | Dalsze zwiększanie progu breakdown nie jest uzasadnione. Problemem jest preconditioner pomijający sprzężenie demagu, a nie bramka fizyczna. |
+| Dokładny preconditioner Schura dla małych układów | Dla real-split wymiaru `<=512` źródło materializuje dokładnie ten sam MatShell Schura, odejmuje `sigma B`, skaluje i używa LU wyłącznie jako prawego preconditionera. Operator eigensolvera, próg `1e-8`, pełne residuale i sondy demagu pozostają bez zmian. Większe układy nadal jawnie używają przybliżenia magnetic-only. Dodano asercję regresyjną, notę naukową i source-map; JSON oraz `git diff --check` przechodzą. | Managed build #167 musi potwierdzić kompilację i kontrakty, po czym identyczny pilot 11 punktów sprawdzi zbieżność. Dla A1 nadal potrzebny jest skalowalny preconditioner świadomy demagu. |
+| Managed build #166 | Job `0aa1aaa60eba475d80d93cbe327aa31a`, request key `nonzero-k-exact-schur-preconditioner-20260929-v1`, profil `fem-cpu-slepc-modal-v1`, source digest `3b3111e517dd261e8377663fb1dc9c211266940b42865e121a00ecfe0fe99758`, capture `a9dda67e7f4c4373ac655e3c9e331e2a`, snapshot `cbe9d21bdffecb4c6ed6aa776ea7dde8da9b47efa71c9d5a0f3fa60b445ef9cb`, został przyjęty przy około `20.1 GB` wolnego miejsca i zdrowym runnerze. | Zakończył się failed: native-build przeszedł, kontrakty 8/9. Asercja exact-Schur była omyłkowo w dużym fixture (real-split 1028), który prawidłowo używa magnetic-only. Przeniesiono ją do małego fixture (real-split 16); duży sprawdza magnetic-only. Wymagany nowy managed build. |
+| Managed build #167 | Job a745f5e241dc497fad98c10c2c11cb13, profil fem-cpu-slepc-modal-v1, source digest 3f8985a7c48ab1a8f1b13341a338c41b24be380a53502d3eb0bc506ea8a83932, snapshot d602e702532ba36ce4c29c45dba110c008834d71bc75eb7e69bfc070b4406ed2. Native release build zakończył kompilację; worker jest aktywny i buduje harness kontraktowy. | Wykonany: terminalny succeeded, exit 0; JUnit 9/9, failures 0, skipped 0. Dry-run sprawdził artefakty i model przed pilotem. |
+| Piloty na #167 | Run 59d3ccee204447b68ee9bc906c6f4fe2 z domyślnym prefiltracją EPS 1e-11 zakończył się przy ky=-2e6 rad/m: EPS limit 2000, estymata 1.57e-11, rzeczywisty residual KSP około 1.60e-9. Kontrolny run 1d797566d6514752b6291c840ab01657 z prefiltracją 1e-10 przeszedł do Gamma, lecz nie certyfikował okna K0 przez niestabilną normalizację sondy global_y. Oba kontenery zweryfikowano jako nieobecne; nie ma kompletnego CSV. | Nie zaliczać 11 punktów. Zachować fizyczny próg 1e-8. Naprawić normalizację sondy K0 i powtórzyć na świeżym runtime. |
+| Poprawka sondy K0 | Zamiast ilorazu norm niemal zerowych działań P*phi i C*q sonda używa komponentowego błędu wstecznego z uncancelled skalą CSR. Poprzedni iloraz pozostaje w diagnostyce. Próg 1e-8, energia, pole, gauge oraz residuale modalne są zachowane. Dodano regresję: kasowanie źródła, istotny defekt, zerowe wiersze, gauge i NaN. Walidator noty/source-map oraz git diff --check przechodzą; wrapper diagnostyczny 14 testów PASS. | Snapshot przyjęty jako job #169 da4f8f86efb94b5cb32642bdb3c0893e, source digest 2f4c8ef0839165bbada6429e6429fe8f039be8e87e7136687f33ce4263277c82, snapshot 7301a6ecef9c9c2a93f333b0db77468d7e55c0b246c1dccb613f0977802da8e3, request key nonzero-k-k0-probe-backward-error-20260930-v1, stan running, etap contract-slepc-modal po native-build exit 0; następnie odebrać 9/9 i uruchomić signed-eleven z prefiltracją 1e-10. Natywnej regresji lokalnie nie kompilowano. |
+| Kontrola k2 na #167 | Run 295591129ccf429893346e9cba4ab83a: completed_unqualified, 1 mod przy ky=2e6 rad/m, 9.723336314054911 GHz; pełny residual 2.771585879901679e-10. Obie sondy demagu oraz rekonstrukcja gradientu potencjału przeszły. Powstały CSV oraz analytic-comparison/dispersion.png i dispersion.pdf, wykres wizualnie sprawdzono. | Referencja n=0: 9.725724281195415 GHz, różnica -2.387967 MHz (-0.0245531%). To jeden zaakceptowany punkt i przybliżona referencja, bez identyfikacji profilu n0, zbieżności i kwalifikacji pełnej dyspersji. |
+| Dodatkowe bramki K0 ujawnione przez kontrolny run | Wśród 11 nieudanych podokien Gamma: 1 k0_demag_operator_probe_failed, 2 slepc_diverged, 8 frequency_window_local_coverage_not_certified. Znaleziono dodatni mod 9.299249697068329 GHz z residualem 4.198808050267267e-15, ale certyfikat okna pozostał failed. | Poprawka sondy w #169 zamyka tylko pierwszą przyczynę. Osobno zbadać dolną krawędź widma (fundamentalny mod nie ma dodatniego sąsiada poniżej) i rozbieżność SLEPc przy degeneracji real-split. Zachować negatywną regresję one-sided saturated spectrum; nie oznaczać okna complete na podstawie samego kandydata. |
+| Signed spectral guards K0 | Kod oddziela publikowane dodatnie mody od podpisanych czestotliwosci Ritz uzywanych jako dowod pokrycia okna. Kazdy guard przechodzi rekonstrukcje oryginalnego deskryptora i niezmieniony prog fizyczny; diagnostyka zapisuje rodzaj oraz liczbe guardow. Dodano regresje fundamentalnego modu bez dodatniego sasiada ponizej i zachowano negatywna regresje nasyconego jednostronnego widma. | Walidator noty 0831 i dokumentacji matematycznej PASS, wrapper pilota 14/14 PASS, diff check PASS. Natywna kompilacja i wykonanie regresji NOT VERIFIED; Zmiane przyjeto jako job #170 eb7c78ea7e134ec9bcd56314f985f583, source digest bd3eb0e59585b5a63c7a8e4336a143f2c385dead7c77ed76b7663836d1823ccd, snapshot 2145ea17e8f05e98c39d93ec936b9c817b8b24e2abc65ae92f0791510c4daacd, capture 129880aa018a44079d5fcbd234e7b991, profil fem-cpu-slepc-modal-v1; stan queued. Dwa rozbiezne podokna SLEPc pozostaja osobna bramka. |
+| DE/BV przy 25 rad/um | Runtime #167, wersjonowany model 3aa1eb4b7f4c6ea5ecd8967ac661f528ba783840. DE run 1d89127285d243e58bc2ada522f3aca5: 13.384204251108984 GHz, pelny residual 2.451762140091136e-10. BV run d5bac6762d88405b99b90837b6451980: 9.664769492954655 GHz, pelny residual 2.310868858622120e-10. Oba completed_unqualified, exit 0; walidacja residuali, sond demagu i rekonstrukcji potencjalu PASS. Plot PNG/PDF de-bv-25-20260930 wizualnie sprawdzony. | Analityka n0: DE 13.673868175350407 GHz, BV 9.760535487542313 GHz; roznice -2.118376% i -0.981155%. Nie traktowac jako pelnej zgodnosci fizycznej. Nastepne kontrole: zbieznosc siatki, profil po grubosci, blad aproksymacji n0 oraz airbox. Testy wejsc/validatora/wrappera 71 PASS + 4 subtesty; samodzielna regresja modelu 2 PASS. |
+| Multi-k: utrata certyfikatow przy publikacji | Run 449fb744567a492db32b95329711ed08 na #167 policzyl 6 punktow DE (2,5,10,15,20,25 rad/um), ale walidator odrzucil eksport spectrum.v3 bez block_residuals. Native exit 0 nie oznacza sukcesu calego runu. Poprawka zachowuje niezmieniony certyfikat pojedynczego modu w prywatnym rejestrze diagnostycznym powiazanym z sample_index, raw_mode_index i frequency_hz; eksport v2/v3 nie uzywa agregatu ani nie fabrykuje certyfikacji. | Rustfmt i diff check PASS, nota/source-map PASS. Dodano natywna regresje dopasowania, zmienionej czestotliwosci, duplikatu i obcej probki; lokalnie jej nie kompilowano zgodnie z zakazem. Przyjeto job #171 94d7d8e4d8444d8fa839cc77a120080a, source digest 00b606d1797674752d6240514c1017bcc564f1641f96cab2394b915bb99a1ded, request key nonzero-k-path-block-certificate-20260930-v1, stan queued. Wymagany terminalny receipt oraz ponowne 6/6 DE oraz BV. Biezace pojedyncze punkty licza sie niezaleznie na #167 z wersjonowanym modelem c9456adf73a489a870d6c7a90d5fd3de2ed95876, progiem 1e-8 i pelnymi artefaktami. |
+| 12 niezaleznych punktow DE/BV | Komplet 6+6 dla k=2,5,10,15,20,25 rad/um. Dziewiec nowych runow zapisano w positive-six-independent-20260930.json; wykorzystano takze trzy zachowane single-k. Kazdy run completed_unqualified, exit 0, native block residuals i seam certificate obecne, sondy demagu i rekonstrukcja potencjalu PASS. Maksimum pelnego residualu 3.403656892868575e-10 przy progu 1e-8. independent-six-comparison zawiera comparison.csv, comparison.json oraz sprawdzony wizualnie PNG/PDF. | Systematyczna roznica z analityka n0 rosnie do DE -2.118376% i BV -0.981155% przy 25 rad/um. Nie zamyka to zbieznosci siatki/airboxu, identyfikacji profilu n0 ani multi-k publication/tracking. Wykres pokazuje punkty niezaleznych solveow, nie zaliczony zbiorczy run. |
+| Rafinacja DE/BV k25 | Runtime #167, model 9ba84d078cfa1cfc47ccc6ea6374639115dfe120. DE L1 13.436508613 GHz; DE L2 13.578981799 GHz; BV L2 9.740140954 GHz, udane runy completed_unqualified. Raport docs/audits/2026-09-30-de-bv-mesh-convergence.md. | Zbieznosc NOT VERIFIED. BV L1 restart 8: EPS limit iteracji, brak zaakceptowanego modu; restart 10 takze failed (96673c3616e64a4f909a5eb3b96fcff8), podobnie KSP 1e-12 (f81f518b3e1748f4a424444cafd6d8d8). Realna liczba tetraedrow filmu 191/354/791; objetosc zgodna. L1 exact Schur, L2 magnetic-only. Potrzebne kolejne poziomy, profil modu i airbox. Wrapper odrzuca wadliwe metadane; 34 testy +7 podtestow PASS. |
+| Diagnostyka profilu k25 | Piec zaakceptowanych modow L0/L1/L2: po usunieciu fazy Blocha overlap z przestrzennie stalym wektorem DE L2 0.999842103, BV L2 0.999998972, z nodalnymi wagami objetosciowymi lumped. Hashowane wejscia i wyniki w mesh-mode-profile-diagnostic-20260930.json. | Wspiera przyblizenie n0, lecz nie identyfikuje najnizszej galezi ani pokrycia okna. Norma lumped jest diagnostyczna; fizyczne certyfikaty i zbieznosc pozostaja osobnymi bramkami. |
+| Czwarty poziom siatki L3 | Model c06965bf92a4a54e6a8e6433c583762e5e06d022: zadane 3.75 nm. Testy interpretowane 93 PASS +7 subtestow, nota/source-map PASS. DE run 4e59f81f28a74af4acc84441ce1b1a33 completed_unqualified, exit 0: 13.596286127 GHz, pelny residual 2.15685293911757e-10, 13507 wezlow calej domeny. | Przesuniecie DE L2-L3 17.304328 MHz (~0.127%); roznica z n0 ok. -0.567%. BV L3 failed: e09e726404d6412e802c06b8c41d5695 (restart 8, PETSc recursive/true norm discrepancy), 0766e8f0e63a4d96a92ff69b1e1c585a (restart 10, exit 1). Manifest mesh-convergence-L3-20260930.json zachowuje terminalny batch. Dalsza rafinacja, airbox i kwalifikacja pozostaja otwarte. |
+| Diagnostyka KSP po bledzie EPS | Przeniesiono odczyt stanu KSP przed powrotem z EPSSolve error; zachowano pierwotny blad i fail-closed. W razie reason ITERATING po hard error diagnostyka zapisuje stan niekompletny, nie sukces. Dodano natywna regresje wymuszonego limitu wewnetrznego solve'a; nota/source-map, 10 testow matematycznego kontraktu i diff check PASS. | Kompilacja/runtime i wykonanie regresji NOT VERIFIED. Zlecenie nonzero-k-failed-ksp-observability-20260930-v1 na runtime-v1 odrzucone HTTP 400: health nie dopuszcza runtime-v1/v2. Nie przyjeto nowego joba. Decyzja uzytkownika: aktywacja runtime-only po kolejce albo wyjatek dla 9 kontraktow; aktualny zakaz kompilacji testow pozostaje. GET /jobs oraz /api/v1/jobs zwracaja HTTP 500 response_too_large; indywidualny status i health dzialaja. |
+| COMSOL A1 i runner | Dostarczono widmo COMSOL `61×24` i szczegółowy kontrakt COMSOL 6.1. Build #157 zakończył się poprawnie, lecz jego pilot ujawnił błąd restarta naprawiony dopiero w bieżących źródłach. | Nie ma jeszcze Fullmag A1 solve'u ani bezpośredniego porównania. Po nowym buildzie i przejściu 11-punktowej kontroli DE uruchomić C1, skontrolować A1 w Γ/X/M w ramach pełnej ścieżki, a następnie porównać komplet A1 `61×24`. |
+
+## Wykonawczy runbook porównania Fullmag--COMSOL A1
+
+Konfiguracja Fullmaga odtwarza nominalną geometrię, parametry materiałowe,
+drogę w przestrzeni odwrotnej i liczbę żądanych modów. Równoważność wszystkich
+warunków brzegowych wymaga jeszcze rozstrzygnięcia opisanego niżej. Nie jest to
+także identyczna dyskretyzacja algebraiczna: przekazany pakiet nie zawiera pliku
+`.mph`, dokładnej siatki/DOF ani zespolonych wektorów własnych COMSOL. Pierwsze
+porównanie jest dlatego porównaniem częstotliwości przy tych samych punktach
+`k`, a zgodność profili modów pozostaje osobną bramką po uzyskaniu danych pól.
+
+Przekazany opis modelu ma ponadto nierozstrzygniętą różnicę konwencji, której
+nie wolno ukryć pod etykietą „identyczny model”. COMSOL 6.1 stosuje czasową
+konwencję `exp(+i*omega*t)`, natomiast README referencji definiuje źródło
+magnetyzacji jako `Menv=Ms*exp(+i*k.r)*dm`, potencjał jako
+`phi_dyn=exp(-i*k.r)*psi` i nie opisuje warunku Blocha dla `dmX/dmY/dmZ`.
+Fullmag stosuje jeden fizyczny ślad Blocha
+`u_dst=exp(-i*k·Delta r)u_src` dla magnetyzacji i potencjału. Nie istnieje
+zatem pojedyncza zmiana znaku `k`, która równocześnie odwzoruje oba zapisane
+w README pola. Dopóki plik `.mph` albo uzupełniony eksport równań i warunków
+brzegowych nie rozstrzygnie tej kwestii, dostarczone `61x24` jest referencją
+„COMSOL as delivered”, a nie certyfikatem równoważności operatorów.
+
+0. **Sprawdzić konwencję referencji.** Zachować standardowy, wspólny ślad
+   Blocha Fullmaga i zapisać w porównaniu jawną mapę znaków. Dla
+   centrosymetrycznego A1 porównać pomocniczo `+k` i `-k`, ale nie używać
+   oczekiwanej wzajemności jako substytutu brakującego warunku brzegowego
+   `dm`. Do pełnej równoważności wejścia wymagać eksportu ustawień periodycznych
+   Micromagnetics, Frequency Domain albo poprawionego przebiegu COMSOL ze
+   wspólną fazą przestrzenną magnetyzacji i potencjału. Minimalny pakiet
+   rozstrzygający musi podać dla `dmX/dmY/dmZ` typ warunku na parach
+   `xminus/xplus` i `yminus/yplus`, mapę source/destination, znak fazy lub
+   potwierdzenie zwykłej periodyczności obwiedni oraz pełne definicje pola
+   demagnetyzującego w solverze częstotliwościowym. Plik `.mph` spełnia tę
+   bramkę; równoważny jest kompletny eksport ustawień i równań.
+1. **Zamknąć build runtime.** Build #157 ma terminalnego workera, exit `0`,
+   receipt, niezależną zgodność rozmiaru i SHA-256 wszystkich 14 artefaktów
+   oraz poprawnie zreconciliowany terminalny rekord kolejki. Ten krok jest
+   wykonany dla źródeł #157; każda kolejna poprawka wymaga nowego snapshotu.
+2. **Potwierdzić mechanikę wielopunktowego nonzero-k.** Na buildzie zawierającym
+   jawną politykę restartu `8` i progu restart-breakdown `1.1` (job #161)
+   uruchomić `run_de_100nm_pilot.py --pilot de-smoke-signed-eleven
+   --gmres-restart 8`. Wymagane jest 11/11 próbek: Gamma oraz
+   `k_y=±(0.5,1,1.5,2,3)e6 rad/m`, jeden zaakceptowany mod na próbkę, pełne
+   i zredukowane residuale poniżej obowiązujących progów, cztery szwy Floqueta,
+   obie sondy demagu, wspólna tożsamość równowagi/siatki i niepusty CSV.
+   Następnie `compare_de_100nm_pilot.py` tworzy roboczy wykres z analityką.
+3. **Uruchomić kontrolę C1.** Z tego samego zweryfikowanego builda wykonać
+   jednorodny film `200×200×10 nm` z demagiem, airboxem `2 µm` nad i pod
+   filmem oraz tą samą drogą `Γ–X–M–Γ`. C1 oddziela błędy operatora
+   Floqueta/demagu od wpływu otworu w A1. Wyniki kontroluje się względem
+   analityki cienkiej warstwy tam, gdzie jej założenia obowiązują.
+4. **Uruchomić właściwy A1.** Przypadek `a1` używa komórki
+   `200×200×10 nm`, centralnego otworu `r=50 nm`, `Ms=800 kA/m`,
+   `Aex=13 pJ/m`, `gamma=2.211e5 m/(A s)`, biasu `0.1 T` w `+x`, relaksacji
+   od `m=+x` z `alpha=0.5` do certyfikowanej równowagi w budżecie `5 ns`,
+   eigensolve z `alpha=0`, demagu w airboxie z Dirichletem na górze/dole oraz
+   fazy Blocha `exp(-i k·r)` na bokach. Droga ma 61 punktów: po 20 przedziałów
+   na `Γ–X`, `X–M`, `M–Γ`, a solver żąda 24 modów w `1 MHz–30 GHz`.
+   Punkty `j=0,20,40,60` są kontrolami `Γ,X,M,Γ` w tym samym pełnym runie;
+   nie wymagają osobnej, inaczej zdyskretyzowanej symulacji.
+5. **Zweryfikować artefakty przed porównaniem.** Run musi zakończyć się bez
+   błędu, zachować zgodny source/build receipt i hashe, 61 niepustych próbek,
+   żądaną liczbę modów lub jawny fail-closed, residuale, szwy Floqueta, sondy
+   demagu, niezmienną siatkę i równowagę dla wszystkich `k`. Najpierw ocenia
+   się cztery punkty kontrolne, potem całą ścieżkę.
+6. **Porównać z dostarczonym COMSOL-em.** Uruchomić
+   `compare_comsol_a1_frequency_reference.py` dla zarządzanego katalogu `a1`
+   i `COMSOL_A1_dispersion.csv`. Komparator zestawia lokalnie posortowane
+   częstotliwości w identycznych próbkach `k`, zapisuje JSON i scatterplot.
+   Nie nazywa rang częstotliwości śledzonymi pasmami, ponieważ CSV COMSOL nie
+   zawiera wektorów własnych ani identyfikatorów gałęzi.
+7. **Wykonać kwalifikację naukową.** Oddzielnie sprawdzić zbieżność siatki,
+   wysokości airboxu, liczby modów i parametrów solvera oraz stabilność
+   równowagi. Dopiero te serie pozwalają ocenić tolerancję zgodności Fullmag--
+   COMSOL i nadać wynikowi status wyższy niż `completed_unqualified`.
+
+Polecenie produkcyjne po sukcesie #157 jest jednoznaczne:
+
+```powershell
+python scripts/run_comsol_dispersion_benchmark.py --repo-root . `
+  --job-id 22a97631a3434d5fbe640fe3d3143417 --cases c1,a1
+```
+
+Orkiestrator wykonuje przypadki sekwencyjnie, korzysta z binarium i kapsuły
+źródeł #157, nie przebudowuje kodu i nie stosuje cichego fallbacku. Identyfikator
+#157 wolno zachować w tym poleceniu tylko po jego terminalnym sukcesie i
+kontroli receipt; przy poprawce źródła należy podać identyfikator nowego builda.
+
+Poniższa tabela jest migawką sprzed powtórzonego postflightu z 2026-09-25;
+szczegóły starszych buildów i prób pozostają zachowane jako historia.
+
+| Bramka | Bieżący dowód | Pozostała praca |
+|---|---|---|
+| Źródła i kontrakty | Trasa FEM CPU Floqueta, dynamicznego demagu i artefaktów istnieje; regresje walidatora dla sond per-podokno dodane; celowane testy Pythona: 7 PASS | C++ serializer okienkowy zmieniony, wymaga managed build/runtime; testów natywnych nie kompilowano zgodnie z tymczasowym zakazem; pozostałe bramki S00–S12 otwarte |
+| Build #142 | Terminalny `succeeded`, exit 0; 14/14 artefaktów zgodnych co do rozmiaru i SHA-256 | Sukces buildu nie potwierdza zbieżności solvera |
+| Pierwszy produkcyjny punkt DE z demagiem | Pilot #142 `de-smoke-k2` dla `k_y=2e6 rad/m` zakończył się exit 1; zero zaakceptowanych modów, po 2000 iteracji EPS w każdym z dwóch okien | Rozwiązać stagnację EPS/KSP i powtórzyć fizyczną kontrolę residuali; diagnostyczny dense oracle nie zastępuje wyniku produkcyjnego |
+| Residual liniowy | Niezależny względny `||Ax-b||/||b||` ostatnich solve'ów: `3.30e-6` i `5.01e-7`; norma wewnętrzna GMRES około `1e-25` | Ustalić źródło rozbieżności bez zmiany progu fizycznego `1e-8` |
+| Build i pilot #143 | Build terminalnie `succeeded`, exit 0, 14/14 artefaktów zgodnych. MGS obniżył końcowy rzeczywisty residual pierwszego okna do `4.14e-8`, lecz żadne okno nie dostarczyło zaakceptowanego modu. Najgorszy rzeczywisty residual wewnętrznego KSP sięgał `1.05e-4`. | Naprawić dokładność zastosowania operatora shift-invert i zbieżność EPS; nie uznawać niższego residualu ostatniego solve'u za zbieżność całego przebiegu |
+| Diagnostyka prefiltra EPS | Przy diagnostycznym `EPS_PREFILTER_ABS=1e-8` pierwsze okno dało jedną zbieżną parę blisko `9.723336314 GHz`, lecz oryginalny residual magnetyczny wyniósł `2.80e-7 > 1e-8`; para została odrzucona. | Nie podnosić wstępnego progu jako rozwiązania; pierwotna bramka fizyczna działa prawidłowo |
+| COMSOL C0 w Γ | Managed run #143 `7e0f427291164864a4931521f0cf05ee`: `2.8002642129151073 GHz`, residual `3.12e-16`, 1 wiersz, 7/7 wymaganych hashy zgodnych; wynik analityczny `2.80026421291511 GHz` | C0 sprawdza jednostki/ekstrakcję bez demagu; C1 Γ, nonzero-k i A1 pozostają otwarte. Obecne szerokie okno C0 dzieli się na 16 kosztownych podokien |
+| Eksperyment CGS2 #144 | Build `succeeded`, exit 0 i 14/14 hashy zgodnych; pilot k2 `905d3e1fe10c4d5abac215ebb5b0fd34` zakończył się exit 1, z 0 przyjętych modów po 2000 iteracji EPS w obu podoknach. Ostatnie rzeczywiste residuale KSP: `8.74e-7`, `1.09e-6`; największe ze wszystkich solve'ów: `8.59e-5`, `5.83e-5`. Diagnostyczny kandydat `9.723336314 GHz` miał residual magnetyczny `2.60e-7 > 1e-8`. | CGS2 nie rozwiązał problemu; zachować oryginalną bramkę fizyczną i sprawdzić restart GMRES przed pozorną zbieżnością |
+| Eksperyment restartu GMRES #145 | Snapshot `4a7af19818788336e2e92afc43252bfe1c963dc6f56ae95ae8ae143b8eed5d22`; job `06549612ec9c428e9be18f0c1e18e10a` zakończony `succeeded`, exit 0, receipt 14 artefaktów. Run `5d06e0b19c564b9e8647cc734854b9f4` zakończył się exit 1 przed raportem EPS: przy zerowej liczbie modów adapter Rust odrzucił modalną metrykę wykonania, zwracając `resolved_target=None`. | Adapter zachowuje teraz attestation nawet dla pustego widma; regresja źródłowa dodana, lecz nie skompilowana zgodnie z zakazem testów natywnych. Nowy snapshot #146 ma potwierdzić poprawkę, a powtórzony k2 ustali, czy EPS znalazł mod |
+| Build #146 | Snapshot `363d3e49990944dee3215234540dfe0c9bf63be2c7175d2384656a08b6cce9c1`; job `a73ba0c45de34ffcb251023b3c304792`, request `de-empty-modal-attestation-20260925`, profil `fem-cpu-slepc-runtime-v1`; receipt terminalny `succeeded`, exit 0, 14 artefaktów | Build #146 dotyczy stanu sprzed obecnej poprawki serializera; nowy managed build jest wymagany |
+| Pilot #146 — DE-SMOKE k2 | Run `a9d88663d3d346199ea639ecff772ac8`, `k_y=2e6 rad/m`, `gmres_restart=10`, proces solvera exit 0; tryb `9.72333631405827 GHz`; największy rzeczywisty residual magnetyczny kandydata w pierwszym podoknie `8.86e-14`, maksymalny zmierzony true-relative KSP residual `3.89e-11` | `run-result` ma status failed podczas postflightu: serializer nie opublikował `dynamic_demag_operator_probe`; globalnie `complete=false`, `window_completeness=not_certified`, drugie podokno nie znalazło modu. To kandydat diagnostyczny, nie zaliczony punkt dyspersji |
+| Przyczyna błędu sondy | Wspólna funkcja serializująca `subwindows[]` pomijała pole sondy, mimo że solver zwraca wynik sondy dla każdego podokna; tryb pojedynczego przesunięcia już serializował to pole | Serializować sondę w każdej pozycji `subwindows[]`; walidator ma wymagać i sprawdzać wszystkie rekordy |
+| Następny managed pilot | Poprawiono walidator i dodano regresje dla kompletnego, brakującego i nieudanego rekordu per-podokno. C++ writer publikuje sondę w diagnostyce każdego podokna | Wykonać wszystkie testy Pythona/kontrakty, aktualizację dokumentacji i preflight; następnie build zarządzany oraz ponowny pilot k2; zaakceptować tylko gdy sonda jest obecna i przejdzie we wszystkich oknach |
+| COMSOL A1 | Dostarczone CSV 61×24 i szczegółowy opis COMSOL 6.1; nominalna geometria/materiał/airbox odpowiadają modelowi A1 Fullmag | Brak wyniku Fullmag A1, stanu `m0`, siatki COMSOL i porównania numerycznego; certyfikat relaksacji A1 otwarty |
+| Runner i storage | Koordynator `Fullmag_build_runner` zakończył #146 terminalnie; pilot zachowany w storage | Przed nowym buildem sprawdzić bieżący stan runnera, aktywne joby i miejsce; nie sprzątać danych bez potrzeby i autoryzacji |
+| Dyspersja i nauka | `NOT VERIFIED` | Produkcyjne punkty k=0 i k≠0, wykres z analityką, C0/C1/A1, zbieżność siatki/airboxu/modów, frontend i kwalifikacja wydania |
+
+Pełny zakres S00–S12 pozostaje aktywny. Sukces kontraktów, buildu lub pojedynczego
+punktu nie zamyka GPU, Control Room, śledzenia gałęzi ani kwalifikacji naukowej.
 
 
 ## Managed DE-SMOKE: diagnostyka faktoryzacji — 2026-09-23
@@ -1417,9 +1922,12 @@ naprawy zapisano w `377230523`; retry wymaga osobnej zgody automatycznego
 przeglądu. Wolne miejsce wynosi około **50.9 GB**, nie usuwano danych.
 Ostatnia weryfikacja GitHub wykazała nieważny token; integracja pozostaje otwarta.
 
-Native sparse source jest zamrożony do pierwszego buildu, wraz z regresją
-q_complex_dof_count=514, niezerowym sprzężeniem potencjału i analityczną
-częstotliwością. Ten test nie został jeszcze wykonany w MFEM/SLEPc.
+Job #118 ma niezmienny snapshot źródeł `91d52458008dbba8ec68ba508525f6376d19537d79d95cc6698a6e6d60617e73`.
+Natywna kompilacja tego snapshotu zakończyła się exit 0, a instalacja zależności
+frontendu nadal trwa. Snapshot zawiera poprzedni sparse Schur source i regresję
+`q_complex_dof_count=514`, ale nie obejmuje późniejszej poprawki znaku
+`A_phiq` ani fail-fast walidacji planera. Nie daje jeszcze wyniku runu w
+MFEM/SLEPc dla bieżących źródeł.
 
 Poniższe sekcje i dawna tabela S00–S12 są historią etapów. Ich datowane
 HEAD-y, liczby wolnego miejsca i opisy brakujących funkcji nie zastępują
@@ -1445,13 +1953,13 @@ Realizacja [planu S00–S12](2026-09-12-eigensolve-dispersion-nonzero-k-plan.md)
 | S01 — nauka, ADR, kontrakty | W TRAKCIE | Noty, mapy źródeł, walidatory i review |
 | S02 — Python/IR | W TRAKCIE | Walidacja k i selektorów, round-trip, testy konsumentów |
 | S03 — natywny operator magnetyczny Blocha | W TRAKCIE | Prolongacja fazowa i właściciel sparse są zapisane; pozostają MFEM sparse/matrix-free, pełne assembly i managed runtime |
-| S04 — dynamiczny demag-k CPU | W TRAKCIE | Bounded dense Schur provider i producent czterech bloków MFEM są zapisane; planner otwiera wyłącznie strict/double/CPU/Full2x2/FloquetAirbox/nonzero-k z Poisson airbox. Pozostają matrix-free/sparse owner, gauge, zbieżność brzegu i managed runtime |
-| S05 — natywny solver spektralny | W TRAKCIE | Dodano właściciela Floquet SLEPc dla dense i sparse oraz routing obu ścieżek; pozostają managed SLEPc, residuale oryginalnego układu, kompletność i resume |
+| S04 — dynamiczny demag-k CPU | W TRAKCIE | W źródle istnieje bounded sparse Schur/SLEPc route i producent bloków MFEM; poprawiono znak `A_phiq`. Pozostają pełny residual deskryptora z gauge/szwami, zbieżność airboxu i siatki oraz aktualny managed runtime; żaden punkt nie jest jeszcze zaakceptowany |
+| S05 — natywny solver spektralny | W TRAKCIE | Dense i sparse Floquet SLEPc mają routing i diagnostykę bloków. Operator obsługuje fazowaną rotację lokalnej bazy T_member^T T_rep; poprawiono także sprzeczny Rust preflight, który wcześniej blokował tę rotację. Regresje przyjmują zmianę ram przy zgodnym fizycznym m0 i odrzucają niezgodne m0, ale nie zostały skompilowane. Managed k2 z 2026-09-23 nie zaakceptował modów (residual magnetyczny 2.17e-7 przy progu 1e-8). Nadal brakuje certyfikacji pełnego residualu deskryptora i kompletnego okna, wznowienia oraz managed builda aktualnego źródła. |
 | S06 — śledzenie gałęzi | W TRAKCIE | Hungarian/gaps i metryka masy FE są gotowe; pozostają fizyczne podprzestrzenie zdegenerowane |
 | S07 — artefakty i API | W TRAKCIE | Stabilne ID, faza/obwiednia, selektory, binarne pola |
-| S08 — Control Room | DO WYKONANIA | Authoring, dyspersja, wybór modu i przestrzenna faza; browser/WebGL |
+| S08 — Control Room | W TRAKCIE | Authoring i wykres f(k) są widoczne źródłowo. Naprawiono odtworzenie wektora k z metadanych ścieżki, przekazanie go z punktu/gałęzi do selekcji i podglądu 3D oraz respektowanie mode_field_available w FMR. Pozostają testy z bieżącego źródła, browser/WebGL, FMS round-trip i stabilność Inspectora.  Bieżący build #119 ujawnił błąd TypeScript: nadmiarowy przecinek w typie Map; poprawiono go w źródle, ale świeży managed build jest jeszcze potrzebny. |
 | S09 — falowód 2.5D | W TRAKCIE | Bounded provider i deterministyczny P1 assembler przekroju są zapisane; pozostają typed realization/routing, managed/MFEM owner, open-boundary convergence i porównania TetraX/3D |
-| S10 — interakcje | DO WYKONANIA | Anizotropia, DMI seams, Gilbert i legalność |
+| S10 — interakcje | W TRAKCIE | Planner odrzuca teraz nieobsługiwaną anizotropię, DMI, niejednorodne `A` i anizotropię powierzchniową przed runtime; właściwe tangent terms, transport DMI na seamach i damping `include` pozostają do implementacji i walidacji |
 | S11 — GPU | DO WYKONANIA | Jawna trasa double bez fallbacku, residency i parytet |
 | S12 — kwalifikacja i integracja | W TRAKCIE | Managed benchmarki, review, commity, PR, merge, weryfikacja mastera |
 
@@ -2114,3 +2622,1748 @@ orchestratora przeszedł **15 testów**. Pełny test fixture'a bramki naukowej
 nie mógł zapisać dużych danych C1/A1 i zakończył się błędem systemowym
 `[Errno 28] No space left on device`; nie jest to wynik fizyki ani regresja
 walidatora. T4–T7, natywny solve, punkty DE i wykres pozostają `NOT VERIFIED`.
+
+## Najnowszy checkpoint runtime i kolejki — 2026-09-23
+
+Poniższy stan opiera się na receiptach i źródłach odczytanych z bieżącego
+worktree oraz na live runnerze. Zastępuje starszy wpis o buildzie 104 jako
+opis aktualnej poprawki.
+
+**Build 104 i zerowy pivot są historyczne.** Job
+`9024007447fe4ec1b7fe9a4b1c76b61e` (`fem-cpu-slepc-runtime-v1`, exit 0)
+zbudował czysty commit `3273836fa8eac08db7f77da4f1758df659a17516`. Jego k2
+zatrzymał się na zerowym pivocie LU przed iteracją. Źródło tego buildu nie
+zawierało jeszcze `normalize_native_floquet_pencil`; commit `479d5c5ca060ca7f8d00705fa96b62e52493bf3c`
+z normalizacją jest późniejszy.
+
+**Build 109 jest najnowszym zweryfikowanym runtime dla tej gałęzi.** Job
+`d4a26468c5124354b9956ac5ddb92aef` zakończył się sukcesem na HEAD `479d5c5…`
+i snapshotcie `8467417fdf6ce3265f00c5dd61b5390b1c32352dd6475421d39b74344b89d052`.
+Kapsuła zawierała `floquet_modal_solver.cpp` o SHA-256
+`a66b79873b2a1d02a474439fa9d58d103e46366a7fc65e94f39a45ede6085370`, z
+normalizacją i normowanym przesunięciem LU wyłącznie dla preconditionera.
+Smoke k2 dotarł do kandydata `9.7233362727 GHz`, lecz odrzucił go: residual
+magnetyczny `2.1678405358e-7` przekroczył `1e-8`; residual potencjału wyniósł
+około `1.42e-14`. Nie zaakceptowano żadnego modu. Ten build potwierdza, że
+ścieżka przeszła faktoryzację, ale nie daje punktu dyspersji.
+
+**Bieżące źródła są nowsze od buildu 109.** Lokalny plik
+`floquet_modal_solver.cpp` ma SHA-256
+`C40D19EAFCEEEA734E2351D775034D7A56356A6DDF1946C27272C6EFE050338A` i dodaje
+absolutny true-residual test `EPS_CONV_ABS`, osobny od bramki fizycznych
+residuali oryginalnych bloków. Dodano też liczniki kandydatów i rozbicie
+residuali EPS/magnetycznego/potencjału. Tego pliku buildu 109 nie zawierał
+(`EPSSetConvergenceTest` nie występuje w jego kapsule). Zmiany i regresja C++
+pozostają **source changed; managed runtime NOT VERIFIED**; nie kompilowano
+testów jednostkowych.
+
+**Runner pozostaje zajęty.** Live koordynator
+`26ad46a25f6aecff5534bd51ea0b7e5b8484d424363d7495ee332828f9d8efec` działa na
+obrazie `sha256:e9f46ae4690d96dfcdfa915584265733b6d9930fdecf60b16b95f6bfb26101fc`.
+Health zgłasza `worker_alive=true` i `accepting_jobs=true`, ale aktywna
+allowlista nie zawiera `fem-cpu-slepc-runtime-v1`. Job #111
+`e087d668915e4e6099d5404d5b8ebc0c` należy do innego worktree. Jego kontener
+`337f0cae831ede0d92e46a4714ddeafd49bf45f6934669df295ce7ed1af0361f` jest
+potwierdzony jako `running=true`; `docker top` wykazał proces `cargo`. Timeout
+`just runner-wait ... 30` nie zakończył joba. Nie zatrzymywać ani nie
+podmieniać koordynatora; obecny profil modalny nie może zastąpić runtime-only,
+a submit odrzuca profil spoza allowlisty przed utworzeniem wpisu kolejki.
+
+Przy health z 22:01 czasu lokalnego wolne było `8,650,276,864` bajtów — około
+60 MB ponad próg przyjęcia 8 GiB. Worker runtime-only jest skonfigurowany na
+obrazie `sha256:e5f70bd632011f9a0d8163430dab81bc6f248e07e4af086dfdf77bcd087471d7`
+(2 CPU, 8 GiB RAM), a obraz jest lokalnie dostępny. Odczyt
+`just runner-retention-plan` timeoutował na API; nie uzyskano listy kandydatów
+i niczego nie usunięto. Przed następnym zgłoszeniem ponownie sprawdzić wolne
+miejsce; nie obchodzić progu ani retencji.
+
+**Następny krok.** Czekać na terminalny stan #111 i zweryfikować pustą listę
+aktywnych zadań. Dopiero wtedy, przez obsługiwany cykl koordynatora, włączyć i
+potwierdzić profil runtime-only, wysłać snapshot bieżącego worktree, sprawdzić
+hash źródła/receipt oraz ponowić `de-smoke-k2`. Wynik musi mieć zaakceptowany
+mod, residuale poniżej `1e-8`, poprawny Floquet/demag i niepusty wiersz
+częstotliwości. Dopiero potem można rozszerzyć próbkę do kilku k i wykreślić
+numeryczne `f(k)` obok zgodnej analityki. B0–B6, zbieżność oraz pełna
+kwalifikacja nadal pozostają otwarte.
+
+### Kontynuacja kolejki — świeży odczyt 2026-09-23
+
+Uwierzytelniony `/health` działającego koordynatora raportuje
+`worker_alive=true`, `accepting_jobs=true`, `worker_error=null`; aktywny jest
+job #111 (`e087d668915e4e6099d5404d5b8ebc0c`) z innego worktree. FIFO działa.
+Hostowy `storage/index/local-runner-container.json` wymienia
+`fem-cpu-slepc-runtime-v1`, lecz live allowlista działającego kontenera kończy
+się na `fem-cpu-slepc-modal-v1`. To rozjazd konfiguracji hosta i procesu
+koordynatora.
+
+Snapshot bieżącego worktree został przygotowany, ale żądanie z kluczem
+`24aa119e7f5848e1b927dc12b3a24f82` zwróciło HTTP 400. Lista jobów nie zawiera
+tego klucza ani naszego nowego wpisu. Kapsuły źródłowe z dwóch prób pozostają
+w storage; niczego nie usuwano. Nie zatrzymano ani nie zmieniono aktywnego joba.
+
+Live health podaje `5,807,996,928` wolnych bajtów, poniżej progu 8 GiB, więc
+build nie może jeszcze wystartować nawet po dopuszczeniu profilu. Po terminalnym
+zakończeniu #111 potwierdzić wolny slot i miejsce, zastosować hostową allowlistę
+przez wspierany cykl pauzy/wymiany dokładnie tego koordynatora, sprawdzić live
+health, a następnie przesłać snapshot. Status poprawki pozostaje **source
+changed; managed runtime NOT VERIFIED**; nie ma zaakceptowanego punktu `k2` ani
+wykresu.
+
+#### Kontrola live health — 2026-09-23, 20:24 UTC
+
+Job #111 nadal jest aktywny; osobne `runner-wait` zakończyło się timeoutem
+API, który nie anuluje joba. Live health nadal pokazuje żywego workera i
+`accepting_jobs=true`, lecz runtime nie znajduje się w allowliście. Wolne
+miejsce spadło do `4,866,473,984` bajtów. Wpis naszego żądania nie powstał;
+nie przeładowywać teraz koordynatora ani nie uruchamiać buildu.
+
+Kolejny odczyt o 20:27 UTC nadal pokazuje aktywny job #111 i tę samą
+allowlistę; wolne miejsce wynosi `4,772,020,224` bajty.
+
+### Re-audyt solvera i kolejki — 2026-09-23, 21:12 UTC
+
+Bezpośredni authenticated `/health` i odczyt rekordu joba rozstrzygnęły
+poprzednią niespójność: job #111 zakończył się `failed`, `exit_code=2`;
+koordynator ma pustą listę `active_jobs`, `worker_alive=true`,
+`accepting_jobs=true` i `worker_error=null`. Wolne miejsce wynosi
+`62,508,752,896` bajtów. Live allowlista nadal nie zawiera
+`fem-cpu-slepc-runtime-v1`, więc naszego zadania nie można zarejestrować pod
+wymaganym profilem. `just runner-container-status` nadal zwraca
+`Docker Desktop coordinator request failed`; nie podmieniono obrazu ani nie
+zmieniono wspólnego koordynatora. Queue jest współdzieloną kolejką FIFO.
+
+Potwierdzono błąd N2 w natywnym Schurze: `KSPPREONLY` stosuje preconditioner
+raz, a niejawny `MAT_SHIFT_NONZERO` w LU bloku Poissona zmieniał efektywne
+$P(\mathbf k)^{-1}$ w operatorze fizycznym. Źródło ustawia teraz jawnie
+`MAT_SHIFT_NONE`, osobno raportuje `poisson_factorization_shift_policy`, a
+test C++ wymaga tej polityki i sprawdza oryginalny residual potencjału.
+Poprawiono notę 0831 i jej source-map. Jest to **source changed**; testu C++
+ani managed runtime nie uruchomiono. Poprzedni `k2` nadal nie ma zaakceptowanego
+modu i wykazał residual magnetyczny `2.17e-7` przy bramce `1e-8`.
+
+W S06 poprawiono błąd analogiczny w podprzestrzeniach zdegenerowanych:
+normalizacja i odważanie wektora wymagają teraz dokładnie
+`3 * liczba_wag_węzłowych` składowych; nie wnioskują liczby składowych z
+dzielenia długości wektora. Dodano regresję z układem dwóch składowych na
+węzeł. Test Rust nie został uruchomiony.
+
+Weryfikacja źródłowa/dokumentacyjna: source-map validator exit 0, testy
+kontraktu dokumentacji `32/32`, JSON source-map poprawny,
+`git diff --check` exit 0. `rustfmt +nightly --check` dla całego
+`tracking.rs` zgłosił formatowanie w niezmienionych sekcjach pliku; nowy test
+nie ma osobnego sygnału błędu formatowania. Nie wykonywano kompilacji/testów
+backendu ani buildu.
+
+Nie podnoszono `floquet_descriptor_certified` dla sparse solvera: aktualne
+residuale dotyczą zredukowanych oryginalnych bloków, a brak osobnego dowodu
+geometrii szwów i transportu ramy Blocha pozostaje powodem `false`. Nadal
+otwarte są podstawa/polityka odcięcia pure-Neumann `|k|L > 1e-3`, diagnostyka
+proweniencji i niejednoznacznych przypisań S06/S07, frontendowa flaga
+`mode_field_available`, stabilne `sample_id`/`mode_id`, S08–S11 oraz
+kwalifikacja fizyczna.
+
+Szacunek postępu na ten odczyt: około **45% prac implementacyjnych i
+przygotowawczych**, lecz **0% ukończonego wyniku dla `k\ne0`** (brak
+zaakceptowanej częstotliwości, kilku punktów i wykresu porównanego z analityką).
+
+
+### Kontynuacja audytu artefaktów — 2026-09-24
+
+Usunięto pozorną wartość ambiguous_assignment_count: 0 z producenta ścieżki
+wielu wektorów k. eigen/spectrum.v2.json i eigen/branches.v2.json publikują
+teraz null, ambiguous_assignment_count_available: false oraz jawny powód
+assignment_ambiguity_metric_not_computed. Validator sprawdza spójność tej
+trójki w podsumowaniu spectrum i branches; specyfikacja v2 opisuje kontrakt.
+Trzy testy regresyjne najpierw wykazały, że dawny validator przepuszczał
+sprzeczne false + 0, a po poprawce przechodzą.
+
+Weryfikacja źródeł: scripts/test_verify_fem_frequency_domain_eigen_artifacts.py
+— 212/212; AST Pythona — OK; git diff --check — exit 0. Nie kompilowano
+testów backendu ani nie uruchamiano buildu managed. Frontend/API z ostatniego
+przyrostu nadal nie mają testów integracyjnych ani dowodu w przeglądarce.
+Odczyt just runner-container-status z 24.09 zwracał
+Docker Desktop coordinator request failed, więc aktualnego stanu kolejki nie
+można potwierdzić tym interfejsem. Nie użyto trasy zastępczej.
+
+To nie zmienia bramki naukowej: ostatni zapisany wynik k2 miał residual
+2.17e-7 przy wymaganiu <1e-8; brak zaakceptowanej częstotliwości dla
+k != 0, kilku punktów f(k) i wykresu z porównaniem analitycznym. Szacunek
+prac przygotowawczych i źródłowych pozostaje około 45%; wynik naukowy
+pozostaje 0% do czasu zaakceptowanego rozwiązania i porównania.
+
+### S05 — snapshot SLEPc zgloszony do kolejki — 2026-09-24
+
+Ponowny odczyt runnera potwierdził health OK, worker_alive=true,
+accepting_jobs=true, brak worker_error oraz około 61 GB wolnego miejsca.
+Profil fem-cpu-slepc-modal-v1 jest dozwolony. Bez przerywania aktywnego joba
+innego worktree zgłoszono nasz pelny, dirty snapshot do wspólnej kolejki FIFO:
+job 50515860dec847189d97f0fc2d7284d9, sequence 114, request key
+95c0e50ee8d843a7866d3358182426a1, source_digest
+d5ade1037f4ae44d5ecd92d5c0fad9b47c80bc00365790307409193f1643403e,
+native source snapshot SHA
+eaa39903aa77342191dd6016e494061d959168edd8ac9157c7e4b37db2319104.
+Przy zgłoszeniu aktywny byl job 84972dfa8cfe485f92110d6d0e3c3e42 z innego
+worktree. Oczekujemy na terminalny stan joba; submission nie jest dowodem
+builda ani testów kontraktowych.
+
+### Korekta pure-Neumann Floquet i odświeżenie kolejki — 2026-09-24
+
+Usunięto prewencyjny próg `|k| L > 1e-3` z assemblera shared-domain.
+Nie uwzględniał rzeczywistych wektorów translacji siatki i arbitralnie
+odrzucał część niezerowych `k`. Dla Floqueta kontrakt teraz publikuje
+`gauge_policy=require_invertible`, nie przenosi wektora mean-zero z `k=0`,
+a o rozwiązywalności decydują fazowo zredukowany operator Poissona,
+faktoryzacja bez zmiany operatora fizycznego i residual oryginalnego bloku.
+Dodano regresję małego niezerowego `k` obejmującą gotowość sparse operatora,
+brak odziedziczonego gauge i jego jawną politykę w metadanych.
+
+Zaktualizowano notę naukową i mapę źródeł. Nota rozdziela residual sparse
+SLEPc od pełnej certyfikacji deskryptora: sparse path nadal nie certyfikuje
+szwów/frame ani pre-Schur reconstruction i nie publikuje
+`floquet_descriptor_certified=true`.
+
+Kontrole źródłowe: `git diff --check` — exit 0; source-map JSON — poprawny;
+`scripts/check_physics_docs_gate.py --base HEAD --head WORKTREE` — pass;
+stary próg i związany z nim komunikat nie występują już w assemblerze ani
+regresji. Nie kompilowano C++ ani testów backendu — wymagają managed runnera.
+
+Job #112 z innego worktree zakończył się `succeeded`, exit 0, i zwolnił slot.
+Nasz job #114 (`50515860dec847189d97f0fc2d7284d9`) w ostatnim odczycie nadal
+był `queued`. Jego niezmienny snapshot SHA `eaa39903aa77342191dd6016e494061d959168edd8ac9157c7e4b37db2319104`
+powstał przed powyższą korektą, więc nawet jego sukces nie zweryfikuje tej
+zmiany. Po terminalnym stanie #114 należy zgłosić nowy snapshot z aktualnym
+diffem; bez lokalnego fallbacku.
+
+Ta korekta usuwa ukryte geometryczne odrzucenie punktów, ale nie dowodzi
+dokładności bardzo małego `k`. Potrzebne pozostają managed SLEPc, residuale,
+zbieżność po `k`/siatce/airboxie i zaakceptowany wykres względem analityki.
+
+
+### Odświeżenie snapshotu i rewalidacja S06 — 2026-09-24
+
+Stary job #114 (`50515860dec847189d97f0fc2d7284d9`) anulowano przed
+uruchomieniem: jego snapshot `eaa39903aa77342191dd6016e494061d959168edd8ac9157c7e4b37db2319104`
+nie zawierał poprawki pure-Neumann. Następny submit chwilowo trafił na żywą
+blokadę tego worktree; po zakończeniu procesu capture zgłoszono bieżący
+snapshot jako job #115 (`f26f2304554741eebb5618c5dd0891e6`), request key
+`1508573ea61647d3b4e2c33a3c7a0818`, profil `fem-cpu-slepc-modal-v1`, source
+digest `265edeea56b2d1421980d59c502636b8c3603034a01a91eda0dfec63b301c354`,
+native dirty identity `d8646c6cbab544d37d089b8f8aae3c8d41b6f29522458c3b0855f1be36ad4912`
+i source snapshot SHA
+`6bec2ae5a8bf40c2aed5ec6159e818604bfb16ef382f2574fb1ae0d4793d06d3`.
+Job #115 obejmuje poprawkę Floquet; przy ostatnim odczycie nadal czekał FIFO
+za jobem #113 z innego worktree. Job #116 anulowano jako duplikat: miał
+identyczne digesty i snapshot SHA co #115. Nie zatrzymano ani nie zmieniono
+jobu #113. `runner-doctor` nie mógł poświadczyć kontekstu Docker Desktop;
+odczyt kolejki i logu #113 nadal potwierdzał jego stan `running`, bez
+terminalnego wyniku dla #115.
+
+Reaudyt zgłoszonej niezgodności proweniencji śledzenia S06 nie potwierdził
+opisanego przypadku fallbacku przy niepoprawnej metryce masy. W bieżącym
+`tracking.rs` częstotliwościowy fallback jest używany tylko wtedy, gdy brakuje
+wektora własnego; jeśli wektory istnieją, ale overlap FE nie daje się obliczyć,
+`tracking_edge_metrics_views` nie tworzy krawędzi. Krawędź z `overlap_prev=None`
+przy obecnych wektorach powstaje dla jawnego transportu podprzestrzeni, więc
+heurystyka źródła nie jest tu sprzeczna z faktyczną metodą. To rozstrzygnięcie
+opiera się na przeglądzie źródła — testów Rust nie kompilowano ani nie
+uruchamiano. S06 pozostaje otwarte w zakresie walidacji fizycznego transportu
+zdegenerowanych podprzestrzeni.
+
+**Następny krok:** poczekać na terminalny wynik #113, następnie zweryfikować
+build #115 i uruchomić `de-smoke-k2` na dokładnie tym receipcie. Job w kolejce
+nie jest wynikiem kompilacji ani solve; nie ma nadal zaakceptowanej
+częstotliwości dla `k\ne0`, kilku punktów dyspersji ani wykresu porównanego z
+analityką.
+
+### Aktualizacja kolejki i dowodów UI — 2026-09-24
+
+Job #113 (cea04ed70f7c4a698939ef9e798a6c3a) z worktree eigensolve-k0-finalization zakończył się terminalnie statusem succeeded, exit_code=0. Log potwierdził też kompilację aplikacji Control Room i ukończenie TypeScript w tym jobie; nie jest to dowód dla źródeł ani solvera tego worktree.
+
+Nasz job #115 (f26f2304554741eebb5618c5dd0891e6) przeszedł z queued do running na koordynatorze local-host. Nadal dotyczy wyłącznie snapshotu 6bec2ae5a8bf40c2aed5ec6159e818604bfb16ef382f2574fb1ae0d4793d06d3, source digest 265edeea56b2d1421980d59c502636b8c3603034a01a91eda0dfec63b301c354. Ostatnie wait potwierdziło running, bez exit code i bez dostępnego jeszcze logu; nie uruchomiono duplikatu ani nie przerwano joba.
+
+runner-doctor i lokalny runner-container-status nie mogły poświadczyć kontekstu Docker Desktop; bezpośredni odczyt Docker zakończył się odmową dostępu do lokalnych metadanych kontekstu. Odczyt i oczekiwanie na joby przez API runnera działają. Nie odzyskiwać lease na podstawie wieku.
+
+Kontrola UI S08: istniejąca karta http://localhost:3110/workspace zwróciła ERR_CONNECTION_REFUSED. Browser/WebGL proof pozostaje NOT VERIFIED i wymaga dostępnego serwera właściwego obrazu/runtime.
+
+Następny krok: monitorować dokładnie #115. Po sukcesie zweryfikować receipt, source identity i artefakty buildu, a potem uruchomić just run-de-smoke f26f2304554741eebb5618c5dd0891e6 k2. Po porażce zbadać terminalny log i poprawiać przyczynę; job w stanie running/timeout nie jest wynikiem solvera.
+
+### Luka analitycznego porównania DE-SMOKE — 2026-09-24
+
+Przegląd ścieżki artefaktów wykazał, że wejście DE-SMOKE deklaruje porównanie jako postsolve-only i nie ustawia DispersionValidationIR. Walidator wierszy pozostawia jawne rozpoznanie gałęzi n=0 i porównanie analityczne jako wymagania otwarte. Plotter rysuje linię analityczną tylko wtedy, gdy w wejściowym dispersion.csv są wartości analytic_frequency_hz. Zatem obecny fixture nie zapewnia jeszcze porównania w swoim CSV.
+
+Istniejący generator Kalinikosa n=0 jest związany z parametrami benchmarku C1 i referencją otwartego filmu. Nie wolno użyć jego gotowego CSV dla 10 nm DE-SMOKE ani traktować go jako rozwiązania skończonego airboxu. Istniejąca formuła bazowa jest wielokrotnego użytku, ale porównanie DE-SMOKE musi zostać policzone z parametrami tego runu i wyraźnie oznaczone jako otwarto-filmowa referencja; efekt skończonego brzegu i kontrola Gamma pozostają osobnymi pozycjami.
+
+Po pierwszym udanym pilocie sprawdzić metadata.json, parametry fizyczne, źródło modelu i hash dispersion.csv. Dodać porównawczy sidecar oraz wykres FEM/analityka bez nadpisywania surowych artefaktów. Sidecar ma wiązać run/job, source identity, wybór gałęzi, residual i wersję modelu; wynik pozostaje niekwalifikowany do czasu kontroli profilu n=0, zbieżności siatki/airboxu/liczby modów oraz dalszych punktów k.
+
+### Etap native-build joba #115 — 2026-09-24
+
+Nowy odczyt logu joba #115 zawiera marker [fullmag runner] stage native-build start oraz polecenie make install-cli-dev. Status pozostaje running, exit_code=null; receipt i końcowy wynik buildu nie są jeszcze dostępne. Jest to dowód wejścia w kompilację natywną, nie dowód jej sukcesu ani wykonania solvera. Zmiany dopisane później wyłącznie do tego planu nie zmieniają już zgłoszonej kapsuły runtime.
+
+### Reaudyt S06 — wymiar wektora overlapu — 2026-09-24
+
+Zgłoszony finding o wyprowadzaniu liczby składowych z ilorazu długości wektora i liczby wag nie występuje w bieżącym worktree. tracking_subspace.rs wymaga checked_mul(node_count, TRACKING_VECTOR_COMPONENTS_PER_NODE) == vector_len i odrzuca niezgodność w obu kierunkach ważenia. tracking.rs dodatkowo zwraca LengthMismatch i nie stosuje fallbacku euklidesowego. Regresja modal_overlap_rejects_unaligned_mass_metadata_without_euclidean_fallback sprawdza brak krawędzi overlapu dla niespójnych wymiarów.
+
+Weryfikacja była źródłowa; testu Rust nie kompilowano ani nie uruchamiano zgodnie z ograniczeniem AGENTS.md. Zmienione tracking.rs i tracking_subspace.rs należą do snapshotu #115; job kompiluje się, lecz nie daje jeszcze terminalnego wyniku ani runtime dowodu śledzenia gałęzi.
+
+### Poprawka kontraktu gauge po awarii joba #115 — 2026-09-24
+
+Job #115 (f26f2304554741eebb5618c5dd0891e6) zakończył się terminalnie
+failed, exit 2. Natywna kompilacja wskazała użycie floquet_k_rad_per_m
+poza zakresem w poisson_airbox_shared_domain.cpp:2597: helper
+assemble_poisson_airbox_shared_domain nie otrzymuje wektora k.
+
+Naprawiono przepływ jawnie w kontrakcie żądania assemblacji:
+PoissonAirboxPureNeumannGaugePolicy rozróżnia teraz
+mean_zero_augmented dla k=0 oraz require_invertible dla Floqueta.
+Assembler tworzy wektor średniej wyłącznie dla pierwszej polityki;
+politykę Floqueta ustawia wrapper przed assemblacją fazową. Metadane
+i digest operatora wynikają teraz z tej samej jawnej wartości. Dodano
+regresję dla braku odziedziczonego wektora mean-zero i właściwej etykiety
+require_invertible. Nie zmieniono operatora fizycznego ani nie
+przywrócono arbitralnego progu |k|L.
+
+Job #116 (7bb08983c4c344f08e04be2e1d9b327d) został anulowany i miał ten
+sam stary source digest co #115; nie weryfikuje powyższej poprawki.
+Aktualny runner-list nie wykazał aktywnych jobów, ale
+just runner-container-status zakończył się komunikatem
+Docker Desktop coordinator request failed, a runner-doctor
+Cannot attest Docker Desktop context. API list/status działa, lecz
+przed nowym buildem trzeba odzyskać wiarygodną attestację zdrowia i
+dopuszczonego profilu. Nie uruchomiono lokalnej kompilacji. git diff
+--check i kontrola źródłowa po poprawce przeszły; regresja C++ i nowy
+managed build pozostają NOT VERIFIED.
+
+Następny krok: po potwierdzeniu zdrowia runnera zgłosić świeży snapshot
+worktree, sprawdzić receipt/tożsamość źródeł i uruchomić de-smoke-k2.
+Dopiero potem można ocenić residuale oryginalnych bloków, otrzymaną
+częstotliwość i pole demagu; nadal brak zaakceptowanego punktu k!=0,
+porównania analitycznego oraz wykresu.
+
+### Snapshot po poprawce zgłoszony do FIFO — 2026-09-24
+
+Zgodnie z poleceniem użytkownika świeży snapshot został przyjęty przez
+wspólną kolejkę jako job #117: 79649ebe340c4e4cac9121867a70bc32,
+profil fem-cpu-slepc-modal-v1, source digest
+b1f4cd130f80f7cd580b5b2aa2b0f22b8e256a107046eaff38416b09b9ef38db,
+source snapshot SHA
+f9202249112f68bec88b986e50088f41b02073a36104c33b1e5aad858b5b0bd6.
+Odczyt statusu po 30-sekundowym wait potwierdził state=running,
+exit_code=null. Wait klienta zwrócił timeout 124, co nie kończy ani nie
+anuluje joba. Poprzednie #115/#116 są terminalne; nie zgłoszono duplikatu.
+
+Snapshot zawiera poprawkę jawnej polityki gauge i regresję oraz poprzednie
+zmiany S04/S05/S06/S07. Profil i capture zostały zaakceptowane przez
+kolejkę, lecz Docker Desktop nadal nie jest poświadczony przez
+runner-doctor/container-status. Wynik kompilacji, receipt i test C++
+pozostają NOT VERIFIED. Następny krok to sprawdzać ten sam job #117 do
+stanu terminalnego; przy sukcesie zweryfikować receipt i odpalić
+de-smoke-k2 z tego dokładnego runtime.
+
+### S05 — kontrola ram stycznych na modalnych szwach Floqueta — 2026-09-24
+
+Reaudyt shared-domain assemblera potwierdził, że `build_phase_entries`
+sprawdza indeksy, klasy, fazę `-k·R` i spójność grafu translacji, ale modalny
+producer nie sprawdzał, czy lokalne ramy styczne na sparowanych węzłach są
+zgodne. Współczynnikami tangent constraint były identyczności dla obu
+składowych, co jest poprawne tylko przy zgodnych `m`, `e1` i `e2`; różnica
+ramy wymagałaby jawnej macierzy transportu 2×2, której ten backend nie
+implementuje.
+
+Dodano fail-closed `validate_periodic_tangent_frames`: dla aktywnych
+magnetycznie par weryfikuje skończoność i maksymalną składową różnicę
+`m/e1/e2` nie większą niż `1e-10`, zgodnie z istniejącym modalnym
+kontraktem Floqueta w solverze odpowiedzi wymuszonej. Pary air-only z
+nieaktywną klasą magnetyczną pozostają pominięte. Dodano regresję obracającej
+się o 90° poprawnej ortonormalnej ramy, która musi zostać odrzucona przed
+assembly bloków. Zaktualizowano notę fizyczną i mapę źródeł.
+
+Geometria par i translacja są osobnym warunkiem: runner tworzy `MeshTopology`
+przez `MeshTopology::from_ir`, które uruchamia `validate_mesh_for_execution`,
+a następnie przekazuje z tej samej topologii węzły i translacje. Faza oraz
+cykle są dodatkowo sprawdzane w natywnym producerze. Nie zmieniono flagi
+`floquet_descriptor_certified`: residuale sparse nadal nie dowodzą pełnej
+rekonstrukcji i nie wolno na tej podstawie publikować kwalifikowanego pola.
+
+`git diff --check` przechodzi. Testu C++ nie kompilowano lokalnie zgodnie z
+regułą managed-build; job #117 jest nadal `running` i jego zamrożony snapshot
+nie zawiera tego przyrostu. Nowy test oraz implementacja czekają na świeży
+managed build po terminalnym zakończeniu #117; test i fizyka pozostają
+`NOT VERIFIED`.
+
+
+### Terminalny wynik managed buildu #117 i poprawka kompilacji — 2026-09-24
+
+Ponowny odczyt joba `79649ebe340c4e4cac9121867a70bc32` wykazał stan
+`failed`, `exit_code=2`, profil `fem-cpu-slepc-modal-v1`, source digest
+`b1f4cd130f80f7cd580b5b2aa2b0f22b8e256a107046eaff38416b09b9ef38db`.
+Build zatrzymał się po około 41 minutach na etapie `native-build`, zanim
+powstał używalny runtime. Kompilator wskazał
+`crates/fullmag-runner/src/eigen/artifacts/modal_manifest.rs:807`:
+Rust nie obsługuje bezpośredniego dostępu do pola w przechwyconym formacie
+`{point.sample_index}`. Zmieniono wyłącznie zapis na pozycyjny
+`format!("sample-{:04}/mode-{:04}", point.sample_index, point.raw_mode_index)`,
+co zachowuje ten sam identyfikator artefaktu. `git diff --check` dla pliku
+przechodzi, a wyszukanie w `crates/fullmag-runner/src` nie znalazło innych
+analogicznych interpolacji pól. Poprawki nie kompilowano; job #117 nie zawiera
+ani tej poprawki, ani późniejszej kontroli ram stycznych Floqueta. Nie
+uruchomiono `de-smoke-k2`.
+
+Po awarii `runner-list` nie wykazał jobów w stanie queued/running/dispatched.
+`just runner-doctor` nadal kończy się `Cannot attest Docker Desktop context`,
+a `just runner-container-status` — `Docker Desktop coordinator request failed`.
+Nie zgłoszono duplikatu ani nowego snapshotu, bo zdrowie wspólnego runnera nie
+jest poświadczone. Następny krok: przywrócić wiarygodną attestację istniejącego
+runnera, ponownie potwierdzić pusty slot i zgłosić jeden świeży snapshot
+z poprawką formatu oraz kontrolą ram. Dopiero po sukcesie buildu i walidacji
+jego receipt uruchomić `de-smoke-k2` z dokładnie tego runtime.
+
+S05 i S12 pozostają w toku. Nadal brak zaakceptowanej częstotliwości `k != 0`,
+porównania numeryczno-analitycznego i wykresu dyspersji.
+
+### Wznowienie managed runnera i snapshot #118 — 2026-09-24
+
+Odczyt `just runner-doctor` i `just runner-container-status` w zwykłym sandboxie
+nie miał dostępu do metadanych kontekstu Docker Desktop. Po dopuszczonym odczycie
+diagnostycznym stan został potwierdzony: kontekst `desktop-linux`, kontener
+`Fullmag_build_runner` `running`, `health.ok=true`, worker `running`, bez błędu,
+`accepting_jobs=true`, `active_jobs=[]`, a profil `fem-cpu-slepc-modal-v1` jest
+na liście dozwolonych. W chwili zgłoszenia nie działał żaden managed job; slot
+kolejki był wolny. Nie uruchamiano drugiego koordynatora ani lokalnego builda.
+
+Bieżący worktree przeszedł `git diff --check` (exit 0; wyłącznie ostrzeżenia
+konwersji LF/CRLF). Świeży snapshot został przyjęty jako job #118:
+`674dac1a46fc4cf4ba5268459f4fc845`, profil `fem-cpu-slepc-modal-v1`, HEAD
+`479d5c5ca060ca7f8d00705fa96b62e52493bf3c`, source digest
+`175f5c31e5a57dac4a1c8364d473a69ab1452ffe620031af161ff9761ee8b283`, capture
+`301a1f6a3568427eb1b1bad978f15016`, source snapshot SHA
+`91d52458008dbba8ec68ba508525f6376d19537d79d95cc6698a6e6d60617e73`.
+Manifest snapshotu zawiera poprawiony `modal_manifest.rs` oraz kontrolę ram
+stycznych w `floquet_airbox_operator.cpp`. Potwierdza to objęcie snapshotem
+poprawki formatu wskazanej przez kompilator joba #117 i późniejszej poprawki
+Floqueta. Job #118 jest `running`; pierwszy odczyt logu zwrócił pusty ogon.
+Nie ma jeszcze terminalnego wyniku, receipt ani runtime; nie uruchomiono
+`de-smoke-k2` i nadal brak częstości `k != 0`.
+
+**Następny krok:** obserwować dokładnie job #118, bez ponownego zgłoszenia.
+Po sukcesie sprawdzić receipt, hashy i tożsamość źródeł, a potem wykonać
+`de-smoke-k2` z tego runtime. Po terminalnej porażce przeanalizować jej log i
+naprawić konkretny błąd przed kolejnym snapshotem.
+
+#### Wyjaśnienie heartbeat podczas joba #118 — 2026-09-24
+
+Po przejęciu #118 API health zwrócił `active_jobs=[#118:running]`, worker
+`running`, `accepting_jobs=true` i brak błędu. Puste `coordinator.active_job_ids`
+nie oznacza utraty lease: `scripts/local_runner/service.py` zapisuje
+`state=running, active_job_ids=[]` przed wejściem w callback `execute`, a
+`container_main._health_snapshot()` pobiera rzeczywiste aktywne rekordy osobno
+z `queue.active()`. Zatem obie wartości mogą się różnić w trakcie kompilacji.
+Ostatni ogon logu pozostaje pusty; job jest żywy i obserwujemy ten sam identyfikator.
+Nie restartowano runnera i nie wysłano duplikatu.
+
+#### Kontener worker #118 wystartował — 2026-09-24
+
+Journal joba ma `phase=start-requested` i zapamiętany dokładny container ID
+`1bc90756169efd4feca7404c7f8f75f5914defe60d15a3a49d95834849abe619`.
+Odczyt stanu tego kontenera przez Docker Desktop zwrócił `Status=running`,
+`Running=true`; health API nadal wymienia #118 jako aktywny, worker żyje,
+przyjmuje zadania i nie raportuje błędu. Nie ma dowodu awarii ani utraty lease.
+
+`runner-logs` zwraca pusty ogon, ponieważ `build_executor.py::finish_build`
+pobiera i zapisuje `docker logs` dopiero po terminalnym stanie kontenera.
+Pusty log w trakcie pracy nie dowodzi zawieszenia. Nie użyto reconcile, cancel,
+restartu ani drugiego joba; dalej obserwować ten sam #118 do wyniku terminalnego.
+
+#### #118 wszedł do kompilacji natywnej — 2026-09-24
+
+Odczyt oficjalnego `just runner-logs` wykazał marker `stage native-build start`
+i polecenie `make install-cli-dev`; worker kompiluje zależności Rust, m.in.
+`fullmag-quantities`, `fullmag-fdm-demag`, `fullmag-ir`, `fullmag-build-info`,
+`fullmag-fem-sys`, `fullmag-engine`, `fullmag-plan`, `fullmag-session` i
+`fullmag-application`. Job #118 nadal jest `running`, bez terminalnego exit code.
+Na razie brak zgłoszonego błędu kompilatora, receiptu, testów lub wykonania
+modelu. Po zakończeniu trzeba sprawdzić pełny log i receipt przed DE-SMOKE.
+
+### Reaudyt S04/S05 i korekta postępu — 2026-09-24
+
+Niezależny audyt zgłosił sześć luk Floquet/SLEPc. Reprodukcja na bieżącym
+wywołaniu produkcyjnym potwierdziła niezgodność znaku `A_phiq`: słaby człon
+Poissona daje `P phi = S q`, natomiast deskryptor wymaga
+`A_phiq q + P phi = 0`, czyli `A_phiq = -S`. Importer odwraca teraz znak przed
+projekcją przez ograniczenia Floqueta; do testu payloadu dodano kontrolę
+analitycznego znaku dla próbki tetraedrycznej.
+
+Nie potwierdzono osobnego zgłoszenia o niezgodnych wymiarach źródła i
+ograniczenia stycznego w ścieżce produkcyjnej. `assemble_floquet_airbox_shared_domain_blocks`
+tworzy `source_request` bez mapy `magnetic_reduced_node`, zatem producent
+zwraca pełne kolumny q; istniejący test integracyjny oczekuje tego samego.
+Niskopoziomowy assembler nadal ma opcję redukcji dla niezależnych zastosowań,
+ale bieżący importer z niej nie korzysta.
+
+Pozostają otwarte: pełny residual deskryptora z warunkami szwów i gauge;
+transport baz stycznych `Q` dla nieidentycznych ram (obecny guard je odrzuca);
+certyfikat kompletności widma/okna; oraz plannerowa legalność i obsługa
+interakcji, w tym damping i niezerowe k.
+Nie wolno z tych luk wyprowadzać kwalifikacji runtime.
+
+Ponowny przegląd `native_poisson_airbox_mode_from_json` wykazał, że runner
+normalizuje `q` przez masową metrykę zredukowaną i dzieli fizyczne `phi` przez
+ten sam czynnik. `mass_norm` jest liczony ponownie po normalizacji. Zatem
+normalizacja jest obecna w źródle; jej potwierdzenie w zbudowanym runnerze i
+opublikowanym artefakcie pozostaje NOT VERIFIED.
+
+`git diff --check` przechodzi. Regresji C++ nie zbudowano z powodu
+tymczasowego zakazu kompilowania testów jednostkowych. Job #118
+`674dac1a46fc4cf4ba5268459f4fc845` nadal jest `running` na natywnej kompilacji
+i został utworzony przed poprawką znaku; jego snapshot nie zawiera tej zmiany.
+Po wyniku terminalnym trzeba sprawdzić receipt i zlecić świeży managed build
+bieżącego źródła przed `DE-SMOKE`.
+
+Aktualny, heurystyczny szacunek: **20–25% celu end-to-end**, około **45% prac
+przygotowawczych/źródłowych** i **0% zaakceptowanego wyniku naukowego dla
+`k != 0`**. Nadal nie ma częstotliwości, porównania z analityką ani wykresu.
+
+Ponowny odczyt joba #118 wykazał, że kompilacja przeszła do `fullmag-runner`;
+log zawiera ostrzeżenia o nieużywanym imporcie i metodzie deprecated, bez
+zgłoszonego błędu kompilatora na tym etapie. Job nadal nie ma wyniku
+terminalnego, a jego snapshot nie obejmuje poprawki znaku Floqueta.
+
+### Fail-fast legalność interakcji Floqueta — 2026-09-24
+
+Reaudyt wykazał rozjazd: natywny shared-domain solver odrzucał anizotropię,
+DMI, niejednorodne `A` i anizotropię powierzchniową dopiero podczas
+przygotowania runtime, podczas gdy `plan_fem_eigen` mógł zwrócić poprawny
+plan CPU `FloquetAirbox`. Planner sprawdza teraz te same pola przed
+opublikowaniem planu i zwraca jawny błąd `fallback=none`; bazowa ścieżka
+exchange/Zeeman/demag oraz provenance pozostają bez zmian.
+
+Dodano regresje planera dla anizotropii jednoosiowej i bulk DMI. Nie
+uruchomiono testów Rust ani ich kompilacji zgodnie z aktywnym zakazem.
+`git diff --check` przechodzi. `cargo fmt -p fullmag-plan -- --check` wskazał
+już istniejące, niepowiązane formatowanie w tych dużych plikach (m.in. importy
+i funkcje w `fem.rs`, starsze asercje w `tests.rs`); szerokiego formatowania
+nie zastosowano.
+
+Nie zmienia to zakresu opublikowanej capability: niezerok-Floquet demag nadal
+nie jest kwalifikowany. Wymagane jest źródłowe sprawdzenie przez następny
+managed build oraz dowód, że niedozwolone wejścia zatrzymują się na plannerze.
+Wiersz dyspersji w `docs/specs/capability-matrix-v0.md` doprecyzowano tak,
+by odróżniał istniejący w źródle operator od produkcyjnej capability; nie
+włączono `production_cpu` dla demagu niezerowego k.
+Job #118 nadal jest aktywny po `runner-wait` z timeoutem 30 s; ponowny status
+potwierdził `running`, `exit_code=null` i ten sam snapshot. Nie anulowano ani
+nie zdublowano joba. Po jego terminalnym zakończeniu należy zbudować aktualny
+snapshot, zawierający poprawkę znaku i walidację planera, przed kolejnym
+`DE-SMOKE`.
+
+#### Postęp joba #118 — 2026-09-24
+
+Odczyt oficjalnego `runner-logs` wykazał
+`native-build end exit_code=0` po `3,009,736 ms`, a potem rozpoczęcie
+`frontend-dependencies` (`pnpm install --frozen-lockfile`). Status joba nadal
+`running`, `exit_code=null` w chwili tego odczytu; nie było wtedy terminalnego
+receipt. To potwierdza
+kompilację natywnego snapshotu #118, ale nie zmiany z poprawką znaku Floqueta
+ani fail-fast walidacją planera, które powstały po jego capture. Nie wysłano
+drugiego joba; po zakończeniu tego builda następny snapshot musi zawierać
+aktualne źródła.
+
+### S08 — wektor k w handoffie punktu i gałęzi — 2026-09-24
+
+Audyt kodu Control Room wykazał, że wybór próbki wykresu zachowywał wektor
+`k` z kolumn CSV, ale gubił go, gdy jedynym źródłem były kontrolne punkty
+`path_metadata`; wybór próbki w tabeli gałęzi nie niósł ani `k`, ani `path_s`.
+Model wykresu odtwarza teraz każdy wektor z liniowego podziału kolejnych
+kontrolnych `k_vector` zgodnie z `samples_per_segment`. Model gałęzi łączy
+punkt po `(sample_index, raw_mode_index)` z tym samym artefaktem dyspersji,
+a selekcja i polecenie podglądu 3D przekazują `wavevectorKf` i `pathS`.
+Eksport CSV gałęzi zawiera teraz próbkę, mod, współrzędną ścieżki oraz
+składowe `k`. Wiersz piku FMR nie publikuje pola 3D, gdy producent jawnie
+ustawił `mode_field_available=false`, nawet jeśli obecne jest ID pola.
+
+Dodano regresje modelu dla interpolacji wektora k, selekcji gałęzi i
+niedostępnego pola FMR. Nie uruchomiono testów jednostkowych z powodu
+obowiązującego zakazu ich kompilacji/uruchamiania. `git diff --check` przechodzi.
+S08 nadal nie jest zweryfikowane w przeglądarce; wymagany jest modalny flow
+chart → wybrany punkt/gałąź → overlay z przestrzenną fazą Floqueta, kontrola
+widocznego canvas/WebGL i rysującego bufora oraz export/import FMS.
+
+### Terminalny wynik managed build #118 — 2026-09-24
+
+Job `674dac1a46fc4cf4ba5268459f4fc845` (`fem-cpu-slepc-modal-v1`, snapshot
+`175f5c31e5a57dac4a1c8364d473a69ab1452ffe620031af161ff9761ee8b283`)
+zakończył się `succeeded`, exit code 0. Log potwierdza sukces
+`native-build` (3 009 736 ms), instalacji zależności frontendu (1 017 022 ms)
+i `frontend-build` (379 148 ms); produkcyjny build Next.js zakończył
+kompilację, TypeScript i prerender bez błędu. To dowód buildu dla zamrożonego
+źródła #118, nie dla bieżących edycji S08 ani późniejszej poprawki znaku
+`A_phiq`. Job nie uruchamiał solvera ani nie wyprodukował zaakceptowanego
+punktu dyspersji.
+
+Po zakończeniu #118 odczyt stanu przez uprawniony, tylko-odczytowy dostęp
+potwierdził `Fullmag_build_runner` `running`, `health.ok=true`, żywego workera,
+`accepting_jobs=true`, pustą kolejkę i 42 576 662 528 bajtów wolnego miejsca.
+Profil `fem-cpu-slepc-modal-v1` jest dozwolony. Następny krok to jeden świeży
+snapshot bieżącego worktree, a potem kontrola jego receipt i uruchomienie
+`DE-SMOKE` z runtime przypisanym do tego snapshota.
+
+### Świeży snapshot #120 — 2026-09-24
+
+Po terminalnym sukcesie #118 potwierdzono stan wspólnego runnera:
+`health.ok=true`, `worker_alive=true`, `accepting_jobs=true`, `active_jobs=[]`,
+profil `fem-cpu-slepc-modal-v1` dozwolony i 42 576 662 528 bajtów wolnego
+storage. Zgłoszono bieżący worktree jako job #120:
+`90a4051188614844bb1b64b9a5e0841c`, source digest
+`0221cae0e29db59ba330e4636fc60188e987ed0915294393b1b3e70f3c839790`, capture
+`e42ba5f0a6fe4da49f865b59022dbb54`, snapshot SHA-256
+`e3d650b15730a1263754cc0e391321e8a1117b813ed5a5ae12288f26f7e6b3d7`, bazowy
+HEAD `479d5c5ca060ca7f8d00705fa96b62e52493bf3c`. Z kapsuły odczytano i
+porównano z worktree hashe aktualnego `frequencyDomainChartModels.ts`,
+`EigenBranchInspectorPanel.tsx`, poprawionego
+`poisson_airbox_shared_domain.cpp` i fail-fast walidacji `fullmag-plan`; każdy
+porównany plik jest identyczny z bieżącym. Job ma stan `queued`, więc nie ma
+jeszcze wyniku builda ani runtime. Po jego terminalnym zakończeniu trzeba
+zweryfikować receipt/hashy, następnie uruchomić `DE-SMOKE` i sprawdzić
+niezerowy punkt k przed uznaniem S04/S05.
+
+### S04/S05 — lokalna baza styczna na szwie Floqueta — 2026-09-24
+
+Współdzielony modalny operator Blocha nie wymaga już identycznych składowych
+`e1/e2` na parze periodycznej. Dla reprezentanta klasy i jej członka buduje
+`R = T_member^T T_rep`, a ograniczenie magnetyczne stosuje
+`exp(-i k·Δr) R`. Akceptacja nadal wymaga zgodnych fizycznych wektorów
+magnetyzacji równowagowej oraz skończonych, ortonormalnych i prawoskrętnych
+ram stycznych. Inna magnetyzacja lub niejednostkowa fizyczna rotacja spinowa
+`Q` pozostają odrzucane przez ten kontrakt.
+
+Dodano regresję dla obrotu lokalnej bazy o 90 stopni, współczynników fazowanej
+macierzy `2×2` i osobne odrzucenie niezgodnego fizycznego stanu równowagi.
+Zgodnie z aktywną instrukcją repozytorium nie kompilowano ani nie uruchamiano
+testów jednostkowych. `git diff --check` przechodzi; kompilacja i test regresji
+pozostają NOT VERIFIED.
+
+Ponowny odczyt wspólnego runnera wykazał job #119 (`3c386adf…`) w stanie
+`running` i #120 (`90a40511…`) w stanie `queued`; oba zgłaszają ten sam source
+digest `0221cae0…`. Ich niezmienne snapshoty powstały przed poprawką mapy ram,
+więc nie walidują tego przyrostu. Nie przerwano żadnego joba. Po zwolnieniu
+worktree-lock należy zarejestrować jeden snapshot najnowszych źródeł i potwierdzić
+receipt przed smoke `DE`.
+
+Odczyt `runner-logs` dla #119 pokazuje trwający etap `native-build` (`make
+install-cli-dev`) i kompilację crate'ów Rust; widoczne są tylko ostrzeżenia, bez
+zgłoszonego błędu kompilatora. Job nie ma terminalnego wyniku ani receipt.
+
+Poprawka dotyczy aktualnego shared-domain modalnego importera. Osobny
+driven-response validator w `driven_response_solver.cpp` nadal wymaga zgodnych
+lokalnych ram; ta ścieżka nie jest dowodem obsługi ogólnego `Q` i wymaga osobnego
+zakresu, jeśli ma dzielić tę samą elastyczną semantykę.
+
+
+### S04/S05 — korekta Rust preflight ram Floqueta — 2026-09-24
+
+Rust preflight shared-domain Full2x2 niepotrzebnie wymagał identycznych lokalnych ram stycznych, choć natywny operator C++ już transportuje współrzędne macierzą T_member^T T_rep. Zmieniono go na kontrolę zgodności fizycznych wektorów równowagi m0 dla translacyjnego Q = I; zmiana orientacji lokalnej bazy stycznej jest dozwolona, a niezgodność m0 nadal kończy się błędem.
+
+Dodano testy dla obu przypadków. Nie kompilowano ani nie uruchamiano testów jednostkowych zgodnie z obowiązującą instrukcją repozytorium. git diff --check przechodzi; ta korekta pozostaje niezweryfikowana runtime.
+
+Bieżący odczyt managed runnera: job #119 3c386adf… nadal running, job #120 90a40511… nadal queued; oba mają digest 0221cae0… i snapshot zarejestrowany przed tą poprawką. Nie anulowano ani nie zdublowano jobów. Po zwolnieniu kolejki potrzebny jest świeży snapshot bieżącego worktree, następnie build z receipt i run DE-SMOKE.
+
+Szacunek end-to-end pozostaje heurystyczny: **20–25%**; prace źródłowe/przygotowawcze około **45%**; zaakceptowany naukowo punkt k != 0 nadal **0%**.
+
+
+### S08 — błąd TypeScript w managed buildzie #119 — 2026-09-24
+
+Job #119 3c386adf… zakończył się jako failed, exit code 2. Etap native-build przeszedł, ale frontend-build dwukrotnie zatrzymał się na błędzie TypeScript w frequencyDomainChartModels.ts:1885: niedozwolony końcowy przecinek po typie wartości generyka Map. Usunięto ten przecinek w bieżącym worktree.
+
+Job #120 90a40511… jest teraz running, ale używa tego samego digestu 0221cae0… i zawiera błąd sprzed poprawki. Nie przerwano go. Ani #119, ani #120 nie budują obecnej wersji po poprawce; po terminalnym #120 potrzebny będzie świeży managed build bieżącego snapshotu.
+
+Błąd składni jest poprawiony źródłowo, lecz jego naprawa pozostaje bez managed build proof. End-to-end: **20–25%**; źródło/przygotowanie: około **45%**; zaakceptowany naukowo punkt k != 0: **0%**.
+
+### Aktualizacja checkpointu kolejki i postępu — 2026-09-24
+
+Status #120 (`90a4051188614844bb1b64b9a5e0841c`) odczytany ponownie: `running`, bez `exit_code`, ze starym digestem `0221cae0…`, sprzed obecnych poprawek. Nie anulowano joba ani nie dodano duplikatu. `just runner-container-status` nie potwierdził zdrowia kontenera (`Docker Desktop coordinator request failed`), więc przed kolejnym snapshotem trzeba poczekać na terminalny wynik #120 i ponownie poświadczyć runner.
+
+Szacunek celu end-to-end: **20–25%**; źródła i przygotowanie: około **45%**; zaakceptowany wynik naukowy `k != 0`: **0%**. Aktualny kod nie ma managed-build proof, a częstotliwość, porównanie analityczne i wykres pozostają do uzyskania.
+
+### S05 — świeży build bieżących poprawek #122 — 2026-09-24
+
+Wspólny managed runner ma `health.ok=true`, żywego workera, `accepting_jobs=true`, brak błędu workera, dozwolony profil `fem-cpu-slepc-modal-v1` i 34 362 441 728 B wolnego storage. Job #120 (`90a4051188614844bb1b64b9a5e0841c`) nadal jest `running` na starym source digest `0221cae0…`. Jego stanu nie zmieniano. Raport koordynatora ma `active_job_ids=[]`, lecz kolejkowy endpoint nadal zwraca #120 jako running; nie uznaję go za zakończony ani nie odzyskuję lease.
+
+Bieżący snapshot zgłoszono poprawną receptą managed z dedykowanego worktree. Job #122: `3f6c3486725745af9349895a0588a72b`, `state=queued`, `exit_code=null`, source digest `b4af0bd998b64b4eb68528cbe7432707419892b455df65036f6b2d05873ab8a6`, capture `e1733f2c90ab4c5eb3dd945b0ef92364`, source snapshot SHA `2f16693d4cc14f16cbf587442b2a85ce830802825a5b4534bc9e741eb140a9d4`, HEAD `479d5c5ca060ca7f8d00705fa96b62e52493bf3c`. Wspólna lista pokazuje wyłącznie #120 running i #122 queued; #121 z worktree eigensolve-k0-finalization jest terminalnie cancelled. Brak równoległego buildu.
+
+Nie ma jeszcze receipt ani aktualnego build proof. Po terminalnym #120 runner powinien podjąć #122; następnie zweryfikować receipt/hashe, uruchomić `DE-SMOKE` na runtime przypisanym do dokładnego snapshotu i ocenić k2 z residualem, polami oraz demagiem. Testów jednostkowych nie kompilowano ani nie uruchamiano.
+
+Szacunek: **20–25% celu end-to-end**, około **45% źródeł/przygotowania**, **0% zaakceptowanego wyniku naukowego `k != 0`**.
+
+### S04/S05 — rozdzielenie proweniencji residuali — 2026-09-24
+
+Parser wyniku Floqueta nie kopiuje już residualu względnego do pól
+`residual_absolute_l2`, `residual_linf` ani `backend_reported_residual`.
+Każde pole przyjmuje wyłącznie własną wartość producenta; gdy jej nie ma,
+artefakt zachowuje brak zamiast publikować syntetyczne zero lub alias innej
+normy. Residuale obliczane ponownie po stronie runnera pozostają osobno
+oznaczone jako obliczone, a nie raportowane przez SLEPc.
+
+Dodano regresje parsera i serializacji ścieżki modalnej. `rustfmt +nightly
+--check` dla pięciu zmienionych plików Rust oraz `git diff --check` przeszły.
+Testów Rust nie kompilowano ani nie uruchamiano z powodu obowiązującej
+instrukcji repozytorium. To poprawia wiarygodność diagnostyki, ale nie
+certyfikuje pełnego residualu deskryptora, szwów ani gauge.
+
+### S08 — wybór punktu, dostępność pola i ciągłość wykresu — 2026-09-24
+
+Oba wykresy dyspersji w panelach Dispersion i k-Path przekazują kliknięty
+punkt do selekcji. Podgląd modalnego pola wymaga teraz opublikowanego klucza
+zasobu; samo ID nie tworzy już pozornego handoffu 3D. Explorer preferuje
+wektor `k` z CSV, gdy artefakt nie ma sidecara ścieżki. Serie śledzonych
+gałęzi zachowują przerwy między brakującymi próbkami, a nieśledzone surowe
+mody są rysowane jako punkty, bez łączenia ich w pozorne gałęzie.
+
+Dodano regresje dla brakującego klucza pola, przerw w danych, nieśledzonych
+modów, null-sentinela renderera i wektora `k` w CSV. `git diff --check`
+przechodzi. Formatowania Prettier nie można było sprawdzić, bo formatter nie
+jest zainstalowany w tym worktree. Testów jednostkowych nie uruchomiono.
+Zmiany nie mają jeszcze managed-build ani browser/WebGL proof.
+
+Job #120 (`90a4051188614844bb1b64b9a5e0841c`) pozostaje `running` ze starym
+digestem `0221cae0…`; job #122 (`3f6c3486725745af9349895a0588a72b`) jest
+`queued` z digestem `b4af0bd…`. Żaden snapshot nie zawiera powyższych poprawek.
+Po zwolnieniu kolejki i potwierdzeniu zdrowia runnera potrzebny jest jeden
+świeży snapshot, jego terminalny build/receipt, następnie `DE-SMOKE` z tego
+runtime. Nadal nie ma obliczonej ani zaakceptowanej częstotliwości `k != 0`.
+
+Szacunek pozostaje heurystyczny: **20–25% celu end-to-end**, około **45% prac
+źródłowych/przygotowawczych** i **0% zaakceptowanego wyniku naukowego dla
+`k != 0`**.
+
+### Reattestacja runnera po zmianach S08 — 2026-09-24
+
+Po ostatnim odczycie recepta `just runner-container-status` zakończyła się
+błędem `Docker Desktop coordinator request failed`. To nie dowodzi awarii
+solverowego workera, ale nie pozwala potwierdzić aktualnego zdrowia kontenera.
+Lista kolejki nadal pokazywała #120 jako `running` i #122 jako `queued`;
+nie zmieniono ani nie anulowano ich stanu. Nie zgłoszono nowego snapshotu i
+nie uruchomiono alternatywnego builda. Kolejny build wymaga ponownej
+reattestacji przez obsługiwaną receptę.
+
+### Bieżąca reattestacja kolejki i procent postępu — 2026-09-24
+
+Aktualny odczyt managed runnera: kontener działa, `health.ok=true`, worker żyje, przyjmuje zadania, nie zgłasza błędu; profil `fem-cpu-slepc-modal-v1` jest dozwolony, wolne miejsce: 29 166 612 480 B. Job #120 (`90a4051188614844bb1b64b9a5e0841c`) zakończył się błędem (`exit_code=2`): kompilacja natywna i instalacja zależności frontendowych przeszły, ale frontend zatrzymał się na błędzie TypeScript `frequencyDomainChartModels.ts:1885` (końcowy przecinek w typie `Map`). Naprawa składni jest już w bieżącym worktree.
+
+Job #122 (`3f6c3486725745af9349895a0588a72b`) pozostaje `running`, na starszym snapshotcie (`source_snapshot_sha256=2f16693d…`, source digest `b4af0bd…`) sprzed najnowszych poprawek residuali i paneli frontendowych. Runner zgłasza go w `active_jobs`, mimo że `active_job_ids` jest puste. Nie przerywano joba ani nie odzyskiwano lease. Należy dodać aktualny snapshot do serialnej kolejki i poczekać na wynik obu buildów.
+
+Ocena postępu jest szacunkiem, nie miarą ukończonych punktów planu: **20–25% całego celu**, około **45% prac źródłowych/przygotowawczych**, **0% naukowej walidacji niezerowego k**. Mamy kod i regresje źródłowe dla części kontraktów oraz wykresów, ale nie mamy potwierdzonej częstotliwości z solvera dla `k != 0`, porównania z analityką ani wykresu z obliczonych danych. Testów jednostkowych nie kompilowano ani nie uruchamiano zgodnie z obowiązującą regułą repozytorium. Aktualny kod nie ma jeszcze managed-build proof ani browser/WebGL proof.
+
+### Job #123 — snapshot bieżącego worktree w kolejce — 2026-09-24
+
+Po potwierdzeniu zdrowia runnera zgłoszono bieżący snapshot do wspólnej kolejki: #123 (`c62f1d5990ec4806bba82d8fb33beda3`), profil `fem-cpu-slepc-modal-v1`, `state=queued`. Job #122 (`3f6c3486725745af9349895a0588a72b`) był w chwili zgłoszenia nadal `running`; jobów nie uruchomiono równolegle ani nie anulowano. #123 ma `source_digest=c5768e4253f359e16e993af2d4a91ab1ae1a349f7713df1801c3d6d3eb5abeb0`, `capture_id=6fcb48331d8e48028c1e42fea2da021a`, `source_snapshot_sha256=f05ba3d65e0cf3f0be98d01aabfa6a8fa1c6b0cd6d02bfeb75dbaab4304775af`, bazowy HEAD `479d5c5ca060ca7f8d00705fa96b62e52493bf3c`. Jest to build źródła, nie dowód wyniku fizycznego; po terminalnym buildzie nadal wymagane są receipt, DE-SMOKE i akceptacja częstotliwości, residuali, fazy Floqueta i demagu.
+
+### T4 — częściowy operatorowy probe demagu, 2026-09-24
+
+Dodano źródłowy przyrost do ścieżki niezerowego `k`: assembler tworzy dwa
+jednorodne zaburzenia poprzeczne w lokalnych współrzędnych stycznych, a solver
+przed EPS rozwiązuje dla nich ten sam blok potencjału `P phi = -A_phiq q`.
+Diagnostyka raportuje residual równania potencjału, energię z bloku potencjału,
+energię ze sprzężenia zwrotnego i defekt Hermitowskości. Przekroczenie progu
+`1e-8` dla obserwowalnego wymuszenia zatrzymuje solve; jawny status probe trafia
+do diagnostyki i wyniku natywnego.
+
+To nie zamyka T4. Brakuje testu `Gamma` dla składowych równoległej i
+prostopadłej oraz kontroli `N_z` wynikającego z geometrii, rekonstrukcji pola,
+markerów interfejsów i fazy Floqueta, a także porównania niezerowego `k_y` z
+niezależnym profilem 1D. Gdy jedno z globalnych wymuszeń nie jest obserwowalne,
+obecny solver oznacza probe jako `not_observable` i kontynuuje; walidator
+benchmarku musi wymagać `passed` dla konfiguracji DE. Testy nie zostały
+skompilowane ani uruchomione. `git diff --check` przechodzi.
+
+Job #122 zakończył się sukcesem (exit 0), ale nie zawiera bieżącego przyrostu
+T4. Job #123 (`c62f1d5990ec4806bba82d8fb33beda3`) nadal działa; jego źródłowy
+snapshot został przechwycony przed tym przyrostem, więc jego sukces nie będzie
+dowodem kompilacji nowego probe. Po zakończeniu #123 wymagany jest kolejny
+snapshot z aktualnego worktree. Nie ma zaakceptowanego wyniku dla `k != 0`;
+szacunek end-to-end pozostaje **20–25%**, a naukowa walidacja `k != 0` **0%**.
+
+### T4 — fail-closed dla nieobserwowalnej osi K0 — 2026-09-24
+
+Reaudyt agregatora probe ujawnił lukę: próbka kierunku oznaczonego jako
+nieobserwowalny zwracała z helpera `true` bez wykonania solve'a, a agregator
+sprawdzał tylko, czy wykonano jakąkolwiek próbę. Przy obserwowalnym `y` i
+nieobserwowalnym `z` status mógł więc przejść i dopuścić solve EPS, mimo że
+artefakt Gamma nie zawierał pełnego pomiaru obu osi wymaganych dla DE.
+
+Agregacja wymaga teraz obserwowalności obu osi i sukcesu obu prób; w innym
+przypadku natywny solve kończy się przed EPS. Dodano negatywny fixture
+walidatora: status główny `passed` z niepodjętą próbą `global_z` musi zostać
+odrzucony.
+
+Parser składni Pythona dla walidatora i jego testu oraz `git diff --check`
+przeszły. Testów jednostkowych nie uruchomiono ani nie kompilowano zgodnie z
+regułą repozytorium. Job #123 nie zawiera tej poprawki; po jego zakończeniu
+potrzebny jest nowy snapshot w kolejce i runtime Gamma. Postęp pozostaje
+heurystycznie **20–25% end-to-end**, około **45% kodu/przygotowania** i **0%**
+zaakceptowanej naukowo dyspersji dla `k != 0`.
+
+### Terminalny wynik joba #123 i poprawki po jego awarii — 2026-09-24
+
+Job #123 (`c62f1d5990ec4806bba82d8fb33beda3`) zakończył się `failed`,
+`exit_code=2`. Log potwierdza `native-build` z `exit_code=0` oraz instalację
+zależności frontendu z `exit_code=0`; dwukrotna próba `web-build-static`
+zatrzymała się na błędzie TypeScript w
+`apps/control-room/src/shared/domain/analysis/frequencyDomainChartModels.ts:1106`.
+Typ `kind` został poszerzony do `string`, choć kontrakt serii dopuszcza tylko
+`line | scatter`. Zmienna otrzymała jawny typ `NonNullable<...kind>`, bez zmiany
+wyboru scatter dla surowych modów i line dla śledzonych gałęzi. Poprawka nie ma
+jeszcze potwierdzenia managed buildem.
+
+Po awarii `just runner-container-status` zwrócił
+`Docker Desktop coordinator request failed`. Status i log joba dało się
+odczytać, ale zdrowie/akceptowanie zadań nie zostało potwierdzone; nie wysłano
+duplikatu ani nowego snapshotu. Następny krok: ponowić reattestację istniejącego
+runnera przez obsługiwaną receptę; dopiero przy potwierdzonym zdrowiu wysłać
+świeży snapshot z worktree i kontynuować po FIFO.
+
+Kontrole źródłowe po poprawkach: Python AST walidatora i fixture'u oraz
+`git diff --check` przeszły. Testów jednostkowych i kompilacji lokalnej nie
+uruchomiono. Wyniku dla `k != 0`, porównania analitycznego ani wykresu nadal nie
+ma; postęp pozostaje **20–25% end-to-end**, około **45% źródła/przygotowania**,
+**0% naukowo zaakceptowanego wyniku `k != 0`**.
+
+### Reattestacja wspólnego runnera — 2026-09-24
+
+Wspierana recepta `just runner-container-status`, uruchomiona z dostępem hosta,
+potwierdziła istniejący kontener `Fullmag_build_runner`: `health.ok=true`,
+worker żyje, `accepting_jobs=true`, `active_jobs=[]`, profil
+`fem-cpu-slepc-modal-v1` jest dozwolony, a wolne miejsce wynosi
+14,895,345,664 B. Odczyt listy kolejki potwierdził, że #123 jest terminalnie
+`failed` (`exit_code=2`), #122 zakończył się sukcesem i nie ma nowszego aktywnego
+jobu. Poprzedni błąd kontroli zdrowia był granicą dostępu do Docker Desktop w
+ograniczonym środowisku; użyto tej samej read-only recepty z dostępem hosta,
+bez zmiany konfiguracji.
+
+Runner jest gotowy do przyjęcia kolejnego snapshotu po zatrzymaniu edycji na
+czas capture. Nowy build musi zawierać poprawkę TypeScript i fail-closed K0;
+wynik #123 ich nie obejmuje. Nie ma jeszcze wyniku solvera dla `k != 0` ani
+wykresu, więc szacunki celu pozostają **20–25% end-to-end**, około **45%**
+źródła/przygotowania i **0%** zaakceptowanej naukowo dyspersji `k != 0`.
+
+### Job #124 — świeży snapshot po poprawkach — 2026-09-24
+
+Wysłano jeden snapshot istniejącego worktree do wspólnego FIFO po potwierdzeniu
+zdrowia runnera i pustego slotu. Job #124 ma ID
+`40e05e4a2bff497fbcd6f1c853a24221`, profil `fem-cpu-slepc-modal-v1`, digest
+`30cc17ad49fdd7df6ad9876bc006187a1f3b5724f92cea397496ea3475c067fc`, capture
+`ff908a7894f94d1faaa2e3af61ccd895`, source snapshot SHA
+`453398d2c4b6d96d8131a2864946b88d0b52a78ed92c73a864327194c503613d` i bazowy
+HEAD `479d5c5ca060ca7f8d00705fa96b62e52493bf3c`. Przy pierwszym odczycie po
+zgłoszeniu stan zmienił się z `queued` na `running`; nie ma drugiego joba.
+
+To jest nowy build aktualnego snapshotu, nie wynik solvera. Po terminalnym
+sukcesie wymagane są receipt/hashy, pilot Gamma/k2 z tego runtime, kontrola
+residuali/Floquet/demagu i analityczne porównanie. Wykres nadal nie istnieje.
+### Wynik #124 i poprawka błędu kompilacji — 2026-09-24
+
+Job #124 zakończył się `failed`, `exit_code=2`. Kompilator wskazał w
+`backends/fem/src/frequency_domain/modal_eigen_solver.cpp:467` niepoprawne
+łączenie dwóch literałów `const char[]` operatorem `+`. Pierwszy operand
+zmieniono na `std::string`; `git diff --check` przeszedł. `native-build`
+zakończył się po 592414 ms przed receipt runtime i bez uruchomienia solvera.
+
+Świeży snapshot przyjęto jako #125, ID
+`b03024288adc4cf0849a1b9c51b375be`, profil `fem-cpu-slepc-modal-v1`, digest
+`a21e7963914525b5c635f4130e6aad3b3473fc08d64df3473e0145fb21e2bee3`, capture
+`195d849d85b34eca8405fcffa575ed0f`, source snapshot SHA
+`2f53f1eface1e332aa37b07f1b79cf243273f8ba0db099dbd964b3a215613b3c`, HEAD
+`479d5c5ca060ca7f8d00705fa96b62e52493bf3c`. Job przeszedł do `running`.
+Nie ma jeszcze częstotliwości `k != 0`, porównania analitycznego ani wykresu.
+
+### Terminalny wynik #125 — rozjazd profilu runnera i receipt, 2026-09-24
+
+Job #125 (`b03024288adc4cf0849a1b9c51b375be`) zakończył się `succeeded`,
+`exit_code=0`, dla profilu `fem-cpu-slepc-modal-v1`, source digest
+`a21e7963914525b5c635f4130e6aad3b3473fc08d64df3473e0145fb21e2bee3` i snapshotu
+`2f53f1eface1e332aa37b07f1b79cf243273f8ba0db099dbd964b3a215613b3c`. Etapy
+`native-build`, `frontend-dependencies` i `frontend-build` przeszły. UI uzyskał
+webpack success, TypeScript success oraz statyczny eksport. Natywny build trwał
+2074116 ms; instalacja zależności 1115914 ms; build UI 400443 ms.
+
+`just run-de-smoke b03024288adc4cf0849a1b9c51b375be k2` zostało odrzucone przed
+uruchomieniem kontenera. Bezpośrednia diagnostyka walidatora wykazała
+`Build receipt contract scenario list mismatch`: receipt ma
+`contract_scenarios=null`, etapy zawierają wyłącznie native/UI, a artefaktów
+`contracts/slepc-modal` brak. To nie jest błąd solvera ani wynik częstotliwości.
+Lokalny profil wymaga `contract_scenarios=["slepc-modal"]` oraz etapu
+`contract-slepc-modal`; sukces statusu joba #125 nie dowodził więc wykonania
+kontraktu modalnego.
+
+Przyczyną był nieaktualny obraz koordynatora `sha256:f1235e1a…`, którego
+zaufany entrypoint nie realizował kontraktu z bieżącego worktree. Zbudowano
+obraz `sha256:eed020f1664bde606b20412968681094a885f3e7080679c6d21c90a4160253e4`
+z aktualnych plików `scripts/local_runner/`. Po sprawdzeniu braku zadań
+aktywnych i oczekujących koordynator zatrzymano łagodnie, wymieniono dokładnie
+kontener `Fullmag_build_runner` i wznowiono. Nowy kontener
+`8d1bb4980a6231a44c9109585ea000179e87a4658093334179dccb9eb3295fd3` jest zdrowy,
+przyjmuje zadania, dopuszcza `fem-cpu-slepc-modal-v1`; storage i kolejka
+pozostały zachowane. Aktualny worker ma 0 aktywnych jobów.
+
+Następny krok: wysłać świeży snapshot jako #126, potwierdzić w receipt
+`contract_scenarios=["slepc-modal"]`, przejście `contract-slepc-modal` i zgodność
+pełnego source identity. Dopiero po terminalnej walidacji uruchomić ponownie
+`de-smoke-k2`; akceptacja nadal wymaga niepustej częstotliwości, residuali,
+fazy Floqueta i kontroli demagu.
+
+### Job #126 — zablokowany przed uruchomieniem, 2026-09-24
+
+Jeden świeży snapshot trafił do wspólnej kolejki jako #126, ID
+`7ab40a3eb5ed4a3e9b1ba4ae06fbeebc`, digest `28c84c0fd2cc4762632a4ba63572d4248b91c29330a7b091b7d0d0afee189e11`,
+capture `4e16b88e26f8404a9a1ba8bd73c262de`, snapshot SHA
+`2f53f1eface1e332aa37b07f1b79cf243273f8ba0db099dbd964b3a215613b3c`, HEAD
+`479d5c5ca060ca7f8d00705fa96b62e52493bf3c`. Koordynator później oznaczył job
+`blocked`; `runner-logs` zwraca puste `tail`, a katalog run, `coordinator.json`,
+`artifacts` i `execution` nie powstały. Nie uruchomiono kontraktu SLEPc ani
+solvera, więc brak wyniku częstotliwości `k != 0`.
+
+Przy reattestacji runner był zdrowy i bez aktywnych jobów; wolne miejsce wynosiło
+`7,966,253,056 B`, poniżej bramki `8 * 1024^3 B`. Kod
+`scripts/local_runner/build_executor.py` ponawia sprawdzenie miejsca przed
+utworzeniem `run_root` i odrzuca start poniżej 8 GiB. To najbardziej prawdopodobna
+przyczyna blokady, ale job nie zachował pola z dokładnym błędem; nie nazywamy jej
+udowodnioną. Nie znaleziono innego żywego procesu hosta odnoszącego się do ID
+kandydatów retencji; worker i koordynator są idle, bez aktywnych ani legacy jobów.
+
+Read-only planner retencji, uruchomiony na danych z autoryzowanego `list`,
+wykazał 16 wygasłych kandydatów (łącznie `2,550,514,582 B`). Siedem niezerowych
+katalogów `execution` w tym samym worktree ma łącznie `1,961,268,011 B`:
+`2550ff2862c5471babe6e09f99168265`, `3c596f0c88484245938fd01294ef2d1e`,
+`877ebb8481a641b0b61f03ba2470c320`, `d6e69265e6314ac5ad17cf9f1d533c78`,
+`dd96c72330e2422e9dd014f268457bc0`, `eacae28e4cd740259773b4c2b57c3632`,
+`f906018149c64956b7ce0b8976124b39`. Są to terminalne failed/cancelled
+execution trees; artefakty, logi, manifesty i historię kolejki można zachować.
+Nie usunięto żadnych danych. Wcześniejsza jednorazowa autoryzacja dotyczyła
+jobu `9da3622cca884500a49f1295081e4d6a` i została już wykorzystana, więc nie
+obejmuje tych siedmiu nowych katalogów.
+
+Następny krok wymaga albo stabilnego wzrostu wolnego miejsca ponad 8 GiB, albo
+osobnej zgody na usunięcie wskazanych katalogów execution. Ewentualne odzyskane
+`1.96 GB` dałoby około `9.27 GiB` przy ostatnim pomiarze, tylko `1.27 GiB` ponad
+bramkę; nie jest to gwarancja bezpiecznego szczytowego miejsca. Dopiero po
+sprawdzeniu bieżącego wolnego miejsca i nowym pojedynczym snapshotcie można
+ponowić modalny build. Postęp celu pozostaje **20–25% end-to-end**, około **45%**
+źródła/przygotowania i **0%** naukowo zaakceptowanej dyspersji `k != 0`.
+
+#### Ponowny odczyt #126 — 2026-09-24
+
+Job #126 pozostaje `blocked`; runner zdrowy i idle, `active_jobs=0`, `legacy_jobs=0`. Wolne miejsce spadło do `7,752,859,648 B` (około `7.22 GiB`), nadal poniżej bramki. Katalogi execution z retencji pozostają nieusunięte; oczekuje się na stabilne wolne miejsce albo odpowiedź operatora na dokładnie wskazany zakres. Nie wykonano solvera.
+
+#### Zatwierdzone sprzątnięcie i wznowienie runnera — 2026-09-24
+
+Operator zatwierdził usunięcie wyłącznie siedmiu katalogów `execution` jobów
+`2550ff2862c5471babe6e09f99168265`, `3c596f0c88484245938fd01294ef2d1e`,
+`877ebb8481a641b0b61f03ba2470c320`, `d6e69265e6314ac5ad17cf9f1d533c78`,
+`dd96c72330e2422e9dd014f268457bc0`, `eacae28e4cd740259773b4c2b57c3632`
+i `f906018149c64956b7ce0b8976124b39`. Bezpośrednio przed usunięciem lista
+runnera potwierdziła dla wszystkich tych ID stan `failed` albo `cancelled`,
+właściwy `worktree_id` i zero zadań oczekujących lub aktywnych. Każda ścieżka
+została rozwiązana pod katalogiem storage; nie wykryto punktów dowiązania.
+Usunięto tylko liście `execution`, łącznie `1,961,268,011 B`. Dla wszystkich
+siedmiu jobów zachowano katalogi nadrzędne oraz `artifacts`, `trusted`,
+`coordinator.json`, `receipt.json` i `worker.log`; kontrola po operacji
+potwierdziła ten stan.
+
+Pauza przyjmowania została przyjęta i po sprzątnięciu cofnięta. Weryfikacja
+przez managed runner potwierdziła kontener `Fullmag_build_runner` w stanie
+`running`, `health.ok=true`, `worker_alive=true`, `accepting_jobs=true`,
+`worker_error=null`, koordynator `idle`, `active_jobs=[]`, `legacy_jobs=[]`,
+brak żądania stop oraz dozwolony profil `fem-cpu-slepc-modal-v1`. Wolne miejsce
+wynosiło `37,390,938,112 B` (około `34.8 GiB`). Odczyt doctor wykazał również
+jeden działający kontener BuildKit GPU; nie uruchamiamy ani nie zmieniamy jego
+obciążenia. Odczyt statusu wymagał uprawnionego dostępu do Docker Desktop;
+managed API potwierdziło stan powyżej.
+
+Job #126 (`7ab40a3eb5ed4a3e9b1ba4ae06fbeebc`) pozostaje `blocked` i nie dostarczył
+wyniku solvera. Nie wysłano jeszcze nowego zadania po jego blokadzie. Następny
+krok to wysłać jeden świeży snapshot z tego worktree do profilu
+`fem-cpu-slepc-modal-v1`, potwierdzić receipt i kontrakt `slepc-modal`, a dopiero
+po sukcesie uruchomić pilot `de-smoke-k2`. Obecnie nadal brak zaakceptowanej
+częstotliwości dla `k != 0`, porównania numeryka–analityka i wykresu dyspersji.
+Szacunek postępu pozostaje **20–25% end-to-end**, około **45% źródła/przygotowania**
+i **0% naukowo zaakceptowanej dyspersji**.
+
+#### Job #127 — managed build w toku — 2026-09-24
+
+Po przywróceniu zdrowego runnera wysłano jeden świeży snapshot do profilu
+`fem-cpu-slepc-modal-v1`: job #127, ID
+`1078b783555b491a9dba90184a97f864`, capture
+`1121f8197ad44876bcb4f14f4a49603b`, source digest
+`757357d77e0071b9e5aa093c646186ea9de331ff97adfe1499eda71b801cb882`,
+snapshot SHA `2f53f1eface1e332aa37b07f1b79cf243273f8ba0db099dbd964b3a215613b3c`,
+HEAD `479d5c5ca060ca7f8d00705fa96b62e52493bf3c`. Rekord joba wiąże source digest z native source identity; końcowy build receipt jeszcze nie powstał.
+
+Kontener joba `1abf7e296f32b46962c6e223e4dcc57d01f412e4670e6b28ca88774b3d7ba5a4`
+uruchomił `build_entrypoint.py`. Zweryfikowano materializację 7 413 plików
+(około 304 MB), a następnie etap `native-build` przez `make install-cli-dev`.
+Procesy CMake/GMake, C++/CUDA i Rust są aktywne; najnowszy log pokazuje
+kompilację `fullmag-runner` i ostrzeżenia kompilatora bez błędów. Status joba
+pozostaje `running`, worker zdrowy, bez OOM; nie ma jeszcze końcowego receipt
+ani raportu `contract-slepc-modal`. Solver nie policzył jeszcze częstotliwości.
+
+Następny krok: czekać na zamknięcie native build, a potem sprawdzić w receipt
+`contract_scenarios=["slepc-modal"]` oraz wynik `contract-slepc-modal`. Pilot
+`de-smoke-k2` pozostaje warunkowy wobec zaliczenia kontraktu. Do tej chwili
+postęp pozostaje **20–25% end-to-end**, około **45% źródła/przygotowania**
+i **0% naukowo zaakceptowanej dyspersji k != 0**.
+#### Job #127 — zakończony native-build, kompilacja kontraktu SLEPc — 2026-09-24
+
+Etap `native-build` zapisał wynik instalacji launchera `fem-cpu`; logi
+zawierają ostrzeżenia kompilatora, bez błędu. Następnie runner uruchomił
+`contract-slepc-modal`. Aktualny log tego etapu pokazuje budowanie targetu
+`fullmag_fem` przez CMake (około 50% w ostatnim odczycie). Scenariusz testowy
+nie zakończył się jeszcze, nie ma raportu wyniku ani końcowego build receipt.
+Job #127 pozostaje `running`; worker działa w managed containerze i nie zgłasza
+błędu. Nie uruchomiono pilota `de-smoke-k2` i nadal brak częstotliwości `k != 0`.
+
+Następny krok: poczekać na koniec `contract-slepc-modal`, zweryfikować jego
+raport i receipt, a potem — wyłącznie po przejściu kontraktu — wykonać pilot k2.
+
+#### Job #127 — kontrakt zaliczony, pilot k2 zatrzymany przed widmem — 2026-09-24
+
+Job `1078b783555b491a9dba90184a97f864` zakończył managed build i kontrakt
+`contract-slepc-modal` wynikiem `passed`: 8/8 scenariuszy, w tym Floquet,
+dynamic demag i waveguide demag. To potwierdza zbudowanie oraz kontrakt solvera,
+ale nie kwalifikuje dyspersji.
+
+Pilot `de-smoke-k2` zakończył się przed zwróceniem częstotliwości. Operator
+`certified_shared_domain` i żądanie dla `k=[0, 2e6, 0] rad/m` dotarły do modalnej
+ścieżki; walidacja odrzuciła je ogólnym powodem
+`floquet_modal_shared_domain_sparse_operator_is_invalid`. Relaksacja była
+`matched`, a statyczne szwy demagu PBC miały `status=ok`; w pilocie nie ma
+zaakceptowanych modów, residuali ani punktu do porównania z analityką.
+
+#### Job #128 — kompilacja przerwana przez stare wywołanie walidatora — 2026-09-24
+
+Managed job `bc673fb078fd41679c402ad7da8a2b98`, source digest
+`c3bd25470d03675f38536216110f5e6848804e4fd8c2568dcbb1cf9f3448a39f`, zakończył
+się `failed`, `exit_code=2`. Kompilator C++ zatrzymał się w
+`backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp`: po zmianie
+walidatora na `floquet_shared_operator_invalid_reason` druga ścieżka solvera
+nadal wywoływała usunięty symbol `floquet_shared_operator_is_valid`. To błąd
+źródła, nie awaria runnera; nie wykonano ponownie kontraktu ani solvera.
+
+Poprawiono tę drugą ścieżkę: propaguje teraz szczegółowy powód zwrócony przez
+`floquet_shared_operator_invalid_reason`. `git diff --check` przechodzi, a
+wyszukiwanie potwierdza brak pozostałych wywołań starego symbolu. Testów
+jednostkowych nie uruchomiono zgodnie z tymczasowym zakazem kompilowania ich z
+`AGENTS.md`; następną bramką jest świeży managed snapshot/build.
+
+Przed kolejną wysyłką stan runnera potwierdzono read-only: kontener zdrowy,
+`accepting_jobs=true`, worker żywy, koordynator `idle`, brak aktywnych i legacy
+jobów, profil `fem-cpu-slepc-modal-v1` dozwolony, wolne miejsce
+`35,299,020,800 B`. Następny krok: wysłać snapshot po tej poprawce; po sukcesie
+ponownie sprawdzić kontrakt i dopiero wtedy uruchomić nowy pilot k2.
+
+#### Job #129 — snapshot zweryfikowany, managed native-build trwa — 2026-09-24
+
+Snapshot przyjęto jako job `f9f89773ae544aed9ebc6feecfa75a90`, profile
+`fem-cpu-slepc-modal-v1`, source digest
+`cfc8f194e93eddfb5e497b608cdda682675e309a1512bf49f5ff5266921d52e6`, capture
+`eaae8d21b3944d8eb9a03cd7a208ae0e`, snapshot SHA
+`2c0c391967ef7b6519d0abd5e583d4d8f9a8c258ced65ba5f9414b02e7303407` i HEAD
+`479d5c5ca060ca7f8d00705fa96b62e52493bf3c`. Managed runner zweryfikował
+tożsamość kapsuły i uruchomił worker container
+`71d454421bec0ff3e75e411ccc135911ed2e2564ffda3af564cd76cd3416a9e4`.
+
+Job utworzył `coordinator.json` oraz katalogi `artifacts`, `trusted` i `execution`;
+przeszedł do `native-build`. Logi pokazują kompilację C++/Rust backendu FEM,
+bez zgłoszonego błędu. Ostatni stan obserwatora: `running`, `exit_code=null`;
+receipt końcowy i kontrakt SLEPc nie są jeszcze dostępne. Pilot k2 pozostaje
+zablokowany do terminalnego sukcesu buildu i kontraktu.
+
+#### Referencja analityczna DE-SMOKE — obliczona przed solve — 2026-09-24
+
+Z kanonicznej funkcji
+`scripts/verify_fem_frequency_domain_eigen_artifacts.py::kalinikos_slab_n0_frequency_hz`
+obliczono otwarto-filmową referencję Kalinikosa–Slavina dla parametrów
+`examples/fem_de_smoke_numeric.py`: DE, $t=10\,\mathrm{nm}$,
+$M_s=800\,\mathrm{kA\,m^{-1}}$, $A=13\,\mathrm{pJ\,m^{-1}}$,
+$B_0=0.1\,\mathrm{T}$ i
+$\gamma_0=2.211\times10^5\,\mathrm{m\,A^{-1}\,s^{-1}}$.
+Wynik referencyjny: $f_{n=0}(k=0)=9.309813711$ GHz oraz
+$f_{n=0}(k_y=2\times10^6\,\mathrm{rad\,m^{-1}})=9.725724284$ GHz.
+Nie są to częstotliwości FEM ani dopasowane wartości; nie uwzględniają błędu
+skończonego airboxu i nie zamykają kontroli profilu gałęzi ani zbieżności.
+
+#### Job #129 — native-build zaliczony, kontrakt SLEPc kompiluje się — 2026-09-24
+
+API runnera potwierdza marker
+`stage native-build end exit_code=0` (czas `2,119,951.866 ms`) i rozpoczęcie
+`contract-slepc-modal`, które uruchomiło
+`scripts/run_fem_cpu_slepc_modal_contract.sh slepc-modal`. Ostatni odczyt
+kontraktu pokazuje około 42% budowy `fullmag_fem`, aktywny `cc1plus` i pusty
+stderr. Job nadal ma stan `running`; nie ma jeszcze końcowego receipt ani wyniku
+scenariusza SLEPc. Pilot k2 pozostaje zablokowany do terminalnego sukcesu.
+
+### Job #129 — kontrakt SLEPc, najnowszy odczyt — 2026-09-24 19:52:04 +02:00
+
+Log kontraktu SLEPc doszedł do około 97% budowania targetu fullmag_fem
+(ostatnie obiekty CUDA); odpowiadający log błędów pozostaje pusty. Job
+f9f89773ae544aed9ebc6feecfa75a90 nadal ma stan running i nie ma kodu wyjścia.
+To jest postęp kompilacji, nie wynik kontraktu ani solvera. Brakuje jeszcze
+końcowego receipt i raportu scenariuszy; pilot de-smoke-k2 pozostaje warunkowy
+wobec zakończenia kontraktu.
+
+### Job #129 — wynik końcowy, pilot i poprawka sond demagu — 2026-09-24
+
+Odczyt API potwierdził `succeeded`, exit 0 dla joba
+`f9f89773ae544aed9ebc6feecfa75a90`. Raport
+`artifacts/contracts/slepc-modal/result.json` potwierdza osiem wykonanych
+scenariuszy CTest, zero failures i zero skipped. Ten zestaw nie zawierał
+kontraktu `fem_poisson_airbox_shared_domain_contract`.
+
+Rzeczywisty pilot `de-smoke-k2`, zapisany pod tym jobem w
+`comsol-dispersion/2898532814214c60934bc3ad373e6bbd`, zakończył się exit 1.
+Relaksacja osiągnęła próg torque; obie podpróby okna modalnego zatrzymały się
+przed iteracjami z `floquet_shared_domain_demag_probe_shape_mismatch`.
+Wektor k wynosił [0, 2000000, 0] rad/m, liczba tangent DOF 100;
+liczba zaakceptowanych modów wynosiła zero.
+
+Przyczyna w źródłach: wrapper publikował sondy przed wywołaniem
+`assemble_poisson_airbox_shared_domain`, które resetuje cały rekord wyniku.
+Publikację sond przeniesiono za pomyślne assembly; dodano kontrolę zgodności
+ich rozmiaru z ograniczonym operatorem stycznym i regresję C++ w istniejącym
+kontrakcie shared-domain. Profil modalny oraz walidatory raportu rozszerzono
+z ośmiu do dziewięciu scenariuszy, włączając ten kontrakt. Poprawka kodu nie
+stanowi jeszcze dowodu usunięcia błędu w runtime.
+
+### Job #130 — weryfikacja poprawki w toku — 2026-09-24
+
+Job `def0f8d0da6842389b0bd888c1efac6d`, profil `fem-cpu-slepc-modal-v1`,
+korzysta ze snapshotu worktree o HEAD
+`479d5c5ca060ca7f8d00705fa96b62e52493bf3c`, source digest
+`b6bb86f0604ccd7e9493f4f76221971bdeb344bb07aa94fd5a80be64f4ebd4f1`
+i source snapshot SHA
+`c987aed77f5178abaefd4d6bae6b586aae07eab086588a7dfcaa6cfcc4c0e126`.
+API potwierdza `running`, bez kodu wyjścia. Odczyt procesów workera potwierdził
+aktywne `make install-cli-dev` i kompilatory C++ backendu FEM; nie jest to
+wyłącznie odczyt starego rekordu kolejki. Brak końcowego receipt i wyniku
+rozszerzonego kontraktu.
+
+Następna sekwencja: odebrać ten sam job; zweryfikować receipt/tożsamość
+źródeł i dziewięć scenariuszy; wykonać `run-de-smoke JOB k2`; sprawdzić
+niepuste częstotliwości, residual i pole z demagiem. Dopiero po tym rozszerzyć
+próbkowanie na dwa i pięć punktów oraz przygotować porównanie z analityką.
+Żaden zaakceptowany wynik nonzero-k ani kwalifikacja S04/S05/S12 nie wynika
+z samego trwającego buildu.
+
+#### Regresja klienta odbioru kontraktu — 2026-09-24
+
+Dodano `test_modal_contract_requires_executed_shared_domain_regression` do
+`scripts/test_run_comsol_dispersion_benchmark.py`. Niezależna lista dziewięciu
+wymaganych scenariuszy akceptuje kompletny raport; pięć negatywnych wariantów
+odrzuca brak metadanych shared-domain, starą listę ośmiu wykonanych targetów,
+brak scenariusza w JUnit, skipped test i niezgodny snapshot. Uruchomienie
+`python scripts/test_run_comsol_dispersion_benchmark.py`: 16 testów PASS.
+To kontrola klienta odbioru raportu, bez kompilowania natywnych testów i bez
+awansu kwalifikacji solvera. Test zależy od bieżącego przyrostu profilu oraz
+walidatora i należy do tego samego logicznego commita. Snapshot joba #130
+pozostaje niezmieniony; dodany test klienta wykonano poza nim.
+
+### Narzędzie porównania DE — parametry z artefaktów, 2026-09-24
+
+Usunięto założenie CLI `compare_de_100nm_pilot.py`, że każdy run ma film
+100 nm i dziewięć punktów. Istniejące narzędzie obsługuje teraz de100 oraz
+DE-SMOKE k2/two/five. Parametry referencji (grubość, Ms, A, gamma0, B/mu0),
+padding i próbkowanie pochodzą z metadanych konkretnego runu. CLI wymaga
+zakończonego pilota, zgodności job/source/model między request i result,
+wersjonowanego deskryptora, poprawnej orientacji i warunku Dirichleta.
+DE-SMOKE dodatkowo przechodzi istniejący preflight sond demagu i wierszy.
+Indeksy próbek muszą odpowiadać zadeklarowanym wektorom k.
+
+Wykres prezentuje wszystkie numeryczne mody jako punkty oraz istniejącą
+kanoniczną referencję Kalinikosa n=0. Wybór gałęzi pozostaje jawny;
+narzędzie nie dobiera najbliższego modu do analityki. Raport zachowuje
+`NOT VERIFIED`, parametry z metadanych i hashe CSV oraz metadata.json.
+Jednopunktowy wynik k2 jest obsługiwany, lecz nie dowodzi pełnej dyspersji.
+Uzupełniono metadane przykładu 100 nm o materiał/pole/próbkowanie/schema;
+starsze wyniki bez tych danych są jawnie odrzucane zamiast przyjmowania
+stałych ze skryptu.
+
+Weryfikacja: `python scripts/test_compare_de_100nm_pilot.py` — 8 PASS,
+w tym rozróżnienie 10/100 nm, odrzucenie brakujących parametrów, obcego
+schematu, failed runu, niezgodnej tożsamości i zamienionych próbek oraz
+renderowanie PNG/PDF/CSV/JSON dla syntetycznego dwupunktowego fixture.
+Fixture służy wyłącznie weryfikacji narzędzia; nie jest wynikiem FEM.
+Nie powstał jeszcze wykres rzeczywistej dyspersji. Narzędzie korzysta z
+bieżącej rozszerzonej sygnatury `validate_rows`; zmiany muszą być zapisane
+wraz z tym zależnym przyrostem. Snapshot aktywnego #130 nie został zmieniony.
+
+#### Zgodność metadanych porównania z modelem Python→IR — 2026-09-24
+
+Lekki odczyt `fem_de_film_100nm_numeric_pilot.py` przez publiczny DSL
+potwierdził zgodność metadanych porównania z obniżonym IR: Ms, A, gamma0,
+wektor pola, grubość obiektu, wysokość airboxu i rozwinięte dziewięć próbek k.
+Kontrolę utrwalono jako
+`test_de100_comparison_metadata_matches_lowered_physics` w
+`scripts/test_de_smoke_model.py`, z dodatkową zgodnością realizacji demagu.
+`python -m pytest scripts/test_de_smoke_model.py -q -p no:cacheprovider`:
+4 PASS. To dowód authoringu/metadanych, bez meshowania ani solve'a.
+Job #130 po kolejnym bounded wait pozostaje `running`; nie wysłano duplikatu.
+
+### Job #130 — native-build zakończony, kontrakt SLEPc uruchomiony — 2026-09-24
+
+Log zarządzanego joba `def0f8d0da6842389b0bd888c1efac6d` potwierdza
+`stage native-build end exit_code=0 duration_ms=2185546.971`
+(około 36 min 26 s). Wewnątrz tego etapu kompilacja CLI zakończyła się
+po 29 min 16 s, API po 2 min 40 s, a natywny moduł Pythona po 1 min 16 s.
+Następnie wystartował `contract-slepc-modal` z receptą
+`scripts/run_fem_cpu_slepc_modal_contract.sh slepc-modal`.
+To potwierdza kompilację snapshotu, ale jeszcze nie wynik dziewięciu
+kontraktów, receipt końcowy ani poprawne obliczenie k2. Stan joba `running`;
+nie wysłano kolejnego zadania i nie uruchomiono pilota przed kontraktami.
+
+### Checkpoint 2026-09-24 — job #130 i korekta wdrożenia koordynatora
+
+- Job `def0f8d0da6842389b0bd888c1efac6d` wykonał native-build (exit 0) i wszystkie 9 kontraktów CTest (9/9 PASS), w tym regresję `fem_poisson_airbox_shared_domain_contract` (0,25 s). Nie stanowi to jeszcze wyniku dyspersji.
+- Koordynator oznaczył job jako failed przy exit 0: `SLEPc modal receipt does not prove all required CTest targets ran`. Odczyt kodu działającego obrazu `sha256:eed020f1664bde606b20412968681094a885f3e7080679c6d21c90a4160253e4` potwierdził stary zestaw dokładnie 8 testów. Jest to błąd zgodności wdrożenia walidatora z rozszerzonym profilem.
+- Niezależna walidacja tylko do odczytu, aktualnym `validate_build_receipt`, zaakceptowała raport oraz hashe 25 artefaktów. Stan kolejki i oryginalne receipty pozostały niezmienione. Brak wspieranej ponownej walidacji terminalnego failed; reconcile obsługuje running/cancel_requested.
+- Zbudowano i wdrożono przez standardową wymianę koordynator `sha256:22c6b494f9190995486ab0af084a60128a2167b56212205d695fb998fca486c9`; pauza i brak aktywnych jobów potwierdzone przed wymianą. Nowy kontener `93efc83df86e94e761914203bdcf41002cf0a9e3beca0df7cf5c66893249eee3` ma właściwy zestaw 9 testów. Po wznowieniu worker_alive=true, accepting_jobs=true, worker_error=null.
+- Włączono istniejący profil `fem-cpu-slepc-runtime-v1` przez klienta operatorowego, z dotychczasowym obrazem workera `sha256:e5f70bd632011f9a0d8163430dab81bc6f248e07e4af086dfdf77bcd087471d7`, 2 CPU i 8 GiB RAM. Zachowano pozostałe profile. Profil buduje runtime bez testów jednostkowych i bez frontendu; jest zgodny z bieżącym zakazem kompilacji testów. Jego sukces nie zastępuje bramek naukowych.
+- Następny krok: osobny managed runtime build, weryfikacja receipt, następnie DE-SMOKE k2 przez istniejącą receptę. Wynik #130 pozostaje failed, a zaakceptowanych numerycznych punktów nonzero-k nadal 0.
+- Dług techniczny runnera: dodać wersjonowanie zestawu kontraktów i kontrolę zgodności klient/worker/koordynator przed kosztownym buildem; zaprojektować audytowalną ponowną walidację artefaktów terminalnego joba bez nadpisywania pierwotnego zdarzenia i bez ponownej kompilacji.
+- Zgłoszono job #131 `e042f7013fe7401892adf537cd1ee51f`, profil `fem-cpu-slepc-runtime-v1`, snapshot digest `a2a4aa350f029df2f7f7b74b1124a59f899c2fe9e15ca92b0be3a3180564cfb0`; odpowiedź submit: queued. Nie jest to dowód zakończenia buildu.
+- Klient starego głównego checkoutu zgłasza `Container profile allow-list mismatch` po włączeniu runtime. Operacje wykonujemy przez aktualny `scripts/local_runner_cli.py` w worktree zadania (dla innych źródeł z jawnym `--worktree`). Do planu korekt dochodzi kompatybilność walidacji listy profili starszych klientów. Nie zmieniono współdzielonego dirty checkoutu.
+
+### Job #131 — rozpoczęta kompilacja runtime
+
+Worker `fullmag-worker-e042f7013fe7401892adf537cd1ee51f` zakończył przygotowanie kapsuły (7413 plików, 304172774 bajty) i uruchomił `stage native-build start command=["/usr/bin/make", "install-cli-dev"]`. Potwierdzono procesy Cargo/CMake i log kompilacji `fullmag-application`. Status nadal running, brak receipt końcowego. Diagnostyka wcześniejszego oczekiwania wykazała aktywne odczyty/zapisy oraz `p9_client_rpc`; nie anulowano ani nie powielono joba. Nadal brak nowego wyniku DE.
+
+### Job #131 — worker zakończony poprawnie, odbiór koordynatora w toku
+
+Kontener `b24d01387bd0b4aaa5f4c1d674b12e698c5a8ccbe72b52f8fd4123fdfec76014` zakończył się 2026-09-24T21:34:02.974Z z ExitCode=0 i OOMKilled=false. Workerowy build-receipt.json: state=succeeded, runtime_only=true, error=null, 14 artefaktów. CLI: 29m01s; API: 7m38s; końcowy etap modułu Pythona: 2m44s. Kolejka podczas kontroli nadal running: odbiór koordynatora nie jest jeszcze potwierdzony. Nie uruchomiono pilota przed zakończeniem tej bramki.
+
+### Job #131 zaakceptowany; rzeczywisty pilot k2 — brak zbieżnych modów
+
+Koordynator zakończył #131 statusem succeeded, exit 0. Dry-run pilota przeszedł. Uruchomiono `just run-de-smoke e042f7013fe7401892adf537cd1ee51f k2`; run `8d74a094a36843f791e8c7aa0f9a33ee` zakończył się failed, exit 1. Snapshot źródeł: `effaedea87d40737b9a19c73b236980b6f0c5d018fc0e6095e7712b63f1e46a6`; model SHA256 `4f2782b4d692af9a8033c18a613985094da94ded9e627a63599f9d5ef74f475f`.
+
+Relaksacja przeszła (stop torque, 3 kroki). Siatka: 1980 węzłów, 5720 elementów. Solver przyjął `floquet_shared_domain_sparse_matshell`, 100 tangent DOF; wcześniejszy `floquet_shared_domain_demag_probe_shape_mismatch` nie wystąpił. Oba podokna wykonały 100 outer_iterations, ale converged candidates=0, accepted modes=0, unsupported_reason=no_positive_frequency_eigenpair. EPS używa absolute_true_residual i tolerancji 1e-10; operator_normalization_scale=7.9529629105481888e16. Nie jest to częstotliwość ani zwalidowana dyspersja.
+
+Następny krok: odczytać i raportować EPSConvergedReason (obecny kod odczytuje tylko iteracje i liczbę zbieżnych par), odróżnić wyczerpanie iteracji od braku dodatniego widma; zbadać kryterium zbieżności znormalizowanego uogólnionego pencila i rozwiązywanie shift-invert. Nie osłabiać fizycznych residuali ani zastępować rozwiązania analityką. Zwiększenie limitu samo w sobie nie dowodzi naprawy. Runtime log i wynik zachowane pod storage/runs/<worktree-id>/<job-id>/comsol-dispersion/8d74a094a36843f791e8c7aa0f9a33ee.
+
+### Diagnostyka EPS po nieudanym k2 z #131
+
+Dodano odczyt EPSGetConvergedReason i nullable eps_converged_reason w diagnostyce podokien. Przy zerowej liczbie zbieżnych par ujemny reason odróżnia limit iteracji od braku dodatniego widma. Monitor EPS przechowuje wyłącznie ostatnią iterację i błąd pierwszego niezbieżnego przybliżenia (null przy braku estymaty); nie publikuje go jako częstotliwości ani zaakceptowanego residualu. Regresję istniejącego fixture uzupełniono o przyczynę zbieżności i numer iteracji monitora. Diff check PASS; kompilacja i runtime nowych zmian NOT VERIFIED. Testów jednostkowych nie kompilowano zgodnie z zakazem.
+
+W chwili tego checkpointu nowy runtime build nie był zgłoszony: około 8,19 GiB wolnego przy progu 8 GiB. Dalsze usuwanie wymagało zgody; obecny checkpoint poniżej odnotowuje zakres później zatwierdzony.
+
+### Checkpoint 2026-09-25 — cleanup i diagnostyczny runtime #132
+
+Za zgodą użytkownika usunięto tylko katalogi `execution` jobów #130 (`def0f8d0da6842389b0bd888c1efac6d`) i #131 (`e042f7013fe7401892adf537cd1ee51f`). Potwierdzono brak aktywnych jobów i procesów workerów. Pozostały katalogi `artifacts`, `trusted`, receipty, logi oraz cały wynik pilota; nie usuwano cache ani kapsuł źródeł. Wolne miejsce wzrosło do około 9,3 GB.
+
+Zgłoszono do wspólnej kolejki job #132 `60a2a77007e7462aa10bba1d6732588f`, profil `fem-cpu-slepc-runtime-v1`, request key `de-eps-monitor-20260924-cleanup130131`, source digest `1cdf6838edf696afd0fd4d7d2ac6b9a3f657bf2275e24af0d995fc4152760b4c`. Worker wystartował, skopiował i zweryfikował kapsułę, po czym rozpoczął etap `native-build`; job pozostaje `running`. Aktywne testy jednostkowe nie są częścią tego runtime-only profilu. Po sukcesie wymagane są receipt i kontrola artefaktów, następnie dry-run oraz nowy rzeczywisty run `de-smoke-k2`. Do tego czasu nie ma zaakceptowanego punktu dyspersji k≠0.
+
+### Checkpoint 2026-09-25 — stagnacja EPS i korekta progu wstępnego
+
+- Potwierdzono job #132 jako zaakceptowany runtime-only build (exit 0, 14 artefaktów); modelowa próba `--model-ref` przeszła dry-run i użyła pliku z commita `7a8b57cf1ca6b64902cdee60945cebdda9e2bd4c` (SHA-256 `b954b934e20abbc85db3d59a52228ecae303ec0c07652b2946022c340ebc2ee4`).
+- Pilot `ca448b26d8934e849c8bb50460e92612` zakończył się failed po 37 s; run container potwierdzono jako usunięty. Żadna częstość nie została opublikowana.
+- Model żądał `include_demag=true`, $\mathbf k=(0,2\times10^6,0)$ rad/m; solver osiągnął `floquet_shared_domain_sparse_matshell`, 1195 par periodycznych i dwa zadane podokna. Oba wykorzystały limit 500 iteracji, `EPS_DIVERGED_ITS=-1`, 0 zbieżnych modów i brak ewaluacji residualu oryginalnych bloków.
+- Estymaty EPS (`3.4957520e-9`, `6.0189714e-9`) były identyczne jak w próbie 100-iteracyjnej, mniejsze niż żądany residual `1e-8`, lecz większe niż wewnętrzny próg `1e-10`. To wskazuje na nadmiernie ostrą bramkę konwergencji EPS; nie dowodzi, że kandydat spełni niezależną bramkę magnetyczną/potencjałową.
+- Źródła są zmieniane tak, by wewnętrzny próg EPS wynosił $\max(100\epsilon_{\mathrm{machine}},\mathrm{rtol}_{\mathrm{requested}})$. Akceptacja nadal wymaga oryginalnych residuali obu bloków ≤ żądane rtol. Wymagany następny krok: runtime-only build z tą zmianą, odbiór receipt, dry-run, a następnie rzeczywisty pilot k2; jeśli przejdzie filtr EPS, ocenić częstotliwość, oba residuale, fazę, demag i pola.
+- Nie ma jeszcze punktu nonzero-k ani wykresu. Analiza z teorią Kalinikosa/Slavin pozostaje oczekująca. Wolne miejsce 48 973 856 768 B; nie usuwano nowych danych.
+
+### Checkpoint 2026-09-25 — runtime #133 i korekta kryterium EPS
+
+- Managed job #133 (`059f9538791346289316580c94ce4a36`) zakończył runtime-only build `fem-cpu-slepc-runtime-v1` sukcesem, exit 0, 14 artefaktów. Source digest: `9c1312cad6b253fa0345e601de42d2fc2b11aeda0e497e934770a8bbb2714f6d`; snapshot SHA: `11a754ab43488ba74a9684b4c9dddea72239089604c0787108647f7d9535ac1a`; CPU FEM/SLEPc dostępne, GPU niewłączone.
+- Pilot `f45f34706cf24e35ad57612b2309bcdf` dla modelu z commita `7a8b57cf1ca6b64902cdee60945cebdda9e2bd4c` nie przyjął modów. Kontrolny pilot `f683308e79b449e7a2db987253ae9535` użył modelu z commita `673dc10b2704a0e12e193f145a86b33ae53ca13e`, zwiększającego limit iteracji z 500 do 2000 bez zmiany żądanego residualu fizycznego `1e-8`; również zakończył się `failed`, exit 1, 0 zaakceptowanych modów.
+- Oba przebiegi dotarły do FEM CPU/SLEPc, dynamicznego demagu Floqueta dla `k=(0,2e6,0) rad/m`, 1195 par periodycznych i 100 stopni swobody stycznej. Kontrolny run wykonał 2000 iteracji w podoknie, lecz EPS zgłosił `EPS_DIVERGED_ITS`; dwa kandydaty około `9.7233363 GHz` pozostały niezaakceptowane. EPS absolute true residual wyniósł `3.4957520e-9`, residual magnetyczny oryginalnego bloku `2.1678405e-7` (> `1e-8`), a potencjałowy `1.4175e-14`. Większy limit iteracji sam w sobie nie poprawił wyniku.
+- Przyczyną do dalszej weryfikacji jest zbyt luźne absolutne kryterium EPS po globalnym skalowaniu pencila względem per-modowego residualu oryginalnych bloków. Zmieniono wewnętrzny EPS cutoff na `max(100*machine_epsilon, 1e-3*requested_rtol)`; fizyczna bramka `1e-8` nie została zmieniona. Regresja źródłowa i nota naukowa są zaktualizowane, ale ta poprawka czeka na managed build i kolejny pilot.
+- Artefakty obu przebiegów zachowano pod `storage/runs/eigensolve-dispersion-plan-20260-c5dfad6d7f548079/059f9538791346289316580c94ce4a36/comsol-dispersion/`. Nie ma zaakceptowanego punktu `k != 0`, poprawnego wiersza CSV ani wykresu dyspersji. Następny krok: zarejestrować jeden snapshot po kontroli zdrowia kolejki, odebrać build/receipt, wykonać dry-run i powtórzyć `k2`; nie rozszerzać jeszcze do pięciu punktów.
+
+### Job #134 — build poprawki kryterium EPS przyjęty do kolejki
+
+Managed runner przyjął snapshot `8a7b9ff2e8c91609a925055d31ee51ae3c3135090bef40873c40c3336c6ecd5f` jako job #134 (`f29dad61e46048ff934ada17e75cde53`), stan `queued`, profil `fem-cpu-slepc-runtime-v1`. Source digest: `d90df5fb5da8eb13cd15326c1b44b527cd54dbd571645ca1ab636ffeab7e84a0`; capture `68ff64ee5c724ac8b040656659d28400`; bazowy HEAD `673dc10b2704a0e12e193f145a86b33ae53ca13e`. Runner przed capture potwierdził `worker_alive=true`, `accepting_jobs=true`, `active_jobs=[]`, brak błędów i około 47 GB wolnego storage. Kapsuła zawiera bieżącą zmianę EPS, regresję źródłową i aktualizacje dokumentacji. Job nie ma jeszcze końcowego receipt; po `succeeded` trzeba zweryfikować hashe, wykonać dry-run modelu, a następnie jeden pilot k2. Nie zgłaszać równoległego buildu.
+
+### Job #134 — rozpoczęty managed native-build (2026-09-25)
+
+Koordynator zalogował `job_claimed` dla #134 o 01:40:48 UTC; worker-container pozostał aktywny. Przygotowanie kapsuły obejmowało 7413 plików i 304198252 B, z kopiowaniem oraz ponowną weryfikacją hashy per plik. Około 01:53 UTC pojawił się log `native-build`, proces `make install-cli-dev` i proces Cargo. Job pozostaje `running`; brak końcowego receipt i brak pilota k2. Nie wysyłać duplikatu; po terminalnym stanie odbierz receipt i zweryfikuj tożsamość artefaktów, a dopiero potem dry-run i pilot.
+
+
+### Uzupełnienie checkpointu — job #134, runtime #135 i pilot k2 (2026-09-25)
+
+- Job #134 zakończył się sukcesem: `f29dad61e46048ff934ada17e75cde53`, exit 0, profil `fem-cpu-slepc-runtime-v1`. Poprzednia sekcja „rozpoczęty managed native-build” jest historyczna; końcowy status #134 to `succeeded`.
+- Z runtime #134 wykonano piloty `de-smoke-k2` (`2959f883fa954f09ab9885c6b400ebf4`, `3c7bb4a6dac14a1386957de91907431b`) na k=(0, 2e6, 0) rad/m. EPS nie zwrócił zbieżnych modów, więc nie ma zaakceptowanej częstości ani wiersza dyspersji. Korekta identyfikatora: wcześniej przypisany tutaj `ca448b26d8934e849c8bb50460e92612` pochodzi z #132.
+- Na podstawie tamtej awarii dodano diagnostykę rzeczywistego KSP shift-invert. Job #135 `a31670fd5df145479a2054fd4c02e23c` zakończył managed runtime build sukcesem (exit 0), profile `fem-cpu-slepc-runtime-v1`; source digest `7d9c4a5dac4e5c0f9615549fbfef5f471cea24ed66777284d66d4ef868a491ff`, snapshot SHA `5f06161c8a196cbf4070afac5c1f501289c1296c7da632146172f0f066749516`, obraz `sha256:e5f70bd632011f9a0d8163430dab81bc6f248e07e4af086dfdf77bcd087471d7`. Koordynator zweryfikował receipt, manifest zawiera 14 artefaktów, `validation_error=null`; CPU FEM/SLEPc jest dostępne, GPU nie jest włączone.
+- Dry-run przyjął ten dokładny runtime oraz model `examples/fem_de_smoke_numeric.py` z commita `4e7ab1528d008ed487c1ed2789f976ba6c8bf3af`, SHA-256 `36684fb6eeaabdaf579f76a880d715232ff9d9a83e3c1bfcd1015662a558a98d2`. Rzeczywisty przebieg zapisał się pod `storage/runs/eigensolve-dispersion-plan-20260-c5dfad6d7f548079/a31670fd5df145479a2054fd4c02e23c/comsol-dispersion/4d5d2c97987447a09721477d52740dec/`; kontener został potwierdzony jako usunięty przez watchdog.
+- Model użył `include_demag=true`, `k=(0, 2e6, 0) rad/m`, jednego żądanego modu i siatki shared-domain z 5720 tetraedrami, 1980 węzłami i 1195 parami periodycznymi. Solver użył `floquet_shared_domain_sparse_matshell` i dwóch podokien częstotliwości.
+- W obu podoknach EPS wykonał 2000 iteracji i zwrócił `EPS_DIVERGED_ITS`; estymaty true residual wyniosły odpowiednio `3.4957520169599251e-9` i `6.0189714412340221e-9`, przy wewnętrznym progu `1e-11`. Nie było zbieżnych kandydatów, dlatego nie obliczono residuali fizycznych modów. Nie jest to wynik `f(k)`.
+- Nowa telemetria pokazuje, że ostatnie solve'y KSP zakończyły się kodem `KSP_CONVERGED_RTOL` (reason 2), po 15 i 13 iteracjach, z raportowanymi normami `1.3217272668620667e-24` i `1.5471221846117597e-23`; suma iteracji liniowych na okno to 321674 i 288664. Korekta interpretacji: jest to zbieżność według wewnętrznej normy KSP, która może być przybliżona i preconditioned. Bez niezależnego względnego `b-Ax` nie wyklucza błędu shift-invert, także w ostatnim solve'ie.
+- Oddzielny wcześniejszy przebieg #133 z luźniejszym progiem EPS znalazł kandydata około 9.7233363 GHz, ale jego residual magnetyczny wynosił `2.1678405e-7`, powyżej żądanych `1e-8`; sparowany residual potencjału wynosił `1.2442e-14` (maksimum wśród kandydatów: `1.4175e-14`). Kandydat został odrzucony zgodnie z zadanym kontraktem. Audyt tolerancji poniżej koryguje wcześniejszy bezwzględny zakaz zmiany progu i pokazywania częstości: dopuszczalna jest jawna kalibracja oraz wykres diagnostyczny z widocznym statusem odrzucenia; nie wolno przedstawiać go jako zaliczonego benchmarku.
+- Diagnoza robocza: plateau EPS pozostaje nierozstrzygnięte. Kolejna zmiana powinna ujawnić rzeczywisty wymiar podprzestrzeni Krylov–Schur i przetestować jego kontrolowane zwiększenie dla małego modelu, pozostawiając `EPSSetTrueResidual` oraz oba oryginalne fizyczne gate'y bez zmian. To hipoteza do sprawdzenia, nie potwierdzona przyczyna.
+- Status naukowy i produktu pozostaje: zaakceptowane punkty k!=0 — 0; poprawny wiersz CSV — 0; wykres rzeczywistej dyspersji — brak; porównanie z analityką — NOT VERIFIED. Runner zakończył build i pilot; następny krok to poprawa zbieżności EPS i powtórzenie pojedynczego k2 przed rozszerzeniem do kilku punktów.
+
+Do weryfikacji metody iteracyjnej użyto aktualnej dokumentacji SLEPc: [EPS manual](https://slepc.upv.es/release/documentation/manual/eps.html), [EPSSetDimensions](https://slepc.upv.es/release/manualpages/EPS/EPSSetDimensions.html) i [EPSSetTrueResidual](https://slepc.upv.es/release/manualpages/EPS/EPSSetTrueResidual.html). Kod 2 KSP oznacza `KSP_CONVERGED_RTOL` według [PETSc KSPConvergedReason](https://petsc.org/release/manualpages/KSP/KSPConvergedReason/).
+
+### Job #136 — kontrolowana próba większego `ncv` (2026-09-25)
+
+- Po #135 ustalono, że ostatni solve KSP converged, a EPS zatrzymał się po 2000 iteracjach z residualem true około $3.50\times10^{-9}$ wobec wewnętrznego cutoffu $10^{-11}$. Nie było zbieżnych Ritz par, więc bieżący solve nie podał residualu fizycznego moda.
+- Zmieniono rozmiar podprzestrzeni dla Floquet EPS: `ncv=min(N,max(32,2*nev))`, gdzie $N$ to wymiar real-split. Próg EPS i oryginalne bramki magnetyczna/potencjałowa pozostały bez zmian. Dodano serializację wymiarów z `EPSGetDimensions` i regresję źródłową; testów jednostkowych nie kompilowano. Walidator scientific docs, tekstowa regresja kontraktu dokumentacji, JSON source-map i `git diff --check` zakończyły się powodzeniem.
+- Runner przyjął job #136 `b1e00ef90b494fa08801036bd4d4f17a`, profil `fem-cpu-slepc-runtime-v1`, stan `running`; HEAD worktree `4e7ab1528d008ed487c1ed2789f976ba6c8bf3af`, source digest `1b7ee7adbeb2b83260277eb5285d7f2460b633ff5c7c74440d84d7173704f96b`, snapshot SHA `c26f2f6f2890cde8955398e91e9d4e50542d31a1d63a152965c67eea4ccf344c`, capture `f26b01f74dcd4d9ba49769873bb6b54b`. Receipt nie jest jeszcze dostępny.
+- Po terminalnym sukcesie zweryfikować receipt i hashe, wykonać dry-run modelu, a następnie pojedynczy `de-smoke-k2`. Rozstrzygnięcie wymaga rzeczywistych `nev/ncv`, reason/iteracji EPS i KSP, częstotliwości oraz obu fizycznych residuali. Nie liczyć jeszcze innych punktów $k$ ani nie publikować wykresu.
+
+### Wynik joba #136 i rzeczywistego pilota k2 — 2026-09-25
+
+- Managed job #136 (b1e00ef90b494fa08801036bd4d4f17a) zakończył się succeeded, exit 0, profil fem-cpu-slepc-runtime-v1; receipt potwierdza digest źródeł 1b7ee7adbeb2b83260277eb5285d7f2460b633ff5c7c74440d84d7173704f96b, snapshot SHA c26f2f6f2890cde8955398e91e9d4e50542d31a1d63a152965c67eea4ccf344c, SLEPc CPU/double oraz 14 artefaktów buildu. Sukces buildu nie oznacza wyniku naukowego.
+- Dry-run przeszedł, po czym rzeczywisty de-smoke-k2 (8cbc020e2e594c39ac77e192d7067b68) zakończył się failed, kod 1, qualification=NOT VERIFIED. Nie wyemitowano częstotliwości ani artefaktów dyspersji.
+- Model żąda include_demag=true dla dynamicznego operatora Floqueta z magnetostatic_bc="floquet_airbox" i k=(0,2e6,0) rad/m. demag_mode=none w logu dotyczy tylko relaksacji równowagi LLG; nie oznacza wyłączenia dynamicznego demagu w modalnym operatorze.
+- Siatka miała 1980 węzłów, 5720 tetraedrów, 1195 par periodycznych i 100 zespolonych tangent DOF, czyli 200 w reprezentacji real-split EPS. Dwa okna EPS zakończyły się po 2000 iteracjach każde z EPS_DIVERGED_ITS; nev=8, ncv=32, mpd=32, estymaty końcowe true residualu 3.4957520204820899e-9 i 6.0189714339300876e-9 przy wewnętrznym progu 1e-11. W obu oknach liczba zbieżnych kandydatów wyniosła zero, więc nie obliczono residuali fizycznych moda.
+- Ostatnie układy shift-invert KSP zgłosiły KSP_CONVERGED_RTOL (reason 2): 15 i 13 iteracji, raportowane normy odpowiednio 9.291867865464143e-25 i 5.1041410667766433e-24; łączne iteracje KSP na okno wyniosły 474071 i 416220. Są to normy wewnętrzne KSP, a nie niezależnie policzone względne residuale oryginalnego równania; nie wykluczają problemu shift-invert.
+- Kontrolowana próba ncv=32 nie usunęła problemu. Nie powtarzać jej bez zmiany hipotezy; następny krok to osobno sprawdzić zachowanie exact Floquet Schur operatora i preconditionera shift-invert oraz poprawić diagnostykę przebiegu błędu EPS. Nie luzować fizycznych bramek residualu.
+- Dla fixture'u 10 nm poprawne otwarte-filmowe analityczne wartości referencyjne to: k=0 9.309814 GHz, ky=1e6 9.520135 GHz, ky=2e6 9.725724 GHz, ky=3e6 9.926925 GHz, ky=5e6 10.317376 GHz. Szacunek Gamma dla skończonego airboxu 2 µm wynosi 9.299250 GHz. Są to wartości analityczne, a nie wyniki Fullmaga.
+- Status: 0 zaakceptowanych punktów k!=0, 0 poprawnych wierszy CSV, brak wykresu numerycznej dyspersji, porównanie FEM–analityka NOT VERIFIED. Nie przechodzić jeszcze do pięciu punktów ani pełnego C1.
+
+### Audyt progu residualu i korekta dalszego planu — 2026-09-25
+
+Wykonano [audyt tolerancji](../../audits/2026-09-25-de-residual-threshold-audit.md) z [odczytem ośmiu historycznych pilotów](../../audits/2026-09-25-de-residual-threshold-evidence.json) oraz niezależnym przeglądem matematyki i konfiguracji EPS/KSP. Ta aktualizacja zastępuje wcześniejszy bezwzględny nakaz utrzymywania `1e-8` niezależnie od wymaganej dokładności częstotliwości.
+
+`1e-8` jest żądaną tolerancją algebraiczną, której optymalności i osiągalności w tej realizacji jeszcze nie wykazano. Mnożnik EPS `1e-3` jest heurystyką. Plateau nie dowodzi granicy double, a reason 2 i małe `KSPGetResidualNorm` nie dowodzą dokładności oryginalnego układu liniowego. Odrzucony kandydat #133 różni się od faktycznej referencji `n=0` dla 10 nm o −2.388011 MHz (−0.0245536%); to zachęcająca obserwacja, bez oceny osobno błędu algebraicznego, siatki, airboxu i przybliżenia referencji.
+
+Aktualny priorytet T3/T5:
+
+1. **C1 — pomiar błędu:** true residual shift-invert, resolved strona/norma KSP, normy RHS/bloków, pełna zespolona wartość własna i wpływ projekcji. Stan: zaplanowane, niezrealizowane.
+2. **C2 — mała referencja bezpośrednia:** oryginalny Schur z demagiem i `B` z tej samej siatki; zgodność działania MatShell i niezależne rozwiązanie małego problemu, bez badanego shift-invert. Stan: zaplanowane, niezrealizowane.
+3. **C3 — kalibracja:** osobno kryterium kandydatów EPS, oryginalne tolerancje `1e-6/1e-7/1e-8` i dokładność wewnętrznych solve'ów. Porównać częstotliwość, profil, koszt i różnicę do C2; nie dobierać progu pod analitykę. Stan: zaplanowane, niezrealizowane.
+4. **C4 — kilka punktów:** po C1–C3 policzyć 3–5 k i wykres z jawnym statusem jakości. Kandydatów diagnostycznych nie oznaczać jako zaakceptowanych. Stan: oczekuje na kalibrację.
+5. **C5 — walidacja fizyczna:** siatka, airbox, profile, kompletność oraz właściwe przybliżenie analityczne. Stan: oczekuje na wyniki.
+
+W tej aktualizacji poprawiono dokumentację i plan, nie kod solvera ani historyczne statusy. Nie zlecono następnego buildu ani kompilacji testów. Nadal 0 zaakceptowanych punktów przy `1e-8`; nie ma jednak podstaw, by twierdzić, że kandydat z residualem około `2e-7` jest z definicji bezużyteczny do wykresu roboczego.
+
+Walidator noty 0831 przeszedł. Kontrola tekstowa kontraktów dokumentacji: 9/10 poprawnych; otwarte pozostaje dopasowanie `test_modal_dispersion_artifact_contract_names_tracking_and_mode_handoff` do wcześniejszej zmiany nagłówka CSV (`sample_id`, `mode_id`, `mode_field_available`). To zaległość zakresu artefaktów, oddzielna od kalibracji T3; nie zmieniono jej w tym audycie.
+
+### Wdrożenie diagnostyki C1 i job #137 — 2026-09-25
+
+- Dodano niezależne obliczenie `||b−A_shift x||₂ / ||b||₂` dla **ostatniego** solve'a KSP oraz odczyt resolved preconditioning side i norm type. `KSPGetResidualNorm` pozostaje osobną liczbą z PETSc. Dla najgorszego ocenionego kandydata dodano residual z pełną zespoloną wartością własną przed projekcją, jej pominiętą część urojoną w obróconym układzie i normę projekcji modu. Brak danych zapisuje się jako niedostępny/`null`.
+- C1 jest częściowe: nie ma jeszcze maksimum true residualu po wszystkich działaniach shift-invert, norm osobnych bloków ani eksportu odrzuconych wektorów. Bramka akceptacji i `1e-8` pozostały bez zmian. Test natywny uzupełniono w źródle, ale nie kompilowano go zgodnie z zakazem. Walidator dokumentacji naukowej przeszedł.
+- Współdzielony runner był bez aktywnych jobów. Po pauzie zbudowano i włączono obraz koordynatora `sha256:22c6b494f9190995486ab0af084a60128a2167b56212205d695fb998fca486c9`, skonfigurowano profil `fem-cpu-slepc-runtime-v1` na istniejącym obrazie workera i wznowiono kolejkę; kontrola health wykazała `worker_alive=true`, `accepting_jobs=true`. Ten profil buduje runtime FEM CPU/SLEPc bez celów testowych.
+- Zgłoszono snapshot job #137 `454a9276184546ec8b64e4dabd681727`, source digest `dff926e497801da6c77b61ba467a47ae9f0be6c45210f2d62afca5c2d5621430`, source snapshot SHA `148eb4317aa7ec450d31ffdf19b9f5d771c22636facbb357409ddfdff4d22df7`. Stan przy wpisie: `running`, bez receipt; build i pilot pozostają **NOT VERIFIED**.
+- Naprawiono zaległy test nagłówka CSV artefaktów (`sample_id`, `mode_id`, `mode_field_available`); `python -B -m pytest -q scripts/test_frequency_domain_math_contract_docs.py` zakończył się `10 passed`. To kontrola dokumentacji, nie dowód solvera.
+- C2 doprecyzowano jako bounded dense oracle oryginalnego Schura `(Aqq−Aqphi P⁻¹ Aphiq, Bqq)` w wymiarze 200×200 dla pilota, z osobnym Poisson LU, porównaniem z MatShell i `EPSLAPACK`/zerowym `STSHIFT` bez shift-invert. Implementacja oraz uruchomienie C2 nadal są otwarte.
+
+Późniejszy checkpoint: kod diagnostyki C2 jest już dodany za prywatnym opt-in
+`FULLMAG_FLOQUET_DENSE_ORACLE=1`, z limitem 512 real-split DOF i oddzielnym
+JSON. Pilot `de-smoke-k2` otrzymał jawny przełącznik `--dense-oracle`; jego
+interpreted regression zakończył się `6 passed`. Po przeglądzie dodano filtr
+zaniedbywalnej fizycznej rekonstrukcji modu, usunięto własny próg EPS `1e-12`
+i sprawdzono resolved zerowy `STSHIFT`. Walidator noty naukowej i diff check przeszły.
+**C2 nie jest w snapshotcie #137**; kompilacja i numeryczne porównanie C2
+pozostają `NOT VERIFIED` do osobnego managed builda i pilota.
+
+### Checkpoint 2026-09-25 — pilot #137 i korekta czasu życia wektorów
+
+- Build #137 `454a9276184546ec8b64e4dabd681727` zakończył się `succeeded`, exit 0. Jego pilot `de-smoke-k2` `7327c19e1f4b422fa7ad59eb840c9585` zakończył się PETSc `SIGSEGV` (kod 59), bez wyniku modu. Valgrind na diagnostycznej kopii modelu z jedną iteracją EPS zlokalizował nieprawidłowy odczyt w `MatMult` nowego pomiaru C1 po `EPSSolve`: pożyczone RHS/solution KSP nie były już ważne.
+- C1 poprawiono źródłowo przez kopię ostatnich RHS/solution w callbacku `KSPSetPostSolve`. Nie zmieniano fizyki, progu akceptacji ani EPS/KSP tolerancji. Trzeba potwierdzić w managed runtime, że pilot nie ulega awarii i zapisuje rzeczywisty residual.
+- Job #138 `289819783c8e4a2bb39920a9a7cedf25` został zablokowany przed wykonaniem, gdy działał diagnostyczny kontener Valgrind; nie jest dowodem C2. Po jego zakończeniu zgłoszono #139 `4c768fc34f814983b811c45e28dc7550` ze wspólnym snapshotem poprawki C1 i diagnostyki C2. Stan przy wpisie: `running`, bez receipt i bez kwalifikacji fizycznej.
+- Oddzielna obserwacja Valgrind: podczas inicjalizacji Poissona/MFEM występują zapisy poza przydzielony obiekt `mfem::SparseMatrix`. To otwarta kontrola zgodności ABI nagłówków/biblioteki obrazu. Nie ma podstaw, by na jej podstawie uznać punkt dyspersji za obliczony.
+
+Przed uznaniem wyniku C4/C5 należy zamknąć nową bramkę ABI MFEM: ustalić
+definicje kompilacyjne i rozmiar `SparseMatrix` w samej bibliotece obrazu,
+zapewnić zgodność z klientem Fullmag, przebudować obraz i powtórzyć mały
+diagnostyczny przebieg pamięciowy oraz pilot. Samo przejście #139 nie zamknie
+tej bramki, ponieważ używa tego samego obrazu zależności.
+
+Źródłowo przygotowano też C3: DE-SMOKE może jawnie przyjąć tylko
+`1e-8`, `1e-7` lub `1e-6` przez `FULLMAG_DE_SMOKE_SOLVER_RTOL`, a pilot
+`de-smoke-k2` zapisuje wybór z `--solver-rtol` w żądaniu i w metadanych IR.
+Domyślnie nadal używa `1e-8`. Dziesięć interpretowanych testów wejścia przeszło.
+Ta zmiana powstała **po** snapshotcie #139 i wymaga następnego managed builda;
+same testy wejścia nie kalibrują tolerancji ani nie dostarczają częstotliwości.
+To na razie **wspólny sweep żądanego `solver_rtol`**: obecna implementacja
+wyprowadza z niego także próg EPS i wewnętrzne `KSP rtol`. Do rozdzielenia
+trzech przyczyn stagnacji C3 nadal potrzebuje jawnych, niezależnych ustawień
+diagnostycznych albo serii kontrolnej o stałym KSP/EPS oraz porównania z C2.
+
+Build #139 zakończył się `failed`, exit 2: kompilator odrzucił `STNONE` w C2,
+ponieważ SLEPc 3.24.3 nie udostępnia takiej stałej. To błąd źródłowy oracle,
+bez uruchomienia fizyki. Poprawiono konfigurację na jawny `STSHIFT` z
+przesunięciem zero i odczytem resolved typu/przesunięcia; zgodnie z manualem
+SLEPc jest to domyślna transformacja bez shift-invert. Nowy build i pilot
+pozostają wymagane.
+
+Zgłoszono managed runtime job #140 `3243430c4f5341fab4a138d92703b4b7`,
+profil `fem-cpu-slepc-runtime-v1`, source digest
+`bd0b53df79fc64c04418c32983a3410ba859c22061221650796ed7bc5465d0ab`,
+snapshot SHA
+`2f66acdc713753c7cd0ef4baed4e9f07462451ab1581198527ee3b93e46b0b67`.
+Stan przy wpisie: `running`; receipt, pilot C1/C2 i punkty dyspersji nadal
+**NOT VERIFIED**.
+
+Proponowana ścieżka naprawy ABI przed kwalifikacją fizyczną:
+
+1. Ustalić rozmiar/definicje `SparseMatrix` w bibliotece i u klienta z tego samego obrazu oraz potwierdzić wykryty zapis poza obiekt na minimalnym managed CPU przypadku.
+2. Dla trasy FEM CPU/SLEPc przygotować spójny wariant MFEM bez CUDA w osobnym prefiksie obrazu (bez zmiany GPU lane), jawnie wskazać ten prefiks w nowym profilu builda i w runtime. Obecne `build.rs` włącza CUDA przy każdym `FULLMAG_USE_MFEM_STACK=ON`, więc wymaga osobnego, źródłowo zweryfikowanego przełącznika CPU native.
+3. Zweryfikować soname i rzeczywistą ścieżkę ładowanej biblioteki, powtórzyć kontrolę pamięci oraz C0 i `k2` na nowym receipcie. Dopiero ten wynik może wejść do bramki C4/C5. To plan techniczny, nie wykonana naprawa obrazu.
+
+Po snapshocie #140 dodano osobne, prywatne przełączniki C3 dla EPS absolute
+prefilter i shift-invert KSP `rtol`, ograniczone do diagnostycznego pilota
+`de-smoke-k2`. Pozwalają utrzymać fizyczny `solver_rtol=1e-8`, zmieniając
+jedną tolerancję algebraiczną naraz; wartości żądane trafiają do run-request,
+a resolved liczby do diagnostyki solvera. Kod nie był w #140, wymaga
+następnego managed builda i porównania z oracle C2 przed jakimkolwiek wnioskiem
+o akceptacji częstotliwości.
+
+Przygotowano źródłowo profil `fem-cpu-slepc-runtime-v2` dla naprawy ABI:
+osobny MFEM CPU w obrazie, przełącznik natywnej kompilacji bez CUDA i
+post-build attestacja ścieżki CMake oraz załadowanego `libmfem.so`. Profil v1
+pozostaje bez zmian. Testy interpretowane profilu przeszły, lecz obraz v2 nie
+został jeszcze zbudowany ani przypięty do koordynatora; nie ma managed receiptu,
+Valgrind pass ani pilota v2. Kod pilota v2 odczytuje digest obrazu z
+operatorowego katalogu runnera i sprawdza go względem receiptu oraz kontenera;
+bez przypiętego obrazu kończy się błędem. Trwa #140 na starym obrazie, więc nie
+uruchamiano równoległego ciężkiego buildu.
+
+Po ponownym przeglądzie callbacku C1 zabezpieczono również czas życia macierzy
+przesuniętej: snapshot utrzymuje własną referencję PETSc do `Mat` aż do pomiaru
+residualu i zwalnia ją podczas cleanup. #140 zawiera kopię wektorów, ale nie tę
+późniejszą poprawkę własności macierzy; wymaga ona kompilacji w następnym jobie.
+
+#140 `3243430c4f5341fab4a138d92703b4b7` zakończył się `failed`, exit 2,
+przed wydaniem binarium: C++ odrzucił konkatenację dwóch literałów tekstowych
+w `production_cpu_modal_eigen.cpp:152` przy serializacji diagnostyki oracle.
+Poprawiono początek wyrażenia na `std::string`; log nie wykazał innego błędu
+kompilacji. Nowy managed job #141 `13d5788e1fab4cfdb3d13d13843eb611`
+zgłoszono na profilu v1 ze source digest
+`cc9d56011e6b81128f8ff98a84961c672adc12c363f55e54352bd5eadb069258`
+i snapshot SHA
+`6c9712f1453c1c80fba2a2422c69989ebec1adc2ae50d6d5fec3bc553f70bbea`.
+Stan przy wpisie: queued; C1/C2/C3 oraz dyspersja nadal **NOT VERIFIED**.
+
+### Checkpoint 2026-09-25 — #141, pierwszy punkt diagnostyczny nonzero-k
+
+Managed build #141 zakończył się `succeeded`, exit 0; receipt i attestacje
+źródła, SLEPc oraz biblioteki natywnej przeszły. Pilot `de-smoke-k2`
+`5751554e315e4b308bbbe40a696a8369` zakończył się błędem: po 2000
+iteracjach w każdej z dwóch części okna SLEPc nie zwrócił zaakceptowanego
+modu. Rzeczywisty względny residual ostatniego przesuniętego KSP wynosił
+około `5.10e-7` / `3.11e-7`, choć normy konfigurowane PETSc były rzędu
+`1e-24`. Zatem zwykła ścieżka iteracyjna nadal **nie** publikuje punktu
+dyspersji.
+
+Osobny pilot diagnostyczny C2 `8fc0e111aea349918e1a21025bb1aa46`
+na tym samym buildzie również zakończył się błędem zwykłego solvera, lecz
+bounded dense oracle oryginalnego Schura przeszedł własne kontrole:
+`k_y=2e6 rad/m`, `f_FEM=9.723336314058123 GHz`, residual magnetyczny
+`1.6761e-14`, residual potencjału `1.3141e-14`, błąd zgodności akcji
+z MatShell `4.1471e-16`. Referencja analityczna n=0 dla parametrów modelu
+wynosi `9.725724281195415 GHz`, różnica względna `-2.45531e-4`. To
+**jeden punkt numeryczny o małym residualu w diagnostycznej ścieżce C2**,
+nie ukończona dyspersja ani kwalifikacja naukowa. W katalogu pilota zapisano
+`diagnostic-scatter/dispersion-one-point-diagnostic.png` i JSON z pochodzeniem
+danych. Zapis `metadata.json` i standardowej tabeli modów nie powstał,
+ponieważ zwykła ścieżka zwróciła błąd.
+
+Przygotowano źródłowo próbkowanie `signed-eleven`: Gamma oraz pięć par
+`k_y=±(0.5,1,1.5,2,3)e6 rad/m`, jeden mod na próbkę, przy niezmienionej
+geometrii 10 nm i parametrach materiału. Kontrakt wejścia i preflight ma
+`70 passed, 7 subtests passed`. To nie jest jeszcze przebieg numeryczny:
+przed uruchomieniem 11 próbek trzeba doprowadzić solver iteracyjny do
+akceptacji pojedynczego `k2` albo opracować osobno oznaczoną ścieżkę
+diagnostyczną publikacji wyników dense oracle. ABI MFEM w wariancie v2
+pozostaje bramką otwartą.
+
+### Checkpoint 2026-09-25 — rozdzielenie EPS/KSP i job #142
+
+Na niezmienionym buildzie #141 powtórzono `k2` z jedyną zmianą diagnostyczną
+`--eps-prefilter 1e-8` (run `c6ebf525641a49bbb2964385b54e83a1`). EPS
+zwrócił dwa kandydaty w pierwszej części okna, oba blisko 9.723336 GHz,
+ale oryginalny względny residual magnetyczny pozostał
+`2.167840537744029e-7` i obie pary zostały odrzucone przy fizycznym
+`solver_rtol=1e-8`. Zmiana samego filtra EPS nie wystarcza. True residual
+ostatniego przesuniętego KSP wyniósł `2.8102105064276275e-7` w pierwszej
+części i `2.2916007962827794e-7` w drugiej. Diagnostyka wciąż mierzy
+ostatnie rozwiązanie liniowe, nie maksimum ze wszystkich iteracji.
+
+W źródle FEM CPU zmieniono przesunięty GMRES na prawostronne
+prekondycjonowanie z jawną `KSP_NORM_UNPRECONDITIONED`. PETSc dopuszcza tę
+parę i mierzy wtedy normę residualu oryginalnego równania liniowego zamiast
+lewo-prekondycjonowanej. Kryterium fizyczne `1e-8` oraz operator Schura
+pozostały bez zmian. Managed job #142 `65636004e798435ca763c3821088d0cf`,
+profil `fem-cpu-slepc-runtime-v1`, source digest
+`de2f7489d76790dadc55bae547a2033160f9c048fee35b23fc337e72c85d92bb`
+i snapshot SHA
+`7119109bef9605fb51385018fcf55f94fc8742f10800fcf9476208467742a314`
+jest w kolejce/wykonywaniu. Dopiero terminalny build i pilot pokażą, czy
+ten eksperyment usuwa stagnację; nie jest jeszcze zaliczonym rozwiązaniem.
+
+Próba zbudowania osobnego obrazu zależności dla profilu v2 przez
+`just build fem-gpu-runtime` została odrzucona przez projektowy preflight:
+`Container runner owns heavy builds on this host; submit a snapshot through
+just runner-build`. Obecny katalog kolejki nie ma operacji budowy obrazu
+zależności, a istniejący obraz nie zawiera `/opt/fullmag-mfem-cpu`.
+Nie uruchomiono ręcznego buildu Dockera poza bramką. Trasa v2 wymaga
+obsługi obrazu przez zatwierdzony mechanizm operatorowy/runnerowy.
+
+Po snapshocie #142 dodano jeszcze źródłową diagnostykę C1 wszystkich
+zakończonych wewnętrznych solve'ów KSP: callback mierzy ich true residual,
+liczy udane i nieudane pomiary oraz zapisuje maksimum. Osobny test natywny
+sprawdza resolved `PC_RIGHT`/`KSP_NORM_UNPRECONDITIONED` i spójność maksimum
+z ostatnim pomiarem. Zgodnie z tymczasowym zakazem testów jednostkowych nie
+kompilowano go; tych zmian **nie ma** w #142. Doc validator i diff check
+przeszły, ale kompilacja oraz runtime pozostają `NOT VERIFIED` do kolejnego
+managed builda.
+
+Dla tej samej próbki 10 nm przygotowano także osobny pilot `de-smoke-k0`
+z jednym żądanym modem, zamiast podstawiać wynik Gamma z innej geometrii.
+Walidator wymaga w nim operatorowego testu demag Gamma oraz deklarowanych
+parametrów finite airbox; nie wymaga sondy dynamicznego demag nonzero-k,
+bo żaden taki punkt nie jest próbkowany. Łączne interpretowane testy modelu
+i preflightu: `54 passed` (z testami porównania). Pilot `k0` powstał po
+snapshocie #142 i pozostaje `NOT VERIFIED` do managed runtime.
+
+### Odbiór zewnętrznych częstotliwości COMSOL A1 — 2026-09-25
+
+Użytkownik przekazał pięć plików w katalogu
+`docs/plans/active/eignensolve_non_k0/` głównego checkoutu. Skopiowano je bez
+zmian do izolowanego worktree, a integralność i zakres danych opisano w
+[audycie odbioru](../../audits/2026-09-25-comsol-a1-received-data-audit.md).
+CSV ma 61 punktów Γ–X–M–Γ i 24 lokalnie posortowane częstotliwości na punkt;
+nominalne parametry odpowiadają A1 z przepisu, nie pilotowi jednorodnego filmu
+DE-SMOKE. Nie wolno nakładać na ten wykres punktów DE-SMOKE jako porównania
+tego samego modelu.
+
+Pierwszy README nie podawał faktycznego airboxu, siatki ani wersji COMSOL.
+Późniejszy załącznik `COMSOL_A1_model_details_user.txt` deklaruje COMSOL 6.1,
+`d_air=2 µm` na stronę, siatkę docelowo około 5 nm/3 warstwy, jawne słabe
+potencjały statyczny i dynamiczny oraz C0 ≈2.8003 GHz i C1 ≈9.2992 GHz.
+To rozwiązuje brak opisu konfiguracji, ale nie zastępuje `.mph`, logu,
+dokładnej siatki/DOF, stanu równowagi i zespolonych pól. CSV ma
+sześć miejsc dziesiętnych w GHz, mniej niż 15 cyfr znaczących wymaganych w
+protokole. Dlatego jest referencją **wstępną** do porównania widma, nie
+zatwierdzoną bramką naukową. Poproszono użytkownika o provenance i dostępne
+oryginalne artefakty. Kolejność dalszej pracy: przyjąć pojedynczy punkt
+produkcyjny C1/DE, skontrolować C0/C1, uruchomić A1 w Γ/X/M, następnie całą
+ścieżkę A1, porównać zbiory modów bez udawania śledzonych gałęzi i wykonać
+kontrole zbieżności. Przy odbiorze #142 pozostawał `running` bez końcowego
+receipt; Fullmag A1 nadal ma 0 obliczonych punktów.
+
+Dodano `scripts/compare_comsol_a1_frequency_reference.py`. Narzędzie
+waliduje komplet referencji 61×24 i kanoniczną ścieżkę, wymaga ukończonego
+managed runu A1 o zgodnym hashu i nominalnych parametrach, a wynik oznacza
+`frequency_only_unqualified`, bez utożsamiania `frequency_order` z gałęzią.
+Zapisuje JSON i opcjonalny wykres punktowy. Poprawka dopasowania wymusza
+porównanie lokalnych rang od najniższej częstotliwości, zamiast dobierania
+dowolnego podzbioru 24 modów COMSOL, co mogło ukryć brak niskiego modu.
+Sześć interpretowanych testów
+PASS, rzeczywisty CSV przechodzi walidację 61×24. Nie ma jeszcze wyniku
+Fullmag A1, więc komparator nie wykonał porównania numerycznego.
+Korektę zapisano i wysłano jako `970167a80`.
+
+Odbiór sześciu plików, audyt i komparator zapisano jako osobny commit
+`61d9d7d0fdacf23053ca3ab92d413c1aced8693c`. Lokalny `.gitattributes`
+utrzymuje dokładne bajty przekazanego CSV mimo hostowego `core.autocrlf`;
+wszystkie staged bloby danych porównano z oryginałami bajt po bajcie.
+Późniejszy audyt wskazał różnicę budżetu relaksacji: COMSOL opisuje pierwszy
+odcinek 5 ns, a Fullmag miał `50_000 × 5 fs = 0.25 ns`. Kontrakt A1
+zwiększono do `1_000_000 × 5 fs = 5 ns` jako górny limit kroków; zmiana
+nie weszła do wcześniejszego snapshotu builda #144. Nadal trzeba potwierdzić
+faktyczną równowagę certyfikatem momentu obrotowego oraz stabilnością stanu,
+zachowując jeden stan/siatkę dla wszystkich k. To otwarta bramka fizyczna,
+nie automatyczny dowód błędu częstotliwości.
+
+### Runtime #142 i pilot DE-SMOKE k2 — 2026-09-25
+
+Managed job #142 (`65636004e798435ca763c3821088d0cf`) zakończył się
+terminalnie `succeeded`, exit 0. Receipt ma zgodny digest źródła
+`de2f7489d76790dadc55bae547a2033160f9c048fee35b23fc337e72c85d92bb`;
+wszystkie 14 wymienionych artefaktów przeszło kontrolę rozmiaru i SHA-256.
+To jest dowód buildu CPU/SLEPc, nie dowód zbieżności modów.
+
+`de-smoke-k2` uruchomiono z tego binarium przez `just run-de-smoke` dla
+`k=(0,2e6,0) rad/m`. Run zakończył się `failed`, return code 1, bez
+zaakceptowanych modów. Oba podokna osiągnęły limit 2000 iteracji EPS;
+`EPS_DIVERGED_ITS`, `candidate_modes=0`. W podoknach końcowe rzeczywiste
+residua względne KSP wyniosły odpowiednio `3.2976637102177511e-6` i
+`5.0090086153465195e-7`, choć raportowane przez KSP normy wyniosły
+`3.6154343056941193e-25` i `5.3816915164660712e-25`. Snapshot #142
+rozwiązuje `PC_RIGHT` i `KSP_NORM_UNPRECONDITIONED`, lecz samo ustawienie
+strony/normy nie usunęło rozbieżności względem niezależnie liczonego
+`||Ax-b||/||b||`. Bramka fizyczna `1e-8` pozostała bez zmian; nie ma jeszcze
+produkcyjnego punktu dyspersji ani porównania numerycznego z A1 COMSOL.
+
+Następny krok: zbadać przyczynę różnicy między normą PETSc i rzeczywistym
+residualem operatora shift-invert oraz zbieżność EPS, wykorzystując dodaną
+po #142 diagnostykę wszystkich wewnętrznych solve'ów KSP. Następny managed
+snapshot musi zawierać tę diagnostykę; nie należy interpretować samego
+zielonego buildu #142 jako naprawy solvera.
+
+Po przeglądzie implementacji i dokumentacji PETSc przygotowano eksperyment
+modified Gram--Schmidt dla GMRES z prawym preconditionerem. PETSc wyraźnie
+opisuje normę `KSPGetResidualNorm` dla GMRES jako potencjalnie przybliżoną;
+zmiana ortogonalizacji jest hipotezą poprawy stabilności, nie dowodem
+przyczyny ani obniżeniem bramki fizycznej. Nota 0831 i source-map zapisują
+zakres FEM CPU oraz kryteria: rzeczywisty residual `||Ax-b||/||b||`, zbieżność
+EPS i oryginalne residuale magnetyczny/potencjałowy. Walidator noty i 32 testy
+jej kontraktu przeszły; testów natywnych nie kompilowano.
+
+Managed job #143 (`58afb60a8b204a83a132f25d351a1cdb`) przyjął snapshot
+`a0ca9e214c8901e21f1b566e24b0986be3c81da553abb93c7e825ee03736d7dd`.
+SHA-256 pliku solvera w kapsule jest identyczny z lokalnym
+`568ec1bf0d639a55c7b132204987ec3dbef88a52c8db42f2b08c585d2aea55a2`
+i zawiera wywołanie `KSPGMRESModifiedGramSchmidtOrthogonalization`. Przy
+zapisie tego checkpointu job był `running`; wynik i pilot pozostają otwarte.
+
+Osobny dry-run trasy COMSOL C0 na terminalnym buildzie #142 zakończył się
+`dry_run`, exit 0: preflight potwierdził kapsułę, obraz i binarium oraz
+przygotował dokładne polecenie dla przypadku `c0`. Nie uruchomiono jeszcze
+fizycznego C0 i nie ma jego częstotliwości. Pomoc skryptu benchmarku
+skorygowano tak, aby wymieniała oba rzeczywiście obsługiwane profile
+`fem-cpu-slepc-modal-v1` i `fem-cpu-slepc-runtime-v1`; parser i `py_compile`
+przeszły. Ten tekstowy fix powstał po snapshocie #143, nie wpływa na jego
+binarium ani na zaplanowany pilot k2.
+
+### Runtime #143 — MGS i kontrola prefiltra EPS
+
+Build #143 zakończył się terminalnie `succeeded`, exit 0. Receipt zachowuje
+source digest `a0ca9e214c8901e21f1b566e24b0986be3c81da553abb93c7e825ee03736d7dd`;
+14/14 artefaktów przeszło niezależną kontrolę rozmiaru i SHA-256.
+Identyczny produkcyjny `de-smoke-k2` z `k_y=2e6 rad/m` uruchomiono z jego
+binarium w runie `4f28aacae6414ed3b0dfbe3e1693de62`. Exit 1, zero
+zaakceptowanych modów, oba podokna `EPS_DIVERGED_ITS` po 2000 iteracji.
+Końcowe prawdziwe względne residua KSP wyniosły `4.137571917091711e-8`
+i `1.5254634713457512e-7`, wobec #142 `3.2976637102177511e-6` i
+`5.0090086153465195e-7`. To poprawa częściowa, nie ukończony solve.
+Pomiar po wszystkich 32016 wewnętrznych solve'ach każdego okna nie miał
+błędów pomiaru, ale maksimum wyniosło odpowiednio `1.047275813012921e-4`
+i `2.4981913857495865e-5`; na ostatniej iteracji oszacowania EPS pierwszej
+niezbieżnej pary wynosiły `4.51e-9` i `6.39e-9` przy prefiltrze `1e-11`.
+
+Kontrolny run `9c919c67c65b46fdad870173dc6c5bad` ustawił wyłącznie
+diagnostyczny prefiltr EPS na `1e-8` bez zmiany oryginalnej tolerancji
+magnetycznej/potencjałowej `1e-8`. W pierwszym oknie uzyskano jedną
+zbieżną parę `9.723336314085032 GHz`, lecz jej residual magnetyczny
+`2.796933879467072e-7` przekroczył bramkę fizyczną, przy residuale
+potencjałowym `1.2723466903501634e-14`; para została prawidłowo odrzucona.
+W drugim oknie dwie pary były poza jego zakresem częstotliwości. Oba okna
+znów zakończyły się `EPS_DIVERGED_ITS`; łączny wynik pozostaje `failed`.
+Sam prefiltr EPS nie jest przyczyną braku produkcyjnego punktu.
+
+Następny krok numeryczny: zbadać kondycję przesuniętego Schur i jakość
+preconditionera, który obecnie pomija sprzężenie demag `A_qphi P^-1 A_phiq`.
+Zweryfikować na tej samej kapsule wpływ restarta/ortogonalizacji GMRES lub
+refinementu na **maksimum rzeczywistego** `||Ax-b||/||b||` we wszystkich
+solve'ach, a potem na oryginalny residual modu. Nie zmieniać progu
+fizycznego tylko po to, aby otrzymać punkt. Diagnostyczny dense oracle
+pozostaje kontrolą tego samego operatora, nie produkcyjnym fallbackiem.
+
+### Kontrola COMSOL C0 w Γ na buildzie #143
+
+Managed run `7e0f427291164864a4931521f0cf05ee` uruchomił rzeczywisty
+model C0 z kapsuły #143: pełny film bez otworu, wymiana i bias `0.1 T`,
+bez statycznego/dynamicznego demagu, jeden punkt Γ. Run zakończył się
+`completed_unqualified`, return code 0. `eigen/dispersion.csv` zawiera
+jedną częstotliwość `2.8002642129151073e9 Hz` z residualem
+`3.1166874077185831e-16`. Wzór `gamma Hbias/(2π)` w przepisie daje
+`2.80026421291511e9 Hz`; różnica w zapisanej precyzji wynosi około
+`2.9e-6 Hz`. Weryfikacja siedmiu wymaganych artefaktów względem receiptu
+przeszła kontrolę rozmiaru i SHA-256. Diagnostyka wskazuje
+`production_cpu`, `status=ok`, `accepted_mode_count=1`, lecz naukowa bramka
+całego runu nadal jest `NOT VERIFIED`: brak kampanii zbieżności siatki i
+liczby modów. C0 potwierdza konwencję jednostek i przeliczenie gamma dla
+tego przypadku, nie demag ani ścieżkę Floqueta.
+
+Obecny C0 bez demagu odziedziczył airbox `4.01 µm` oraz bardzo szerokie
+okno `1 MHz–30 GHz`: siatka miała `615597` tetraedrów, a solver podzielił
+okno na 16 podokien dla jednego żądanego modu. W trakcie runu zaobserwowano
+użycie pamięci około `43 GiB`. To kosztowny kontrakt kontrolny; przed
+powtarzaniem C0 warto osobno ocenić zawężenie *wyłącznie C0* do
+analitycznie uzasadnionego okna i pominięcie nieużywanego powietrza.
+Nie wolno przenosić takiej optymalizacji do C1/A1, gdzie airbox i demag
+są częścią fizycznego problemu.
+
+### Następny managed eksperyment #144
+
+Kod FEM CPU zastępuje MGS przez klasyczną ortogonalizację Gram--Schmidta
+z wymuszonym refinementem przy każdym kroku GMRES
+(`KSP_GMRES_CGS_REFINE_ALWAYS`). Jest to eksperyment numeryczny według
+dokumentacji PETSc, nie poluzowanie tolerancji. Diagnostyka raportuje
+`ksp_orthogonalization=classical_gram_schmidt_refine_always`. Nota 0831,
+source-map, 10 testów kontraktu matematycznego i 32 testy narzędzia
+dokumentacyjnego przeszły; testów jednostkowych natywnych nie kompilowano
+zgodnie z tymczasową regułą repozytorium.
+
+Job #144 `f5c88d52b5884ac9a4d35e81733ad4f2` (profil
+`fem-cpu-slepc-runtime-v1`) został przyjęty przez jedyną kolejkę jako
+snapshot `3d7ded5031c71bfe81fa76cd29af2a523a9156c30e9db9b8095d4e1382aafb44`.
+Hash źródła solvera w kapsule i worktree jest identyczny:
+`cd41d27fe92870eec849eb29d8bad229095a4a9cf1c217355b2f7b6421562491`.
+Job zakończył się `succeeded`, exit 0. Receipt potwierdza zgodny digest
+źródeł oraz 14/14 artefaktów zweryfikowanych co do rozmiaru i SHA-256.
+Jest to wyłącznie sukces buildu runtime, bez kwalifikacji naukowej.
+Dry-run pilota `de-smoke-k2` przeszedł.
+
+Produkcyjny pilot `905d3e1fe10c4d5abac215ebb5b0fd34` dla
+`k=(0,2e6,0) rad/m` zakończył się exit 1: dwa podokna osiągnęły
+`EPS_DIVERGED_ITS` po 2000 iteracji każde; przyjęto 0 modów i nie
+powstał wiersz CSV. Przy domyślnym prefiltrze `1e-11` ostatnie rzeczywiste
+względne residuale KSP wyniosły odpowiednio `8.74e-7` oraz `1.09e-6`,
+a największe zarejestrowane w każdym podoknie `8.59e-5` oraz `5.83e-5`.
+Wymuszony refinement CGS nie poprawił tych pomiarów względem poprzedniego
+pilota z MGS.
+
+Osobny przebieg diagnostyczny `7a48da1936574c35835660a5b4ea057f`
+zmienił wyłącznie prefiltr EPS na `1e-8`. Ujawnił kandydata
+`9.723336314088953 GHz`, lecz jego oryginalny residual magnetyczny
+`2.603591055862589e-7` przekroczył niezmieniony próg fizycznej
+akceptacji `1e-8`; 0 modów przyjęto. Wartość jest bliska referencji
+analitycznej jednorodnego filmu `9.725724281195415 GHz`: różnica wynosi
+`-2.387967 MHz` (`-0.024553%`). Od wcześniej obliczonej wartości własnej
+dense Schur oracle `9.723336314058123 GHz` różni się tylko o około
+`0.031 Hz`, lecz oracle pochodzi z wcześniejszego przebiegu, a zgodność
+samej wartości własnej nie certyfikuje wektora, residualu ani zbieżności
+siatki. Kandydat nie jest produkcyjnym punktem dyspersji. Następny
+kontrolowany eksperyment powinien
+wymusić restart GMRES przed obserwowaną pozorną zbieżnością po około
+13--15 iteracjach, raportować rzeczywisty residual po ponownym starcie
+i zachować oryginalne progi. Dopiero po udanym punkcie C1/DE należy
+przejść do A1 i porównania z przekazanym CSV COMSOL.
+
+### Diagnostyka restartu GMRES — managed job #145
+
+Dodano ograniczone wartości `FULLMAG_FLOQUET_GMRES_RESTART` 8, 10, 12, 16
+i 30 dla pilota `de-smoke-k2`; domyślne 30 zachowuje dotychczasową politykę.
+Wynik solvera zapisuje rzeczywistą wartość `ksp_restart` w diagnostyce
+podokna. Próg fizycznego residualu `1e-8`, prefiltr EPS, normę KSP,
+preconditioner i geometrię pozostawiono bez zmiany. Celem jest pomiar,
+czy wcześniejszy restart przed obserwowaną pozorną zbieżnością po około
+13--15 iteracjach poprawia rzeczywisty residual układu.
+
+Interpretowane testy narzędzi pilota: 25 PASS i 4 subtesty PASS; walidator
+noty 0831, jej 32 testy kontraktowe i test dokumentacji matematycznej
+przeszły. Natrywnych testów jednostkowych nie kompilowano zgodnie z
+tymczasową regułą repozytorium. Job #145
+`06549612ec9c428e9be18f0c1e18e10a`, profil
+`fem-cpu-slepc-runtime-v1`, snapshot source digest
+`4a7af19818788336e2e92afc43252bfe1c963dc6f56ae95ae8ae143b8eed5d22`,
+capture `dd2a7210b0e04124875d0bc18eadf8b8`, został przyjęty do
+wspólnej kolejki; ostatnio odczytany stan `running`. Snapshot wykonano
+przed późniejszą korektą przestarzałych atrap w testach Pythona; nie
+zmieniła ona produkcyjnego kodu solvera ani pilota. Po terminalnym
+receipcie wymagany jest dry-run i rzeczywisty pilot przy restarcie 10,
+następnie porównanie z domyślnym 30 na tym samym binarium. Żaden z tych
+kroków nie oznacza jeszcze kwalifikacji fizycznej.
+
+### S08 — stan lokalnej kontroli frontendowej podczas #145
+
+Próba uruchomienia czterech skupionych testów Vitest modelu dyspersji,
+renderera i selekcji punktu nie dotarła do testów: `vitest` nie jest
+dostępny w tym worktree. `apps/control-room/node_modules` jest junctionem
+do przypisanego katalogu `storage/builds/<worktree-id>/frontend/...`, lecz
+jego cel obecnie nie istnieje. To brak lokalnych zależności, nie wynik
+`PASS` ani `FAIL` funkcji UI. Nie tworzono drugiego cache ani nie
+uruchamiano instalacji równolegle do aktywnego managed buildu #145.
+Po zakończeniu buildu należy odtworzyć zależności zgodnie z resolverem
+storage i ponowić testy; osobno potrzebny jest dowód browser/WebGL.
+
+### S02 — kontrola publicznego przykładu periodycznego
+
+`packages/fullmag-py/tests/test_periodic_antidot_eigenmodes_example.py`
+przeszedł: 9 testów i 6 podtestów PASS, z `PYTHONPATH` wskazującym
+`packages/fullmag-py/src` również dla subprocessu eksportującego konfigurację.
+Pierwsza próba bez tej ścieżki zatrzymała się na `ModuleNotFoundError` podczas
+zbierania testów; próba z lokalnym `sys.path` przeszła 8/9, lecz subprocess
+nadal nie widział pakietu. Ostateczny poprawny przebieg nie zmienia
+źródeł. Dowód obejmuje authoring/eksport Python, nie managed FEM runtime,
+fizykę dyspersji ani kwalifikację S02 jako całości.

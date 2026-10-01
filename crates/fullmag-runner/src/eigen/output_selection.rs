@@ -669,6 +669,7 @@ mod tests {
             amplitude: None,
             phase: None,
             node_mass_weights: None,
+            consistent_p1_metric: None,
             component_participation:
                 crate::eigen::ModalParticipationObservable::unavailable_without_context("test"),
         }

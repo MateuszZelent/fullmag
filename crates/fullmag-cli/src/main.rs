@@ -1,6 +1,6 @@
 use anyhow::{anyhow, bail, Context, Result};
-use fullmag_application::{DocumentMode, FileProjectRepository, ProjectApplication, ProjectSource};
 use clap::Parser;
+use fullmag_application::{DocumentMode, FileProjectRepository, ProjectApplication, ProjectSource};
 use fullmag_engine::run_reference_exchange_demo;
 use fullmag_ir::{BackendPlanIR, BackendTarget, ProblemIR};
 use serde_json::Value;

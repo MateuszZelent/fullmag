@@ -2,9 +2,10 @@
 from __future__ import annotations
 import argparse
 import json
+import math
 from pathlib import Path
 import re
-from collect_de_bv_thickness_comparison import collect_record, read_json
+from collect_de_bv_thickness_comparison import collect_record, collect_control, read_json
 from compare_de_bv_mode_profiles import sha256
 from run_nonzero_k_validation_controller import validation_cases
 
@@ -24,6 +25,25 @@ def collect(control_path):
     model_ref = config.get("model_ref")
     if not isinstance(model_ref, str) or re.fullmatch(r"[a-f0-9]{40}", model_ref) is None:
         raise ValueError("expected full model source commit")
+    if (len(root.parents) < 5 or root.name != control["job_id"] or root.parent.name != "nonzero-k-validation"
+            or root.parents[1].name != "scientific-batches" or root.parents[3].name != "runs"):
+        raise ValueError("controller report is outside its canonical batch")
+    capsule = Path(config.get("capsule", "")).resolve()
+    storage = root.parents[4]
+    expected_prefix = "runs/" + root.parents[2].name + "/"
+    try:
+        relative = capsule.relative_to(storage).as_posix()
+    except ValueError as error:
+        raise ValueError("controller capsule escapes batch storage") from error
+    if re.fullmatch(re.escape(expected_prefix) + r"[a-f0-9]{32}/source/tree", relative) is None:
+        raise ValueError("controller capsule path is not canonical")
+    controller_source = capsule / "scripts/run_nonzero_k_validation_controller.py"
+    declared_controller_hash = config.get("controller_sha256")
+    if (not isinstance(declared_controller_hash, str)
+            or re.fullmatch(r"[a-f0-9]{64}", declared_controller_hash) is None
+            or not controller_source.is_file() or controller_source.is_symlink()
+            or sha256(controller_source) != declared_controller_hash):
+        raise ValueError("controller source hash differs from pinned capsule")
     expected = validation_cases("signed-13")
     rows = control.get("results")
     if not isinstance(rows, list) or len(rows) != len(expected):
@@ -42,6 +62,10 @@ def collect(control_path):
         if (not isinstance(job, dict) or job.get("job_id") != control["job_id"]
                 or job.get("source_digest") != control["source_digest"]):
             raise ValueError("case build source identity mismatch")
+        source = request.get("source")
+        if (not isinstance(source, dict)
+                or source.get("capsule_relative") != relative.removesuffix("/tree")):
+            raise ValueError("case source capsule differs from pinned controller")
         if layers != "3":
             continue  # Separate thickness collector receives convergence-results.json.
         record = collect_record(output, 3, job, sampling=pilot.removeprefix("de-smoke-"))
@@ -58,23 +82,40 @@ def collect(control_path):
             raise ValueError("signed comparison changes controlled material, mesh or source")
         points.append(record)
     wanted = {0.0, *[sign * magnitude * 1e6 for magnitude in (2, 5, 10, 15, 20, 25) for sign in (-1, 1)]}
+    indexed = {}
     for geometry in ("damon_eshbach", "backward_volume"):
         selected = [r for r in points if r["geometry"] == geometry]
-        if len(selected) != 13 or {r["k_rad_per_m"] for r in selected} != wanted:
+        if len(selected) != 13:
             raise ValueError("signed dispersion lacks actual samples")
+        by_k = {}
+        for expected_k in wanted:
+            matches = [r for r in selected if math.isclose(
+                r["k_rad_per_m"], expected_k, rel_tol=1e-12, abs_tol=1e-12)]
+            if len(matches) != 1:
+                raise ValueError("signed dispersion lacks unique actual samples")
+            by_k[expected_k] = matches[0]
+        indexed[geometry] = by_k
     symmetry = []
     for geometry in ("damon_eshbach", "backward_volume"):
-        by_k = {r["k_rad_per_m"]: r for r in points if r["geometry"] == geometry}
+        by_k = indexed[geometry]
         for magnitude in (2, 5, 10, 15, 20, 25):
             positive, negative = by_k[magnitude * 1e6], by_k[-magnitude * 1e6]
             mean = (positive["frequency_hz"] + negative["frequency_hz"]) / 2
             symmetry.append({"geometry": geometry, "abs_k_rad_per_m": magnitude * 1e6,
+                "actual_positive_k_rad_per_m": positive["k_rad_per_m"],
+                "actual_negative_k_rad_per_m": negative["k_rad_per_m"],
                 "f_positive_hz": positive["frequency_hz"], "f_negative_hz": negative["frequency_hz"],
                 "signed_difference_hz": positive["frequency_hz"] - negative["frequency_hz"],
                 "relative_difference_percent": 100 * (positive["frequency_hz"] - negative["frequency_hz"]) / mean})
+    convergence = collect_control(root / "convergence-results.json")
+    if convergence.get("controller_config_sha256") != sha256(root / "controller-config.json"):
+        raise ValueError("convergence evidence differs from signed controller config")
     return {"schema": "fullmag.signed-de-bv-dispersion.v1", "qualification": "NOT VERIFIED",
             "scope": "actual signed-k samples; convergence and scientific qualification remain separate",
             "records": points, "symmetry_measurements": symmetry,
+            "convergence_evidence": convergence,
+            "controller_source_sha256": declared_controller_hash,
+            "collector_source_sha256": sha256(Path(__file__)),
             "controller_sha256": sha256(control_path),
             "controller_config_sha256": sha256(root / "controller-config.json")}
 

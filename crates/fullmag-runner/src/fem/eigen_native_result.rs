@@ -30,14 +30,14 @@ pub(super) struct NativeModalEigenpair {
     pub(super) omega_rad_s: f64,
     pub(super) eigenvalue_real: f64,
     pub(super) eigenvalue_imag: f64,
-    pub(super) residual_absolute_l2: f64,
+    pub(super) residual_absolute_l2: Option<f64>,
     pub(super) residual_relative_l2: f64,
-    pub(super) residual_linf: f64,
+    pub(super) residual_linf: Option<f64>,
     pub(super) mass_norm: f64,
     pub(super) block_residual_q: f64,
     pub(super) block_residual_phi: f64,
-    pub(super) block_residual_gauge: f64,
-    pub(super) backend_reported_residual: f64,
+    pub(super) block_residual_gauge: Option<f64>,
+    pub(super) backend_reported_residual: Option<f64>,
     pub(super) vector: Vec<Complex64>,
     /// Native tangent coordinates before Cartesian mode-field projection.
     /// Shared-domain Poisson modes retain the scalar potential payload too;
@@ -49,20 +49,42 @@ pub(super) struct NativeModalEigenpair {
     /// layout emitted by the native formatter; it is not a Cartesian mesh
     /// field and must not be promoted to a geometric-BC certificate.
     pub(super) floquet_descriptor_certified: bool,
+    pub(super) floquet_full_descriptor_certified: bool,
+    pub(super) floquet_seam_frame_certified: bool,
+    pub(super) floquet_gauge_policy_satisfied: bool,
     pub(super) floquet_geometric_bc_certified: bool,
+    pub(super) floquet_poisson_boundary_kind: Option<String>,
+    pub(super) floquet_poisson_gauge_policy: Option<String>,
     pub(super) floquet_potential_representation: Option<String>,
     pub(super) floquet_magnetic_relative_residual: Option<f64>,
     pub(super) floquet_potential_relative_residual: Option<f64>,
+    pub(super) floquet_full_magnetic_relative_residual: Option<f64>,
+    pub(super) floquet_full_potential_relative_residual: Option<f64>,
+    pub(super) floquet_scalar_phase_seam_relative_residual: Option<f64>,
+    pub(super) floquet_tangent_frame_seam_relative_residual: Option<f64>,
+    pub(super) floquet_cartesian_magnetic_seam_relative_residual: Option<f64>,
+    pub(super) floquet_equilibrium_pair_relative_residual: Option<f64>,
     pub(super) floquet_potential_real_split: Vec<Complex64>,
 }
 
 #[derive(Debug, Default)]
 struct NativeFloquetModeCertificate {
     descriptor_certified: bool,
+    full_descriptor_certified: bool,
+    seam_frame_certified: bool,
+    gauge_policy_satisfied: bool,
     geometric_bc_certified: bool,
+    poisson_boundary_kind: Option<String>,
+    poisson_gauge_policy: Option<String>,
     potential_representation: Option<String>,
     magnetic_relative_residual: Option<f64>,
     potential_relative_residual: Option<f64>,
+    full_magnetic_relative_residual: Option<f64>,
+    full_potential_relative_residual: Option<f64>,
+    scalar_phase_seam_relative_residual: Option<f64>,
+    tangent_frame_seam_relative_residual: Option<f64>,
+    cartesian_magnetic_seam_relative_residual: Option<f64>,
+    equilibrium_pair_relative_residual: Option<f64>,
     potential_real_split: Vec<Complex64>,
 }
 
@@ -573,9 +595,10 @@ pub(super) fn native_poisson_airbox_mode_from_json(
             });
         }
         validate_native_physical_potential_layout(mode)?;
-        // Physical phi is normalized and exported below. It must never enter
-        // the legacy doubled-real coefficient artifact writer.
-        NativeFloquetModeCertificate::default()
+        // Physical phi is normalized and exported below. Parse its independent
+        // full-field/seam diagnostics, but keep it out of the legacy
+        // doubled-real coefficient artifact writer.
+        native_floquet_physical_mode_certificate_from_json(mode)?
     } else {
         native_floquet_mode_certificate_from_json(mode, normalization_scale)?
     };
@@ -607,21 +630,15 @@ pub(super) fn native_poisson_airbox_mode_from_json(
         .zip(phi_imag.iter())
         .map(|(re, im)| Complex64::new(*re, *im) / normalization_scale)
         .collect::<Vec<_>>();
-    let residual = mode
-        .get("full_residual_reconstruction_relative_error")
-        .map(|_| required_f64(mode, "full_residual_reconstruction_relative_error"))
-        .unwrap_or_else(|| required_f64(mode, "relative_residual"))?;
-    let residual_relative_l2 = mode
-        .get("relative_residual")
-        .map(|_| required_f64(mode, "relative_residual"))
-        .unwrap_or(Ok(residual))?;
+    let (residual_absolute_l2, residual_relative_l2, residual_linf, backend_reported_residual) =
+        native_modal_residuals_from_json(mode)?;
     let block_residual_q = if shared_domain_context.is_some() {
         required_f64(mode, "magnetic_block_backward_error")?
     } else {
         mode.get("magnetic_block_backward_error")
             .map(|_| required_f64(mode, "magnetic_block_backward_error"))
             .transpose()?
-            .unwrap_or(residual)
+            .unwrap_or(residual_relative_l2)
     };
     let block_residual_phi = if shared_domain_context.is_some() {
         required_f64(mode, "poisson_block_backward_error")?
@@ -631,30 +648,23 @@ pub(super) fn native_poisson_airbox_mode_from_json(
             .transpose()?
             .unwrap_or(0.0)
     };
-    let block_residual_gauge = if shared_domain_context.is_some() {
-        required_f64(mode, "gauge_constraint_backward_error")?
-    } else {
-        mode.get("gauge_constraint_backward_error")
-            .map(|_| required_f64(mode, "gauge_constraint_backward_error"))
-            .transpose()?
-            .unwrap_or(0.0)
-    };
+    let block_residual_gauge = optional_nonnegative_f64(mode, "gauge_constraint_backward_error")?;
+    if shared_domain_context.is_some() && mode.get("gauge_constraint_backward_error").is_none() {
+        return Err(RunError {
+            message: "native shared-domain modal result is missing gauge_constraint_backward_error (use null when no scalar gauge equation applies)".to_string(),
+        });
+    }
     for (name, value) in [
-        ("magnetic_block_backward_error", block_residual_q),
-        ("poisson_block_backward_error", block_residual_phi),
+        ("magnetic_block_backward_error", Some(block_residual_q)),
+        ("poisson_block_backward_error", Some(block_residual_phi)),
         ("gauge_constraint_backward_error", block_residual_gauge),
     ] {
-        if value < 0.0 {
+        if value.is_some_and(|value| value < 0.0) {
             return Err(RunError {
                 message: format!("native modal result field '{name}' must be non-negative"),
             });
         }
     }
-    let backend_reported_residual = mode
-        .get("slepc_reported_backward_error")
-        .map(|_| required_f64(mode, "slepc_reported_backward_error"))
-        .transpose()?
-        .unwrap_or(residual_relative_l2);
     let vector_for_projection = if let Some(context) = shared_domain_context {
         if vector.len() != 2usize.saturating_mul(context.magnetic_class_count) {
             return Err(RunError {
@@ -697,9 +707,9 @@ pub(super) fn native_poisson_airbox_mode_from_json(
         omega_rad_s,
         eigenvalue_real,
         eigenvalue_imag,
-        residual_absolute_l2: residual,
+        residual_absolute_l2,
         residual_relative_l2,
-        residual_linf: residual,
+        residual_linf,
         mass_norm: complex_block_mass_norm(tangent_mass, &vector).re,
         block_residual_q,
         block_residual_phi,
@@ -708,10 +718,27 @@ pub(super) fn native_poisson_airbox_mode_from_json(
         q_vector: vector.clone(),
         phi_vector,
         floquet_descriptor_certified: floquet_certificate.descriptor_certified,
+        floquet_full_descriptor_certified: floquet_certificate.full_descriptor_certified,
+        floquet_seam_frame_certified: floquet_certificate.seam_frame_certified,
+        floquet_gauge_policy_satisfied: floquet_certificate.gauge_policy_satisfied,
         floquet_geometric_bc_certified: floquet_certificate.geometric_bc_certified,
+        floquet_poisson_boundary_kind: floquet_certificate.poisson_boundary_kind,
+        floquet_poisson_gauge_policy: floquet_certificate.poisson_gauge_policy,
         floquet_potential_representation: floquet_certificate.potential_representation,
         floquet_magnetic_relative_residual: floquet_certificate.magnetic_relative_residual,
         floquet_potential_relative_residual: floquet_certificate.potential_relative_residual,
+        floquet_full_magnetic_relative_residual: floquet_certificate
+            .full_magnetic_relative_residual,
+        floquet_full_potential_relative_residual: floquet_certificate
+            .full_potential_relative_residual,
+        floquet_scalar_phase_seam_relative_residual: floquet_certificate
+            .scalar_phase_seam_relative_residual,
+        floquet_tangent_frame_seam_relative_residual: floquet_certificate
+            .tangent_frame_seam_relative_residual,
+        floquet_cartesian_magnetic_seam_relative_residual: floquet_certificate
+            .cartesian_magnetic_seam_relative_residual,
+        floquet_equilibrium_pair_relative_residual: floquet_certificate
+            .equilibrium_pair_relative_residual,
         floquet_potential_real_split: floquet_certificate.potential_real_split,
         vector: vector_for_projection,
     })
@@ -793,22 +820,39 @@ fn native_bloch_floquet_mode_from_json(
         omega_rad_s,
         eigenvalue_real,
         eigenvalue_imag,
-        residual_absolute_l2,
+        residual_absolute_l2: Some(residual_absolute_l2),
         residual_relative_l2,
-        residual_linf,
+        residual_linf: Some(residual_linf),
         mass_norm,
         block_residual_q: residual_relative_l2,
         block_residual_phi: 0.0,
-        block_residual_gauge: 0.0,
-        backend_reported_residual: residual_relative_l2,
+        block_residual_gauge: None,
+        backend_reported_residual: None,
         vector,
         q_vector: Vec::new(),
         phi_vector: Vec::new(),
         floquet_descriptor_certified: floquet_certificate.descriptor_certified,
+        floquet_full_descriptor_certified: floquet_certificate.full_descriptor_certified,
+        floquet_seam_frame_certified: floquet_certificate.seam_frame_certified,
+        floquet_gauge_policy_satisfied: floquet_certificate.gauge_policy_satisfied,
         floquet_geometric_bc_certified: floquet_certificate.geometric_bc_certified,
+        floquet_poisson_boundary_kind: floquet_certificate.poisson_boundary_kind,
+        floquet_poisson_gauge_policy: floquet_certificate.poisson_gauge_policy,
         floquet_potential_representation: floquet_certificate.potential_representation,
         floquet_magnetic_relative_residual: floquet_certificate.magnetic_relative_residual,
         floquet_potential_relative_residual: floquet_certificate.potential_relative_residual,
+        floquet_full_magnetic_relative_residual: floquet_certificate
+            .full_magnetic_relative_residual,
+        floquet_full_potential_relative_residual: floquet_certificate
+            .full_potential_relative_residual,
+        floquet_scalar_phase_seam_relative_residual: floquet_certificate
+            .scalar_phase_seam_relative_residual,
+        floquet_tangent_frame_seam_relative_residual: floquet_certificate
+            .tangent_frame_seam_relative_residual,
+        floquet_cartesian_magnetic_seam_relative_residual: floquet_certificate
+            .cartesian_magnetic_seam_relative_residual,
+        floquet_equilibrium_pair_relative_residual: floquet_certificate
+            .equilibrium_pair_relative_residual,
         floquet_potential_real_split: floquet_certificate.potential_real_split,
     })
 }
@@ -856,22 +900,39 @@ fn native_modal_mode_from_json(
         omega_rad_s,
         eigenvalue_real,
         eigenvalue_imag,
-        residual_absolute_l2,
+        residual_absolute_l2: Some(residual_absolute_l2),
         residual_relative_l2,
-        residual_linf,
+        residual_linf: Some(residual_linf),
         mass_norm,
         block_residual_q: residual_relative_l2,
         block_residual_phi: 0.0,
-        block_residual_gauge: 0.0,
-        backend_reported_residual: residual_relative_l2,
+        block_residual_gauge: None,
+        backend_reported_residual: None,
         vector,
         q_vector: Vec::new(),
         phi_vector: Vec::new(),
         floquet_descriptor_certified: floquet_certificate.descriptor_certified,
+        floquet_full_descriptor_certified: floquet_certificate.full_descriptor_certified,
+        floquet_seam_frame_certified: floquet_certificate.seam_frame_certified,
+        floquet_gauge_policy_satisfied: floquet_certificate.gauge_policy_satisfied,
         floquet_geometric_bc_certified: floquet_certificate.geometric_bc_certified,
+        floquet_poisson_boundary_kind: floquet_certificate.poisson_boundary_kind,
+        floquet_poisson_gauge_policy: floquet_certificate.poisson_gauge_policy,
         floquet_potential_representation: floquet_certificate.potential_representation,
         floquet_magnetic_relative_residual: floquet_certificate.magnetic_relative_residual,
         floquet_potential_relative_residual: floquet_certificate.potential_relative_residual,
+        floquet_full_magnetic_relative_residual: floquet_certificate
+            .full_magnetic_relative_residual,
+        floquet_full_potential_relative_residual: floquet_certificate
+            .full_potential_relative_residual,
+        floquet_scalar_phase_seam_relative_residual: floquet_certificate
+            .scalar_phase_seam_relative_residual,
+        floquet_tangent_frame_seam_relative_residual: floquet_certificate
+            .tangent_frame_seam_relative_residual,
+        floquet_cartesian_magnetic_seam_relative_residual: floquet_certificate
+            .cartesian_magnetic_seam_relative_residual,
+        floquet_equilibrium_pair_relative_residual: floquet_certificate
+            .equilibrium_pair_relative_residual,
         floquet_potential_real_split: floquet_certificate.potential_real_split,
     })
 }
@@ -919,6 +980,44 @@ fn required_f64(value: &serde_json::Value, key: &str) -> Result<f64, RunError> {
         .ok_or_else(|| RunError {
             message: format!("native modal result field '{key}' must be finite"),
         })
+}
+
+fn optional_nonnegative_f64(value: &serde_json::Value, key: &str) -> Result<Option<f64>, RunError> {
+    let Some(field) = value.get(key) else {
+        return Ok(None);
+    };
+    if field.is_null() {
+        return Ok(None);
+    }
+    let number = required_f64(value, key)?;
+    if number < 0.0 {
+        return Err(RunError {
+            message: format!("native modal result field '{key}' must be non-negative"),
+        });
+    }
+    Ok(Some(number))
+}
+
+fn native_modal_residuals_from_json(
+    mode: &serde_json::Value,
+) -> Result<(Option<f64>, f64, Option<f64>, Option<f64>), RunError> {
+    let residual_relative_l2 = match optional_nonnegative_f64(mode, "relative_residual")? {
+        Some(value) => value,
+        None => optional_nonnegative_f64(mode, "full_residual_reconstruction_relative_error")?
+            .ok_or_else(|| RunError {
+                message: "native modal result is missing a relative residual".to_string(),
+            })?,
+    };
+    let residual_absolute_l2 = optional_nonnegative_f64(mode, "residual_absolute_l2")?;
+    let residual_linf = optional_nonnegative_f64(mode, "residual_linf")?;
+    let backend_reported_residual =
+        optional_nonnegative_f64(mode, "slepc_reported_backward_error")?;
+    Ok((
+        residual_absolute_l2,
+        residual_relative_l2,
+        residual_linf,
+        backend_reported_residual,
+    ))
 }
 
 #[allow(dead_code)]
@@ -971,6 +1070,173 @@ fn validate_native_physical_potential_layout(mode: &serde_json::Value) -> Result
         });
     }
     Ok(())
+}
+
+fn native_floquet_physical_mode_certificate_from_json(
+    mode: &serde_json::Value,
+) -> Result<NativeFloquetModeCertificate, RunError> {
+    let required_bool = |key: &str| {
+        mode.get(key)
+            .and_then(serde_json::Value::as_bool)
+            .ok_or_else(|| RunError {
+                message: format!("native physical Floquet mode requires boolean '{key}'"),
+            })
+    };
+    let descriptor_certified = required_bool("floquet_descriptor_certified")?;
+    let full_descriptor_certified = required_bool("floquet_full_descriptor_certified")?;
+    let seam_frame_certified = required_bool("floquet_seam_frame_certified")?;
+    let gauge_policy_satisfied = required_bool("floquet_gauge_policy_satisfied")?;
+    let geometric_bc_certified = required_bool("floquet_geometric_bc_certified")?;
+    if geometric_bc_certified {
+        return Err(RunError {
+            message: "native Floquet certificate cannot claim geometric BC certification".into(),
+        });
+    }
+    if descriptor_certified != full_descriptor_certified {
+        return Err(RunError {
+            message: "native Floquet descriptor and full-descriptor certification flags disagree"
+                .into(),
+        });
+    }
+    let potential_representation = mode
+        .get("potential_representation")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| *value == "complex_coefficients")
+        .map(str::to_owned)
+        .ok_or_else(|| RunError {
+            message: "native physical Floquet mode has an unsupported potential representation"
+                .into(),
+        })?;
+    let poisson_boundary_kind = mode
+        .get("poisson_boundary_kind")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| {
+            matches!(
+                *value,
+                "pure_neumann" | "poisson_robin" | "poisson_dirichlet"
+            )
+        })
+        .map(str::to_owned)
+        .ok_or_else(|| RunError {
+            message:
+                "native physical Floquet mode has a missing or unsupported Poisson boundary kind"
+                    .into(),
+        })?;
+    let poisson_gauge_policy = mode
+        .get("poisson_gauge_policy")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| matches!(*value, "require_invertible" | "none"))
+        .map(str::to_owned)
+        .ok_or_else(|| RunError {
+            message:
+                "native physical Floquet mode has a missing or unsupported Poisson gauge policy"
+                    .into(),
+        })?;
+    let poisson_policy_matches_boundary = match poisson_boundary_kind.as_str() {
+        "pure_neumann" => poisson_gauge_policy == "require_invertible",
+        "poisson_robin" | "poisson_dirichlet" => poisson_gauge_policy == "none",
+        _ => false,
+    };
+    if gauge_policy_satisfied != poisson_policy_matches_boundary {
+        return Err(RunError {
+            message: "native Floquet gauge-policy certificate disagrees with the Poisson boundary and gauge policy".into(),
+        });
+    }
+
+    let magnetic_relative_residual = optional_nonnegative_f64(mode, "magnetic_relative_residual")?;
+    let potential_relative_residual =
+        optional_nonnegative_f64(mode, "potential_relative_residual")?;
+    let full_magnetic_relative_residual =
+        optional_nonnegative_f64(mode, "floquet_full_magnetic_relative_residual")?;
+    let full_potential_relative_residual =
+        optional_nonnegative_f64(mode, "floquet_full_potential_relative_residual")?;
+    let scalar_phase_seam_relative_residual =
+        optional_nonnegative_f64(mode, "floquet_scalar_phase_seam_relative_residual")?;
+    let tangent_frame_seam_relative_residual =
+        optional_nonnegative_f64(mode, "floquet_tangent_frame_seam_relative_residual")?;
+    let cartesian_magnetic_seam_relative_residual =
+        optional_nonnegative_f64(mode, "floquet_cartesian_magnetic_seam_relative_residual")?;
+    let equilibrium_pair_relative_residual =
+        optional_nonnegative_f64(mode, "floquet_equilibrium_pair_relative_residual")?;
+    let gauge_constraint_backward_error =
+        optional_nonnegative_f64(mode, "gauge_constraint_backward_error")?;
+    if mode.get("gauge_constraint_backward_error").is_none()
+        || gauge_constraint_backward_error.is_some()
+        || mode
+            .get("gauge_constraint_policy")
+            .and_then(serde_json::Value::as_str)
+            != Some("nonzero_k_poisson_without_mean_constraint")
+    {
+        return Err(RunError {
+            message: "native nonzero-k Floquet mode must identify the invertible Poisson gauge policy and leave the inapplicable gauge residual null".into(),
+        });
+    }
+
+    if full_descriptor_certified {
+        const TOLERANCE: f64 = 1.0e-8;
+        let required_residuals = [
+            ("magnetic_relative_residual", magnetic_relative_residual),
+            ("potential_relative_residual", potential_relative_residual),
+            (
+                "floquet_full_magnetic_relative_residual",
+                full_magnetic_relative_residual,
+            ),
+            (
+                "floquet_full_potential_relative_residual",
+                full_potential_relative_residual,
+            ),
+            (
+                "floquet_scalar_phase_seam_relative_residual",
+                scalar_phase_seam_relative_residual,
+            ),
+            (
+                "floquet_tangent_frame_seam_relative_residual",
+                tangent_frame_seam_relative_residual,
+            ),
+            (
+                "floquet_cartesian_magnetic_seam_relative_residual",
+                cartesian_magnetic_seam_relative_residual,
+            ),
+            (
+                "floquet_equilibrium_pair_relative_residual",
+                equilibrium_pair_relative_residual,
+            ),
+        ];
+        if !seam_frame_certified || !gauge_policy_satisfied {
+            return Err(RunError {
+                message: "native full Floquet descriptor certificate is missing seam or gauge-policy proof".into(),
+            });
+        }
+        for (name, value) in required_residuals {
+            if !value.is_some_and(|value| value <= TOLERANCE) {
+                return Err(RunError {
+                    message: format!(
+                        "native full Floquet certificate requires '{name}' in [0, {TOLERANCE}]"
+                    ),
+                });
+            }
+        }
+    }
+
+    Ok(NativeFloquetModeCertificate {
+        descriptor_certified,
+        full_descriptor_certified,
+        seam_frame_certified,
+        gauge_policy_satisfied,
+        geometric_bc_certified: false,
+        poisson_boundary_kind: Some(poisson_boundary_kind),
+        poisson_gauge_policy: Some(poisson_gauge_policy),
+        potential_representation: Some(potential_representation),
+        magnetic_relative_residual,
+        potential_relative_residual,
+        full_magnetic_relative_residual,
+        full_potential_relative_residual,
+        scalar_phase_seam_relative_residual,
+        tangent_frame_seam_relative_residual,
+        cartesian_magnetic_seam_relative_residual,
+        equilibrium_pair_relative_residual,
+        potential_real_split: Vec::new(),
+    })
 }
 
 /// Parse the optional certificate emitted by the native nonzero-k Floquet
@@ -1090,10 +1356,21 @@ fn native_floquet_mode_certificate_from_json(
     }
     Ok(NativeFloquetModeCertificate {
         descriptor_certified: true,
+        full_descriptor_certified: false,
+        seam_frame_certified: false,
+        gauge_policy_satisfied: false,
         geometric_bc_certified: false,
+        poisson_boundary_kind: None,
+        poisson_gauge_policy: None,
         potential_representation: Some(potential_representation),
         magnetic_relative_residual: Some(magnetic_relative_residual),
         potential_relative_residual: Some(potential_relative_residual),
+        full_magnetic_relative_residual: None,
+        full_potential_relative_residual: None,
+        scalar_phase_seam_relative_residual: None,
+        tangent_frame_seam_relative_residual: None,
+        cartesian_magnetic_seam_relative_residual: None,
+        equilibrium_pair_relative_residual: None,
         potential_real_split,
     })
 }
@@ -1166,6 +1443,18 @@ pub(super) fn gyrotropic_pencil_residual_norms(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_modal_residual_parser_keeps_unknown_norms_unavailable() {
+        let mode = serde_json::json!({"relative_residual": 2.5e-10});
+        let (absolute, relative, linf, backend) =
+            native_modal_residuals_from_json(&mode).expect("relative residual should parse");
+
+        assert_eq!(absolute, None);
+        assert_eq!(relative, 2.5e-10);
+        assert_eq!(linf, None);
+        assert_eq!(backend, None);
+    }
 
     #[test]
     fn physical_potential_accepts_odd_dof_count_without_doubled_real_layout() {

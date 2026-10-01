@@ -799,9 +799,9 @@ fn sort_and_truncate_real_modes(plan: &FemEigenPlanIR, eigenpairs: &mut Vec<Real
     // `Lowest`, or folded to 0 Hz by a frequency window (audit finding H7).
     eigenpairs.retain(|pair| pair.eigenvalue_real.is_finite() && pair.eigenvalue_real >= 0.0);
     match &plan.target {
-        fullmag_ir::EigenTargetIR::Lowest => eigenpairs.sort_by(|lhs, rhs| {
-            lhs.eigenvalue_real.total_cmp(&rhs.eigenvalue_real)
-        }),
+        fullmag_ir::EigenTargetIR::Lowest => {
+            eigenpairs.sort_by(|lhs, rhs| lhs.eigenvalue_real.total_cmp(&rhs.eigenvalue_real))
+        }
         fullmag_ir::EigenTargetIR::Nearest { frequency_hz } => eigenpairs.sort_by(|lhs, rhs| {
             let lhs_freq = frequency_from_eigenvalue(plan.gyromagnetic_ratio, lhs.eigenvalue_real)
                 .expect("eigenvalue_real already filtered non-negative and finite above");
@@ -816,11 +816,9 @@ fn sort_and_truncate_real_modes(plan: &FemEigenPlanIR, eigenpairs: &mut Vec<Real
             frequency_max_hz,
         } => {
             eigenpairs.retain(|pair| {
-                let frequency = frequency_from_eigenvalue(
-                    plan.gyromagnetic_ratio,
-                    pair.eigenvalue_real,
-                )
-                .expect("eigenvalue_real already filtered non-negative and finite above");
+                let frequency =
+                    frequency_from_eigenvalue(plan.gyromagnetic_ratio, pair.eigenvalue_real)
+                        .expect("eigenvalue_real already filtered non-negative and finite above");
                 frequency >= *frequency_min_hz && frequency <= *frequency_max_hz
             });
             eigenpairs.sort_by(|lhs, rhs| {
@@ -844,9 +842,9 @@ fn sort_and_truncate_complex_modes(plan: &FemEigenPlanIR, eigenpairs: &mut Vec<C
     // target-specific sorting or window filtering runs.
     eigenpairs.retain(|pair| pair.eigenvalue_real.is_finite() && pair.eigenvalue_real >= 0.0);
     match &plan.target {
-        fullmag_ir::EigenTargetIR::Lowest => eigenpairs.sort_by(|lhs, rhs| {
-            lhs.eigenvalue_real.total_cmp(&rhs.eigenvalue_real)
-        }),
+        fullmag_ir::EigenTargetIR::Lowest => {
+            eigenpairs.sort_by(|lhs, rhs| lhs.eigenvalue_real.total_cmp(&rhs.eigenvalue_real))
+        }
         fullmag_ir::EigenTargetIR::Nearest { frequency_hz } => eigenpairs.sort_by(|lhs, rhs| {
             let lhs_freq = frequency_from_eigenvalue(plan.gyromagnetic_ratio, lhs.eigenvalue_real)
                 .expect("eigenvalue_real already filtered non-negative and finite above");
@@ -861,11 +859,9 @@ fn sort_and_truncate_complex_modes(plan: &FemEigenPlanIR, eigenpairs: &mut Vec<C
             frequency_max_hz,
         } => {
             eigenpairs.retain(|pair| {
-                let frequency = frequency_from_eigenvalue(
-                    plan.gyromagnetic_ratio,
-                    pair.eigenvalue_real,
-                )
-                .expect("eigenvalue_real already filtered non-negative and finite above");
+                let frequency =
+                    frequency_from_eigenvalue(plan.gyromagnetic_ratio, pair.eigenvalue_real)
+                        .expect("eigenvalue_real already filtered non-negative and finite above");
                 frequency >= *frequency_min_hz && frequency <= *frequency_max_hz
             });
             eigenpairs.sort_by(|lhs, rhs| {

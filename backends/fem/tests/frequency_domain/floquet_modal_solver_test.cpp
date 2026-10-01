@@ -15,6 +15,10 @@
 #define FULLMAG_FEM_WITH_SLEPC 0
 #endif
 
+#if FULLMAG_FEM_WITH_SLEPC
+#include <petscksp.h>
+#endif
+
 namespace fd = fullmag::fem::frequency_domain;
 
 namespace {
@@ -337,7 +341,7 @@ void admits_certified_shared_domain_sparse_operator()
           "shared-domain marker without its operator payload is rejected");
 }
 
-void executes_native_sparse_matshell_above_dense_bound()
+void executes_native_sparse_matshell_above_dense_bound(bool force_inner_failure = false)
 {
     constexpr std::size_t q_dimension = 514u;
     // Keep the synthetic fixture above the shared numerical-zero policy
@@ -351,8 +355,8 @@ void executes_native_sparse_matshell_above_dense_bound()
     // keeps mode selection deterministic while exercising the shifted solve.
     constexpr double target_frequency_hz = 1.0001e6;
     const double expected_omega = fd::omega_rad_s_from_frequency_hz(expected_frequency_hz);
-    const std::complex<double> q_phi_coupling(0.25, 0.0);
-    const std::complex<double> phi_q_coupling(0.25, 0.0);
+    const std::complex<double> q_phi_coupling(force_inner_failure ? 1000.0 : 0.25, 0.0);
+    const std::complex<double> phi_q_coupling(force_inner_failure ? 1000.0 : 0.25, 0.0);
 
     // a_qq models the Hermitian magnetic-Hessian block (K + D), which has a
     // REAL diagonal in production (see FIX H3's rotated_a_qq zero-diagonal
@@ -398,10 +402,22 @@ void executes_native_sparse_matshell_above_dense_bound()
     spectral.target_frequency_hz = target_frequency_hz;
     spectral.residual_tolerance = 1.0e-8;
     spectral.max_outer_iterations = 160;
-    spectral.max_linear_iterations = 96;
+    spectral.max_linear_iterations = force_inner_failure ? 1 : 96;
 
     const auto result = fd::solve_floquet_shared_domain_sparse_modal_spectrum(
         operator_view, spectral);
+#if FULLMAG_FEM_WITH_SLEPC
+    if (force_inner_failure) {
+        check(!result.ok && result.modes.empty(),
+              "inner KSP failure must remain fail-closed");
+        check(result.ksp_diagnostics_available &&
+                  result.ksp_converged_reason_available &&
+                  result.ksp_converged_reason <= 0 &&
+                  result.ksp_last_iterations > 0,
+              "failed EPS retains the nonconverged inner KSP diagnostics");
+        return;
+    }
+#endif
     check(result.execution_policy != nullptr &&
               std::strcmp(result.execution_policy, "petsc_sequential_cpu") == 0,
           "native Floquet result exposes the sequential PETSc policy");
@@ -419,6 +435,11 @@ void executes_native_sparse_matshell_above_dense_bound()
               result.poisson_pc_type != nullptr &&
               std::strcmp(result.poisson_pc_type, "lu") == 0,
           "native Floquet result exposes the Poisson LU policy");
+    check(result.poisson_factorization_shift_policy != nullptr &&
+              std::strcmp(
+                  result.poisson_factorization_shift_policy,
+                  "MAT_SHIFT_NONE") == 0,
+          "native Floquet Poisson inversion preserves the original operator");
     check(result.poisson_iteration_semantics != nullptr &&
               std::strcmp(
                   result.poisson_iteration_semantics,
@@ -432,6 +453,15 @@ void executes_native_sparse_matshell_above_dense_bound()
               std::strcmp(result.factorization_package, "petsc_default_lu") == 0,
           "native Floquet result exposes the shifted GMRES/LU policy");
 #if FULLMAG_FEM_WITH_SLEPC
+    check(result.ksp_restart == 8 &&
+              std::abs(result.ksp_breakdown_tolerance - 2.0) <=
+                  std::numeric_limits<double>::epsilon(),
+          "native Floquet result exposes the bounded GMRES restart and residual replacement policy");
+    check(result.factorization_shift_policy != nullptr &&
+              std::strstr(result.factorization_shift_policy,
+                          "magnetic_only_") ==
+                  result.factorization_shift_policy,
+          "large native Floquet systems retain the bounded magnetic-only preconditioner");
     check(result.ok, result.unsupported_reason);
     check(result.accepted_mode_count == 1,
           "native Floquet MatShell regression accepts one requested mode");
@@ -520,6 +550,8 @@ void normalizes_si_scale_floquet_pencil()
     request.tangent_dof_count = static_cast<int>(q_dimension);
     request.requested_mode_count = 1;
     request.target_frequency_hz = frequency_hz + 1.0e4;
+    request.frequency_min_hz = 0.9 * frequency_hz;
+    request.frequency_max_hz = 1.1 * frequency_hz;
     request.residual_tolerance = 1.0e-8;
     request.max_outer_iterations = 160;
     request.max_linear_iterations = 96;
@@ -530,9 +562,72 @@ void normalizes_si_scale_floquet_pencil()
     check(std::isfinite(result.preconditioner_normalization_scale) &&
               result.preconditioner_normalization_scale > 0.0,
           "shifted preconditioner reports a finite positive normalization");
+    check(result.factorization_shift_policy != nullptr &&
+              std::strstr(result.factorization_shift_policy,
+                          "exact_schur_materialized_") ==
+                  result.factorization_shift_policy,
+          "small native Floquet systems precondition with the materialized exact Schur action");
+    check(std::isfinite(result.factorization_shift_amount) &&
+              result.factorization_shift_amount > 0.0,
+          "preconditioner LU reports its resolved positive shift amount");
     check(result.ok, result.unsupported_reason);
     check(std::abs(result.frequency_hz - frequency_hz) < 1.0e-2,
           "pencil scaling preserves the physical eigenfrequency");
+    check(result.positive_frequency_candidate_count > 0 &&
+              result.frequency_window_candidate_count > 0,
+          "native Floquet diagnostics count positive candidates in the target window");
+    check(result.residual_evaluation_candidate_count > 0,
+          "native Floquet diagnostics report evaluated residual candidates");
+    check(std::isfinite(result.max_candidate_relative_residual) &&
+              std::isfinite(result.max_eps_normalized_absolute_residual) &&
+              std::isfinite(result.max_floquet_magnetic_relative_residual) &&
+              std::isfinite(result.max_floquet_potential_relative_residual),
+          "native Floquet diagnostics expose finite residual components");
+    check(result.ksp_diagnostics_available &&
+              result.ksp_converged_reason_available &&
+              result.ksp_converged_reason > 0 &&
+              result.linear_iterations_total > 0 &&
+              result.ksp_last_iterations > 0 &&
+              std::isfinite(result.ksp_final_residual),
+          "Floquet diagnostics report the inner shift-invert KSP work and stop reason");
+    check(result.ksp_last_true_residual_available &&
+              std::isfinite(result.ksp_last_rhs_norm) &&
+              result.ksp_last_rhs_norm > 0.0 &&
+              std::isfinite(result.ksp_last_true_residual_norm) &&
+              std::isfinite(result.ksp_last_true_relative_residual) &&
+              result.ksp_last_true_relative_residual < 1.0e-8 &&
+              result.ksp_true_residual_sample_count > 0 &&
+              result.ksp_true_residual_measurement_failure_count == 0 &&
+              std::isfinite(result.ksp_max_true_relative_residual) &&
+              result.ksp_max_true_relative_residual >=
+                  result.ksp_last_true_relative_residual &&
+              result.ksp_pc_side == static_cast<int>(PC_RIGHT) &&
+              result.ksp_norm_type == static_cast<int>(KSP_NORM_UNPRECONDITIONED),
+          "Floquet diagnostics check the last solve against the original shifted shell");
+    check(std::isfinite(result.worst_candidate_unprojected_magnetic_relative_residual) &&
+              std::isfinite(result.worst_candidate_rotated_imaginary_rad_s) &&
+              std::isfinite(result.worst_candidate_q_projection_ratio) &&
+              result.worst_candidate_q_projection_ratio > 0.0,
+          "Floquet diagnostics expose the unprojected candidate and reconstruction norm");
+    check(result.eps_monitor_iteration > 0 &&
+              result.eps_monitor_iteration <= result.outer_iterations,
+          "Floquet EPS monitor records an iteration from the completed solve");
+    check(result.eps_converged_reason_available && result.eps_converged_reason > 0,
+          "converged Floquet fixture exposes the native EPS stop reason");
+    check(result.eps_dimensions_available && result.eps_nev > 0 &&
+              result.eps_ncv >= result.eps_nev,
+          "Floquet diagnostics expose the resolved Krylov-Schur dimensions");
+    check(result.max_candidate_relative_residual <= request.residual_tolerance,
+          "native Floquet acceptance uses the requested physical block residual");
+    const double expected_eps_tolerance = std::max(
+        100.0 * std::numeric_limits<double>::epsilon(),
+        1.0e-3 * request.residual_tolerance);
+    check(std::abs(result.eps_normalized_absolute_tolerance - expected_eps_tolerance) <=
+              std::numeric_limits<double>::epsilon() * expected_eps_tolerance,
+          "SLEPc absolute true-residual prefilter uses the configured safety factor");
+    check(result.max_eps_normalized_absolute_residual <=
+              result.eps_normalized_absolute_tolerance,
+          "converged EPS candidates satisfy the configured absolute true-residual cutoff");
 #endif
 }
 
@@ -549,5 +644,6 @@ int main()
     admits_certified_shared_domain_sparse_operator();
     executes_native_sparse_matshell_above_dense_bound();
     normalizes_si_scale_floquet_pencil();
+    executes_native_sparse_matshell_above_dense_bound(true);
     return 0;
 }
