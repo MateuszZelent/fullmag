@@ -240,6 +240,16 @@ function validatePayloads(
   if (payloads.power.length !== payloads.kU.length * payloads.kV.length) {
     return "power payload does not match the declared k-grid";
   }
+  if (payloads.kU.some((value) => !Number.isFinite(value)) ||
+      payloads.kV.some((value) => !Number.isFinite(value))) {
+    return "wave-vector payload contains a non-finite value";
+  }
+  if (payloads.amplitudes.some((value) => !Number.isFinite(value))) {
+    return "amplitude payload contains a non-finite value";
+  }
+  if (payloads.power.some((value) => !Number.isFinite(value) || value < 0)) {
+    return "power payload contains a non-finite or negative value";
+  }
   return null;
 }
 
