@@ -11,6 +11,10 @@ import math
 import sys
 from pathlib import Path
 
+from fem_linearization_identity_replay import (
+    IdentityReplayError, replay_identity_preimage, strict_json_object,
+)
+
 
 TWO_PI = 2.0 * math.pi
 MU0 = 1.2566370614359173e-6
@@ -97,10 +101,9 @@ REFERENCE_FULL_2X2_FLOQUET_REJECTION_CONTRACTS = {
     },
 }
 
-# R4 multi-k path sidecars are intentionally validated at the manifest/path
-# boundary here.  Their signed JSON payloads are replayed by a separate
-# accepted-field contract; this verifier must not invent a schema for the
-# still-evolving linearization_identity.v2 producer.
+# R4 discovery binds paths and sample coverage. The additive own-identity
+# preimage is replayed exactly when published; full physical payload replay
+# remains a separate, explicitly unqualified gate.
 R4_SIGNED_SIDECAR_DEFINITIONS = {
     "accepted_fem_equilibrium_fields_v1_paths": (
         "accepted_fem_equilibrium_fields.v1.json",
@@ -137,6 +140,7 @@ R4_ACCEPTED_SIDECAR_KEYS = (
     "accepted_fem_equilibrium_fields_v2_paths",
 )
 R4_IDENTITY_SIDECAR_KEY = "linearization_identity_v2_paths"
+R4_IDENTITY_PREIMAGE_KEY = "linearization_identity_preimage_v1_paths"
 R4_NEW_SIDECAR_KEYS = (
     "certified_fem_equilibrium_fields_v1_paths",
     "certified_fem_equilibrium_fields_v2_paths",
@@ -916,6 +920,7 @@ def _r4_discovery_result(
     identity_sample_indices: set[int] | None = None,
     missing_recomputed_keys: list[str] | None = None,
     computed_sample_indices: set[int] | None = None,
+    identity_content_sha256_by_sample: dict[str, str] | None = None,
 ) -> dict[str, object]:
     if status not in R4_DISCOVERY_STATUSES:
         raise ValueError(f"unknown R4 discovery status: {status}")
@@ -931,6 +936,11 @@ def _r4_discovery_result(
             if computed_sample_indices is None
             else sorted(computed_sample_indices)
         ),
+        "identity_content_digest_status": (
+            "verified_exact_preimage"
+            if identity_content_sha256_by_sample else "unverified_missing_preimage"
+        ),
+        "identity_content_sha256_by_sample": dict(identity_content_sha256_by_sample or {}),
     }
 
 
@@ -997,9 +1007,9 @@ def validate_r4_signed_sidecars(
     available; that state is reported as ``missing_identity`` rather than
     being treated as a certified result.  This function validates only path
     identity and family/sample-set consistency; when supplied, the explicit
-    spectrum sample set is the complete computed-sample contract.  Accepted/
-    recomputed field replay and the opaque identity-v2 payload remain separate
-    gates.
+    spectrum sample set is the complete computed-sample contract. Published
+    exact identity preimages are checked cryptographically. Accepted/recomputed
+    physical field replay and linked source/state checks remain separate gates.
     """
     if not isinstance(artifacts, dict):
         return _r4_discovery_result(
@@ -1009,7 +1019,8 @@ def validate_r4_signed_sidecars(
         )
     keys = tuple(R4_SIGNED_SIDECAR_DEFINITIONS)
     present = [key for key in keys if key in artifacts]
-    if not present:
+    preimage_present = R4_IDENTITY_PREIMAGE_KEY in artifacts
+    if not present and not preimage_present:
         return _r4_discovery_result(
             "historical",
             "R4 sidecar arrays are absent from a historical manifest",
@@ -1044,6 +1055,10 @@ def validate_r4_signed_sidecars(
     accepted_v1 = declared.get("accepted_fem_equilibrium_fields_v1_paths") or {}
     accepted_v2 = declared.get("accepted_fem_equilibrium_fields_v2_paths") or {}
     identity_v2 = declared.get(R4_IDENTITY_SIDECAR_KEY) or {}
+    identity_preimages = _declared_r4_sidecar_paths(
+        root, artifacts, R4_IDENTITY_PREIMAGE_KEY,
+        "linearization_identity_preimage.v1.json",
+    )
     new_sidecars = {
         key: declared.get(key) or {}
         for key in R4_NEW_SIDECAR_KEYS
@@ -1053,7 +1068,7 @@ def validate_r4_signed_sidecars(
     ]
 
     if not accepted_v1 and not accepted_v2:
-        if identity_v2 or any(new_sidecars.values()):
+        if identity_v2 or identity_preimages or any(new_sidecars.values()):
             fail(
                 "manifest.artifacts R4 identity/certified/recomputed sidecars "
                 "cannot be declared without an accepted FEM equilibrium "
@@ -1093,6 +1108,27 @@ def validate_r4_signed_sidecars(
             "manifest.artifacts accepted fields and linearization identity "
             "sample index sets must match"
         )
+    # Historical bundles omit the additive exact-preimage array. Once it is
+    # declared beside actual identities it must cover the complete sample set.
+    if identity_preimages is not None:
+        if set(identity_preimages) != set(identity_v2):
+            fail("manifest.artifacts identity preimage and identity sample index sets must match")
+        if identity_v2 and set(identity_preimages) != accepted_sample_indices:
+            fail("manifest.artifacts identity preimage sample index set must match accepted fields")
+
+    identity_digests: dict[str, str] = {}
+    for sample_index, (_, preimage_path) in (identity_preimages or {}).items():
+        identity_path = identity_v2[sample_index][1]
+        try:
+            identity_bytes = identity_path.read_bytes()
+            identity = strict_json_object(identity_bytes, "identity")
+            if require_non_negative_int(identity.get("sample_index"), "identity.sample_index") != sample_index:
+                fail("linearization identity sample_index must match its canonical sidecar path")
+            identity_digests[str(sample_index)] = replay_identity_preimage(
+                identity_bytes, preimage_path.read_bytes(),
+            )
+        except (IdentityReplayError, OSError) as error:
+            fail(f"sample {sample_index} identity exact preimage replay failed: {error}")
 
     # Keep the already-existing state-pair binding when those sidecars are
     # declared, but do not turn their absence into a new R4 qualification
@@ -1140,6 +1176,7 @@ def validate_r4_signed_sidecars(
             accepted_sample_indices=accepted_sample_indices,
             missing_recomputed_keys=missing_recomputed_keys,
             computed_sample_indices=computed_sample_indices,
+            identity_content_sha256_by_sample=identity_digests,
         )
     if not identity_v2:
         return _r4_discovery_result(
@@ -1150,6 +1187,7 @@ def validate_r4_signed_sidecars(
             accepted_sample_indices=accepted_sample_indices,
             missing_recomputed_keys=missing_recomputed_keys,
             computed_sample_indices=computed_sample_indices,
+            identity_content_sha256_by_sample=identity_digests,
         )
     if missing_recomputed_keys:
         return _r4_discovery_result(
@@ -1161,6 +1199,7 @@ def validate_r4_signed_sidecars(
             identity_sample_indices=set(identity_v2),
             missing_recomputed_keys=missing_recomputed_keys,
             computed_sample_indices=computed_sample_indices,
+            identity_content_sha256_by_sample=identity_digests,
         )
     return _r4_discovery_result(
         "payload_replay_pending",
@@ -1170,6 +1209,7 @@ def validate_r4_signed_sidecars(
         accepted_sample_indices=accepted_sample_indices,
         identity_sample_indices=set(identity_v2),
         computed_sample_indices=computed_sample_indices,
+        identity_content_sha256_by_sample=identity_digests,
     )
 
 

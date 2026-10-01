@@ -21,6 +21,7 @@ SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 
 import verify_fem_frequency_domain_eigen_artifacts as verifier  # noqa: E402
+from test_fem_linearization_identity_replay import fixture as identity_fixture, encode  # noqa: E402
 
 
 SIDECAR_DEFINITIONS = verifier.R4_SIGNED_SIDECAR_DEFINITIONS
@@ -554,6 +555,92 @@ class EigenPathSignedSidecarTests(unittest.TestCase):
             _write(root, bad_path)
             artifacts["accepted_fem_equilibrium_fields_v1_paths"] = [bad_path]
             self.assert_rejected(root, artifacts, "sample_NNNN")
+
+
+class IdentityPreimagePathTests(unittest.TestCase):
+    def bundle(self, root: Path, samples=(0, 2, 7)) -> dict[str, object]:
+        artifacts = _manifest_artifacts(root, family="v2", samples=samples)
+        paths = []
+        for sample_index in samples:
+            identity, preimage = identity_fixture(sample_index)
+            _write(root, _sidecar_path(sample_index, "linearization_identity.v2.json"), encode(identity))
+            path = _sidecar_path(sample_index, "linearization_identity_preimage.v1.json")
+            paths.append(path)
+            _write(root, path, encode(preimage))
+        artifacts[verifier.R4_IDENTITY_PREIMAGE_KEY] = paths
+        return artifacts
+
+    def test_exact_preimages_replayed_for_all_computed_samples(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            artifacts = self.bundle(root)
+            result = verifier.validate_r4_signed_sidecars(root, artifacts, {0, 2, 7})
+            self.assertEqual(result["identity_content_digest_status"], "verified_exact_preimage")
+            self.assertEqual(set(result["identity_content_sha256_by_sample"]), {"0", "2", "7"})
+            # Identity digest replay cannot promote missing physical replay.
+            self.assertEqual(result["status"], "payload_replay_pending")
+
+    def test_missing_historical_preimages_remain_unqualified(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            artifacts = _manifest_artifacts(root, family="v2", samples=(2,))
+            result = verifier.validate_r4_signed_sidecars(root, artifacts, {2})
+            self.assertEqual(result["identity_content_digest_status"], "unverified_missing_preimage")
+            self.assertEqual(result["status"], "payload_replay_pending")
+
+    def test_missing_fields_preserve_successful_identity_digest_evidence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            artifacts = self.bundle(root, samples=(2,))
+            for key in verifier.R4_NEW_SIDECAR_KEYS:
+                artifacts[key] = []
+            result = verifier.validate_r4_signed_sidecars(root, artifacts, {2})
+            self.assertEqual(result["status"], "missing_recomputed")
+            self.assertEqual(result["identity_content_digest_status"], "verified_exact_preimage")
+            self.assertEqual(set(result["identity_content_sha256_by_sample"]), {"2"})
+
+    def test_incomplete_or_extra_preimage_sample_sets_are_rejected(self):
+        for mutation in ("empty", "missing", "extra"):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                artifacts = self.bundle(root)
+                paths = artifacts[verifier.R4_IDENTITY_PREIMAGE_KEY]
+                if mutation == "empty":
+                    paths.clear()
+                elif mutation == "missing":
+                    paths.pop()
+                else:
+                    path = _sidecar_path(8, "linearization_identity_preimage.v1.json")
+                    _write(root, path)
+                    paths.append(path)
+                with self.assertRaisesRegex(SystemExit, "preimage and identity sample index"):
+                    verifier.validate_r4_signed_sidecars(root, artifacts, {0, 2, 7})
+
+    def test_wrong_identity_sample_with_valid_hash_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            artifacts = self.bundle(root, samples=(0,))
+            identity, preimage = identity_fixture(2)
+            _write(root, artifacts[verifier.R4_IDENTITY_SIDECAR_KEY][0], encode(identity))
+            _write(root, artifacts[verifier.R4_IDENTITY_PREIMAGE_KEY][0], encode(preimage))
+            with self.assertRaisesRegex(SystemExit, "sample_index must match"):
+                verifier.validate_r4_signed_sidecars(root, artifacts, {0})
+
+    def test_corrupt_exact_preimage_fails_main_discovery(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            artifacts = self.bundle(root, samples=(2,))
+            _, preimage = identity_fixture(2)
+            preimage["identity_preimage_json"] += " "
+            _write(root, artifacts[verifier.R4_IDENTITY_PREIMAGE_KEY][0], encode(preimage))
+            with self.assertRaisesRegex(SystemExit, "exact preimage replay failed"):
+                verifier.validate_r4_signed_sidecars(root, artifacts, {2})
+
+    def test_preimage_without_identity_arrays_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with self.assertRaisesRegex(SystemExit, "must declare all plural arrays"):
+                verifier.validate_r4_signed_sidecars(root, {verifier.R4_IDENTITY_PREIMAGE_KEY: []}, {0})
 
 
 if __name__ == "__main__":

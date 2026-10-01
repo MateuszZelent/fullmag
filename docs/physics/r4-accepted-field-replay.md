@@ -284,6 +284,9 @@ change slice and are therefore `NOT VERIFIED` here.
 | R4 sidecar discovery | `crates/fullmag-runner/src/fem/eigen_path_manifest.rs` — `build_eigen_path_frequency_domain_manifest` | Actual per-sample plural paths | FEM CPU/GPU | source-visible; runtime pending |
 | Independent Python field replay | `scripts/fem_equilibrium_field_replay.py` — `replay_accepted_recomputed_fields` | Binary field digests, differences, exact certificate preimage and explicit context limitations | FEM CPU/GPU | interpreted fixture checks; runtime pending |
 | Python field replay regression | `scripts/test_fem_equilibrium_field_replay.py` — `test_frozen_v1_and_v2_binary_field_digests_match_rust` | Frozen digests, mutations and strict preimage types | FEM CPU/GPU | 8 interpreted groups PASS |
+| Own identity digest replay | `scripts/fem_linearization_identity_replay.py` — `replay_identity_preimage` | Exact UTF-8, typed values, raw and framed hashes; no physical-state qualification | FEM CPU/GPU | 10 interpreted groups PASS |
+| Complete preimage paths | `scripts/test_eigen_path_signed_sidecars.py` — `test_exact_preimages_replayed_for_all_computed_samples` | All computed samples, historical absence, no promotion to full R4 | FEM CPU/GPU | interpreted fixtures PASS |
+| Identity mutation regression | `scripts/test_fem_linearization_identity_replay.py` — `test_every_identity_field_is_bound` | Every field, JSON types, duplicate keys and nesting | FEM CPU/GPU | interpreted fixtures PASS |
 | Interpreted regression | `scripts/test_fem_accepted_recomputed_replay_contract.py` — `run_accepted_recomputed_replay_contract` | Cross-layer source and numerical contract | all FEM lanes | local interpreted check |
 
 ## Aktualizacja R4 multi-k — 2026-10-01
@@ -322,3 +325,27 @@ wartości bool i float oraz duplikaty indeksów są odrzucane.
 Weryfikacja: 31 regresji sidecarów PASS oraz 213 testów pytest istniejącego
 walidatora PASS. Ta kontrola nie odtwarza jeszcze podpisanych payloadów
 identity i nie dowodzi wykonania solvera. Główna bramka R4 pozostaje otwarta.
+
+## Własny exact preimage identity — przyrost weryfikatora
+
+Kontrakt bajtów i framingu opisuje
+`docs/physics/r4-linearization-identity-v2.md`. Główny walidator odczytuje
+addytywną tablicę `linearization_identity_preimage_v1_paths[]`, jeśli jest
+zadeklarowana. Wówczas musi ona obejmować wszystkie opublikowane identity
+próbek, a pole `sample_index` musi odpowiadać kanonicznej ścieżce pliku.
+
+`scripts/fem_linearization_identity_replay.py` sprawdza dokładne UTF-8 bytes,
+raw SHA-256, framed digest oraz typowane wartości wszystkich 52 pól identity
+po wyzerowaniu wyłącznie `content_sha256`. Nie serializuje ponownie słownika
+Python w celu zgadywania bajtów `serde_json`. Odrzuca duplicate keys, bool/int/
+float coercion, lone Unicode surrogates, niefinitywne liczby i nadmierne
+zagnieżdżenie. Zmiana whitespace preimage zmienia jego hash.
+
+Brak historycznego sidecara pozostaje `unverified_missing_preimage`.
+Poprawny digest daje tylko `identity_content_digest_status` równy
+`verified_exact_preimage`; pełne R4 nadal ma status `payload_replay_pending`.
+Powiązane mesh, m0, podpisy fizyczne, endpointy i rzeczywiste wykonanie wymagają
+osobnych kontroli. Podpis hash nie jest uwierzytelnieniem producenta.
+
+Regresje interpretowane: 10 grup exact preimage oraz 38 testów sidecarów PASS.
+Pełny managed replay tego przyrostu pozostaje NOT VERIFIED.

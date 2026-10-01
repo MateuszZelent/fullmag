@@ -4678,3 +4678,17 @@ Niezależny Python own preimage replay ma 9 grup regresji PASS, lecz pozostaje
 lokalnym przyrostem; publikacja sidecara i podłączenie pełnego replay do głównej
 bramki nadal OPEN. Runner zdrowy, aktywny #192, nasz #193 queued. Wymagany
 terminalny receipt oraz późniejszy build nowego spójnego SHA. S00–S12 zachowane.
+
+## R4 — exact own preimage w głównym walidatorze
+
+`fem_linearization_identity_replay.py` odtwarza raw/framed hash dokładnych bajtów
+i typowane wartości 52 pól identity. Główny walidator przyjmuje addytywną tablicę
+preimage paths, wymaga pełnego sample-set i zgodnego sample_index w payloadzie.
+Historyczny brak zachowuje NOT VERIFIED. Poprawny własny digest jest osobnym
+wynikiem, także przy brakujących polach recomputed; pełny gate nadal OPEN.
+
+Review bez P1; P2 nadmiernego zagnieżdżenia i utraty informacji o poprawnym
+hashu przy missing_recomputed poprawione z regresjami. 48 testów przyrostu PASS,
+213 testów dotychczasowego walidatora PASS. Scientific source-map PASS.
+Rust sidecar producer, non-shared handoff, source provenance i modal identity
+są w dalszej implementacji. Ten etap nie dowodzi managed runtime ani fizyki.
