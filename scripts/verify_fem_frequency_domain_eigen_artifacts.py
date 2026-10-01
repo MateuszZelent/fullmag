@@ -1230,6 +1230,49 @@ def validate_r4_signed_sidecars(
     )
 
 
+def validate_producer_provenance_discovery(
+    root: Path,
+    artifacts: dict,
+    computed_sample_indices: set[int] | None,
+) -> dict[str, object]:
+    """Bind additive producer paths to actual samples without qualifying payloads.
+
+    Shared and non-shared operators use the same immutable producer record.
+    Historical absence is reported, while partial coverage or a conflicting
+    singular alias is rejected before any physical replay can use the paths.
+    """
+    paths = _declared_r4_sidecar_paths(
+        root, artifacts, "producer_provenance_v1_paths", "producer_provenance.v1.json"
+    )
+    singular = artifacts.get("producer_provenance_v1_path")
+    if singular is not None:
+        relative, _ = require_bundle_path(
+            root, singular, "manifest.artifacts.producer_provenance_v1_path"
+        )
+        index = _r4_sidecar_sample_index(
+            relative, "producer_provenance.v1.json",
+            "manifest.artifacts.producer_provenance_v1_path",
+        )
+        if not paths or index not in paths or paths[index][0] != relative:
+            fail("producer provenance singular path must belong to its plural sample set")
+    if not paths:
+        return {
+            "status": "unverified_missing_producer_provenance",
+            "sample_indices": [],
+            "payload_replay_status": "NOT_VERIFIED",
+        }
+    indices = list(paths)
+    if indices != sorted(indices):
+        fail("producer provenance paths must be ordered by sample_index")
+    if computed_sample_indices is not None and set(indices) != computed_sample_indices:
+        fail("producer provenance sample index set must match computed spectrum samples")
+    return {
+        "status": "producer_paths_bound",
+        "sample_indices": indices,
+        "payload_replay_status": "NOT_VERIFIED",
+    }
+
+
 def _declared_state_paths(
     root: Path, artifacts: object, stem: str, filename: str
 ) -> list[tuple[str, Path, str]]:
@@ -1369,6 +1412,9 @@ def validate_equilibrium_artifacts(
         root,
         artifacts,
         computed_sample_indices=computed_sample_indices,
+    )
+    r4_discovery["producer_provenance_discovery"] = validate_producer_provenance_discovery(
+        root, artifacts, computed_sample_indices,
     )
     def has_declared_path(keys: tuple[str, ...]) -> bool:
         return any(
