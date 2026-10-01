@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, type ReactNode } from "react";
 
 import { SESSION_EVENTS_WS_PATH, VISUALIZATION_STATE_PATH } from "./api/apiPaths";
 import { planarMonitorFramePreviewStore } from "./workspace/planarMonitorFramePreview";
@@ -65,8 +65,10 @@ import {
   createViewport3DInactiveResourcePauseController,
 } from "./resources/inactiveViewportResourcePolicy";
 import { useRuntimeCommandControlResourceData } from "./resources/studyRuntimeResources";
-import { sessionRequestScopeKey } from "./resources/sessionResourceIdentity";
+import { confirmedSessionResourceIdentity, sessionRequestScopeKey, type SessionResourceIdentity } from "./resources/sessionResourceIdentity";
 import { useSessionResourceIdentity } from "./resources/useSessionStatus";
+import { useSessionCollection } from "./resources/useSessionCollection";
+import { isProjectWorkspaceCommand } from "./commands/projectWorkspaceCommandPolicy";
 import { STUDY_RUNTIME_COMMANDS } from "./runtime/studyRuntimeCommandContributions";
 import { SelectionController } from "./selection/SelectionController";
 import type { KernelApi } from "./types";
@@ -149,7 +151,9 @@ function createKernel(): KernelApi {
   });
   const cameraRegistry = new CameraRegistryController({
     api: api.visualization,
+    getSessionScopeKey: () => commands.getSessionScopeKey() ?? null,
   });
+  cameraRegistry.setSessionScopeKey(null);
   const analysisFieldOverlay = new AnalysisFieldOverlayController();
   const modeComposition = new ModeCompositionController({
     getActiveModeComposition: (options) =>
@@ -301,13 +305,12 @@ function DiagnosticRecorderConnector({ kernel }: { kernel: KernelApi }) {
   return null;
 }
 
-function RealtimeConnector({ kernel }: { kernel: KernelApi }) {
-  const sessionIdentity = useSessionResourceIdentity();
+function RealtimeConnector({ kernel, sessionIdentity }: { kernel: KernelApi; sessionIdentity: SessionResourceIdentity }) {
   const sessionScopeKey = sessionRequestScopeKey(sessionIdentity);
   const expectedRequestScopeEpoch = sessionIdentity?.requestScopeEpoch ?? null;
   const expectedSessionId = sessionIdentity?.sessionId ?? null;
   useEffect(() => {
-    if (controlRoomRealtimeDisabledFromBrowser()) {
+    if (!expectedSessionId || !expectedRequestScopeEpoch || controlRoomRealtimeDisabledFromBrowser()) {
       return;
     }
 
@@ -389,6 +392,66 @@ function CommandShortcutConnector({ kernel }: { kernel: KernelApi }) {
   return null;
 }
 
+function ProjectWorkspaceShortcutConnector({
+  kernel,
+  canCreateSession,
+}: {
+  kernel: KernelApi;
+  canCreateSession: boolean;
+}) {
+  useEffect(() => {
+    const commands = {
+      all: () => kernel.commands.all().filter((command) =>
+        isProjectWorkspaceCommand(command.id) &&
+        (canCreateSession || command.id !== "workspace.new-problem")),
+      isEnabled: (id: string, context: Parameters<typeof kernel.commands.isEnabled>[1]) => kernel.commands.isEnabled(id, context),
+      execute: (id: string, context: Parameters<typeof kernel.commands.execute>[1]) => kernel.commands.execute(id, context),
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      dispatchShortcutCommand(commands, event, createCommandContext("shortcut", kernel, {
+        sessionScopeKey: null,
+        sourceDetail: "project-workspace",
+      }));
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [kernel, canCreateSession]);
+  return null;
+}
+
+function SessionRuntimeConnectors({ kernel }: { kernel: KernelApi }) {
+  const sessions = useSessionCollection();
+  if (sessions.state !== "ready") {
+    return <ProjectWorkspaceShortcutConnector kernel={kernel} canCreateSession={sessions.state === "no-session"} />;
+  }
+  return <AvailableSessionRuntimeConnectors kernel={kernel} collection={sessions.resource.data} />;
+}
+
+function AvailableSessionRuntimeConnectors({ kernel, collection }: {
+  kernel: KernelApi;
+  collection: ReturnType<typeof useSessionCollection>["resource"]["data"];
+}) {
+  const identity = useSessionResourceIdentity();
+  const confirmedIdentity = confirmedSessionResourceIdentity(identity, collection);
+  const scopeKey = sessionRequestScopeKey(confirmedIdentity);
+  useLayoutEffect(() => {
+    const clearRuntimeSelection = () => {
+      if (kernel.selection.get().ref?.type !== "materialized-dataset") kernel.selection.clearForSessionTransition("workspace");
+    };
+    clearRuntimeSelection();
+    return clearRuntimeSelection;
+  }, [kernel, scopeKey]);
+  if (!confirmedIdentity) return null;
+  return (
+    <>
+      <RealtimeConnector kernel={kernel} sessionIdentity={confirmedIdentity} />
+      <CommandShortcutConnector kernel={kernel} />
+      <VisualizationRegistrySyncConnector kernel={kernel} />
+      <CameraRegistrySyncConnector kernel={kernel} sessionScopeKey={scopeKey!} />
+    </>
+  );
+}
+
 function VisualizationRegistrySyncConnector({ kernel }: { kernel: KernelApi }) {
   useEffect(() => {
     kernel.visualizationSync.start();
@@ -398,11 +461,12 @@ function VisualizationRegistrySyncConnector({ kernel }: { kernel: KernelApi }) {
   return null;
 }
 
-function CameraRegistrySyncConnector({ kernel }: { kernel: KernelApi }) {
+function CameraRegistrySyncConnector({ kernel, sessionScopeKey }: { kernel: KernelApi; sessionScopeKey: string }) {
   useEffect(() => {
+    kernel.cameraRegistry.setSessionScopeKey(sessionScopeKey);
     kernel.cameraRegistry.start();
-    return () => kernel.cameraRegistry.stop();
-  }, [kernel]);
+    return () => { kernel.cameraRegistry.stop(); kernel.cameraRegistry.setSessionScopeKey(null); };
+  }, [kernel, sessionScopeKey]);
 
   return null;
 }
@@ -683,10 +747,7 @@ export function KernelProvider({ children }: KernelProviderProps) {
 
   return (
     <KernelContext.Provider value={kernel}>
-      <RealtimeConnector kernel={kernel} />
-      <CommandShortcutConnector kernel={kernel} />
-      <VisualizationRegistrySyncConnector kernel={kernel} />
-      <CameraRegistrySyncConnector kernel={kernel} />
+      <SessionRuntimeConnectors kernel={kernel} />
       <BrowserAuditConnector kernel={kernel} />
       <DiagnosticRecorderConnector kernel={kernel} />
       <PerformanceDiagnosticsConnector kernel={kernel} />

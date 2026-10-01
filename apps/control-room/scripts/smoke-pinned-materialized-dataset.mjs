@@ -76,9 +76,15 @@ async function main() {
     }
   });
   page.on("pageerror", (error) => errors.push(error.message));
+  page.on("websocket", (socket) => {
+    if (new URL(socket.url()).pathname.startsWith("/v2/sessions/current/")) errors.push("Unexpected current-session WebSocket.");
+  });
   page.on("dialog", async (dialog) => {
     if (dialog.type() === "prompt" && dialog.message() === "Project name") {
       await dialog.accept("Untitled project");
+    } else if (state.expectProjectClose && dialog.type() === "confirm" && dialog.message() === "Discard unsaved project changes?") {
+      state.expectProjectClose = false;
+      await dialog.accept();
     } else {
       errors.push(`Unexpected dialog: ${dialog.type()} ${dialog.message()}`);
       await dialog.dismiss();
@@ -92,11 +98,12 @@ async function main() {
       method,
       path: url.pathname,
       query: url.search,
+      phase: state.collectionMismatch ? "identity-mismatch" : "project",
       type: "request",
     });
     if (
       url.pathname.startsWith("/v2/sessions/current/") &&
-      !["GET", "HEAD", "OPTIONS"].includes(method)
+      !(state.collectionMismatch && method === "GET" && url.pathname === "/v2/sessions/current/status")
     ) {
       state.forbiddenRuntimeRequests.push({ method, path: url.pathname });
     }
@@ -116,9 +123,7 @@ async function main() {
   await page.addInitScript((baseUrl) => {
     window.__FULLMAG_CONFIG__ = {
       ...(window.__FULLMAG_CONFIG__ ?? {}),
-      allowMissingSessionSmoke: true,
       controlRoomApiBase: baseUrl,
-      disableRealtime: true,
     };
   }, apiBase);
   await installFixtureRoutes(page, state);
@@ -128,7 +133,8 @@ async function main() {
       timeout: timeoutMs,
       waitUntil: "domcontentloaded",
     });
-    await page.locator("main.fm-workspace-shell").waitFor({ state: "visible", timeout: timeoutMs });
+    await page.getByRole("button", { name: "File", exact: true }).waitFor({ state: "visible", timeout: timeoutMs });
+    await page.locator('[data-state="no-session"]').waitFor({ state: "visible", timeout: timeoutMs });
 
     await createProject(page, state);
     await openSavedResults(page);
@@ -141,6 +147,12 @@ async function main() {
       runId: TARGET_RUN_ID,
     });
     assertPositivePinnedInspector(positive.inspectorText);
+    await page.getByRole("button", { name: "Apply", exact: true }).isDisabled().then((disabled) => assertCondition(disabled, "Pinned readonly dataset exposed Apply."));
+    await page.getByRole("button", { name: "Focus", exact: true }).isDisabled().then((disabled) => assertCondition(disabled, "Project Inspector exposed runtime Focus."));
+    await page.getByRole("button", { name: "Hide Inspector", exact: true }).click();
+    await page.getByRole("button", { name: "Show Inspector", exact: true }).waitFor({ state: "visible", timeout: timeoutMs });
+    await page.getByRole("button", { name: "Show Inspector", exact: true }).click();
+    await page.locator(".fm-inspector").waitFor({ state: "visible", timeout: timeoutMs });
     await captureScreenshot(page, state, "pinned-materialized-dataset-positive.png");
 
     await selectSavedRun(page, OTHER_RUN_ID);
@@ -168,6 +180,45 @@ async function main() {
       newProjectId: state.currentProjectId,
     });
 
+    state.expectProjectClose = true;
+    await page.getByRole("button", { name: "File", exact: true }).click();
+    await page.getByRole("menuitem", { name: /^Close Project/i }).click();
+    await page.locator('[data-state="no-session"]').waitFor({ state: "visible", timeout: timeoutMs });
+    assert.equal(await page.locator(".fm-results-navigator-shell").count(), 0, "Closed project retained saved results.");
+
+    // A collection failure is unknown availability, not confirmed absence.
+    // Durable project results still work without any current-session connector.
+    state.sessionCollectionError = true;
+    assert.ok(state.startupWarnings.length <= 1, "Repeated shell startup mount warning before reload.");
+    const warningsBeforeReload = state.startupWarnings.length;
+    await page.reload({ waitUntil: "domcontentloaded", timeout: timeoutMs });
+    await page.locator('[data-state="session-error"]').waitFor({ state: "visible", timeout: timeoutMs });
+    await createProject(page, state);
+    await openSavedResults(page, "error");
+    await page.getByText("No saved runs in this project.", { exact: true }).waitFor({ state: "visible", timeout: timeoutMs });
+    await page.locator(".fm-inspector__empty").waitFor({ state: "visible", timeout: timeoutMs });
+    assertCondition((await page.locator("section[aria-label='Saved results']").innerText()).includes(state.currentProjectId), "Unknown-session workspace displayed another project.");
+    await captureScreenshot(page, state, "pinned-materialized-dataset-session-list-error.png");
+    assert.ok(state.startupWarnings.length - warningsBeforeReload <= 1, "Repeated shell startup mount warning after error reload.");
+    const warningsBeforeMismatch = state.startupWarnings.length;
+    state.sessionCollectionError = false;
+    state.collectionMismatch = true;
+    const mismatchRequestOffset = state.requests.length;
+    const mismatchStatusResponse = page.waitForResponse((response) =>
+      new URL(response.url()).pathname === "/v2/sessions/current/status", { timeout: timeoutMs });
+    await page.reload({ waitUntil: "domcontentloaded", timeout: timeoutMs });
+    await mismatchStatusResponse;
+    await page.locator('[data-state="session-loading"]').waitFor({ state: "visible", timeout: timeoutMs });
+    await createProject(page, state);
+    await openSavedResults(page, "loading");
+    await page.getByText("No saved runs in this project.", { exact: true }).waitFor({ state: "visible", timeout: timeoutMs });
+    await page.locator(".fm-inspector__empty").waitFor({ state: "visible", timeout: timeoutMs });
+    const mismatchCurrent = state.requests.slice(mismatchRequestOffset).filter((request) => request.path.startsWith("/v2/sessions/current/"));
+    assertCondition(mismatchCurrent.length > 0, "Identity mismatch did not exercise the status bootstrap.");
+    assertCondition(mismatchCurrent.every((request) => request.method === "GET" && request.path === "/v2/sessions/current/status"), "Mismatched cached session identity mounted runtime resources.");
+    assert.equal(await page.locator(".fm-ribbon__tab").count(), 0, "Mismatched status enabled session ribbon.");
+    await captureScreenshot(page, state, "pinned-materialized-dataset-session-identity-mismatch.png");
+
     assert.equal(
       state.forbiddenRuntimeRequests.length,
       0,
@@ -176,10 +227,18 @@ async function main() {
       )}`,
     );
     assert.equal(errors.length, 0, `Browser errors: ${errors.join(" | ")}`);
-    assert.ok(state.startupWarnings.length <= 1, "Repeated shell startup mount warning.");
+    assert.equal(await page.locator("canvas").count(), 0, "Project workspace mounted a runtime canvas.");
+    assert.ok(state.startupWarnings.length - warningsBeforeMismatch <= 1, "Repeated shell startup mount warning after mismatch reload.");
     assertRequiredRequests(state);
 
     proof = {
+      session_collection: "confirmed_empty",
+      current_session_http_or_websocket: "none in no-session/error phases; status bootstrap only in identity-mismatch phase; no realtime bypass",
+      project_workspace_canvas_count: 0,
+      inspector_hide_restore: "verified in project workspace",
+      closed_project_unmounts_saved_results: true,
+      collection_error_preserves_explicit_unknown_state: true,
+      collection_b_status_a_gates_entire_runtime_tree: true,
       project_switch_suppresses_readonly_old_payload: true,
       positive_owner_revision: OWNER_REVISION,
       positive_containing_revision: SOLUTION_REVISION,
@@ -241,11 +300,14 @@ function createFixtureState() {
     forbiddenRuntimeRequests: [],
     metadataRequests: [],
     startupWarnings: [],
+    expectProjectClose: false,
+    sessionCollectionError: false,
+    collectionMismatch: false,
   };
 }
 
 async function createProject(page, state) {
-  await page.locator(".fm-ribbon__tab").first().waitFor({ state: "visible", timeout: timeoutMs });
+  await page.getByRole("button", { name: "File", exact: true }).waitFor({ state: "visible", timeout: timeoutMs });
   await page.getByRole("button", { name: "File", exact: true }).click();
   const button = page.getByRole("menuitem", { name: /^New Project/i });
   await button.waitFor({ state: "visible", timeout: timeoutMs });
@@ -262,18 +324,12 @@ async function createProject(page, state) {
   assertCondition(state.currentProjectId, "Project creation response was not intercepted.");
 }
 
-async function openSavedResults(page) {
-  const resultsRibbon = page.locator(".fm-ribbon__tab").filter({ hasText: /^Results$/ });
-  await resultsRibbon.click();
+async function openSavedResults(page, sessionState = "no-session") {
+  await page.locator(`[data-project-workspace-session-state="${sessionState}"]`).waitFor({ state: "visible", timeout: timeoutMs });
   await page.locator(".fm-results-navigator-shell").waitFor({
     state: "visible",
     timeout: timeoutMs,
   });
-  const savedTab = await firstVisible(page, [
-    page.getByRole("tab", { name: "Saved", exact: true }),
-    page.locator("button").filter({ hasText: /^Saved$/ }),
-  ]);
-  await savedTab.click();
   await page.locator("section[aria-label='Saved results']").first().waitFor({
     state: "visible",
     timeout: timeoutMs,
@@ -473,13 +529,21 @@ async function installFixtureRoutes(page, state) {
     const path = url.pathname;
 
     if (method === "GET" && path === "/v2/sessions") {
+      if (state.sessionCollectionError) {
+        await fulfillJson(route, { error: { code: "fixture_collection_unavailable", message: "Session collection unavailable." } }, 503);
+        return;
+      }
       await fulfillJson(route, {
         schema_version: "2.0.0",
-        sessions: [{ current: true, name: "Fixture workspace", session_id: "fixture-unavailable-session", status: "unavailable" }],
+        sessions: state.collectionMismatch ? [{ current: true, name: "Session B", session_id: "session-b", status: "ready" }] : [],
       });
       return;
     }
     if (method === "GET" && path === "/v2/sessions/current/status") {
+      if (state.collectionMismatch) {
+        await fulfillJson(route, { session: { session_id: "session-a", session_epoch: "epoch-a", request_scope_epoch: "scope-a" }, resources: {} });
+        return;
+      }
       await fulfillJson(route, {
         error: { code: "session_missing", message: "No session in this saved-results fixture." },
       }, 404);
@@ -888,8 +952,8 @@ async function assertRequiredRequests(state) {
   assertCondition(paths.includes(expected[0]), "Project create request was not observed.");
   assert.equal(
     state.projectCreateCount,
-    2,
-    "The browser fixture must exercise both the initial and project-switch create paths.",
+    4,
+    "The browser fixture must exercise initial, project-switch, collection-error and identity-mismatch paths.",
   );
   assertCondition(paths.includes(expected[1]), "Project switch run-list request was not observed.");
   assertCondition(

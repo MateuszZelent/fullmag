@@ -1,9 +1,19 @@
-import type { LiveStatusResource } from "../api/apiTypes";
+import type { LiveStatusResource, SessionListResource } from "../api/apiTypes";
 
 export interface SessionResourceIdentity {
   readonly sessionId: string;
   readonly sessionEpoch: string;
   readonly requestScopeEpoch: string;
+}
+
+/** Status alone cannot authorize a cached session after collection changes. */
+export function confirmedSessionResourceIdentity(
+  identity: SessionResourceIdentity | null,
+  collection: SessionListResource | null,
+): SessionResourceIdentity | null {
+  if (!identity || !collection) return null;
+  const current = collection.sessions.filter((session) => session.current);
+  return current.length === 1 && current[0].session_id === identity.sessionId ? identity : null;
 }
 
 export function sessionResourceIdentityFromStatus(

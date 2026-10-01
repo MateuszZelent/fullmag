@@ -104,6 +104,26 @@ function createEventTarget<T extends Record<string, unknown>>(state: T) {
 }
 
 describe("CameraRegistryController", () => {
+  it("aborts an old scoped camera flush and rejects its late response after switching sessions", async () => {
+    let resolveOld!: (state: VisualizationStateResource) => void;
+    const patch = vi.fn((_patch: VisualizationStatePatch, _options?: import("../api/apiTypes").RequestOptions) =>
+      new Promise<VisualizationStateResource>((resolve) => { resolveOld = resolve; }));
+    const controller = new CameraRegistryController({ api: { patch }, idleFlushMs: null });
+    controller.setSessionScopeKey("session-a");
+    controller.patchCamera({ position: [10, 20, 30] });
+    const pending = controller.flushNow();
+    expect(patch.mock.calls[0][1]?.sessionScopeKey).toBe("session-a");
+    controller.setSessionScopeKey(null);
+    expect(patch.mock.calls[0][1]?.signal?.aborted).toBe(true);
+    controller.setSessionScopeKey("session-b");
+    resolveOld(visualizationState(9, camera({ position: [10, 20, 30] })));
+    await pending;
+    expect(controller.getSnapshot().camera).toEqual(DEFAULT_CAMERA_REGISTRY_STATE);
+    expect(controller.getSnapshot().dirty).toBe(false);
+    expect(controller.getSnapshot().lastRemoteRevision).toBeNull();
+    await controller.flushNow();
+    expect(patch).toHaveBeenCalledTimes(1);
+  });
   it("adopts backend camera state until the local registry is dirty", () => {
     const { controller } = createController();
     const remote = camera({

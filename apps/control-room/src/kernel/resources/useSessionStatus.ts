@@ -15,8 +15,10 @@ import {
 import {
   sessionResourceIdentitiesEqual,
   sessionResourceIdentityFromStatus,
+  confirmedSessionResourceIdentity,
   type SessionResourceIdentity,
 } from "./sessionResourceIdentity";
+import { useSessionCollection } from "./useSessionCollection";
 
 export const SESSION_STATUS_RESOURCE_KEY = "session:status";
 
@@ -81,10 +83,12 @@ export function useSessionStatusSelector<TSelected>(
 }
 
 export function useSessionResourceIdentity(): SessionResourceIdentity | null {
-  return useSessionStatusSelector(
+  const sessions = useSessionCollection();
+  const identity = useSessionStatusSelector(
     (status) => sessionResourceIdentityFromStatus(status.data),
-    { isEqual: sessionResourceIdentitiesEqual },
+    { enabled: sessions.state === "ready", isEqual: sessionResourceIdentitiesEqual },
   );
+  return confirmedSessionResourceIdentity(identity, sessions.resource.data);
 }
 
 export function useSessionLifecycle(): SelectedSessionLifecycle | null {

@@ -46,6 +46,7 @@ import {
 } from "./InspectorTabState";
 
 interface InspectorShellProps {
+  focusDisabled?: boolean;
   children: ReactNode;
   descriptor: InspectorDescriptor;
   onFocus: () => void;
@@ -74,6 +75,7 @@ function InspectorIdentityIcon({ icon }: Pick<InspectorDescriptor, "icon">) {
 }
 
 export function InspectorShell({
+  focusDisabled = false,
   children,
   descriptor,
   onFocus,
@@ -218,6 +220,7 @@ export function InspectorShell({
                 size="sm"
                 variant="secondary"
                 onClick={onFocus}
+                disabled={focusDisabled}
               >
                 <Focus size={14} aria-hidden="true" />
                 Focus

@@ -35,6 +35,14 @@ export class SelectionController {
     patch: Partial<Omit<Selection, "moduleSource">>,
     source: ModuleId,
   ): void {
+    this.update(patch, source, true);
+  }
+
+  private update(
+    patch: Partial<Omit<Selection, "moduleSource">>,
+    source: ModuleId,
+    enforceGuards: boolean,
+  ): void {
     const prev = this.state;
     const carriesRef = Object.prototype.hasOwnProperty.call(patch, "ref");
     const next: Selection = {
@@ -56,7 +64,7 @@ export class SelectionController {
     }
 
     for (const guard of this.changeGuards) {
-      if (!guard(next, prev, source)) return;
+      if (enforceGuards && !guard(next, prev, source)) return;
     }
 
     this.state = next;
@@ -76,6 +84,11 @@ export class SelectionController {
       { kind: null, label: null, objectId: null, nodeId: null, ref: null },
       source,
     );
+  }
+
+  /** Lost session ownership cannot be retained by an old dirty draft guard. */
+  clearForSessionTransition(source: ModuleId): void {
+    this.update({ ...EMPTY_SELECTION }, source, false);
   }
 
   subscribe(listener: SelectionListener): () => void {

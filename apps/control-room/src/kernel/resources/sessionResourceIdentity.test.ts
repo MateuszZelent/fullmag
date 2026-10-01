@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  confirmedSessionResourceIdentity,
   sessionResourceIdentitiesEqual,
   sessionResourceIdentityFromStatus,
   sessionResourceIdentityKey,
@@ -8,6 +9,14 @@ import {
 } from "./sessionResourceIdentity";
 
 describe("session resource identity", () => {
+  it("requires exactly one current collection entry matching the status identity", () => {
+    const identity = { sessionId: "session-a", sessionEpoch: "epoch-1", requestScopeEpoch: "api:1" };
+    const collection = (sessions: { current: boolean; session_id: string }[]) => ({ sessions }) as import("../api/apiTypes").SessionListResource;
+    expect(confirmedSessionResourceIdentity(identity, collection([]))).toBeNull();
+    expect(confirmedSessionResourceIdentity(identity, collection([{ current: true, session_id: "session-b" }]))).toBeNull();
+    expect(confirmedSessionResourceIdentity(identity, collection([{ current: false, session_id: "session-a" }]))).toBeNull();
+    expect(confirmedSessionResourceIdentity(identity, collection([{ current: true, session_id: "session-a" }]))).toBe(identity);
+  });
   it("makes identical resource paths distinct across session epochs", () => {
     const first = { sessionId: "session-1", sessionEpoch: "epoch-1", requestScopeEpoch: "api:1" };
     const second = { sessionId: "session-1", sessionEpoch: "epoch-2", requestScopeEpoch: "api:2" };

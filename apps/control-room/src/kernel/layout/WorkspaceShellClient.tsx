@@ -5,21 +5,33 @@ import {
   useSimulationStartupOverlayState,
 } from "./SimulationStartupOverlay";
 import { useSessionCollection } from "../resources/useSessionCollection";
+import { useSessionResourceIdentity } from "../resources/useSessionStatus";
 import { EmptyWorkspace } from "./EmptyWorkspace";
 import { Button } from "@/shared/ui/Button";
 import { WorkspaceRenderProfiler } from "../performance/reactRenderProfiler";
 import { SlotHost } from "./SlotHost";
 import { WorkspaceDockLayout } from "./WorkspaceDockLayout";
+import { WorkspaceContentScopeProvider } from "./WorkspaceContentScope";
+import { useProjectDocumentSnapshot } from "../persistence/ProjectDocumentStatus";
+import { useKernel } from "../KernelContext";
+import { useLayoutSelector } from "./useLayout";
 
 export function WorkspaceShellClient() {
   const sessions = useSessionCollection();
+  const project = useProjectDocumentSnapshot();
+  const identity = useSessionResourceIdentity();
+  const sessionState = sessions.state === "ready" && !identity ? "loading" : sessions.state;
 
-  if (sessions.state !== "ready") return (
+  if (sessionState !== "ready" && project.state === "ready") {
+    return <ProjectWorkspaceShell sessionState={sessionState} />;
+  }
+
+  if (sessionState !== "ready") return (
     <>
       <SlotHost slotId="app-menu" />
-      {sessions.state === "no-session" ? (
+      {sessionState === "no-session" ? (
         <EmptyWorkspace />
-      ) : sessions.state === "error" ? (
+      ) : sessionState === "error" ? (
         <SessionCollectionError onRetry={sessions.resource.refetch} />
       ) : (
         <SessionCollectionLoading />
@@ -28,6 +40,42 @@ export function WorkspaceShellClient() {
   );
 
   return <ActiveWorkspaceShell />;
+}
+
+function ProjectWorkspaceShell({
+  sessionState,
+}: {
+  sessionState: "loading" | "error" | "no-session";
+}) {
+  const kernel = useKernel();
+  const panels = useLayoutSelector((layout) => layout.panelVisible);
+  const detail = sessionState === "no-session"
+    ? "No active session. Saved project results are available independently."
+    : sessionState === "error"
+      ? "Session list unavailable. Saved project results remain available."
+      : "Checking for sessions. Saved project results remain available.";
+  return (
+    <WorkspaceContentScopeProvider scope="project">
+      <SlotHost slotId="app-menu" />
+      <section
+        className="flex flex-wrap items-center justify-between gap-2 border-b border-fm-border bg-fm-surface px-4 py-2"
+        data-project-workspace-session-state={sessionState}
+        aria-label="Project workspace"
+      >
+        <div>
+          <h1 className="m-0 text-fm-sm font-semibold text-fm-primary">Saved project results</h1>
+          <p className="m-0 text-fm-xs text-fm-muted" role={sessionState === "error" ? "alert" : "status"}>{detail}</p>
+        </div>
+        <div className="flex gap-2">
+          {!panels.left ? <Button size="sm" variant="secondary" onClick={() => kernel.layout.togglePanel("left")}>Show saved results</Button> : null}
+          {!panels.right ? <Button size="sm" variant="secondary" onClick={() => kernel.layout.togglePanel("right")}>Show Inspector</Button> : null}
+        </div>
+      </section>
+      <WorkspaceRenderProfiler id="WorkspaceDockLayout">
+        <WorkspaceDockLayout />
+      </WorkspaceRenderProfiler>
+    </WorkspaceContentScopeProvider>
+  );
 }
 
 function SessionCollectionLoading() {

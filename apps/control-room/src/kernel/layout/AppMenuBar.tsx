@@ -1,5 +1,7 @@
 "use client";
 
+import { isProjectWorkspaceCommand } from "../commands/projectWorkspaceCommandPolicy";
+
 import { ChevronDown, Search } from "lucide-react";
 import { useEffect, useMemo, useReducer, useState, useSyncExternalStore } from "react";
 
@@ -362,11 +364,12 @@ function appMenuDialogReducer(
 
 export function AppMenuBar() {
   const sessions = useSessionCollection();
+  const identity = useSessionResourceIdentity();
 
-  return sessions.state === "ready" ? (
+  return sessions.state === "ready" && identity ? (
     <SessionAppMenuBar />
   ) : (
-    <NoSessionAppMenuBar state={sessions.state} />
+    <NoSessionAppMenuBar state={sessions.state === "ready" ? "loading" : sessions.state} />
   );
 }
 
@@ -380,6 +383,7 @@ function NoSessionAppMenuBar({
   const [newProblemOpen, setNewProblemOpen] = useState(false);
   const commandContext = createCommandContext("menu", kernel, {
     sourceDetail: "app-menu",
+    sessionScopeKey: null,
   });
   useEffect(
     () => kernel.bus.on("workspace:new-problem-requested", () => {
@@ -388,11 +392,13 @@ function NoSessionAppMenuBar({
     [kernel.bus],
   );
   const runCommand = (commandId: string, input?: unknown) => {
+    if (!isProjectWorkspaceCommand(commandId)) return;
     if (kernel.commands.get(commandId)) {
       void kernel.commands.execute(commandId, commandContext, input);
     }
   };
   const isCommandDisabled = (commandId: string) => {
+    if (!isProjectWorkspaceCommand(commandId)) return true;
     if (commandId === "workspace.new-problem" && state !== "no-session") {
       return true;
     }
@@ -455,6 +461,7 @@ function NoSessionAppMenuBar({
       </nav>
       <button
         className="fm-header__search"
+        disabled
         title="Command search (Ctrl+Shift+P)"
         type="button"
         onClick={() => runCommand("workspace.command-palette")}

@@ -40,6 +40,7 @@ import { Tabs, TabsList, TabsTrigger } from "@/shared/ui/Tabs";
 import { ResultsNavigatorTree } from "./ResultsNavigatorTree";
 import { ResultDatasetBrowser } from "./ResultDatasetBrowser";
 import { SavedResultsBrowser } from "./SavedResultsBrowser";
+import { useWorkspaceContentScope } from "@/kernel/layout/WorkspaceContentScope";
 import {
   buildResultDatasetBrowserModel,
   buildResultDatasetItemPageQuery,
@@ -816,6 +817,13 @@ function CurrentResultsNavigator({
 
 export default function ResultsNavigatorModule(props: ModuleProps) {
   const [surface, setSurface] = useState<"current" | "saved">("current");
+  const projectOnly = useWorkspaceContentScope() === "project";
+
+  if (projectOnly) return (
+    <div className="fm-results-navigator-shell grid min-w-0 gap-2">
+      <SavedResultsBrowser kernel={props.kernel} moduleId={props.moduleId} />
+    </div>
+  );
 
   return (
     <div className="fm-results-navigator-shell grid min-w-0 gap-2">

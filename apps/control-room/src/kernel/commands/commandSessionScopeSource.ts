@@ -1,4 +1,5 @@
-import type { LiveStatusResource } from "../api/apiTypes";
+import type { LiveStatusResource, SessionListResource } from "../api/apiTypes";
+import { SESSIONS_PATH } from "../api/apiPaths";
 import {
   sharedResourceRuntimeStore,
   type ResourceRuntimeStore,
@@ -6,6 +7,7 @@ import {
 import {
   sessionRequestScopeKey,
   sessionResourceIdentityFromStatus,
+  confirmedSessionResourceIdentity,
 } from "../resources/sessionResourceIdentity";
 import { SESSION_STATUS_RESOURCE_KEY } from "../resources/useSessionStatus";
 import type { CommandSessionScopeSource } from "./CommandRegistry";
@@ -25,12 +27,17 @@ export function createCommandSessionScopeSource(
 ): CommandSessionScopeSource {
   return {
     getScopeKey: () => {
+      const collection = runtimeStore.getSnapshot<SessionListResource>(SESSIONS_PATH).data;
+      if (!collection || collection.sessions.length === 0) return null;
       const status = runtimeStore.getSnapshot<LiveStatusResource>(
         SESSION_STATUS_RESOURCE_KEY,
       ).data;
-      return sessionRequestScopeKey(sessionResourceIdentityFromStatus(status));
+      return sessionRequestScopeKey(confirmedSessionResourceIdentity(sessionResourceIdentityFromStatus(status), collection));
     },
-    subscribe: (listener) =>
-      runtimeStore.subscribe(SESSION_STATUS_RESOURCE_KEY, listener),
+    subscribe: (listener) => {
+      const unsubscribeStatus = runtimeStore.subscribe(SESSION_STATUS_RESOURCE_KEY, listener);
+      const unsubscribeCollection = runtimeStore.subscribe(SESSIONS_PATH, listener);
+      return () => { unsubscribeStatus(); unsubscribeCollection(); };
+    },
   };
 }

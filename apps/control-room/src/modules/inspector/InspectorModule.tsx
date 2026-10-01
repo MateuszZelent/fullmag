@@ -5,6 +5,8 @@ import { useEffect, useMemo } from "react";
 import { useKernel } from "@/kernel/KernelContext";
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import { WorkspaceRenderProfiler } from "@/kernel/performance/reactRenderProfiler";
+import { useWorkspaceContentScope } from "@/kernel/layout/WorkspaceContentScope";
+import { EMPTY_SELECTION } from "@/kernel/selection/selectionTypes";
 import {
   selectionSnapshotEquals,
   useSelectionSelector,
@@ -68,11 +70,13 @@ function PendingFormBridge() {
 
 export default function InspectorModule() {
   const kernel = useKernel();
+  const projectOnly = useWorkspaceContentScope() === "project";
   const selection = useSelectionSelector((state) => state, {
     isEqual: selectionSnapshotEquals,
   });
 
   const handleFocus = () => {
+    if (projectOnly) return;
     void kernel.commands.execute("viewport-3d.fit", {
       source: "inspector",
       layout: kernel.layout,
@@ -93,10 +97,11 @@ export default function InspectorModule() {
     <WorkspaceRenderProfiler id="InspectorModule">
       <InspectorEditSessionProvider>
         <PendingFormBridge />
-        <InspectorDirtySelectionGuard controller={kernel.selection} selection={selection}>
+        <InspectorDirtySelectionGuard controller={kernel.selection} selection={projectOnly && selection.ref?.type !== "materialized-dataset" ? EMPTY_SELECTION : selection}>
         {(guardedSelection) => {
-          const panel = resolveInspectorPanel(guardedSelection);
-          const fallbackPanel = guardedSelection.kind
+          const canInspect = !projectOnly || guardedSelection.ref?.type === "materialized-dataset";
+          const panel = canInspect ? resolveInspectorPanel(guardedSelection) : null;
+          const fallbackPanel = canInspect && guardedSelection.kind
             ? resolveUnknownInspectorRoute().contribution
             : null;
           const baseDescriptor = resolveInspectorDescriptor(guardedSelection);
@@ -109,13 +114,16 @@ export default function InspectorModule() {
             <InspectorShell
               descriptor={descriptor}
               onFocus={handleFocus}
-              onSelectBreadcrumb={(next) => kernel.selection.set(next, "inspector")}
+              focusDisabled={projectOnly}
+              onSelectBreadcrumb={(next) => {
+                if (!projectOnly || next.ref?.type === "materialized-dataset") kernel.selection.set(next, "inspector");
+              }}
               onToggleVisibility={handleToggleVisibility}
             >
               {Panel ? (
                 <Panel selection={guardedSelection} />
               ) : (
-                <div className="fm-inspector__empty">Select an explorer node.</div>
+                <div className="fm-inspector__empty">{projectOnly ? "Select a saved project result. Simulation editing requires an active session." : "Select an explorer node."}</div>
               )}
             </InspectorShell>
           );

@@ -138,6 +138,7 @@ export class ProjectDocumentController {
   }
 
   async create(name = DEFAULT_PROJECT_NAME): Promise<ProjectDocumentResource> {
+    if (this.snapshot.state === "loading") throw new Error("A project document operation is already in progress.");
     const trimmedName = name.trim();
     if (!trimmedName) {
       throw new Error("Project name cannot be empty.");
@@ -156,6 +157,7 @@ export class ProjectDocumentController {
   }
 
   async open(source: ProjectArchiveSource): Promise<ProjectDocumentResource> {
+    if (this.snapshot.state === "loading") throw new Error("A project document operation is already in progress.");
     if (source.bytes.byteLength === 0) {
       throw new Error("The selected project archive is empty.");
     }

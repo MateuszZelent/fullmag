@@ -15,6 +15,7 @@ import {
 } from "./layoutModel";
 import { SlotHost } from "./SlotHost";
 import { ViewportTabHost } from "./ViewportTabHost";
+import { useWorkspaceContentScope } from "./WorkspaceContentScope";
 import { useWorkspaceStartupInteractionBlocked } from "./SimulationStartupOverlay";
 import { useKernel } from "../KernelContext";
 import { useLayoutSelector } from "./useLayout";
@@ -32,6 +33,25 @@ interface SortableWorkspaceColumnProps {
 interface WorkspaceDockState {
   layout: typeof DEFAULT_WORKSPACE_LAYOUT;
   restored: boolean;
+}
+
+function WorkspaceColumnContent({ slotId }: { slotId: WorkspaceColumnLayout["slotId"] }) {
+  const scope = useWorkspaceContentScope();
+  const kernel = useKernel();
+  if (slotId === "viewport-main") {
+    return scope === "project" ? (
+      <section className="grid flex-1 place-items-center p-6" aria-label="Saved field preview" data-project-results-preview="unavailable">
+        <div className="grid max-w-sm gap-2 text-center">
+          <h2 className="m-0 text-fm-md font-semibold text-fm-primary">Saved field preview</h2>
+          <p className="m-0 text-fm-sm text-fm-muted">Field preview is not available yet. Select a saved result to inspect its details.</p>
+        </div>
+      </section>
+    ) : <ViewportTabHost />;
+  }
+  if (scope === "project" && slotId === "panel-left") {
+    return <SlotHost slotId={slotId} moduleManifest={kernel.modules.get("results-navigator") ?? null} />;
+  }
+  return <SlotHost slotId={slotId} />;
 }
 
 function persistWorkspaceLayout(layout: typeof DEFAULT_WORKSPACE_LAYOUT): void {
@@ -61,11 +81,7 @@ function SortableWorkspaceColumn({
             <span>{column.label}</span>
             <GripVertical size={12} aria-hidden="true" />
           </div>
-          {column.slotId === "viewport-main" ? (
-            <ViewportTabHost />
-          ) : (
-            <SlotHost slotId={column.slotId} />
-          )}
+          <WorkspaceColumnContent slotId={column.slotId} />
         </div>
       )}
     </SortableItem>
@@ -74,13 +90,15 @@ function SortableWorkspaceColumn({
 
 export function WorkspaceDockLayout() {
   const kernel = useKernel();
+  const projectOnly = useWorkspaceContentScope() === "project";
   const panelVisible = useLayoutSelector((layout) => layout.panelVisible);
   const focusedSlot = useLayoutSelector((layout) => layout.focusedSlot);
   const activeBottomPanelTab = useLayoutSelector(
     (layout) => layout.activeBottomPanelTab,
   );
   const startupInteractionBlocked = useWorkspaceStartupInteractionBlocked();
-  const hasAuxViewportModule = kernel.modules.forSlot("viewport-aux").length > 0;
+  const hasAuxViewportModule = !projectOnly && kernel.modules.forSlot("viewport-aux").length > 0;
+  const bottomVisible = !projectOnly && panelVisible.bottom;
   const [dockState, setDockState] = useState<WorkspaceDockState>({
     layout: DEFAULT_WORKSPACE_LAYOUT,
     restored: false,
@@ -167,14 +185,14 @@ export function WorkspaceDockLayout() {
     if (column.slotId === "panel-right") return panelVisible.right;
     return true;
   });
-  const mainPanelCount = panelVisible.bottom ? 2 : 1;
+  const mainPanelCount = bottomVisible ? 2 : 1;
   const mainAutoSaveId = `fullmag-workspace-main:${mainPanelCount}`;
   const columnAutoSaveId = `fullmag-workspace-columns:${visibleColumns
     .map((column) => column.slotId)
     .join("|")}`;
   const startupDiagnosticsVisible =
     startupInteractionBlocked &&
-    panelVisible.bottom &&
+    bottomVisible &&
     focusedSlot === "panel-bottom" &&
     activeBottomPanelTab === "diagnostics";
   const workspacePanelsInert = startupInteractionBlocked || undefined;
@@ -192,7 +210,7 @@ export function WorkspaceDockLayout() {
               <span>Explorer</span>
               <GripVertical size={12} aria-hidden="true" />
             </div>
-            <SlotHost slotId="panel-left" />
+            <WorkspaceColumnContent slotId="panel-left" />
           </div>
         ) : null}
         <div className="fm-dock-column" inert={workspacePanelsInert}>
@@ -200,7 +218,7 @@ export function WorkspaceDockLayout() {
             <span>Viewport</span>
             <GripVertical size={12} aria-hidden="true" />
           </div>
-          <ViewportTabHost />
+          <WorkspaceColumnContent slotId="viewport-main" />
         </div>
         {hasAuxViewportModule ? (
           <div className="fm-dock-column" inert={workspacePanelsInert}>
@@ -217,10 +235,10 @@ export function WorkspaceDockLayout() {
               <span>Inspector</span>
               <GripVertical size={12} aria-hidden="true" />
             </div>
-            <SlotHost slotId="panel-right" />
+            <WorkspaceColumnContent slotId="panel-right" />
           </div>
         ) : null}
-        {panelVisible.bottom ? (
+        {bottomVisible ? (
           <div
             className="fm-workspace-bottom-panel"
             data-startup-diagnostics={
@@ -310,7 +328,7 @@ export function WorkspaceDockLayout() {
             </ResizablePanelGroup>
           </SortableList>
         </ResizablePanel>
-        {panelVisible.bottom ? (
+        {bottomVisible ? (
           <>
             <ResizableHandle className="fm-resize-handle--horizontal" />
             <ResizablePanel
