@@ -4486,3 +4486,28 @@ Nie zmieniono kapsuły #188 ani kolejki. F01 w implementacji w osobnych plikach;
 R4 w niezależnym review różnic. Robin open-axis helper jest już wspólny.
 Modal mixed-mesh fingerprint v3 i osobny handoff source identity mają pierwszeństwo
 przed starszą K0-only propozycją fingerprint v6; nie kopiować jej mechanicznie.
+
+
+## R4 — dokładne preimages, pierwszy fragment źródłowy
+
+W `equilibrium_identity.rs` identyfikatory przechowują dokładne compact JSON
+użyte do wyliczenia pięciu hashów. Materiał bez Ku zachowuje v1, materiał
+constant Ku zachowuje nasze canonical v2; nie przeniesiono K0 V1-only buildera.
+Namespace, separator0, LE byte length i bytes pozostają niezmienione.
+Przygotowano natywne regresje golden legacy replay oraz Ku sign/scaling/signed0.
+Parser Rust1file PASS; 10 kontraktów dokumentacji i source-map PASS. Niezależny
+Python/hashlib replay historycznych golden bytes PASS, mutacje namespace i bytes
+zmieniają digest. To nie jest wykonanie nowych funkcji Rust.
+
+Pełny port accepted/recomputed fields, source/modal identity V2, certificate
+publication, niezależny walidator i runtime nadal OPEN. Review pierwszego
+fragmentu trwa. F01 ma dodatkowy pre-commit blocker: MFEMv4.7 tetraorder4 ma
+ujemną wagę, a exchange wymaga dodatnich; korygowana polityka tet5/prism4.
+Nie publikowano błędnego wspólnego order4. Zakres S00–S12 pozostaje otwarty.
+
+R4 foundation po niezależnym review: brak blokera źródłowego. Uzupełniono
+przygotowane replay/mutation regresje wszystkich pięciu rodzin tożsamości.
+Parser dwóch plików Rust PASS; natywne testy nadal NOT VERIFIED. Pełny R4
+nie jest gotowy: accepted/recomputed fields, V2/Ku namespace, Provided continuation
+multi-k, remap accepted/identity artifacts i Python V1/V2 validator wymagają
+spójnego portu. K0-only topologyV6 override nie zastępuje naszego mixedV3.

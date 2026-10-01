@@ -71,6 +71,12 @@ pub(super) fn constant_uniaxial_descriptor(
 pub(super) fn equilibrium_material_signature(
     material: &fullmag_ir::MaterialIR,
 ) -> Result<String, RunError> {
+    equilibrium_material_signature_and_preimage(material).map(|(digest, _)| digest)
+}
+
+fn equilibrium_material_signature_and_preimage(
+    material: &fullmag_ir::MaterialIR,
+) -> Result<(String, String), RunError> {
     let uniaxial = constant_uniaxial_descriptor(material)?;
     let mut preimage = EquilibriumMaterialSignaturePreimageV1 {
         schema_version: EQUILIBRIUM_MATERIAL_PREIMAGE_V1.to_string(),
@@ -81,7 +87,7 @@ pub(super) fn equilibrium_material_signature(
     };
     if let Some((ku, axis)) = uniaxial {
         preimage.schema_version = EQUILIBRIUM_MATERIAL_PREIMAGE_V2.to_string();
-        signature_digest(
+        signature_digest_and_preimage(
             EQUILIBRIUM_MATERIAL_PREIMAGE_V2,
             &EquilibriumMaterialSignaturePreimageV2 {
                 material: preimage,
@@ -90,7 +96,7 @@ pub(super) fn equilibrium_material_signature(
             },
         )
     } else {
-        signature_digest(EQUILIBRIUM_MATERIAL_PREIMAGE_V1, &preimage)
+        signature_digest_and_preimage(EQUILIBRIUM_MATERIAL_PREIMAGE_V1, &preimage)
     }
 }
 
@@ -146,21 +152,26 @@ pub(crate) struct ModalDynamicBoundarySignaturePreimageV1 {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct EquilibriumIdentitySignaturesV1 {
     pub(crate) equilibrium_material_signature: String,
+    pub(crate) equilibrium_material_preimage_json: String,
     pub(crate) equilibrium_static_physics_signature: String,
+    pub(crate) equilibrium_static_physics_preimage_json: String,
     pub(crate) equilibrium_boundary_signature: String,
+    pub(crate) equilibrium_boundary_preimage_json: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ModalIdentitySignaturesV1 {
     pub(crate) modal_operator_signature: String,
+    pub(crate) modal_operator_preimage_json: String,
     pub(crate) modal_dynamic_boundary_signature: String,
+    pub(crate) modal_dynamic_boundary_preimage_json: String,
 }
 
 impl EquilibriumIdentitySignaturesV1 {
     pub(crate) fn from_relax_plan(plan: &FemPlanIR) -> Result<Self, RunError> {
         validate_supported_relax_source(plan)?;
         Self::from_preimages(
-            equilibrium_material_signature(&plan.material)?,
+            equilibrium_material_signature_and_preimage(&plan.material)?,
             EquilibriumStaticPhysicsSignaturePreimageV1 {
                 schema_version: EQUILIBRIUM_STATIC_PHYSICS_PREIMAGE_V1.to_string(),
                 enable_exchange: plan.enable_exchange,
@@ -186,7 +197,7 @@ impl EquilibriumIdentitySignaturesV1 {
             ));
         }
         Self::from_preimages(
-            equilibrium_material_signature(&plan.material)?,
+            equilibrium_material_signature_and_preimage(&plan.material)?,
             EquilibriumStaticPhysicsSignaturePreimageV1 {
                 schema_version: EQUILIBRIUM_STATIC_PHYSICS_PREIMAGE_V1.to_string(),
                 enable_exchange: plan.enable_exchange,
@@ -205,20 +216,23 @@ impl EquilibriumIdentitySignaturesV1 {
     }
 
     fn from_preimages(
-        material_signature: String,
+        material_identity: (String, String),
         static_physics: EquilibriumStaticPhysicsSignaturePreimageV1,
         boundary: EquilibriumBoundarySignaturePreimageV1,
     ) -> Result<Self, RunError> {
+        let (equilibrium_material_signature, equilibrium_material_preimage_json) =
+            material_identity;
+        let (equilibrium_static_physics_signature, equilibrium_static_physics_preimage_json) =
+            signature_digest_and_preimage(EQUILIBRIUM_STATIC_PHYSICS_PREIMAGE_V1, &static_physics)?;
+        let (equilibrium_boundary_signature, equilibrium_boundary_preimage_json) =
+            signature_digest_and_preimage(EQUILIBRIUM_BOUNDARY_PREIMAGE_V1, &boundary)?;
         Ok(Self {
-            equilibrium_material_signature: material_signature,
-            equilibrium_static_physics_signature: signature_digest(
-                EQUILIBRIUM_STATIC_PHYSICS_PREIMAGE_V1,
-                &static_physics,
-            )?,
-            equilibrium_boundary_signature: signature_digest(
-                EQUILIBRIUM_BOUNDARY_PREIMAGE_V1,
-                &boundary,
-            )?,
+            equilibrium_material_signature,
+            equilibrium_material_preimage_json,
+            equilibrium_static_physics_signature,
+            equilibrium_static_physics_preimage_json,
+            equilibrium_boundary_signature,
+            equilibrium_boundary_preimage_json,
         })
     }
 }
@@ -248,12 +262,15 @@ impl ModalIdentitySignaturesV1 {
             demag_realization: plan.demag_realization,
             air_box_config: plan.air_box_config.clone(),
         };
+        let (modal_operator_signature, modal_operator_preimage_json) =
+            signature_digest_and_preimage(MODAL_OPERATOR_PREIMAGE_V1, &operator)?;
+        let (modal_dynamic_boundary_signature, modal_dynamic_boundary_preimage_json) =
+            signature_digest_and_preimage(MODAL_DYNAMIC_BOUNDARY_PREIMAGE_V1, &dynamic_boundary)?;
         Ok(Self {
-            modal_operator_signature: signature_digest(MODAL_OPERATOR_PREIMAGE_V1, &operator)?,
-            modal_dynamic_boundary_signature: signature_digest(
-                MODAL_DYNAMIC_BOUNDARY_PREIMAGE_V1,
-                &dynamic_boundary,
-            )?,
+            modal_operator_signature,
+            modal_operator_preimage_json,
+            modal_dynamic_boundary_signature,
+            modal_dynamic_boundary_preimage_json,
         })
     }
 }
@@ -335,7 +352,10 @@ fn unsupported_source_identity(detail: &str) -> RunError {
     }
 }
 
-fn signature_digest<T: Serialize>(namespace: &str, value: &T) -> Result<String, RunError> {
+fn signature_digest_and_preimage<T: Serialize>(
+    namespace: &str,
+    value: &T,
+) -> Result<(String, String), RunError> {
     let bytes = serde_json::to_vec(value).map_err(|error| RunError {
         message: format!("equilibrium_identity_serialization_failed: {error}"),
     })?;
@@ -343,8 +363,11 @@ fn signature_digest<T: Serialize>(namespace: &str, value: &T) -> Result<String, 
     hash.update(namespace.as_bytes());
     hash.update([0]);
     hash.update((bytes.len() as u64).to_le_bytes());
-    hash.update(bytes);
-    Ok(format!("sha256:{:x}", hash.finalize()))
+    hash.update(&bytes);
+    let preimage_json = String::from_utf8(bytes).map_err(|error| RunError {
+        message: format!("equilibrium_identity_preimage_not_utf8: {error}"),
+    })?;
+    Ok((format!("sha256:{:x}", hash.finalize()), preimage_json))
 }
 
 #[cfg(test)]
@@ -392,4 +415,48 @@ mod material_identity_tests {
         assert_eq!(equilibrium_material_signature(&material).unwrap(),
             "sha256:5acf82b569d679296e01d7724e5a2a83fc60ce37d3d711afd535143c4bdad5af");
     }
+
+    #[test]
+    fn material_preimage_replays_exact_legacy_digest() {
+        let material = fullmag_ir::MaterialIR {
+            saturation_magnetisation: 800_000.0,
+            exchange_stiffness: 1.3e-11,
+            ..Default::default()
+        };
+        let (digest, preimage) = equilibrium_material_signature_and_preimage(&material).unwrap();
+        let expected = r#"{"schema_version":"EquilibriumMaterialSignaturePreimage.v1","saturation_magnetisation_a_per_m":800000.0,"exchange_stiffness_j_per_m":1.3e-11,"saturation_magnetisation_field_a_per_m":null,"exchange_stiffness_field_j_per_m":null}"#;
+        assert_eq!(preimage, expected);
+        assert_eq!(digest, "sha256:5acf82b569d679296e01d7724e5a2a83fc60ce37d3d711afd535143c4bdad5af");
+        // Replay from emitted bytes rather than serializing the same Rust struct again.
+        let mut replay = Sha256::new();
+        replay.update(EQUILIBRIUM_MATERIAL_PREIMAGE_V1.as_bytes());
+        replay.update([0]);
+        replay.update((preimage.len() as u64).to_le_bytes());
+        replay.update(preimage.as_bytes());
+        assert_eq!(digest, format!("sha256:{:x}", replay.finalize()));
+    }
+
+    #[test]
+    fn ku_preimage_preserves_canonical_axis_and_v2_scope() {
+        let mut material = fullmag_ir::MaterialIR {
+            saturation_magnetisation: 800_000.0,
+            exchange_stiffness: 1.3e-11,
+            uniaxial_anisotropy: Some(-0.0),
+            anisotropy_axis: Some([2.0, 3.0, 0.0]),
+            ..Default::default()
+        };
+        let original = equilibrium_material_signature_and_preimage(&material).unwrap();
+        material.uniaxial_anisotropy = Some(0.0);
+        material.anisotropy_axis = Some([-4.0, -6.0, -0.0]);
+        assert_eq!(original, equilibrium_material_signature_and_preimage(&material).unwrap());
+        let decoded: serde_json::Value = serde_json::from_str(&original.1).unwrap();
+        assert_eq!(decoded["schema_version"], EQUILIBRIUM_MATERIAL_PREIMAGE_V2);
+        assert_eq!(decoded["uniaxial_anisotropy_j_per_m3"], 0.0);
+        material.uniaxial_anisotropy = Some(1.0);
+        assert_ne!(original, equilibrium_material_signature_and_preimage(&material).unwrap());
+        material.uniaxial_anisotropy = None;
+        material.anisotropy_axis = None;
+        assert_ne!(original, equilibrium_material_signature_and_preimage(&material).unwrap());
+    }
+
 }

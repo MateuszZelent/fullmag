@@ -1826,6 +1826,20 @@
       "symbol": "void PreservesFailedSchurEpsCountersWithoutPublishingModes",
       "responsibility": "Verify performed EPS/Schur/Poisson work survives a failed solve without stale or partial published modes.",
       "evidence_status": "prepared native regression; compilation and execution NOT VERIFIED"
+    },
+    {
+      "id": "source-r4-identity-preimage-replay",
+      "path": "crates/fullmag-runner/src/fem/equilibrium_identity.rs",
+      "symbol": "signature_digest_and_preimage",
+      "responsibility": "Preserve exact compact preimage bytes for independent replay while retaining legacy v1 and canonical Ku v2 identity hashes.",
+      "evidence_status": "Rust parser PASS; native regressions prepared; runtime and complete R4 replay NOT VERIFIED"
+    },
+    {
+      "id": "source-r4-all-family-preimage-regression",
+      "path": "crates/fullmag-runner/src/fem/eigen_tests.rs",
+      "symbol": "equilibrium_and_modal_preimages_replay_all_identity_families",
+      "responsibility": "Prepare exact-byte replay and mutation rejection for material/static/boundary/operator/dynamic-boundary identity families.",
+      "evidence_status": "Rust parser PASS; native compilation/execution NOT VERIFIED"
     }
   ],
   "public_api": {

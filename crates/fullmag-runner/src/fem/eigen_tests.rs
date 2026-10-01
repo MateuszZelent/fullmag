@@ -182,6 +182,45 @@ fn equilibrium_and_modal_identity_signatures_are_separated_by_semantics() {
 }
 
 #[test]
+fn equilibrium_and_modal_preimages_replay_all_identity_families() {
+    use crate::fem::equilibrium_identity::{
+        EquilibriumIdentitySignaturesV1, ModalIdentitySignaturesV1,
+    };
+    use sha2::{Digest, Sha256};
+
+    let plan = minimal_native_modal_plan();
+    let source = EquilibriumIdentitySignaturesV1::from_eigen_plan(&plan).unwrap();
+    let modal = ModalIdentitySignaturesV1::from_eigen_plan(&plan).unwrap();
+    let families = [
+        ("EquilibriumMaterialSignaturePreimage.v1", &source.equilibrium_material_preimage_json,
+         &source.equilibrium_material_signature),
+        ("EquilibriumStaticPhysicsSignaturePreimage.v1", &source.equilibrium_static_physics_preimage_json,
+         &source.equilibrium_static_physics_signature),
+        ("EquilibriumBoundarySignaturePreimage.v1", &source.equilibrium_boundary_preimage_json,
+         &source.equilibrium_boundary_signature),
+        ("ModalOperatorSignaturePreimage.v1", &modal.modal_operator_preimage_json,
+         &modal.modal_operator_signature),
+        ("ModalDynamicBoundarySignaturePreimage.v1", &modal.modal_dynamic_boundary_preimage_json,
+         &modal.modal_dynamic_boundary_signature),
+    ];
+    for (namespace, preimage, recorded_digest) in families {
+        let decoded: serde_json::Value = serde_json::from_str(preimage).unwrap();
+        assert_eq!(decoded["schema_version"], namespace);
+        let replay = |bytes: &[u8]| {
+            let mut hash = Sha256::new();
+            hash.update(namespace.as_bytes());
+            hash.update([0]);
+            hash.update((bytes.len() as u64).to_le_bytes());
+            hash.update(bytes);
+            format!("sha256:{:x}", hash.finalize())
+        };
+        assert_eq!(*recorded_digest, replay(preimage.as_bytes()));
+        assert_ne!(*recorded_digest, replay(format!("{preimage} ").as_bytes()),
+                   "all identity families must bind the exact serialized bytes");
+    }
+}
+
+#[test]
 fn equilibrium_identity_signatures_mutate_only_in_the_owning_source_family() {
     use crate::fem::equilibrium_identity::EquilibriumIdentitySignaturesV1;
 

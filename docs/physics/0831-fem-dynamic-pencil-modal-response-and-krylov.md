@@ -621,6 +621,16 @@ v7/v6 keeps its raw semantics and digest preimages; it cannot become a Ku
 source by relabeling. Filenames and manifest keys match the actual schemas.
 Public Ku remains gated pending managed runtime and scientific validation.
 
+R4 identity replay first preserves the exact serialized preimages alongside
+all equilibrium and modal identity digests. The digest remains namespace,
+zero separator, little-endian byte length and the same compact JSON bytes.
+Ku-free material keeps v1 bytes; constant Ku keeps canonical v2 bytes, including
+the sign/scaling equivalence of its axis. These strings are internal replay
+inputs, not a substitute for accepted/recomputed field certificates or a new
+published artifact schema. End-to-end replay and managed qualification remain
+pending; adding preimages alone does not certify equilibrium provenance.
+
+
 The equilibrium observer registers Ku as a typed anisotropy interaction, never
 as a frozen per-node external field. This keeps Zeeman and anisotropy energies
 and field components separate and evaluates Ku at the actual accepted m0.
@@ -1984,6 +1994,8 @@ visibility into runtime qualification.
 | K0 diagnostic variadic safety | Source verification | `scripts/check_fem_schur_printf_contract.py` + `check_source` | Match literal printf placeholders with variadic arguments; reject missing ncv. | 27 literal calls plus 5 regression checks PASS | source verification only | working tree |
 | Bounded K0 window ncv regression | FEM CPU test source | `backends/fem/tests/frequency_domain/poisson_airbox_modal_eigen_slepc_test.cpp` + `void FrequencyWindowDoesNotRetryWhenOnlyTheGlobalRequestIsSaturated` | Verify bounded base/refined ncv and every subwindow's actual published request. | Native unit compilation prohibited; prepared only | NOT VERIFIED | working tree |
 | Failed EPS diagnostic regression | FEM CPU test source | `backends/fem/tests/frequency_domain/poisson_airbox_modal_eigen_slepc_test.cpp` + `void PreservesFailedSchurEpsCountersWithoutPublishingModes` | Preserve performed work without publishing stale or partial modes. | Native unit compilation prohibited; prepared only | NOT VERIFIED | working tree |
+| R4 exact identity preimages | FEM Rust source | `crates/fullmag-runner/src/fem/equilibrium_identity.rs` + `signature_digest_and_preimage` | Preserve namespace/byte-length/exact JSON replay with legacy and canonical Ku identities. | Parser PASS; native regressions prepared | Complete R4/runtime NOT VERIFIED | working tree |
+| R4 all-family replay regression | FEM Rust test source | `crates/fullmag-runner/src/fem/eigen_tests.rs` + `equilibrium_and_modal_preimages_replay_all_identity_families` | Independent byte replay and mutation checks for all five identities. | Parser PASS; prepared only | Native execution NOT VERIFIED | working tree |
 | Coupled cached-window regression | FEM CPU | `backends/fem/tests/frequency_domain/poisson_airbox_modal_eigen_slepc_test.cpp` + `void FrequencyWindowRetainsDemagInBoundedCachedPreconditioner` | Known Schur frequency across shifts and fresh windows. | Native compilation prohibited; pending | source-visible / unvalidated | working tree |
 
 ### Anulowanie podczas materializacji preconditionera K0
