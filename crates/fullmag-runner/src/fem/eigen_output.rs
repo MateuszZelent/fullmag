@@ -62,7 +62,7 @@ fn binary_artifact(path: impl Into<String>, bytes: Vec<u8>) -> AuxiliaryArtifact
 /// mapping in one Rust contract so single-k and multi-k publication cannot
 /// silently diverge.  `{:04}` is a minimum width: sample 10000 is therefore
 /// canonically named `sample_10000`, not padded to an arbitrary width.
-pub(crate) const R4_SIDECAR_DEFINITIONS: [(&str, &str, Option<&str>); 8] = [
+pub(crate) const R4_SIDECAR_DEFINITIONS: [(&str, &str, Option<&str>); 9] = [
     (
         "accepted_fem_equilibrium_fields_v1_paths",
         "accepted_fem_equilibrium_fields.v1.json",
@@ -102,6 +102,33 @@ pub(crate) const R4_SIDECAR_DEFINITIONS: [(&str, &str, Option<&str>); 8] = [
         "recomputed_fem_linearization_certificate_v2_paths",
         "recomputed_fem_linearization_certificate.v2.json",
         Some("v2"),
+    ),
+    (
+        "consumer_plan_snapshot_v1_paths",
+        super::eigen_equilibrium_contract::CONSUMER_PLAN_SNAPSHOT_FILENAME,
+        None,
+    ),
+];
+
+/// Non-shared Floquet sidecars are a separate provenance family.  They must
+/// never be folded into the shared R4 identity/certification gate: a complete
+/// non-shared path set only proves that the producer published the three
+/// immutable payloads for every computed sample.
+pub(crate) const NONSHARED_FLOQUET_SIDECAR_DEFINITIONS: [(&str, &str, &str); 3] = [
+    (
+        "nonshared_floquet_operator_identity_v1_paths",
+        "nonshared_floquet_operator_identity.v1.json",
+        "nonshared_floquet_operator_identity_v1_path",
+    ),
+    (
+        "nonshared_floquet_operator_identity_preimage_v1_paths",
+        "nonshared_floquet_operator_identity_preimage.v1.json",
+        "nonshared_floquet_operator_identity_preimage_v1_path",
+    ),
+    (
+        "nonshared_floquet_source_state_v1_paths",
+        "nonshared_floquet_source_state.v1.json",
+        "nonshared_floquet_source_state_v1_path",
     ),
 ];
 
@@ -159,6 +186,32 @@ pub(crate) struct R4SidecarCoverage {
     pub(crate) structural_complete: bool,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct NonSharedFloquetSidecarCoverage {
+    pub(crate) status: String,
+    pub(crate) reason: String,
+    pub(crate) computed_sample_indices: BTreeSet<usize>,
+    pub(crate) missing_keys: Vec<String>,
+    pub(crate) paths_by_key: BTreeMap<String, Vec<String>>,
+    pub(crate) has_any_sidecars: bool,
+    pub(crate) structural_complete: bool,
+}
+
+impl NonSharedFloquetSidecarCoverage {
+    pub(crate) fn manifest_value(&self) -> serde_json::Value {
+        serde_json::json!({
+            "status": self.status,
+            "qualification": "NOT_VERIFIED",
+            "reason": self.reason,
+            "computed_sample_indices": self.computed_sample_indices.iter().copied().collect::<Vec<_>>(),
+            "missing_keys": self.missing_keys,
+            "structural_complete": self.structural_complete,
+            "operator_replay": "NOT_VERIFIED",
+            "scientific_qualification": "NOT_VERIFIED",
+        })
+    }
+}
+
 impl R4SidecarCoverage {
     pub(crate) fn manifest_value(&self) -> serde_json::Value {
         serde_json::json!({
@@ -210,6 +263,138 @@ fn r4_sidecar_path_sets(
     (paths_by_key, invalid_paths)
 }
 
+fn nonshared_floquet_sidecar_path_sets(
+    artifacts: &[AuxiliaryArtifact],
+) -> (
+    BTreeMap<String, Vec<String>>,
+    Vec<String>,
+) {
+    let mut paths_by_key = BTreeMap::new();
+    let mut invalid_paths = Vec::new();
+    for (key, filename, _) in NONSHARED_FLOQUET_SIDECAR_DEFINITIONS {
+        let mut paths = artifacts
+            .iter()
+            .filter_map(|artifact| {
+                if is_sample_scoped_sidecar_candidate(&artifact.relative_path, filename)
+                    && canonical_sample_scoped_index(&artifact.relative_path, filename).is_none()
+                {
+                    invalid_paths.push(artifact.relative_path.clone());
+                    return None;
+                }
+                canonical_sample_scoped_index(&artifact.relative_path, filename)
+                    .map(|_| artifact.relative_path.clone())
+            })
+            .collect::<Vec<_>>();
+        paths.sort_by_key(|path| {
+            canonical_sample_scoped_index(path, filename).unwrap_or(usize::MAX)
+        });
+        paths.dedup();
+        paths_by_key.insert(key.to_string(), paths);
+    }
+    invalid_paths.sort();
+    invalid_paths.dedup();
+    (paths_by_key, invalid_paths)
+}
+
+fn nonshared_floquet_path_set(
+    paths_by_key: &BTreeMap<String, Vec<String>>,
+    key: &str,
+) -> BTreeSet<usize> {
+    let filename = NONSHARED_FLOQUET_SIDECAR_DEFINITIONS
+        .iter()
+        .find(|(candidate, _, _)| *candidate == key)
+        .map(|(_, filename, _)| *filename);
+    let Some(filename) = filename else {
+        return BTreeSet::new();
+    };
+    paths_by_key
+        .get(key)
+        .into_iter()
+        .flatten()
+        .filter_map(|path| canonical_sample_scoped_index(path, filename))
+        .collect()
+}
+
+/// Discover non-shared Floquet sidecars and require a complete per-sample
+/// path set.  This is deliberately structural only: it does not parse or
+/// certify the operator, source state, or physical preimages.
+pub(crate) fn inspect_nonshared_floquet_sidecars(
+    artifacts: &[AuxiliaryArtifact],
+    computed_sample_indices: &[usize],
+) -> NonSharedFloquetSidecarCoverage {
+    let computed_sample_count = computed_sample_indices.len();
+    let computed_sample_indices = computed_sample_indices.iter().copied().collect::<BTreeSet<_>>();
+    let (paths_by_key, invalid_paths) = nonshared_floquet_sidecar_path_sets(artifacts);
+    let has_any_sidecars = paths_by_key.values().any(|paths| !paths.is_empty())
+        || !invalid_paths.is_empty();
+    let empty = || NonSharedFloquetSidecarCoverage {
+        status: "historical".to_string(),
+        reason: "non-shared Floquet sidecars are absent from this manifest".to_string(),
+        computed_sample_indices: computed_sample_indices.clone(),
+        missing_keys: Vec::new(),
+        paths_by_key: paths_by_key.clone(),
+        has_any_sidecars,
+        structural_complete: false,
+    };
+    if !has_any_sidecars {
+        return empty();
+    }
+    if computed_sample_indices.len() != computed_sample_count {
+        return NonSharedFloquetSidecarCoverage {
+            status: "invalid".to_string(),
+            reason: "computed path samples contain duplicate sample_index values".to_string(),
+            ..empty()
+        };
+    }
+    if !invalid_paths.is_empty() {
+        return NonSharedFloquetSidecarCoverage {
+            status: "invalid".to_string(),
+            reason: format!(
+                "non-canonical non-shared Floquet sidecar paths: {}",
+                invalid_paths.join(", ")
+            ),
+            ..empty()
+        };
+    }
+
+    let mut missing_keys = Vec::new();
+    for (key, _, _) in NONSHARED_FLOQUET_SIDECAR_DEFINITIONS {
+        let samples = nonshared_floquet_path_set(&paths_by_key, key);
+        if !samples.is_subset(&computed_sample_indices) {
+            return NonSharedFloquetSidecarCoverage {
+                status: "invalid".to_string(),
+                reason: format!(
+                    "non-shared Floquet sidecar {key} contains samples outside computed samples"
+                ),
+                ..empty()
+            };
+        }
+        if samples != computed_sample_indices {
+            missing_keys.push(key.to_string());
+        }
+    }
+    if !missing_keys.is_empty() {
+        return NonSharedFloquetSidecarCoverage {
+            status: "missing_sidecars".to_string(),
+            reason: format!(
+                "non-shared Floquet sidecar arrays do not cover every computed sample: {}",
+                missing_keys.join(", ")
+            ),
+            missing_keys,
+            ..empty()
+        };
+    }
+    NonSharedFloquetSidecarCoverage {
+        status: "path_coverage_complete".to_string(),
+        reason: "non-shared Floquet sidecar paths cover every computed sample; operator replay remains separate".to_string(),
+        computed_sample_indices,
+        missing_keys,
+        paths_by_key,
+        has_any_sidecars,
+        structural_complete: true,
+    }
+}
+
 fn r4_path_set(paths_by_key: &BTreeMap<String, Vec<String>>, key: &str) -> BTreeSet<usize> {
     let filename = R4_SIDECAR_DEFINITIONS
         .iter()
@@ -224,6 +409,32 @@ fn r4_path_set(paths_by_key: &BTreeMap<String, Vec<String>>, key: &str) -> BTree
         .flatten()
         .filter_map(|path| canonical_sample_scoped_index(path, filename))
         .collect()
+}
+
+fn validate_consumer_plan_snapshot(
+    identity: &super::eigen_equilibrium_contract::LinearizationIdentityV2,
+    artifacts: &[AuxiliaryArtifact],
+) -> Result<(), String> {
+    let path = super::eigen_equilibrium_contract::consumer_plan_snapshot_relative_path(
+        identity.sample_index,
+    );
+    let Some(bytes) = r4_artifact_bytes(artifacts, &path) else {
+        return Err(format!("consumer plan snapshot sidecar is missing: {path}"));
+    };
+    let actual_digest = format!("sha256:{:x}", Sha256::digest(bytes));
+    if actual_digest != identity.consumer_plan_snapshot_sha256 {
+        return Err(format!(
+            "consumer plan snapshot digest does not match identity for sample {}",
+            identity.sample_index
+        ));
+    }
+    serde_json::from_slice::<FemEigenPlanIR>(bytes)
+        .map_err(|error| format!("consumer plan snapshot JSON is invalid: {error}"))?;
+    // Do not serialize `plan` again here.  `FemEigenPlanIR` contains map-like
+    // values whose iteration order is not a consumer-side proof of the
+    // producer bytes.  The raw SHA above is the exact-byte binding; parsing
+    // only proves that the bound bytes are a valid plan payload.
+    Ok(())
 }
 
 fn validate_r4_identity_links(
@@ -573,6 +784,33 @@ pub(crate) fn inspect_r4_sidecars(
         missing_recomputed_keys.push(key.to_string());
     }
     let allow_missing_recomputed = !missing_recomputed_keys.is_empty();
+    if !allow_missing_recomputed {
+        let consumer_plan_samples =
+            r4_path_set(&paths_by_key, "consumer_plan_snapshot_v1_paths");
+        if !consumer_plan_samples.is_subset(&accepted_sample_indices) {
+            return R4SidecarCoverage {
+                status: "invalid".to_string(),
+                reason: "consumer plan snapshot samples are outside the computed R4 samples"
+                    .to_string(),
+                accepted_family: Some(accepted_family.to_string()),
+                accepted_sample_indices,
+                identity_sample_indices: identity_samples,
+                ..empty()
+            };
+        }
+        if consumer_plan_samples != computed_sample_indices {
+            return R4SidecarCoverage {
+                status: "missing_consumer_plan_snapshot".to_string(),
+                reason:
+                    "consumer_plan_snapshot.v1.json must be present for every computed sample"
+                        .to_string(),
+                accepted_family: Some(accepted_family.to_string()),
+                accepted_sample_indices,
+                identity_sample_indices: identity_samples,
+                ..empty()
+            };
+        }
+    }
 
     let mut identity_content_sha256_by_sample = BTreeMap::new();
     for sample_index in &identity_samples {
@@ -684,6 +922,20 @@ pub(crate) fn inspect_r4_sidecars(
                 identity_sample_indices: identity_samples,
                 ..empty()
             };
+        }
+        if !allow_missing_recomputed {
+            if let Err(reason) = validate_consumer_plan_snapshot(&identity, artifacts) {
+                return R4SidecarCoverage {
+                    status: "invalid".to_string(),
+                    reason: format!(
+                        "consumer plan snapshot check failed for sample {sample_index}: {reason}"
+                    ),
+                    accepted_family: Some(accepted_family.to_string()),
+                    accepted_sample_indices,
+                    identity_sample_indices: identity_samples,
+                    ..empty()
+                };
+            }
         }
         identity_content_sha256_by_sample.insert(sample_index.to_string(), identity.content_sha256);
     }
@@ -2330,6 +2582,8 @@ pub(super) fn write_eigen_v2_bundle(
         sample_index,
     )?;
     let r4_coverage = inspect_r4_sidecars(auxiliary_artifacts, &[sample_index]);
+    let nonshared_floquet_coverage =
+        inspect_nonshared_floquet_sidecars(auxiliary_artifacts, &[sample_index]);
 
     let has_mode_fields = !mode_metadata_paths.is_empty();
     let spectrum_revision = spectrum_v2_revision;
@@ -2464,6 +2718,20 @@ pub(super) fn write_eigen_v2_bundle(
                     .unwrap_or_default();
                 artifacts.insert(key.to_string(), serde_json::json!(paths));
             }
+            let consumer_plan_paths = r4_coverage
+                .paths_by_key
+                .get("consumer_plan_snapshot_v1_paths")
+                .cloned()
+                .unwrap_or_default();
+            artifacts.insert(
+                "consumer_plan_snapshot_v1_path".to_string(),
+                consumer_plan_paths
+                    .first()
+                    .filter(|_| consumer_plan_paths.len() == 1)
+                    .map_or(serde_json::Value::Null, |path| {
+                        serde_json::json!(path)
+                    }),
+            );
             artifacts.insert(
                 "linearization_identity_sha256_by_sample".to_string(),
                 serde_json::json!(r4_coverage.identity_content_sha256_by_sample.clone()),
@@ -2475,11 +2743,39 @@ pub(super) fn write_eigen_v2_bundle(
     {
         artifacts.remove("linearization_identity_sha256_by_sample");
     }
+    if nonshared_floquet_coverage.has_any_sidecars {
+        if let Some(artifacts) = manifest
+            .get_mut("artifacts")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            for (key, _, alias) in NONSHARED_FLOQUET_SIDECAR_DEFINITIONS {
+                let paths = nonshared_floquet_coverage
+                    .paths_by_key
+                    .get(key)
+                    .cloned()
+                    .unwrap_or_default();
+                artifacts.insert(key.to_string(), serde_json::json!(paths));
+                artifacts.insert(
+                    alias.to_string(),
+                    paths
+                        .first()
+                        .filter(|_| {
+                            nonshared_floquet_coverage.structural_complete && paths.len() == 1
+                        })
+                        .map_or(serde_json::Value::Null, |path| serde_json::json!(path)),
+                );
+            }
+        }
+    }
     if let Some(diagnostics) = manifest
         .get_mut("diagnostics")
         .and_then(serde_json::Value::as_object_mut)
     {
         diagnostics.insert("r4_replay".to_string(), r4_coverage.manifest_value());
+        diagnostics.insert(
+            "nonshared_floquet_replay".to_string(),
+            nonshared_floquet_coverage.manifest_value(),
+        );
     }
     if let (Some(manifest_object), Some(diagnostics_object)) = (
         manifest.as_object_mut(),
@@ -3308,6 +3604,220 @@ mod linearization_identity_sidecar_tests {
         identity
     }
 
+    fn complete_r4_fixture(sample_index: usize, consumer_plan_bytes: &[u8]) -> Vec<AuxiliaryArtifact> {
+        let mut identity = identity_fixture(sample_index);
+        let sample_prefix = format!("eigen/metadata/sample_{sample_index:04}");
+        identity.recomputed_certificate_schema =
+            "RecomputedFemLinearizationCertificate.v2".to_string();
+        identity.equilibrium_artifact_path =
+            format!("{sample_prefix}/equilibrium_artifact.v8.json");
+        identity.linearization_state_path =
+            format!("{sample_prefix}/linearization_state.v7.json");
+        identity.accepted_fields_path =
+            format!("{sample_prefix}/accepted_fem_equilibrium_fields.v2.json");
+        identity.certified_fields_path =
+            format!("{sample_prefix}/certified_fem_equilibrium_fields.v2.json");
+        identity.recomputed_certificate_path =
+            format!("{sample_prefix}/recomputed_fem_linearization_certificate.v2.json");
+        identity.consumer_plan_snapshot_sha256 =
+            format!("sha256:{:x}", Sha256::digest(consumer_plan_bytes));
+
+        let accepted_fields = crate::types::CertifiedFemEquilibriumFields::from_fields_with_anisotropy(
+            vec![[1.0, 0.0, 0.0]; 2],
+            vec![[0.0, 1.0, 0.0]; 2],
+            vec![[0.0, 0.0, 1.0]; 2],
+            vec![[1.0, 1.0, 0.0]; 2],
+            vec![[2.0, 2.0, 2.0]; 2],
+            vec![0.0; 2],
+        )
+        .expect("accepted V2 fields fixture must be valid");
+        let certified_fields = crate::types::CertifiedFemEquilibriumFields::from_fields_with_anisotropy(
+            vec![[1.5, 0.0, 0.0]; 2],
+            vec![[0.0, 1.5, 0.0]; 2],
+            vec![[0.0, 0.0, 1.5]; 2],
+            vec![[1.5, 1.5, 0.0]; 2],
+            vec![[3.0, 3.0, 3.0]; 2],
+            vec![0.0; 2],
+        )
+        .expect("certified V2 fields fixture must be valid");
+        let accepted_bytes =
+            serde_json::to_vec(&accepted_fields).expect("accepted fields must serialize");
+        let certified_bytes =
+            serde_json::to_vec(&certified_fields).expect("certified fields must serialize");
+        identity.accepted_fields_content_sha256 = accepted_fields.content_sha256.clone();
+        identity.certified_fields_content_sha256 = certified_fields.content_sha256.clone();
+        identity.accepted_fields_bytes_sha256 =
+            format!("sha256:{:x}", Sha256::digest(&accepted_bytes));
+        identity.certified_fields_bytes_sha256 =
+            format!("sha256:{:x}", Sha256::digest(&certified_bytes));
+
+        let mut recomputed_certificate =
+            crate::types::RecomputedFemLinearizationCertificateV1 {
+                schema_version: "RecomputedFemLinearizationCertificate.v2".to_string(),
+                status: "matched".to_string(),
+                recompute_provider: "prepared-r4-fixture".to_string(),
+                node_count: 2,
+                equilibrium_content_sha256: identity.equilibrium_content_sha256.clone(),
+                mesh_topology_sha256: identity.source_mesh_topology_sha256.clone(),
+                equilibrium_material_signature: identity.equilibrium_material_signature.clone(),
+                equilibrium_static_physics_signature: identity
+                    .equilibrium_static_physics_signature
+                    .clone(),
+                equilibrium_boundary_signature: identity.equilibrium_boundary_signature.clone(),
+                accepted_fields_content_sha256: accepted_fields.content_sha256.clone(),
+                recomputed_fields_content_sha256: certified_fields.content_sha256.clone(),
+                max_h_ex_difference_a_per_m: 0.0,
+                max_h_demag_difference_a_per_m: 0.0,
+                max_h_ext_difference_a_per_m: 0.0,
+                max_h_anisotropy_difference_a_per_m: Some(0.0),
+                max_h_eff_difference_a_per_m: 0.0,
+                max_phi_difference_a: 0.0,
+                field_absolute_tolerance_a_per_m:
+                    crate::types::FEM_LINEARIZATION_FIELD_ABSOLUTE_TOLERANCE_A_PER_M,
+                field_relative_tolerance: crate::types::FEM_LINEARIZATION_FIELD_RELATIVE_TOLERANCE,
+                phi_absolute_tolerance_a: crate::types::FEM_LINEARIZATION_PHI_ABSOLUTE_TOLERANCE_A,
+                content_sha256: String::new(),
+            };
+        recomputed_certificate.content_sha256 =
+            crate::types::recomputed_fem_linearization_certificate_sha256(
+                &recomputed_certificate,
+            )
+            .expect("recomputed certificate fixture must hash");
+        let recomputed_bytes = serde_json::to_vec(&recomputed_certificate)
+            .expect("recomputed certificate must serialize");
+        let recomputed_preimage =
+            crate::types::recomputed_fem_linearization_certificate_preimage_bytes(
+                &recomputed_certificate,
+            )
+            .expect("recomputed certificate preimage must serialize");
+        identity.recomputed_certificate_content_sha256 =
+            recomputed_certificate.content_sha256.clone();
+        identity.recomputed_certificate_bytes_sha256 =
+            format!("sha256:{:x}", Sha256::digest(&recomputed_bytes));
+        identity.recomputed_certificate_preimage_json =
+            String::from_utf8(recomputed_preimage.clone()).expect("preimage must be UTF-8");
+        identity.recomputed_certificate_preimage_sha256 =
+            format!("sha256:{:x}", Sha256::digest(&recomputed_preimage));
+
+        identity.content_sha256.clear();
+        let identity_preimage =
+            serde_json::to_vec(&identity).expect("identity fixture preimage must serialize");
+        identity.content_sha256 = super::super::eigen_equilibrium_contract::
+            linearization_identity_v2_content_sha256_from_preimage_bytes(&identity_preimage);
+        let identity_bytes = serde_json::to_vec(&identity).expect("identity must serialize");
+        let identity_preimage_sidecar = super::super::eigen_equilibrium_contract::
+            linearization_identity_v2_preimage_sidecar_bytes(&identity)
+            .expect("identity preimage sidecar must serialize");
+        let equilibrium_bytes = serde_json::to_vec(&serde_json::json!({
+            "content_sha256": identity.equilibrium_artifact_sha256,
+        }))
+        .expect("equilibrium fixture must serialize");
+        let state_bytes = serde_json::to_vec(&serde_json::json!({
+            "content_sha256": identity.linearization_state_sha256,
+        }))
+        .expect("state fixture must serialize");
+
+        vec![
+            AuxiliaryArtifact {
+                relative_path: identity.equilibrium_artifact_path.clone(),
+                bytes: equilibrium_bytes,
+            },
+            AuxiliaryArtifact {
+                relative_path: identity.linearization_state_path.clone(),
+                bytes: state_bytes,
+            },
+            AuxiliaryArtifact {
+                relative_path: identity.accepted_fields_path.clone(),
+                bytes: accepted_bytes,
+            },
+            AuxiliaryArtifact {
+                relative_path: identity.certified_fields_path.clone(),
+                bytes: certified_bytes,
+            },
+            AuxiliaryArtifact {
+                relative_path: identity.recomputed_certificate_path.clone(),
+                bytes: recomputed_bytes,
+            },
+            AuxiliaryArtifact {
+                relative_path: format!(
+                    "{sample_prefix}/linearization_identity.v2.json"
+                ),
+                bytes: identity_bytes,
+            },
+            AuxiliaryArtifact {
+                relative_path: format!(
+                    "{sample_prefix}/linearization_identity_preimage.v1.json"
+                ),
+                bytes: identity_preimage_sidecar,
+            },
+            AuxiliaryArtifact {
+                relative_path: super::super::eigen_equilibrium_contract::
+                    consumer_plan_snapshot_relative_path(sample_index),
+                bytes: consumer_plan_bytes.to_vec(),
+            },
+        ]
+    }
+
+    #[test]
+    fn complete_r4_single_k_sidecars_are_structurally_replayable() {
+        let plan = super::super::eigen_tests::minimal_native_modal_plan();
+        let consumer_plan_bytes =
+            super::super::eigen_equilibrium_contract::consumer_plan_snapshot_bytes(&plan)
+                .expect("consumer plan fixture must serialize");
+        let artifacts = complete_r4_fixture(0, &consumer_plan_bytes);
+
+        let coverage = inspect_r4_sidecars(&artifacts, &[0]);
+
+        assert_eq!(coverage.status, "payload_replay_pending");
+        assert!(coverage.structural_complete);
+        assert_eq!(coverage.accepted_family.as_deref(), Some("v2"));
+        assert_eq!(coverage.accepted_sample_indices, BTreeSet::from([0_usize]));
+        assert_eq!(coverage.identity_sample_indices, BTreeSet::from([0_usize]));
+        assert_eq!(
+            coverage.paths_by_key["consumer_plan_snapshot_v1_paths"],
+            vec![
+                "eigen/metadata/sample_0000/consumer_plan_snapshot.v1.json".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn complete_r4_multi_k_sidecars_cover_every_computed_sample() {
+        let plan = super::super::eigen_tests::minimal_native_modal_plan();
+        let consumer_plan_bytes =
+            super::super::eigen_equilibrium_contract::consumer_plan_snapshot_bytes(&plan)
+                .expect("consumer plan fixture must serialize");
+        let artifacts = complete_r4_fixture(0, &consumer_plan_bytes)
+            .into_iter()
+            .chain(complete_r4_fixture(2, &consumer_plan_bytes))
+            .collect::<Vec<_>>();
+
+        let coverage = inspect_r4_sidecars(&artifacts, &[0, 2]);
+
+        assert_eq!(coverage.status, "payload_replay_pending");
+        assert!(coverage.structural_complete);
+        assert_eq!(coverage.accepted_family.as_deref(), Some("v2"));
+        assert_eq!(
+            coverage.computed_sample_indices,
+            BTreeSet::from([0_usize, 2_usize])
+        );
+        assert_eq!(
+            coverage.accepted_sample_indices,
+            BTreeSet::from([0_usize, 2_usize])
+        );
+        assert_eq!(
+            coverage.identity_sample_indices,
+            BTreeSet::from([0_usize, 2_usize])
+        );
+        assert_eq!(
+            coverage.paths_by_key["consumer_plan_snapshot_v1_paths"],
+            vec![
+                "eigen/metadata/sample_0000/consumer_plan_snapshot.v1.json".to_string(),
+                "eigen/metadata/sample_0002/consumer_plan_snapshot.v1.json".to_string(),
+            ]
+        );
+    }
+
     fn published_fixture(
         sample_index: usize,
     ) -> (
@@ -3345,6 +3855,34 @@ mod linearization_identity_sidecar_tests {
             },
         ];
         (summary, artifacts, identity, preimage_bytes)
+    }
+
+    #[test]
+    fn consumer_plan_snapshot_is_bound_to_the_identity_sample_path() {
+        let identity = identity_fixture(3);
+        let wrong_sample_path =
+            super::super::eigen_equilibrium_contract::consumer_plan_snapshot_relative_path(2);
+        let artifacts = vec![AuxiliaryArtifact {
+            relative_path: wrong_sample_path,
+            bytes: b"{}".to_vec(),
+        }];
+        let error = validate_consumer_plan_snapshot(&identity, &artifacts)
+            .expect_err("a different sample path must not satisfy the identity");
+        assert!(error.contains("sidecar is missing"));
+    }
+
+    #[test]
+    fn consumer_plan_snapshot_rejects_bytes_with_a_different_identity_digest() {
+        let identity = identity_fixture(3);
+        let path =
+            super::super::eigen_equilibrium_contract::consumer_plan_snapshot_relative_path(3);
+        let artifacts = vec![AuxiliaryArtifact {
+            relative_path: path,
+            bytes: b"{}".to_vec(),
+        }];
+        let error = validate_consumer_plan_snapshot(&identity, &artifacts)
+            .expect_err("changed bytes must not satisfy the identity digest");
+        assert!(error.contains("digest does not match identity"));
     }
 
     #[test]
@@ -3441,6 +3979,75 @@ mod linearization_identity_sidecar_tests {
                 "eigen/metadata/sample_10000/linearization_state.v7.json",
             ]
         );
+    }
+
+    #[test]
+    fn nonshared_floquet_coverage_is_separate_and_requires_all_samples() {
+        let artifacts = NONSHARED_FLOQUET_SIDECAR_DEFINITIONS
+            .into_iter()
+            .flat_map(|(_, filename, _)| {
+                [0_usize, 2_usize].into_iter().map(move |sample_index| {
+                    AuxiliaryArtifact {
+                        relative_path: format!(
+                            "eigen/metadata/sample_{sample_index:04}/{filename}"
+                        ),
+                        bytes: b"{}".to_vec(),
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let coverage = inspect_nonshared_floquet_sidecars(&artifacts, &[0, 2]);
+        assert_eq!(coverage.status, "path_coverage_complete");
+        assert!(coverage.structural_complete);
+        assert_eq!(
+            coverage.computed_sample_indices,
+            BTreeSet::from([0_usize, 2_usize])
+        );
+        assert_eq!(
+            inspect_r4_sidecars(&artifacts, &[0, 2]).status,
+            "historical"
+        );
+
+        let partial = artifacts
+            .into_iter()
+            .filter(|artifact| {
+                artifact.relative_path
+                    != "eigen/metadata/sample_0002/nonshared_floquet_source_state.v1.json"
+            })
+            .collect::<Vec<_>>();
+        let partial_coverage = inspect_nonshared_floquet_sidecars(&partial, &[0, 2]);
+        assert_eq!(partial_coverage.status, "missing_sidecars");
+        assert!(partial_coverage
+            .missing_keys
+            .contains(&"nonshared_floquet_source_state_v1_paths".to_string()));
+        assert!(!partial_coverage.structural_complete);
+    }
+
+    #[test]
+    fn nonshared_floquet_coverage_rejects_noncanonical_or_extra_samples() {
+        let artifacts = vec![AuxiliaryArtifact {
+            relative_path:
+                "eigen/metadata/sample_00000/nonshared_floquet_source_state.v1.json"
+                    .to_string(),
+            bytes: b"{}".to_vec(),
+        }];
+        let noncanonical = inspect_nonshared_floquet_sidecars(&artifacts, &[0]);
+        assert_eq!(noncanonical.status, "invalid");
+        assert!(noncanonical.reason.contains("non-canonical"));
+
+        let artifacts = NONSHARED_FLOQUET_SIDECAR_DEFINITIONS
+            .into_iter()
+            .map(|(_, filename, _)| AuxiliaryArtifact {
+                relative_path: format!(
+                    "eigen/metadata/sample_0007/{filename}"
+                ),
+                bytes: b"{}".to_vec(),
+            })
+            .collect::<Vec<_>>();
+        let extra = inspect_nonshared_floquet_sidecars(&artifacts, &[0]);
+        assert_eq!(extra.status, "invalid");
+        assert!(extra.reason.contains("outside computed samples"));
     }
 
     #[test]

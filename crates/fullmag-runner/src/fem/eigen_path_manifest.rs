@@ -48,6 +48,11 @@ pub(super) fn build_eigen_path_frequency_domain_manifest(
         mode_artifacts,
         &computed_sample_indices,
     );
+    let nonshared_floquet_coverage =
+        crate::fem::eigen_output::inspect_nonshared_floquet_sidecars(
+            mode_artifacts,
+            &computed_sample_indices,
+        );
     let producer_provenance_v1_paths =
         crate::fem::eigen_output::sample_scoped_producer_provenance_paths(mode_artifacts);
     let producer_provenance_v1_path =
@@ -389,6 +394,7 @@ pub(super) fn build_eigen_path_frequency_domain_manifest(
             "modal_overlap_unavailable_reason": modal_overlap_unavailable_reason,
             "interrupted": false,
             "r4_replay": r4_coverage.manifest_value(),
+            "nonshared_floquet_replay": nonshared_floquet_coverage.manifest_value(),
         },
         "capabilities": {
             "driven_response_artifact_available": false,
@@ -420,10 +426,43 @@ pub(super) fn build_eigen_path_frequency_domain_manifest(
                     .unwrap_or_default();
                 artifacts.insert(key.to_string(), serde_json::json!(paths));
             }
+            let consumer_plan_paths = r4_coverage
+                .paths_by_key
+                .get("consumer_plan_snapshot_v1_paths")
+                .cloned()
+                .unwrap_or_default();
+            artifacts.insert(
+                "consumer_plan_snapshot_v1_path".to_string(),
+                consumer_plan_paths
+                    .first()
+                    .filter(|_| consumer_plan_paths.len() == 1)
+                    .map_or(serde_json::Value::Null, |path| serde_json::json!(path)),
+            );
             artifacts.insert(
                 "linearization_identity_sha256_by_sample".to_string(),
                 serde_json::json!(r4_coverage.identity_content_sha256_by_sample.clone()),
             );
+        }
+        if nonshared_floquet_coverage.has_any_sidecars {
+            for (key, _, alias) in
+                crate::fem::eigen_output::NONSHARED_FLOQUET_SIDECAR_DEFINITIONS
+            {
+                let paths = nonshared_floquet_coverage
+                    .paths_by_key
+                    .get(key)
+                    .cloned()
+                    .unwrap_or_default();
+                artifacts.insert(key.to_string(), serde_json::json!(paths));
+                artifacts.insert(
+                    alias.to_string(),
+                    paths
+                        .first()
+                        .filter(|_| {
+                            nonshared_floquet_coverage.structural_complete && paths.len() == 1
+                        })
+                        .map_or(serde_json::Value::Null, |path| serde_json::json!(path)),
+                );
+            }
         }
     }
     if let Some(resolved) = manifest

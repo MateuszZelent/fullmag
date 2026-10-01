@@ -581,6 +581,10 @@ mod output_publication_tests {
             "linearization_state.v6.json",
             "equilibrium_artifact.v8.json",
             "linearization_state.v7.json",
+            "consumer_plan_snapshot.v1.json",
+            "nonshared_floquet_operator_identity.v1.json",
+            "nonshared_floquet_operator_identity_preimage.v1.json",
+            "nonshared_floquet_source_state.v1.json",
         ] {
             let source = format!("eigen/metadata/{filename}");
             let target = format!("eigen/metadata/sample_0007/{filename}");
@@ -634,6 +638,70 @@ mod output_publication_tests {
         assert!(error
             .message
             .contains("eigen_path_signed_state_sample_index_mismatch"));
+    }
+
+    #[test]
+    fn nonshared_exact_preimages_are_preserved_without_reserialization() {
+        for filename in [
+            "nonshared_floquet_source_state_preimage.v1.json",
+            "nonshared_floquet_operator_input_preimage.v1.json",
+            "equilibrium_material_preimage.v1.json",
+        ] {
+            let path = format!(
+                "eigen/metadata/sample_0007/nonshared_source/{filename}"
+            );
+            let payload = br#"{ "sample_index": 0, "preimage": "sample_0000" }"#;
+            let remapped = remap_single_k_mode_artifacts(
+                &[AuxiliaryArtifact {
+                    relative_path: path.clone(),
+                    bytes: payload.to_vec(),
+                }],
+                7,
+                &BTreeSet::new(),
+            )
+            .expect("non-shared exact preimage must remain publishable");
+            assert_eq!(remapped.len(), 1);
+            assert_eq!(remapped[0].relative_path, path);
+            assert_eq!(remapped[0].bytes, payload);
+
+            let error = remap_single_k_mode_artifacts(
+                &[AuxiliaryArtifact {
+                    relative_path: path,
+                    bytes: payload.to_vec(),
+                }],
+                8,
+                &BTreeSet::new(),
+            )
+            .expect_err("an exact preimage from another sample must fail closed");
+            assert!(error
+                .message
+                .contains("eigen_path_nonshared_provenance_sample_index_mismatch"));
+        }
+    }
+
+    #[test]
+    fn nonshared_provenance_paths_reject_traversal_empty_dot_and_backslash() {
+        let payload = br#"{ "sample_index": 0, "preimage": "sample_0000" }"#;
+        for suffix in [
+            "nonshared_source/../foreign.json",
+            "nonshared_source//foreign.json",
+            "nonshared_source/./foreign.json",
+            r"nonshared_source\foreign.json",
+        ] {
+            let path = format!("eigen/metadata/sample_0007/{suffix}");
+            let error = remap_single_k_mode_artifacts(
+                &[AuxiliaryArtifact {
+                    relative_path: path,
+                    bytes: payload.to_vec(),
+                }],
+                7,
+                &BTreeSet::new(),
+            )
+            .expect_err("noncanonical non-shared provenance path must fail closed");
+            assert!(error
+                .message
+                .contains("eigen_path_nonshared_provenance_sample_path_noncanonical"));
+        }
     }
 
     #[test]
@@ -2272,6 +2340,16 @@ pub(super) fn remap_single_k_mode_artifacts(
                 ),
             });
         }
+        if is_sample_scoped_nonshared_provenance_candidate(&artifact.relative_path)
+            && sample_scoped_nonshared_provenance_artifact_index(&artifact.relative_path).is_none()
+        {
+            return Err(RunError {
+                message: format!(
+                    "eigen_path_nonshared_provenance_sample_path_noncanonical: {}",
+                    artifact.relative_path
+                ),
+            });
+        }
         if let Some(source_sample_index) = sample_scoped_signed_state_artifact_index(
             &artifact.relative_path,
         ) {
@@ -2279,6 +2357,18 @@ pub(super) fn remap_single_k_mode_artifacts(
                 return Err(RunError {
                     message: format!(
                         "eigen_path_signed_state_sample_index_mismatch: source={}, target={}",
+                        source_sample_index, sample_index
+                    ),
+                });
+            }
+        }
+        if let Some(source_sample_index) =
+            sample_scoped_nonshared_provenance_artifact_index(&artifact.relative_path)
+        {
+            if source_sample_index != sample_index {
+                return Err(RunError {
+                    message: format!(
+                        "eigen_path_nonshared_provenance_sample_index_mismatch: source={}, target={}",
                         source_sample_index, sample_index
                     ),
                 });
@@ -2343,6 +2433,40 @@ fn is_sample_scoped_signed_state_candidate(relative_path: &str) -> bool {
         && single_k_signed_state_artifact(&format!("eigen/metadata/{filename}"))
 }
 
+fn sample_scoped_nonshared_provenance_artifact_index(relative_path: &str) -> Option<usize> {
+    let rest = relative_path.strip_prefix("eigen/metadata/sample_")?;
+    let (sample, suffix) = rest.split_once('/')?;
+    if suffix.contains('\\') {
+        return None;
+    }
+    let mut components = suffix.split('/');
+    if components.next() != Some("nonshared_source") {
+        return None;
+    }
+    let payload_components = components.collect::<Vec<_>>();
+    if payload_components.is_empty()
+        || payload_components.iter().any(|component| {
+        component.is_empty() || component == "." || component == ".."
+    })
+    {
+        return None;
+    }
+    let sample_index = sample.parse::<usize>().ok()?;
+    (sample == format!("{sample_index:04}")).then_some(sample_index)
+}
+
+fn is_sample_scoped_nonshared_provenance_candidate(relative_path: &str) -> bool {
+    let Some(rest) = relative_path.strip_prefix("eigen/metadata/sample_") else {
+        return false;
+    };
+    let Some((_sample, suffix)) = rest.split_once('/') else {
+        return false;
+    };
+    suffix == "nonshared_source"
+        || suffix.starts_with("nonshared_source/")
+        || suffix.starts_with("nonshared_source\\")
+}
+
 fn sample_scoped_producer_provenance_artifact_index(relative_path: &str) -> Option<usize> {
     crate::fem::eigen_output::canonical_sample_scoped_index(
         relative_path,
@@ -2365,12 +2489,14 @@ fn is_signed_state_artifact_path(relative_path: &str) -> bool {
         || is_sample_scoped_producer_provenance_candidate(relative_path)
         || single_k_signed_state_artifact(relative_path)
         || sample_scoped_signed_state_artifact_index(relative_path).is_some()
+        || sample_scoped_nonshared_provenance_artifact_index(relative_path).is_some()
 }
 
 fn eigen_path_signed_state_artifact(relative_path: &str) -> bool {
     is_root_producer_provenance_artifact(relative_path)
         || is_sample_scoped_producer_provenance_candidate(relative_path)
         || is_sample_scoped_signed_state_candidate(relative_path)
+        || is_sample_scoped_nonshared_provenance_candidate(relative_path)
 }
 
 fn single_k_signed_state_artifact(relative_path: &str) -> bool {
@@ -2381,6 +2507,10 @@ fn single_k_signed_state_artifact(relative_path: &str) -> bool {
         | "eigen/metadata/linearization_state.v7.json"
         | "eigen/metadata/linearization_identity.v2.json"
         | "eigen/metadata/linearization_identity_preimage.v1.json"
+        | "eigen/metadata/consumer_plan_snapshot.v1.json"
+        | "eigen/metadata/nonshared_floquet_operator_identity.v1.json"
+        | "eigen/metadata/nonshared_floquet_operator_identity_preimage.v1.json"
+        | "eigen/metadata/nonshared_floquet_source_state.v1.json"
         | "eigen/metadata/accepted_fem_equilibrium_fields.v1.json"
         | "eigen/metadata/accepted_fem_equilibrium_fields.v2.json"
         | "equilibrium/accepted_fem_equilibrium_fields.v1.json"
@@ -2410,6 +2540,11 @@ pub(super) fn remap_single_k_mode_artifact_path(
         return (source_sample_index == sample_index).then(|| relative_path.to_string());
     }
     if let Some(source_sample_index) = sample_scoped_signed_state_artifact_index(relative_path) {
+        return (source_sample_index == sample_index).then(|| relative_path.to_string());
+    }
+    if let Some(source_sample_index) =
+        sample_scoped_nonshared_provenance_artifact_index(relative_path)
+    {
         return (source_sample_index == sample_index).then(|| relative_path.to_string());
     }
     if single_k_signed_state_artifact(relative_path) {

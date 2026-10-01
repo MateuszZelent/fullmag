@@ -2,6 +2,42 @@
 
 ## Aktualny stan — 2026-10-01, po commicie 09aa7e5bc
 
+Bieżący przyrost lokalny: native publisher zachowuje dokładne bajty planu
+konsumenta w `consumer_plan_snapshot.v1.json`; verifier wiąże raw SHA z
+identity i pełnym zbiorem policzonych próbek. Niezależne review Rust nie
+wykryło P1/P2; przygotowano pozytywne regresje pełnego pakietu single-/multi-k
+z rzeczywistymi typami planu i pól (native tests niekompilowane).
+Kontrole producenta, routingu i consumer-plan: 28 unittest PASS.
+Osobny replay nonshared Floquet jest podłączony do głównego verifiera;
+sprawdza canonical paths, coverage, exact preimages i relacje macierzy,
+w tym gamma0 w rad/s per (A/m). Routing używa rzeczywistego interpretowanego
+fixture, bez mocka: 20 testów routing/helper/consumer PASS. Deklaracje
+nonshared w manifestach Rust są zaimplementowane, po review struktury;
+utwardzenie canonical paths odrzuca traversal, dot/empty components i
+backslash, zachowując dokładne bajty podpisanych artefaktów. Pełny native
+operator replay, residuale i kwalifikacja naukowa pozostają NOT VERIFIED.
+Po integracji: 40 interpretowanych regresji producenta/routingu/consumer/
+nonshared PASS oraz 213 testów głównego verifiera PASS (75,58 s).
+Pełne walidatory trzech not naukowych PASS; kontrola parsera nie zastępuje
+kompilacji ani uruchomienia natywnego solvera.
+Nie kompilowano testów native. Obserwator session 42033 został ponownie
+odpytany i nadal jest running; proces pilota PID 168336 jest aktywny,
+log Γ t3 przeszedł do refinement 27/50, computed_modes=0. Brak nowego
+terminalnego wyniku częstotliwości, widma i CSV dyspersji; wykres nie został
+zaktualizowany o nowe punkty tej serii.
+Niezależny odczyt Docker potwierdził kontener `21c61a91ee6f` jako running:
+chwilowe CPU 213,39%, RAM 354,7 MiB. To pomiar całego kontenera, nie kosztu
+samej macierzy lub fazy EPS; nie dowodzi zbieżności modalnej.
+Review integracji wykryło dwa kolejne defekty obsługi wejścia: wszystkie
+jawnie puste tablice nonshared były traktowane jak historyczny brak, a typy
+JSON niezgodne z kontraktem mogły spowodować TypeError/AttributeError.
+Pierwszy naprawiono z regresjami pustych/niekompletnych deklaracji (4 testy
+routingu PASS). Normalizacja typów w helperze jest zaimplementowana:
+embedding, damping, pair_id i konwersja ogromnej liczby JSON odrzucają dane
+przez kontrolowany NonSharedReplayError. Test głównego verifiera po pełnym
+rehash malformed payloadu również odrzuca podmianę; bieżący zestaw 48
+interpretowanych regresji PASS. Przyrost nie jest jeszcze zbudowany.
+
 Ta sekcja i tabela „Stan etapów” określają bieżące bramki. Pozostałe wpisy
 opisują historię; dawne `running/live/queued` nie są aktualnym stanem procesu.
 
@@ -13,7 +49,10 @@ Nowy job nie został przyjęty; proces pilota używającego runtime #193 nadal
 trzyma lock worktree (aktywny właściciel PID 168336 na Orion, potwierdzony proces).
 Odczyt nazwy skryptu właściciela: `run_de_100nm_pilot.py`. Nie użyto
 alternatywnego storage ani równoległego buildu. Następnie ponowić ten sam
-request-key po zwolnieniu zasobu. W czasie oczekiwania: exact consumer-plan
+request-key po zwolnieniu zasobu, jeśli nadal sprawdzamy 09aa7e5bc.
+Dla późniejszego spójnego checkpointu użyć nowego request-key z jego pełnym
+SHA; build starego checkpointu nie kwalifikuje późniejszych zmian.
+W czasie oczekiwania: exact consumer-plan
 sidecar oraz niezależny nonshared source/operator replay. Pełny S00–S12 otwarty.
 
 - Na remote: checkpoint replayu pól i actual mesh `6b3b7357e1084aa91e9a5b77b9503e8929d5eb4a`,

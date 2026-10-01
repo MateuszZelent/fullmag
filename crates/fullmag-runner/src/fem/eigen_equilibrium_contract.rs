@@ -20,6 +20,13 @@ pub(super) const ACCEPTED_FEM_RELAX_STAGE_HANDOFF_V2: &str = "AcceptedFemRelaxSt
 pub(super) const ACCEPTED_FEM_RELAX_STAGE_HANDOFF_V3: &str = "AcceptedFemRelaxStageHandoff.v3";
 pub(super) const LINEARIZATION_IDENTITY_V2: &str = "linearization_identity.v2";
 pub(super) const LINEARIZATION_IDENTITY_PREIMAGE_V1: &str = "linearization_identity_preimage.v1";
+/// Exact consumer plan bytes used to populate
+/// `LinearizationIdentityV2.consumer_plan_snapshot_sha256`.
+///
+/// The sidecar is the raw `serde_json::to_vec(FemEigenPlanIR)` output.  It is
+/// deliberately not wrapped in an envelope: adding an envelope would make
+/// the published bytes differ from the identity preimage digest.
+pub(super) const CONSUMER_PLAN_SNAPSHOT_FILENAME: &str = "consumer_plan_snapshot.v1.json";
 pub const FEM_RELAXATION_PRODUCER_PROVENANCE_V1: &str =
     "fem_relaxation_producer_provenance.v1";
 pub const FEM_RELAXATION_PRODUCER_PLAN_NAMESPACE_V1: &str =
@@ -486,6 +493,32 @@ pub(crate) fn fem_relaxation_producer_provenance_sample_relative_path(
     format!(
         "eigen/metadata/sample_{sample_index:04}/producer_provenance.v1.json"
     )
+}
+
+pub(super) fn consumer_plan_snapshot_relative_path(sample_index: usize) -> String {
+    format!(
+        "eigen/metadata/sample_{sample_index:04}/{CONSUMER_PLAN_SNAPSHOT_FILENAME}"
+    )
+}
+
+/// Serialize the consumer plan once at the artifact boundary.  The returned
+/// bytes are both the sidecar payload and the input to the identity digest;
+/// consumers therefore have an exact replay preimage rather than a
+/// reconstruction opportunity.
+pub(super) fn consumer_plan_snapshot_bytes(
+    plan: &FemEigenPlanIR,
+) -> Result<Vec<u8>, RunError> {
+    serde_json::to_vec(plan).map_err(|error| RunError {
+        message: format!("consumer_plan_snapshot_serialization_failed: {error}"),
+    })
+}
+
+pub(super) fn consumer_plan_snapshot_bytes_and_sha256(
+    plan: &FemEigenPlanIR,
+) -> Result<(Vec<u8>, String), RunError> {
+    let bytes = consumer_plan_snapshot_bytes(plan)?;
+    let digest = bytes_sha256(&bytes);
+    Ok((bytes, digest))
 }
 
 #[derive(Debug, Clone)]
@@ -1413,7 +1446,7 @@ impl AcceptedFemRelaxStageHandoff {
         linearization_state_path: String,
         modal_mesh_topology_fingerprint_v3: String,
         consumer_build_identity: serde_json::Value,
-    ) -> Result<LinearizationIdentityV2, RunError> {
+    ) -> Result<(LinearizationIdentityV2, Vec<u8>), RunError> {
         let replay = self.verified_replay.as_ref().ok_or_else(|| RunError {
             message: "linearization_identity_missing_verified_replay_payload".to_string(),
         })?;
@@ -1557,11 +1590,8 @@ impl AcceptedFemRelaxStageHandoff {
                 });
             }
         }
-        let consumer_plan_snapshot_sha256 =
-            super::eigen_digest::shared_domain_content_digest(
-                "linearization_identity.consumer_plan",
-                plan,
-            )?;
+        let (consumer_plan_snapshot_bytes, consumer_plan_snapshot_sha256) =
+            consumer_plan_snapshot_bytes_and_sha256(plan)?;
         let recomputed_preimage_bytes =
             crate::types::recomputed_fem_linearization_certificate_preimage_bytes(
                 &replay.recomputed_certificate,
@@ -1643,7 +1673,7 @@ impl AcceptedFemRelaxStageHandoff {
                 message: "linearization_identity_provenance_binding_invalid".to_string(),
             });
         }
-        Ok(identity)
+        Ok((identity, consumer_plan_snapshot_bytes))
     }
 
     #[allow(clippy::too_many_arguments)]

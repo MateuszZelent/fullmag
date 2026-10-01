@@ -329,24 +329,27 @@ pub(super) fn native_modal_artifacts(
             .map_err(|error| RunError {
                 message: format!("modal source mesh identity is invalid: {error}"),
             })?;
-    let linearization_identity_v2 = match (linearization_state, source_relax_handoff) {
-        (Some(state), Some(handoff)) => {
-            let (equilibrium_artifact_path, linearization_state_path) =
-                published_state_artifact_paths.as_ref().ok_or_else(|| RunError {
-                    message: "linearization_identity_state_artifact_paths_missing".to_string(),
-                })?;
-            Some(handoff.build_linearization_identity_v2(
-                plan,
-                state,
-                sample_index,
-                equilibrium_artifact_path.clone(),
-                linearization_state_path.clone(),
-                modal_source_mesh_topology.clone(),
-                crate::artifacts::build_identity_json(),
-            )?)
-        }
-        _ => None,
-    };
+    let (linearization_identity_v2, consumer_plan_snapshot_bytes) =
+        match (linearization_state, source_relax_handoff) {
+            (Some(state), Some(handoff)) => {
+                let (equilibrium_artifact_path, linearization_state_path) =
+                    published_state_artifact_paths.as_ref().ok_or_else(|| RunError {
+                        message: "linearization_identity_state_artifact_paths_missing".to_string(),
+                    })?;
+                let (identity, consumer_plan_snapshot_bytes) =
+                    handoff.build_linearization_identity_v2(
+                        plan,
+                        state,
+                        sample_index,
+                        equilibrium_artifact_path.clone(),
+                        linearization_state_path.clone(),
+                        modal_source_mesh_topology.clone(),
+                        crate::artifacts::build_identity_json(),
+                    )?;
+                (Some(identity), Some(consumer_plan_snapshot_bytes))
+            }
+            _ => (None, None),
+        };
     if let Some(object) = solver_diagnostics.as_object_mut() {
         // The native diagnostics payload reports candidate/accepted counts,
         // while artifacts-v2 needs the exact number of modes that survived
@@ -1047,6 +1050,19 @@ pub(super) fn native_modal_artifacts(
                 super::eigen_equilibrium_contract::linearization_identity_v2_preimage_sidecar_bytes(
                     identity,
                 )?,
+            )?;
+            append_exact_signed_sidecar(
+                &mut auxiliary_artifacts,
+                &super::eigen_equilibrium_contract::consumer_plan_snapshot_relative_path(
+                    sample_index,
+                ),
+                consumer_plan_snapshot_bytes
+                    .as_ref()
+                    .ok_or_else(|| RunError {
+                        message: "consumer_plan_snapshot_bytes_missing_for_verified_handoff"
+                            .to_string(),
+                    })?
+                    .clone(),
             )?;
             append_exact_signed_sidecar(
                 &mut auxiliary_artifacts,

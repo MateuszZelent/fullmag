@@ -269,6 +269,12 @@
       "responsibility": "Typed schema identity v2 i własny framed digest po exact preimage."
     },
     {
+      "id": "consumer-plan-snapshot",
+      "path": "crates/fullmag-runner/src/fem/eigen_equilibrium_contract.rs",
+      "symbol": "consumer_plan_snapshot_bytes_and_sha256",
+      "responsibility": "Zwraca jeden surowy serde JSON stream planu konsumenta dla digestu identity i sidecara bez koperty."
+    },
+    {
       "id": "identity-preimage-sidecar",
       "path": "crates/fullmag-runner/src/fem/eigen_equilibrium_contract.rs",
       "symbol": "linearization_identity_v2_preimage_sidecar_bytes",
@@ -279,6 +285,12 @@
       "path": "crates/fullmag-runner/src/fem/eigen_output.rs",
       "symbol": "validate_published_linearization_identity_sidecars",
       "responsibility": "Weryfikuje published identity/preimage i reklamuje ścieżki manifestu tylko po zgodności digestu."
+    },
+    {
+      "id": "consumer-plan-manifest-binding",
+      "path": "crates/fullmag-runner/src/fem/eigen_output.rs",
+      "symbol": "inspect_r4_sidecars",
+      "responsibility": "Wymaga consumer_plan_snapshot.v1.json dla każdego kompletnego sample-setu i wiąże jego raw SHA z identity."
     },
     {
       "id": "state-artifact-paths",

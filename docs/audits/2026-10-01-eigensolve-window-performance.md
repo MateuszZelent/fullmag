@@ -39,8 +39,9 @@ shifty seryjnie. Nie deklarujemy równoległego liczenia punktów ani shiftów.
 harmonogram okna wyznacza wymiar jako `2*problem.q_dof_count`. Przy porównaniu
 progu cache należy odczytać rzeczywisty wymiar wewnętrzny. Sam komunikat
 `effective_dof=656` nie jest pomiarem wymiaru tej macierzy i nie uzasadnia
-zwiększenia limitu tylko do 656. Pilot przekracza próg, lecz dokładny koszt
-materializacji trzeba policzyć dla wewnętrznego split.
+zwiększenia limitu tylko do 656. Przekroczenie progu przez pilot pozostaje
+niepotwierdzone bez odczytu rzeczywistego split_count. Dokładny koszt
+materializacji trzeba policzyć dla tego wewnętrznego wymiaru.
 
 Wycofano liczbowe twierdzenie o historycznych licznikach: wskazany do review
 `stage_00_flat_relax/metadata.json` zawiera również duże tablice indeksów.

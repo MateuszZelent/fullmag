@@ -1273,6 +1273,104 @@ def validate_producer_provenance_discovery(
     }
 
 
+def validate_consumer_plan_exact_replay(
+    root: Path, artifacts: dict, computed_sample_indices: set[int] | None,
+) -> dict[str, object]:
+    """Bind raw consumer plan bytes to identity, without qualifying IR or assembly.
+
+    The sidecar is the original compact serde_json plan, not an envelope.
+    Parsing checks duplicate keys and non-finite values; hashing always uses
+    the retained bytes, including their original field order and whitespace.
+    """
+    paths = _declared_r4_sidecar_paths(
+        root, artifacts, "consumer_plan_snapshot_v1_paths", "consumer_plan_snapshot.v1.json"
+    ) or {}
+    singular = artifacts.get("consumer_plan_snapshot_v1_path")
+    if singular is not None:
+        relative, _ = require_bundle_path(root, singular, "consumer_plan_snapshot_v1_path")
+        index = _r4_sidecar_sample_index(relative, "consumer_plan_snapshot.v1.json", "consumer plan alias")
+        if index not in paths or paths[index][0] != relative:
+            fail("consumer plan singular path must belong to its plural sample set")
+    if not paths:
+        return {"status": "NOT_VERIFIED", "reason": "exact consumer plan bytes absent"}
+    if list(paths) != sorted(paths):
+        fail("consumer plan paths must be ordered by sample_index")
+    if computed_sample_indices is not None and set(paths) != computed_sample_indices:
+        fail("consumer plan sample index set must match computed spectrum samples")
+    identities = _declared_r4_sidecar_paths(
+        root, artifacts, R4_IDENTITY_SIDECAR_KEY, "linearization_identity.v2.json"
+    ) or {}
+    if set(paths) != set(identities):
+        fail("consumer plan sample index set must match linearization identities")
+    digests = {}
+    for index, (_, plan_path) in paths.items():
+        raw = plan_path.read_bytes()
+        try:
+            strict_json_object(raw, "exact consumer plan")
+            identity = strict_json_object(identities[index][1].read_bytes(), "linearization identity")
+        except IdentityReplayError as error:
+            fail(f"consumer plan replay sample {index}: {error}")
+        if type(identity.get("sample_index")) is not int or identity["sample_index"] != index:
+            fail("consumer plan identity sample_index differs from its canonical path")
+        digest = "sha256:" + hashlib.sha256(raw).hexdigest()
+        require_equal(identity.get("consumer_plan_snapshot_sha256"), digest, "consumer plan raw digest")
+        digests[str(index)] = digest
+    return {
+        "status": "consumer_plan_exact_bytes_replayed", "raw_sha256_by_sample": digests,
+        "plan_semantics_status": "NOT_VERIFIED", "operator_replay_status": "NOT_VERIFIED",
+    }
+
+
+def validate_nonshared_operator_replay(
+    root: Path, artifacts: dict, computed_sample_indices: set[int] | None,
+) -> dict[str, object]:
+    """Replay declared nonshared samples without qualifying native FEM assembly."""
+    from fem_nonshared_operator_replay import NonSharedReplayError, replay_nonshared_operator
+
+    families = (
+        "nonshared_floquet_operator_identity",
+        "nonshared_floquet_operator_identity_preimage",
+        "nonshared_floquet_source_state",
+    )
+    paths = {}
+    for family in families:
+        key = f"{family}_v1_paths"
+        declared = _declared_r4_sidecar_paths(root, artifacts, key, f"{family}.v1.json") or {}
+        alias = artifacts.get(f"{family}_v1_path")
+        if alias is not None and (len(declared) != 1 or alias != next(iter(declared.values()))[0]):
+            fail(f"manifest.artifacts.{family}_v1_path differs from its single-sample array")
+        if list(declared) != sorted(declared):
+            fail(f"manifest.artifacts.{key} must be ordered by sample index")
+        paths[family] = declared
+    if not any(paths.values()):
+        if any(f"{family}_v1_paths" in artifacts for family in families):
+            fail("explicit nonshared operator replay arrays must cover computed samples")
+        return {"status": "NOT_VERIFIED", "reason": "nonshared exact sidecar declarations absent"}
+    indices = set(paths[families[0]])
+    if not indices or any(set(paths[family]) != indices for family in families):
+        fail("nonshared operator replay sidecars have incomplete sample coverage")
+    if computed_sample_indices is not None and indices != computed_sample_indices:
+        fail("nonshared operator replay sidecars differ from computed sample coverage")
+    reports = {}
+    for index in sorted(indices):
+        try:
+            report = replay_nonshared_operator(
+                root, sample_index=index,
+                identity_path=Path(paths[families[0]][index][0]),
+                identity_preimage_path=Path(paths[families[1]][index][0]),
+                source_state_path=Path(paths[families[2]][index][0]),
+            )
+        except NonSharedReplayError as error:
+            fail(f"nonshared operator replay sample {index}: {error}")
+        reports[str(index)] = report.as_dict()
+    return {
+        "status": "nonshared_exact_operator_relations_replayed",
+        "reports_by_sample": reports,
+        "native_operator_replay_status": "NOT_VERIFIED",
+        "scientific_qualification": "NOT_VERIFIED",
+    }
+
+
 def validate_producer_payload_replay(root: Path, manifest: dict) -> dict[str, object]:
     """Replay producer payloads when v2 identity is available, independently of assembly.
 
@@ -1502,7 +1600,13 @@ def validate_equilibrium_artifacts(
     r4_discovery["producer_provenance_discovery"] = validate_producer_provenance_discovery(
         root, artifacts, computed_sample_indices,
     )
+    r4_discovery["consumer_plan_replay"] = validate_consumer_plan_exact_replay(
+        root, artifacts, computed_sample_indices,
+    )
     r4_discovery["producer_payload_replay"] = validate_producer_payload_replay(root, manifest)
+    r4_discovery["nonshared_operator_replay"] = validate_nonshared_operator_replay(
+        root, artifacts, computed_sample_indices,
+    )
     def has_declared_path(keys: tuple[str, ...]) -> bool:
         return any(
             key in artifacts

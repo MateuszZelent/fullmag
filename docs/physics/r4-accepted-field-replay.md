@@ -282,6 +282,8 @@ change slice and are therefore `NOT VERIFIED` here.
 | R4 conflict propagation | `crates/fullmag-runner/src/fem/eigen_path.rs` — `execute_fem_eigen_path` | Abort before publishing conflicting signed evidence | FEM CPU/GPU | source-visible; runtime pending |
 | R4 sidecar persistence | `crates/fullmag-runner/src/fem/eigen_path_artifacts.rs` — `single_k_signed_state_artifact` | Exact bytes, independent mode selection | FEM CPU/GPU | source-visible; native pending |
 | R4 sidecar discovery | `crates/fullmag-runner/src/fem/eigen_path_manifest.rs` — `build_eigen_path_frequency_domain_manifest` | Actual per-sample plural paths | FEM CPU/GPU | source-visible; runtime pending |
+| Consumer plan snapshot | `crates/fullmag-runner/src/fem/eigen_equilibrium_contract.rs` — `consumer_plan_snapshot_bytes_and_sha256` | Exact serde bytes shared by identity digest and sidecar | FEM CPU/GPU | source-visible; runtime pending |
+| Consumer plan coverage | `crates/fullmag-runner/src/fem/eigen_output.rs` — `inspect_r4_sidecars` | Require one raw-SHA-bound plan per complete computed sample | FEM CPU/GPU | source-visible; runtime pending |
 | Independent Python field replay | `scripts/fem_equilibrium_field_replay.py` — `replay_accepted_recomputed_fields` | Binary field digests, differences, exact certificate preimage and explicit context limitations | FEM CPU/GPU | interpreted fixture checks; runtime pending |
 | Python field replay regression | `scripts/test_fem_equilibrium_field_replay.py` — `test_frozen_v1_and_v2_binary_field_digests_match_rust` | Frozen digests, mutations and strict preimage types | FEM CPU/GPU | 8 interpreted groups PASS |
 | Own identity digest replay | `scripts/fem_linearization_identity_replay.py` — `replay_identity_preimage` | Exact UTF-8, typed values, raw and framed hashes; no physical-state qualification | FEM CPU/GPU | 10 interpreted groups PASS |
@@ -298,6 +300,14 @@ wyboru pól modów; spectrum-only nie traci dowodów równowagi. Przygotowana
 regresja natywna obejmuje próbki 0, 2, 7 i oba źródłowe prefixy. Nie została
 uruchomiona. Binder kontynuacji nadal musi zachować i opublikować wszystkie
 payloady; obecność pustych tablic nie zamyka replay R4.
+
+Kompletny nowy pakiet publikuje także exact raw bytes planu konsumenta jako
+`eigen/metadata/sample_NNNN/consumer_plan_snapshot.v1.json`. To ten sam
+`serde_json::to_vec(FemEigenPlanIR)` stream, którego digest zapisuje
+`consumer_plan_snapshot_sha256` identity V2; manifest dodaje
+`consumer_plan_snapshot_v1_paths[]`, a single-k także singular alias. Brak,
+nadmiar lub zmiana raw SHA pozostają `NOT_VERIFIED` i nie są zastępowane
+rekonstrukcją planu po stronie odbiornika.
 
 Dwa źródłowe prefixy mogą wskazać jeden docelowy plik próbki. Przy różnych
 bajtach podpisanego sidecara agregacja zwraca błąd przed usunięciem

@@ -20,7 +20,9 @@ wykazuje, że payload pochodzi z właściwego planu i source snapshotu. Adapter
 3. odtwarza mesh, materiał, $mathbf m_0$ i trzy fizyczne preimage'y identity;
 4. wiąże raw bytes accepted/certified/recomputed z oryginalnymi nazwami
    producenta, również gdy konsument skopiował je do `sample_NNNN`;
-5. zwraca `ReplaySourceContext` dopiero po zamknięciu wszystkich tych bram.
+5. wiąże exact bytes `consumer_plan_snapshot.v1.json` z polem
+   `consumer_plan_snapshot_sha256` identity;
+6. zwraca `ReplaySourceContext` dopiero po zamknięciu wszystkich tych bram.
 
 Adapter nie zmienia równań LLG, planu `ProblemIR` ani operatora Floqueta.
 `scientific_qualification` pozostaje `NOT_VERIFIED`: replay nie jest dowodem
@@ -108,6 +110,7 @@ To nie jest publiczny konstruktor `fullmag` Python DSL. Główne typy i funkcja:
 | `ProducerArtifactPaths.equilibrium_magnetization_path` | `Path` | jawny m0 artifact/field |
 | `replay_producer_provenance(...)` | `ProducerReplayReport` | brak pliku, obce source, digest lub rodzina kończy fail-closed |
 | `ProducerReplayReport.source_context` | `ReplaySourceContext` | tworzony dopiero po pełnym replayu źródła |
+| `validate_consumer_plan_exact_replay(...)` | `dict[str, object]` | exact raw bytes i digest identity; semantyka consumer IR pozostaje `NOT_VERIFIED` |
 
 `expected_source_run_id`, `expected_source_stage_id`,
 `expected_source_stage_kind` i `expected_source_snapshot_sha256` są wymagane.
@@ -120,6 +123,7 @@ Tabela parametrów użytych przez verifier jest wyczerpująca dla tego adaptera:
 | `ProducerArtifactPaths.payload_paths` | `Mapping[str, Path] \| None` | `None` | `$1$` | when present, exactly three absolute copied-payload paths | consumer transport locations while preserving original producer refs | FEM CPU/GPU payloads; runtime not verified | No change |
 | `ProducerArtifactPaths.producer_plan_path` | `Path \| None` | `required for standalone producer bundle; None for inline modal bundle` | `$1$` | exact bytes equal producer_plan_snapshot.preimage_json when supplied | source FemPlanIR exact preimage | FEM CPU/GPU payloads; runtime not verified | FemPlanIR |
 | `replay_producer_provenance.expected_source_snapshot_sha256` | `str` | `required` | `$1$` | sha256:<64 lowercase hex> equal to producer build snapshot | explicit consumer expectation for cross-build policy | FEM CPU/GPU payloads; runtime not verified | No change |
+| `manifest.artifacts.consumer_plan_snapshot_v1_paths` | `list[str]` | `absent` | `$1$` | ordered canonical `sample_NNNN/consumer_plan_snapshot.v1.json` paths with raw digest binding | exact consumer-plan transport locations | FEM CPU/GPU payloads; IR/runtime not verified | FemEigenPlanIR snapshot |
 
 Poniższy przykład pokazuje pełny, kopiowalny przebieg dla jawnego bundle'u
 producenta. Ścieżki są wejściem operatora; adapter nie wyszukuje brakujących
@@ -195,7 +199,8 @@ Kolejność walidacji jest stała:
    cross-build;
 7. pięć equilibrium identity preimage'ów i ich zgodność z planem;
 8. raw bytes, schema, content digest oraz V1/V2 zgodność trzech payloadów;
-9. niezależny replay accepted/certified/recomputed z exact certificate preimage.
+9. niezależny replay accepted/certified/recomputed z exact certificate preimage;
+10. exact-byte replay `consumer_plan_snapshot.v1.json` z digestem identity.
 
 Brak któregokolwiek pliku, ścieżka absolutna/traversal, obcy snapshot,
 zmienione bytes, nieznana rodzina lub niezgodny m0 daje
@@ -224,6 +229,7 @@ Brak dowodu pozostaje `NOT VERIFIED`, a poprawny replay nie jest naukowym
 | exact producer writer | `crates/fullmag-runner/src/artifacts.rs` + `fem_relaxation_producer_provenance_artifact` | zapis rzeczywistych bytes sidecara i payloadów |
 | Python adapter | `scripts/fem_producer_provenance_replay.py` + `replay_producer_provenance` | source-bound replay i `ReplaySourceContext` |
 | producer routing | `scripts/verify_fem_frequency_domain_eigen_artifacts.py` + `validate_producer_payload_replay` | sample_NNNN routing, source replay i operator gate separation |
+| consumer exact-byte replay | `scripts/verify_fem_frequency_domain_eigen_artifacts.py` + `validate_consumer_plan_exact_replay` | raw consumer plan bytes i digest identity, bez semantyki IR |
 | field replay | `scripts/fem_accepted_recomputed_replay.py` + `replay_artifact_paths` | typed fields, m0, mesh i certificate preimage |
 | physical identity replay | `scripts/fem_equilibrium_identity_replay.py` + `replay_equilibrium_identity_preimages` | pięć preimage/signature pairs |
 | full identity gate | `scripts/fem_linearization_identity_replay.py` + `replay_identity_preimage` | 52 pola i own exact preimage |
@@ -234,8 +240,8 @@ Brak dowodu pozostaje `NOT VERIFIED`, a poprawny replay nie jest naukowym
 
 | Kontrola | Wynik | Znaczenie |
 |---|---|---|
-| `python -B -m unittest scripts/test_fem_producer_provenance_replay.py` | PASS, 11 testów | valid bundle, inline plan, copied payloads, certified m0, marker normalization, shared routing i semantyczne mutacje identity |
-| `python -B -m unittest scripts/test_fem_producer_provenance_replay.py scripts/test_fem_accepted_recomputed_replay.py scripts/test_fem_equilibrium_identity_replay.py` | PASS, 33 testy | adapter plus zależne replaye |
+| `python -B -m unittest scripts/test_fem_producer_provenance_replay.py` | PASS, 14 testów | valid bundle, inline plan, copied payloads, certified m0, marker normalization, source routing i consumer exact-byte replay |
+| `python -B -m unittest scripts/test_fem_producer_provenance_replay.py scripts/test_fem_accepted_recomputed_replay.py scripts/test_fem_equilibrium_identity_replay.py` | PASS, 36 testów | adapter plus zależne replaye |
 | native compilation | NOT VERIFIED | obowiązuje zakaz kompilacji testów jednostkowych |
 | managed runtime | NOT VERIFIED | adapter nie uruchamia runnera |
 | modal residual/convergence | NOT VERIFIED | wymaga osobnej bramy naukowej |
@@ -251,6 +257,11 @@ Brak dowodu pozostaje `NOT VERIFIED`, a poprawny replay nie jest naukowym
 - `consumer_plan_snapshot_sha256` jest tutaj sprawdzany jako jawny digest i
   element polityki cross-build; pełny consumer plan oraz operator modalny są
   poza tym adapterem i pozostają `NOT_VERIFIED`.
+- Zmiana consumer-plan bytes bez aktualizacji identity jest odrzucana. Zmiana
+  samospójna, czyli nowe bytes plus nowy digest i exact identity preimage, może
+  przejść bramkę transportową; jej `plan_semantics_status` oraz
+  `operator_replay_status` nadal są `NOT_VERIFIED`, ponieważ adapter nie
+  odtwarza semantyki `FemEigenPlanIR` ani assembly operatora.
 - Certyfikowany artifact m0 jest sprawdzany pod kątem schematu i akceptacji,
   a pełna walidacja jego `content_sha256`, completion i periodic certificate
   pozostaje odpowiedzialnością native loadera.
@@ -282,3 +293,4 @@ Brak dowodu pozostaje `NOT VERIFIED`, a poprawny replay nie jest naukowym
 | adapter tests | `scripts/test_fem_producer_provenance_replay.py` + `class ProducerProvenanceReplayTests` | FEM CPU interpreted | fixture and mutation suite |
 | producer routing | `scripts/verify_fem_frequency_domain_eigen_artifacts.py` + `validate_producer_payload_replay` | FEM CPU interpreted | real producer fixture, operator `NOT_VERIFIED` |
 | routing regression | `scripts/test_fem_producer_provenance_replay.py` + `test_main_shared_routing_replays_real_producer_bundle` | FEM CPU interpreted | source replay and foreign artifact/path/hash rejection |
+| consumer exact bytes | `scripts/verify_fem_frequency_domain_eigen_artifacts.py` + `validate_consumer_plan_exact_replay` | FEM CPU interpreted | raw digest replay; plan/operator remain `NOT_VERIFIED` |

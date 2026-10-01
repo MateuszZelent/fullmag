@@ -467,6 +467,18 @@ class ProducerProvenanceReplayTests(unittest.TestCase):
         state_path = sample / "linearization_state.v6.json"
         state_path.write_bytes(json.dumps(state, separators=(",", ":")).encode("utf-8"))
 
+        # This is the exact consumer-plan transport fixture.  It is deliberately
+        # kept separate from the producer FemPlan snapshot: this interpreted
+        # gate proves bytes and identity binding, not native FemEigenPlanIR
+        # deserialization or operator assembly.
+        consumer_plan_raw = (
+            b'{"schema_version":"FemEigenPlanIR.snapshot.v1",'
+            b'"sample_index":0,"wave_vector_rad_per_m":[0.0,0.0,0.0],'
+            b'"requested_device":"cpu"}'
+        )
+        consumer_plan_path = sample / "consumer_plan_snapshot.v1.json"
+        consumer_plan_path.write_bytes(consumer_plan_raw)
+
         routing_paths = ProducerArtifactPaths(
             producer_root=root,
             provenance_path=producer_path,
@@ -479,6 +491,11 @@ class ProducerProvenanceReplayTests(unittest.TestCase):
         # the source artifact/state content bindings change in this routed copy.
         _rewrite_identity_field(routing_paths, "equilibrium_artifact_sha256", equilibrium["content_sha256"])
         _rewrite_identity_field(routing_paths, "linearization_state_sha256", state["content_sha256"])
+        _rewrite_identity_field(
+            routing_paths,
+            "consumer_plan_snapshot_sha256",
+            "sha256:" + hashlib.sha256(consumer_plan_raw).hexdigest(),
+        )
 
         relative = "eigen/metadata/sample_0000/"
         manifest = {
@@ -486,6 +503,7 @@ class ProducerProvenanceReplayTests(unittest.TestCase):
                 "producer_provenance_v1_paths": [relative + "producer_provenance.v1.json"],
                 verifier.R4_IDENTITY_SIDECAR_KEY: [relative + "linearization_identity.v2.json"],
                 verifier.R4_IDENTITY_PREIMAGE_KEY: [relative + "linearization_identity_preimage.v1.json"],
+                "consumer_plan_snapshot_v1_paths": [relative + "consumer_plan_snapshot.v1.json"],
                 "equilibrium_artifact_v7_paths": [relative + "equilibrium_artifact.v7.json"],
                 "linearization_state_v6_paths": [relative + "linearization_state.v6.json"],
             }
@@ -525,6 +543,65 @@ class ProducerProvenanceReplayTests(unittest.TestCase):
                 report["samples"]["0"]["scientific_qualification"],
                 "NOT_VERIFIED",
             )
+            consumer = verifier.validate_consumer_plan_exact_replay(
+                Path(temp.name), manifest["artifacts"], {0}
+            )
+            self.assertEqual(consumer["status"], "consumer_plan_exact_bytes_replayed")
+            self.assertEqual(consumer["raw_sha256_by_sample"].keys(), {"0"})
+            self.assertEqual(consumer["plan_semantics_status"], "NOT_VERIFIED")
+            self.assertEqual(consumer["operator_replay_status"], "NOT_VERIFIED")
+        finally:
+            temp.cleanup()
+
+    def test_consumer_plan_foreign_bytes_without_identity_update_are_rejected(self) -> None:
+        temp, paths, manifest = self._shared_routing_bundle()
+        try:
+            plan_path = paths.producer_root / "eigen" / "metadata" / "sample_0000" / "consumer_plan_snapshot.v1.json"
+            plan_path.write_bytes(b'{"foreign":true}')
+            with self.assertRaisesRegex(SystemExit, "raw digest"):
+                verifier.validate_consumer_plan_exact_replay(
+                    paths.producer_root, manifest["artifacts"], {0}
+                )
+        finally:
+            temp.cleanup()
+
+    def test_self_consistent_foreign_consumer_plan_remains_semantically_unverified(self) -> None:
+        temp, paths, manifest = self._shared_routing_bundle()
+        try:
+            plan_path = paths.producer_root / "eigen" / "metadata" / "sample_0000" / "consumer_plan_snapshot.v1.json"
+            foreign_raw = b'{"foreign":true,"sample_index":0}'
+            plan_path.write_bytes(foreign_raw)
+            _rewrite_identity_field(
+                paths,
+                "consumer_plan_snapshot_sha256",
+                "sha256:" + hashlib.sha256(foreign_raw).hexdigest(),
+            )
+            report = verifier.validate_consumer_plan_exact_replay(
+                paths.producer_root, manifest["artifacts"], {0}
+            )
+            self.assertEqual(report["status"], "consumer_plan_exact_bytes_replayed")
+            self.assertEqual(report["plan_semantics_status"], "NOT_VERIFIED")
+            self.assertEqual(report["operator_replay_status"], "NOT_VERIFIED")
+        finally:
+            temp.cleanup()
+
+    def test_foreign_consumer_source_snapshot_is_rejected_by_source_replay(self) -> None:
+        temp, paths, manifest = self._shared_routing_bundle()
+        try:
+            _rewrite_identity_field(
+                paths,
+                "consumer_source_snapshot_sha256",
+                "sha256:" + "9" * 64,
+            )
+            consumer = verifier.validate_consumer_plan_exact_replay(
+                paths.producer_root, manifest["artifacts"], {0}
+            )
+            self.assertEqual(consumer["status"], "consumer_plan_exact_bytes_replayed")
+            self.assertEqual(consumer["plan_semantics_status"], "NOT_VERIFIED")
+            with self.assertRaisesRegex(SystemExit, "source snapshot"):
+                verifier.validate_producer_payload_replay(
+                    paths.producer_root, manifest
+                )
         finally:
             temp.cleanup()
 

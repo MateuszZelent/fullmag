@@ -345,7 +345,10 @@ Producent:
 3. przechowuje dokładne bajty wszystkich trzech dokumentów w verified handoff;
 4. przy modalnym sample odczytuje parę equilibrium/state i sprawdza family,
    mesh, m0, materiał, statykę, boundary i źródło;
-5. publikuje sidecary sample-scoped oraz identity.
+5. serializuje `FemEigenPlanIR` raz, używa tych samych bajtów do
+   `consumer_plan_snapshot_sha256` i publikuje je jako
+   `consumer_plan_snapshot.v1.json`;
+6. publikuje sidecary sample-scoped oraz identity.
 
 Konsument odrzuca brak jednego z trzech payloadów, mieszanie V1/V2 lub
 niespójną parę equilibrium/state, V1 z polami V2, V2 bez canonical kind,
@@ -359,6 +362,16 @@ bajty, ale konflikt pod jedną ścieżką jest błędem, nie wyborem pierwszego
 rekordu. Validation errors kończą się odrzuceniem artefaktu, a unsupported combinations
 nie otrzymują fallbacku. Brak dowodu jest NOT VERIFIED, a nie
 domyślną zgodnością.
+
+Sidecar planu konsumenta jest surowym wynikiem `serde_json::to_vec` bez
+koperty. Jego ścieżka ma postać
+`eigen/metadata/sample_NNNN/consumer_plan_snapshot.v1.json`, a manifesty
+publikują `consumer_plan_snapshot_v1_paths[]` oraz singular alias dla
+pojedynczego sample. Odbiornik sprawdza raw SHA względem pola
+`consumer_plan_snapshot_sha256` identity i parsuje te same bajty jako
+`FemEigenPlanIR`; nie rekonstruuje planu ani nie używa reserializacji jako
+dowodu exact bytes. Brak lub niezgodność tej rodziny pozostaje
+`r4_replay.qualification = "NOT_VERIFIED"`.
 
 (discrete-realization)=
 ## 8. Realizacja FEM i backendów
@@ -390,16 +403,17 @@ FDM. Status: not_applicable.
 | typed identity v2 | crates/fullmag-runner/src/fem/eigen_equilibrium_contract.rs + LinearizationIdentityV2 | pola, family, source/build, material, mesh i sidecary |
 | verified exact handoff | crates/fullmag-runner/src/fem/eigen_equilibrium_contract.rs + from_completed_relax_verified_with_exact_artifacts | walidacja accepted/certified/recomputed i zachowanie bajtów |
 | identity producer | crates/fullmag-runner/src/fem/eigen_equilibrium_contract.rs + build_linearization_identity_v2 | sprawdzenie target planu i budowa rekordu sample |
+| consumer plan snapshot | crates/fullmag-runner/src/fem/eigen_equilibrium_contract.rs + consumer_plan_snapshot_bytes_and_sha256 | jeden exact serde byte stream dla digestu identity i sidecara |
 | identity digest | crates/fullmag-runner/src/fem/eigen_equilibrium_contract.rs + linearization_identity_v2_content_sha256 | framed digest po wyzerowaniu własnego content |
 | exact cert preimage | crates/fullmag-runner/src/types.rs + recomputed_fem_linearization_certificate_preimage_bytes | exact serde bytes certyfikatu |
-| producer sidecary | crates/fullmag-runner/src/fem/eigen_native_artifacts.rs + native_modal_artifacts | publikacja accepted/certified/recomputed/identity/preimage |
+| producer sidecary | crates/fullmag-runner/src/fem/eigen_native_artifacts.rs + native_modal_artifacts | publikacja accepted/certified/recomputed/identity/preimage/consumer plan |
 | konflikt bajtów | crates/fullmag-runner/src/fem/eigen_native_artifacts.rs + append_exact_signed_sidecar | fail-closed przy sprzecznych dokumentach |
 | single-k manifest binding | crates/fullmag-runner/src/fem/eigen_output.rs + validate_published_linearization_identity_sidecars | sprawdza identity, exact preimage i rzeczywisty content digest przed reklamą ścieżek |
 | bias continuation | crates/fullmag-runner/src/fem/eigen_execution.rs + from_completed_relax_verified_with_exact_artifacts | ta sama bramka dla kolejnego sample |
 | CLI consumer | crates/fullmag-cli/src/orchestrator.rs + accepted_relax_handoff_from_completed_stage_with_exact_artifacts | odczyt exact artefaktów i verified handoff |
 | manifest paths | crates/fullmag-runner/src/fem/eigen_path_manifest.rs + eigen_path_state_metadata_paths | multi-sample ścieżki sidecarów |
 | path selectors | crates/fullmag-runner/src/fem/eigen_path_artifacts.rs + sample_scoped_signed_state_artifact_index | jeden canonical parser sample_NNNN, bez arbitrary zero-padding |
-| R4 coverage guard | crates/fullmag-runner/src/fem/eigen_output.rs + inspect_r4_sidecars | rzeczywisty sample set, family completeness, exact identity own-links i per-sample digest |
+| R4 coverage guard | crates/fullmag-runner/src/fem/eigen_output.rs + inspect_r4_sidecars | rzeczywisty sample set, family completeness, consumer-plan raw SHA, exact identity own-links i per-sample digest |
 | path R4 manifest status | crates/fullmag-runner/src/fem/eigen_path_manifest.rs + build_eigen_path_frequency_domain_manifest | historyczny brak oraz partial sidecars pozostają NOT VERIFIED |
 | source replay tests | scripts/test_eigen_path_signed_sidecars.py + test_* | zgodność rodzin, brakujące i sprzeczne sidecary |
 | own identity preimage replay | scripts/fem_linearization_identity_replay.py + replay_identity_preimage | exact sidecar, typed equality, duplicate/unknown/nonfinite rejection |
@@ -419,6 +433,10 @@ Single-k oraz eigen_path manifest publikują tylko rzeczywiście znalezione
 tablice R4 i dołączają `r4_replay` z coverage, statusem oraz mapą
 `linearization_identity_sha256_by_sample`; brak lub częściowość nie jest
 kwalifikacją.
+W kompletnym nowym pakiecie tablice obejmują także
+`consumer_plan_snapshot_v1_paths[]`; single-k dodaje alias
+`consumer_plan_snapshot_v1_path`. Sidecar jest dokładnym JSON planu użytym
+przez identity, więc Python może sprawdzić raw SHA bez rekonstrukcji planu.
 
 Python verifier potrafi odtworzyć identity z dostarczonego sample-scoped
 sidecara exact p_id; testy kontraktu obejmują 10 grup mutacji i odrzuceń. Nie
@@ -497,6 +515,8 @@ sidecara dla deklarowanego identity kończy się błędem fail-closed.
 |---|---|---|---|
 | framed identity digest | crates/fullmag-runner/src/fem/eigen_equilibrium_contract.rs + linearization_identity_v2_content_sha256 | FEM CPU | source-visible; runtime NOT VERIFIED |
 | typed schema and field roles | crates/fullmag-runner/src/fem/eigen_equilibrium_contract.rs + LinearizationIdentityV2 | FEM CPU | source-visible |
+| exact consumer plan snapshot | crates/fullmag-runner/src/fem/eigen_equilibrium_contract.rs + consumer_plan_snapshot_bytes_and_sha256 | FEM CPU | source-visible; runtime NOT VERIFIED |
+| consumer plan raw-SHA gate | crates/fullmag-runner/src/fem/eigen_output.rs + inspect_r4_sidecars | FEM CPU | source-visible; runtime NOT VERIFIED |
 | physical V1/V2 signatures | crates/fullmag-runner/src/fem/equilibrium_identity.rs + from_relax_plan | FEM CPU | source + existing contract |
 | exact accepted/recomputed handoff | crates/fullmag-runner/src/fem/eigen_equilibrium_contract.rs + AcceptedFemRelaxStageReplayPayload | FEM CPU | source-visible |
 | exact certificate preimage | crates/fullmag-runner/src/types.rs + recomputed_fem_linearization_certificate_preimage_bytes | FEM CPU | source + prepared regression |

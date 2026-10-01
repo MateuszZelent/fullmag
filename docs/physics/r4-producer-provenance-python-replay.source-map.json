@@ -155,6 +155,13 @@
       "evidence_status": "interpreted_tested"
     },
     {
+      "id": "consumer-plan-replay",
+      "path": "scripts/verify_fem_frequency_domain_eigen_artifacts.py",
+      "symbol": "validate_consumer_plan_exact_replay",
+      "responsibility": "exact consumer plan bytes bound to identity digest without IR qualification",
+      "evidence_status": "interpreted_tested"
+    },
+    {
       "id": "producer-routing-test",
       "path": "scripts/test_fem_producer_provenance_replay.py",
       "symbol": "test_main_shared_routing_replays_real_producer_bundle",
@@ -221,6 +228,16 @@
         "meaning": "explicit consumer expectation for cross-build policy",
         "backend_support": "FEM CPU/GPU payloads; runtime not verified",
         "problem_ir": "No change"
+      },
+      {
+        "python": "manifest.artifacts.consumer_plan_snapshot_v1_paths",
+        "type": "list[str]",
+        "default": "absent",
+        "si_unit": "1",
+        "validation": "ordered canonical `sample_NNNN/consumer_plan_snapshot.v1.json` paths with raw digest binding",
+        "meaning": "exact consumer-plan transport locations",
+        "backend_support": "FEM CPU/GPU payloads; IR/runtime not verified",
+        "problem_ir": "FemEigenPlanIR snapshot"
       }
     ]
   }

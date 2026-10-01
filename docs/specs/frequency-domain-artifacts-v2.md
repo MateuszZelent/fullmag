@@ -1339,6 +1339,18 @@ identity sidecarów. Brak identity/preimage, różny zbiór próbek, mieszana
 rodzina V1/V2, niepełna rodzina certified/recomputed albo niezgodny raw-byte
 digest oznacza `r4_replay.qualification = "NOT_VERIFIED"` i nie może ustawić
 bramki R4 jako gotowej.
+
+Każdy nowy, kompletny pakiet R4 publikuje również surowe bajty planu
+konsumenta w `eigen/metadata/sample_NNNN/consumer_plan_snapshot.v1.json`.
+Są to dokładnie bajty `serde_json::to_vec(FemEigenPlanIR)` użyte do obliczenia
+`linearization_identity.v2.consumer_plan_snapshot_sha256`; sidecar nie ma
+dodatkowej koperty ani alternatywnej kolejności pól. Manifest single-k publikuje
+`artifacts.consumer_plan_snapshot_v1_path` oraz jednoelementową tablicę
+`artifacts.consumer_plan_snapshot_v1_paths[]`, a manifest path publikuje tę
+samą tablicę dla wszystkich rzeczywiście policzonych próbek. Brak próbki,
+dodatkowa próbka, niezgodny raw SHA albo niepoprawny JSON pozostają
+`r4_replay.qualification = "NOT_VERIFIED"`. Historyczne manifesty bez tej
+rodziny zachowują status historyczny i nie są przez to promowane.
 Jeżeli accepted oraz identity/preimage są poprawnie związane, ale rodzina
 certified/recomputed jest niepełna, manifest zachowuje mapę
 `linearization_identity_sha256_by_sample` i publikuje

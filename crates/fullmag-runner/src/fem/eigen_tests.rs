@@ -4001,7 +4001,7 @@ fn modal_v6_cross_language_golden_matches_native_preimage_and_class_digests() {
     assert!(corner_error.message.contains("corner_closure_incomplete"));
 }
 
-fn minimal_native_modal_plan() -> FemEigenPlanIR {
+pub(super) fn minimal_native_modal_plan() -> FemEigenPlanIR {
     FemEigenPlanIR {
         mesh_build_report: None,
         mesh_name: "native_modal_mesh".to_string(),
@@ -9150,4 +9150,18 @@ fn certified_artifact_publication_rejects_unknown_or_mixed_schema_pairs() {
     ] {
         assert!(certified_equilibrium_artifact_filenames(pair.0, pair.1).is_err());
     }
+}
+
+#[test]
+fn consumer_plan_snapshot_uses_the_identity_digest_preimage_bytes() {
+    let plan = minimal_native_modal_plan();
+    let (bytes, digest) = consumer_plan_snapshot_bytes_and_sha256(&plan).unwrap();
+    assert_eq!(bytes, serde_json::to_vec(&plan).unwrap());
+    assert_eq!(
+        digest,
+        shared_domain_content_digest("linearization_identity.consumer_plan", &plan).unwrap()
+    );
+    let mut modified = bytes.clone();
+    modified.push(b' ');
+    assert_ne!(digest, format!("sha256:{:x}", Sha256::digest(&modified)));
 }
