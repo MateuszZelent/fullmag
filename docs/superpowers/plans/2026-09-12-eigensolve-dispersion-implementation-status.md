@@ -1,6 +1,33 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
-## Aktualny stan — 2026-10-02, checkpoint nearest bf25a30d7
+## Aktualny stan — 2026-10-02, checkpoint nearest 71ec3f159
+
+### Kolejka #196 — wspólny checkpoint poprawek
+
+Commit `71ec3f159b47ee7a56e471020923248c2cac283f` jest na origin i zawiera
+przyrost S05 oraz wcześniejsze poprawki raw64, referencję finite-airbox
+i manifesty S07. Scoped review i kontrole źródeł zakończono przed commitem;
+nie kompilowano testów jednostkowych. Zgłoszono jeden managed build
+`fem-cpu-slepc-runtime-v2`, job #196 `febe368724ec4e76a1da88ad24878a9b`,
+request key `eigensolve-nearest-71ec3f159b47-20261002`.
+Source digest: `cb6b948883bd2c75eb1997c7a677b0da0a4a1a0335e6c00e695911f67cd68d18`.
+Native source snapshot: `e4203626ed9a2a7ca4a82405831fc85c1a853af9a264dd45db623c00169ad32a`.
+Capture: `3c82a3a38cfd46f78a4f75342ed7876b`; source mode `commit`, clean.
+
+Status odczytany z API: `queued`. Runner jest zdrowy, przyjmuje zadania,
+nie ma aktywnego joba, ale ostatni pomiar wolnego storage wynosi
+4 952 559 616 B (około 4,61 GiB), poniżej progu startu 8 GiB.
+Pytanie do operatora o zwolnienie miejsca jest nadal otwarte; nie usunięto
+danych ani nie zlecono równoległego buildu.
+
+Sterownik uruchomiono z nowej niezmiennej kapsuły, session `7375`;
+pierwszy odczyt: `build_state=queued`. Konfiguracja jest w
+`storage/runs/<worktree-id>/scientific-batches/nonzero-k-validation/febe368724ec4e76a1da88ad24878a9b/controller-config.json`.
+Po sukcesie buildu i kontroli runtime uruchomi sześć rzeczywistych pilotów
+DE/BV: k=0 oraz k=±2e6 rad/m, L2, trzy warstwy w grubości.
+Nearest shifts 9/10 GHz służą wyszukiwaniu; nie zastępują częstotliwości
+solvera. Pierwszy błąd zatrzyma serię do diagnozy. Brak nowych wyników,
+kompletności widma i aktualizacji wykresu; pełny S00–S12 pozostaje otwarty.
 
 ### Najnowszy wynik #195 i naprawa granicy build identity
 
