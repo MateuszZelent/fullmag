@@ -15,6 +15,14 @@ dlatego nie podnosi procentów P3/P5.
 
 ## Dokumenty finalne
 
+Checkpoint 01.10.2026: [P6-50 — discovery zapisanych wyników i przypięty
+Inspector](p6/50-saved-results-discovery-and-inspector.md). Zakładka Saved
+korzysta ze stronicowanych referencji rzeczywistych SolutionSet i dokładnych
+rewizji. Managed browser fixture potwierdził readonly Inspector, odrzucenie
+fałszywego manifestu oraz fences zmiany runu/projektu. Pełny dostęp bez sesji,
+binarny podgląd pól, managed HTTP, nauka i release pozostają otwarte;
+procentów realizacji planu nie podniesiono na podstawie fixture.
+
 W rewalidacji 21.09.2026 dodano także trwały, fenced journal
 `retry_decision.v1`; wcześniejsze sformułowanie o otwartej decyzji retry należy
 czytać jako brak zastosowania decyzji do durable snapshotu i brak automatycznej
