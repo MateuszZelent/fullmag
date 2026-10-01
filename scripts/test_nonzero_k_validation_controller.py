@@ -4,6 +4,50 @@ import run_nonzero_k_validation_controller as controller
 
 
 class ControllerTests(unittest.TestCase):
+    def test_execution_rejects_modified_controller_before_running_pilots(self):
+        import hashlib
+        import tempfile
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            executing = root / "executing.py"
+            executing.write_bytes(b"pinned controller\n")
+            pinned = root / "capsule/scripts/run_nonzero_k_validation_controller.py"
+            pinned.parent.mkdir(parents=True)
+            pinned.write_bytes(executing.read_bytes())
+            config = {"controller_sha256": hashlib.sha256(executing.read_bytes()).hexdigest()}
+            controller.validate_controller_source(config, root / "capsule", executing)
+            for path in (executing, pinned):
+                original = path.read_bytes()
+                path.write_bytes(original + b"modified")
+                with self.subTest(path=path), self.assertRaises(ValueError):
+                    controller.validate_controller_source(config, root / "capsule", executing)
+                path.write_bytes(original)
+
+    def test_nearest_series_runs_both_gamma_and_actual_signed_cases(self):
+        cases = controller.validation_cases("nearest-single-k")
+        self.assertEqual(len(cases), 6)
+        self.assertEqual({pilot for _, pilot, _ in cases}, {
+            "de-smoke-k0", "de-smoke-bv-k0", "de-smoke-k2", "de-smoke-k-2",
+            "de-smoke-bv-k2", "de-smoke-bv-k-2"})
+        self.assertTrue(all(layers == "3" for _, _, layers in cases))
+        targets = {pilot: 9.0 for _, pilot, _ in cases}
+        targets["de-smoke-k2"] = 10.0
+        config = {"series": "nearest-single-k", "nearest_targets_ghz": targets}
+        self.assertEqual(controller.selected_only_arguments(config, "de-smoke-k2"),
+                         ["--spectral-target", "nearest", "--nearest-target-frequency-ghz", "10"])
+        self.assertEqual(controller.selected_only_arguments({"series": "signed-13"}, "de-smoke-k2"), [])
+
+    def test_nearest_series_rejects_unpinned_or_invalid_shifts(self):
+        pilots = [pilot for _, pilot, _ in controller.validation_cases("nearest-single-k")]
+        for targets in (None, {}, {pilot: 9.0 for pilot in pilots[:-1]}):
+            with self.subTest(targets=targets), self.assertRaises(ValueError):
+                controller.selected_only_arguments({"series": "nearest-single-k", "nearest_targets_ghz": targets}, pilots[0])
+        for bad in (True, float("nan"), float("inf"), 1e308, 10**400, 0, -9, "9"):
+            targets = {pilot: 9.0 for pilot in pilots}
+            targets[pilots[-1]] = bad
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                controller.selected_only_arguments({"series": "nearest-single-k", "nearest_targets_ghz": targets}, pilots[0])
+
     def test_python_children_disable_bytecode(self):
         command = controller.python_command(Path("capsule/script.py"), "--job-id", "123")
         self.assertEqual(command[1], "-B")
@@ -47,6 +91,27 @@ class ControllerTests(unittest.TestCase):
             self.assertEqual(controller.validate_observer_root(config, layout, job["job_id"]), config.parent)
             with self.assertRaises(ValueError):
                 controller.validate_observer_root(storage / "runs/worktree-test" / job["job_id"] / "controller-config.json", layout, job["job_id"])
+
+    def test_nearest_preparation_pins_shifts_in_saved_configuration(self):
+        import json
+        import tempfile
+        with tempfile.TemporaryDirectory() as temporary:
+            storage = Path(temporary)
+            layout = {"storage_root": str(storage), "repo_root": str(storage / "checkout"),
+                      "worktree_id": "worktree-test"}
+            job = {"job_id": "a" * 32, "source_digest": "b" * 64,
+                   "worktree_id": "worktree-test", "payload": {"capsule_relative":
+                   "runs/worktree-test/" + "c" * 32 + "/source"}}
+            path = controller.prepare_controller_config(job, layout, "d" * 40, "nearest-single-k")
+            config = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(config["series"], "nearest-single-k")
+            self.assertEqual(config["model_ref"], "d" * 40)
+            for _, pilot, _ in controller.validation_cases(config["series"]):
+                arguments = controller.selected_only_arguments(config, pilot)
+                self.assertEqual(arguments[:2], ["--spectral-target", "nearest"])
+                expected = "10" if pilot in {"de-smoke-k2", "de-smoke-k-2"} else "9"
+                self.assertEqual(arguments[-1], expected)
+            self.assertFalse((storage / "runs/worktree-test" / job["job_id"]).exists())
 
     def test_config_preparation_rejects_job_identity_and_path_traversal(self):
         import tempfile

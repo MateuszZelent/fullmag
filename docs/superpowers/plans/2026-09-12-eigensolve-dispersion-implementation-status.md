@@ -2,19 +2,58 @@
 
 ## Aktualny stan — 2026-10-01, checkpoint nearest e6214cb39
 
-Managed runtime-only build #194 przyjęty i potwierdzony `running`:
+Końcowe niezależne review e6214cb39 wykryło P1 provenance:
+`eigen_native_window.rs` może dla adaptera `floquet_airbox_cpu_schur_slepc`
+publikować `magnetostatic_bc=periodic_airbox_k0` oraz scope/claim K0.
+To nie dowodzi błędu operatora C++, ale blokuje wiarygodność artefaktów
+nonzero-k. Poprawka zależna od faktycznego planu/adaptera jest zaimplementowana;
+mismatch zwraca RunError, intencja Floqueta pozostaje jawna, a scope K0
+dotyczy tylko CPU Schur. Parser/source/noty i końcowe niezależne review PASS.
+Checkpoint `7c70e1b48c68a61280a765a0131b1dd63e47380d`; native wykonanie
+NOT VERIFIED. Ostatni stale-fixture missing-boundary poprawiono na bounded K0.
+Build #194 nie dostarczył runtime: zakończył się błędem kompilacji.
+Po poprawce nonzero-k wymaga świeżego runtime ze spójnego SHA.
+P2 review: dodano `solve_complete` bezpośrednio ze statusu native, oddzielnie
+od `selected_only`/`window_complete=false`; nie jest wyliczany z tekstu JSON.
+Kontrola źródłowa PASS, native wykonanie NOT VERIFIED.
+
+Managed runtime-only build #194 zakończony `failed`, exit=2:
 `e4aef98d4f0442b0ae43b43b7d055305`, profil `fem-cpu-slepc-runtime-v2`,
 źródło `e6214cb39583b0644dc80a5f9183ce232a9f1246` (commit i push potwierdzone).
 Request key: `eigensolve-nearest-e6214cb39583-20261001`.
 Source digest: `9a4a1215693510af88d6bdb19e45d678e84d56a91061aa75ccb80226451ba227`.
 Kapsuła: `runs/eigensolve-dispersion-plan-20260-c5dfad6d7f548079/08f924ccf3d44f08a882dc94981cc5d5/source`.
 Źródło czyste; snapshot SHA `17e838ca1f4dd7bd78dd272b7de29a8337ce0a00f7ebf1164d3713abd385284b`.
-Brak jeszcze terminalnego receipt i obliczeń tego runtime. Nie ponawiać
-submission ani uruchamiać równoległego ciężkiego buildu. Po sukcesie:
+Etap native-build trwał 718 228,649 ms. Log wykazuje cztery przyczyny Rust:
+import MeshTopology z niewłaściwego modułu, brak reexportu funkcji CPU
+z producer identity, brak exact certificate preimage w replay payload
+oraz porównanie podwójnej referencji do komponentu ścieżki (dwa E0277).
+Poprawki są w toku; parser i testy interpretowane nie wykrywały tych
+błędów typów. Kolejny build dopiero ze spójnego checkpointu napraw.
+Receipt `artifacts/build-receipt.json` potwierdza failed, runtime_only=true
+i unit_test_targets=[]; SHA256 stderr:
+`c284b99ae73ce33c97640febd81c9e494ca3c038e20acd0d8f7a5b9603eed791`.
+Naprawy czterech przyczyn zapisano i wysłano w
+`55c837888b903d53385b6b3ee92b7d2e0f89d0fd`: poprawny import/reexport,
+typ iteratora oraz preimage tworzony raz i zachowany w replay payload.
+Niezależne review źródeł, parser Rust i 56 regresji nonshared PASS.
+Kompilacja tego checkpointu nadal NOT VERIFIED.
+Po sukcesie:
 sprawdzić receipt/hashes/MFEM loader, dry-run, Γ nearest (cel 9 GHz), następnie
 osobne ±DE i ±BV dla k=2e6 rad/m. Cel Γ odsunięty od dokładnej wartości
 analitycznej, aby nie zadawać shiftu na znanym biegunie. Wyniki nadal muszą
 przejść oryginalne residuale, seam/phase, mesh, equilibrium i potential checks.
+
+Sterownik otrzymał serię `nearest-single-k`: sześć rzeczywistych, kolejnych
+uruchomień (Γ DE, Γ BV, ±2 rad/µm DE, ±2 rad/µm BV). Konfiguracja przypina
+shift 9 GHz dla Γ/BV i 10 GHz dla DE nonzero-k; są to cele numeryczne,
+a nie wyniki ani dopasowanie do analityki. Nearest ma selected-only scope
+i nie dostarcza dowodu kompletności okna lub zbieżności. Kontrole sterownika:
+10 PASS i 19 subtestów PASS. Przed wykonaniem sterownik sprawdza SHA własnych
+bajtów i swojej kopii w kapsule; zmiana którejkolwiek blokuje uruchomienie
+pilotów. Niezależne review sterownika PASS; naprawiono także kontrolowane
+odrzucenie przepełnienia bardzo dużego integera celu. Kolektor i wykres
+w review; runtime NOT VERIFIED.
 
 Zapisano i wysłano dwa kolejne checkpointy:
 `c9f10a1d41780f88cdee2a36f21a430612343932` (terminalny audyt Γ) oraz
@@ -2273,14 +2312,14 @@ Realizacja [planu S00–S12](2026-09-12-eigensolve-dispersion-nonzero-k-plan.md)
 
 | Etap | Stan | Pozostały warunek |
 |---|---|---|
-| S00 — baza K0 i dowody | W TRAKCIE | Bieżący managed runtime, Kittel, pełny zaakceptowany handoff |
+| S00 — baza K0 i dowody | W TRAKCIE | #193 zachował mod Γ 9,299249697 GHz z full backward error 2,01e-13 i zgodnością finite-airbox analityki, ale pełne okno było niekompletne. Wymagane oficjalne artefakty i zaakceptowany handoff bieżącego runtime. |
 | S01 — nauka, ADR, kontrakty | W TRAKCIE | Noty, mapy źródeł, walidatory i review |
 | S02 — Python/IR | W TRAKCIE | Walidacja k i selektorów, round-trip, testy konsumentów |
 | S03 — natywny operator magnetyczny Blocha | W TRAKCIE | Prolongacja i bounded sparse operator są w źródłach; geometry-aware tet/prism oraz ich rzeczywista kwadratura mają review. Wymagane są bieżący managed assembly/runtime i pełne certyfikaty deskryptora. |
 | S04 — dynamiczny demag-k CPU | W TRAKCIE | Sparse Schur/SLEPc i MFEM blocks są źródłowo zaimplementowane. Pozostają residual pełnego deskryptora/gauge/szwów, zbieżność airboxu i siatki oraz kwalifikacja nowego źródła; archiwalne punkty nie zastępują tych bramek. |
-| S05 — natywny solver spektralny | W TRAKCIE | Bounded EPS/Krylov i diagnostyka niepełnych Ritz są zapisane bez publikowania odrzuconych modów. #188 zakończył się błędem 6/50 podokien. #193 dotyczy wcześniejszego źródła na MFEM4.10; potem potrzebny spójny SHA i dowód kompletnego okna, residuali oraz wznowienia. |
+| S05 — natywny solver spektralny | W TRAKCIE | #193: 14/50 podokien rozbieżnych, niekompletne okno; pojedynczy mod Γ zaakceptowany. #194 failed: pięć błędów Rust z czterech przyczyn; naprawy source są w review. Nadal wymagane świeży runtime nearest, naprawa pełnego okna, certyfikat pokrycia/residuali i wznowienia; nearest nie zastępuje tej bramki. |
 | S06 — śledzenie gałęzi | W TRAKCIE | Hungarian/gaps i metryka masy FE są gotowe; pozostają fizyczne podprzestrzenie zdegenerowane |
-| S07 — artefakty i API | W TRAKCIE | Complete sample coverage, canonical/raw Ku migration i own exact identity replay mają lekkie regresje. Rust producer sidecar/handoff jest w review. Nadal potrzebne pełne physical/source replay, aktualne binary fields/selektory i managed evidence. |
+| S07 — artefakty i API | W TRAKCIE | Exact producer/consumer/mesh/native input replay zapisano i zreviewowano; 56 regresji nonshared i 213 głównego verifiera PASS. P1 oznaczania nonzero-k jako K0 naprawiony źródłowo i przyjęty w niezależnym review. Nadal potrzebne pełne native matrix/physical replay, strukturalne refs diagnostyki, aktualne binary fields/selektory i managed evidence. |
 | S08 — Control Room | W TRAKCIE | Źródła authoring/scatterplot, selekcji k/pola i linewidth zostały poprawione. Wymagane są bieżący managed frontend/runtime, browser/WebGL, FMS round-trip, dostępność pól i stabilność Inspectora. Historyczny #119 nie jest aktualnym buildem. |
 | S09 — falowód 2.5D | W TRAKCIE | Bounded provider i deterministyczny P1 assembler przekroju są zapisane; pozostają typed realization/routing, managed/MFEM owner, open-boundary convergence i porównania TetraX/3D |
 | S10 — interakcje | W TRAKCIE | Ku tangent terms i canonical/raw artifact v8/v7 mają implementację źródłową; guard/runtime i pełna kwalifikacja nadal otwarte. DMI, surface terms, niejednorodność, seam transport i damping `include` wymagają odpowiednich implementacji i walidacji bez osłabiania capability guards. |
