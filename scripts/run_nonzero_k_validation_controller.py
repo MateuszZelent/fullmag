@@ -45,8 +45,30 @@ def validate_observer_root(config_path, layout, job_id):
     return actual
 
 
-def prepare_controller_config(job, layout, model_ref):
+def validation_cases(series="thickness"):
+    """Return actual solver runs; signed samples are never mirrored results."""
+    convergence = [("gamma-t3", "de-smoke-k0", "3")]
+    for layers in ("3", "6", "9"):
+        convergence += [("de-t" + layers, "de-smoke-k25", layers),
+                        ("bv-t" + layers, "de-smoke-bv-k25", layers)]
+    if series == "thickness":
+        return convergence
+    if series != "signed-13":
+        raise ValueError("unsupported nonzero-k validation series")
+    cases = [convergence[0], ("bv-k0-t3", "de-smoke-bv-k0", "3"),
+             *convergence[1:3]]
+    for magnitude in (25, 20, 15, 10, 5, 2):
+        for signed in ((-magnitude,) if magnitude == 25 else (magnitude, -magnitude)):
+            label = "m" + str(-signed) if signed < 0 else "p" + str(signed)
+            for geometry, prefix in (("de", ""), ("bv", "bv-")):
+                cases.append((geometry + "-k" + label + "-t3",
+                              "de-smoke-" + prefix + "k" + str(signed), "3"))
+    return cases + convergence[3:]
+
+
+def prepare_controller_config(job, layout, model_ref, series="thickness"):
     """Prepare observer state without reserving the coordinator-owned job root."""
+    validation_cases(series)
     job_id = job.get("job_id")
     if job.get("worktree_id") != layout["worktree_id"]:
         raise ValueError("job worktree identity mismatch")
@@ -64,7 +86,7 @@ def prepare_controller_config(job, layout, model_ref):
         raise ValueError("noncanonical managed source capsule")
     config = {"worktree": str(Path(layout["repo_root"])),
               "capsule": str(storage / relative / "tree"), "job_id": job_id,
-              "source_digest": digest, "model_ref": model_ref,
+              "source_digest": digest, "model_ref": model_ref, "series": series,
               "controller_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest()}
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("x", encoding="utf-8") as stream:
@@ -79,13 +101,16 @@ def main():
     action.add_argument("--prepare-job", type=Path, help="saved managed submission JSON")
     parser.add_argument("--repo-root", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--model-ref", help="full commit SHA for observer preparation")
+    parser.add_argument("--series", choices=("thickness", "signed-13"), help="series to pin during preparation")
     args = parser.parse_args()
     import fullmag_storage
     if args.prepare_job:
         job = json.loads(args.prepare_job.read_text(encoding="utf-8"))
         layout = fullmag_storage.resolve_layout(args.repo_root, "windows-native")
-        print(prepare_controller_config(job, layout, args.model_ref), flush=True)
+        print(prepare_controller_config(job, layout, args.model_ref, args.series or "thickness"), flush=True)
         return
+    if args.series is not None:
+        parser.error("--series is only valid with --prepare-job; execution uses pinned config")
     config = json.loads(args.config.read_text(encoding="utf-8"))
     layout = fullmag_storage.resolve_layout(config["worktree"], "windows-native")
     root = validate_observer_root(args.config, layout, config["job_id"])
@@ -109,10 +134,8 @@ def main():
         if state in TERMINAL_FAILURES:
             raise SystemExit("Build terminal: " + state)
         time.sleep(30)
-    cases = [("gamma-t3", "de-smoke-k0", "3")]
-    for layers in ("3", "6", "9"):
-        cases += [("de-t" + layers, "de-smoke-k25", layers),
-                  ("bv-t" + layers, "de-smoke-bv-k25", layers)]
+    cases = validation_cases(config.get("series", "thickness"))
+    convergence_names = {name for name, _, _ in validation_cases("thickness")}
     results = []
     for name, pilot, layers in cases:
         print("Starting " + name, flush=True)
@@ -126,6 +149,10 @@ def main():
         (root / "controller-results.json").write_text(json.dumps({
             "qualification": "NOT VERIFIED", "job_id": config["job_id"],
             "source_digest": config["source_digest"], "results": results}, indent=2), encoding="utf-8")
+        (root / "convergence-results.json").write_text(json.dumps({
+            "qualification": "NOT VERIFIED", "job_id": config["job_id"],
+            "source_digest": config["source_digest"],
+            "results": [r for r in results if r["case"] in convergence_names]}, indent=2), encoding="utf-8")
         print(name + " wrapper_exit=" + str(completed.returncode), flush=True)
         if completed.returncode:
             raise SystemExit("Stopped at first failed pilot; diagnosis required")

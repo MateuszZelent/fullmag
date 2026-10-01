@@ -13,7 +13,7 @@ import os
 import fullmag as fm
 
 SAMPLING = os.environ.get("FULLMAG_DE_SMOKE_SAMPLING", "two")
-_SINGLE_K_NAMES = {f"{prefix}k{k}" for prefix in ("", "bv-") for k in (*range(26), -25)}
+_SINGLE_K_NAMES = {f"{prefix}k{k}" for prefix in ("", "bv-") for k in range(-25, 26)}
 _PATH_NAMES = {"two", "five", "positive-six", "bv-positive-six", "positive-26", "bv-positive-26", "signed-eleven"}
 if SAMPLING not in _SINGLE_K_NAMES | _PATH_NAMES:
     raise ValueError(f"Unsupported FULLMAG_DE_SMOKE_SAMPLING: {SAMPLING}")

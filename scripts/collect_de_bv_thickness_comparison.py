@@ -10,7 +10,7 @@ from pathlib import Path
 import numpy as np
 from compare_de_bv_mode_profiles import load_record, sha256
 from run_de_100nm_pilot import validate_thickness_layers_metadata, validate_smoke_potential_fields
-from validate_de_smoke_rows import validate_rows
+from validate_de_smoke_rows import validate_rows, SAMPLING
 from verify_fem_frequency_domain_eigen_artifacts import kalinikos_slab_n0_frequency_hz
 
 
@@ -24,7 +24,7 @@ def positive(value):
     return float(value)
 
 
-def collect_record(run, layers, expected_job):
+def collect_record(run, layers, expected_job, *, sampling=None):
     run = Path(run).resolve()
     request, result = read_json(run/"run-request.json"), read_json(run/"run-result.json")
     if (request.get("schema") != "fullmag.de-smoke.request.v1" or
@@ -47,6 +47,14 @@ def collect_record(run, layers, expected_job):
     pilot=result.get("pilot")
     orientations={"de-smoke-k25":("damon_eshbach","M0=x,k=y,normal=z"),
                   "de-smoke-bv-k25":("backward_volume","M0=x,k=x,normal=z")}
+    if sampling is not None:
+        if (not isinstance(sampling, str) or re.fullmatch(r"(?:bv-)?k-?\d+", sampling) is None
+                or sampling not in SAMPLING or len(SAMPLING[sampling]) != 1
+                or pilot != "de-smoke-" + sampling):
+            raise ValueError("expected explicitly requested single-point DE/BV pilot")
+        orientations = {pilot: (("backward_volume", "M0=x,k=x,normal=z")
+                                if sampling.startswith("bv-") else
+                                ("damon_eshbach", "M0=x,k=y,normal=z"))}
     if pilot not in orientations:
         raise ValueError("expected DE/BV k25 pilot")
     geometry,orientation=orientations[pilot]
@@ -69,6 +77,8 @@ def collect_record(run, layers, expected_job):
         raise ValueError("comparison requires exactly one sample and mode")
     row=rows[0]
     k=float(row["ky_rad_per_m"] if geometry=="damon_eshbach" else row["kx_rad_per_m"])
+    if sampling is not None and k != SAMPLING[sampling][0]:
+        raise ValueError("actual signed wavevector differs from requested sample")
     frequency=positive(float(row["frequency_hz"]))
     mode_path=case/"eigen/modes/sample_0000/mode_0000.json"
     mode=read_json(mode_path)

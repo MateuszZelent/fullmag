@@ -1,5 +1,14 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
+## S02/S12 — rzeczywiste signed-k DE/BV, 2026-10-01
+
+- Naprawa mapy jest commit/push f33ca4e5c3c96c408eef5ca6d8edb31dea656f87; niezależne review bez P1/P2. Uzupełniony replay wiąże również kolejność runtime par (6d932e997d5e5012191270ac2066c70a25dc776e).
+- Dodano serię signed-13: 26rzeczywistych punktówDE/BV (0,±2,±5,±10,±15,±20,±25rad/µm) +4kontrole6/9warstw, sekwencyjnie. Jeden model Python, indywidualne signed wektory i wyniki; bez odbicia częstotliwości.
+- Signed kolektor zachowuje bramki źródeł, pól, residuali i mierzy symetrię. 35nowych lekkich testówPASS,49istniejącychPASS i21subtestówPASS; native testów nie kompilowano. Wykres gotowy do faktycznych ujemnych danych.
+- Wymagany nowy snapshot runtime-v2 i terminalny receipt, potem30runów i signed scatterplot. Aktualnie bez nowych częstotliwości; Ku canonical/raw migration, COMSOL A1, zbieżność, inne interakcje, GPU, browser i integracja pełnego S00–S12 pozostają otwarte.
+
+
+
 ## S02/S12 — kanoniczne mapy periodyczne, 2026-10-01
 
 - #187 succeeded/exit0, ale pilot Γ zakończył się przed częstotliwościami błędem producer_reduction_map_not_canonical. DE/BV nie rozpoczęto.

@@ -425,6 +425,8 @@
     }
   ],
   "sources": [
+    {"id": "source-signed-modal-series", "path": "scripts/run_nonzero_k_validation_controller.py", "symbol": "validation_cases", "responsibility": "Actual separately executed signed-k DE/BV points and independent thickness controls"},
+    {"id": "source-signed-modal-collector", "path": "scripts/collect_signed_de_bv_dispersion.py", "symbol": "collect", "responsibility": "Bind actual signed solver samples to source, fields and original residual gates and measure symmetry"},
     {"id": "source-canonical-modal-reduction-maps", "path": "crates/fullmag-runner/src/fem/eigen_shared_domain_geometry.rs", "symbol": "modal_shared_domain_equivalence_classes", "responsibility": "Canonical minimum-member representative and dense periodic class numbering before native assembly"},
     {"id": "source-canonical-modal-reduction-replay", "path": "scripts/replay_modal_periodic_reduction_maps.py", "symbol": "replay", "responsibility": "Independent graph-components comparison of legacy and minimum-root maps on accepted runtime pair artifacts"},
     {"id": "source-certified-field-digest", "path": "crates/fullmag-runner/src/types.rs", "symbol": "certified_equilibrium_fields_sha256", "responsibility": "Bind versioned field arrays to exact little-endian binary bytes"},

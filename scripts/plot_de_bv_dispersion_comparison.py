@@ -40,7 +40,8 @@ def main():
                   bias_t=parameters["bias_field_a_per_m"] * MU0,
                   exchange_j_m=parameters["exchange_stiffness_j_per_m"],
                   gamma0_m_a_s=parameters["gamma0_rad_s_per_a_m"])
-    grid = np.linspace(0, max(r["k_rad_per_m"] for r in rows), 81)
+    grid = np.linspace(min(0, min(r["k_rad_per_m"] for r in rows)),
+                       max(0, max(r["k_rad_per_m"] for r in rows)), 161)
     reference = []
     import matplotlib
     matplotlib.use("Agg")

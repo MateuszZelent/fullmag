@@ -983,6 +983,26 @@ Dotyczy przygotowania map FEM CPU; nie stanowi dowodu wykonania FEM GPU,
 nie zmienia realizacji FDM CPU/GPU. Regresje źródłowe i niezależny replay
 siatki nie zastępują ponownego managed pilota Γ oraz niezerowego k.
 
+### Seria signed-k DE/BV do 25 rad/µm
+
+Dla jednorodnego filmu 10 nm z demagiem, M0 i polem w osi x, DE używa
+wektora w osi y, a BV w osi x. Seria `signed-13` zadaje osobne obliczenia
+dla 0 oraz obu znaków wartości 2, 5, 10, 15, 20, 25 rad/µm w każdej
+konfiguracji. To 13 rzeczywistych punktów na konfigurację; znak jest zachowany
+w Python→ProblemIR, fazie Floqueta, CSV, odbiorze i na osi wykresu.
+Punkty ujemne nie powstają przez odbicie dodatnich częstotliwości.
+Referencja jednorodnego symetrycznego filmu jest wzajemna, lecz symetrię
+wyników FEM należy zmierzyć, a nie narzucić. Zakres ten dotyczy konkretnej
+geometrii bez DMI; nie stanowi ogólnego założenia wzajemności.
+
+Kontroler `validation_cases` w `scripts/run_nonzero_k_validation_controller.py`
+zachowuje kontrolę Γ, osobne zaakceptowane receipty i serie zbieżności warstw
+3/6/9 dla dodatniego k25. Domyślna seria siedmiu przypadków pozostaje dostępna.
+Nowa seria signed-k używa L2/t3, tych samych SI materiału i tolerancji;
+wykres nie zastępuje bramki residuali, zgodności siatki, pól ani zbieżności.
+Przy pierwszym nieudanym punkcie dalsze przypadki są zatrzymywane do diagnozy.
+Nie wprowadza to nowej realizacji GPU/FDM ani zmiany schematu ProblemIR.
+
 (implementation-mapping)=
 ### 4.4 Runtime lifecycle and provenance
 
@@ -1118,6 +1138,8 @@ visibility into runtime qualification.
 
 | Equation/claim | Lane | Repository path + stable symbol | Responsibility | Tests/evidence | Evidence status | Immutable link |
 |---|---|---|---|---|---|---|
+| Signed-k solver series | FEM CPU | `scripts/run_nonzero_k_validation_controller.py` + `validation_cases` | Actual 13-point DE and BV series, plus unchanged thickness controls. | `scripts/test_signed_de_bv_dispersion.py` + `test_signed_series_has_actual_paired_samples_and_retains_convergence` | Authoring/contracts tested; runtime pending | Pending scoped commit |
+| Signed-k scientific collection | FEM CPU diagnostic | `scripts/collect_signed_de_bv_dispersion.py` + `collect` | Require all actual points, bound sources, original residuals, fields, signed coordinates; measure reciprocity without imposing it. | `scripts/test_signed_de_bv_dispersion.py` + `test_signed_collector_measures_asymmetry_without_reflecting_frequencies` | Synthetic contract fixtures only; not FEM proof | Pending scoped commit |
 | Kanoniczna numeracja klas periodycznych | FEM CPU preparation | `crates/fullmag-runner/src/fem/eigen_shared_domain_geometry.rs` + `modal_shared_domain_equivalence_classes` | Minimum member representative; direction/order invariant magnetic and scalar maps. | `canonical_periodic_maps_are_pair_order_and_direction_invariant`; `scripts/replay_modal_periodic_reduction_maps.py` + `replay` | Source/replay only; managed runtime required | Pending scoped commit |
 | Certified static fields (source-certified-field-path-selector) | FEM CPU | `crates/fullmag-runner/src/types.rs` + `artifact_paths_for_material` | Select matching v1/v2 producer and consumer artifact paths | Source-only regressions prepared; native runtime pending | NOT VERIFIED | working tree |
 | Certified static fields (source-certified-field-bias-consumer) | FEM CPU | `crates/fullmag-runner/src/fem/eigen_execution.rs` + `execute_bias_field_sample_with_relaxation` | Consume the correct version in each independently relaxed bias-field sample | Source-only regressions prepared; native runtime pending | NOT VERIFIED | working tree |

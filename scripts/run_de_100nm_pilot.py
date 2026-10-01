@@ -37,7 +37,7 @@ PILOTS = {
     "de-smoke-signed-eleven": ("examples/fem_de_smoke_numeric.py", "signed-eleven"),
 }
 for _geometry_prefix in ("", "bv-"):
-    for _k_um in (*range(26), -25):
+    for _k_um in range(-25, 26):
         _sampling = f"{_geometry_prefix}k{_k_um}"
         PILOTS.setdefault(f"de-smoke-{_sampling}", ("examples/fem_de_smoke_numeric.py", _sampling))
 SOLVER_RTOL_CHOICES = ("1e-8", "1e-7", "1e-6")

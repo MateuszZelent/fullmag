@@ -24,7 +24,7 @@ SAMPLING = {
                       0.5e6, 1e6, 1.5e6, 2e6, 3e6),
 }
 for _prefix in ("", "bv-"):
-    for _k_um in (*range(26), -25):
+    for _k_um in range(-25, 26):
         SAMPLING.setdefault(f"{_prefix}k{_k_um}", (_k_um * 1e6,))
 DENSE_SAMPLING = frozenset(("positive-26", "bv-positive-26"))
 DENSE_CERTIFICATION_TOLERANCE = 1e-8
