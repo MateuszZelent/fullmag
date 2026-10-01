@@ -826,6 +826,20 @@ required for current FEM writer output and production modal k-path gates. For
 legacy CSV, the identity triplet `sample_id`, `mode_id`, and
 `mode_field_available` may be absent together; if any member is present, all
 three are required and validated.
+**Authoritative explicit mode sample**
+
+An explicit sample selects only
+`eigen/modes/sample_XXXX/mode_YYYY.json` in the artifact root of the active
+workspace. The legacy-compatible `analysis/eigenmodes/modes/{mode_id}`
+endpoint must not replace that selection with `eigen/modes/mode_YYYY.json`
+when its `sample_index` query is present. A missing selected artifact remains
+not-found; an unreadable or malformed artifact preserves its read/parse error.
+Only a request without `sample_index` reads the legacy path. The positional
+`analysis/eigen/modes/{sample_index}/{mode_index}` endpoint uses the same
+explicit-sample selection rule. This does not change response shapes or add
+frontend endpoint adapters; the resource-first mode route remains the browser
+owner. Selection by path does not itself certify payload or run/stage provenance.
+
 Each public mode key `(sample_index, raw_mode_index)` published in
 `eigen/spectrum.v2.json` must appear exactly once in `dispersion.csv`.
 `path_s_rad_per_m`, `kx_rad_per_m`, `ky_rad_per_m`, `kz_rad_per_m`, and

@@ -1,5 +1,13 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
+## F02/S07 — jawny sample bez podmiany legacy, 2026-10-01
+
+- Usunięto catch-all fallback get_mode do legacy. Wspólny read_selected_eigen_mode utrzymuje autorytatywny sample także dla get_mode_v2; legacy tylko przy braku sample_index. Brak pliku404 i parse/read error nie zmieniają wyboru próbki.
+- Cztery rzeczywiste filesystem regresje Rust przygotowane: brak sample0/1 z legacy; corrupt z legacy; rawmode0 w dwóch signed próbkach; dwa katalogi wyników. Parser jednego pliku PASS; niezależny review bez P1/P2; native unit tests niekompilowane, managed API runtime/browser NOT VERIFIED.
+- OpenAPI request/response types i ścieżki bez zmian; facada ControlRoomApi.frequencyDomain.eigenMode korzysta z resource-first trasy. Nie dodano frontendowego fallbacku. Specyfikację selekcji uzupełniono.
+- Pełny ownership run/stage i walidacja payloadów nadal wymagają bramek S07/S08. F01/F03 oraz cały S00–S12 pozostają otwarte. Ten sam kontener Gamma7df4be7c5ace running, refinement24/50; brak nowej terminalnej częstotliwości.
+
+
 ## Odbiór GPT PRO ab64bac, 2026-10-01
 
 - Commit/push odbioru audytu:434b16d498feea5087957d604776bc683bafebfb; HEAD/remote zgodne, worktree czysty przed próbą builda.
