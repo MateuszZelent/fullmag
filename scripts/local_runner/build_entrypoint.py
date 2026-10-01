@@ -1003,6 +1003,201 @@ def validate_native_source_snapshot(diagnostics: object, expected: object) -> st
     return actual
 
 
+_MFEM_VERSION_RE = re.compile(
+    r"\A\s*(\d+)\.(\d+)(?:\.(\d+))?(?:[-+][0-9A-Za-z.-]+)?\s*\Z"
+)
+_MFEM_HEADER_COMPONENT_RE = re.compile(
+    r"(?m)^\s*#\s*define\s+MFEM_VERSION_(MAJOR|MINOR|PATCH)\s+(\d+)\s*$"
+)
+_MFEM_HEADER_NUMBER_RE = re.compile(
+    r"(?m)^\s*#\s*define\s+MFEM_VERSION\s+(\d+)\s*$"
+)
+_MFEM_HEADER_STRING_RE = re.compile(
+    r'(?m)^\s*#\s*define\s+MFEM_VERSION(?:_STRING)?\s+"([^"]+)"\s*$'
+)
+_MFEM_HEADER_INCLUDE_RE = re.compile(
+    r'(?m)^\s*#\s*include\s+"([^"]+)"\s*$'
+)
+_MFEM_CMAKE_VERSION_RE = re.compile(
+    r"(?im)^\s*set\s*\(\s*(?:PACKAGE_VERSION|MFEM_VERSION)\s+\"?([^\"\s\)]+)\"?\s*\)"
+)
+
+
+def _parse_mfem_version(value: object, label: str) -> tuple[int, int, int | None]:
+    if not isinstance(value, str):
+        raise BuildEntryPointError(f"{label} MFEM version is missing")
+    match = _MFEM_VERSION_RE.fullmatch(value)
+    if match is None:
+        raise BuildEntryPointError(f"{label} MFEM version is invalid: {value!r}")
+    major, minor, patch = match.groups()
+    return int(major), int(minor), int(patch) if patch is not None else None
+
+
+def _version_text(version: tuple[int, int, int | None]) -> str:
+    major, minor, patch = version
+    return f"{major}.{minor}" if patch is None else f"{major}.{minor}.{patch}"
+
+
+def _read_mfem_attestation_file(path: Path, label: str) -> str:
+    try:
+        if path.is_symlink() or not path.is_file():
+            raise BuildEntryPointError(f"{label} is not a regular file: {path}")
+        if path.stat().st_size > 1024 * 1024:
+            raise BuildEntryPointError(f"{label} is unexpectedly large: {path}")
+        return path.read_text(encoding="utf-8", errors="replace")
+    except BuildEntryPointError:
+        raise
+    except OSError as error:
+        raise BuildEntryPointError(f"cannot read {label}: {path}") from error
+
+
+def _header_mfem_version(path: Path) -> str:
+    text = _read_mfem_attestation_file(path, "MFEM installed header")
+    sources: list[tuple[Path, str]] = [(path, text)]
+    for include_name in _MFEM_HEADER_INCLUDE_RE.findall(text):
+        included_path = path.parent / include_name
+        if included_path.is_symlink():
+            raise BuildEntryPointError("MFEM generated version header is a symlink")
+        include_path = included_path.resolve()
+        if not include_path.is_relative_to(path.parent.resolve()):
+            raise BuildEntryPointError("MFEM installed header includes a path outside its directory")
+        if include_path == path:
+            raise BuildEntryPointError("MFEM installed header includes itself")
+        sources.append(
+            (
+                include_path,
+                _read_mfem_attestation_file(include_path, "MFEM generated version header"),
+            )
+        )
+    combined_text = "\n".join(source_text for _, source_text in sources)
+    components: dict[str, int] = {}
+    for name, value in _MFEM_HEADER_COMPONENT_RE.findall(combined_text):
+        parsed = int(value)
+        if name in components and components[name] != parsed:
+            raise BuildEntryPointError(f"MFEM installed header has conflicting {name} values")
+        components[name] = parsed
+    observed_versions: list[tuple[int, int, int | None]] = []
+    if "MAJOR" in components and "MINOR" in components:
+        observed_versions.append(
+            (components["MAJOR"], components["MINOR"], components.get("PATCH"))
+        )
+    encoded_values = [int(value) for value in _MFEM_HEADER_NUMBER_RE.findall(combined_text)]
+    if encoded_values and len(set(encoded_values)) != 1:
+        raise BuildEntryPointError("MFEM installed header has conflicting MFEM_VERSION values")
+    if encoded_values:
+        encoded = encoded_values[0]
+        observed_versions.append((encoded // 10000, (encoded // 100) % 100, encoded % 100))
+    string_values = _MFEM_HEADER_STRING_RE.findall(combined_text)
+    for value in string_values:
+        observed_versions.append(_parse_mfem_version(value, "MFEM installed header"))
+    if not observed_versions:
+        raise BuildEntryPointError("MFEM installed header does not expose a version")
+    major_minor = {version[:2] for version in observed_versions}
+    patches = {version[2] for version in observed_versions if version[2] is not None}
+    if len(major_minor) != 1 or len(patches) > 1:
+        detail = ", ".join(_version_text(version) for version in observed_versions)
+        raise BuildEntryPointError(f"MFEM installed header version sources disagree: {detail}")
+    major, minor = next(iter(major_minor))
+    patch = next(iter(patches), None)
+    return _version_text((major, minor, patch))
+
+
+def _cmake_mfem_version(path: Path) -> str:
+    text = _read_mfem_attestation_file(path, "MFEM CMake version file")
+    match = _MFEM_CMAKE_VERSION_RE.search(text)
+    if match is None:
+        raise BuildEntryPointError("MFEM CMake package does not expose a version")
+    value = match.group(1)
+    _parse_mfem_version(value, "MFEM CMake package")
+    return value
+
+
+def _observe_mfem_abi(
+    mfem_abi: Mapping[str, Any],
+    mfem_cmake_dir: str,
+    loaded_version: str,
+    *,
+    prefix: Path,
+) -> dict[str, Any]:
+    """Bind MFEM ABI bytes to installed metadata and the loaded native library.
+
+    The version is deliberately measured from the installed header, the CMake
+    package and the loaded Fullmag FEM library.  Image tags and environment
+    declarations are not inputs to this attestation.
+    """
+
+    if not isinstance(mfem_abi, Mapping):
+        raise BuildEntryPointError("MFEM ABI attestation is missing")
+    try:
+        resolved_prefix = prefix.resolve(strict=True)
+        resolved_cmake_dir = Path(mfem_cmake_dir).resolve(strict=True)
+        resolved_library = Path(str(mfem_abi.get("path"))).resolve(strict=True)
+    except (OSError, TypeError, ValueError) as error:
+        raise BuildEntryPointError("MFEM ABI attestation paths are invalid") from error
+    if not resolved_cmake_dir.is_relative_to(resolved_prefix):
+        raise BuildEntryPointError("MFEM CMake package resolved outside the selected prefix")
+    if not resolved_library.is_relative_to(resolved_prefix / "lib"):
+        raise BuildEntryPointError("MFEM ABI library resolved outside the selected prefix")
+    version_file = resolved_cmake_dir / "MFEMConfigVersion.cmake"
+    if not version_file.is_file():
+        version_file = resolved_cmake_dir / "mfem-config-version.cmake"
+    header_path = resolved_prefix / "include" / "mfem" / "config" / "config.hpp"
+    header_version = _header_mfem_version(header_path)
+    cmake_version = _cmake_mfem_version(version_file)
+    loaded_version = str(loaded_version)
+    _parse_mfem_version(loaded_version, "loaded MFEM library")
+    versions = {
+        "header": (header_version, _parse_mfem_version(header_version, "MFEM installed header")),
+        "cmake": (cmake_version, _parse_mfem_version(cmake_version, "MFEM CMake package")),
+        "loaded_library": (loaded_version, _parse_mfem_version(loaded_version, "loaded MFEM library")),
+    }
+    major_minor = {value[1][:2] for value in versions.values()}
+    patches = {value[1][2] for value in versions.values() if value[1][2] is not None}
+    if len(major_minor) != 1 or len(patches) > 1:
+        detail = ", ".join(f"{name}={value[0]}" for name, value in versions.items())
+        raise BuildEntryPointError(f"MFEM version mismatch: {detail}")
+    _, canonical_components = versions["loaded_library"]
+    observed = dict(mfem_abi)
+    _, library_sha256 = sha256_file(resolved_library)
+    if observed.get("sha256") != library_sha256:
+        raise BuildEntryPointError("MFEM ABI library changed during version attestation")
+    observed["path"] = str(resolved_library)
+    observed["sha256"] = library_sha256
+    observed["version"] = _version_text((canonical_components[0], canonical_components[1], None))
+    observed["version_sources"] = {
+        "header": {"path": str(header_path), "version": header_version},
+        "cmake": {"path": str(version_file), "version": cmake_version},
+        "loaded_library": {"path": str(resolved_library), "version": loaded_version},
+    }
+    return observed
+
+
+def _loaded_mfem_version(library: Any, c_text: Any) -> str:
+    class RuntimeBuildInfoV2(ctypes.Structure):
+        _fields_ = [
+            ("abi_version", ctypes.c_uint32),
+            ("struct_size", ctypes.c_uint32),
+            ("mfem_version", ctypes.c_char * 32),
+            ("hypre_version", ctypes.c_char * 32),
+        ]
+
+    try:
+        query = library.fullmag_fem_get_runtime_build_info_v2
+        query.argtypes = [ctypes.POINTER(RuntimeBuildInfoV2)]
+        query.restype = ctypes.c_int
+        info = RuntimeBuildInfoV2()
+        return_code = int(query(ctypes.byref(info)))
+    except (AttributeError, OSError) as error:
+        raise BuildEntryPointError(
+            f"MFEM runtime version query is unavailable: {error}"
+        ) from error
+    if return_code != 0 or info.abi_version != 2 or info.struct_size != ctypes.sizeof(info):
+        raise BuildEntryPointError("MFEM runtime version query did not attest ABI v2")
+    value = c_text(info.mfem_version)
+    _parse_mfem_version(value, "loaded MFEM library")
+    return value
+
+
 def _attest_slepc_runtime(
     workspace: Path,
     artifacts: Path,
@@ -1244,9 +1439,12 @@ def _attest_slepc_runtime(
 
     previous_library_path = os.environ.get("LD_LIBRARY_PATH")
     os.environ["LD_LIBRARY_PATH"] = probe_environment["LD_LIBRARY_PATH"]
+    loaded_mfem_version: str | None = None
     try:
         try:
             library = ctypes.CDLL(str(runtime_library))
+            if cpu_abi_profile:
+                loaded_mfem_version = _loaded_mfem_version(library, c_text)
             query = library.fullmag_fem_get_frequency_domain_dependency_info
             query.argtypes = [ctypes.POINTER(DependencyInfo)]
             query.restype = ctypes.c_int
@@ -1261,6 +1459,15 @@ def _attest_slepc_runtime(
             os.environ.pop("LD_LIBRARY_PATH", None)
         else:
             os.environ["LD_LIBRARY_PATH"] = previous_library_path
+    if cpu_abi_profile:
+        if loaded_mfem_version is None or mfem_abi is None or mfem_cmake_dir is None:
+            raise BuildEntryPointError("MFEM CPU version attestation is incomplete")
+        mfem_abi = _observe_mfem_abi(
+            mfem_abi,
+            mfem_cmake_dir,
+            loaded_mfem_version,
+            prefix=Path("/opt/fullmag-mfem-cpu"),
+        )
     if return_code != 0:
         raise BuildEntryPointError(
             f"SLEPc runtime dependency query exited {return_code}"

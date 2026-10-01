@@ -466,6 +466,145 @@ class BuildEntryPointTests(unittest.TestCase):
             (str(compatibility),),
         )
 
+    def _write_mfem_installation(
+        self,
+        *,
+        header_version: tuple[int, int, int] = (4, 10, 0),
+        cmake_version: str = "4.10.0",
+    ) -> tuple[Path, Path, Path]:
+        prefix = self.root / "mfem-cpu"
+        header = prefix / "include" / "mfem" / "config" / "config.hpp"
+        header.parent.mkdir(parents=True)
+        header.write_text(
+            '#include "_config.hpp"\n',
+            encoding="utf-8",
+        )
+        encoded_version = (
+            header_version[0] * 10000
+            + header_version[1] * 100
+            + header_version[2]
+        )
+        (header.parent / "_config.hpp").write_text(
+            "\n".join(
+                (
+                    f"#define MFEM_VERSION {encoded_version}",
+                    f'#define MFEM_VERSION_STRING "{header_version[0]}.{header_version[1]}.{header_version[2]}"',
+                    "#define MFEM_VERSION_MAJOR ((MFEM_VERSION)/10000)",
+                    "#define MFEM_VERSION_MINOR (((MFEM_VERSION)/100)%100)",
+                    "#define MFEM_VERSION_PATCH ((MFEM_VERSION)%100)",
+                )
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        cmake_dir = prefix / "lib" / "cmake" / "mfem"
+        cmake_dir.mkdir(parents=True)
+        version_file = cmake_dir / "MFEMConfigVersion.cmake"
+        version_file.write_text(
+            f'set(PACKAGE_VERSION "{cmake_version}")\n', encoding="utf-8"
+        )
+        library = prefix / "lib" / "libmfem.so.4.10.0"
+        library.write_bytes(b"mfem")
+        return cmake_dir, header, library
+
+    def test_mfem_abi_attestation_records_observed_header_cmake_and_loaded_versions(self) -> None:
+        cmake_dir, header, library = self._write_mfem_installation()
+        observed = entrypoint._observe_mfem_abi(
+            {"path": str(library), "sha256": hashlib.sha256(library.read_bytes()).hexdigest()},
+            str(cmake_dir),
+            "4.10",
+            prefix=self.root / "mfem-cpu",
+        )
+
+        self.assertEqual(observed["version"], "4.10")
+        self.assertEqual(observed["version_sources"]["header"]["version"], "4.10.0")
+        self.assertEqual(observed["version_sources"]["header"]["path"], str(header))
+        self.assertEqual(observed["version_sources"]["cmake"]["version"], "4.10.0")
+        self.assertEqual(observed["version_sources"]["loaded_library"]["version"], "4.10")
+
+    def test_mfem_abi_attestation_rejects_version_disagreement(self) -> None:
+        cmake_dir, _, library = self._write_mfem_installation()
+        with self.assertRaisesRegex(entrypoint.BuildEntryPointError, "MFEM version mismatch"):
+            entrypoint._observe_mfem_abi(
+                {"path": str(library), "sha256": hashlib.sha256(library.read_bytes()).hexdigest()},
+                str(cmake_dir),
+                "4.9",
+                prefix=self.root / "mfem-cpu",
+            )
+
+    def test_mfem_abi_attestation_rejects_header_and_cmake_disagreement(self) -> None:
+        cmake_dir, _, library = self._write_mfem_installation(cmake_version="4.9.0")
+        with self.assertRaisesRegex(entrypoint.BuildEntryPointError, "MFEM version mismatch"):
+            entrypoint._observe_mfem_abi(
+                {"path": str(library), "sha256": hashlib.sha256(library.read_bytes()).hexdigest()},
+                str(cmake_dir),
+                "4.10",
+                prefix=self.root / "mfem-cpu",
+            )
+
+    def test_mfem_header_rejects_encoded_and_string_version_disagreement(self) -> None:
+        cmake_dir, header, library = self._write_mfem_installation()
+        header.with_name("_config.hpp").write_text(
+            '#define MFEM_VERSION 41000\n'
+            '#define MFEM_VERSION_STRING "4.9.0"\n',
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(
+            entrypoint.BuildEntryPointError,
+            "header version sources disagree",
+        ):
+            entrypoint._observe_mfem_abi(
+                {"path": str(library), "sha256": hashlib.sha256(library.read_bytes()).hexdigest()},
+                str(cmake_dir),
+                "4.10",
+                prefix=self.root / "mfem-cpu",
+            )
+
+    def test_loaded_mfem_version_reads_runtime_build_info_v2(self) -> None:
+        class Query:
+            argtypes: object
+            restype: object
+
+            def __call__(self, pointer: object) -> int:
+                info = pointer._obj  # type: ignore[attr-defined]
+                info.abi_version = 2
+                info.struct_size = entrypoint.ctypes.sizeof(info)
+                info.mfem_version = b"4.10"
+                info.hypre_version = b"2.31.0"
+                return 0
+
+        class Library:
+            fullmag_fem_get_runtime_build_info_v2 = Query()
+
+        self.assertEqual(
+            entrypoint._loaded_mfem_version(
+                Library(),
+                lambda value: bytes(value).split(b"\x00", 1)[0].decode("utf-8"),
+            ),
+            "4.10",
+        )
+
+    def test_loaded_mfem_version_rejects_wrong_runtime_build_info_abi(self) -> None:
+        class Query:
+            argtypes: object
+            restype: object
+
+            def __call__(self, pointer: object) -> int:
+                info = pointer._obj  # type: ignore[attr-defined]
+                info.abi_version = 1
+                info.struct_size = entrypoint.ctypes.sizeof(info)
+                info.mfem_version = b"4.10"
+                return 0
+
+        class Library:
+            fullmag_fem_get_runtime_build_info_v2 = Query()
+
+        with self.assertRaisesRegex(entrypoint.BuildEntryPointError, "ABI v2"):
+            entrypoint._loaded_mfem_version(
+                Library(),
+                lambda value: bytes(value).split(b"\x00", 1)[0].decode("utf-8"),
+            )
+
     def test_slepc_runtime_probe_rejects_unavailable_native_fem(self) -> None:
         output = self.workspace / ".fullmag" / "local"
         runtime_bin = output / "bin" / "fullmag-bin"

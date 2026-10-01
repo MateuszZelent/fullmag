@@ -4562,3 +4562,22 @@ Parser2Rust/10docs/source-map PASS; końcowe review w toku, runtime NOT VERIFIED
 Brama zdeformowanego prism6: przygotowany niezależny GL4/5/7 oracle używa
 4/5/7 punktów na osi, nie MFEM orders4/5/7; dokumentacja korygowana,
 produkcyjna zbieżność kwadratury i native execution nadal OPEN.
+
+
+## Terminalny #188 i R4path checkpoint
+
+#188 failed:6/50podokien EPSdiverged,44ukończone. Lokalne9.299249697GHz
+nie jest końcowym certyfikowanym punktem. Pełna diagnoza:
+`docs/audits/2026-10-01-job188-frequency-window-failure.md`.
+Ten sam kontroler90201terminal exit1; kontener nie istnieje. Runner zdrowy,
+lecz aktualnie wykonuje job189 na innym checkoutcie. MFEMimagebuild nadal
+oczekuje, bez restartowania/zmiany cudzegojob.
+
+R4path source commit5a2257f31: review po poprawieniu storage_formatnone
+bezP1; replayPython/plural sample-set/runtime nadal OPEN. AcceptedR4port
+wykrył P1 wCLI(staraarność+legacybypass), jest poprawiany przedcommit.
+MFEMobservedversion attestation38lighttestsPASS; nativeheadercontract
+przygotowany. F01deformed referenceGLconvergence przygotowana; rootmathprobe
+potwierdził GL4→GL5 max4.0978971e-8, GL5→GL7max1.5717799e-10
+bezfaktora2Aex,scalar rank5 i dodatniJacobian. Nie jest to MFEMruntime.
+Pełny S00–S12 nadal otwarty.
