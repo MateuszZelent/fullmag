@@ -12,8 +12,12 @@ Source digest `a10753dbee8313170b2a721716824496ebfbf1c255e01dc67ee446e96d89073f`
 snapshot SHA `b6511df906eb213ffe5f820985c202cfc6cc5364c68becd569611de8bad506a5`,
 kapsuła `ab76858f0c0c475d898e79b71f864354/source`. Źródło czyste, commit mode.
 Ostatni status API running; kontener `fullmag-worker-5a281e74772d4976a9d09ccc8d5c7be9`
-istnieje i działa. Odczyt procesów potwierdza aktywny `python3`; nie ma
-jeszcze logu native-build ani receipt, więc sukces kompilacji pozostaje
+istnieje i działa. Kolejny odczyt potwierdził aktywne `make`, `cargo` i `rustc`
+oraz logi native-build; etap kompilacji rozpoczął się. Przygotowanie kapsuły
+wewnątrz workera zajęło około 14 minut (7584 pliki, 301 172 237 B).
+Proces w trakcie przygotowania wykonywał odczyty przez system plików p9;
+to obserwacja infrastruktury, nie pomiar solvera ani dowód całej przyczyny
+kosztu. Nie ma jeszcze terminalnego receipt, więc sukces kompilacji pozostaje
 NOT VERIFIED. Sesja sterownika 95215 nadal żywa i czeka na ten sam job.
 Koordynator żywy; nie ponawiać submission po
 samym timeout obserwacji. Runner preflight:
