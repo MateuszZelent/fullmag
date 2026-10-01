@@ -575,6 +575,21 @@ producer and modal consumer use the same builder. A scaled or opposite axis
 represents the same rank-one energy, while a changed Ku or physical axis must
 invalidate the stored equilibrium. Uniform Ms is required for this increment;
 spatial coefficients, second-order and cubic terms remain unsupported.
+The bounded Ku artifact pair uses `equilibrium_artifact.v8` and
+`LinearizationState.v7`. Its `material_signature` and native
+`material_snapshot_id` use the canonical equilibrium material identity.
+The separate `material_provenance_signature` hashes the raw MaterialIR of
+the current materialization plan, with
+`material_provenance_scope=materialization_plan` and
+`material_identity_kind=canonical_equilibrium_material.v2`.
+This scope does not reconstruct the original authored relaxation material.
+A provided v8 artifact preserves its source raw provenance; the new state
+records the current plan's raw hash. Equivalent scaled/opposite axes may
+have different raw hashes, but must share the canonical signature. Legacy
+v7/v6 keeps its raw semantics and digest preimages; it cannot become a Ku
+source by relabeling. Filenames and manifest keys match the actual schemas.
+Public Ku remains gated pending managed runtime and scientific validation.
+
 The equilibrium observer registers Ku as a typed anisotropy interaction, never
 as a frozen per-node external field. This keeps Zeeman and anisotropy energies
 and field components separate and evaluates Ku at the actual accepted m0.
@@ -1851,6 +1866,8 @@ visibility into runtime qualification.
 
 | Equation/claim | Lane | Repository path + stable symbol | Responsibility | Tests/evidence | Evidence status | Immutable link |
 |---|---|---|---|---|---|---|
+| Canonical/raw material artifacts | FEM CPU orchestration | `crates/fullmag-runner/src/fem/eigen_shared_domain.rs` + `shared_domain_artifact_material_identity` | Shared canonical Ku signature and preserved raw plan provenance; legacy semantics retained. | `shared_domain_material_identity_preserves_raw_legacy_and_canonical_ku` | Rust regression prepared, not compiled; managed runtime pending | Pending scoped commit |
+| Versioned equilibrium reader | FEM CPU orchestration | `crates/fullmag-runner/src/fem/eigen_equilibrium.rs` + `load_certified_equilibrium_artifact` | Accept certified v7/v8 only and reject missing or masqueraded material identity. | `equilibrium_artifact_loader_requires_certified_v7_contract` and extended v8 cases | Source-only Rust regression; managed runtime pending | Pending scoped commit |
 | Zero-field stationary state | FEM CPU scope / mathematical diagnostic | `crates/fullmag-runner/src/fem/eigen_shared_domain.rs` + `validate_shared_domain_modal_scope` | Admit zero field without asserting zero curvature or modal success; reject invalid amplitudes. | `shared_domain_modal_scope_accepts_zero_static_field`; `scripts/test_uniaxial_constrained_energy_hessian.py` + `test_zero_static_field_retains_easy_plane_and_exchange_curvature` | Rust regression prepared, not executed; independent energy test only | [ab64bac46](https://github.com/MateuszZelent/fullmag/commit/ab64bac46b7ceda295812da93244b2eba81174e4) |
 | Full thickness control evidence | FEM CPU diagnostic | `scripts/collect_de_bv_thickness_comparison.py` + `collect_control` | Bind six thickness runs and Gamma before signed collection accepts convergence evidence. | `scripts/test_signed_de_bv_dispersion.py` + `test_signed_collector_requires_controller_and_separate_convergence_binding` | Synthetic contracts; not convergence qualification | Pending scoped commit |
 | Signed-k solver series | FEM CPU | `scripts/run_nonzero_k_validation_controller.py` + `validation_cases` | Actual 13-point DE and BV series, plus unchanged thickness controls. | `scripts/test_signed_de_bv_dispersion.py` + `test_signed_series_has_actual_paired_samples_and_retains_convergence` | Authoring/contracts tested; runtime pending | Pending scoped commit |

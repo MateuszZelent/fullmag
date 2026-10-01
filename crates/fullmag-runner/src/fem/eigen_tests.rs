@@ -6036,6 +6036,55 @@ fn native_cpu_modal_window_accepts_explicit_gamma_single_k() {
 }
 
 #[test]
+fn shared_domain_material_identity_preserves_raw_legacy_and_canonical_ku() {
+    let mut material = minimal_native_modal_plan().material;
+    let (legacy, raw, canonical) =
+        shared_domain_artifact_material_identity(&material, None).unwrap();
+    assert!(!canonical);
+    assert_eq!(legacy, raw);
+    assert_eq!(
+        raw,
+        shared_domain_content_digest("material_signature", &material).unwrap()
+    );
+    let legacy_source = serde_json::json!({"schema_version": "equilibrium_artifact.v7", "material_signature": legacy});
+    shared_domain_artifact_material_identity(&material, Some(&legacy_source)).unwrap();
+
+    material.uniaxial_anisotropy = Some(-1.0e3);
+    material.anisotropy_axis = Some([1.0, 0.0, 0.0]);
+    let (physical, source_raw, canonical) =
+        shared_domain_artifact_material_identity(&material, None).unwrap();
+    assert!(canonical);
+    assert_ne!(physical, source_raw);
+    assert!(shared_domain_artifact_material_identity(&material, Some(&legacy_source)).is_err());
+    let source = serde_json::json!({
+        "schema_version": "equilibrium_artifact.v8", "material_signature": physical,
+        "material_provenance_signature": source_raw,
+        "material_identity_kind": "canonical_equilibrium_material.v2",
+        "material_provenance_scope": "materialization_plan",
+    });
+    let frozen = source.clone();
+    for axis in [[-2.0, 0.0, 0.0], [7.0, -0.0, 0.0]] {
+        material.anisotropy_axis = Some(axis);
+        let (actual_physical, current_raw, _) =
+            shared_domain_artifact_material_identity(&material, Some(&source)).unwrap();
+        assert_eq!(actual_physical, physical);
+        assert_ne!(current_raw, source_raw);
+        assert_eq!(
+            source, frozen,
+            "provided artifact provenance must not be rewritten"
+        );
+    }
+    material.uniaxial_anisotropy = Some(-2.0e3);
+    assert!(shared_domain_artifact_material_identity(&material, Some(&source)).is_err());
+    material.uniaxial_anisotropy = Some(-1.0e3);
+    material.anisotropy_axis = Some([0.0, 1.0, 0.0]);
+    assert!(shared_domain_artifact_material_identity(&material, Some(&source)).is_err());
+    material.uniaxial_anisotropy = None;
+    material.anisotropy_axis = None;
+    assert!(shared_domain_artifact_material_identity(&material, Some(&source)).is_err());
+}
+
+#[test]
 fn shared_domain_modal_scope_allows_normalized_texture_inside_the_unit_cell() {
     let plan = minimal_native_modal_plan();
     let topology = MeshTopology::from_ir(&plan.mesh).expect("minimal FEM mesh is valid");
@@ -8138,11 +8187,66 @@ fn equilibrium_artifact_loader_requires_certified_v7_contract() {
     ));
     std::fs::write(&path, artifact.to_string()).unwrap();
     assert_eq!(
-        load_equilibrium_artifact_v7(path.to_str().unwrap(), 1)
+        load_certified_equilibrium_artifact(path.to_str().unwrap(), 1)
             .unwrap()
             .m0,
         vec![[0.0, 0.0, 1.0]]
     );
+
+    let mut canonical_artifact = artifact.clone();
+    canonical_artifact["schema_version"] = serde_json::json!("equilibrium_artifact.v8");
+    canonical_artifact["material_identity_kind"] =
+        serde_json::json!("canonical_equilibrium_material.v2");
+    canonical_artifact["material_provenance_signature"] =
+        serde_json::json!(format!("sha256:{}", "a".repeat(64)));
+    canonical_artifact["material_provenance_scope"] = serde_json::json!("materialization_plan");
+    let seal_v8 = |mut value: serde_json::Value| {
+        let object = value.as_object_mut().unwrap();
+        object.remove("content_sha256");
+        object.remove("equilibrium_id");
+        let digest = shared_domain_content_digest("equilibrium_artifact_v8", &value).unwrap();
+        value["content_sha256"] = serde_json::json!(digest);
+        value["equilibrium_id"] = serde_json::json!(format!(
+            "equilibrium_artifact.v8:{}",
+            digest.strip_prefix("sha256:").unwrap()
+        ));
+        value
+    };
+    canonical_artifact = seal_v8(canonical_artifact);
+    std::fs::write(&path, canonical_artifact.to_string()).unwrap();
+    assert_eq!(
+        load_certified_equilibrium_artifact(path.to_str().unwrap(), 1)
+            .unwrap()
+            .value,
+        canonical_artifact
+    );
+    for field in [
+        "material_signature",
+        "material_identity_kind",
+        "material_provenance_signature",
+        "material_provenance_scope",
+    ] {
+        let mut invalid = canonical_artifact.clone();
+        invalid.as_object_mut().unwrap().remove(field);
+        std::fs::write(&path, seal_v8(invalid).to_string()).unwrap();
+        assert!(load_certified_equilibrium_artifact(path.to_str().unwrap(), 1).is_err());
+    }
+    for (field, invalid_value) in [
+        ("material_identity_kind", "raw"),
+        ("material_provenance_scope", "original_authored_relaxation"),
+        ("material_provenance_signature", "sha256:not-a-digest"),
+        ("material_signature", "sha256:ABC"),
+    ] {
+        let mut invalid = canonical_artifact.clone();
+        invalid[field] = serde_json::json!(invalid_value);
+        std::fs::write(&path, seal_v8(invalid).to_string()).unwrap();
+        assert!(load_certified_equilibrium_artifact(path.to_str().unwrap(), 1).is_err());
+    }
+    let mut masqueraded_legacy = artifact.clone();
+    masqueraded_legacy["material_identity_kind"] =
+        serde_json::json!("canonical_equilibrium_material.v2");
+    std::fs::write(&path, masqueraded_legacy.to_string()).unwrap();
+    assert!(load_certified_equilibrium_artifact(path.to_str().unwrap(), 1).is_err());
 
     let mut invalid_cases = Vec::new();
     invalid_cases.push(serde_json::json!([[0.0, 0.0, 1.0]]));
@@ -8168,11 +8272,11 @@ fn equilibrium_artifact_loader_requires_certified_v7_contract() {
 
     for invalid in invalid_cases {
         std::fs::write(&path, invalid.to_string()).unwrap();
-        assert!(load_equilibrium_artifact_v7(path.to_str().unwrap(), 1).is_err());
+        assert!(load_certified_equilibrium_artifact(path.to_str().unwrap(), 1).is_err());
     }
 
     std::fs::write(&path, v6.to_string()).unwrap();
-    let error = load_equilibrium_artifact_v7(path.to_str().unwrap(), 1).unwrap_err();
+    let error = load_certified_equilibrium_artifact(path.to_str().unwrap(), 1).unwrap_err();
     assert!(error.message.contains(
             "equilibrium_artifact_v6_uncertified: rerun relaxation or migrate with source completion evidence"
         ));
@@ -8216,7 +8320,7 @@ fn equilibrium_artifact_v7_loader_rejects_payload_tamper() {
 
     artifact["m0"] = serde_json::json!([[0.0, 1.0, 0.0]]);
     std::fs::write(&path, artifact.to_string()).unwrap();
-    let error = load_equilibrium_artifact_v7(path.to_str().unwrap(), 1)
+    let error = load_certified_equilibrium_artifact(path.to_str().unwrap(), 1)
         .expect_err("tampering after digest creation must fail closed");
     assert!(error.message.contains("content_sha256"));
     std::fs::remove_file(path).unwrap();
@@ -8254,7 +8358,7 @@ fn equilibrium_artifact_v7_loader_rejects_arbitrary_declared_hash_and_id() {
     });
 
     std::fs::write(&path, artifact.to_string()).unwrap();
-    let error = load_equilibrium_artifact_v7(path.to_str().unwrap(), 1)
+    let error = load_certified_equilibrium_artifact(path.to_str().unwrap(), 1)
         .expect_err("a self-consistent but arbitrary declared hash/id must fail closed");
     assert!(error.message.contains("content_sha256"));
     std::fs::remove_file(path).unwrap();
@@ -8357,4 +8461,45 @@ fn eigen_path_forwards_stop_before_single_k_execution() {
         error.message
     );
     assert_eq!(phases, vec!["preparing_k_path_sample"]);
+}
+
+#[test]
+fn certified_artifact_publication_rejects_unknown_or_mixed_schema_pairs() {
+    assert_eq!(
+        certified_equilibrium_artifact_filenames(
+            Some("equilibrium_artifact.v7"),
+            Some("LinearizationState.v6")
+        )
+        .unwrap(),
+        (
+            "equilibrium_artifact.v7.json",
+            "linearization_state.v6.json"
+        )
+    );
+    assert_eq!(
+        certified_equilibrium_artifact_filenames(
+            Some("equilibrium_artifact.v8"),
+            Some("LinearizationState.v7")
+        )
+        .unwrap(),
+        (
+            "equilibrium_artifact.v8.json",
+            "linearization_state.v7.json"
+        )
+    );
+    for pair in [
+        (None, None),
+        (Some("equilibrium_artifact.v8"), None),
+        (
+            Some("equilibrium_artifact.v8"),
+            Some("LinearizationState.v6"),
+        ),
+        (
+            Some("equilibrium_artifact.v7"),
+            Some("LinearizationState.v7"),
+        ),
+        (Some("unknown"), Some("LinearizationState.v6")),
+    ] {
+        assert!(certified_equilibrium_artifact_filenames(pair.0, pair.1).is_err());
+    }
 }

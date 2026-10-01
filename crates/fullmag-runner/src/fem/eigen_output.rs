@@ -1584,13 +1584,41 @@ pub(super) fn write_eigen_v2_bundle(
             .get_mut("artifacts")
             .and_then(serde_json::Value::as_object_mut)
         {
+            let handoff = &summary_payload["solver_diagnostics"]["linearization_handoff"];
+            if handoff["accepted_for_frequency_operator"].as_bool() != Some(true) {
+                return Err(RunError { message: "equilibrium_artifact_schema_pair_invalid: missing accepted linearization handoff".to_string() });
+            }
+            let (equilibrium_filename, _) =
+                super::eigen_equilibrium_contract::certified_equilibrium_artifact_filenames(
+                    handoff["equilibrium_artifact_schema"].as_str(),
+                    handoff["linearization_state_schema"].as_str(),
+                )?;
+            let canonical_material = equilibrium_filename == "equilibrium_artifact.v8.json";
             artifacts.insert(
-                "equilibrium_artifact_v7_path".to_string(),
-                serde_json::json!("eigen/metadata/equilibrium_artifact.v7.json"),
+                if canonical_material {
+                    "equilibrium_artifact_v8_path"
+                } else {
+                    "equilibrium_artifact_v7_path"
+                }
+                .to_string(),
+                serde_json::json!(if canonical_material {
+                    "eigen/metadata/equilibrium_artifact.v8.json"
+                } else {
+                    "eigen/metadata/equilibrium_artifact.v7.json"
+                }),
             );
             artifacts.insert(
-                "linearization_state_v6_path".to_string(),
-                serde_json::json!("eigen/metadata/linearization_state.v6.json"),
+                if canonical_material {
+                    "linearization_state_v7_path"
+                } else {
+                    "linearization_state_v6_path"
+                }
+                .to_string(),
+                serde_json::json!(if canonical_material {
+                    "eigen/metadata/linearization_state.v7.json"
+                } else {
+                    "eigen/metadata/linearization_state.v6.json"
+                }),
             );
         }
     }

@@ -1,8 +1,6 @@
-use super::equilibrium_identity::constant_uniaxial_descriptor;
 use super::eigen_digest::{is_sha256_digest, shared_domain_content_digest};
 use super::eigen_equilibrium_contract::{
-    validate_certified_equilibrium_fields, AcceptedFemRelaxStageHandoff,
-    LoadedEquilibriumArtifactV7,
+    validate_certified_equilibrium_fields, AcceptedFemRelaxStageHandoff, LoadedEquilibriumArtifact,
 };
 use super::eigen_math::{cross, vector_norm};
 use super::eigen_policy::resolved_demag_realization;
@@ -10,17 +8,18 @@ use super::eigen_reduction::validate_tangent_frame_transport_support;
 use super::eigen_shared_domain::max_vector_field_difference;
 use super::eigen_shared_domain_geometry::shared_domain_robin_beta_m;
 use super::eigen_types::AcceptedEquilibriumCriterion;
+use super::equilibrium_identity::constant_uniaxial_descriptor;
 use crate::types::ExecutedRun;
 use crate::types::RunError;
 use fullmag_engine::fem::FemLlgProblem;
 use fullmag_engine::fem::MeshTopology;
-use fullmag_engine::{CubicAnisotropyConfig, UniaxialAnisotropyConfig};
 use fullmag_engine::EffectiveFieldObservables;
 use fullmag_engine::EffectiveFieldTerms;
 use fullmag_engine::LlgConfig;
 use fullmag_engine::MaterialParameters;
 use fullmag_engine::TimeIntegrator;
 use fullmag_engine::Vector3;
+use fullmag_engine::{CubicAnisotropyConfig, UniaxialAnisotropyConfig};
 
 // The relaxation producer and the modal consumer evaluate the same static
 // fields through different native code paths.  A pure absolute tolerance
@@ -327,12 +326,15 @@ pub(super) fn materialize_equilibrium(
         Vec<Vector3>,
         u64,
         EffectiveFieldObservables,
-        Option<LoadedEquilibriumArtifactV7>,
+        Option<LoadedEquilibriumArtifact>,
     ),
     RunError,
 > {
     let source_artifact = if let EquilibriumSourceIR::Artifact { path } = &plan.equilibrium {
-        Some(load_equilibrium_artifact_v7(path, plan.mesh.nodes.len())?)
+        Some(load_certified_equilibrium_artifact(
+            path,
+            plan.mesh.nodes.len(),
+        )?)
     } else {
         None
     };
@@ -623,10 +625,10 @@ pub(super) fn materialize_equilibrium(
     ))
 }
 
-pub(super) fn load_equilibrium_artifact_v7(
+pub(super) fn load_certified_equilibrium_artifact(
     path: &str,
     expected_len: usize,
-) -> Result<LoadedEquilibriumArtifactV7, RunError> {
+) -> Result<LoadedEquilibriumArtifact, RunError> {
     let raw = std::fs::read_to_string(path).map_err(|error| RunError {
         message: format!("failed to read equilibrium artifact '{}': {}", path, error),
     })?;
@@ -635,7 +637,7 @@ pub(super) fn load_equilibrium_artifact_v7(
     })?;
     let object = value.as_object().ok_or_else(|| RunError {
         message: format!(
-            "equilibrium artifact '{}' must be a certified equilibrium_artifact.v7 object; raw vector payloads are rejected",
+            "equilibrium artifact '{}' must be a certified equilibrium_artifact.v7/v8 object; raw vector payloads are rejected",
             path
         ),
     })?;
@@ -646,7 +648,7 @@ pub(super) fn load_equilibrium_artifact_v7(
             .filter(|value| !value.is_empty())
             .ok_or_else(|| RunError {
                 message: format!(
-                    "equilibrium artifact '{}' is missing required v7 field '{}'",
+                    "equilibrium artifact '{}' is missing required equilibrium field '{}'",
                     path, name
                 ),
             })
@@ -658,12 +660,44 @@ pub(super) fn load_equilibrium_artifact_v7(
                 .to_string(),
         });
     }
-    if schema_version != "equilibrium_artifact.v7" {
+    if !matches!(
+        schema_version,
+        "equilibrium_artifact.v7" | "equilibrium_artifact.v8"
+    ) {
         return Err(RunError {
             message: format!(
-                "equilibrium artifact '{}' must use schema equilibrium_artifact.v7",
+                "equilibrium artifact '{}' must use schema equilibrium_artifact.v7 or equilibrium_artifact.v8",
                 path
             ),
+        });
+    }
+    if schema_version == "equilibrium_artifact.v8" {
+        let valid_digest = |value: &str| {
+            is_sha256_digest(value)
+                && value[7..]
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        };
+        if required_string("material_identity_kind")? != "canonical_equilibrium_material.v2"
+            || required_string("material_provenance_scope")? != "materialization_plan"
+            || !valid_digest(required_string("material_signature")?)
+            || !valid_digest(required_string("material_provenance_signature")?)
+        {
+            return Err(RunError {
+                message: "equilibrium_artifact_v8_material_identity_invalid".to_string(),
+            });
+        }
+    } else if [
+        "material_identity_kind",
+        "material_provenance_signature",
+        "material_provenance_scope",
+    ]
+    .iter()
+    .any(|name| object.contains_key(*name))
+    {
+        return Err(RunError {
+            message: "equilibrium_artifact_v7_cannot_advertise_canonical_material_identity"
+                .to_string(),
         });
     }
     if object
@@ -698,10 +732,10 @@ pub(super) fn load_equilibrium_artifact_v7(
         .expect("the equilibrium artifact object was validated above");
     digest_object.remove("content_sha256");
     digest_object.remove("equilibrium_id");
-    let recomputed_content_sha256 =
-        shared_domain_content_digest("equilibrium_artifact_v7", &digest_payload)?;
+    let recomputed_content_sha256 = shared_domain_content_digest(schema_version, &digest_payload)?;
     let expected_equilibrium_id = format!(
-        "equilibrium_artifact.v7:{}",
+        "{}:{}",
+        schema_version,
         recomputed_content_sha256
             .strip_prefix("sha256:")
             .unwrap_or(&recomputed_content_sha256)
@@ -985,7 +1019,7 @@ pub(super) fn load_equilibrium_artifact_v7(
                 path
             ),
         })?;
-    Ok(LoadedEquilibriumArtifactV7 {
+    Ok(LoadedEquilibriumArtifact {
         value: value.clone(),
         m0,
         h_eff0,
@@ -1014,5 +1048,5 @@ pub(super) fn load_equilibrium_artifact_v7(
 }
 
 fn load_equilibrium_artifact(path: &str, expected_len: usize) -> Result<Vec<Vector3>, RunError> {
-    Ok(load_equilibrium_artifact_v7(path, expected_len)?.m0)
+    Ok(load_certified_equilibrium_artifact(path, expected_len)?.m0)
 }

@@ -255,6 +255,81 @@ def equilibrium_artifact_v7_digest(artifact: dict) -> str:
     return "sha256:" + hashlib.sha256(canonical_bytes).hexdigest()
 
 
+def equilibrium_artifact_v8_digest(artifact: dict) -> str:
+    """Return the v8 content digest without changing the frozen v7 helper."""
+    preimage = dict(artifact)
+    preimage.pop("content_sha256", None)
+    preimage.pop("equilibrium_id", None)
+    try:
+        canonical_bytes = serde_json_compact_bytes(preimage)
+    except (TypeError, ValueError) as error:
+        fail(
+            "equilibrium_artifact_v8 cannot be canonically serialized for "
+            f"content_sha256 validation: {error}"
+        )
+    return "sha256:" + hashlib.sha256(canonical_bytes).hexdigest()
+
+
+def linearization_state_v7_digest(state: dict) -> str:
+    """Return the canonical content digest used by LinearizationState.v7."""
+    preimage = dict(state)
+    preimage.pop("content_sha256", None)
+    preimage.pop("linearization_state_id", None)
+    try:
+        canonical_bytes = serde_json_compact_bytes(preimage)
+    except (TypeError, ValueError) as error:
+        fail(
+            "LinearizationState.v7 cannot be canonically serialized for "
+            f"content_sha256 validation: {error}"
+        )
+    return "sha256:" + hashlib.sha256(canonical_bytes).hexdigest()
+
+
+CANONICAL_EQUILIBRIUM_MATERIAL_IDENTITY_KIND = "canonical_equilibrium_material.v2"
+CANONICAL_EQUILIBRIUM_MATERIAL_PROVENANCE_SCOPE = "materialization_plan"
+V8_MATERIAL_IDENTITY_FIELDS = (
+    "material_signature",
+    "material_identity_kind",
+    "material_provenance_signature",
+    "material_provenance_scope",
+)
+
+
+def validate_canonical_equilibrium_material_identity(
+    payload: dict, name: str
+) -> tuple[str, str]:
+    """Validate the four-field v8/v7 canonical/raw material identity contract."""
+    if not isinstance(payload, dict):
+        fail(f"{name} must be an object")
+    canonical_signature = require_sha256_token(
+        payload.get("material_signature"), f"{name}.material_signature"
+    )
+    require_equal(
+        payload.get("material_identity_kind"),
+        CANONICAL_EQUILIBRIUM_MATERIAL_IDENTITY_KIND,
+        f"{name}.material_identity_kind",
+    )
+    provenance_signature = require_sha256_token(
+        payload.get("material_provenance_signature"),
+        f"{name}.material_provenance_signature",
+    )
+    require_equal(
+        payload.get("material_provenance_scope"),
+        CANONICAL_EQUILIBRIUM_MATERIAL_PROVENANCE_SCOPE,
+        f"{name}.material_provenance_scope",
+    )
+    return canonical_signature, provenance_signature
+
+
+def _reject_v8_material_identity_fields(payload: dict, name: str) -> None:
+    for field_name in V8_MATERIAL_IDENTITY_FIELDS[1:]:
+        if field_name in payload:
+            fail(
+                f"{name}.{field_name} is not allowed in the frozen legacy "
+                "schema"
+            )
+
+
 def _require_non_negative_finite_number(value: object, name: str) -> float:
     if isinstance(value, bool):
         fail(f"{name} must be a finite number")
@@ -265,7 +340,7 @@ def _require_non_negative_finite_number(value: object, name: str) -> float:
 
 
 def validate_equilibrium_artifact_v7_payload(
-    artifact: dict, expected_content_sha256: object
+    artifact: dict, expected_content_sha256: object | None = None
 ) -> None:
     """Validate an equilibrium v7 payload independently of its bundle path."""
     if not isinstance(artifact, dict):
@@ -276,6 +351,8 @@ def validate_equilibrium_artifact_v7_payload(
             "equilibrium_artifact_v6_uncertified: rerun relaxation or migrate "
             "with source completion evidence"
         )
+    if isinstance(artifact, dict):
+        _reject_v8_material_identity_fields(artifact, "equilibrium_artifact")
     require_equal(
         schema_version,
         "equilibrium_artifact.v7",
@@ -356,20 +433,21 @@ def validate_equilibrium_artifact_v7_payload(
         artifact.get("content_sha256"),
         "equilibrium_artifact.content_sha256",
     )
-    expected_content_sha256 = require_sha256_token(
-        expected_content_sha256,
-        "expected_content_sha256",
-    )
     require_equal(
         content_sha256,
         equilibrium_artifact_v7_digest(artifact),
         "equilibrium_artifact.content_sha256",
     )
-    require_equal(
-        content_sha256,
-        expected_content_sha256,
-        "expected_content_sha256",
-    )
+    if expected_content_sha256 is not None:
+        expected_content_sha256 = require_sha256_token(
+            expected_content_sha256,
+            "expected_content_sha256",
+        )
+        require_equal(
+            content_sha256,
+            expected_content_sha256,
+            "expected_content_sha256",
+        )
     require_equal(
         artifact.get("equilibrium_id"),
         "equilibrium_artifact.v7:" + content_sha256.removeprefix("sha256:"),
@@ -392,27 +470,522 @@ def validate_equilibrium_artifact_v7_payload(
     )
 
 
-def validate_equilibrium_artifact_v7(root: Path, manifest: dict) -> None:
-    declared_path = manifest.get("artifacts", {}).get(
-        "equilibrium_artifact_v7_path"
-    )
-    if declared_path is None:
-        return
-    relative_path, artifact_path = require_bundle_path(
-        root,
-        declared_path,
-        "manifest.artifacts.equilibrium_artifact_v7_path",
+def validate_equilibrium_artifact_v8_payload(
+    artifact: dict, expected_content_sha256: object | None = None
+) -> None:
+    """Validate v8 and its canonical/raw equilibrium material identity."""
+    if not isinstance(artifact, dict):
+        fail("equilibrium_artifact must be an object")
+    require_equal(
+        artifact.get("schema_version"),
+        "equilibrium_artifact.v8",
+        "equilibrium_artifact.schema_version",
     )
     require_equal(
-        relative_path,
-        "eigen/metadata/equilibrium_artifact.v7.json",
-        "manifest.artifacts.equilibrium_artifact_v7_path",
+        require_boolean(
+            artifact.get("accepted_for_linearization"),
+            "equilibrium_artifact.accepted_for_linearization",
+        ),
+        True,
+        "equilibrium_artifact.accepted_for_linearization",
     )
-    artifact = load_json(artifact_path)
-    validate_equilibrium_artifact_v7_payload(
-        artifact,
-        manifest.get("equilibrium_artifact_sha256"),
+    certificate = artifact.get("acceptance_certificate")
+    if not isinstance(certificate, dict):
+        fail("equilibrium_artifact.acceptance_certificate must be an object")
+    expected = {
+        "torque": ("max_torque_apm", "A/m", "torque"),
+        "energy": ("total_energy_plateau_range_j", "J", "energy"),
+    }.get(certificate.get("criterion"))
+    if expected is None:
+        fail("equilibrium_artifact.acceptance_certificate.criterion is invalid")
+    metric_kind, unit, stop_reason = expected
+    require_equal(
+        certificate.get("metric_kind"),
+        metric_kind,
+        "equilibrium_artifact.acceptance_certificate.metric_kind",
     )
+    require_equal(
+        certificate.get("unit"), unit,
+        "equilibrium_artifact.acceptance_certificate.unit",
+    )
+    require_equal(
+        certificate.get("stop_reason"), stop_reason,
+        "equilibrium_artifact.acceptance_certificate.stop_reason",
+    )
+    require_equal(
+        certificate.get("status"), "completed",
+        "equilibrium_artifact.acceptance_certificate.status",
+    )
+    require_equal(
+        require_boolean(
+            certificate.get("converged"),
+            "equilibrium_artifact.acceptance_certificate.converged",
+        ),
+        True,
+        "equilibrium_artifact.acceptance_certificate.converged",
+    )
+    metric_value = _require_non_negative_finite_number(
+        certificate.get("metric_value"),
+        "equilibrium_artifact.acceptance_certificate.metric_value",
+    )
+    threshold = _require_non_negative_finite_number(
+        certificate.get("threshold"),
+        "equilibrium_artifact.acceptance_certificate.threshold",
+    )
+    if metric_value > threshold:
+        fail(
+            "equilibrium_artifact.acceptance_certificate.metric_value must "
+            "satisfy its non-negative threshold"
+        )
+    completion_sha256 = require_sha256_token(
+        certificate.get("completion_sha256"),
+        "equilibrium_artifact.acceptance_certificate.completion_sha256",
+    )
+    require_equal(
+        artifact.get("completion_sha256"), completion_sha256,
+        "equilibrium_artifact.completion_sha256",
+    )
+    content_sha256 = require_sha256_token(
+        artifact.get("content_sha256"),
+        "equilibrium_artifact.content_sha256",
+    )
+    require_equal(
+        content_sha256,
+        equilibrium_artifact_v8_digest(artifact),
+        "equilibrium_artifact.content_sha256",
+    )
+    if expected_content_sha256 is not None:
+        require_equal(
+            content_sha256,
+            require_sha256_token(expected_content_sha256, "expected_content_sha256"),
+            "expected_content_sha256",
+        )
+    require_equal(
+        artifact.get("equilibrium_id"),
+        "equilibrium_artifact.v8:" + content_sha256.removeprefix("sha256:"),
+        "equilibrium_artifact.equilibrium_id",
+    )
+    observables = artifact.get("observables")
+    if not isinstance(observables, dict):
+        fail("equilibrium_artifact.observables must be an object")
+    for field_name in ["max_torque_Apm", "max_torque_T", "max_torque_relative"]:
+        _require_non_negative_finite_number(
+            observables.get(field_name),
+            f"equilibrium_artifact.observables.{field_name}",
+        )
+    integrity = artifact.get("representation_integrity")
+    if not isinstance(integrity, dict):
+        fail("equilibrium_artifact.representation_integrity must be an object")
+    _require_non_negative_finite_number(
+        integrity.get("m0_norm_tolerance"),
+        "equilibrium_artifact.representation_integrity.m0_norm_tolerance",
+    )
+    validate_canonical_equilibrium_material_identity(
+        artifact, "equilibrium_artifact"
+    )
+
+
+def validate_linearization_state_v7_payload(
+    state: dict,
+    equilibrium: dict,
+    expected_content_sha256: object | None = None,
+) -> None:
+    """Validate v7 state and bind canonical material to the v8 source."""
+    if not isinstance(state, dict):
+        fail("linearization_state must be an object")
+    require_equal(
+        state.get("schema_version"),
+        "LinearizationState.v7",
+        "linearization_state.schema_version",
+    )
+    require_equal(
+        require_boolean(
+            state.get("accepted_for_frequency_operator"),
+            "linearization_state.accepted_for_frequency_operator",
+        ),
+        True,
+        "linearization_state.accepted_for_frequency_operator",
+    )
+    if not isinstance(equilibrium, dict):
+        fail("linearization_state source equilibrium must be an object")
+    require_equal(
+        equilibrium.get("schema_version"),
+        "equilibrium_artifact.v8",
+        "linearization_state.source_equilibrium_schema",
+    )
+    equilibrium_digest = require_sha256_token(
+        equilibrium.get("content_sha256"),
+        "equilibrium_artifact.content_sha256",
+    )
+    equilibrium_id = require_non_empty_string(
+        equilibrium.get("equilibrium_id"),
+        "equilibrium_artifact.equilibrium_id",
+    )
+    require_equal(
+        state.get("source_equilibrium_artifact"),
+        equilibrium_digest,
+        "linearization_state.source_equilibrium_artifact",
+    )
+    require_equal(
+        state.get("source_equilibrium_id"),
+        equilibrium_id,
+        "linearization_state.source_equilibrium_id",
+    )
+    content_sha256 = require_sha256_token(
+        state.get("content_sha256"),
+        "linearization_state.content_sha256",
+    )
+    require_equal(
+        content_sha256,
+        linearization_state_v7_digest(state),
+        "linearization_state.content_sha256",
+    )
+    if expected_content_sha256 is not None:
+        require_equal(
+            content_sha256,
+            require_sha256_token(
+                expected_content_sha256, "expected_linearization_state_sha256"
+            ),
+            "expected_linearization_state_sha256",
+        )
+    require_equal(
+        state.get("linearization_state_id"),
+        "LinearizationState.v7:" + content_sha256.removeprefix("sha256:"),
+        "linearization_state.linearization_state_id",
+    )
+    equilibrium_material_signature, _ = validate_canonical_equilibrium_material_identity(
+        equilibrium, "equilibrium_artifact"
+    )
+    state_material_signature, _ = validate_canonical_equilibrium_material_identity(
+        state, "linearization_state"
+    )
+    require_equal(
+        state_material_signature,
+        equilibrium_material_signature,
+        "linearization_state.material_signature",
+    )
+
+
+def validate_linearization_state_v6_payload(
+    state: dict,
+    equilibrium: dict,
+    expected_content_sha256: object | None = None,
+) -> None:
+    """Validate the frozen legacy v6 state binding without v8 identity fields."""
+    if not isinstance(state, dict):
+        fail("linearization_state must be an object")
+    require_equal(
+        state.get("schema_version"),
+        "LinearizationState.v6",
+        "linearization_state.schema_version",
+    )
+    _reject_v8_material_identity_fields(state, "linearization_state")
+    require_equal(
+        require_boolean(
+            state.get("accepted_for_frequency_operator"),
+            "linearization_state.accepted_for_frequency_operator",
+        ),
+        True,
+        "linearization_state.accepted_for_frequency_operator",
+    )
+    if not isinstance(equilibrium, dict):
+        fail("linearization_state source equilibrium must be an object")
+    require_equal(
+        equilibrium.get("schema_version"),
+        "equilibrium_artifact.v7",
+        "linearization_state.source_equilibrium_schema",
+    )
+    equilibrium_digest = require_sha256_token(
+        equilibrium.get("content_sha256"),
+        "equilibrium_artifact.content_sha256",
+    )
+    equilibrium_id = require_non_empty_string(
+        equilibrium.get("equilibrium_id"),
+        "equilibrium_artifact.equilibrium_id",
+    )
+    require_equal(
+        state.get("source_equilibrium_artifact"),
+        equilibrium_digest,
+        "linearization_state.source_equilibrium_artifact",
+    )
+    require_equal(
+        state.get("source_equilibrium_id"),
+        equilibrium_id,
+        "linearization_state.source_equilibrium_id",
+    )
+    content_sha256 = require_sha256_token(
+        state.get("content_sha256"),
+        "linearization_state.content_sha256",
+    )
+    require_equal(
+        content_sha256,
+        linearization_state_v7_digest(state),
+        "linearization_state.content_sha256",
+    )
+    if expected_content_sha256 is not None:
+        require_equal(
+            content_sha256,
+            require_sha256_token(
+                expected_content_sha256, "expected_linearization_state_sha256"
+            ),
+            "expected_linearization_state_sha256",
+        )
+    require_equal(
+        state.get("linearization_state_id"),
+        "LinearizationState.v6:" + content_sha256.removeprefix("sha256:"),
+        "linearization_state.linearization_state_id",
+    )
+
+
+def _state_sample_key(relative_path: str, filename: str) -> str:
+    normalized = Path(relative_path).as_posix()
+    prefix = "eigen/metadata/"
+    if not normalized.startswith(prefix) or not normalized.endswith(filename):
+        fail(
+            f"state artifact path must be under eigen/metadata and end with "
+            f"{filename}"
+        )
+    middle = normalized[len(prefix) : -len(filename)]
+    if middle.endswith("/"):
+        middle = middle[:-1]
+    return middle
+
+
+def _declared_state_paths(
+    root: Path, artifacts: object, stem: str, filename: str
+) -> list[tuple[str, Path, str]]:
+    if not isinstance(artifacts, dict):
+        return []
+    singular_key = stem + "_path"
+    plural_key = stem + "_paths"
+    singular = artifacts.get(singular_key)
+    plural = artifacts.get(plural_key)
+    if singular is not None and plural is not None:
+        fail(f"manifest.artifacts.{singular_key} and {plural_key} are ambiguous")
+    if singular is not None:
+        relative_path, artifact_path = require_bundle_path(
+            root, singular, f"manifest.artifacts.{singular_key}"
+        )
+        require_equal(
+            relative_path,
+            f"eigen/metadata/{filename}",
+            f"manifest.artifacts.{singular_key}",
+        )
+        return [(relative_path, artifact_path, "")]
+    if plural is None:
+        return []
+    if (
+        not isinstance(plural, list)
+        or not plural
+        or any(not isinstance(item, str) for item in plural)
+        or len(set(plural)) != len(plural)
+    ):
+        fail(f"manifest.artifacts.{plural_key} must be a non-empty unique list")
+    result: list[tuple[str, Path, str]] = []
+    sample_keys: set[str] = set()
+    for index, item in enumerate(plural):
+        relative_path, artifact_path = require_bundle_path(
+            root, item, f"manifest.artifacts.{plural_key}[{index}]"
+        )
+        sample_key = _state_sample_key(relative_path, filename)
+        if sample_key in sample_keys:
+            fail(
+                f"manifest.artifacts.{plural_key} contains duplicate sample key "
+                f"{sample_key!r}"
+            )
+        sample_keys.add(sample_key)
+        result.append((relative_path, artifact_path, sample_key))
+    return result
+
+
+def _state_path_pairs(root: Path, manifest: dict, *, schema: str) -> list[tuple[str, Path, Path, str]]:
+    artifacts = manifest.get("artifacts")
+    if schema == "v8":
+        equilibrium_stem, equilibrium_filename = (
+            "equilibrium_artifact_v8",
+            "equilibrium_artifact.v8.json",
+        )
+        state_stem, state_filename = (
+            "linearization_state_v7",
+            "linearization_state.v7.json",
+        )
+    else:
+        equilibrium_stem, equilibrium_filename = (
+            "equilibrium_artifact_v7",
+            "equilibrium_artifact.v7.json",
+        )
+        state_stem, state_filename = (
+            "linearization_state_v6",
+            "linearization_state.v6.json",
+        )
+    equilibria = _declared_state_paths(
+        root, artifacts, equilibrium_stem, equilibrium_filename
+    )
+    states = _declared_state_paths(root, artifacts, state_stem, state_filename)
+    if bool(equilibria) != bool(states):
+        fail(
+            f"manifest.artifacts {schema} equilibrium/state paths must be "
+            "declared together"
+        )
+    if not equilibria:
+        return []
+    equilibrium_by_key = {sample_key: (relative, path) for relative, path, sample_key in equilibria}
+    state_by_key = {sample_key: (relative, path) for relative, path, sample_key in states}
+    if set(equilibrium_by_key) != set(state_by_key):
+        fail(
+            f"manifest.artifacts {schema} equilibrium/state sample filename keys "
+            "do not match"
+        )
+    return [
+        (equilibrium_by_key[key][0], equilibrium_by_key[key][1], state_by_key[key][1], key)
+        for key in sorted(equilibrium_by_key)
+    ]
+
+
+def validate_linearization_handoff_diagnostics(
+    payload: object, *, expected_equilibrium_schema: str, expected_state_schema: str, name: str
+) -> bool:
+    if not isinstance(payload, dict) or "linearization_handoff" not in payload:
+        return False
+    handoff = payload.get("linearization_handoff")
+    if not isinstance(handoff, dict):
+        fail(f"{name}.linearization_handoff must be an object")
+    require_equal(
+        handoff.get("equilibrium_artifact_schema"),
+        expected_equilibrium_schema,
+        f"{name}.linearization_handoff.equilibrium_artifact_schema",
+    )
+    require_equal(
+        handoff.get("linearization_state_schema"),
+        expected_state_schema,
+        f"{name}.linearization_handoff.linearization_state_schema",
+    )
+    if "accepted_for_frequency_operator" in handoff:
+        require_equal(
+            require_boolean(
+                handoff.get("accepted_for_frequency_operator"),
+                f"{name}.linearization_handoff.accepted_for_frequency_operator",
+            ),
+            True,
+            f"{name}.linearization_handoff.accepted_for_frequency_operator",
+        )
+    return True
+
+
+def validate_equilibrium_artifacts(
+    root: Path, manifest: dict, solver_diagnostics: dict | None = None
+) -> None:
+    artifacts = manifest.get("artifacts")
+    if not isinstance(artifacts, dict):
+        return
+    def has_declared_path(keys: tuple[str, ...]) -> bool:
+        return any(
+            key in artifacts
+            and artifacts.get(key) is not None
+            and artifacts.get(key) != []
+            for key in keys
+        )
+
+    v8_keys = {
+        "equilibrium_artifact_v8_path",
+        "equilibrium_artifact_v8_paths",
+        "linearization_state_v7_path",
+        "linearization_state_v7_paths",
+    }
+    v7_keys = {
+        "equilibrium_artifact_v7_path",
+        "equilibrium_artifact_v7_paths",
+        "linearization_state_v6_path",
+        "linearization_state_v6_paths",
+    }
+    for key in v8_keys | v7_keys:
+        if key not in artifacts:
+            continue
+        value = artifacts.get(key)
+        if key.endswith("_paths"):
+            if not isinstance(value, list):
+                fail(f"manifest.artifacts.{key} must be a list")
+        elif not isinstance(value, str) or not value.strip():
+            fail(f"manifest.artifacts.{key} must be a non-empty path")
+
+    has_v8 = has_declared_path(tuple(v8_keys))
+    has_v7 = has_declared_path(tuple(v7_keys))
+    if has_v8 and has_v7:
+        fail("manifest.artifacts cannot mix v8/v7 and legacy v7/v6 state paths")
+    if has_v8:
+        pairs = _state_path_pairs(root, manifest, schema="v8")
+        expected_equilibrium_sha = manifest.get("equilibrium_artifact_sha256")
+        expected_state_sha = manifest.get("linearization_state_sha256")
+        for index, (relative, equilibrium_path, state_path, sample_key) in enumerate(pairs):
+            equilibrium = load_json(equilibrium_path)
+            state = load_json(state_path)
+            expected_eq = expected_equilibrium_sha if len(pairs) == 1 else None
+            expected_state = expected_state_sha if len(pairs) == 1 else None
+            validate_equilibrium_artifact_v8_payload(equilibrium, expected_eq)
+            validate_linearization_state_v7_payload(state, equilibrium, expected_state)
+        handoff_found = False
+        for name, payload in (
+            ("manifest.diagnostics", manifest.get("diagnostics")),
+            ("solver_diagnostics", solver_diagnostics),
+        ):
+            handoff_found = validate_linearization_handoff_diagnostics(
+                payload,
+                expected_equilibrium_schema="equilibrium_artifact.v8",
+                expected_state_schema="LinearizationState.v7",
+                name=name,
+            ) or handoff_found
+        if not handoff_found:
+            fail("v8/v7 artifacts require linearization_handoff diagnostics")
+        return
+    if has_v7:
+        validate_equilibrium_artifact_v7(root, manifest)
+        has_v7_state = any(
+            key in artifacts
+            for key in (
+                "linearization_state_v6_path",
+                "linearization_state_v6_paths",
+            )
+        )
+        if not has_v7_state:
+            return
+        pairs = _state_path_pairs(root, manifest, schema="v7")
+        expected_equilibrium_sha = manifest.get("equilibrium_artifact_sha256")
+        expected_state_sha = manifest.get("linearization_state_sha256")
+        for relative, equilibrium_path, state_path, sample_key in pairs:
+            equilibrium = load_json(equilibrium_path)
+            state = load_json(state_path)
+            expected_eq = expected_equilibrium_sha if len(pairs) == 1 else None
+            expected_state = expected_state_sha if len(pairs) == 1 else None
+            validate_equilibrium_artifact_v7_payload(equilibrium, expected_eq)
+            validate_linearization_state_v6_payload(state, equilibrium, expected_state)
+        handoff_found = False
+        for name, payload in (
+            ("manifest.diagnostics", manifest.get("diagnostics")),
+            ("solver_diagnostics", solver_diagnostics),
+        ):
+            handoff_found = validate_linearization_handoff_diagnostics(
+                payload,
+                expected_equilibrium_schema="equilibrium_artifact.v7",
+                expected_state_schema="LinearizationState.v6",
+                name=name,
+            ) or handoff_found
+
+
+def validate_equilibrium_artifact_v7(root: Path, manifest: dict) -> None:
+    paths = _declared_state_paths(
+        root,
+        manifest.get("artifacts"),
+        "equilibrium_artifact_v7",
+        "equilibrium_artifact.v7.json",
+    )
+    if not paths:
+        return
+    expected_content_sha256 = manifest.get("equilibrium_artifact_sha256")
+    for _, artifact_path, _ in paths:
+        validate_equilibrium_artifact_v7_payload(
+            load_json(artifact_path),
+            expected_content_sha256 if len(paths) == 1 else None,
+        )
 
 
 def validate_periodic_mesh_certificate(
@@ -5106,7 +5679,7 @@ def main(argv: list[str] | None = None) -> int:
         "manifest.schema_version",
     )
     require_equal(manifest.get("stage_kind"), "eigenmodes", "manifest.stage_kind")
-    validate_equilibrium_artifact_v7(root, manifest)
+    validate_equilibrium_artifacts(root, manifest, solver_diagnostics)
     validate_manifest_physics(manifest)
     require_equal(
         manifest.get("artifacts", {}).get("solver_diagnostics_path"),

@@ -375,12 +375,33 @@ def validate_eigen_handoff(
         summary.get("k_sampling") == [0.0, 0.0, 0.0],
         "eigen_summary must describe one K0 sample",
     )
-    equilibrium = read_json(artifacts / "eigen/metadata/equilibrium_artifact.v7.json")
+    metadata = artifacts / "eigen/metadata"
+    families = [("equilibrium_artifact.v7", "LinearizationState.v6", "linearization_state.v6.json"),
+                ("equilibrium_artifact.v8", "LinearizationState.v7", "linearization_state.v7.json")]
+    present = [(eq, state, filename) for eq, state, filename in families
+               if (metadata / f"{eq}.json").is_file()]
+    require(len(present) == 1, "exactly one equilibrium artifact schema family is required")
+    eq_schema, state_schema, state_filename = present[0]
+    require(not any((metadata / filename).is_file() for _, other, filename in families
+                    if other != state_schema), "mixed linearization schema families are forbidden")
+    equilibrium = read_json(metadata / f"{eq_schema}.json")
+    require(equilibrium.get("schema_version") == eq_schema, "equilibrium schema/file mismatch")
     require(
         equilibrium.get("accepted_for_linearization") is True,
         "equilibrium artifact was not accepted for linearization",
     )
-    linearization = read_json(artifacts / "eigen/metadata/linearization_state.v6.json")
+    linearization = read_json(metadata / state_filename)
+    require(linearization.get("schema_version") == state_schema, "linearization schema/file mismatch")
+    if eq_schema == "equilibrium_artifact.v8":
+        from verify_fem_frequency_domain_eigen_artifacts import (
+            validate_equilibrium_artifact_v8_payload,
+            validate_linearization_state_v7_payload,
+        )
+        try:
+            validate_equilibrium_artifact_v8_payload(equilibrium)
+            validate_linearization_state_v7_payload(linearization, equilibrium)
+        except (ValueError, RuntimeError, SystemExit) as error:
+            raise ValidationError(f"invalid canonical material handoff: {error}") from error
     require(
         linearization.get("accepted_for_frequency_operator") is True,
         "linearization state was not accepted for the frequency operator",

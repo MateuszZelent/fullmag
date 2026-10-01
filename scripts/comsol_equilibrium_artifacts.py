@@ -40,8 +40,57 @@ def sample_state_paths(manifest, sample_index):
     artifacts = manifest.get("artifacts") if isinstance(manifest, Mapping) else None
     if not isinstance(artifacts, Mapping):
         raise ValueError("manifest.artifacts are required")
+    v8_keys = {
+        "equilibrium_artifact_v8_path",
+        "equilibrium_artifact_v8_paths",
+        "linearization_state_v7_path",
+        "linearization_state_v7_paths",
+    }
+    v7_keys = {
+        "equilibrium_artifact_v7_path",
+        "equilibrium_artifact_v7_paths",
+        "linearization_state_v6_path",
+        "linearization_state_v6_paths",
+    }
+    def has_declared_path(keys):
+        return any(
+            key in artifacts
+            and artifacts.get(key) is not None
+            and artifacts.get(key) != []
+            for key in keys
+        )
+
+    for key in v8_keys | v7_keys:
+        if key not in artifacts:
+            continue
+        value = artifacts.get(key)
+        if key.endswith("_paths"):
+            if not isinstance(value, list):
+                raise ValueError(f"{key} must be a list")
+        elif not isinstance(value, str) or not value.strip():
+            raise ValueError(f"{key} must be a non-empty path")
+
+    has_v8 = has_declared_path(v8_keys)
+    has_v7 = has_declared_path(v7_keys)
+    if has_v8 and has_v7:
+        raise ValueError("mixed v8/v7 and legacy v7/v6 state paths")
+    if has_v8:
+        families = (
+            ("equilibrium_artifact_v8", "equilibrium_artifact.v8.json"),
+            ("linearization_state_v7", "linearization_state.v7.json"),
+        )
+    elif has_v7:
+        families = (
+            ("equilibrium_artifact_v7", "equilibrium_artifact.v7.json"),
+            ("linearization_state_v6", "linearization_state.v6.json"),
+        )
+    else:
+        raise ValueError("manifest has no supported equilibrium/state paths")
+
     selected = []
-    for stem, filename in (("equilibrium_artifact_v7", "equilibrium_artifact.v7.json"), ("linearization_state_v6", "linearization_state.v6.json")):
+    requested_sample_keys = []
+    sample_key_sets = []
+    for stem, filename in families:
         singular = artifacts.get(stem + "_path")
         plural = artifacts.get(stem + "_paths")
         if singular is not None and plural is not None:
@@ -50,11 +99,39 @@ def sample_state_paths(manifest, sample_index):
             expected = "eigen/metadata/" + filename
             if sample_index != 0 or singular != expected:
                 raise ValueError("single-state path does not match sample zero")
+            requested_sample_keys.append("")
+            sample_key_sets.append({""})
         else:
             expected = f"eigen/metadata/sample_{sample_index:04d}/" + filename
-            if not isinstance(plural, list) or any(not isinstance(item, str) for item in plural) or len(set(plural)) != len(plural) or expected not in plural:
-                raise ValueError("missing or duplicated per-sample state path")
+            if (
+                not isinstance(plural, list)
+                or not plural
+                or any(not isinstance(item, str) for item in plural)
+                or len(set(plural)) != len(plural)
+            ):
+                raise ValueError("missing or duplicated per-sample state paths")
+            keys = set()
+            for item in plural:
+                normalized = Path(item).as_posix()
+                prefix = "eigen/metadata/"
+                if (
+                    not normalized.startswith(prefix)
+                    or not normalized.endswith(filename)
+                    or ".." in Path(item).parts
+                ):
+                    raise ValueError("invalid per-sample state path")
+                key = normalized[len(prefix) : -len(filename)].rstrip("/")
+                if key in keys:
+                    raise ValueError("duplicate per-sample filename key")
+                keys.add(key)
+            requested_sample_keys.append(f"sample_{sample_index:04d}")
+            sample_key_sets.append(keys)
         selected.append(expected)
+    if sample_key_sets[0] != sample_key_sets[1]:
+        raise ValueError("equilibrium/state sample filename keys do not match")
+    for requested_key, keys in zip(requested_sample_keys, sample_key_sets):
+        if requested_key not in keys:
+            raise ValueError("missing requested per-sample state path")
     return tuple(selected)
 
 
@@ -78,7 +155,19 @@ def read_sample_equilibrium(root, manifest, metadata, mode, sample_index, *, mes
         objects.append(json.loads(data))
         hashes.append({"path": relative, "sha256": "sha256:" + hashlib.sha256(data).hexdigest()})
     equilibrium, state = objects
-    verifier.validate_equilibrium_artifact_v7_payload(equilibrium, mode.get("equilibrium_artifact_sha256"))
+    if equilibrium.get("schema_version") == "equilibrium_artifact.v8":
+        verifier.validate_equilibrium_artifact_v8_payload(
+            equilibrium, mode.get("equilibrium_artifact_sha256")
+        )
+        verifier.validate_linearization_state_v7_payload(
+            state,
+            equilibrium,
+            mode.get("linearization_state_sha256"),
+        )
+    else:
+        verifier.validate_equilibrium_artifact_v7_payload(
+            equilibrium, mode.get("equilibrium_artifact_sha256")
+        )
     plan = metadata["execution_plan"]["backend_plan"]
     fields = (plan.get("external_field"), equilibrium.get("external_field_a_per_m"))
     for field in fields:

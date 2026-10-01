@@ -36,14 +36,18 @@ pub(super) fn constant_uniaxial_descriptor(
 ) -> Result<Option<(f64, [f64; 3])>, RunError> {
     let Some(ku) = material.uniaxial_anisotropy else {
         if material.anisotropy_axis.is_some() {
-            return Err(unsupported_source_identity("uniaxial axis supplied without Ku"));
+            return Err(unsupported_source_identity(
+                "uniaxial axis supplied without Ku",
+            ));
         }
         return Ok(None);
     };
     if !ku.is_finite() || !material.saturation_magnetisation.is_finite()
         || material.saturation_magnetisation <= 0.0 || material.ms_field.is_some()
     {
-        return Err(unsupported_source_identity("constant Ku requires finite Ku and uniform positive Ms"));
+        return Err(unsupported_source_identity(
+            "constant Ku requires finite Ku and uniform positive Ms",
+        ));
     }
     let axis = material.anisotropy_axis.unwrap_or([0.0, 0.0, 1.0]);
     if axis.iter().any(|value| !value.is_finite()) {
@@ -64,7 +68,9 @@ pub(super) fn constant_uniaxial_descriptor(
     Ok(Some((if ku == 0.0 { 0.0 } else { ku }, canonical_axis)))
 }
 
-fn equilibrium_material_signature(material: &fullmag_ir::MaterialIR) -> Result<String, RunError> {
+pub(super) fn equilibrium_material_signature(
+    material: &fullmag_ir::MaterialIR,
+) -> Result<String, RunError> {
     let uniaxial = constant_uniaxial_descriptor(material)?;
     let mut preimage = EquilibriumMaterialSignaturePreimageV1 {
         schema_version: EQUILIBRIUM_MATERIAL_PREIMAGE_V1.to_string(),
@@ -75,11 +81,14 @@ fn equilibrium_material_signature(material: &fullmag_ir::MaterialIR) -> Result<S
     };
     if let Some((ku, axis)) = uniaxial {
         preimage.schema_version = EQUILIBRIUM_MATERIAL_PREIMAGE_V2.to_string();
-        signature_digest(EQUILIBRIUM_MATERIAL_PREIMAGE_V2, &EquilibriumMaterialSignaturePreimageV2 {
-            material: preimage,
-            uniaxial_anisotropy_j_per_m3: ku,
-            canonical_uniaxial_axis: axis,
-        })
+        signature_digest(
+            EQUILIBRIUM_MATERIAL_PREIMAGE_V2,
+            &EquilibriumMaterialSignaturePreimageV2 {
+                material: preimage,
+                uniaxial_anisotropy_j_per_m3: ku,
+                canonical_uniaxial_axis: axis,
+            },
+        )
     } else {
         signature_digest(EQUILIBRIUM_MATERIAL_PREIMAGE_V1, &preimage)
     }

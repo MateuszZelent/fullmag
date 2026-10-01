@@ -1,5 +1,15 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
+
+## S10/S12 — zatwierdzona migracja canonical/raw Ku, 2026-10-01
+
+- Jawna zgoda użytkownika na equilibrium_artifact.v8 / LinearizationState.v7. Ku-free pozostaje v7/v6; historyczne dane i #188 nie są migrowane.
+- Producenci/loader Rust, material_snapshot_id, wersjonowane nazwy i manifesty single-/multi-k zmienione. Raw provenance ma zakres materialization_plan, provided source nieprzepisywany. Publiczny Ku guard zachowany.
+- Odbiorniki Python/COMSOL i bindingi zaktualizowane;20nowychregresji+29COMSOL/payload+9verifierPASS; dwa odbiorniki runtime/parity przeszły44lekkie regresje.10plikówRust parserPASS; nativeunitniekompilowane. Mapa źródeł i publicexamplesPASS. Review bezP1;P2cichegofallbackuschematów naprawione; końcowyreviewdelty bezP1/P2. Bramka COMSOL49testów+54podprzypadkiPASS;łącznie151lekkichtestów+54podprzypadkiPASS. Commit/push/build bieżącej migracji pozostają do wykonania.
+- Audyt: docs/audits/2026-10-01-ku-canonical-material-artifact-migration.md.
+- #188 nadalGamma base4/50, kontener7df4be7c5ace running; nie daje dowodu nowej migracji ani zaakceptowanej częstotliwości. Runner healthy/accepting; około42,6GiBwolnego przy kontroli.
+- CałyS00–S12 pozostaje otwarty: signed DE/BV, zbieżność, COMSOL A1, interakcje, waveguide, GPU, browser i integracja.
+
 ## S10/S12 — zerowe H_eff, kolejny przyrost źródeł
 
 - `validate_shared_domain_modal_scope` dopuszcza skończone zerowe pole: brak pola statycznego nie dowodzi braku krzywizny. Ujemne/NaN/Inf amplitudy odrzucane; publiczny Ku guard zachowany.

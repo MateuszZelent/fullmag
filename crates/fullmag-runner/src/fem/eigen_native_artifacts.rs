@@ -295,8 +295,8 @@ pub(super) fn native_modal_artifacts(
             object.insert(
                 "linearization_handoff".to_string(),
                 serde_json::json!({
-                    "equilibrium_artifact_schema": "equilibrium_artifact.v7",
-                    "linearization_state_schema": "LinearizationState.v6",
+                    "equilibrium_artifact_schema": state.equilibrium_artifact["schema_version"],
+                    "linearization_state_schema": state.linearization_state["schema_version"],
                     "accepted_for_frequency_operator": true,
                 }),
             );
@@ -861,12 +861,17 @@ pub(super) fn native_modal_artifacts(
         &equilibrium_source_json(&plan.equilibrium),
     )?);
     if let Some(state) = linearization_state {
+        let (equilibrium_filename, linearization_filename) =
+            super::eigen_equilibrium_contract::certified_equilibrium_artifact_filenames(
+                state.equilibrium_artifact["schema_version"].as_str(),
+                state.linearization_state["schema_version"].as_str(),
+            )?;
         auxiliary_artifacts.push(json_artifact(
-            "eigen/metadata/equilibrium_artifact.v7.json",
+            &format!("eigen/metadata/{equilibrium_filename}"),
             &state.equilibrium_artifact,
         )?);
         auxiliary_artifacts.push(json_artifact(
-            "eigen/metadata/linearization_state.v6.json",
+            &format!("eigen/metadata/{linearization_filename}"),
             &state.linearization_state,
         )?);
     }

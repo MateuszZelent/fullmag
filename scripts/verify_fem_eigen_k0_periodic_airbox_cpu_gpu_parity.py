@@ -98,28 +98,34 @@ def _validate_state_sidecars(
     diagnostics: dict[str, Any],
     sample_count: int,
 ) -> dict[str, str]:
-    """Bind accepted v6 state sidecars to the sample diagnostic identities."""
+    """Bind one accepted state schema family to the sample diagnostics."""
 
+    metadata = root / "eigen" / "metadata"
+    directories = [metadata / f"sample_{sample_index:04d}"]
+    if sample_count == 1:
+        directories.append(metadata)
+    families = [("equilibrium_artifact.v6", "LinearizationState.v6", "linearization_state.v6.json"),
+                ("equilibrium_artifact.v7", "LinearizationState.v6", "linearization_state.v6.json"),
+                ("equilibrium_artifact.v8", "LinearizationState.v7", "linearization_state.v7.json")]
+    present = [(directory, eq, state, filename)
+               for directory in directories for eq, state, filename in families
+               if (directory / f"{eq}.json").is_file()]
+    if len(present) != 1:
+        _fail(f"{root}: sample {sample_index} requires exactly one equilibrium schema family")
+    directory, eq_schema, state_schema, state_filename = present[0]
+    for candidate in directories:
+        for filename in ("linearization_state.v6.json", "linearization_state.v7.json"):
+            if (candidate / filename).is_file() and (candidate != directory or filename != state_filename):
+                _fail(f"{root}: sample {sample_index} has ambiguous linearization sidecars")
     names = {
-        "equilibrium_artifact_sha256": (
-            "equilibrium_artifact.v6.json",
-            "equilibrium_artifact.v6",
-            "accepted_for_linearization",
-        ),
-        "linearization_state_sha256": (
-            "linearization_state.v6.json",
-            "LinearizationState.v6",
-            "accepted_for_frequency_operator",
-        ),
+        "equilibrium_artifact_sha256": (f"{eq_schema}.json", eq_schema, "accepted_for_linearization"),
+        "linearization_state_sha256": (state_filename, state_schema, "accepted_for_frequency_operator"),
     }
+    payloads = {}
     result: dict[str, str] = {}
     for digest_key, (basename, schema, acceptance_key) in names.items():
-        sample_path = root / "eigen" / "metadata" / f"sample_{sample_index:04d}" / basename
-        candidates = [sample_path]
-        if sample_count == 1:
-            candidates.append(root / "eigen" / "metadata" / basename)
-        path = next((candidate for candidate in candidates if candidate.is_file()), None)
-        if path is None:
+        path = directory / basename
+        if not path.is_file():
             _fail(f"{root}: sample {sample_index} is missing {basename}")
         payload = _json(path)
         if payload.get("schema_version") != schema:
@@ -132,6 +138,19 @@ def _validate_state_sidecars(
         if payload.get("content_sha256") != expected_digest:
             _fail(f"{path}: content_sha256 does not match {digest_key}")
         result[digest_key] = str(path.relative_to(root))
+        payloads[digest_key] = payload
+    if eq_schema == "equilibrium_artifact.v8":
+        from verify_fem_frequency_domain_eigen_artifacts import (
+            validate_equilibrium_artifact_v8_payload,
+            validate_linearization_state_v7_payload,
+        )
+        try:
+            validate_equilibrium_artifact_v8_payload(payloads["equilibrium_artifact_sha256"])
+            validate_linearization_state_v7_payload(
+                payloads["linearization_state_sha256"], payloads["equilibrium_artifact_sha256"]
+            )
+        except (ValueError, RuntimeError, SystemExit) as error:
+            _fail(f"{root}: invalid canonical material handoff: {error}")
     return result
 
 

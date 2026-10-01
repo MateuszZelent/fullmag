@@ -168,3 +168,23 @@ artifact validator. Required regressions cover legacy bytes, independent v2
 binary digest, missing/forged anisotropy, shape/nonfinite errors and measured
 field decomposition. Native unit compilation remains prohibited; runtime
 qualification is still required before promotion.
+
+### Canonical versus raw material artifacts
+
+The user-authorized bounded Ku route adds equilibrium_artifact.v8 and
+LinearizationState.v7. Their material_signature and native material_snapshot_id
+use the existing canonical equilibrium_material_signature. A separate
+material_provenance_signature hashes the raw MaterialIR of the materialization
+plan, explicitly scoped as materialization_plan. The identity kind is
+canonical_equilibrium_material.v2. Provided v8 records preserve their own
+source raw provenance; newly generated states bind the current plan's raw
+hash. Equivalent axes may differ in raw hashes but must share physical identity.
+
+Ku-free writes retain v7/v6 and historical digest preimages. Legacy records
+cannot be reinterpreted as Ku sources. All acceptance, completion, field,
+mesh, phase and content-digest gates remain. Actual schemas determine paths
+and single-/multi-sample manifest keys. Owners are the shared-domain producer,
+equilibrium loader, native artifact/manifest producers, Python verifier and
+COMSOL state readers. Compatibility readers are retained for archived records;
+rollback keeps Ku gated rather than relabeling artifacts. This extension does
+not change public Ku legality or assert native CPU/GPU qualification.

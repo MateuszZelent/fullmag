@@ -43,6 +43,10 @@ pub(super) fn build_eigen_path_frequency_domain_manifest(
         eigen_path_state_metadata_paths(mode_artifacts, "equilibrium_artifact.v7.json");
     let linearization_state_v6_paths =
         eigen_path_state_metadata_paths(mode_artifacts, "linearization_state.v6.json");
+    let equilibrium_artifact_v8_paths =
+        eigen_path_state_metadata_paths(mode_artifacts, "equilibrium_artifact.v8.json");
+    let linearization_state_v7_paths =
+        eigen_path_state_metadata_paths(mode_artifacts, "linearization_state.v7.json");
     let mode_field_resources = mode_metadata_paths
         .iter()
         .filter_map(|path| parse_eigen_path_mode_metadata_path(path))
@@ -488,6 +492,12 @@ pub(super) fn build_eigen_path_frequency_domain_manifest(
         if let Some(certificate) = eigen_path_floquet_periodic_mesh_certificate(plan) {
             diagnostics.insert("periodic_mesh_certificate".to_string(), certificate);
         }
+    }
+    if !equilibrium_artifact_v8_paths.is_empty() || !linearization_state_v7_paths.is_empty() {
+        manifest["artifacts"]["equilibrium_artifact_v8_paths"] =
+            serde_json::json!(equilibrium_artifact_v8_paths);
+        manifest["artifacts"]["linearization_state_v7_paths"] =
+            serde_json::json!(linearization_state_v7_paths);
     }
     manifest
 }

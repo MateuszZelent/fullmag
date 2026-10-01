@@ -12,7 +12,7 @@ use super::eigen_digest::sha256_text;
 use super::eigen_digest::{is_sha256_digest, shared_domain_content_digest};
 use super::eigen_equilibrium_contract::{
     validate_certified_equilibrium_fields, AcceptedFemEigenEquilibriumHandoff,
-    AcceptedFemRelaxStageHandoff, LoadedEquilibriumArtifactV7,
+    AcceptedFemRelaxStageHandoff, LoadedEquilibriumArtifact,
 };
 use super::eigen_math::vector_norm;
 use super::eigen_policy::{
@@ -28,6 +28,7 @@ use super::eigen_shared_domain_geometry::{
     OwnedModalEigenCsrMatrix, OwnedModalEigenPoissonAirboxBlockProblem,
 };
 use super::eigen_types::SharedDomainLinearizationState;
+use super::equilibrium_identity::equilibrium_material_signature;
 use crate::native_fem;
 use crate::types::RunError;
 use fullmag_engine::fem::FemLlgProblem;
@@ -39,6 +40,36 @@ use fullmag_ir::EquilibriumSourceIR;
 use fullmag_ir::FemEigenPlanIR;
 use nalgebra::DMatrix;
 use num_complex::Complex64;
+
+pub(super) fn shared_domain_artifact_material_identity(
+    material: &fullmag_ir::MaterialIR,
+    source: Option<&serde_json::Value>,
+) -> Result<(String, String, bool), RunError> {
+    let canonical = material.uniaxial_anisotropy.is_some();
+    if source.is_some_and(|source| {
+        source["schema_version"].as_str()
+            != Some(if canonical {
+                "equilibrium_artifact.v8"
+            } else {
+                "equilibrium_artifact.v7"
+            })
+    }) {
+        return Err(RunError { message: "equilibrium_material_identity_version_mismatch: Ku requires v8; legacy material requires v7".to_string() });
+    }
+    let raw = shared_domain_content_digest("material_signature", material)?;
+    let physical = if canonical {
+        equilibrium_material_signature(material)?
+    } else {
+        raw.clone()
+    };
+    if source.is_some_and(|source| source["material_signature"].as_str() != Some(physical.as_str()))
+    {
+        return Err(RunError {
+            message: "equilibrium_material_hash_mismatch".to_string(),
+        });
+    }
+    Ok((physical, raw, canonical))
+}
 
 pub(super) fn reduced_shared_domain_tangent_mass(
     topology: &MeshTopology,
@@ -225,7 +256,7 @@ pub(super) fn build_shared_domain_linearization_state(
     plan: &FemEigenPlanIR,
     topology: &MeshTopology,
     problem: &FemLlgProblem,
-    source_artifact: Option<&LoadedEquilibriumArtifactV7>,
+    source_artifact: Option<&LoadedEquilibriumArtifact>,
     source_relax_handoff: Option<&AcceptedFemRelaxStageHandoff>,
     equilibrium: &[Vector3],
     observables: &EffectiveFieldObservables,
@@ -277,7 +308,21 @@ pub(super) fn build_shared_domain_linearization_state(
     }
 
     let mesh_signature = plan.mesh.topology_fingerprint_v6();
-    let material_signature = shared_domain_content_digest("material_signature", &plan.material)?;
+    let (material_signature, material_provenance_signature, canonical_material) =
+        shared_domain_artifact_material_identity(
+            &plan.material,
+            source_artifact.map(|source| &source.value),
+        )?;
+    let equilibrium_schema = if canonical_material {
+        "equilibrium_artifact.v8"
+    } else {
+        "equilibrium_artifact.v7"
+    };
+    let linearization_schema = if canonical_material {
+        "LinearizationState.v7"
+    } else {
+        "LinearizationState.v6"
+    };
     let physics_signature = shared_domain_content_digest(
         "physics_signature",
         &serde_json::json!({
@@ -536,7 +581,7 @@ pub(super) fn build_shared_domain_linearization_state(
                 serde_json::json!(source_relax_handoff.completion_sha256),
             );
         let mut artifact = serde_json::json!({
-            "schema_version": "equilibrium_artifact.v7",
+            "schema_version": equilibrium_schema,
             "accepted_for_linearization": true,
             "acceptance_certificate": acceptance_certificate,
             "completion_sha256": source_relax_handoff.completion_sha256,
@@ -567,13 +612,21 @@ pub(super) fn build_shared_domain_linearization_state(
                 .unwrap_or("none"),
             "periodic_mesh_certificate": periodic_certificate_json,
         });
-        let digest = shared_domain_content_digest("equilibrium_artifact_v7", &artifact)?;
+        if canonical_material {
+            artifact["material_identity_kind"] =
+                serde_json::json!("canonical_equilibrium_material.v2");
+            artifact["material_provenance_signature"] =
+                serde_json::json!(material_provenance_signature);
+            artifact["material_provenance_scope"] = serde_json::json!("materialization_plan");
+        }
+        let digest = shared_domain_content_digest(equilibrium_schema, &artifact)?;
         if let Some(object) = artifact.as_object_mut() {
             object.insert("content_sha256".to_string(), serde_json::json!(digest));
             object.insert(
                 "equilibrium_id".to_string(),
                 serde_json::json!(format!(
-                    "equilibrium_artifact.v7:{}",
+                    "{}:{}",
+                    equilibrium_schema,
                     digest.strip_prefix("sha256:").unwrap_or(&digest)
                 )),
             );
@@ -650,7 +703,7 @@ pub(super) fn build_shared_domain_linearization_state(
 
     let operator_m0 = extend_equilibrium_m0_to_air_nodes(topology, equilibrium);
     let mut linearization_state = serde_json::json!({
-        "schema_version": "LinearizationState.v6",
+        "schema_version": linearization_schema,
         "source_equilibrium_artifact": equilibrium_artifact_digest,
         "source_equilibrium_id": equilibrium_id,
         "operator_dictionary": "FrequencyOperatorDictionary.v1",
@@ -695,8 +748,16 @@ pub(super) fn build_shared_domain_linearization_state(
         "producer_run_id": producer_run_id,
         "demag_model": demag_model,
     });
+    if canonical_material {
+        linearization_state["material_identity_kind"] =
+            serde_json::json!("canonical_equilibrium_material.v2");
+        linearization_state["material_provenance_signature"] =
+            serde_json::json!(material_provenance_signature);
+        linearization_state["material_provenance_scope"] =
+            serde_json::json!("materialization_plan");
+    }
     let linearization_state_digest =
-        shared_domain_content_digest("linearization_state_v6", &linearization_state)?;
+        shared_domain_content_digest(linearization_schema, &linearization_state)?;
     if let Some(object) = linearization_state.as_object_mut() {
         object.insert(
             "content_sha256".to_string(),
@@ -705,7 +766,8 @@ pub(super) fn build_shared_domain_linearization_state(
         object.insert(
             "linearization_state_id".to_string(),
             serde_json::json!(format!(
-                "LinearizationState.v6:{}",
+                "{}:{}",
+                linearization_schema,
                 linearization_state_digest
                     .strip_prefix("sha256:")
                     .unwrap_or(&linearization_state_digest)
@@ -934,25 +996,39 @@ pub(super) fn build_native_shared_domain_modal_problem<'a>(
         "linearization_field_term",
         &external_field_h_ext0_xyz,
     )?);
-    let (uniaxial_axis_xyz, uniaxial_anisotropy_field_a_per_m) =
-        if let Some((ku, normalized)) = super::equilibrium_identity::constant_uniaxial_descriptor(&plan.material)? {
-            if !ms_values.is_empty() {
-                return Err(RunError { message: "shared-domain constant anisotropy field requires uniform Ms".to_string() });
-            }
-            let field = 2.0 * (ku / (MU0 * plan.material.saturation_magnetisation));
-            if !field.is_finite() {
-                return Err(RunError { message: "shared-domain uniaxial field is not finite".to_string() });
-            }
-            ((0..topology.n_nodes).flat_map(|_| normalized).collect::<Vec<f64>>(), vec![field])
-        } else {
-            (Vec::new(), Vec::new())
-        };
+    let (uniaxial_axis_xyz, uniaxial_anisotropy_field_a_per_m) = if let Some((ku, normalized)) =
+        super::equilibrium_identity::constant_uniaxial_descriptor(&plan.material)?
+    {
+        if !ms_values.is_empty() {
+            return Err(RunError {
+                message: "shared-domain constant anisotropy field requires uniform Ms".to_string(),
+            });
+        }
+        let field = 2.0 * (ku / (MU0 * plan.material.saturation_magnetisation));
+        if !field.is_finite() {
+            return Err(RunError {
+                message: "shared-domain uniaxial field is not finite".to_string(),
+            });
+        }
+        (
+            (0..topology.n_nodes)
+                .flat_map(|_| normalized)
+                .collect::<Vec<f64>>(),
+            vec![field],
+        )
+    } else {
+        (Vec::new(), Vec::new())
+    };
     let anisotropy_term_digest = if uniaxial_anisotropy_field_a_per_m.is_empty() {
         None
     } else {
-        Some(shared_domain_content_digest("linearization_uniaxial_term", &(
-            uniaxial_axis_xyz.as_slice(), uniaxial_anisotropy_field_a_per_m.as_slice(),
-        ))?)
+        Some(shared_domain_content_digest(
+            "linearization_uniaxial_term",
+            &(
+                uniaxial_axis_xyz.as_slice(),
+                uniaxial_anisotropy_field_a_per_m.as_slice(),
+            ),
+        )?)
     };
     let demag_term_digest = Some(shared_domain_content_digest(
         "linearization_demag_term",

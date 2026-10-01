@@ -1285,7 +1285,7 @@ promoted. Modal eigen manifests must additionally include:
 - optional `artifacts.fmr_kittel_fit_v1_path = "fmr/kittel_fit.v1.json"`
   when the postsolve Kittel comparison is derivable; this artifact remains
   `partial` when statistical covariance is unavailable,
-- `artifacts.equilibrium_artifact_v6_paths[]` and
+- `artifacts.equilibrium_artifact_v7_paths[]` and
   `artifacts.linearization_state_v6_paths[]` for a multi-sample native
   handoff (each path is scoped to `sample_NNNN`),
 - `resources.mode_field_resources[]`,
@@ -1294,6 +1294,30 @@ promoted. Modal eigen manifests must additionally include:
 - `diagnostics.tracking_score_source`,
 - `diagnostics.modal_overlap_available`,
 - optional `diagnostics.modal_overlap_unavailable_reason`.
+
+Native Ku handoffs use `equilibrium_artifact.v8` and `LinearizationState.v7`.
+Their singular manifest keys are `equilibrium_artifact_v8_path` and
+`linearization_state_v7_path`; multi-sample keys are
+`equilibrium_artifact_v8_paths[]` and `linearization_state_v7_paths[]`.
+Each pair belongs to the same sample; mixed versions for one sample are invalid.
+Empty legacy path arrays do not declare another handoff. Ku-free writers retain
+`equilibrium_artifact.v7` / `LinearizationState.v6`, their filenames, digest
+preimages and manifest keys. Historical artifacts remain readable in their
+original validation scope; they are not relabelled as canonical Ku evidence.
+
+Both new payloads require `material_identity_kind =
+"canonical_equilibrium_material.v2"`. Their `material_signature` is the existing
+canonical equilibrium material digest and binds native `material_snapshot_id`.
+`material_provenance_signature` is a separate raw MaterialIR digest with mandatory
+`material_provenance_scope = "materialization_plan"`: it identifies the request
+being materialized, not a recovered original relaxation request. Axis sign and
+nonzero scaling may change this raw digest without changing the canonical
+uniaxial material. A provided equilibrium artifact retains its original payload,
+content digest and provenance; the new linearization records the current raw
+request and must match the source canonical identity. Changed Ku or physical axis
+must be rejected. Acceptance certificates, certified fields, mesh/phase binding,
+content digests and equilibrium/state IDs remain mandatory. This migration alone
+does not enable or scientifically qualify the public Ku modal path.
 
 For modal k-path dispersion manifests, `capabilities.dispersion` must publish
 lane-specific status entries for:

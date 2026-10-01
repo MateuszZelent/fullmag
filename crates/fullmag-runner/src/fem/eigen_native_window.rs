@@ -5,7 +5,7 @@ use super::eigen_constants::{
 use super::eigen_digest::shared_domain_content_digest;
 use super::eigen_equilibrium::bind_stage_continuation_artifacts;
 use super::eigen_equilibrium_contract::{
-    AcceptedFemEigenEquilibriumHandoff, AcceptedFemRelaxStageHandoff, LoadedEquilibriumArtifactV7,
+    AcceptedFemEigenEquilibriumHandoff, AcceptedFemRelaxStageHandoff, LoadedEquilibriumArtifact,
 };
 use super::eigen_execution_resolution::PlannedFemEigenExecution;
 use super::eigen_mass_metric::{
@@ -83,7 +83,7 @@ pub(super) fn execute_native_modal_window(
     observables: EffectiveFieldObservables,
     relaxation_steps: u64,
     problem: &FemLlgProblem,
-    source_artifact: Option<&LoadedEquilibriumArtifactV7>,
+    source_artifact: Option<&LoadedEquilibriumArtifact>,
     source_relax_handoff: Option<&AcceptedFemRelaxStageHandoff>,
     topology: &MeshTopology,
     reduction: &ReductionMap,

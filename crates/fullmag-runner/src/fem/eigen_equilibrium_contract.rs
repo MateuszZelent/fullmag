@@ -151,8 +151,12 @@ impl AcceptedFemRelaxStageHandoff {
             });
         }
         validate_certified_equilibrium_fields(&certified_fields, source_mesh.nodes.len())?;
-        if certified_fields.h_anisotropy_a_per_m.is_some() != source_plan.material.uniaxial_anisotropy.is_some() {
-            return Err(RunError { message: "relax_stage_handoff_anisotropy_schema_material_mismatch".to_string() });
+        if certified_fields.h_anisotropy_a_per_m.is_some()
+            != source_plan.material.uniaxial_anisotropy.is_some()
+        {
+            return Err(RunError {
+                message: "relax_stage_handoff_anisotropy_schema_material_mismatch".to_string(),
+            });
         }
         let source_plan_mesh = crate::types::FemMeshPayload::from(source_plan);
         if crate::types::fem_mesh_topology_fingerprint(&source_plan_mesh)
@@ -334,8 +338,12 @@ impl AcceptedFemRelaxStageHandoff {
             });
         }
         validate_certified_equilibrium_fields(&self.certified_fields, self.node_count)?;
-        if self.certified_fields.h_anisotropy_a_per_m.is_some() != plan.material.uniaxial_anisotropy.is_some() {
-            return Err(RunError { message: "relax_stage_handoff_anisotropy_schema_material_mismatch".to_string() });
+        if self.certified_fields.h_anisotropy_a_per_m.is_some()
+            != plan.material.uniaxial_anisotropy.is_some()
+        {
+            return Err(RunError {
+                message: "relax_stage_handoff_anisotropy_schema_material_mismatch".to_string(),
+            });
         }
         let target_signatures =
             crate::fem::equilibrium_identity::EquilibriumIdentitySignaturesV1::from_eigen_plan(
@@ -742,8 +750,12 @@ pub(crate) fn validate_certified_equilibrium_fields(
         .all(|(node, (((h_ex, h_demag), h_ext), h_eff))| {
             (0..3).all(|component| {
                 let exchange_demag = h_ex[component] + h_demag[component];
-                let before_external = fields.h_anisotropy_a_per_m.as_ref()
-                    .map_or(exchange_demag, |anisotropy| exchange_demag + anisotropy[node][component]);
+                let before_external = fields
+                    .h_anisotropy_a_per_m
+                    .as_ref()
+                    .map_or(exchange_demag, |anisotropy| {
+                        exchange_demag + anisotropy[node][component]
+                    });
                 h_eff[component] == before_external + h_ext[component]
             })
         });
@@ -1001,7 +1013,7 @@ pub(crate) fn accepted_relax_to_eigen_handoff_from_run(
 }
 
 #[derive(Debug, Clone)]
-pub(super) struct LoadedEquilibriumArtifactV7 {
+pub(super) struct LoadedEquilibriumArtifact {
     pub(super) value: serde_json::Value,
     pub(super) m0: Vec<Vector3>,
     pub(super) h_eff0: Vec<Vector3>,
@@ -1021,4 +1033,19 @@ pub(super) struct LoadedEquilibriumArtifactV7 {
     pub(super) periodic_mesh_certificate: serde_json::Value,
     pub(super) acceptance_certificate: AcceptedEquilibriumCriterion,
     pub(super) completion_sha256: String,
+}
+
+pub(super) fn certified_equilibrium_artifact_filenames(
+    equilibrium_schema: Option<&str>,
+    linearization_schema: Option<&str>,
+) -> Result<(&'static str, &'static str), RunError> {
+    match (equilibrium_schema, linearization_schema) {
+        (Some("equilibrium_artifact.v7"), Some("LinearizationState.v6")) =>
+            Ok(("equilibrium_artifact.v7.json", "linearization_state.v6.json")),
+        (Some("equilibrium_artifact.v8"), Some("LinearizationState.v7")) =>
+            Ok(("equilibrium_artifact.v8.json", "linearization_state.v7.json")),
+        _ => Err(RunError {
+            message: "equilibrium_artifact_schema_pair_invalid: publication requires an explicit supported equilibrium/linearization pair".to_string(),
+        }),
+    }
 }

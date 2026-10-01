@@ -569,6 +569,40 @@ mod output_publication_tests {
     }
 
     #[test]
+    fn versioned_state_sidecars_remap_and_retain_sample_identity() {
+        for filename in [
+            "equilibrium_artifact.v7.json",
+            "linearization_state.v6.json",
+            "equilibrium_artifact.v8.json",
+            "linearization_state.v7.json",
+        ] {
+            let source = format!("eigen/metadata/{filename}");
+            let target = format!("eigen/metadata/sample_0007/{filename}");
+            assert_eq!(
+                remap_single_k_mode_artifact_path(&source, 7, &BTreeSet::from([3_u32])),
+                Some(target.clone())
+            );
+            let mut artifacts = vec![
+                AuxiliaryArtifact {
+                    relative_path: target.clone(),
+                    bytes: vec![17],
+                },
+                AuxiliaryArtifact {
+                    relative_path: format!("eigen/metadata/sample_0008/{filename}"),
+                    bytes: vec![18],
+                },
+            ];
+            retain_selected_eigen_path_mode_artifacts(
+                &mut artifacts,
+                &BTreeSet::from([SampleModeId::new(7, 3)]),
+            );
+            assert_eq!(artifacts.len(), 1);
+            assert_eq!(artifacts[0].relative_path, target);
+            assert_eq!(artifacts[0].bytes, vec![17]);
+        }
+    }
+
+    #[test]
     fn internal_tracking_requests_all_modes_without_public_path_selectors() {
         let outputs = vec![
             OutputIR::EigenMode {
@@ -1957,6 +1991,8 @@ pub(super) fn remap_single_k_mode_artifact_path(
     for state_name in [
         "equilibrium_artifact.v7.json",
         "linearization_state.v6.json",
+        "equilibrium_artifact.v8.json",
+        "linearization_state.v7.json",
     ] {
         if relative_path == format!("eigen/metadata/{state_name}") {
             return Some(format!("eigen/metadata/{sample_path}/{state_name}"));
