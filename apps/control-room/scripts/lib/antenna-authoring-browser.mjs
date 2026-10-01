@@ -29,6 +29,21 @@ export function assertAntennaScene(scene) {
   if (!Array.isArray(ports[0]?.branches) || ports[0].branches.length < 2) {
     throw new Error(`Antenna port ${portId} does not contain a signal/return branch pair.`);
   }
+  const branches = ports[0].branches;
+  const signal = branches.find((branch) => branch?.id === "signal");
+  const returnBranch = branches.find((branch) => branch?.id === "return");
+  if (
+    ports[0]?.schema_version !== "antenna_port_mode.v2" ||
+    branches.length !== 2 ||
+    signal?.signed_weight !== 1 ||
+    signal?.inlet_terminal_ref !== "signal_in" ||
+    signal?.outlet_terminal_ref !== "signal_out" ||
+    returnBranch?.signed_weight !== -1 ||
+    returnBranch?.inlet_terminal_ref !== "return_in" ||
+    returnBranch?.outlet_terminal_ref !== "return_out"
+  ) {
+    throw new Error(`Antenna port ${portId} does not match the balanced microstrip preset.`);
+  }
 
   const stages = sceneArray(scene, "antenna_field_solve_stages").filter(
     (stage) => stage?.source_object_id === objectId,

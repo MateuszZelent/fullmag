@@ -11,9 +11,13 @@ test("assertAntennaScene resolves the authored conductor composition", () => {
     objects: [{ id: "antenna-1", role: "antenna" }],
     current_transports: [{ name: "antenna-1:current" }],
     antenna_port_modes: [{
+      schema_version: "antenna_port_mode.v2",
       id: "antenna-1:port:common",
       source_object_id: "antenna-1",
-      branches: [{ id: "signal" }, { id: "return" }],
+      branches: [
+        { id: "signal", inlet_terminal_ref: "signal_in", outlet_terminal_ref: "signal_out", signed_weight: 1 },
+        { id: "return", inlet_terminal_ref: "return_in", outlet_terminal_ref: "return_out", signed_weight: -1 },
+      ],
       current_transport_id: "antenna-1:current",
     }],
     antenna_field_solve_stages: [{
@@ -50,9 +54,13 @@ test("assertAntennaScene rejects a stage without an H_ant_basis output", () => {
       assertAntennaScene({
         objects: [{ id: "antenna-1", role: "antenna" }],
         antenna_port_modes: [{
+          schema_version: "antenna_port_mode.v2",
           id: "port-1",
           source_object_id: "antenna-1",
-          branches: [{ id: "signal" }, { id: "return" }],
+          branches: [
+            { id: "signal", inlet_terminal_ref: "signal_in", outlet_terminal_ref: "signal_out", signed_weight: 1 },
+            { id: "return", inlet_terminal_ref: "return_in", outlet_terminal_ref: "return_out", signed_weight: -1 },
+          ],
           current_transport_id: "current-1",
         }],
         antenna_field_solve_stages: [{
@@ -64,5 +72,23 @@ test("assertAntennaScene rejects a stage without an H_ant_basis output", () => {
         current_transports: [{ id: "current-1" }],
       }),
     /H_ant_basis/,
+  );
+});
+
+test("assertAntennaScene rejects an unbalanced microstrip preset", () => {
+  assert.throws(
+    () => assertAntennaScene({
+      objects: [{ id: "antenna-1", role: "antenna" }],
+      antenna_port_modes: [{
+        schema_version: "antenna_port_mode.v2",
+        id: "port-1",
+        source_object_id: "antenna-1",
+        branches: [
+          { id: "signal", inlet_terminal_ref: "signal_in", outlet_terminal_ref: "signal_out", signed_weight: 1 },
+          { id: "return", inlet_terminal_ref: "return_in", outlet_terminal_ref: "return_out", signed_weight: 1 },
+        ],
+      }],
+    }),
+    /balanced microstrip preset/,
   );
 });
