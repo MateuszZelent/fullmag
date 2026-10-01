@@ -28,6 +28,24 @@ ukończone**.
 
 ## Następny krok diagnostyczny
 
+Analiza źródła MFEM 4.7 zawęża przyczynę: `BilinearForm::FormLinearSystem`
+wywołuje `EliminateVDofsInRHS`, które modyfikuje przekazany `rhs` w miejscu.
+W tym solve pierwotne $b=0$, lecz po eliminacji `rhs` nie musi już być zerowe.
+Dlatego wcześniejsze próby obliczające $KV-\texttt{rhs}$ **po**
+`FormLinearSystem` nie realizowały zadanej reakcji $KV-b$. Ponadto
+`FormSystemMatrix` eliminuje DOF Dirichleta w `mat`, więc zwykłe `Mult` po
+tej operacji nie używa już nieeliminowanego $K$. `FullMult` może odzyskać
+wkład macierzy eliminowanej, ale samo nie naprawia podmienionego $b$.
+To jest diagnoza semantyki API, nie zaliczony wynik liczbowy.
+
+W kolejnej próbie należy zachować niezmienione $b$ oraz operator $K$ przed
+`FormLinearSystem`, a potem osobno sprawdzić ich wymiary i reakcje. Dla
+obecnego jednorodnego RHS minimalny test porównawczy może odejmować jawne
+zero; implementacja produkcyjna nie może jednak zakładać $b=0$ bez
+zakodowania tego ograniczenia w kontrakcie. Do czasu odwołania zakazu
+kompilowania testów jednostkowych z `AGENTS.md` nie uruchamiać natywnego
+kontraktu ani nie oznaczać T05 jako ukończonego.
+
 Przed kolejną zmianą produkcyjną wypisać w dedykowanym teście: atrybuty
 obu końców pręta, liczbę DOF w każdym terminalu, surowe sumy residualu
 `Mult`/`FullMult`, wynik historycznego `boundary_current_a` oraz analityczne
@@ -50,4 +68,4 @@ odwrócenia znaku, gauge i rozłącznych składowych, a dopiero potem nową
 wersję ABI oraz terminal response matrix.
 
 Źródło semantyki eliminacji MFEM 4.7:
-https://github.com/mfem/mfem/blob/v4.7/fem/bilinearform.hpp
+https://github.com/mfem/mfem/blob/v4.7/fem/bilinearform.cpp
