@@ -3,12 +3,15 @@
 
 ## S10/S12 — zatwierdzona migracja canonical/raw Ku, 2026-10-01
 
-- Jawna zgoda użytkownika na equilibrium_artifact.v8 / LinearizationState.v7. Ku-free pozostaje v7/v6; historyczne dane i #188 nie są migrowane.
-- Producenci/loader Rust, material_snapshot_id, wersjonowane nazwy i manifesty single-/multi-k zmienione. Raw provenance ma zakres materialization_plan, provided source nieprzepisywany. Publiczny Ku guard zachowany.
-- Odbiorniki Python/COMSOL i bindingi zaktualizowane;20nowychregresji+29COMSOL/payload+9verifierPASS; dwa odbiorniki runtime/parity przeszły44lekkie regresje.10plikówRust parserPASS; nativeunitniekompilowane. Mapa źródeł i publicexamplesPASS. Review bezP1;P2cichegofallbackuschematów naprawione; końcowyreviewdelty bezP1/P2. Bramka COMSOL49testów+54podprzypadkiPASS;łącznie151lekkichtestów+54podprzypadkiPASS. Commit/push/build bieżącej migracji pozostają do wykonania.
-- Audyt: docs/audits/2026-10-01-ku-canonical-material-artifact-migration.md.
-- #188 nadalGamma base4/50, kontener7df4be7c5ace running; nie daje dowodu nowej migracji ani zaakceptowanej częstotliwości. Runner healthy/accepting; około42,6GiBwolnego przy kontroli.
-- CałyS00–S12 pozostaje otwarty: signed DE/BV, zbieżność, COMSOL A1, interakcje, waveguide, GPU, browser i integracja.
+- Jawna zgoda użytkownika na equilibrium_artifact.v8 / LinearizationState.v7. Ku-free zachowuje v7/v6; historyczne dane i kapsuła #188 nie są przepisywane.
+- Zaktualizowano producentów i loader Rust, material_snapshot_id, nazwy plików i manifesty single-/multi-k oraz odbiorniki Python/COMSOL. Raw provenance ma zakres materialization_plan; provided source zachowany. Publiczny Ku guard nadal aktywny.
+- 151 lekkich testów +54 podprzypadki PASS; 10 plików Rust parser PASS, mapa źródeł i public examples PASS. Native unit tests niekompilowane. Review bez P1/P2 po naprawieniu cichego fallbacku wersji podczas publikacji.
+- Commit/push: 799be85d3e1c40ee1d7790797d6f81536e9d9ce9; zgodność HEAD/remote i czysty worktree potwierdzone.
+- Managed runtime-v2 build tego SHA nie został utworzony: klient exit1 Storage is busy, lease worktree eigensolve-dispersion-plan-20260-c5dfad6d7f548079 zajęty przez #188. Runner healthy/accepting, około42,6GiB wolnego. Nie obchodzono lease i nie przydzielano innego targetu. Po zwolnieniu lease ponowić request-key ku-canonical-artifact-v8-799be85d3e1c40ee z tym samym SHA.
+- Audyt: docs/audits/2026-10-01-ku-canonical-material-artifact-migration.md. Runtime migracji i bramka Ku pozostają NOT VERIFIED.
+- #188 nadal Γ base4/50; kontener7df4be7c5ace running. Brak terminalnej nowej częstotliwości. Kapsuła #188 nie zawiera obecnej migracji.
+- Cały S00–S12 pozostaje otwarty: signed DE/BV, zbieżność, COMSOL A1, interakcje, waveguide, GPU, browser i integracja.
+
 
 ## S10/S12 — zerowe H_eff, kolejny przyrost źródeł
 

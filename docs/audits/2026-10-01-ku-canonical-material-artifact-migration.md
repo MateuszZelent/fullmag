@@ -41,3 +41,13 @@ Publiczny guard Ku pozostaje aktywny. Nie wolno uznać migracji za walidację mo
 #188: build succeeded, ale trwający Γ używa wcześniejszej kapsuły b2edf2fbc0295c83f6d768ad8bd3391904017c5f871d0244afe15c4b3a1a4a46. Nie zawiera tej migracji. Kontroler90201 i kontener7df4be7c5ace nadal aktywne; ostatnia kontrola base4/50, bez terminalnej nowej częstotliwości. Nie restartowano ani nie usuwano danych.
 
 Następnie: końcowe review i testy migracji -> commit/push -> managed runtime-v2 build -> wersjonowane artefakty runtime -> odrębny dowód Ku przed zdjęciem guarda. Równolegle kontynuacja #188, signed DE/BV i zbieżność; COMSOL A1, inne interakcje, waveguide, GPU, browser i integracja S00–S12 pozostają otwarte.
+
+## Commit/push i blokada buildu
+
+Migracja została zapisana i wysłana jako `799be85d3e1c40ee1d7790797d6f81536e9d9ce9`. HEAD i remote branch sprawdzone i zgodne; worktree czysty po commicie.
+
+Próba `local_runner_cli.py submit --operation build --profile fem-cpu-slepc-runtime-v2 --source commit --ref 799be85d3e1c40ee1d7790797d6f81536e9d9ce9 --request-key ku-canonical-artifact-v8-799be85d3e1c40ee` zakończona exit1: `Storage is busy: eigensolve-dispersion-plan-20260-c5dfad6d7f548079. Reuse the running task or wait; do not allocate a random target.`
+
+Nie powstał nowy job ani receipt tej migracji. Runner jest healthy/accepting, profil runtime-only dostępny, wolne około42,6GiB. Blokadą jest lease aktywnego wykonania #188, a nie brak profilu lub miejsca. Nie obejściowo zmieniono celu storage, nie restartowano koordynatora i nie przerwano Γ. Rejestr worktree także podlega temu lease; checkpoint pozostaje w wersjonowanym planie.
+
+Następny krok po zwolnieniu lease: ponowić to samo zlecenie z pełnym SHA i request-key; zweryfikować terminalny receipt, runtime_only=true i brak unit_targets. Następnie osobne bramki artefaktów i Ku. Cały cel S00–S12 nie jest zamknięty.
