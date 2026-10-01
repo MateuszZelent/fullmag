@@ -24,6 +24,7 @@ pub mod eval;
 pub mod fem_state_field;
 pub mod fem_state_snapshot_receipt;
 pub mod fem_local_node_map;
+pub mod fem_native_indexed_geometry;
 pub mod id;
 pub mod provider;
 pub mod reduction;

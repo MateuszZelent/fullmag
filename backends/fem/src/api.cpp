@@ -24,6 +24,7 @@
 #include "cpu/mfem/runtime/mfem_host_access.hpp"
 #include "cpu/mfem/runtime/mfem_device.hpp"
 #include "cpu/mfem/runtime/mfem_mesh_builder.hpp"
+#include "cpu/mfem/runtime/indexed_geometry.hpp"
 #include "cpu/mfem/runtime/runtime_build_info.hpp"
 #include "cpu/mfem/runtime/snapshot.hpp"
 #include "cpu/mfem/runtime/stage_completion.hpp"
@@ -95,6 +96,8 @@ constexpr const char *kUnavailableMessage =
 #if FULLMAG_HAS_MFEM_STACK
 
 constexpr std::uint64_t kMaxLocalNodeMapNodes = 4ull * 1024ull * 1024ull;
+constexpr std::uint64_t kMaxLiveGeometryChunk = 4096ull;
+constexpr std::uint64_t kLiveCellRecordWidth = 9ull;
 
 struct LocalNodeMapSnapshot {
     std::uint64_t local_node_count = 0;
@@ -279,6 +282,14 @@ fullmag_fem_local_node_map_v1 local_node_map_metadata(const LocalNodeMapSnapshot
     metadata.core_periodic_class_count = snapshot.core_periodic_class_count;
     metadata.core_periodic_map_revision = snapshot.core_periodic_map_revision;
     return metadata;
+}
+
+template <typename T>
+bool valid_geometry_output_span(const T *pointer, std::uint64_t length)
+{
+    const auto address = reinterpret_cast<std::uintptr_t>(pointer);
+    return pointer != nullptr && address % alignof(T) == 0u &&
+        length <= (std::numeric_limits<std::uintptr_t>::max() - address) / sizeof(T);
 }
 
 #endif
@@ -5749,6 +5760,144 @@ int fullmag_fem_backend_copy_local_node_map_v1(
     (void)local_to_core_class_len;
     (void)class_representatives;
     (void)class_representatives_len;
+    fullmag_fem_set_handle_error(handle, kUnavailableMessage);
+    return FULLMAG_FEM_ERR_UNAVAILABLE;
+#endif
+}
+
+int fullmag_fem_backend_copy_local_node_geometry_v1(
+    fullmag_fem_backend *handle,
+    uint64_t expected_total_nodes,
+    uint64_t expected_total_cells,
+    uint64_t first_node,
+    uint64_t node_count,
+    double *out_nodes_xyz,
+    uint64_t out_nodes_xyz_len)
+{
+    if (handle == nullptr) {
+        fullmag_fem_set_global_error(
+            "fullmag_fem_backend_copy_local_node_geometry_v1 received null handle");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+
+#if FULLMAG_HAS_MFEM_STACK
+    try {
+        if (node_count == 0u || node_count > kMaxLiveGeometryChunk ||
+            node_count > std::numeric_limits<uint64_t>::max() / 3u ||
+            out_nodes_xyz == nullptr ||
+            !valid_geometry_output_span(out_nodes_xyz, out_nodes_xyz_len) ||
+            out_nodes_xyz_len != node_count * 3u) {
+            fullmag_fem_set_handle_error(
+                handle,
+                "fullmag_fem_backend_copy_local_node_geometry_v1 received invalid output range or buffer");
+            return FULLMAG_FEM_ERR_INVALID;
+        }
+        std::vector<double> chunk;
+        std::string error;
+        if (!fullmag::fem::collect_live_node_geometry_chunk(
+                handle->context,
+                expected_total_nodes,
+                expected_total_cells,
+                first_node,
+                node_count,
+                chunk,
+                error)) {
+            fullmag_fem_set_handle_error(
+                handle,
+                "live MFEM node geometry rejected: " + error);
+            return FULLMAG_FEM_ERR_INVALID;
+        }
+        std::copy(chunk.begin(), chunk.end(), out_nodes_xyz);
+        handle->last_error.clear();
+        fullmag_fem_clear_global_error();
+        return FULLMAG_FEM_OK;
+    } catch (const std::exception &ex) {
+        fullmag_fem_set_handle_error(
+            handle,
+            std::string("fullmag_fem_backend_copy_local_node_geometry_v1 failed: ") + ex.what());
+        return FULLMAG_FEM_ERR_INTERNAL;
+    } catch (...) {
+        fullmag_fem_set_handle_error(
+            handle,
+            "fullmag_fem_backend_copy_local_node_geometry_v1 failed with an unknown exception");
+        return FULLMAG_FEM_ERR_INTERNAL;
+    }
+#else
+    (void)expected_total_nodes;
+    (void)expected_total_cells;
+    (void)first_node;
+    (void)node_count;
+    (void)out_nodes_xyz;
+    (void)out_nodes_xyz_len;
+    fullmag_fem_set_handle_error(handle, kUnavailableMessage);
+    return FULLMAG_FEM_ERR_UNAVAILABLE;
+#endif
+}
+
+int fullmag_fem_backend_copy_local_cell_geometry_v1(
+    fullmag_fem_backend *handle,
+    uint64_t expected_total_nodes,
+    uint64_t expected_total_cells,
+    uint64_t first_cell,
+    uint64_t cell_count,
+    uint32_t *out_cells,
+    uint64_t out_cells_len)
+{
+    if (handle == nullptr) {
+        fullmag_fem_set_global_error(
+            "fullmag_fem_backend_copy_local_cell_geometry_v1 received null handle");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+
+#if FULLMAG_HAS_MFEM_STACK
+    try {
+        if (cell_count == 0u || cell_count > kMaxLiveGeometryChunk ||
+            cell_count > std::numeric_limits<uint64_t>::max() / kLiveCellRecordWidth ||
+            out_cells == nullptr ||
+            !valid_geometry_output_span(out_cells, out_cells_len) ||
+            out_cells_len != cell_count * kLiveCellRecordWidth) {
+            fullmag_fem_set_handle_error(
+                handle,
+                "fullmag_fem_backend_copy_local_cell_geometry_v1 received invalid output range or buffer");
+            return FULLMAG_FEM_ERR_INVALID;
+        }
+        std::vector<uint32_t> chunk;
+        std::string error;
+        if (!fullmag::fem::collect_live_cell_geometry_chunk(
+                handle->context,
+                expected_total_nodes,
+                expected_total_cells,
+                first_cell,
+                cell_count,
+                chunk,
+                error)) {
+            fullmag_fem_set_handle_error(
+                handle,
+                "live MFEM cell geometry rejected: " + error);
+            return FULLMAG_FEM_ERR_INVALID;
+        }
+        std::copy(chunk.begin(), chunk.end(), out_cells);
+        handle->last_error.clear();
+        fullmag_fem_clear_global_error();
+        return FULLMAG_FEM_OK;
+    } catch (const std::exception &ex) {
+        fullmag_fem_set_handle_error(
+            handle,
+            std::string("fullmag_fem_backend_copy_local_cell_geometry_v1 failed: ") + ex.what());
+        return FULLMAG_FEM_ERR_INTERNAL;
+    } catch (...) {
+        fullmag_fem_set_handle_error(
+            handle,
+            "fullmag_fem_backend_copy_local_cell_geometry_v1 failed with an unknown exception");
+        return FULLMAG_FEM_ERR_INTERNAL;
+    }
+#else
+    (void)expected_total_nodes;
+    (void)expected_total_cells;
+    (void)first_cell;
+    (void)cell_count;
+    (void)out_cells;
+    (void)out_cells_len;
     fullmag_fem_set_handle_error(handle, kUnavailableMessage);
     return FULLMAG_FEM_ERR_UNAVAILABLE;
 #endif

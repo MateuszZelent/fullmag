@@ -27,6 +27,24 @@ const _: () = {
 };
 
 extern "C" {
+    pub fn fullmag_fem_backend_copy_local_node_geometry_v1(
+        handle: *mut fullmag_fem_backend,
+        expected_total_nodes: u64,
+        expected_total_cells: u64,
+        first: u64,
+        count: u64,
+        out_xyz: *mut f64,
+        out_len: u64,
+    ) -> i32;
+    pub fn fullmag_fem_backend_copy_local_cell_geometry_v1(
+        handle: *mut fullmag_fem_backend,
+        expected_total_nodes: u64,
+        expected_total_cells: u64,
+        first: u64,
+        count: u64,
+        out_records: *mut u32,
+        out_len: u64,
+    ) -> i32;
     pub fn fullmag_fem_backend_snapshot_local_node_map_v1(
         handle: *mut fullmag_fem_backend,
         out_map: *mut fullmag_fem_local_node_map_v1,

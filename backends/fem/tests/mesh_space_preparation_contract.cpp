@@ -1,13 +1,16 @@
 #include "fullmag_fem.h"
+#include "backend_handle.hpp"
 #include "core/fem_mesh.hpp"
 #include "cpu/mfem/runtime/mfem_mesh_builder.hpp"
 
 #include <mfem.hpp>
 
 #include <array>
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
+#include <limits>
 
 namespace {
 
@@ -139,6 +142,53 @@ int main()
         wrong_extent.n_nodes = 3u;
         check(!fullmag::fem::verify_mfem_local_node_ordering(wrong_extent, scalar, ordering_error),
             "matching space must retain canonical vertex extent");
+
+        // Cold ABI fixture borrows stack-owned MFEM handles; no solver runs.
+        fullmag_fem_backend geometry_handle{};
+        geometry_handle.context.mesh = imported;
+        geometry_handle.context.base_plan.fe_order = 1u;
+        geometry_handle.context.mfem_context.ready = true;
+        geometry_handle.context.mfem_context.mesh = realized_mesh.get();
+        geometry_handle.context.mfem_context.fes = &scalar;
+        std::array<double, 12> observed_nodes{};
+        std::array<uint32_t, 9> observed_cell{};
+        check(fullmag_fem_backend_copy_local_node_geometry_v1(
+            &geometry_handle, 4, 1, 0, 4, observed_nodes.data(), observed_nodes.size()) == FULLMAG_FEM_OK,
+            "node ABI reads actual scalar P1 geometry");
+        check(std::equal(observed_nodes.begin(), observed_nodes.end(), imported.nodes_xyz.begin()),
+            "actual MFEM coordinates retain canonical order");
+        check(fullmag_fem_backend_copy_local_cell_geometry_v1(
+            &geometry_handle, 4, 1, 0, 1, observed_cell.data(), observed_cell.size()) == FULLMAG_FEM_OK,
+            "cell ABI reads actual geometry and ordered connectivity");
+        check(observed_cell == std::array<uint32_t, 9>{{1, 0, 1, 2, 3, 0, 0, 0, 0}},
+            "Tet4 ABI has exact vertices and zero unused slots");
+        observed_nodes.fill(91.);
+        realized_mesh->GetVertex(3)[0] = std::numeric_limits<double>::quiet_NaN();
+        check(fullmag_fem_backend_copy_local_node_geometry_v1(
+            &geometry_handle, 4, 1, 0, 4, observed_nodes.data(), observed_nodes.size()) == FULLMAG_FEM_ERR_INVALID,
+            "invalid later node rejects the entire ABI chunk");
+        check(std::all_of(observed_nodes.begin(), observed_nodes.end(), [](double value) { return value == 91.; }),
+            "failed later node leaves every caller output value untouched");
+        realized_mesh->GetVertex(3)[0] = imported.nodes_xyz[9];
+        realized_mesh->GetVertex(0)[0] = -0.;
+        check(fullmag_fem_backend_copy_local_node_geometry_v1(
+            &geometry_handle, 4, 1, 0, 4, observed_nodes.data(), observed_nodes.size()) == FULLMAG_FEM_ERR_INVALID,
+            "signed zero mismatch cannot masquerade as exact native coordinates");
+        realized_mesh->GetVertex(0)[0] = imported.nodes_xyz[0];
+        observed_cell.fill(91u);
+        geometry_handle.context.mesh.cell_nodes[1] = imported.cell_nodes[2];
+        check(fullmag_fem_backend_copy_local_cell_geometry_v1(
+            &geometry_handle, 4, 1, 0, 1, observed_cell.data(), observed_cell.size()) == FULLMAG_FEM_ERR_INVALID,
+            "changed canonical connectivity rejects observed cell chunk");
+        check(std::all_of(observed_cell.begin(), observed_cell.end(), [](uint32_t value) { return value == 91u; }),
+            "invalid cell leaves every caller output value untouched");
+        check(fullmag_fem_backend_copy_local_node_geometry_v1(
+            &geometry_handle, 4, 1, 0, 4097, observed_nodes.data(), observed_nodes.size()) == FULLMAG_FEM_ERR_INVALID,
+            "native geometry chunk cannot exceed its declared bound");
+        // The fixture never transfers ownership to native teardown.
+        geometry_handle.context.mfem_context.ready = false;
+        geometry_handle.context.mfem_context.mesh = nullptr;
+        geometry_handle.context.mfem_context.fes = nullptr;
     }
 #endif
     check(evidence.quality_sample_count > 0u && evidence.invalid_cell_count == 0u &&

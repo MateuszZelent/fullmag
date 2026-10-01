@@ -15,6 +15,11 @@ dlatego nie podnosi procentów P3/P5.
 
 ## Dokumenty finalne
 
+Checkpoint 01.10.2026: [P6-59 — projekcja rzeczywistej geometrii MFEM](p6/59-native-indexed-geometry-projection.md)
+dodaje bounded native node/cell export i digest porównywany z accepted oraz
+saved MeshIR. Native compilation/runtime nadal otwarte; P6 około 52%,
+cały plan około 49%.
+
 Checkpoint 01.10.2026: [P6-58 — dokładne powiązanie mapy z geometrią](p6/58-exact-saved-map-geometry-binding.md)
 sprawdza historyczny geometry owner i pełną core periodic partition podczas
 odczytu mapped snapshotu. Live native geometry i renderer nadal otwarte;

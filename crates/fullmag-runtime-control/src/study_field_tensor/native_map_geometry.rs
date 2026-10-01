@@ -18,6 +18,7 @@ pub(super) fn validate_saved_native_map_geometry(
     pinned: &PinnedSolutionTensorSource,
     tensor: &TensorDescriptor,
     map: &FemLocalNodeIndexMap,
+    native_indexed_geometry_sha256: Option<&str>,
 ) -> Result<()> {
     let member = owner
         .members
@@ -42,11 +43,26 @@ pub(super) fn validate_saved_native_map_geometry(
     let manifest = selected.context("saved native map has no exact geometry binding")?;
     let geometry = read_saved_fem_p1_geometry(store.cas(), &manifest.geometry)?;
     validate_saved_geometry_tensor(&geometry, tensor)?;
+    if let Some(expected) = native_indexed_geometry_sha256 {
+        validate_indexed_geometry_digest(expected, &geometry.mesh)?;
+    }
     validate_core_periodic_map(
         map,
         geometry.mesh.nodes.len(),
         &geometry.mesh.periodic_node_pairs,
     )
+}
+
+fn validate_indexed_geometry_digest(expected: &str, mesh: &fullmag_ir::MeshIR) -> Result<()> {
+    let actual = fullmag_ir::native_indexed_geometry::fem_native_indexed_geometry_sha256(
+        &mesh.nodes,
+        &mesh.cells,
+    )
+    .map_err(anyhow::Error::msg)?;
+    if actual != expected {
+        bail!("saved canonical geometry differs from the native indexed geometry snapshot");
+    }
+    Ok(())
 }
 
 fn root(parent: &mut [u32], node: u32) -> u32 {
@@ -188,5 +204,27 @@ mod tests {
         let original = map(vec![0, 1], vec![0, 1], false);
         validate_core_periodic_map(&original, 2, &[]).unwrap();
         assert!(validate_core_periodic_map(&map(vec![0, 0], vec![0], true), 2, &[]).is_err());
+    }
+
+    #[test]
+    fn observed_indexed_projection_rejects_saved_geometry_changes() {
+        let mut mesh = fullmag_ir::MeshIR::from_legacy_tet4(
+            "indexed".into(),
+            vec![[0., 0., 0.], [1., 0., 0.], [0., 1., 0.], [0., 0., 1.]],
+            vec![[0, 1, 2, 3]],
+            vec![1],
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+            std::collections::HashMap::new(),
+        );
+        let expected = "sha256:46fbbd2c176d321c10ca26d7f9297fb1381d086a9f27c368151867462925c578";
+        validate_indexed_geometry_digest(expected, &mesh).unwrap();
+        mesh.nodes[0][0] = -0.;
+        assert!(validate_indexed_geometry_digest(expected, &mesh).is_err());
+        mesh.nodes[0][0] = 0.;
+        mesh.cells.nodes.swap(1, 2);
+        assert!(validate_indexed_geometry_digest(expected, &mesh).is_err());
     }
 }

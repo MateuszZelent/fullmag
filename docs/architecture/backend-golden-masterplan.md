@@ -214,6 +214,11 @@ Reguły dla tego drzewa:
   materiałów, field buffers, własność stanu i natywne kontrakty backend-neutral,
   żyją w `backends/fem/core` albo `backends/fem/include`.
 - Realizacja FEM CPU MFEM żyje pod `backends/fem/cpu/mfem`.
+- Zimny eksport actual MFEM node/cell projection należy do
+  `backends/fem/cpu/mfem/runtime/indexed_geometry.*`. Fasada C ABI waliduje
+  caller buffers i przekazuje błędy; runner haszuje bounded chunki,
+  porównuje accepted MeshIR i publikuje mały receipt. Nie przenosi to
+  własności numeryki do Rust ani nie kwalifikuje CPU/GPU przez sam digest.
 - Workflow steady charge/spin transportu FEM CPU należy do
   `backends/fem/cpu/mfem/transport`. Runner może walidować deskryptor,
   wywołać wersjonowane ABI oraz opublikować quantity/provenance, ale nie może

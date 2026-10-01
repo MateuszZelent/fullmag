@@ -66,3 +66,18 @@ fn unknown_fields_missing_map_and_invalid_native_counts_fail_closed() {
     assert!(parse_fem_snapshot_receipt(&serde_json::to_vec(&raw).unwrap()).is_err());
     assert!(parse_fem_snapshot_receipt(&vec![b' '; MAX_FEM_SNAPSHOT_RECEIPT_BYTES + 1]).is_err());
 }
+
+#[test]
+fn indexed_geometry_receipt_requires_canonical_digest_and_bound_node_map() {
+    let mut receipt =
+        FemLocalNodeSnapshotReceipt::capture(0, 0., 0., &[[1., 0., 0.]; 2], representation())
+            .unwrap();
+    receipt.native_indexed_geometry_sha256 = Some(format!("sha256:{}", "a".repeat(64)));
+    assert!(receipt.validate(2).is_err());
+    receipt.native_node_map_sha256 = Some(format!("sha256:{}", "b".repeat(64)));
+    receipt.validate(2).unwrap();
+    let wire = serde_json::to_vec(&receipt).unwrap();
+    assert_eq!(parse_fem_snapshot_receipt(&wire).unwrap(), receipt);
+    receipt.native_indexed_geometry_sha256 = Some("unverified".into());
+    assert!(receipt.validate(2).is_err());
+}

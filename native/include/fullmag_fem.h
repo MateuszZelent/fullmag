@@ -3445,6 +3445,43 @@ int fullmag_fem_backend_copy_local_node_map_v1(
     uint64_t class_representatives_len
 );
 
+/*
+ * Copy a bounded chunk of the actual finalized MFEM vertex coordinates from
+ * one live backend handle.  The caller supplies the expected complete node
+ * and cell counts, a node range, and an output length in doubles (exactly
+ * node_count * 3).  The producer validates the live scalar H1/P1 space and
+ * the coordinates against the handle's canonical Context before writing.
+ * This is a cold terminal snapshot API: callers must exclude concurrent
+ * solver/context mutation and must consume every chunk before publishing a
+ * digest.  It exposes a projection, not a complete MeshIR/v3 artifact.
+ */
+int fullmag_fem_backend_copy_local_node_geometry_v1(
+    fullmag_fem_backend *handle,
+    uint64_t expected_total_nodes,
+    uint64_t expected_total_cells,
+    uint64_t first_node,
+    uint64_t node_count,
+    double *out_nodes_xyz,
+    uint64_t out_nodes_xyz_len
+);
+
+/*
+ * Copy a bounded chunk of actual MFEM cell geometry/connectivity.  Each cell
+ * occupies nine u32 values: the stable Fullmag cell type followed by eight
+ * vertex slots; unused slots are zero.  The output length is exactly
+ * cell_count * 9.  The same cold terminal and caller-owned snapshot rules as
+ * the node projection apply.
+ */
+int fullmag_fem_backend_copy_local_cell_geometry_v1(
+    fullmag_fem_backend *handle,
+    uint64_t expected_total_nodes,
+    uint64_t expected_total_cells,
+    uint64_t first_cell,
+    uint64_t cell_count,
+    uint32_t *out_cells,
+    uint64_t out_cells_len
+);
+
 int fullmag_fem_backend_solver_attempt_count_v1(
     fullmag_fem_backend *handle,
     uint64_t *out_count

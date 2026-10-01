@@ -7,6 +7,10 @@ bounded data plane oraz jeden frontend analityczny oparty o pinned source.
 
 ## Przyrosty
 
+[P6-59 — projekcja rzeczywistej geometrii MFEM](59-native-indexed-geometry-projection.md)
+— bounded actual node/cell ABI, inkrementalny digest oraz porównanie
+z accepted i saved MeshIR; native/runtime qualification otwarte.
+
 [P6-58 — dokładne powiązanie mapy z geometrią](58-exact-saved-map-geometry-binding.md)
 — exact historical binding, tensor semantics i pełna canonical periodic
 partition; status native representation pozostaje `not_verified`.

@@ -14,6 +14,8 @@ mod eigen;
 mod frequency_domain;
 mod plan;
 #[cfg(feature = "fem-gpu")]
+mod indexed_geometry;
+#[cfg(feature = "fem-gpu")]
 mod runtime_info;
 #[cfg(feature = "fem-gpu")]
 mod stage_coupled;

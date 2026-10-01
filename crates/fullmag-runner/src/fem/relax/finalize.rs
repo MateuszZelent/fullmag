@@ -620,6 +620,20 @@ pub(crate) fn finalize_native_fem_relaxation(
     final_node_map
         .validate_representation(&recomputed_native_equilibrium.representation)
         .map_err(|message| RunError { message })?;
+    let native_indexed_geometry = backend
+        .indexed_geometry_sha256(plan.mesh.nodes.len() as u64, plan.mesh.cells.len() as u64)?;
+    let expected_indexed_geometry =
+        fullmag_ir::native_indexed_geometry::fem_native_indexed_geometry_sha256(
+            &plan.mesh.nodes,
+            &plan.mesh.cells,
+        )
+        .map_err(|message| RunError { message })?;
+    if native_indexed_geometry != expected_indexed_geometry {
+        return Err(RunError {
+            message: "live native FEM indexed geometry differs from the accepted MeshIR projection"
+                .into(),
+        });
+    }
     let mut final_snapshot_receipt =
         fullmag_quantities::fem_state_snapshot_receipt::FemLocalNodeSnapshotReceipt::capture(
             final_stats.step,
@@ -634,6 +648,7 @@ pub(crate) fn finalize_native_fem_relaxation(
             .content_sha256()
             .map_err(|message| RunError { message })?,
     );
+    final_snapshot_receipt.native_indexed_geometry_sha256 = Some(native_indexed_geometry);
     let final_magnetization = recomputed_native_equilibrium.magnetization;
     let certified_fem_equilibrium_fields = recomputed_native_equilibrium.fields;
     finalization_field_copy_wall_time_ns =

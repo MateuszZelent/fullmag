@@ -24,6 +24,10 @@ pub struct FemLocalNodeSnapshotReceipt {
     pub representation: FemRepresentationReceipt,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub native_node_map_sha256: Option<String>,
+    /// Node/cell projection observed from the same exclusively owned handle.
+    /// Does not include markers/facets or certify runtime/scientific validity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_indexed_geometry_sha256: Option<String>,
 }
 
 impl FemLocalNodeSnapshotReceipt {
@@ -59,6 +63,7 @@ impl FemLocalNodeSnapshotReceipt {
             values_sha256: local_node_values_sha256(values)?,
             representation,
             native_node_map_sha256: None,
+            native_indexed_geometry_sha256: None,
         };
         receipt.validate(values.len())?;
         Ok(receipt)
@@ -72,6 +77,12 @@ impl FemLocalNodeSnapshotReceipt {
                 .native_node_map_sha256
                 .as_ref()
                 .is_some_and(|hash| !is_canonical_sha256(hash))
+            || self
+                .native_indexed_geometry_sha256
+                .as_ref()
+                .is_some_and(|hash| {
+                    !is_canonical_sha256(hash) || self.native_node_map_sha256.is_none()
+                })
             || !self.snapshot_time_s.is_finite()
             || self.snapshot_time_s < 0.0
             || !self.snapshot_solver_dt_s.is_finite()

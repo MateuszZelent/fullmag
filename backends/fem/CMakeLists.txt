@@ -160,6 +160,7 @@ set(FEM_SOURCES
     gpu/cuda/runtime/execution_receipt.cpp
     gpu/cuda/runtime/performance_counters.cpp
     cpu/mfem/runtime/interrupt.cpp
+    cpu/mfem/runtime/indexed_geometry.cpp
     cpu/mfem/runtime/mfem_context.cpp
     cpu/mfem/runtime/mfem_device.cpp
     cpu/mfem/runtime/runtime_build_info.cpp
