@@ -13,19 +13,27 @@ opisują historię; dawne `running/live/queued` nie są aktualnym stanem procesu
   Otwarte: non-shared identity, provenance importu, modal identity i pełny replay.
   Focused review wykrył ponadto trzy P1 publikacji: indeks multi-k stale=0,
   ścieżki state sprzed przeniesienia oraz brak plural arrays single-k.
-  Naprawa tych trzech błędów jest w toku; nie są oznaczone jako ukończone.
+  Naprawy tych trzech błędów są obecne w źródłach i przechodzą niezależne
+  review: realny indeks i finalne ścieżki trafiają do identity przed podpisaniem,
+  single-k publikuje komplet ośmiu tablic. Runtime pozostaje NOT VERIFIED.
+  Kolejne review: poprawiono cztery błędne nazwy parametrów blokujące
+  kompilację; trwa utwardzenie kompletności tablic i digestów per próbka.
+  Nowy replay pól wymaga rzeczywistej topologii do wyliczenia fingerprintu,
+  a nie samego zadeklarowanego digestu. Ta luka jest naprawiana przed publikacją.
   Python sprawdza teraz pięć exact preimage materiału/statyki/boundary/raw
   po pełnym own-identity replay. Focused 59 i główny verifier 213 PASS.
   Poprawiono leksykalne ujemne zero, zakres deklaracji i regresje airbox/PBC;
   te kontrole nie certyfikują jeszcze pól, operatora ani źródła.
 - MFEM CPU 4.10.0 jest zbudowany i odczytany z rzeczywistej biblioteki. Build
-  Fullmaga #193 (`19e798d5ff07454db64c90e63ba4f3a3`) rozpoczął running, źródło
-  `e78a25bac0f95c1190821524545803e4311b8ef9`. Nie zawiera nowszych przyrostów.
-  Kontener `463764a54084782448cea6a6c43743ce9da046a38939dda3d637391b18418061`
-  jest przypięty do obrazu MFEM4.10 `8a508319a68c4116da81b745fdd1b084015b665d92b36b2241e1e245b5febf89`.
-  Sprawdzono aktywne cargo/CMake/gmake/C++ i rzeczywiste logi native-build;
-  nie jest to sam zapis statusu kolejki. Uruchomiono jeden obserwator serii
-  `thickness`, session `42033`, który czeka na sukces tego samego joba.
+  Fullmaga #193 (`19e798d5ff07454db64c90e63ba4f3a3`) zakończył się `succeeded`,
+  źródło `e78a25bac0f95c1190821524545803e4311b8ef9`. Nie zawiera nowszych przyrostów.
+  Receipt zawiera 14 artefaktów. Atestacja CMake `pass` wskazuje faktyczny
+  `libmfem.so.4.10.0`, SHA256 `89dfb92bea5c9019744ef8802238aa259f7689bfb3978a8d02976865801b86ae`.
+  Obraz MFEM4.10: `8a508319a68c4116da81b745fdd1b084015b665d92b36b2241e1e245b5febf89`.
+  Niezależny dry-run wrappera walidującego receipt/źródło zakończył się exit0.
+  Jeden obserwator serii `thickness`, session `42033`, przeszedł do Γ t3.
+  Kontener solvera `21c61a91ee6f` jest aktywny; log pokazuje podokno 3/50.
+  Nie ma jeszcze terminalnego wyniku częstotliwości ani kwalifikacji residualu.
   Konfiguracja: `storage/runs/eigensolve-dispersion-plan-20260-c5dfad6d7f548079/scientific-batches/nonzero-k-validation/19e798d5ff07454db64c90e63ba4f3a3/controller-config.json`.
   Przypięty model i runtime mają SHA `e78a25bac0f95c1190821524545803e4311b8ef9`:
   Γ t3, DE/BV k25 t3/t6/t9. Wrapper sprawdza receipt/hash/image i heavy lease,
