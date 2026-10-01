@@ -1812,13 +1812,20 @@
       "path": "scripts/check_fem_schur_printf_contract.py",
       "symbol": "check_source",
       "responsibility": "Reject literal variadic diagnostic argument-count mismatches without native unit compilation.",
-      "evidence_status": "26 calls checked; source-only"
+      "evidence_status": "27 calls checked; source-only"
     },
     {
       "id": "source-k0-bounded-krylov-window-regression",
       "path": "backends/fem/tests/frequency_domain/poisson_airbox_modal_eigen_slepc_test.cpp",
       "symbol": "void FrequencyWindowDoesNotRetryWhenOnlyTheGlobalRequestIsSaturated",
       "responsibility": "Check explicit ncv bounds and local retry evidence; native compilation/execution pending."
+    },
+    {
+      "id": "source-k0-failed-eps-counters-regression",
+      "path": "backends/fem/tests/frequency_domain/poisson_airbox_modal_eigen_slepc_test.cpp",
+      "symbol": "void PreservesFailedSchurEpsCountersWithoutPublishingModes",
+      "responsibility": "Verify performed EPS/Schur/Poisson work survives a failed solve without stale or partial published modes.",
+      "evidence_status": "prepared native regression; compilation and execution NOT VERIFIED"
     }
   ],
   "public_api": {

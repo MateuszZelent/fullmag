@@ -1,5 +1,30 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
+## EPS — diagnostyka niepełnej zbieżności, 2026-10-01
+
+Baza przyrostu: `99293ff8659276abfb57c2dddaff46f269e5c234` (bounded Krylov).
+Przeniesiono wybrane fragmenty K0: rzeczywiste liczniki EPS/Schur/Poisson
+przed obsługą ujemnego convergence reason oraz diagnostyczną rekonstrukcję
+częściowych Ritz. Niepełny EPS nadal kończy się błędem przed publikacją modów.
+Maksymalnie cztery dodatnie próbki zachowują niezależne residuale full/magnetic/
+Poisson/gauge. Poprawiono etykietę faktycznego KSP na GMRES.
+
+Review wykrył dwa P2: za mały bufor próbek i anulowanie podczas rekonstrukcji.
+Bufor zwiększono do 1536 bajtów, niedostępność próbek jest jawna, a przepełnienie
+całego JSON kończy się oznaczeniem unavailable. Powtórny odczyt cancellation
+przed finalną decyzją zachowuje interrupted/cancel_requested.
+
+Kontrola 27 literalnych wywołań diagnostyki i 18 testów interpretowanych/source/
+docs PASS. Przygotowano natywną regresję liczników i braku stale/partial modes;
+nie kompilowano ani nie uruchamiano testów jednostkowych zgodnie z zakazem.
+Nowy runtime i nauka pozostają NOT VERIFIED. Kontroler 90201 sprawdzony live;
+#188 nadal korzysta ze starszej kapsuły. Nie tworzono konkurencyjnego buildu.
+
+Pełny zakres S00–S12 pozostaje otwarty. Dalej: review i commit tego przyrostu,
+F01 prism6 quadrature, R4/replay oraz mesh/Robin; następnie nowy managed runtime
+z aktualnego źródła, signed DE/BV, zbieżności i COMSOL A1 oraz pozostałe bramki.
+
+
 ## S01/S12 — wspólny K0/nonzero-k i bounded Krylov, 2026-10-01
 
 Historia K0 została scalona i wypchnięta przez `9b14e53757412d91ba5cc955774e228fb71b8cf0`; checkpoint `1cf47b6d25b48cbb5b6813d6995ba5113fb03be4`. Wątek K0 utrzymuje freeze, 100 dirty/untracked pozycji zachowano. Wspólnym miejscem integracji pozostaje worktree nonzero-k. Raport: `docs/audits/2026-10-01-k0-nonzero-k-worktree-integration.md`.
@@ -4441,3 +4466,8 @@ nadal nie widział pakietu. Ostateczny poprawny przebieg nie zmienia
 fizykę dyspersji ani kwalifikację S02 jako całości.
 
 Końcowe review wskazało dalsze obejścia P2: kolejka CLI mogła przyjąć bezpośrednio przypisany marker, opóźniony realtime sample mógł przeżyć wejście w tryb modalny, a licznik iteracji trafiał do physical total_steps. Dodano centralne filtry candidate/enqueue, anulowanie pending QoS pod wspólną blokadą przejścia oraz total_steps=0 dla callbacku bez fizycznych kroków. Historia pozostaje zachowana. Legacy completed z końcowym markerem pozostaje fail-closed; odzyskanie pomiaru wymaga jawnej tożsamości obserwacji, nie fallbacku do niesprawdzonego final_e_*.
+
+Review EPS po poprawkach: brak blokera produkcyjnego. Przygotowana regresja
+akceptuje obie rzeczywiste przyczyny niepełnego EPS (diverged/not_converged),
+zamiast narzucać kod zależny od wersji SLEPc. Wymuszenie braku zbieżności przez
+limit jednej iteracji pozostaje do potwierdzenia natywnie; nie jest dowodem PASS.

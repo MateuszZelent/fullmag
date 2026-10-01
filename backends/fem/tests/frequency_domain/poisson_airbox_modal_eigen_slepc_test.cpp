@@ -2322,8 +2322,44 @@ void SolvesSharedDomainCpuSchurModalFixture()
                    "\"samples\":[{"),
           "raw Ritz diagnostics must retain bounded per-pair samples");
     check(contains(result.diagnostics_json,
-                   "\"ksp_type\":\"preonly\""),
-          "bounded shared-domain CPU Schur diagnostics must report the exact direct shifted solve");
+                   "\"ksp_type\":\"gmres\""),
+          "bounded shared-domain CPU Schur must report GMRES with exact shifted preconditioning");
+}
+
+void PreservesFailedSchurEpsCountersWithoutPublishingModes()
+{
+    const WindowSpectrumFixture fixture = make_window_spectrum_fixture(
+        {0.25e9, 0.6e9, 1.1e9, 1.7e9, 2.3e9, 3.2e9,
+         4.3e9, 5.5e9, 6.9e9, 8.4e9, 10.2e9, 12.1e9});
+    fd::PoissonAirboxEigenBlockProblem problem = fixture.problem(0.0, 14.0e9, 3);
+    problem.target_kind = "nearest_frequency";
+    problem.target_frequency_hz = 2.7e9;
+    problem.max_outer_iterations = 1;
+    problem.residual_tolerance = 1.0e-10;
+    fd::PoissonAirboxModalEigenResult result{};
+    // Reused caller-owned results must not retain a mode from an earlier solve.
+    result.accepted_modes.resize(1u);
+    result.accepted_mode_count = 1u;
+    result.frequency_hz = 42.0e9;
+    const fd::FrequencyDomainStatus status =
+        fd::solve_poisson_airbox_modal_eigen_cpu_schur(problem, &result);
+    check(status == fd::FrequencyDomainStatus::solve_error,
+          "one outer iteration must not certify this unresolved spectrum");
+    check(result.slepc_converged_reason_code <= 0 && result.outer_iterations > 0u,
+          "incomplete EPS must retain its performed outer iterations");
+    check(result.operator_apply_count > 0u && result.poisson_solve_count > 0u,
+          "failed EPS must preserve actual Schur and Poisson work");
+    check(result.accepted_modes.empty() && result.accepted_mode_count == 0u &&
+              result.frequency_hz == 0.0 && !result.full_residual_certified,
+          "partial Ritz diagnostics must never publish a physical mode");
+    check(contains(result.stop_reason, "slepc_diverged") ||
+              contains(result.stop_reason, "slepc_not_converged"),
+          "failed solve must retain its actual incomplete EPS stop reason");
+    if (result.converged_eigenpair_count > 0u) {
+        check(contains(result.raw_ritz_classification_json,
+                       "\"reconstructed_samples\":"),
+              "partial convergence must retain bounded reconstruction diagnostics");
+    }
 }
 
 void solve_shared_domain_cpu_schur_fixture_above_exact_preconditioner_cap(
@@ -2332,7 +2368,7 @@ void solve_shared_domain_cpu_schur_fixture_above_exact_preconditioner_cap(
 {
     // The production exact shifted preconditioner is capped at split dimension
     // 8192. Use the smallest even q-space whose real split is genuinely above
-    // that cap so this fixture cannot silently fall back to PREONLY.
+    // that cap so this fixture exercises the iterative preconditioner path.
     constexpr std::uint64_t q_count = 4098;
     constexpr std::uint64_t pair_count = q_count / 2;
     CsrOwned a_qq{};
@@ -2838,6 +2874,7 @@ int main()
     FrequencyWindowUsesCertifiedSignedGuardBelowFundamentalMode();
     FrequencyWindowRetainsDemagInBoundedCachedPreconditioner();
     FrequencyWindowCancellationDuringCachedPreconditionerPreservesStopReason();
+    PreservesFailedSchurEpsCountersWithoutPublishingModes();
     ReturnsRequestedSharedDomainCpuSchurModes();
     SolvesSharedDomainCpuSchurModalFixture();
     SolvesSharedDomainCpuSchurModalFixtureAboveExactPreconditionerCap();

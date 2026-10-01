@@ -131,3 +131,33 @@ Dowody: 18 testów interpretowanych/source/docs PASS, mapa źródeł PASS, 26 li
 Kontroler90201 nadal żywy; Docker7df4be7c5ace ma running=true, exit-code0 oznacza tu stan bieżący, nie sukces zakończenia. Gamma #188 przeszedł do refinement25/50 (window_s około8019). Wynik terminalny nie jest jeszcze dostępny. Nowy kod nie zmienia trwającej kapsuły.
 
 Dalej: EPS partial convergence/counters/bounded reconstructed diagnostics; zgodność etykiety GMRES i portability PETSc; następnie spójny R4, mesh/Robin oraz kwalifikacja. Pełny cel i bramki S00–S12 pozostają otwarte.
+
+
+## EPS — diagnostyka niepełnej zbieżności, 2026-10-01
+
+Baza przyrostu: `99293ff8659276abfb57c2dddaff46f269e5c234` (bounded Krylov).
+Przeniesiono wybrane fragmenty K0: rzeczywiste liczniki EPS/Schur/Poisson
+przed obsługą ujemnego convergence reason oraz diagnostyczną rekonstrukcję
+częściowych Ritz. Niepełny EPS nadal kończy się błędem przed publikacją modów.
+Maksymalnie cztery dodatnie próbki zachowują niezależne residuale full/magnetic/
+Poisson/gauge. Poprawiono etykietę faktycznego KSP na GMRES.
+
+Review wykrył dwa P2: za mały bufor próbek i anulowanie podczas rekonstrukcji.
+Bufor zwiększono do 1536 bajtów, niedostępność próbek jest jawna, a przepełnienie
+całego JSON kończy się oznaczeniem unavailable. Powtórny odczyt cancellation
+przed finalną decyzją zachowuje interrupted/cancel_requested.
+
+Kontrola 27 literalnych wywołań diagnostyki i 18 testów interpretowanych/source/
+docs PASS. Przygotowano natywną regresję liczników i braku stale/partial modes;
+nie kompilowano ani nie uruchamiano testów jednostkowych zgodnie z zakazem.
+Nowy runtime i nauka pozostają NOT VERIFIED. Kontroler 90201 sprawdzony live;
+#188 nadal korzysta ze starszej kapsuły. Nie tworzono konkurencyjnego buildu.
+
+Pełny zakres S00–S12 pozostaje otwarty. Dalej: review i commit tego przyrostu,
+F01 prism6 quadrature, R4/replay oraz mesh/Robin; następnie nowy managed runtime
+z aktualnego źródła, signed DE/BV, zbieżności i COMSOL A1 oraz pozostałe bramki.
+
+Review EPS po poprawkach: brak blokera produkcyjnego. Przygotowana regresja
+akceptuje obie rzeczywiste przyczyny niepełnego EPS (diverged/not_converged),
+zamiast narzucać kod zależny od wersji SLEPc. Wymuszenie braku zbieżności przez
+limit jednej iteracji pozostaje do potwierdzenia natywnie; nie jest dowodem PASS.

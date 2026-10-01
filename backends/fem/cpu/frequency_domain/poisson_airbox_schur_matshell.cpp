@@ -3306,9 +3306,7 @@ void write_production_schur_diagnostics(
         result.raw_ritz_classification_json[0] != '\0'
             ? result.raw_ritz_classification_json
             : "{\"available\":false,\"samples\":[]}",
-        std::strcmp(result.shifted_preconditioner_kind, "exact_shifted_schur_action") == 0
-            ? "preonly"
-            : "gmres",
+        "gmres",
         result.shifted_preconditioner_kind[0] != '\0'
             ? result.shifted_preconditioner_kind
             : "not_configured",
@@ -5368,7 +5366,7 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
     PetscInt outer_iterations = 0;
     PetscInt converged = 0;
     const PetscErrorCode eps_solve_status = EPSSolve(eps);
-    const bool solve_interrupted =
+    bool solve_interrupted =
         operator_context->solve_control.cancellation_observed ||
         poisson_airbox_modal_cancel_requested(problem);
     EPSConvergedReason eps_reason = EPS_CONVERGED_ITERATING;
@@ -5398,7 +5396,27 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
         sizeof(out_result->slepc_converged_reason),
         eps_reason > 0 ? "eps_converged" :
             eps_reason < 0 ? "eps_diverged" : "eps_iterating");
-    if (!solve_interrupted && eps_reason <= 0) {
+    // Preserve work actually performed even when EPS exhausts its iteration
+    // budget.  A failed solve must not serialize default zero counters.
+    out_result->outer_iterations = static_cast<std::uint32_t>(
+        std::max<PetscInt>(0, outer_iterations));
+    out_result->converged_eigenpair_count = static_cast<std::uint32_t>(
+        std::max<PetscInt>(0, converged));
+    out_result->operator_apply_count =
+        context.operator_apply_count - operator_apply_count_before;
+    out_result->poisson_solve_count =
+        context.poisson_solve_count - poisson_solve_count_before;
+    out_result->poisson_iteration_count = context.poisson_iteration_count;
+    PetscInt shift_linear_iterations = 0;
+    if (KSPGetTotalIterations(st_ksp, &shift_linear_iterations) == 0) {
+        out_result->shift_linear_iteration_count = static_cast<std::uint64_t>(
+            std::max<PetscInt>(0, shift_linear_iterations));
+    }
+    // Extract and certify the converged Ritz vectors even when EPS did not
+    // reach its requested nev.  These observations are diagnostic only: the
+    // incomplete solve still returns solve_error before mode selection.
+    const bool incomplete_eps = !solve_interrupted && eps_reason <= 0;
+    if (incomplete_eps && converged == 0) {
         destroy_slepc_objects(&eps, &xr, &xi, nullptr, nullptr);
         MatDestroy(&shifted_preconditioner);
         return fail_production_schur(
@@ -5442,8 +5460,9 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
     copy_message(
         out_result->stop_reason,
         sizeof(out_result->stop_reason),
-        solve_interrupted ? "cancel_requested" : "converged");
-    PetscInt shift_linear_iterations = 0;
+        solve_interrupted ? "cancel_requested" :
+            incomplete_eps ? (eps_reason < 0 ? "slepc_diverged" : "slepc_not_converged") :
+                "converged");
     if (KSPGetTotalIterations(st_ksp, &shift_linear_iterations) == 0) {
         out_result->shift_linear_iteration_count = static_cast<std::uint64_t>(
             std::max<PetscInt>(0, shift_linear_iterations));
@@ -5491,6 +5510,10 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
     std::size_t raw_ritz_samples_size = 1u;
     std::uint32_t raw_ritz_sample_count = 0u;
     bool raw_ritz_samples_complete = true;
+    char reconstructed_samples[1536]{'['};
+    std::size_t reconstructed_samples_size = 1u;
+    std::uint32_t reconstructed_sample_count = 0u;
+    bool reconstructed_samples_complete = true;
     const auto append_raw_ritz_sample = [&](PetscInt index,
                                             double kr_scaled,
                                             double ki_scaled,
@@ -5815,6 +5838,29 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
             continue;
         }
         ++out_result->full_residual_accepted_count;
+        if (reconstructed_samples_complete && reconstructed_sample_count < 4u) {
+            const int written = std::snprintf(
+                reconstructed_samples + reconstructed_samples_size,
+                sizeof(reconstructed_samples) - reconstructed_samples_size,
+                "%s{\"index\":%d,\"frequency_hz\":%.17g,"
+                "\"full_backward_error\":%.17g,\"magnetic_backward_error\":%.17g,"
+                "\"poisson_backward_error\":%.17g,\"gauge_backward_error\":%.17g}",
+                reconstructed_sample_count == 0u ? "" : ",",
+                static_cast<int>(index),
+                kinematics.frequency_hz,
+                metrics.reconstructed_full_descriptor_backward_error,
+                metrics.magnetic_block_backward_error,
+                metrics.poisson_block_backward_error,
+                metrics.gauge_constraint_backward_error);
+            if (written <= 0 ||
+                static_cast<std::size_t>(written) >=
+                    sizeof(reconstructed_samples) - reconstructed_samples_size) {
+                reconstructed_samples_complete = false;
+            } else {
+                reconstructed_samples_size += static_cast<std::size_t>(written);
+                ++reconstructed_sample_count;
+            }
+        }
         candidates.push_back(Candidate{
             index,
             std::abs(kinematics.omega_rad_s - target_omega),
@@ -5835,8 +5881,16 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
     } else {
         copy_message(raw_ritz_samples, sizeof(raw_ritz_samples), "[]");
     }
+    if (reconstructed_samples_complete &&
+        reconstructed_samples_size + 2u <= sizeof(reconstructed_samples)) {
+        reconstructed_samples[reconstructed_samples_size++] = ']';
+        reconstructed_samples[reconstructed_samples_size] = '\0';
+    } else {
+        reconstructed_samples_complete = false;
+        copy_message(reconstructed_samples, sizeof(reconstructed_samples), "[]");
+    }
     const bool raw_ritz_range_available = out_result->raw_ritz_finite_count > 0u;
-    std::snprintf(
+    const int raw_ritz_json_size = std::snprintf(
         out_result->raw_ritz_classification_json,
         sizeof(out_result->raw_ritz_classification_json),
         "{\"available\":true,\"retrieval_failed_count\":%u,"
@@ -5846,7 +5900,9 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
         "\"in_window_count\":%u,\"out_of_window_count\":%u,"
         "\"kr_scaled_range\":[%.17g,%.17g],"
         "\"ki_scaled_range\":[%.17g,%.17g],"
-        "\"sample_limit\":4,\"samples\":%s}",
+        "\"sample_limit\":4,\"samples\":%s,"
+        "\"reconstructed_sample_limit\":4,\"reconstructed_samples_available\":%s,"
+        "\"reconstructed_samples\":%s}",
         out_result->raw_ritz_retrieval_failed_count,
         out_result->raw_ritz_nonfinite_count,
         out_result->raw_ritz_finite_count,
@@ -5861,7 +5917,17 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
         raw_ritz_range_available ? kr_scaled_max : 0.0,
         raw_ritz_range_available ? ki_scaled_min : 0.0,
         raw_ritz_range_available ? ki_scaled_max : 0.0,
-        raw_ritz_samples);
+        raw_ritz_samples,
+        reconstructed_samples_complete ? "true" : "false",
+        reconstructed_samples);
+    if (raw_ritz_json_size < 0 ||
+        static_cast<std::size_t>(raw_ritz_json_size) >=
+            sizeof(out_result->raw_ritz_classification_json)) {
+        copy_message(
+            out_result->raw_ritz_classification_json,
+            sizeof(out_result->raw_ritz_classification_json),
+            "{\"available\":false,\"reason\":\"diagnostic_buffer_exhausted\"}");
+    }
 
     out_result->operator_apply_count =
         context.operator_apply_count - operator_apply_count_before;
@@ -5874,6 +5940,24 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
     }
     destroy_slepc_objects(&eps, &xr, &xi, nullptr, nullptr);
     MatDestroy(&shifted_preconditioner);
+
+    // Cancellation can arrive while reconstructing diagnostic partial Ritz vectors.
+    solve_interrupted = solve_interrupted ||
+        operator_context->solve_control.cancellation_observed ||
+        poisson_airbox_modal_cancel_requested(problem);
+    if (incomplete_eps) {
+        destroy_refinement_ksp();
+        return fail_production_schur(
+            problem,
+            out_result,
+            solve_interrupted ? FrequencyDomainStatus::interrupted
+                              : FrequencyDomainStatus::solve_error,
+            solve_interrupted
+                ? "production shared-domain K0 Schur diagnostic reconstruction was cancelled"
+                : "production shared-domain K0 Schur SLEPc did not report convergence",
+            solve_interrupted ? "cancel_requested"
+                              : (eps_reason < 0 ? "slepc_diverged" : "slepc_not_converged"));
+    }
 
     std::sort(
         candidates.begin(),
