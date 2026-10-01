@@ -61,6 +61,10 @@ nie zawierają tego przyrostu. Pełny plan S00–S12 pozostaje obowiązujący.
 - Root integration: 59 focused PASS i 213 testów głównego verifiera PASS.
   Pięć digestów jest zachowywanych także przy `missing_recomputed`;
   pełne R4 pozostaje `NOT VERIFIED`.
+- Końcowe niezależne review checkpointu
+  `ff1f823fe9ac078403299989b0ce4319ca77023e`: bez nowych P1/P2 w zakresie
+  Pythonowego replayu i integracji. Nie jest to review końcowe aktywnych zmian
+  Rust ani dowód wykonania solvera.
 
 1. Naprawić P2 eksportu kwadratury i zapisać osobny zweryfikowany etap F01.
 2. Opublikować own exact preimage wraz z single-/multi-k manifest links.

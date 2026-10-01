@@ -1,6 +1,6 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
-## Aktualny stan — 2026-10-01, po checkpointach e5dc37407 i 9d8f8bf9e
+## Aktualny stan — 2026-10-01, po commicie ff1f823fe
 
 Ta sekcja i tabela „Stan etapów” określają bieżące bramki. Pozostałe wpisy
 opisują historię; dawne `running/live/queued` nie są aktualnym stanem procesu.
@@ -23,6 +23,14 @@ opisują historię; dawne `running/live/queued` nie są aktualnym stanem procesu
   `e78a25bac0f95c1190821524545803e4311b8ef9`. Nie zawiera nowszych przyrostów.
   Kontener `463764a54084782448cea6a6c43743ce9da046a38939dda3d637391b18418061`
   jest przypięty do obrazu MFEM4.10 `8a508319a68c4116da81b745fdd1b084015b665d92b36b2241e1e245b5febf89`.
+  Sprawdzono aktywne cargo/CMake/gmake/C++ i rzeczywiste logi native-build;
+  nie jest to sam zapis statusu kolejki. Uruchomiono jeden obserwator serii
+  `thickness`, session `42033`, który czeka na sukces tego samego joba.
+  Konfiguracja: `storage/runs/eigensolve-dispersion-plan-20260-c5dfad6d7f548079/scientific-batches/nonzero-k-validation/19e798d5ff07454db64c90e63ba4f3a3/controller-config.json`.
+  Przypięty model i runtime mają SHA `e78a25bac0f95c1190821524545803e4311b8ef9`:
+  Γ t3, DE/BV k25 t3/t6/t9. Wrapper sprawdza receipt/hash/image i heavy lease,
+  zatrzymuje się na pierwszym błędzie. Seria nie kwalifikuje nowszego źródła R4
+  i nie zastępuje rzeczywiście liczonych ujemnych k, C0 ani COMSOL A1.
 - #188 i jego kontroler są terminalne: błąd kompletności okna, 6/50 podokien.
   Lokalny kandydat 9.299249697 GHz nie jest kwalifikowanym punktem dyspersji.
 - Archiwalne punkty i wykresy nie kwalifikują bieżącego źródła. Wymagane są
