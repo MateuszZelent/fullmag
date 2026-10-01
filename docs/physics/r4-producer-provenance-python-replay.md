@@ -122,7 +122,7 @@ Tabela parametrów użytych przez verifier jest wyczerpująca dla tego adaptera:
 |---|---|---|---|---|---|---|---|
 | `ProducerArtifactPaths.payload_paths` | `Mapping[str, Path] \| None` | `None` | `$1$` | when present, exactly three absolute copied-payload paths | consumer transport locations while preserving original producer refs | FEM CPU/GPU payloads; runtime not verified | No change |
 | `ProducerArtifactPaths.producer_plan_path` | `Path \| None` | `required for standalone producer bundle; None for inline modal bundle` | `$1$` | exact bytes equal producer_plan_snapshot.preimage_json when supplied | source FemPlanIR exact preimage | FEM CPU/GPU payloads; runtime not verified | FemPlanIR |
-| `replay_producer_provenance.expected_source_snapshot_sha256` | `str` | `required` | `$1$` | sha256:<64 lowercase hex> equal to producer build snapshot | explicit consumer expectation for cross-build policy | FEM CPU/GPU payloads; runtime not verified | No change |
+| `replay_producer_provenance.expected_source_snapshot_sha256` | `str` | `required` | `$1$` | 64 lowercase hex without prefix, equal to producer build snapshot | explicit consumer expectation for cross-build policy | FEM CPU/GPU payloads; runtime not verified | No change |
 | `manifest.artifacts.consumer_plan_snapshot_v1_paths` | `list[str]` | `absent` | `$1$` | ordered canonical `sample_NNNN/consumer_plan_snapshot.v1.json` paths with raw digest binding | exact consumer-plan transport locations | FEM CPU/GPU payloads; IR/runtime not verified | FemEigenPlanIR snapshot |
 
 Poniższy przykład pokazuje pełny, kopiowalny przebieg dla jawnego bundle'u
@@ -158,7 +158,7 @@ report = replay_producer_provenance(
     expected_source_run_id="run-id-from-manifest",
     expected_source_stage_id="stage-id-from-manifest",
     expected_source_stage_kind="relaxation",
-    expected_source_snapshot_sha256="sha256:" + "0" * 64,
+    expected_source_snapshot_sha256="0" * 64,
 )
 assert report.status == "qualified_payload_replay"
 assert report.scientific_qualification == "NOT_VERIFIED"

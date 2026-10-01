@@ -10,6 +10,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import verify_fem_frequency_domain_eigen_artifacts as verifier
 
+SOURCE_SNAPSHOT = "b6511df906eb213ffe5f820985c202cfc6cc5364c68becd569611de8bad506a5"
 
 class ProducerPayloadRoutingTests(unittest.TestCase):
     def setUp(self):
@@ -42,7 +43,7 @@ class ProducerPayloadRoutingTests(unittest.TestCase):
             "linearization_state_sha256": state["content_sha256"],
             "linearization_state_schema": state["schema_version"],
             "source_run_id": "run-source", "source_stage_id": "stage-source",
-            "source_stage_kind": "relaxation", "consumer_source_snapshot_sha256": "snapshot",
+            "source_stage_kind": "relaxation", "consumer_source_snapshot_sha256": SOURCE_SNAPSHOT,
         }
         for name in ("accepted_fields", "certified_fields", "recomputed_certificate"):
             identity[name + "_path"] = self.publish(name, name + ".json", {})

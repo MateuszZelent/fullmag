@@ -32,6 +32,22 @@ dyspersji. Nie jest dowodem, że solver znalazł poprawną częstotliwość. Jes
 bramką pochodzenia, która ma zakończyć się fail-closed, gdy brakuje
 któregokolwiek wymaganego związania.
 
+`producer_source_snapshot_sha256`, `consumer_source_snapshot_sha256` oraz
+odpowiadające im pola w build identity mają kanoniczny format 64 małych
+znaków hex bez prefiksu, ustanowiony przez `fullmag-build-info`. Nie są
+prefiksowanymi digestami payloadu. Warunek zgodności snapshotów pozostaje
+porównaniem dokładnych identyfikatorów; prefiks, uppercase, brakujące pole
+lub obcy snapshot są błędem. Mapowanie: `strict_build_identity_snapshot`
+w `crates/fullmag-runner/src/fem/eigen_equilibrium_contract.rs`.
+
+Wspólny `validate_linearization_identity_source_snapshots` sprawdza również
+zgodność zagnieżdżonych build identity z polami top-level. Używają go writer
+preimage oraz Rustowy inspector strukturalny i walidator sidecara. Sam
+`linearization_identity_v2_content_sha256_from_preimage_bytes` pozostaje
+funkcją skrótu dokładnych bajtów; poprawny digest ramki nie zastępuje
+walidacji kontraktu snapshotów. Regresje Rust tej granicy są przygotowane,
+ale nie kompilowane; managed runtime pozostaje NOT VERIFIED.
+
 (governing-equations)=
 ## 2. Digesty i związanie fizyczne
 
@@ -538,6 +554,7 @@ sidecara dla deklarowanego identity kończy się błędem fail-closed.
 | m0 endpoint binding | crates/fullmag-runner/src/fem/eigen_equilibrium_contract.rs + vector_field_content_sha256 | FEM CPU | source-visible; runtime NOT VERIFIED |
 | physical identity constructor | crates/fullmag-runner/src/fem/equilibrium_identity.rs + from_relax_plan | FEM CPU | source-visible |
 | m0 norm gate | crates/fullmag-runner/src/fem/eigen_equilibrium_contract.rs + validate_handoff_m0_norms | FEM CPU | source-visible; runtime NOT VERIFIED |
+| shared snapshot validation | crates/fullmag-runner/src/fem/eigen_equilibrium_contract.rs + validate_linearization_identity_source_snapshots | FEM CPU | raw64, nested/top-level binding; runtime NOT VERIFIED |
 
 Nota nie promuje source parsera, testów interpretowanych ani obecności plików do
 kwalifikacji solvera. Uzupełnienie własnego exact preimage identity i dowody

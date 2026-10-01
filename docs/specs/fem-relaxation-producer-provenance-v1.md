@@ -39,7 +39,7 @@ brakiem dowodu, a nie zgodnością domyślną.
     "built_at_utc": "string",
     "git_commit": "string",
     "worktree_state": "string",
-    "source_snapshot_sha256": "sha256:<64 lowercase hex>"
+    "source_snapshot_sha256": "<64 lowercase hex>"
   },
   "producer_plan_snapshot": {
     "namespace": "fem_relaxation.producer_plan.v1",
@@ -66,6 +66,13 @@ Wymagane są wszystkie pola pokazane powyżej. Nieznane pola, nieznany
 `cross_build_policy`, `null`, uppercase hex, digest o złej długości i ścieżki
 absolutne są odrzucane. Pola `preimage_json` i payloady odnoszą się do
 rzeczywistych bajtów; klient nie może ich zrekonstruować z typed object.
+
+`producer_build_identity.source_snapshot_sha256` zachowuje dokładnie format
+`fullmag-build-info`: 64 małe znaki hex bez prefiksu. Identyfikatory source
+snapshotu producenta i konsumenta w `LinearizationIdentity.v2` używają tego
+samego formatu. Digesty payloadów, planów i sygnatur fizycznych nadal mają
+prefiks `sha256:`. Są to odrębne pola; konsument nie normalizuje ani nie
+podmienia tożsamości źródeł.
 
 ## 3. Ścieżki i manifest
 

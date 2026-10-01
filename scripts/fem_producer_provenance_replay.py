@@ -81,6 +81,7 @@ SOURCE_REPLAY_QUALIFIED = "qualified_payload_replay"
 SOURCE_REPLAY_REJECTED = "rejected"
 
 _SHA256_RE = re.compile(r"sha256:[0-9a-f]{64}\Z")
+_RAW_SOURCE_SNAPSHOT_RE = re.compile(r"[0-9a-f]{64}\Z")
 _PROVENANCE_FIELDS = frozenset(
     {
         "schema_version",
@@ -262,6 +263,15 @@ def _digest(value: Any, label: str) -> str:
     return value
 
 
+def _source_snapshot(value: Any, label: str) -> str:
+    """Validate native build-info's raw lowercase SHA-256 spelling."""
+    if type(value) is not str or _RAW_SOURCE_SNAPSHOT_RE.fullmatch(value) is None:
+        _fail(
+            f"{label}: expected 64 lowercase hexadecimal characters without sha256: prefix"
+        )
+    return value
+
+
 def _sha256(raw: bytes) -> str:
     return "sha256:" + hashlib.sha256(raw).hexdigest()
 
@@ -363,7 +373,7 @@ def _identity_build_identity(value: Any, label: str) -> Mapping[str, Any]:
     _exact_fields(build, _BUILD_FIELDS, label)
     for key in ("built_at_utc", "git_commit", "worktree_state"):
         _nonempty_string(build[key], f"{label}.{key}")
-    _digest(build["source_snapshot_sha256"], f"{label}.source_snapshot_sha256")
+    _source_snapshot(build["source_snapshot_sha256"], f"{label}.source_snapshot_sha256")
     return build
 
 
@@ -413,6 +423,10 @@ def _validate_identity_source_bindings(
     equal("source_stage_id", provenance["source_stage_id"])
     equal("source_stage_kind", provenance["source_stage_kind"])
     equal("producer_plan_snapshot_sha256", plan_snapshot["framed_sha256"])
+    _source_snapshot(
+        identity.get("producer_source_snapshot_sha256"),
+        "linearization identity.producer_source_snapshot_sha256",
+    )
     equal("producer_source_snapshot_sha256", build["source_snapshot_sha256"])
     equal("cross_build_policy", provenance["cross_build_policy"])
     equal("source_mesh_topology_sha256", provenance["source_mesh_topology_sha256"])
@@ -430,6 +444,10 @@ def _validate_identity_source_bindings(
     consumer_build = _identity_build_identity(
         identity.get("consumer_build_identity"),
         "linearization identity.consumer_build_identity",
+    )
+    _source_snapshot(
+        identity.get("consumer_source_snapshot_sha256"),
+        "linearization identity.consumer_source_snapshot_sha256",
     )
     equal("consumer_source_snapshot_sha256", consumer_build["source_snapshot_sha256"])
     if consumer_build["source_snapshot_sha256"] != build["source_snapshot_sha256"]:
@@ -585,11 +603,11 @@ def _validate_provenance(
     _exact_fields(build, _BUILD_FIELDS, "producer_build_identity")
     for key in ("built_at_utc", "git_commit", "worktree_state"):
         _nonempty_string(build[key], f"producer_build_identity.{key}")
-    producer_snapshot = _digest(
+    producer_snapshot = _source_snapshot(
         build["source_snapshot_sha256"],
         "producer_build_identity.source_snapshot_sha256",
     )
-    expected_snapshot = _digest(
+    expected_snapshot = _source_snapshot(
         expected_source_snapshot_sha256,
         "expected_source_snapshot_sha256",
     )
@@ -840,7 +858,10 @@ def replay_producer_provenance(
         _fail("expected_source_stage_id must be non-empty")
     if not isinstance(expected_source_stage_kind, str) or not expected_source_stage_kind.strip():
         _fail("expected_source_stage_kind must be non-empty")
-    expected_snapshot = _digest(expected_source_snapshot_sha256, "expected_source_snapshot_sha256")
+    expected_snapshot = _source_snapshot(
+        expected_source_snapshot_sha256,
+        "expected_source_snapshot_sha256",
+    )
 
     provenance, provenance_raw = _load_object(paths.provenance_path, "producer provenance sidecar")
     build, plan_snapshot, payloads, _ = _validate_provenance(

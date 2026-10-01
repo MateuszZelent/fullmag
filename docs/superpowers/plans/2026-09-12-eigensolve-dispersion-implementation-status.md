@@ -2,6 +2,66 @@
 
 ## Aktualny stan — 2026-10-02, checkpoint nearest bf25a30d7
 
+### Najnowszy wynik #195 i naprawa granicy build identity
+
+Koordynator zakończył #195 statusem `succeeded`; worker exit=0,
+native-build trwał 29 min 44 s. Sterownik 95215 zakończył się exit=1 po
+pierwszym pilocie `gamma-t3/de-smoke-k0` (około 26 s). Relaksacja doszła do
+zapisu artefaktów, który odrzucono komunikatem
+`fem_relaxation_producer_provenance_invalid: producer build identity`.
+Eigensolve i pozostałych pięciu punktów nie uruchomiono. Nie ma nowych
+częstotliwości ani podstawy do aktualizacji scatterplotu tej serii.
+
+Root cause jest potwierdzony przez log i kod: stamp buildu zawiera poprawny
+source snapshot `b6511df906eb213ffe5f820985c202cfc6cc5364c68becd569611de8bad506a5`
+w kanonicznym formacie raw64. Walidator producenta i linearization identity
+stosowały walidator digestu payloadu wymagający `sha256:`. Syntetyczne fixture'y
+powielały nieprawidłowy prefiks i nie wykryły błędu integracji. Poprawka
+rozdziela walidację raw64 build identity od prefiksowanych digestów
+payloadów; odbiorniki Python i fixture'y muszą używać identycznego kontraktu.
+Nie wolno usuwać kontroli źródła ani akceptować obcych snapshotów.
+
+Poprawka raw64 obejmuje Rust producer/identity oraz trzy interpretery Python:
+producer provenance, exact linearization preimage i nonshared operator replay.
+Focused checks: 47 PASS + 102 subtests; routing 6 PASS + 6 subtests;
+pełny verifier 213 PASS (77,08 s); dodatkowe kontrakty discovery/routing/
+nonshared 21 PASS; validator contract 35 PASS. Trzy zmienione mapy naukowe
+PASS, Rust parser PASS. Native regresje są przygotowane, lecz nie kompilowane
+zgodnie z zakazem; wynik managed runtime poprawki pozostaje NOT VERIFIED.
+Review raw64 zamknęło też P2 inspectora: wspólny validator sprawdza raw64,
+nested/top-level binding i same-source policy zarówno w writerze, jak i
+w strukturalnym odbiorniku Rust. Poprawny framed hash nie omija już tej
+kontroli. Przygotowano regresje samospójnego, ale prefiksowanego sidecara
+oraz mismatchu źródeł; ich native wykonanie nadal NOT VERIFIED.
+
+Następny krok: regression checks obu odbiorników, review, commit i managed
+runtime-only build poprawionego źródła, następnie nowa próba w osobnym
+katalogu wyników. Zachowujemy kapsułę bf25 i nieudaną próbę #195 bez zmian.
+Nowa publikacja stanu, sześć punktów signed DE/BV, full-window completeness,
+zbieżność, A1, GPU i browser pozostają wymaganymi, otwartymi bramkami.
+
+### Korekty z bieżącego review przed zamrożeniem przyrostów
+
+- S05: ścieżka reuse musi przejść pełne `admit_floquet_modal_sparse_request`,
+  a nie omijać admission przy bezpośrednim wejściu do shared-domain solvera.
+- S05: twardy błąd `EPSSolve` z unsafe cleanup musi zatrzymać dalsze reuse
+  i pozostawić okno nierozstrzygnięte. Lifetime obiektów referencjonowanych
+  przez pozostawiony EPS wymaga jawnej obsługi; deterministyczny cleanup nie
+  może być reklamowany na tej ścieżce. Review wykazało dwa P1 i jeden P2;
+  trwają poprawki. Przyrost nie jest jeszcze zaakceptowany ani runtime-tested.
+- Analityka/plot: selected-only record musi wiązać wszystkie parametry
+  `B0`, `H0`, `mu0`, `t`, `d`, `Ms`, `Aex`, `gamma0` z resolved metadata.
+  Review wykazało P1 brakujących pięciu bindingów, P2 jednostki potencjału
+  (powinna wynosić A) i P2 niekontrolowanego typu geometrii. Trwają poprawki
+  i regresje mutacyjne; dotychczasowe 67 zielonych testów nie pokrywało P1.
+- Analityka: niezależna kontrola Decimal (70 cyfr) wykazała cancellation
+  w `N_parallel` finite Dirichlet przy małym k. Dla k=1 rad/m, t=10 nm,
+  d=2 um błąd względny czynnika wynosił około 31%; dla k=0,01 rad/m
+  około 886 razy wartości referencyjnej. Nie oznacza to podobnego błędu
+  częstotliwości (czynnik jest wówczas bardzo mały), ale blokuje twierdzenie
+  o dokładnej granicy low-k. Wymagana stabilna postać algebraiczna z Taylor
+  dla różnicy `2P-uF`, niezależne regresje wysokoprecyzyjne i ponowny review.
+
 Przyrost S07 uzupełnia strukturalne referencje finalnej diagnostyki C ABI
 w manifestach single-k i multi-k. Nowa para ma oddzielną coverage i właściwe
 ścieżki `sample_NNNN/nonshared_source/...`; historyczne trzy płaskie sidecary
@@ -39,8 +99,8 @@ Submission zakończony exit0, przyjęty job #195:
 Source digest `a10753dbee8313170b2a721716824496ebfbf1c255e01dc67ee446e96d89073f`,
 snapshot SHA `b6511df906eb213ffe5f820985c202cfc6cc5364c68becd569611de8bad506a5`,
 kapsuła `ab76858f0c0c475d898e79b71f864354/source`. Źródło czyste, commit mode.
-Ostatni status API running; kontener `fullmag-worker-5a281e74772d4976a9d09ccc8d5c7be9`
-istnieje i działa. Kolejny odczyt potwierdził aktywne `make`, `cargo` i `rustc`
+W czasie buildu kontener `fullmag-worker-5a281e74772d4976a9d09ccc8d5c7be9`
+działał. Odczyt potwierdził aktywne `make`, `cargo` i `rustc`
 oraz logi native-build; etap kompilacji rozpoczął się. Przygotowanie kapsuły
 wewnątrz workera zajęło około 14 minut (7584 pliki, 301 172 237 B).
 Proces w trakcie przygotowania wykonywał odczyty przez system plików p9;
@@ -51,15 +111,13 @@ native-build exit=0, duration_ms=1 783 616,963. Root sprawdził wszystkie
 CPU/double oraz runtime_contract.unit_test_targets=[]: PASS.
 Dependency attestation potwierdza PETSc 3.24.6, SLEPc 3.24.3 i ten sam
 snapshot źródeł; CMake attestation wiąże MFEM 4.10.0 z hash ABI.
-Ostatni status API nadal running: koordynator nie opublikował jeszcze
-końcowego statusu. Recepta wymaga kontroli receipt i niezmienionej kapsuły
-przed zamknięciem joba. Sesja sterownika 95215
-nadal żywa i czeka na terminalny status tego samego joba. Punkty i
-kwalifikacja fizyczna nadal NOT VERIFIED.
+Koordynator następnie opublikował `succeeded`. Sesja sterownika 95215
+jest terminalna (exit=1); przyczynę nieudanego pilota opisano powyżej.
+Punkty i kwalifikacja fizyczna nadal NOT VERIFIED.
 Log potwierdził `Finished release profile ... in 14m 29s` dla pierwszej
 kompilacji CLI z FEM. API zakończyło się w 9m 03s, Python core w 4m 01s.
-Nie jest to jeszcze terminalny sukces koordynatora ani wynik fizyczny.
-Świeży health runnera:
+Jest to terminalny sukces buildu, ale nie wynik fizyczny.
+Health runnera odczytany w czasie buildu:
 worker_alive=true, worker_error=null, accepting_jobs=true, aktywny #195,
 storage_free_bytes=10 284 400 640. Ten odczyt nie jest gwarancją pojemności
 dla kolejnych przebiegów ani kwalifikacją naukową.

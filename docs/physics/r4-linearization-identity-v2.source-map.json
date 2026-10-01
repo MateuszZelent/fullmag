@@ -362,7 +362,13 @@
       "id": "source-binding",
       "path": "crates/fullmag-runner/src/fem/eigen_equilibrium_contract.rs",
       "symbol": "strict_build_identity_snapshot",
-      "responsibility": "Wymaga lowercase sha256 source snapshotu i zgodności producer/consumer."
+      "responsibility": "Wymaga canonical raw64 lowercase source snapshotu build identity."
+    },
+    {
+      "id": "shared-source-snapshot-validation",
+      "path": "crates/fullmag-runner/src/fem/eigen_equilibrium_contract.rs",
+      "symbol": "validate_linearization_identity_source_snapshots",
+      "responsibility": "Wspólna walidacja raw64, nested/top-level binding i same-source policy w writerze oraz structural inspectorze."
     },
     {
       "id": "python-identity-replay",

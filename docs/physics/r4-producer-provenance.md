@@ -40,6 +40,16 @@ Obecny problem ma trzy warianty:
 `ProducerProvenance` jest addytywnym dowodem pochodzenia. Nie zmienia energii,
 równań LLG, operatora Floqueta ani semantyki `ProblemIR`.
 
+Identyfikator `producer_build_identity.source_snapshot_sha256` jest dokładną
+kopią `fullmag_build_info::identity()` i ma 64 małe znaki hex bez prefiksu,
+tak jak `FULLMAG_SOURCE_SNAPSHOT_SHA256` w buildzie managed. Ta sama reguła
+dotyczy source snapshotów producenta i konsumenta w linearization identity.
+Digesty planów, pól i sygnatur fizycznych zachowują format `sha256:<hex>`.
+Walidatory rozdzielają te formaty zamiast normalizować wejście. Próba Γ po
+buildzie #195 ujawniła użycie walidatora digestów payloadu dla poprawnej
+tożsamości buildu; poprawka źródłowa nie jest jeszcze dowodem ponownego
+uruchomienia ani wyniku częstotliwości.
+
 (governing-equations)=
 ## 2. Digesty i warunek akceptacji
 
@@ -254,7 +264,7 @@ Minimalny typed payload:
     "built_at_utc": "...",
     "git_commit": "...",
     "worktree_state": "clean",
-    "source_snapshot_sha256": "sha256:<64 lowercase hex>"
+    "source_snapshot_sha256": "<64 lowercase hex>"
   },
   "producer_plan_snapshot": {
     "namespace": "fem_relaxation.producer_plan.v1",
@@ -512,6 +522,8 @@ nie zastępuje odtworzenia planu, fizycznych sygnatur, pól ani operatora.
 | Raw artifact digest | `crates/fullmag-runner/src/fem/eigen_output.rs` + `published_artifact_sha256` | FEM CPU | source-visible; runtime NOT VERIFIED |
 | Producer payload boundary | `crates/fullmag-runner/src/artifacts.rs` + `fem_relaxation_producer_provenance_artifact` | FEM CPU | source-visible; exact bytes and hashes validated before append |
 | Source snapshot policy | `crates/fullmag-runner/src/fem/eigen_equilibrium_contract.rs` + `validate_for_handoff` | FEM CPU | source-visible; fail-closed validation, runtime NOT VERIFIED |
+| Source snapshot encoding | `crates/fullmag-runner/src/fem/eigen_equilibrium_contract.rs` + `is_strict_source_snapshot_sha256` | FEM CPU | raw64; managed runtime poprawki NOT VERIFIED |
+| Build identity authority | `crates/fullmag-build-info/src/lib.rs` + `identity` | wspólny build | exact source identity bez normalizacji |
 | CLI producer transport | `crates/fullmag-cli/src/orchestrator.rs` + `accepted_relax_handoff_from_completed_stage_with_exact_artifacts` | FEM CPU | source-visible; sidecar required by verified API |
 | Verified constructor | `crates/fullmag-runner/src/fem/eigen_equilibrium_contract.rs` + `from_completed_relax_verified_with_exact_artifacts_and_provenance` | FEM CPU | source-visible; requires typed producer sidecar |
 | Standalone execution binding | `crates/fullmag-runner/src/lib.rs` + `bind_fem_execution_stage_identity` | FEM CPU/GPU | source-visible; prepared regressions, runtime NOT VERIFIED |

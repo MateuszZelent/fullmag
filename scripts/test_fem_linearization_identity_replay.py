@@ -15,6 +15,8 @@ from fem_linearization_identity_replay import (  # noqa: E402
     IDENTITY_FIELDS, IdentityReplayError, replay_identity_preimage,
 )
 
+SOURCE_SNAPSHOT = "b6511df906eb213ffe5f820985c202cfc6cc5364c68becd569611de8bad506a5"
+
 
 def encode(value: object) -> bytes:
     return json.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8")
@@ -24,10 +26,14 @@ def fixture(sample_index: int = 2, *, overrides: dict | None = None) -> tuple[di
     identity = {key: "fixture" for key in IDENTITY_FIELDS}
     identity.update(schema_version="linearization_identity.v2", sample_index=sample_index,
                     node_count=1, content_sha256="",
-                    producer_build_identity={"source_snapshot_sha256": "sha256:" + "a" * 64,
+                    producer_build_identity={"source_snapshot_sha256": "a" * 64,
                                              "nested": {"enabled": True, "value": 1}},
-                    consumer_build_identity={"source_snapshot_sha256": "sha256:" + "a" * 64},
+                    consumer_build_identity={"source_snapshot_sha256": "a" * 64},
+                    producer_source_snapshot_sha256=SOURCE_SNAPSHOT,
+                    consumer_source_snapshot_sha256=SOURCE_SNAPSHOT,
                     source_stage_id="relaxation-zażółć")
+    identity["producer_build_identity"]["source_snapshot_sha256"] = SOURCE_SNAPSHOT
+    identity["consumer_build_identity"]["source_snapshot_sha256"] = SOURCE_SNAPSHOT
     if overrides:
         identity.update(overrides)
     # Intentionally pretty, reversed-order UTF-8 bytes: hashing must retain
@@ -98,6 +104,46 @@ class IdentityReplayTests(unittest.TestCase):
                 changed = dict(sidecar, **{key: "sha256:" + "0" * 64})
                 with self.assertRaises(IdentityReplayError):
                     replay_identity_preimage(encode(identity), encode(changed))
+
+    def test_build_source_snapshots_use_raw_lowercase_hex(self):
+        identity, sidecar = fixture()
+        for field, mutate in (
+            ("producer_source_snapshot_sha256", lambda value: "sha256:" + value),
+            ("consumer_source_snapshot_sha256", lambda value: value.upper()),
+        ):
+            with self.subTest(field=field):
+                changed = copy.deepcopy(identity)
+                changed[field] = mutate(changed[field])
+                with self.assertRaisesRegex(IdentityReplayError, "source_snapshot_sha256"):
+                    replay_identity_preimage(encode(changed), encode(sidecar))
+
+        for field in ("producer_source_snapshot_sha256", "consumer_source_snapshot_sha256"):
+            with self.subTest(field=field, mutation="missing"):
+                changed = copy.deepcopy(identity)
+                changed.pop(field)
+                with self.assertRaises(IdentityReplayError):
+                    replay_identity_preimage(encode(changed), encode(sidecar))
+
+        for build in ("producer_build_identity", "consumer_build_identity"):
+            with self.subTest(build=build):
+                changed = copy.deepcopy(identity)
+                changed[build]["source_snapshot_sha256"] = (
+                    "sha256:" + changed[build]["source_snapshot_sha256"]
+                )
+                with self.assertRaisesRegex(IdentityReplayError, "source_snapshot_sha256"):
+                    replay_identity_preimage(encode(changed), encode(sidecar))
+
+    def test_native_contract_source_guard_requires_raw_64_hex(self):
+        contract_path = (
+            Path(__file__).resolve().parents[1]
+            / "crates/fullmag-runner/src/fem/eigen_equilibrium_contract.rs"
+        )
+        source = contract_path.read_text(encoding="utf-8")
+        start = source.index("fn is_strict_source_snapshot_sha256")
+        guard = source[start:source.index("\n}\n", start) + 3]
+        self.assertIn("value.len() == 64", guard)
+        self.assertIn("(b'a'..=b'f').contains(&byte)", guard)
+        self.assertNotIn('value.starts_with("sha256:")', guard)
 
     def test_duplicate_keys_in_all_three_objects_are_rejected(self):
         identity, sidecar = fixture()

@@ -1087,6 +1087,21 @@ pub(crate) fn inspect_r4_sidecars(
                 ..empty()
             };
         }
+        if let Err(error) = super::eigen_equilibrium_contract::
+            validate_linearization_identity_source_snapshots(&identity)
+        {
+            return R4SidecarCoverage {
+                status: "invalid".to_string(),
+                reason: format!(
+                    "identity source snapshot validation failed for sample {sample_index}: {}",
+                    error.message
+                ),
+                accepted_family: Some(accepted_family.to_string()),
+                accepted_sample_indices,
+                identity_sample_indices: identity_samples,
+                ..empty()
+            };
+        }
         let sidecar = match serde_json::from_slice::<
             super::eigen_equilibrium_contract::LinearizationIdentityPreimageV1,
         >(preimage_bytes) {
@@ -1281,6 +1296,7 @@ fn validate_published_linearization_identity_sidecars(
             ),
         });
     }
+    super::eigen_equilibrium_contract::validate_linearization_identity_source_snapshots(&identity)?;
     if identity.content_sha256 != identity_digest {
         return Err(RunError {
             message: "linearization_identity_sha256_does_not_match_published_identity".to_string(),
@@ -3820,10 +3836,10 @@ mod linearization_identity_sidecar_tests {
             "source_stage_kind": "relaxation",
             "producer_plan_snapshot_sha256": digest.clone(),
             "consumer_plan_snapshot_sha256": digest.clone(),
-            "producer_build_identity": {"source_snapshot_sha256": digest.clone()},
-            "consumer_build_identity": {"source_snapshot_sha256": digest.clone()},
-            "producer_source_snapshot_sha256": digest.clone(),
-            "consumer_source_snapshot_sha256": digest.clone(),
+            "producer_build_identity": {"source_snapshot_sha256": "a".repeat(64)},
+            "consumer_build_identity": {"source_snapshot_sha256": "a".repeat(64)},
+            "producer_source_snapshot_sha256": "a".repeat(64),
+            "consumer_source_snapshot_sha256": "a".repeat(64),
             "cross_build_policy": "same_source_snapshot_required",
             "source_mesh_topology_sha256": digest.clone(),
             "modal_mesh_topology_fingerprint_v3": digest.clone(),
@@ -4117,6 +4133,110 @@ mod linearization_identity_sidecar_tests {
             },
         ];
         (summary, artifacts, identity, preimage_bytes)
+    }
+
+    #[test]
+    fn source_snapshot_validator_binds_nested_builds_and_cross_build_policy() {
+        let identity = identity_fixture(3);
+        super::super::eigen_equilibrium_contract::
+            validate_linearization_identity_source_snapshots(&identity)
+            .expect("canonical raw source snapshots must validate");
+
+        let mut prefixed = identity.clone();
+        prefixed.producer_source_snapshot_sha256 = format!("sha256:{}", "a".repeat(64));
+        let error = super::super::eigen_equilibrium_contract::
+            validate_linearization_identity_source_snapshots(&prefixed)
+            .expect_err("prefixed top-level source snapshot must be rejected");
+        assert_eq!(error.message, "linearization_identity_source_snapshot_format_invalid");
+
+        let mut nested_mismatch = identity.clone();
+        nested_mismatch.producer_build_identity["source_snapshot_sha256"] =
+            serde_json::json!("b".repeat(64));
+        let error = super::super::eigen_equilibrium_contract::
+            validate_linearization_identity_source_snapshots(&nested_mismatch)
+            .expect_err("nested producer source snapshot must bind to top-level field");
+        assert_eq!(
+            error.message,
+            "linearization_identity_source_snapshot_binding_mismatch"
+        );
+
+        let mut cross_build = identity;
+        cross_build.consumer_build_identity["source_snapshot_sha256"] =
+            serde_json::json!("b".repeat(64));
+        cross_build.consumer_source_snapshot_sha256 = "b".repeat(64);
+        let error = super::super::eigen_equilibrium_contract::
+            validate_linearization_identity_source_snapshots(&cross_build)
+            .expect_err("producer and consumer source snapshots must match");
+        assert_eq!(
+            error.message,
+            "linearization_identity_cross_build_source_snapshot_mismatch"
+        );
+    }
+
+    #[test]
+    fn r4_inspection_rejects_prefixed_snapshot_with_valid_framed_hash() {
+        let plan = super::super::eigen_tests::minimal_native_modal_plan();
+        let consumer_plan_bytes =
+            super::super::eigen_equilibrium_contract::consumer_plan_snapshot_bytes(&plan)
+                .expect("consumer plan fixture must serialize");
+        let mut artifacts = complete_r4_fixture(0, &consumer_plan_bytes);
+        let identity_path =
+            "eigen/metadata/sample_0000/linearization_identity.v2.json";
+        let preimage_path =
+            "eigen/metadata/sample_0000/linearization_identity_preimage.v1.json";
+        let identity_artifact = artifacts
+            .iter()
+            .find(|artifact| artifact.relative_path == identity_path)
+            .expect("identity fixture must be present");
+        let mut identity: super::super::eigen_equilibrium_contract::LinearizationIdentityV2 =
+            serde_json::from_slice(&identity_artifact.bytes)
+                .expect("identity fixture must deserialize");
+        identity.producer_source_snapshot_sha256 = format!("sha256:{}", "a".repeat(64));
+        identity.content_sha256.clear();
+        let preimage = serde_json::to_vec(&identity).expect("invalid identity must serialize");
+        identity.content_sha256 = super::super::eigen_equilibrium_contract::
+            linearization_identity_v2_content_sha256_from_preimage_bytes(&preimage);
+        let identity_bytes = serde_json::to_vec(&identity).expect("identity must serialize");
+        let preimage_sidecar =
+            super::super::eigen_equilibrium_contract::LinearizationIdentityPreimageV1 {
+                schema_version: super::super::eigen_equilibrium_contract::
+                    LINEARIZATION_IDENTITY_PREIMAGE_V1
+                    .to_string(),
+                identity_schema: super::super::eigen_equilibrium_contract::
+                    LINEARIZATION_IDENTITY_V2
+                    .to_string(),
+                identity_preimage_json: String::from_utf8(preimage.clone())
+                    .expect("identity preimage must be UTF-8"),
+                identity_preimage_sha256: format!("sha256:{:x}", Sha256::digest(&preimage)),
+                identity_content_sha256: identity.content_sha256.clone(),
+            };
+        let preimage_bytes =
+            serde_json::to_vec(&preimage_sidecar).expect("preimage sidecar must serialize");
+        for artifact in &mut artifacts {
+            if artifact.relative_path == identity_path {
+                artifact.bytes = identity_bytes.clone();
+            } else if artifact.relative_path == preimage_path {
+                artifact.bytes = preimage_bytes.clone();
+            }
+        }
+
+        let coverage = inspect_r4_sidecars(&artifacts, &[0]);
+        assert_eq!(coverage.status, "invalid");
+        assert!(coverage.reason.contains("source snapshot validation"));
+        assert!(coverage.reason.contains("format_invalid"));
+
+        let summary = serde_json::json!({
+            "solver_diagnostics": {
+                "linearization_identity_sha256": identity.content_sha256.clone()
+            }
+        });
+        let error = super::validate_published_linearization_identity_sidecars(
+            &summary,
+            &artifacts,
+            0,
+        )
+        .expect_err("published identity validation must reject prefixed snapshots");
+        assert!(error.message.contains("source_snapshot"));
     }
 
     #[test]

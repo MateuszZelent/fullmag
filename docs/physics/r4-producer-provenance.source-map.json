@@ -103,6 +103,18 @@
       "responsibility": "Strict source snapshot, schema, path i fail-closed cross-build policy."
     },
     {
+      "id": "producer-build-snapshot-format",
+      "path": "crates/fullmag-runner/src/fem/eigen_equilibrium_contract.rs",
+      "symbol": "is_strict_source_snapshot_sha256",
+      "responsibility": "Source snapshot build identity to 64 lowercase hex bez prefiksu; odrębny od digestów payloadu."
+    },
+    {
+      "id": "producer-build-snapshot-authority",
+      "path": "crates/fullmag-build-info/src/lib.rs",
+      "symbol": "identity",
+      "responsibility": "Canonical build identity kopiowana przez granicę producenta bez normalizacji."
+    },
+    {
       "id": "producer-cli-transport",
       "path": "crates/fullmag-cli/src/orchestrator.rs",
       "symbol": "accepted_relax_handoff_from_completed_stage_with_exact_artifacts",

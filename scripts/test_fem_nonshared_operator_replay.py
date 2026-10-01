@@ -15,6 +15,7 @@ sys.path.insert(0, str(SCRIPTS))
 
 from fem_nonshared_operator_replay import (  # noqa: E402
     NonSharedReplayError,
+    _validate_build_identity,
     raw_sha256,
     replay_nonshared_operator,
 )
@@ -63,6 +64,7 @@ OPERATOR_INPUT_RAW = (
     b'"active_node_count":1,"tangent_dof_count":2,"equilibrium_source_kind":"provided","include_exchange":true,"include_demag":false}'
 )
 OPERATOR_INPUT_SHA = "sha256:80c36708388ecda5dad3e86e69fba1d302ff79ce0d9b8cf11751354a5d2dd0f6"
+SOURCE_SNAPSHOT = "b6511df906eb213ffe5f820985c202cfc6cc5364c68becd569611de8bad506a5"
 
 
 def _digest(char: str) -> str:
@@ -138,7 +140,7 @@ def _bundle(root: Path, matrix_raw: bytes = MATRIX_PENCIL_RAW, phase: float = -2
         "producer_provenance": None,
         "producer_plan_snapshot": None,
         "producer_build_identity": None,
-        "consumer_build_identity": {"source_snapshot_sha256": _digest("a")},
+        "consumer_build_identity": {"source_snapshot_sha256": SOURCE_SNAPSHOT},
         "mesh": {
             "topology_fingerprint_v3": _digest("3"),
             "topology_fingerprint_v6": _digest("4"),
@@ -233,7 +235,7 @@ def _bundle(root: Path, matrix_raw: bytes = MATRIX_PENCIL_RAW, phase: float = -2
         "k_vector_rad_m": [2.0, 0.0, 0.0],
         "phase_convention": "ExpMinusIKDotTranslation",
         "floquet_pairs": operator["floquet_pairs"],
-        "consumer_build_identity": {"source_snapshot_sha256": _digest("a")},
+        "consumer_build_identity": {"source_snapshot_sha256": SOURCE_SNAPSHOT},
         "producer_build_identity": None,
         "source_handoff_sha256": None,
         "status": "NOT_VERIFIED",
@@ -417,6 +419,25 @@ def _rewrite_payload_bundle(
 
 
 class NonSharedOperatorReplayTests(unittest.TestCase):
+    def test_build_identity_uses_raw_lowercase_snapshot_hex(self) -> None:
+        self.assertEqual(
+            _validate_build_identity(
+                {"source_snapshot_sha256": SOURCE_SNAPSHOT}, "consumer_build_identity"
+            )["source_snapshot_sha256"],
+            SOURCE_SNAPSHOT,
+        )
+        for value in (
+            "sha256:" + SOURCE_SNAPSHOT,
+            SOURCE_SNAPSHOT.upper(),
+            "a" * 63,
+            None,
+        ):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(NonSharedReplayError, "source_snapshot_sha256"):
+                    _validate_build_identity(
+                        {"source_snapshot_sha256": value}, "consumer_build_identity"
+                    )
+
     def test_frozen_literals_match_recorded_raw_sha(self) -> None:
         self.assertEqual(raw_sha256(MESH_RAW), MESH_SHA)
         self.assertEqual(raw_sha256(MATRIX_PENCIL_RAW), MATRIX_PENCIL_SHA)

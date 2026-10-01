@@ -224,7 +224,7 @@
         "type": "str",
         "default": "required",
         "si_unit": "1",
-        "validation": "sha256:<64 lowercase hex> equal to producer build snapshot",
+        "validation": "64 lowercase hex without prefix, equal to producer build snapshot",
         "meaning": "explicit consumer expectation for cross-build policy",
         "backend_support": "FEM CPU/GPU payloads; runtime not verified",
         "problem_ir": "No change"

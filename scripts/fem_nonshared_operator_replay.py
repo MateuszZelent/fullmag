@@ -63,6 +63,7 @@ NATIVE_INPUT_DIAGNOSTICS_REFS_FIELD = (
 )
 
 _SHA256_RE = re.compile(r"sha256:[0-9a-f]{64}\Z")
+_RAW_SOURCE_SNAPSHOT_RE = re.compile(r"[0-9a-f]{64}\Z")
 _MAX_JSON_DEPTH = 128
 _REL_TOL = 5.0e-11
 _ABS_TOL = 1.0e-12
@@ -598,7 +599,13 @@ def _validate_build_identity(value: Any, label: str) -> Mapping[str, Any]:
         _fail(f"{label}: expected object")
     if "source_snapshot_sha256" not in value:
         _fail(f"{label}: source_snapshot_sha256 missing")
-    _digest(value["source_snapshot_sha256"], f"{label}.source_snapshot_sha256")
+    if (
+        type(value["source_snapshot_sha256"]) is not str
+        or _RAW_SOURCE_SNAPSHOT_RE.fullmatch(value["source_snapshot_sha256"]) is None
+    ):
+        _fail(
+            f"{label}.source_snapshot_sha256: expected 64 lowercase hexadecimal characters without sha256: prefix"
+        )
     return value
 
 

@@ -313,7 +313,7 @@ fn validate_producer_build_identity(
     if identity.built_at_utc.trim().is_empty()
         || identity.git_commit.trim().is_empty()
         || identity.worktree_state.trim().is_empty()
-        || !is_strict_sha256_digest(&identity.source_snapshot_sha256)
+        || !is_strict_source_snapshot_sha256(&identity.source_snapshot_sha256)
     {
         return Err(RunError {
             message: "fem_relaxation_producer_provenance_invalid: producer build identity"
@@ -787,13 +787,52 @@ fn strict_build_identity_snapshot(
     let snapshot = identity
         .get("source_snapshot_sha256")
         .and_then(serde_json::Value::as_str)
-        .filter(|value| is_strict_sha256_digest(value))
+        .filter(|value| is_strict_source_snapshot_sha256(value))
         .ok_or_else(|| RunError {
             message: format!(
                 "linearization_identity_missing_{role}_source_snapshot_sha256"
             ),
         })?;
     Ok(snapshot.to_string())
+}
+
+pub(super) fn validate_linearization_identity_source_snapshots(
+    identity: &LinearizationIdentityV2,
+) -> Result<(), RunError> {
+    if identity.cross_build_policy != "same_source_snapshot_required" {
+        return Err(RunError {
+            message: "linearization_identity_cross_build_policy_violation".to_string(),
+        });
+    }
+
+    let producer_build_snapshot =
+        strict_build_identity_snapshot(&identity.producer_build_identity, "producer")?;
+    let consumer_build_snapshot =
+        strict_build_identity_snapshot(&identity.consumer_build_identity, "consumer")?;
+
+    if !is_strict_source_snapshot_sha256(&identity.producer_source_snapshot_sha256)
+        || !is_strict_source_snapshot_sha256(&identity.consumer_source_snapshot_sha256)
+    {
+        return Err(RunError {
+            message: "linearization_identity_source_snapshot_format_invalid".to_string(),
+        });
+    }
+    if identity.producer_source_snapshot_sha256 != producer_build_snapshot
+        || identity.consumer_source_snapshot_sha256 != consumer_build_snapshot
+    {
+        return Err(RunError {
+            message: "linearization_identity_source_snapshot_binding_mismatch".to_string(),
+        });
+    }
+    if producer_build_snapshot != consumer_build_snapshot
+        || identity.producer_source_snapshot_sha256
+            != identity.consumer_source_snapshot_sha256
+    {
+        return Err(RunError {
+            message: "linearization_identity_cross_build_source_snapshot_mismatch".to_string(),
+        });
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
@@ -1929,6 +1968,15 @@ fn is_strict_sha256_digest(value: &str) -> bool {
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
+// BuildIdentity preserves the canonical managed build-info raw hex format.
+// Payload and physical signature digests above use a different, prefixed format.
+fn is_strict_source_snapshot_sha256(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
 fn linearization_identity_v2_preimage_bytes(
     identity: &LinearizationIdentityV2,
 ) -> Result<Vec<u8>, RunError> {
@@ -1937,13 +1985,7 @@ fn linearization_identity_v2_preimage_bytes(
             message: "linearization_identity_v2_schema_version_mismatch".to_string(),
         });
     }
-    if identity.cross_build_policy != "same_source_snapshot_required"
-        || identity.producer_source_snapshot_sha256 != identity.consumer_source_snapshot_sha256
-    {
-        return Err(RunError {
-            message: "linearization_identity_cross_build_policy_violation".to_string(),
-        });
-    }
+    validate_linearization_identity_source_snapshots(identity)?;
     let mut preimage = identity.clone();
     preimage.content_sha256.clear();
     serde_json::to_vec(&preimage).map_err(|error| RunError {
@@ -2511,15 +2553,44 @@ mod producer_provenance_tests {
             built_at_utc: "2026-10-01T00:00:00Z".to_string(),
             git_commit: "abc".to_string(),
             worktree_state: "clean".to_string(),
-            source_snapshot_sha256: bytes_sha256(b"source"),
+            source_snapshot_sha256: format!("{:x}", Sha256::digest(b"source")),
         };
         assert!(validate_producer_build_identity(&identity).is_ok());
+
+        let canonical_snapshot = identity.source_snapshot_sha256.clone();
+        identity.source_snapshot_sha256 = format!("sha256:{canonical_snapshot}");
+        assert!(validate_producer_build_identity(&identity).is_err());
+        identity.source_snapshot_sha256 = canonical_snapshot;
 
         identity.source_snapshot_sha256 = identity.source_snapshot_sha256.to_uppercase();
         assert!(validate_producer_build_identity(&identity).is_err());
 
         identity.source_snapshot_sha256 = String::new();
         assert!(validate_producer_build_identity(&identity).is_err());
+    }
+
+    #[test]
+    fn build_identity_snapshot_preserves_managed_raw_hex_and_rejects_payload_digest_format() {
+        let snapshot = "ab".repeat(32);
+        let identity = serde_json::json!({"source_snapshot_sha256": snapshot});
+        assert_eq!(
+            strict_build_identity_snapshot(&identity, "producer").unwrap(),
+            snapshot
+        );
+        for invalid in [
+            format!("sha256:{snapshot}"),
+            snapshot.to_uppercase(),
+            "a".repeat(63),
+            String::new(),
+        ] {
+            assert!(strict_build_identity_snapshot(
+                &serde_json::json!({"source_snapshot_sha256": invalid}),
+                "producer"
+            )
+            .is_err());
+        }
+        assert!(is_strict_sha256_digest(&format!("sha256:{snapshot}")));
+        assert!(!is_strict_sha256_digest(&snapshot));
     }
 
     #[test]
@@ -2583,7 +2654,7 @@ mod producer_provenance_tests {
                 built_at_utc: "2026-10-01T00:00:00Z".to_string(),
                 git_commit: "abc".to_string(),
                 worktree_state: "clean".to_string(),
-                source_snapshot_sha256: digest.clone(),
+                source_snapshot_sha256: "a".repeat(64),
             },
             producer_plan_snapshot: FemRelaxationProducerPlanSnapshot {
                 namespace: FEM_RELAXATION_PRODUCER_PLAN_NAMESPACE_V1.to_string(),

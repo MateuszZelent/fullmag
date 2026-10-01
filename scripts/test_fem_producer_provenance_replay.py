@@ -37,7 +37,8 @@ import verify_fem_frequency_domain_eigen_artifacts as verifier  # noqa: E402
 
 
 NODE_COUNT = 4
-SOURCE_SNAPSHOT = "sha256:" + "a" * 64
+# Raw build snapshot recorded by managed runtime job #195.
+SOURCE_SNAPSHOT = "b6511df906eb213ffe5f820985c202cfc6cc5364c68becd569611de8bad506a5"
 MATERIAL_SIGNATURE = "sha256:5acf82b569d679296e01d7724e5a2a83fc60ce37d3d711afd535143c4bdad5af"
 STATIC_SIGNATURE = "sha256:9f6f99073b14cc461ca1a7c9199282867bc2ce34789b38cd2f61a52124b63b48"
 BOUNDARY_SIGNATURE = "sha256:9b1e80acd4476df1caf3c63f83ea40e504993f67dbc6dbbbb74b29eaddf6aa3e"
@@ -591,7 +592,7 @@ class ProducerProvenanceReplayTests(unittest.TestCase):
             _rewrite_identity_field(
                 paths,
                 "consumer_source_snapshot_sha256",
-                "sha256:" + "9" * 64,
+                "9" * 64,
             )
             consumer = verifier.validate_consumer_plan_exact_replay(
                 paths.producer_root, manifest["artifacts"], {0}
@@ -723,8 +724,53 @@ class ProducerProvenanceReplayTests(unittest.TestCase):
                     expected_source_run_id="run-1",
                     expected_source_stage_id="relaxation-1",
                     expected_source_stage_kind="relaxation",
-                    expected_source_snapshot_sha256="sha256:" + "c" * 64,
+                    expected_source_snapshot_sha256="c" * 64,
                 )
+        finally:
+            temp.cleanup()
+
+    def test_source_snapshot_requires_raw_lowercase_hex(self) -> None:
+        for mutation in ("prefixed", "uppercase", "missing"):
+            with self.subTest(mutation=mutation):
+                temp, paths = self._bundle()
+                try:
+                    provenance = json.loads(paths.provenance_path.read_text())
+                    build = provenance["producer_build_identity"]
+                    if mutation == "prefixed":
+                        build["source_snapshot_sha256"] = "sha256:" + SOURCE_SNAPSHOT
+                    elif mutation == "uppercase":
+                        build["source_snapshot_sha256"] = SOURCE_SNAPSHOT.upper()
+                    else:
+                        build.pop("source_snapshot_sha256")
+                    paths.provenance_path.write_text(json.dumps(provenance))
+                    with self.assertRaisesRegex(
+                        ProducerProvenanceReplayError, "source_snapshot_sha256"
+                    ):
+                        replay_producer_provenance(
+                            paths,
+                            expected_source_run_id="run-1",
+                            expected_source_stage_id="relaxation-1",
+                            expected_source_stage_kind="relaxation",
+                            expected_source_snapshot_sha256=SOURCE_SNAPSHOT,
+                        )
+                finally:
+                    temp.cleanup()
+
+    def test_expected_source_snapshot_rejects_prefixed_or_missing_form(self) -> None:
+        temp, paths = self._bundle()
+        try:
+            for expected in ("sha256:" + SOURCE_SNAPSHOT, None):
+                with self.subTest(expected=expected):
+                    with self.assertRaisesRegex(
+                        ProducerProvenanceReplayError, "expected_source_snapshot_sha256"
+                    ):
+                        replay_producer_provenance(
+                            paths,
+                            expected_source_run_id="run-1",
+                            expected_source_stage_id="relaxation-1",
+                            expected_source_stage_kind="relaxation",
+                            expected_source_snapshot_sha256=expected,
+                        )
         finally:
             temp.cleanup()
 

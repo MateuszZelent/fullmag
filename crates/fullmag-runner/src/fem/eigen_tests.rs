@@ -504,7 +504,7 @@ fn exact_producer_fixture(with_declared_ku: bool) -> ExactProducerFixture {
             "built_at_utc": "2026-10-01T00:00:00Z",
             "git_commit": "fixture-producer",
             "worktree_state": "clean",
-            "source_snapshot_sha256": format!("sha256:{}", "a".repeat(64)),
+            "source_snapshot_sha256": "a".repeat(64),
         }),
         accepted_path,
         &accepted_fields_json,

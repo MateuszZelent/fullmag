@@ -41,6 +41,7 @@ PREIMAGE_FIELDS = frozenset({
     "schema_version", "identity_schema", "identity_preimage_json",
     "identity_preimage_sha256", "identity_content_sha256",
 })
+_RAW_SOURCE_SNAPSHOT_RE = re.compile(r"[0-9a-f]{64}\Z")
 
 
 class IdentityReplayError(ValueError):
@@ -120,6 +121,15 @@ def _digest(value: Any, label: str) -> str:
     return value
 
 
+def _source_snapshot(value: Any, label: str) -> str:
+    """Validate native build-info's raw lowercase SHA-256 spelling."""
+    if type(value) is not str or _RAW_SOURCE_SNAPSHOT_RE.fullmatch(value) is None:
+        raise IdentityReplayError(
+            f"{label}: expected 64 lowercase hexadecimal characters without sha256: prefix"
+        )
+    return value
+
+
 def replay_identity_preimage(identity_bytes: bytes, sidecar_bytes: bytes) -> str:
     """Verify exact identity bytes and return their declared framed digest.
 
@@ -143,6 +153,15 @@ def replay_identity_preimage(identity_bytes: bytes, sidecar_bytes: bytes) -> str
         elif key in {"producer_build_identity", "consumer_build_identity"}:
             if type(value) is not dict:
                 raise IdentityReplayError(f"identity.{key}: expected object")
+            _source_snapshot(
+                value.get("source_snapshot_sha256"),
+                f"identity.{key}.source_snapshot_sha256",
+            )
+        elif key in {
+            "producer_source_snapshot_sha256",
+            "consumer_source_snapshot_sha256",
+        }:
+            _source_snapshot(value, f"identity.{key}")
         elif type(value) is not str or not value:
             raise IdentityReplayError(f"identity.{key}: expected nonempty string")
     declared = _digest(identity["content_sha256"], "identity.content_sha256")
