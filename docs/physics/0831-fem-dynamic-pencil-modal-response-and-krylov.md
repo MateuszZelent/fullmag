@@ -1095,8 +1095,8 @@ study.stages.add_frequency_response(
 | `add_eigenmodes.equilibrium_artifact` | `str \| None` | `None` | $1$ | Required and non-empty for `equilibrium_source="artifact"`; a supplied value is always normalized as non-empty. | Immutable equilibrium artifact path. | FEM CPU/GPU authoring; runtime capability-gated | `study.equilibrium.path` for the artifact variant. |
 | `add_eigenmodes.normalization` | `str` | `"unit_l2"` | $1$ | One of `unit_l2`, `unit_max_amplitude`; other values raise `ValueError`. | Mode normalization request. | FEM CPU/GPU authoring; runtime capability-gated | `study.normalization`. |
 | `add_eigenmodes.damping_policy` | `str` | `"ignore"` | $1$ | One of `ignore`, `include`; `periodic_airbox_k0` requires `ignore`. | Whether Gilbert damping participates in the modal pencil. | FEM CPU/GPU authoring; runtime capability-gated | `study.damping_policy`. |
-| `add_eigenmodes.k_vector` | `tuple[float, float, float] \| None` | `None` | $\mathrm{rad\,m^{-1}}$ | Legacy single-$\mathbf k$ alias; finite three-vector; conflicts with a non-equivalent `k_sampling`; `periodic_airbox_k0` requires exact zero. | Single Bloch wave vector. | FEM CPU/GPU authoring; nonzero-k demag remains unsupported | `study.k_sampling={"kind":"single","k_vector":[...]}`. |
-| `add_eigenmodes.k_sampling` | `object \| None` | `None` | $1$ | Must lower through `coerce_k_sampling`; a simultaneous non-equivalent `k_vector` is rejected. | Single point, path or declared wave-vector sampling. | FEM CPU/GPU authoring; runtime capability-gated | `study.k_sampling`. |
+| `add_eigenmodes.k_vector` | `tuple[float, float, float] \| None` | `None` | $\mathrm{rad\,m^{-1}}$ | Legacy single-$\mathbf k$ alias; finite three-vector; conflicts with a non-equivalent `k_sampling`; `periodic_airbox_k0` requires exact zero. | Single Bloch wave vector. | FEM CPU authoring; bounded nearest-frequency Floquet-airbox demag route is source-visible and runtime-unvalidated; GPU remains unsupported | `study.k_sampling={"kind":"single","k_vector":[...]}`. |
+| `add_eigenmodes.k_sampling` | `object \| None` | `None` | $1$ | Must lower through `coerce_k_sampling`; a simultaneous non-equivalent `k_vector` is rejected. | Single point, path or declared wave-vector sampling. | FEM CPU authoring; bounded nearest-frequency Floquet-airbox demag route is source-visible and runtime-unvalidated; GPU remains unsupported | `study.k_sampling`. |
 | `add_eigenmodes.bias_field_sweep` | `BiasFieldSweep \| None` | `None` | $1$ | Must be `BiasFieldSweep`; requires single Gamma, demag, `periodic_airbox_k0`, periodic spin-wave BC and ignored damping. | Ordered physical bias-field sweep. | FEM CPU/GPU authoring; runtime capability-gated | `study.bias_field_sweep`. |
 | `add_eigenmodes.bc` | `str \| PeriodicBC \| FloquetBC \| dict` | `"free"` | $1$ | Must serialize as a supported spin-wave BC; periodic/floquet objects require non-empty pair IDs. | Dynamic magnetic boundary condition. | FEM CPU/GPU authoring; runtime capability-gated | `study.spin_wave_bc`. |
 | `add_eigenmodes.magnetostatic_bc` | `str` | `"open"` | $1$ | One of `open`, `periodic_airbox_k0`, `floquet_airbox`; `periodic_airbox_k0` additionally requires demag, periodic BC, zero $\mathbf k$ and ignored damping. | Dynamic magnetostatic boundary model. | FEM CPU/GPU authoring; runtime capability-gated | `study.magnetostatic_bc`. |
@@ -1264,6 +1264,50 @@ validated_scope = bounded workload description
 A synthetic algebra oracle or a narrow K0 macrospin result cannot promote a
 Poisson-airbox, nonzero-k, or general GPU capability.
 
+(nearest-floquet-selected-route)=
+#### 4.3.1 Bounded nearest-frequency Floquet diagnostic
+
+The FEM CPU capability gate now admits a bounded, selected-only nearest-frequency
+request for a nonzero-$k$ Floquet airbox with dynamic demagnetization. The request
+must keep the existing physical contract: `full_2x2`, demagnetization enabled in
+both the plan and operator, `damping_policy="ignore"`, a Poisson/Robin
+magnetostatic realization, `SharedDomainMeshWithAir`, valid magnetic and airbox
+periodic pair maps, and at least one nonzero sample. The runner classifies the
+periodic node pairs against the tet4 element markers and requires both a
+nonzero magnetic-pair count and a nonzero airbox-pair count; nonempty metadata
+lists alone are insufficient. These guards select the
+existing native MFEM/SLEPc Schur entry point; they do not introduce a second
+operator or a CPU fallback.
+
+`target="nearest"` carries one positive `target_frequency` in Hz. A single-$k$
+request and a multi-$k$ path use that same scalar target for every sample. The
+native request transfers the target kind and frequency unchanged, and orders
+accepted candidates by their distance from the target angular frequency. The
+original full descriptor, magnetic-block and potential-block residual checks and
+their existing tolerance remain the acceptance gate.
+
+Nearest is a diagnostic selection mode. Its artifacts must report
+`spectrum_completeness="selected_only"` and `window_complete=false`; a selected
+mode is not a complete frequency window, a complete spectrum, or a convergence
+claim. The `frequency_window` route remains the owner of window coverage and
+window-completeness evidence. The first planned diagnostic scope is five separate
+CPU points (Gamma and signed DE/BV controls) using the analytic $n=0$ slab value
+only as a search target. That analytic value is a comparison input, never a
+replacement operator or an acceptance oracle. Managed runtime, residual,
+mesh/airbox convergence, signed-path completeness, COMSOL A1 parity and GPU
+qualification remain open.
+
+The producer boundary for this metadata is
+`backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp`, after the
+Floquet owner has selected the nearest mode. Its native diagnostics and result
+envelopes must carry `target_kind="nearest_frequency"`, the finite requested
+`target_frequency_hz`, `spectrum_completeness="selected_only"` and
+`window_complete=false`. These fields describe the actual selected solve; they
+are not inferred by the runner from a target request. The frequency-window
+producer keeps its separate `window_completeness` contract and must not be
+marked selected-only by this route. Native compilation and runtime evidence for
+this producer remain pending.
+
 
 ### Kanoniczne klasy redukcji periodycznej FEM CPU
 
@@ -1430,7 +1474,10 @@ Floquet/airbox dynamic-demag path, GPU adapter and public requests are
 source-visible, but current-snapshot managed qualification of finite descriptor
 handling, production reduced response, device-resident Krylov, general GPU
 modal eigensolve, damping/nonuniform textures and physical K0 demag remains
-absent. Nonzero-k dynamic demag is gated as unqualified, nonzero-k DMI remains
+absent. The bounded nearest-frequency nonzero-k Floquet/demag request is now
+source-visible and selected-only, but its managed runtime, residual and physics
+qualification are still absent. Nonzero-k dynamic demag is therefore gated as
+unqualified, nonzero-k DMI remains
 unavailable, and fully 3D periodic demag remains unavailable; all unsupported
 combinations fail closed.
 
@@ -1981,6 +2028,10 @@ visibility into runtime qualification.
 | {eq}`eq-fem-floquet-full-projected-residuals` | FEM CPU Floquet | `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp` + `certify_floquet_full_descriptor` | Reconstruct the full weak equations, project into admissible test spaces, and check periodic seams and boundary-matched gauge policy. | Source review; managed build and pilot pending | source-visible; runtime certification NOT VERIFIED | repository working tree |
 | {eq}`eq-fem-floquet-full-projected-residuals` | FEM CPU runner | `crates/fullmag-runner/src/fem/eigen_native_result.rs` + `native_floquet_physical_mode_certificate_from_json` | Validate physical complex-coefficient certificate flags, residuals, and boundary/gauge provenance; preserve the inapplicable gauge residual as null. | Source review; Rust compilation pending managed build | source-visible; runtime propagation NOT VERIFIED | repository working tree |
 | {eq}`eq-fem-floquet-full-projected-residuals` | FEM CPU runner | `crates/fullmag-runner/src/fem/eigen_native_artifacts.rs` + `floquet_certificate_summary` | Publish the physical Floquet certificate summary without promoting an uncertified mode; keep the legacy doubled-real payload contract separate. | Source review; artifact validation pending managed execution | source-visible; runtime artifacts NOT VERIFIED | repository working tree |
+| Nearest-frequency nonzero-k Floquet selected diagnostic | FEM CPU | `crates/fullmag-runner/src/fem/eigen_capability.rs` + `native_cpu_modal_window_has_floquet_dynamic_demag_path`; `crates/fullmag-runner/src/fem/eigen_execution.rs` + `execute_fem_eigen_inner` | Route a bounded `target="nearest"` request through the existing Floquet/dynamic-demag Schur operator while retaining one global target per path, original residual gates and selected-only completeness. | `scripts/test_nearest_floquet_dynamic_demag_routing_source.py`; prepared Rust regressions `planned_floquet_dynamic_demag_nearest_target_dispatches_same_cpu_engine` and `native_cpu_modal_window_accepts_nonzero_floquet_airbox_demag_nearest_target` | Source/interpreted checks PASS; native compilation, managed runtime and physics qualification pending | working tree |
+| Nearest-frequency Floquet resolution | FEM CPU runner | `crates/fullmag-runner/src/fem/eigen_execution_resolution.rs` + `resolve_fem_eigen_execution_resolution` | Keep the exact Floquet CPU engine and double-precision contract for nearest single-k and constant-target multi-k paths. | `planned_floquet_dynamic_demag_nearest_target_dispatches_same_cpu_engine` | Source/interpreted checks PASS; native compilation and managed runtime pending | working tree |
+| source-nearest-floquet-native-producer-metadata | FEM CPU native producer | `backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp` + `solve_sparse_production_modal_payload` | Publish actual nearest target metadata and selected-only/window-incomplete semantics in both native diagnostics and result envelopes; leave frequency-window completeness separate. | `scripts/test_nearest_floquet_dynamic_demag_routing_source.py` | Source/interpreted checks PASS; native compilation, managed runtime and physics qualification pending | working tree |
+| Nearest-frequency routing source regression | Source verification | `scripts/test_nearest_floquet_dynamic_demag_routing_source.py` + `test_native_solver_keeps_residual_and_selected_only_policies` | Freeze public target transfer, original residual policies and selected-only/window-complete separation without claiming native execution. | Script PASS | Interpreted source check only; native compilation, managed runtime and physics qualification pending | working tree |
 | Stage-first modal capture | common | `packages/fullmag-py/src/fullmag/world.py` + `eigenmodes_stage` | Build the public modal stage specification. | Python API round-trip tests | source tested | [blob](https://github.com/MateuszZelent/fullmag/blob/70636fa61fcdf32b6f61b7544f347172ef36a219/packages/fullmag-py/src/fullmag/world.py) |
 | Stage-first driven capture | common | `packages/fullmag-py/src/fullmag/world.py` + `frequency_response_stage` | Build the public driven stage and normalized solver policy. | Python API round-trip tests | source tested | [blob](https://github.com/MateuszZelent/fullmag/blob/70636fa61fcdf32b6f61b7544f347172ef36a219/packages/fullmag-py/src/fullmag/world.py) |
 | Modal validation and lowering | common | `packages/fullmag-py/src/fullmag/model/study.py` + `class Eigenmodes` | Validate and serialize the modal request. | `test_study_stage_builder_eigenmodes_operator_roundtrips` | source tested | [blob](https://github.com/MateuszZelent/fullmag/blob/70636fa61fcdf32b6f61b7544f347172ef36a219/packages/fullmag-py/src/fullmag/model/study.py) |
@@ -2007,7 +2058,7 @@ visibility into runtime qualification.
 | Waveguide nonzero-k demagnetization oracle | FEM CPU planned | `backends/fem/include/frequency_domain/floquet_waveguide_demag_k.hpp` + `build_floquet_waveguide_demag_k_real_split` | Provide the bounded 2.5D modified-Helmholtz and Schur oracle; transverse MFEM assembly and open-boundary convergence remain separate. | `fem_floquet_waveguide_demag_k_contract` source is present; compile/runtime unvalidated | source visible; uncompiled/unvalidated | repository source |
 | Existing shared-domain Poisson owner | FEM CPU | `backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.hpp` + `assemble_poisson_airbox_shared_domain` | Preserve the existing K0/shared-domain assembly boundary while nonzero-k demag remains gated. | existing source contract tests | source visible; nonzero-k physics unvalidated | repository source |
 | Floquet pure-Neumann invertibility policy | FEM CPU | `backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp` + `assemble_poisson_airbox_shared_domain_payload` | For Floquet k, clear the k=0 gauge and defer scalar solvability to the phase-constrained operator factorization and residual checks; do not use a universal $|k|L$ cutoff. | source review; managed nonzero-k physics still unvalidated | source visible; nonzero-k physics unvalidated | [blob](https://github.com/MateuszZelent/fullmag/blob/7a8b57cf1ca6b64902cdee60945cebdda9e2bd4c/backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp) |
-| Cached K0 window preconditioning | FEM CPU | `backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.cpp` + `create_production_cached_window_preconditioner` | Retain demag in bounded cached preconditioning across shifts. | Managed runtime pending | source-visible / unvalidated | working tree |
+| Cached K0 window preconditioning | FEM CPU | `backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.cpp` + `bool create_production_cached_window_preconditioner` | Retain demag in bounded cached preconditioning across shifts. | Managed runtime pending | source-visible / unvalidated | working tree |
 | Bounded K0 Krylov selected spectrum | FEM CPU | `backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.cpp` + `bounded_krylov_dimensions` | Keep standalone positive nearest 2x and borrowed window 4x; bounded explicit ncv and diagnostic evidence. | Native regression prepared; printf arity 27 calls checked | source-visible / unvalidated | working tree |
 | K0 diagnostic variadic safety | Source verification | `scripts/check_fem_schur_printf_contract.py` + `check_source` | Match literal printf placeholders with variadic arguments; reject missing ncv. | 27 literal calls plus 5 regression checks PASS | source verification only | working tree |
 | Bounded K0 window ncv regression | FEM CPU test source | `backends/fem/tests/frequency_domain/poisson_airbox_modal_eigen_slepc_test.cpp` + `void FrequencyWindowDoesNotRetryWhenOnlyTheGlobalRequestIsSaturated` | Verify bounded base/refined ncv and every subwindow's actual published request. | Native unit compilation prohibited; prepared only | NOT VERIFIED | working tree |

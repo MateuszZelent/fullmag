@@ -2,6 +2,28 @@
 
 ## Aktualny stan — 2026-10-01, po commicie c5b14ffd4
 
+Zapisano i wysłano dwa kolejne checkpointy:
+`c9f10a1d41780f88cdee2a36f21a430612343932` (terminalny audyt Γ) oraz
+`a5ef668db1c2ef001086b4aac35b20160dea8def` (exact native input diagnostics).
+Drugi przyrost przeszedł niezależne review bez blokera P1/P2, 56 lekkich
+regresji, parser Rust i pełny validator noty. Główny verifier artefaktów po
+integracji ma 213 testów PASS (67,88 s). Zachowuje dokładne bajty C ABI,
+acykliczny preimage i referencje per próbka; native runtime pozostaje NOT VERIFIED.
+Przygotowaną regresję preserve/remap nowych sidecarów rozszerzono w
+`eigen_path_artifacts.rs`; parser PASS, wykonanie natywnego testu NOT VERIFIED.
+Follow-up: jawne strukturalne tablice ich referencji w manifestach nonshared.
+
+Nearest Γ/±DE/±BV jest przygotowany źródłowo: rzeczywisty adapter CPU
+publikuje selected-only, planner i executor używają wspólnego capability,
+który wymaga poprawnych par magnetic i airbox. Pilot wiąże cel z native
+solver.v1.json; odrzuca konflikty root/sample, bool indeks i przepełnienie
+GHz→Hz. 114 testów interpretowanych i 29 subtestów PASS; source contract,
+parser Rust oraz walidatory not PASS. Przygotowane testy native nie były
+kompilowane. Nowy managed build i fizyczne punkty pozostają NOT VERIFIED.
+Świeży runner: worker_alive=true, accepting_jobs=true, active_jobs=[], brak
+błędów, 13 304 324 096 B wolnego; runtime-v2 jest dopuszczony. To odczyt
+preflight, nie dowód przyszłego przyjęcia joba ani wykonania symulacji.
+
 Pilot na runtime #193 zakończył się błędem `frequency_window_subwindow_failed`:
 36 z 50 podokien poprawnych, 14 rozbieżnych. Obserwator 42033 zakończył się
 kodem 1, proces 168336 nie istnieje; wcześniejsze wpisy running są historyczne.

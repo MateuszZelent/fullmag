@@ -341,6 +341,74 @@ class PilotTests(unittest.TestCase):
         self.assertIn("export FULLMAG_GMSH_THREADS=1", single)
         self.assertIn("case_dir=/workspace/benchmark-output/de-smoke-k2", single)
 
+    def test_nearest_pilot_is_single_k_selected_only_and_fail_closed(self):
+        context = SimpleNamespace(source_tree=Path("/capsule"), runtime_root=Path("/runtime"),
+                                  image_digest="sha256:test",
+                                  job={"job_id": "a" * 32, "profile": "fem-cpu-slepc-runtime-v1"})
+        with patch.object(pilot.managed, "_compose_command",
+                          return_value=["docker", "run", "placeholder"]):
+            shell = pilot.compose_command(
+                context, Path("/outputs"), pilot=pilot.NEAREST_PILOT)[-1]
+            self.assertIn("export FULLMAG_DE_SMOKE_SAMPLING=k2", shell)
+            self.assertIn("export FULLMAG_DE_SMOKE_MODAL_TARGET=nearest", shell)
+            self.assertIn("export FULLMAG_DE_SMOKE_TARGET_FREQUENCY_GHZ=10", shell)
+            custom = pilot.compose_command(
+                context, Path("/outputs"), pilot=pilot.NEAREST_PILOT,
+                nearest_target_frequency_ghz="12.5")[-1]
+            self.assertIn("export FULLMAG_DE_SMOKE_TARGET_FREQUENCY_GHZ=12.5", custom)
+            for value in ("0", "-1", "nan", "inf", "-inf", "1e308", "bad"):
+                with self.subTest(value=value), self.assertRaises(pilot.managed.BenchmarkError):
+                    pilot.compose_command(
+                        context, Path("/outputs"), pilot=pilot.NEAREST_PILOT,
+                        nearest_target_frequency_ghz=value)
+            with self.assertRaisesRegex(pilot.managed.BenchmarkError, "single-k"):
+                pilot.compose_command(
+                    context, Path("/outputs"), pilot="de-smoke-two",
+                    nearest_target_frequency_ghz="10")
+            for single_pilot in ("de-smoke-k0", "de-smoke-k-25", "de-smoke-bv-k25"):
+                with self.subTest(single_pilot=single_pilot):
+                    shell = pilot.compose_command(
+                        context, Path("/outputs"), pilot=single_pilot,
+                        spectral_target="nearest", nearest_target_frequency_ghz="11.25")[-1]
+                    self.assertIn("export FULLMAG_DE_SMOKE_MODAL_TARGET=nearest", shell)
+                    self.assertIn("export FULLMAG_DE_SMOKE_TARGET_FREQUENCY_GHZ=11.25", shell)
+            with self.assertRaisesRegex(pilot.managed.BenchmarkError, "spectral-target"):
+                pilot.compose_command(
+                    context, Path("/outputs"), pilot="de-smoke-k2",
+                    nearest_target_frequency_ghz="10")
+
+    def test_selected_only_metadata_validator_does_not_claim_window(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            metadata = {"problem_meta": {"runtime_metadata": {"de_smoke": {
+                "schema": "fullmag.de-smoke.v1",
+                "modal_target": "nearest",
+                "target_frequency_hz": 12.5e9,
+                "selection_scope": "selected_only",
+                "window_complete": False,
+                "sampling": "k2",
+                "requested_mode_count": 1,
+                "k_vectors_rad_per_m": [[0.0, 2.0e6, 0.0]],
+            }}}}
+            (root / "metadata.json").write_text(json.dumps(metadata))
+            diagnostics = root / "eigen/diagnostics"
+            diagnostics.mkdir(parents=True)
+            (diagnostics / "solver.v1.json").write_text(json.dumps({
+                "target_kind": "nearest_frequency",
+                "spectrum_completeness": "selected_only",
+                "window_complete": False,
+                "target_omega_rad_s": 12.5e9 * 2.0 * 3.141592653589793,
+            }))
+            report = pilot.validate_selected_only_metadata(root, 12.5e9, "k2")
+            self.assertEqual(report["selection_scope"], "selected_only")
+            self.assertIs(report["window_complete"], False)
+            self.assertEqual(report["qualification"], "NOT VERIFIED")
+            self.assertEqual(report["native_diagnostics"]["target_kind"], "nearest_frequency")
+            metadata["problem_meta"]["runtime_metadata"]["de_smoke"]["window_complete"] = True
+            (root / "metadata.json").write_text(json.dumps(metadata))
+            with self.assertRaisesRegex(pilot.managed.BenchmarkError, "window_complete"):
+                pilot.validate_selected_only_metadata(root, 12.5e9)
+
 
 
     def test_thickness_request_is_explicit_and_checked_against_mesh_authoring(self):

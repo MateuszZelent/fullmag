@@ -3562,6 +3562,39 @@ void modal_nonzero_k_floquet_bloch_payload_with_dynamic_demag_k_is_admitted()
     check(contains(result.diagnostics_json, "\"value_count\":4"),
           "dynamic demag diagnostics must preserve the payload extent");
     fullmag_fem_frequency_domain_result_destroy(&result);
+
+    // The same admitted Floquet operator must publish selected-only metadata
+    // when the native target is nearest-frequency.  This remains a prepared
+    // contract regression until the managed SLEPc build is available.
+    request.target_kind = "nearest_frequency";
+    request.target_frequency_hz = 0.2;
+    FullmagFemFrequencyDomainResult nearest_result =
+        fullmag_fem_modal_eigen_solve(&request);
+    check(contains(nearest_result.diagnostics_json,
+                   "\"target_kind\":\"nearest_frequency\""),
+          "nearest Floquet diagnostics must publish the native target kind");
+    check(contains(nearest_result.diagnostics_json,
+                   "\"target_frequency_hz\":0.2"),
+          "nearest Floquet diagnostics must publish the requested target frequency");
+    check(contains(nearest_result.diagnostics_json,
+                   "\"spectrum_completeness\":\"selected_only\""),
+          "nearest Floquet diagnostics must publish selected-only completeness");
+    check(contains(nearest_result.diagnostics_json,
+                   "\"window_complete\":false"),
+          "nearest Floquet diagnostics must never publish a complete window");
+    check(contains(nearest_result.result_json,
+                   "\"target_kind\":\"nearest_frequency\""),
+          "nearest Floquet result must publish the native target kind");
+    check(contains(nearest_result.result_json,
+                   "\"target_frequency_hz\":0.2"),
+          "nearest Floquet result must publish the requested target frequency");
+    check(contains(nearest_result.result_json,
+                   "\"spectrum_completeness\":\"selected_only\""),
+          "nearest Floquet result must publish selected-only completeness");
+    check(contains(nearest_result.result_json,
+                   "\"window_complete\":false"),
+          "nearest Floquet result must never publish a complete window");
+    fullmag_fem_frequency_domain_result_destroy(&nearest_result);
 }
 
 void modal_nonzero_k_floquet_dynamic_demag_k_rejects_malformed_payload()

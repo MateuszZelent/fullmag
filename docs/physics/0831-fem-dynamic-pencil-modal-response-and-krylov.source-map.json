@@ -1470,7 +1470,7 @@
     {
       "id": "source-k0-cached-window-preconditioner",
       "path": "backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.cpp",
-      "symbol": "create_production_cached_window_preconditioner",
+      "symbol": "bool create_production_cached_window_preconditioner",
       "responsibility": "Cache bounded K0 window preconditioning without replacing the physical MatShell."
     },
     {
@@ -1868,6 +1868,41 @@
       "symbol": "build_eigen_path_frequency_domain_manifest",
       "evidence_status": "source_visible",
       "responsibility": "List only present accepted fields v1/v2 and linearization identity v2 sidecars in the multi-k manifest."
+    },
+    {
+      "id": "source-nearest-floquet-capability",
+      "path": "crates/fullmag-runner/src/fem/eigen_capability.rs",
+      "symbol": "native_cpu_modal_window_has_floquet_dynamic_demag_path",
+      "evidence_status": "source/interpreted checks PASS; native compilation and managed runtime pending",
+      "responsibility": "Admit nearest-frequency beside the existing frequency-window target only when the complete Floquet airbox dynamic-demag contract is present, including classified nonzero magnetic and airbox periodic-pair counts."
+    },
+    {
+      "id": "source-nearest-floquet-resolution",
+      "path": "crates/fullmag-runner/src/fem/eigen_execution_resolution.rs",
+      "symbol": "resolve_fem_eigen_execution_resolution",
+      "evidence_status": "source/interpreted checks PASS; native compilation and managed runtime pending",
+      "responsibility": "Bind a nearest-frequency nonzero-k plan to the exact CPU Floquet airbox Schur engine without changing device or precision policy."
+    },
+    {
+      "id": "source-nearest-floquet-execution",
+      "path": "crates/fullmag-runner/src/fem/eigen_execution.rs",
+      "symbol": "execute_fem_eigen_inner",
+      "evidence_status": "source/interpreted checks PASS; native compilation and managed runtime pending",
+      "responsibility": "Transfer one global target frequency per single-k or multi-k path to the existing native operator and preserve selected-only completeness."
+    },
+    {
+      "id": "source-nearest-floquet-native-producer-metadata",
+      "path": "backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp",
+      "symbol": "solve_sparse_production_modal_payload",
+      "evidence_status": "source-visible; interpreted regression PASS; native compilation and managed runtime pending",
+      "responsibility": "Publish the actual nearest-frequency Floquet result metadata: target kind and target frequency, selected-only spectrum completeness, and window_complete=false; leave the frequency-window producer contract separate."
+    },
+    {
+      "id": "source-nearest-floquet-routing-regression",
+      "path": "scripts/test_nearest_floquet_dynamic_demag_routing_source.py",
+      "symbol": "test_native_solver_keeps_residual_and_selected_only_policies",
+      "evidence_status": "interpreted source checks PASS; native compilation, managed runtime and physics qualification pending",
+      "responsibility": "Freeze public target transfer, unchanged residual policies, selected-only output and the prepared Rust single/path regressions."
     }
   ],
   "public_api": {
@@ -1989,7 +2024,7 @@
         "si_unit": "$\\mathrm{rad\\,m^{-1}}$",
         "validation": "Legacy single-$\\mathbf k$ alias; finite three-vector; conflicts with a non-equivalent `k_sampling`; `periodic_airbox_k0` requires exact zero.",
         "meaning": "Single Bloch wave vector.",
-        "backend_support": "FEM CPU/GPU authoring; nonzero-k demag remains unsupported",
+        "backend_support": "FEM CPU authoring; bounded nearest-frequency Floquet-airbox demag route is source-visible and runtime-unvalidated; GPU remains unsupported",
         "problem_ir": "`study.k_sampling={\"kind\":\"single\",\"k_vector\":[...]}`."
       },
       {
@@ -1999,7 +2034,7 @@
         "si_unit": "$1$",
         "validation": "Must lower through `coerce_k_sampling`; a simultaneous non-equivalent `k_vector` is rejected.",
         "meaning": "Single point, path or declared wave-vector sampling.",
-        "backend_support": "FEM CPU/GPU authoring; runtime capability-gated",
+        "backend_support": "FEM CPU authoring; bounded nearest-frequency Floquet-airbox demag route is source-visible and runtime-unvalidated; GPU remains unsupported",
         "problem_ir": "`study.k_sampling`."
       },
       {

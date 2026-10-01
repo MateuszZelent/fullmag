@@ -219,6 +219,31 @@ void append_optional_json_field(std::string &json, const std::string &field)
     json += "}";
 }
 
+bool is_nearest_frequency_target(const ModalEigenRequest &request) noexcept
+{
+    return request.target_kind != nullptr &&
+        std::strcmp(request.target_kind, "nearest_frequency") == 0;
+}
+
+std::string nearest_frequency_metadata_json(const ModalEigenRequest &request)
+{
+    if (!is_nearest_frequency_target(request)) {
+        return {};
+    }
+    return "\"target_kind\":\"nearest_frequency\","
+        "\"target_frequency_hz\":" +
+        format_double(request.target_frequency_hz) +
+        ",\"spectrum_completeness\":\"selected_only\","
+        "\"window_complete\":false";
+}
+
+void append_nearest_frequency_metadata(
+    std::string &json,
+    const ModalEigenRequest &request)
+{
+    append_optional_json_field(json, nearest_frequency_metadata_json(request));
+}
+
 std::string mode_kinematics_json_fields(ComplexEigenvalue lambda)
 {
     const ModeKinematics kinematics = map_eigenvalue(
@@ -292,6 +317,12 @@ std::string with_modal_request_diagnostics(
         diagnostics_json += operator_k_vector_diagnostics_json(request);
         diagnostics_json += modal_floquet_periodic_pair_diagnostics_json(request);
         diagnostics_json += dynamic_demag_k_diagnostics_json(request);
+        const std::string nearest_metadata =
+            nearest_frequency_metadata_json(request);
+        if (!nearest_metadata.empty()) {
+            diagnostics_json += ",";
+            diagnostics_json += nearest_metadata;
+        }
         if (modal_request_is_nonzero_k_floquet(request)) {
             diagnostics_json += ",\"floquet_modal_solver_model\":\"";
             diagnostics_json += floquet_modal_solver_model();
@@ -912,6 +943,7 @@ FrequencyDomainContractResult dense_payload_validation_error(
         "\"study_product\":\"modal_eigen\","
         "\"status\":\"validation_error\","
         "\"accepted_mode_count\":0}";
+    append_nearest_frequency_metadata(result.result_json, request);
     return result;
 }
 
@@ -940,6 +972,7 @@ FrequencyDomainContractResult sparse_payload_validation_error(
         "\"study_product\":\"modal_eigen\","
         "\"status\":\"validation_error\","
         "\"accepted_mode_count\":0}";
+    append_nearest_frequency_metadata(result.result_json, request);
     return result;
 }
 
@@ -1014,6 +1047,7 @@ FrequencyDomainContractResult sparse_payload_solver_pending_result(
             format_double(shift.shift_frequency_hz);
     }
     result.result_json += "}";
+    append_nearest_frequency_metadata(result.result_json, request);
     return result;
 }
 
@@ -1541,6 +1575,7 @@ FrequencyDomainContractResult contour_descriptor_certification_error(
         "\"unsupported_reason\":\"" +
         std::string(reason != nullptr ? reason : "floquet_original_descriptor_residual_failed") +
         "\"}";
+    append_nearest_frequency_metadata(result.result_json, request);
     return result;
 }
 
@@ -1771,6 +1806,7 @@ FrequencyDomainContractResult solve_dense_production_modal_contour_payload(
             "\",\"stop_reason\":\"" +
             std::string(window_stop_reason) +
             "\",\"window_completeness\":\"not_certified\"}";
+        append_nearest_frequency_metadata(result.result_json, request);
         return result;
     }
 
@@ -1888,6 +1924,7 @@ FrequencyDomainContractResult solve_dense_production_modal_contour_payload(
         completeness_status +
         "\",\"modes\":" +
         format_contour_modes_json(contour_result.modes) + "}";
+    append_nearest_frequency_metadata(result.result_json, request);
     result.artifact_manifest_path.clear();
     return result;
 }
@@ -2305,6 +2342,7 @@ FrequencyDomainContractResult solve_dense_production_modal_payload(
             ",\"shift_omega_rad_s\":" +
             format_double(shift.shift_omega_rad_s) +
             "}";
+        append_nearest_frequency_metadata(result.result_json, request);
         return result;
     }
 
@@ -2440,6 +2478,7 @@ FrequencyDomainContractResult solve_dense_production_modal_payload(
         format_double(shift.shift_omega_rad_s) +
         ",\"modes\":" +
         format_slepc_modes_json(slepc_result) + "}";
+    append_nearest_frequency_metadata(result.result_json, request);
     result.artifact_manifest_path.clear();
     return result;
 }
@@ -2549,6 +2588,7 @@ FrequencyDomainContractResult solve_sparse_production_modal_payload(
             ",\"shift_omega_rad_s\":" +
             format_double(shift.shift_omega_rad_s) +
             "}";
+        append_nearest_frequency_metadata(result.result_json, request);
         append_optional_json_field(result.diagnostics_json, demag_probe_json_field);
         append_optional_json_field(result.result_json, demag_probe_json_field);
         return result;
@@ -2687,6 +2727,7 @@ FrequencyDomainContractResult solve_sparse_production_modal_payload(
         format_double(shift.shift_omega_rad_s) +
         ",\"modes\":" +
         format_slepc_modes_json(slepc_result) + "}";
+    append_nearest_frequency_metadata(result.result_json, request);
     append_optional_json_field(result.diagnostics_json, demag_probe_json_field);
     append_optional_json_field(result.result_json, demag_probe_json_field);
     result.artifact_manifest_path.clear();
@@ -3184,6 +3225,7 @@ FrequencyDomainContractResult production_cpu_modal_eigen_unavailable(
             format_double(shift.shift_omega_rad_s);
     }
     result.result_json += "}";
+    append_nearest_frequency_metadata(result.result_json, request);
     result.artifact_manifest_path.clear();
     return result;
 }

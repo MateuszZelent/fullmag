@@ -2,10 +2,11 @@ from pathlib import Path
 import csv
 import json
 import pytest
-from validate_de_smoke_rows import load_spectrum_v3_modes, validate_rows, SAMPLING
+from validate_de_smoke_rows import (
+    load_spectrum_v3_modes, validate_rows, validate_selected_only_diagnostics, SAMPLING)
 
 MS = 800000.0
-MU0 = 1.25663706212e-6
+MU0 = 4.0 * 3.141592653589793 * 1e-7
 THICKNESS = 10e-9
 PERIOD = 40e-9
 PADDING = 2e-6
@@ -88,6 +89,19 @@ def diagnostics(sampling, *, probe_status='passed', missing_sample=None,
 
 def write_diagnostics(path, sampling, **kwargs):
     path.write_text(json.dumps(diagnostics(sampling, **kwargs)),encoding='utf-8')
+
+
+def write_selected_diagnostics(path, *, target_hz=12.5e9, target_kind='nearest_frequency',
+                               completeness='selected_only', window_complete=False,
+                               include_omega=True):
+    value = {
+        'target_kind': target_kind,
+        'spectrum_completeness': completeness,
+        'window_complete': window_complete,
+    }
+    if include_omega:
+        value['target_omega_rad_s'] = target_hz * 2.0 * 3.141592653589793
+    path.write_text(json.dumps(value), encoding='utf-8')
 
 
 def write_metadata(path):
@@ -218,6 +232,108 @@ def test_certified_nonzero_k_rows_keep_reduced_full_and_seam_residuals_distinct(
     assert mode['block_residuals']['eps_full'] == 5e-12
     assert result['status'] == 'pass'
     assert result['full_descriptor_certified'] is True
+
+
+def test_selected_only_rows_use_a_separate_scope_without_window_claim(tmp_path):
+    csv_path = tmp_path / 'dispersion.csv'
+    selected = rows('k2')
+    selected[0]['frequency_hz'] = 2.0e9
+    write(csv_path, selected)
+    diagnostics_path = tmp_path / 'solver.v1.json'
+    write_diagnostics(diagnostics_path, 'k2')
+    write_metadata(tmp_path / 'metadata.json')
+    write_spectrum_v3(tmp_path / 'spectrum.v3.json', 'k2')
+    spectrum = json.loads((tmp_path / 'spectrum.v3.json').read_text())
+    spectrum['samples'][0]['modes'][0]['frequency_hz'] = 2.0e9
+    (tmp_path / 'spectrum.v3.json').write_text(json.dumps(spectrum))
+
+    with pytest.raises(ValueError, match='outside the frozen DE-SMOKE window'):
+        validate_rows(csv_path, 'k2', diagnostics_path, tmp_path / 'metadata.json')
+    result = validate_rows(
+        csv_path, 'k2', diagnostics_path, tmp_path / 'metadata.json',
+        selection_scope='selected_only')
+    assert result['status'] == 'pass'
+    assert result['selection_scope'] == 'selected_only'
+    assert result['qualification'] == 'NOT VERIFIED'
+
+
+def test_selected_only_native_diagnostics_require_exact_target(tmp_path):
+    path = tmp_path / 'solver.v1.json'
+    write_selected_diagnostics(path)
+    report = validate_selected_only_diagnostics(path, 12.5e9)
+    assert report['status'] == 'pass'
+    assert report['target_kind'] == 'nearest_frequency'
+    assert report['target_field'] == 'target_omega_rad_s'
+    assert report['window_complete'] is False
+    for mutation, kwargs in (
+        ('wrong_kind', {'target_kind': 'frequency_window'}),
+        ('wrong_completeness', {'completeness': 'complete_window'}),
+        ('complete_window', {'window_complete': True}),
+        ('wrong_target', {'target_hz': 13e9}),
+        ('missing_target', {'include_omega': False}),
+    ):
+        with pytest.raises(ValueError):
+            write_selected_diagnostics(path, **kwargs)
+            validate_selected_only_diagnostics(path, 12.5e9)
+
+
+def test_selected_only_native_diagnostics_reads_the_single_sample_payload(tmp_path):
+    path = tmp_path / 'solver.v1.json'
+    path.write_text(json.dumps({
+        'sample_solver_diagnostics': [{
+            'sample_index': 0,
+            'diagnostics': {
+                'target_kind': 'nearest_frequency',
+                'spectrum_completeness': 'selected_only',
+                'window_complete': False,
+                'target_omega_rad_s': 12.5e9 * 2.0 * 3.141592653589793,
+            },
+        }],
+    }))
+    assert validate_selected_only_diagnostics(path, 12.5e9)['status'] == 'pass'
+    value = json.loads(path.read_text())
+    value['sample_solver_diagnostics'].append(value['sample_solver_diagnostics'][0])
+    path.write_text(json.dumps(value))
+    with pytest.raises(ValueError, match='one sample record'):
+        validate_selected_only_diagnostics(path, 12.5e9)
+
+
+@pytest.mark.parametrize('key,value', [
+    ('spectrum_completeness', 'complete_window'),
+    ('window_complete', True),
+    ('target_omega_rad_s', 13.0e9 * 2.0 * 3.141592653589793),
+])
+def test_selected_only_native_diagnostics_rejects_conflicting_root_alias(tmp_path, key, value):
+    path = tmp_path / 'solver.v1.json'
+    sample = {
+        'target_kind': 'nearest_frequency',
+        'spectrum_completeness': 'selected_only',
+        'window_complete': False,
+        'target_omega_rad_s': 12.5e9 * 2.0 * 3.141592653589793,
+    }
+    path.write_text(json.dumps({
+        'sample_solver_diagnostics': [{'sample_index': 0, 'diagnostics': sample}],
+        key: value,
+    }))
+    with pytest.raises(ValueError, match='root and sample diagnostics disagree'):
+        validate_selected_only_diagnostics(path, 12.5e9)
+
+
+def test_selected_only_native_diagnostics_rejects_boolean_sample_index(tmp_path):
+    path = tmp_path / 'solver.v1.json'
+    path.write_text(json.dumps({
+        'sample_solver_diagnostics': [{
+            'sample_index': False,
+            'diagnostics': {
+                'target_kind': 'nearest_frequency',
+                'spectrum_completeness': 'selected_only',
+                'window_complete': False,
+                'target_omega_rad_s': 12.5e9 * 2.0 * 3.141592653589793,
+            },
+        }],
+    }))
+    with pytest.raises(ValueError, match='identify sample 0'):
+        validate_selected_only_diagnostics(path, 12.5e9)
 
 
 def test_certified_nonzero_k_rows_reject_a_mismatched_full_residual_summary(tmp_path):

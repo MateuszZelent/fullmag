@@ -115,7 +115,7 @@ class ComparisonTests(unittest.TestCase):
                      "orientation": "M0=x,k=y,normal=z", "outer_boundary_kind": "poisson_dirichlet",
                      "film_thickness_m": 10e-9, "air_padding_each_side_m": 2e-6,
                      "saturation_magnetization_a_per_m": 800000, "exchange_stiffness_j_per_m": 13e-12,
-                     "external_induction_t": .1, "mu0_t_m_a": 1.25663706212e-6,
+                     "external_induction_t": .1, "mu0_t_m_a": 4 * math.pi * 1e-7,
                      "gamma0_m_per_a_s": 221100., "ky_rad_per_m": [2e6]}
             metadata = {"problem_meta": {"runtime_metadata": {"de_smoke": model}}}
             (run/"run-request.json").write_text(json.dumps(request))
@@ -180,7 +180,7 @@ class ComparisonTests(unittest.TestCase):
                          "orientation": "M0=x,k=y,normal=z", "outer_boundary_kind": "poisson_dirichlet",
                          "film_thickness_m": 10e-9, "air_padding_each_side_m": 2e-6,
                          "saturation_magnetization_a_per_m": 800000, "exchange_stiffness_j_per_m": 13e-12,
-                         "external_induction_t": .1, "mu0_t_m_a": 1.25663706212e-6,
+                         "external_induction_t": .1, "mu0_t_m_a": 4 * math.pi * 1e-7,
                          "gamma0_m_per_a_s": 221100., "ky_rad_per_m": list(ks)}
                 (run / "run-request.json").write_text(json.dumps(request))
                 (run / "run-result.json").write_text(json.dumps(result))
@@ -200,6 +200,42 @@ class ComparisonTests(unittest.TestCase):
                         self.assertEqual(loaded[2]["film_thickness_m"], 10e-9)
                         self.assertAlmostEqual(reference(ks[0], loaded[2]) / 1e9,
                                                13.67386817535, places=7)
+
+    def test_nearest_alias_is_selected_only_and_validates_native_contract(self):
+        with TemporaryDirectory() as tmp:
+            run = Path(tmp)
+            pilot = "de-smoke-nearest-k2"
+            case = run / pilot
+            (case / "eigen").mkdir(parents=True)
+            identity = {"model_sha256": "a" * 64, "job": {"job_id": "b" * 32},
+                        "source": {"snapshot_sha256": "c" * 64}}
+            request = {**identity, "schema": "fullmag.de-smoke.request.v1",
+                       "sampling": "k2", "modal_target": "nearest",
+                       "spectral_target": "nearest", "target_frequency_hz": 12.5e9}
+            result = {**identity, "schema": "fullmag.de-smoke.result.v1",
+                      "pilot": pilot, "status": "completed_unqualified", "return_code": 0}
+            model = {"schema": "fullmag.de-smoke.v1", "sampling": "k2",
+                     "orientation": "M0=x,k=y,normal=z", "outer_boundary_kind": "poisson_dirichlet",
+                     "film_thickness_m": 10e-9, "air_padding_each_side_m": 2e-6,
+                     "saturation_magnetization_a_per_m": 800000, "exchange_stiffness_j_per_m": 13e-12,
+                     "external_induction_t": .1, "mu0_t_m_a": 4 * math.pi * 1e-7,
+                     "gamma0_m_per_a_s": 221100., "ky_rad_per_m": [2e6],
+                     "modal_target": "nearest", "target_frequency_hz": 12.5e9,
+                     "selection_scope": "selected_only", "window_complete": False}
+            (run / "run-request.json").write_text(json.dumps(request))
+            (run / "run-result.json").write_text(json.dumps(result))
+            (case / "metadata.json").write_text(json.dumps(
+                {"problem_meta": {"runtime_metadata": {"de_smoke": model}}}))
+            (case / "eigen/dispersion.csv").write_text(
+                "sample_index,raw_mode_index,branch_id,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,frequency_hz,residual_norm\n"
+                "0,0,0,0,2000000,0,12500000000,1e-12\n")
+            with patch("validate_de_smoke_rows.validate_rows") as rows_validation, \
+                    patch("compare_de_100nm_pilot.validate_selected_only_diagnostics") as native_validation:
+                loaded = load_comparison_input(run)
+            rows_validation.assert_called_once()
+            self.assertEqual(rows_validation.call_args.kwargs["selection_scope"], "selected_only")
+            native_validation.assert_called_once()
+            self.assertEqual(loaded[3], (2e6,))
 
     def test_numerical_sample_indices_cannot_swap_wavevectors(self):
         with TemporaryDirectory() as tmp:

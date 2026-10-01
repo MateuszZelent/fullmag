@@ -2,13 +2,18 @@
 
 Default: Gamma and ky=2e6 rad/m. FULLMAG_DE_SMOKE_SAMPLING=k0 or k2 requests
 only the lowest target mode at the selected wavevector so a single-point solve does not ask
-each shift for a full four-mode bundle. FULLMAG_DE_SMOKE_SAMPLING=five selects
+each shift for a full four-mode bundle. FULLMAG_DE_SMOKE_MODAL_TARGET=nearest
+selects the mode nearest the finite positive
+FULLMAG_DE_SMOKE_TARGET_FREQUENCY_GHZ at one single-k point; this is a
+selected-only diagnostic and cannot certify a complete frequency window or a
+dispersion curve. FULLMAG_DE_SMOKE_SAMPLING=five selects
 all five prescribed points; signed-eleven selects Gamma and five pairs of
 positive/negative ky, one mode per point. References are evaluated after the native solve;
 this fixture does not select an analytic solver or claim qualification.
 """
 from __future__ import annotations
 
+import math
 import os
 import fullmag as fm
 
@@ -32,6 +37,39 @@ IS_GAMMA_SINGLE = IS_SINGLE and KY[0] == 0.0
 K_VECTORS = [(k, 0.0, 0.0) if IS_BV else (0.0, k, 0.0) for k in KY]
 FREQUENCY_MIN_HZ = 12e9 if SAMPLING in ("k25", "k-25") else 8.5e9
 FREQUENCY_MAX_HZ = 16e9 if (SAMPLING in ("k25", "k-25", "positive-six", "positive-26") or (IS_SINGLE and not IS_BV and abs(KY[0]) >= 15e6)) else 12e9
+MODAL_TARGET = os.environ.get("FULLMAG_DE_SMOKE_MODAL_TARGET", "frequency_window")
+if MODAL_TARGET not in {"frequency_window", "nearest"}:
+    raise ValueError(
+        "FULLMAG_DE_SMOKE_MODAL_TARGET must be 'frequency_window' or 'nearest', "
+        f"got {MODAL_TARGET!r}"
+    )
+if MODAL_TARGET == "nearest" and not IS_SINGLE:
+    raise ValueError(
+        "FULLMAG_DE_SMOKE_MODAL_TARGET=nearest requires exactly one single-k sampling point"
+    )
+if MODAL_TARGET == "nearest" and REQUESTED_MODE_COUNT != 1:
+    raise ValueError("nearest DE-SMOKE selection requires one requested mode")
+TARGET_FREQUENCY_HZ = None
+if MODAL_TARGET == "nearest":
+    _target_frequency_ghz_text = os.environ.get(
+        "FULLMAG_DE_SMOKE_TARGET_FREQUENCY_GHZ", "10.0"
+    )
+    try:
+        _target_frequency_ghz = float(_target_frequency_ghz_text)
+    except ValueError as exc:
+        raise ValueError(
+            "FULLMAG_DE_SMOKE_TARGET_FREQUENCY_GHZ must be a number, "
+            f"got {_target_frequency_ghz_text!r}"
+        ) from exc
+    if not math.isfinite(_target_frequency_ghz) or _target_frequency_ghz <= 0.0:
+        raise ValueError(
+            "FULLMAG_DE_SMOKE_TARGET_FREQUENCY_GHZ must be finite and positive"
+        )
+    TARGET_FREQUENCY_HZ = _target_frequency_ghz * 1.0e9
+    if not math.isfinite(TARGET_FREQUENCY_HZ):
+        raise ValueError(
+            "FULLMAG_DE_SMOKE_TARGET_FREQUENCY_GHZ overflows finite Hz range"
+        )
 RELAX_DT_S = 5e-15
 RELAX_MAX_STEPS = 50000
 RELAX_MAX_TIME_S = RELAX_DT_S * RELAX_MAX_STEPS
@@ -49,6 +87,7 @@ EIGEN_SOLVER_MAX_OUTER_ITERATIONS = 2000
 MS_A_PER_M = 800000.0
 A_J_PER_M = 13e-12
 GAMMA0_M_PER_A_S = 2.211e5
+MU0_T_M_A = 4.0 * math.pi * 1e-7
 B_EXT_T = 0.1
 FILM_THICKNESS_M = 10e-9
 CELL_PERIOD_M = 40e-9
@@ -115,7 +154,8 @@ study.runtime_metadata("de_smoke", {
     "cell_period_m": CELL_PERIOD_M,
     "air_padding_each_side_m": AIR_PADDING_EACH_SIDE_M,
     "saturation_magnetization_a_per_m": MS_A_PER_M,
-    "mu0_t_m_a": 1.25663706212e-6,
+    # Keep the published model convention bitwise aligned with fullmag-engine::MU0.
+    "mu0_t_m_a": MU0_T_M_A,
     "exchange_stiffness_j_per_m": A_J_PER_M,
     "gamma0_m_per_a_s": GAMMA0_M_PER_A_S,
     "external_induction_t": B_EXT_T,
@@ -127,6 +167,12 @@ study.runtime_metadata("de_smoke", {
     "dispersion_geometry": "backward_volume" if IS_BV else "damon_eshbach",
     "requested_mode_count": REQUESTED_MODE_COUNT,
     "orientation": "M0=x,k=x,normal=z" if IS_BV else "M0=x,k=y,normal=z",
+    "modal_target": MODAL_TARGET,
+    "target_frequency_hz": TARGET_FREQUENCY_HZ,
+    "frequency_window_hz": [FREQUENCY_MIN_HZ, FREQUENCY_MAX_HZ]
+    if MODAL_TARGET == "frequency_window" else None,
+    "selection_scope": "selected_only" if MODAL_TARGET == "nearest" else "frequency_window",
+    "window_complete": False if MODAL_TARGET == "nearest" else None,
     "eigen_solver_rtol": EIGEN_SOLVER_RTOL,
     "eigen_solver_max_outer_iterations": EIGEN_SOLVER_MAX_OUTER_ITERATIONS,
     "analytic_comparison": "postsolve_only",
@@ -136,8 +182,11 @@ study.stages.add_relax(stage_id="relax", algorithm="llg_overdamped",
                        dt=RELAX_DT_S, relax_alpha=0.5,
                        max_steps=RELAX_MAX_STEPS, tolA=1.0)
 study.stages.add_eigenmodes(
-    count=REQUESTED_MODE_COUNT, target="frequency_window", frequency_min=FREQUENCY_MIN_HZ,
-    frequency_max=FREQUENCY_MAX_HZ, operator="full_2x2", include_demag=True,
+    count=REQUESTED_MODE_COUNT, target=MODAL_TARGET,
+    target_frequency=TARGET_FREQUENCY_HZ if MODAL_TARGET == "nearest" else None,
+    frequency_min=FREQUENCY_MIN_HZ if MODAL_TARGET == "frequency_window" else None,
+    frequency_max=FREQUENCY_MAX_HZ if MODAL_TARGET == "frequency_window" else None,
+    operator="full_2x2", include_demag=True,
     solver_rtol=EIGEN_SOLVER_RTOL,
     solver_max_outer_iterations=EIGEN_SOLVER_MAX_OUTER_ITERATIONS,
     equilibrium_source="relax", normalization="unit_l2", damping_policy="ignore",

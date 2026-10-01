@@ -7,7 +7,8 @@ import json
 import math
 from pathlib import Path
 from verify_fem_frequency_domain_eigen_artifacts import kalinikos_slab_n0_frequency_hz
-from validate_de_smoke_rows import SAMPLING, load_spectrum_v3_modes
+from validate_de_smoke_rows import (
+    SAMPLING, load_spectrum_v3_modes, validate_selected_only_diagnostics)
 from de_pilot_receipts import validate_de_pilot_receipts
 
 PARAMETERS = dict(geometry="damon_eshbach", bias_field_a_per_m=0.1/(4e-7*math.pi),
@@ -111,11 +112,15 @@ def load_comparison_input(run):
     request = json.loads((run/"run-request.json").read_text(encoding="utf-8"))
     result = json.loads((run/"run-result.json").read_text(encoding="utf-8"))
     pilot = result.get("pilot")
-    sampling = pilot.removeprefix("de-smoke-") if isinstance(pilot, str) else None
+    nearest_alias = pilot == "de-smoke-nearest-k2"
+    sampling = (request.get("sampling") if nearest_alias else
+                pilot.removeprefix("de-smoke-") if isinstance(pilot, str) else None)
     if pilot != "de100" and (
             not isinstance(pilot, str) or not pilot.startswith("de-smoke-") or
             sampling not in SAMPLING or sampling.startswith("bv-")):
         raise ValueError("Unsupported DE pilot")
+    if nearest_alias and sampling != "k2":
+        raise ValueError("nearest DE-SMOKE alias must preserve k2 sampling")
     validate_de_pilot_receipts(request, result, pilot)
     metadata_path = run/pilot/"metadata.json"
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
@@ -151,10 +156,34 @@ def load_comparison_input(run):
     source = run/pilot/"eigen/dispersion.csv"
     if pilot != "de100":
         from validate_de_smoke_rows import validate_rows
-        sampling = pilot.removeprefix("de-smoke-")
         if model.get("sampling") != sampling or request.get("sampling") != sampling or tuple(expected_k) != SAMPLING[sampling]:
             raise ValueError("DE-SMOKE sampling metadata mismatch")
-        validate_rows(source, sampling, run/pilot/"eigen/diagnostics/solver.v1.json", metadata_path)
+        modal_target = model.get("modal_target", request.get("modal_target", "frequency_window"))
+        selected_only = nearest_alias or modal_target == "nearest"
+        if selected_only:
+            if len(SAMPLING[sampling]) != 1:
+                raise ValueError("selected-only comparison requires one k sample")
+            if (modal_target != "nearest" or model.get("selection_scope") != "selected_only" or
+                    model.get("window_complete") is not False):
+                raise ValueError("selected-only DE-SMOKE metadata is incomplete")
+            target_hz = model.get("target_frequency_hz")
+            if (isinstance(target_hz, bool) or not isinstance(target_hz, (int, float)) or
+                    not math.isfinite(target_hz) or target_hz <= 0):
+                raise ValueError("selected-only DE-SMOKE metadata has no target frequency")
+            request_target_hz = request.get("target_frequency_hz")
+            if request_target_hz is not None and (
+                    isinstance(request_target_hz, bool) or
+                    not isinstance(request_target_hz, (int, float)) or
+                    not math.isfinite(request_target_hz) or request_target_hz <= 0 or
+                    not math.isclose(float(request_target_hz), float(target_hz),
+                                     rel_tol=1e-12, abs_tol=1e-6)):
+                raise ValueError("selected-only request target disagrees with metadata")
+            diagnostics_path = run/pilot/"eigen/diagnostics/solver.v1.json"
+            validate_rows(source, sampling, diagnostics_path, metadata_path,
+                          selection_scope="selected_only")
+            validate_selected_only_diagnostics(diagnostics_path, float(target_hz))
+        else:
+            validate_rows(source, sampling, run/pilot/"eigen/diagnostics/solver.v1.json", metadata_path)
     rows = read_modes(source, expected_k)
     return request, rows, parameters, tuple(expected_k), padding, source, metadata_path
 
@@ -165,6 +194,18 @@ def main(argv=None):
     parser.add_argument("--branch-id", type=int, help="explicit branch selected using physical mode profiles")
     args = parser.parse_args(argv)
     request, rows, parameters, expected_k, padding, source, metadata_path = load_comparison_input(args.run)
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    result_path = args.run / "run-result.json"
+    result_payload = (json.loads(result_path.read_text(encoding="utf-8"))
+                      if result_path.exists() else {})
+    pilot = result_payload.get("pilot")
+    descriptor = "de_100nm_numeric_pilot" if pilot == "de100" else "de_smoke"
+    model_metadata = metadata.get("problem_meta", {}).get("runtime_metadata", {}).get(descriptor, {})
+    if not isinstance(model_metadata, dict):
+        model_metadata = {}
+    modal_target = request.get("spectral_target", request.get("modal_target",
+                        model_metadata.get("modal_target", "frequency_window")))
+    selected_only = (pilot == "de-smoke-nearest-k2" or modal_target == "nearest")
     comparison = (compare_branch(rows, args.branch_id, parameters, expected_k)
                   if args.branch_id is not None else None)
     import matplotlib
@@ -181,7 +222,8 @@ def main(argv=None):
         ax.plot([r["ky_rad_per_m"]/1e6 for r in comparison], [r["frequency_hz"]/1e9 for r in comparison], "o-", label=f"FEM: gałąź {args.branch_id}")
         with (output/"branch-comparison.csv").open("x", newline="", encoding="utf-8") as stream:
             writer=csv.DictWriter(stream,fieldnames=list(comparison[0]));writer.writeheader();writer.writerows(comparison)
-    ax.set(xlabel="k_y [rad/µm]", ylabel="f [GHz]", title=f"DE {parameters['film_thickness_m']*1e9:g} nm: FEM i referencja n=0 (bez kwalifikacji)")
+    title_scope = "selected-only" if selected_only else "frequency-window"
+    ax.set(xlabel="k_y [rad/µm]", ylabel="f [GHz]", title=f"DE {parameters['film_thickness_m']*1e9:g} nm: FEM i referencja n=0 ({title_scope}, bez kwalifikacji)")
     ax.grid(alpha=.25);ax.legend();fig.tight_layout()
     fig.savefig(output/"dispersion.png",dpi=180);fig.savefig(output/"dispersion.pdf");plt.close(fig)
     residual_scope_counts = {}
@@ -193,6 +235,10 @@ def main(argv=None):
         if residual is not None:
             residual_maxima[scope] = max(residual_maxima.get(scope, 0.0), residual)
     report={"qualification":"NOT VERIFIED", "parameters_from_metadata":parameters,
+            "modal_target":modal_target,
+            "selection_scope":"selected_only" if selected_only else "frequency_window",
+            "window_complete":False if selected_only else None,
+            "analytic_comparison":"postsolve_only",
             "residual_scope": next(iter(residual_scope_counts)) if len(residual_scope_counts) == 1 else "mixed",
             "residual_scope_counts":residual_scope_counts,
             "max_relative_residual_l2_by_scope":residual_maxima,
@@ -211,6 +257,9 @@ def main(argv=None):
                            "Uniform n=0 approximation; thickness-mode coupling is omitted.",
                            "Open-film analytic reference differs from a finite Dirichlet airbox.",
                            "Profile identification, spectral coverage and convergence remain required."]}
+    if selected_only:
+        report["limitations"].append(
+            "Selected-only contains one requested mode and is not a complete frequency window or dispersion qualification.")
     (output/"comparison.json").write_text(json.dumps(report,indent=2)+"\n")
     print(output)
     return 0

@@ -17,11 +17,14 @@ import sys
 import time
 
 import run_comsol_dispersion_benchmark as managed
-from validate_de_smoke_rows import validate_rows
+from validate_de_smoke_rows import validate_rows, validate_selected_only_diagnostics, SAMPLING
 from validate_de_physical_potential import validate_physical_potential, _extract_mesh
 import de_smoke_model_input as model_input
 
 MODEL = "examples/fem_de_film_100nm_numeric_pilot.py"
+NEAREST_PILOT = "de-smoke-nearest-k2"
+NEAREST_PILOTS = frozenset((NEAREST_PILOT,))
+DEFAULT_NEAREST_TARGET_FREQUENCY_GHZ = 10.0
 PILOTS = {
     "de100": (MODEL, None),
     "de-smoke-two": ("examples/fem_de_smoke_numeric.py", "two"),
@@ -35,6 +38,7 @@ PILOTS = {
     "de-smoke-positive-26": ("examples/fem_de_smoke_numeric.py", "positive-26"),
     "de-smoke-bv-positive-26": ("examples/fem_de_smoke_numeric.py", "bv-positive-26"),
     "de-smoke-signed-eleven": ("examples/fem_de_smoke_numeric.py", "signed-eleven"),
+    NEAREST_PILOT: ("examples/fem_de_smoke_numeric.py", "k2"),
 }
 for _geometry_prefix in ("", "bv-"):
     for _k_um in range(-25, 26):
@@ -55,6 +59,57 @@ def pilot_model(pilot):
     return PILOTS[pilot][0]
 
 
+def _is_single_k_pilot(pilot):
+    sampling = PILOTS.get(pilot, (None, None))[1]
+    return (pilot.startswith("de-smoke-") and sampling in SAMPLING and
+            len(SAMPLING[sampling]) == 1)
+
+
+def _modal_selection(pilot, target_frequency_ghz=None, spectral_target=None):
+    """Return the explicit modal target and its SI target frequency.
+
+    ``nearest`` is available for every existing single-k DE/BV/Γ pilot.  The
+    historical ``de-smoke-nearest-k2`` name remains an alias; all other calls
+    must opt in explicitly so a frequency-window request cannot silently become
+    selected-only.
+    """
+    if spectral_target not in (None, "frequency_window", "nearest"):
+        raise managed.BenchmarkError("unsupported spectral target")
+    alias_nearest = pilot in NEAREST_PILOTS
+    if alias_nearest and spectral_target == "frequency_window":
+        raise managed.BenchmarkError("nearest pilot cannot request frequency_window")
+    if target_frequency_ghz is not None and not (alias_nearest or spectral_target == "nearest"):
+        raise managed.BenchmarkError(
+            "nearest target requires --spectral-target nearest for a single-k DE-SMOKE pilot"
+        )
+    if spectral_target is None:
+        spectral_target = "nearest" if alias_nearest else "frequency_window"
+    if spectral_target == "frequency_window":
+        return "frequency_window", None
+    if not _is_single_k_pilot(pilot):
+        raise managed.BenchmarkError(
+            "nearest target requires an existing single-k DE/BV/Γ pilot"
+        )
+    if target_frequency_ghz is None:
+        target_frequency_ghz = DEFAULT_NEAREST_TARGET_FREQUENCY_GHZ
+    try:
+        target_frequency_ghz = float(target_frequency_ghz)
+    except (TypeError, ValueError) as error:
+        raise managed.BenchmarkError(
+            "nearest target frequency must be a finite positive number in GHz"
+        ) from error
+    if not math.isfinite(target_frequency_ghz) or target_frequency_ghz <= 0.0:
+        raise managed.BenchmarkError(
+            "nearest target frequency must be a finite positive number in GHz"
+        )
+    target_frequency_hz = target_frequency_ghz * 1.0e9
+    if not math.isfinite(target_frequency_hz):
+        raise managed.BenchmarkError(
+            "nearest target frequency overflows the finite Hz range"
+        )
+    return "nearest", target_frequency_hz
+
+
 def validate_model(context, pilot="de100"):
     model = pilot_model(pilot)
     entries = [entry for entry in context.manifest["files"] if entry["path"] == model]
@@ -68,8 +123,10 @@ def validate_model(context, pilot="de100"):
     return digest
 
 
-def compose_command(context, output, timeout_seconds=managed.DEFAULT_TIMEOUT_SECONDS, *, pilot="de100", external_model=False, dense_oracle=False, solver_rtol=None, eps_prefilter=None, shifted_ksp_rtol=None, gmres_restart=None, mesh_level=None, thickness_layers=None):
+def compose_command(context, output, timeout_seconds=managed.DEFAULT_TIMEOUT_SECONDS, *, pilot="de100", external_model=False, dense_oracle=False, solver_rtol=None, eps_prefilter=None, shifted_ksp_rtol=None, gmres_restart=None, mesh_level=None, thickness_layers=None, nearest_target_frequency_ghz=None, spectral_target=None):
     model = pilot_model(pilot)
+    modal_target, target_frequency_hz = _modal_selection(
+        pilot, nearest_target_frequency_ghz, spectral_target)
     if thickness_layers is not None and (
             not pilot.startswith("de-smoke-") or thickness_layers not in THICKNESS_LAYERS_CHOICES):
         raise managed.BenchmarkError("thickness layers require a supported DE-SMOKE value")
@@ -105,6 +162,11 @@ def compose_command(context, output, timeout_seconds=managed.DEFAULT_TIMEOUT_SEC
          else "source_script=/workspace/capsule/" + model),
         *(["export FULLMAG_GMSH_THREADS=1",
             "export FULLMAG_DE_SMOKE_SAMPLING=" + PILOTS[pilot][1]] if PILOTS[pilot][1] else []),
+        *(["export FULLMAG_DE_SMOKE_MODAL_TARGET=" + modal_target]
+          if PILOTS[pilot][1] else []),
+        *(["export FULLMAG_DE_SMOKE_TARGET_FREQUENCY_GHZ="
+           + format(target_frequency_hz / 1.0e9, ".17g")]
+          if modal_target == "nearest" else []),
         *(["export FULLMAG_FLOQUET_DENSE_ORACLE=1"] if dense_oracle else []),
         *(["export FULLMAG_DE_SMOKE_SOLVER_RTOL=" + solver_rtol] if solver_rtol else []),
         *(["export FULLMAG_FLOQUET_EPS_PREFILTER_ABS=" + eps_prefilter] if eps_prefilter else []),
@@ -175,6 +237,67 @@ def validate_smoke_potential_fields(case_dir, expected_sample_count):
             "mode_count": len(reports), "modes": reports}
 
 
+def validate_selected_only_metadata(case_dir, expected_target_frequency_hz, expected_sampling=None):
+    """Validate authoring and native scope of a one-point nearest-mode pilot.
+
+    Metadata proves the request, while ``solver.v1.json`` proves that the
+    native provider preserved the selected-only contract.  Neither promotes
+    the artifact to a complete window or dispersion result.
+    """
+    try:
+        metadata = json.loads((case_dir / "metadata.json").read_text(encoding="utf-8"))
+        model = metadata["problem_meta"]["runtime_metadata"]["de_smoke"]
+    except (OSError, json.JSONDecodeError, KeyError, TypeError) as error:
+        raise managed.BenchmarkError(
+            "selected-only DE-SMOKE metadata is missing or malformed"
+        ) from error
+    if not isinstance(model, dict) or model.get("schema") != "fullmag.de-smoke.v1":
+        raise managed.BenchmarkError("selected-only DE-SMOKE metadata has an unsupported schema")
+    if model.get("modal_target") != "nearest":
+        raise managed.BenchmarkError("selected-only DE-SMOKE metadata does not declare nearest target")
+    if model.get("selection_scope") != "selected_only":
+        raise managed.BenchmarkError("selected-only DE-SMOKE metadata has the wrong selection scope")
+    if model.get("window_complete") is not False:
+        raise managed.BenchmarkError("selected-only DE-SMOKE metadata must declare window_complete=false")
+    target_frequency_hz = model.get("target_frequency_hz")
+    if (isinstance(target_frequency_hz, bool) or
+            not isinstance(target_frequency_hz, (int, float)) or
+            not math.isfinite(target_frequency_hz) or target_frequency_hz <= 0.0 or
+            not math.isclose(target_frequency_hz, expected_target_frequency_hz,
+                             rel_tol=1e-12, abs_tol=0.0)):
+        raise managed.BenchmarkError("selected-only DE-SMOKE target frequency disagrees with the request")
+    sampling = model.get("sampling")
+    if not isinstance(sampling, str) or sampling not in {
+            f"{prefix}k{k}" for prefix in ("", "bv-") for k in range(-25, 26)}:
+        raise managed.BenchmarkError("selected-only DE-SMOKE metadata does not identify one single-k sample")
+    if expected_sampling is not None and sampling != expected_sampling:
+        raise managed.BenchmarkError("selected-only DE-SMOKE sampling disagrees with the request")
+    if model.get("requested_mode_count") != 1:
+        raise managed.BenchmarkError("selected-only DE-SMOKE metadata requests more than one mode")
+    vectors = model.get("k_vectors_rad_per_m")
+    if not isinstance(vectors, list) or len(vectors) != 1:
+        raise managed.BenchmarkError("selected-only DE-SMOKE metadata contains more than one k vector")
+    try:
+        native = validate_selected_only_diagnostics(
+            case_dir / "eigen/diagnostics/solver.v1.json", expected_target_frequency_hz)
+    except (OSError, ValueError) as error:
+        raise managed.BenchmarkError(
+            "selected-only DE-SMOKE native diagnostics are missing or inconsistent"
+        ) from error
+    return {
+        "schema": "fullmag.de-smoke-selected-only-preflight.v1",
+        "status": "pass",
+        "qualification": "NOT VERIFIED",
+        "selection_scope": "selected_only",
+        "window_complete": False,
+        "target_frequency_hz": float(target_frequency_hz),
+        "sampling": sampling,
+        "mode_count": 1,
+        "native_diagnostics": native,
+        "pending": ["full frequency-window coverage", "dispersion comparison and convergence"],
+    }
+
+
 def validate_mesh_level_metadata(case_dir, requested):
     """Verify authoring resolution; actual mesh convergence remains separate."""
     try:
@@ -239,8 +362,10 @@ def validate_thickness_layers_metadata(case, requested):
             "qualification": "NOT VERIFIED"}
 
 
-def execute(context, output, command, model_sha, timeout_seconds=managed.DEFAULT_TIMEOUT_SECONDS, *, pilot="de100", model_identity=None, dense_oracle=False, solver_rtol=None, eps_prefilter=None, shifted_ksp_rtol=None, gmres_restart=None, mesh_level=None, thickness_layers=None):
+def execute(context, output, command, model_sha, timeout_seconds=managed.DEFAULT_TIMEOUT_SECONDS, *, pilot="de100", model_identity=None, dense_oracle=False, solver_rtol=None, eps_prefilter=None, shifted_ksp_rtol=None, gmres_restart=None, mesh_level=None, thickness_layers=None, nearest_target_frequency_ghz=None, spectral_target=None):
     model = pilot_model(pilot)
+    modal_target, target_frequency_hz = _modal_selection(
+        pilot, nearest_target_frequency_ghz, spectral_target)
     schema_name = "de100-pilot" if pilot == "de100" else "de-smoke"
     request = managed._run_request(context, output, (), command, timeout_seconds=timeout_seconds)
     request.update(schema=f"fullmag.{schema_name}.request.v1", operation=pilot + "-numerical-pilot",
@@ -253,6 +378,11 @@ def execute(context, output, command, model_sha, timeout_seconds=managed.DEFAULT
     request["gmres_restart_diagnostic_requested"] = gmres_restart
     request["mesh_level_requested"] = mesh_level
     request["thickness_layers_requested"] = thickness_layers
+    request["modal_target"] = modal_target
+    request["spectral_target"] = modal_target
+    request["target_frequency_hz"] = target_frequency_hz
+    request["selection_scope"] = "selected_only" if modal_target == "nearest" else "frequency_window"
+    request["window_complete"] = False if modal_target == "nearest" else None
     request["source"]["public_model_files"] = [*managed.PUBLIC_MODEL_FILES] if model_identity else [model, *managed.PUBLIC_MODEL_FILES]
     if model_identity:
         request["model_source"] = model_identity
@@ -282,13 +412,21 @@ def execute(context, output, command, model_sha, timeout_seconds=managed.DEFAULT
             artifacts = managed._validate_case_artifacts(output / pilot, "c1")
             artifacts["case"] = pilot
             if PILOTS[pilot][1] is not None:
-                artifacts["row_preflight"] = validate_rows(
+                row_args = (
                     output / pilot / "eigen/dispersion.csv",
                     PILOTS[pilot][1],
                     output / pilot / "eigen/diagnostics/solver.v1.json",
-                    output / pilot / "metadata.json")
+                    output / pilot / "metadata.json",
+                )
+                artifacts["row_preflight"] = (
+                    validate_rows(*row_args, selection_scope="selected_only")
+                    if modal_target == "nearest" else validate_rows(*row_args)
+                )
                 artifacts["potential_reconstruction"] = validate_smoke_potential_fields(
                     output / pilot, artifacts["row_preflight"]["sample_count"])
+                if modal_target == "nearest":
+                    artifacts["selected_only_preflight"] = validate_selected_only_metadata(
+                        output / pilot, target_frequency_hz, PILOTS[pilot][1])
             if mesh_level is not None:
                 artifacts["mesh_level_resolution"] = validate_mesh_level_metadata(output / pilot, mesh_level)
             if thickness_layers is not None:
@@ -339,6 +477,15 @@ def main(argv=None):
                         help="diagnostic shift-invert KSP rtol for DE-SMOKE pilots")
     parser.add_argument("--gmres-restart", choices=GMRES_RESTART_CHOICES,
                         help="diagnostic shift-invert GMRES restart for DE-SMOKE pilots")
+    parser.add_argument(
+        "--spectral-target",
+        choices=("frequency_window", "nearest"),
+        help="explicit modal selection; nearest is limited to a single-k pilot",
+    )
+    parser.add_argument(
+        "--nearest-target-frequency-ghz",
+        help="finite positive nearest-mode target for --spectral-target nearest",
+    )
     args = parser.parse_args(argv)
     try:
         layout = managed.fullmag_storage.resolve_layout(args.repo_root, "windows-native")
@@ -358,7 +505,7 @@ def main(argv=None):
             output = Path(layout["storage_root"]) / "runs" / layout["worktree_id"] / args.job_id / (args.pilot + "-preview")
             print(json.dumps({"status": "dry_run", "qualification": "NOT VERIFIED",
                               "model_sha256": model_sha, "model_source": input_identity,
-                              "command": compose_command(context, output, pilot=args.pilot, external_model=input_identity is not None, dense_oracle=args.dense_oracle, solver_rtol=args.solver_rtol, eps_prefilter=args.eps_prefilter, shifted_ksp_rtol=args.shifted_ksp_rtol, gmres_restart=args.gmres_restart, mesh_level=args.mesh_level, thickness_layers=args.thickness_layers)}, indent=2))
+                              "command": compose_command(context, output, pilot=args.pilot, external_model=input_identity is not None, dense_oracle=args.dense_oracle, solver_rtol=args.solver_rtol, eps_prefilter=args.eps_prefilter, shifted_ksp_rtol=args.shifted_ksp_rtol, gmres_restart=args.gmres_restart, mesh_level=args.mesh_level, thickness_layers=args.thickness_layers, nearest_target_frequency_ghz=args.nearest_target_frequency_ghz, spectral_target=args.spectral_target)}, indent=2))
             return 0
         with managed.fullmag_storage.build_lock(layout):
             context = managed._validate_build_context(layout, managed._read_job(layout, args.job_id))
@@ -368,7 +515,7 @@ def main(argv=None):
             output.mkdir(parents=True, exist_ok=False)
             if input_data is not None:
                 model_input.stage_model(output, input_data)
-            return execute(context, output, compose_command(context, output, pilot=args.pilot, external_model=input_identity is not None, dense_oracle=args.dense_oracle, solver_rtol=args.solver_rtol, eps_prefilter=args.eps_prefilter, shifted_ksp_rtol=args.shifted_ksp_rtol, gmres_restart=args.gmres_restart, mesh_level=args.mesh_level, thickness_layers=args.thickness_layers), model_sha, pilot=args.pilot, model_identity=input_identity, dense_oracle=args.dense_oracle, solver_rtol=args.solver_rtol, eps_prefilter=args.eps_prefilter, shifted_ksp_rtol=args.shifted_ksp_rtol, gmres_restart=args.gmres_restart, mesh_level=args.mesh_level, thickness_layers=args.thickness_layers)
+            return execute(context, output, compose_command(context, output, pilot=args.pilot, external_model=input_identity is not None, dense_oracle=args.dense_oracle, solver_rtol=args.solver_rtol, eps_prefilter=args.eps_prefilter, shifted_ksp_rtol=args.shifted_ksp_rtol, gmres_restart=args.gmres_restart, mesh_level=args.mesh_level, thickness_layers=args.thickness_layers, nearest_target_frequency_ghz=args.nearest_target_frequency_ghz, spectral_target=args.spectral_target), model_sha, pilot=args.pilot, model_identity=input_identity, dense_oracle=args.dense_oracle, solver_rtol=args.solver_rtol, eps_prefilter=args.eps_prefilter, shifted_ksp_rtol=args.shifted_ksp_rtol, gmres_restart=args.gmres_restart, mesh_level=args.mesh_level, thickness_layers=args.thickness_layers, nearest_target_frequency_ghz=args.nearest_target_frequency_ghz, spectral_target=args.spectral_target)
     except (managed.BenchmarkError, managed.fullmag_storage.StorageError, OSError, ValueError, sqlite3.Error, subprocess.SubprocessError, SyntaxError) as error:
         print(f"de100-pilot: {error}", file=sys.stderr)
         return 2

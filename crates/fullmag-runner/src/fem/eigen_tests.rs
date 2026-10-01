@@ -4116,7 +4116,7 @@ fn bounded_floquet_dynamic_demag_execution_plan() -> FemEigenPlanIR {
         frequency_min_hz: 1.0e8,
         frequency_max_hz: 5.0e9,
     };
-    add_x_floquet_pair_to_plan(&mut plan);
+    configure_x_floquet_request(&mut plan);
     plan
 }
 
@@ -4430,6 +4430,40 @@ fn planned_floquet_dynamic_demag_cpu_resolution_dispatches_distinct_engine() {
     let execution = resolve_fem_eigen_execution_resolution(&plan, Some(&resolution))
         .expect("the materialized Floquet dynamic-demag resolution must validate")
         .expect("bounded Floquet dynamic-demag plans must have an exact execution");
+
+    assert_eq!(execution.lane(), FemEigenExecutionLane::Cpu);
+    assert_eq!(
+        execution.native_target(),
+        Some(native_fem::NativeModalExecutionTarget::ProductionCpu)
+    );
+    assert_eq!(execution.engine_id(), "floquet_airbox_cpu_schur_slepc");
+}
+
+#[test]
+fn planned_floquet_dynamic_demag_nearest_target_dispatches_same_cpu_engine() {
+    let mut plan = bounded_floquet_dynamic_demag_execution_plan();
+    plan.target = fullmag_ir::EigenTargetIR::Nearest {
+        frequency_hz: 2.0e9,
+    };
+    plan.k_sampling = Some(fullmag_ir::KSamplingIR::Path {
+        points: vec![
+            fullmag_ir::KPointIR {
+                label: Some("Γ".to_string()),
+                k_vector: [0.0, 0.0, 0.0],
+            },
+            fullmag_ir::KPointIR {
+                label: Some("X".to_string()),
+                k_vector: [1.0e6, 0.0, 0.0],
+            },
+        ],
+        samples_per_segment: vec![2],
+        closed: false,
+    });
+
+    let resolution = exact_floquet_dynamic_demag_resolution(fullmag_ir::ExecutionDevice::Cpu);
+    let execution = resolve_fem_eigen_execution_resolution(&plan, Some(&resolution))
+        .expect("nearest Floquet dynamic-demag resolution must validate")
+        .expect("nearest Floquet path must retain the exact CPU execution");
 
     assert_eq!(execution.lane(), FemEigenExecutionLane::Cpu);
     assert_eq!(
@@ -5009,6 +5043,15 @@ fn add_x_floquet_pair_to_plan(plan: &mut FemEigenPlanIR) {
         node_a: 0,
         node_b: 1,
     }];
+    configure_x_floquet_request(plan);
+}
+
+fn add_x_floquet_shared_domain_airbox_to_plan(plan: &mut FemEigenPlanIR) {
+    add_minimal_shared_domain_periodic_airbox(plan);
+    configure_x_floquet_request(plan);
+}
+
+fn configure_x_floquet_request(plan: &mut FemEigenPlanIR) {
     plan.spin_wave_bc = SpinWaveBoundaryConditionIR::Config(fullmag_ir::SpinWaveBoundaryConfigIR {
         kind: SpinWaveBoundaryKindIR::Floquet,
         boundary_pair_id: Some("x_faces".to_string()),
@@ -8067,19 +8110,8 @@ fn native_cpu_modal_window_accepts_nonzero_floquet_airbox_demag_path() {
     plan.enable_demag = true;
     plan.demag_realization = Some(fullmag_ir::ResolvedFemDemagIR::PoissonRobin);
     plan.domain_mesh_mode = fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir;
-    plan.air_box_config = Some(fullmag_ir::AirBoxConfigIR {
-        factor: 2.0,
-        grading: 1.2,
-        boundary_marker: 99,
-        bc_kind: Some("robin".to_string()),
-        robin_beta_mode: Some("dipole".to_string()),
-        robin_beta_factor: Some(2.0),
-        shape: Some("bbox".to_string()),
-        factor_source: Some("test".to_string()),
-        boundary_marker_source: Some("test".to_string()),
-    });
     plan.damping_policy = EigenDampingPolicyIR::Ignore;
-    add_x_floquet_pair_to_plan(&mut plan);
+    add_x_floquet_shared_domain_airbox_to_plan(&mut plan);
 
     assert!(
         native_cpu_modal_window_enabled(&plan),
@@ -8125,6 +8157,134 @@ fn native_cpu_modal_window_accepts_nonzero_floquet_airbox_demag_path() {
         point_plan.spin_wave_bc.kind(),
         SpinWaveBoundaryKindIR::Periodic
     );
+}
+
+#[test]
+fn native_cpu_modal_window_accepts_nonzero_floquet_airbox_demag_nearest_target() {
+    let mut plan = minimal_native_modal_plan();
+    plan.operator.kind = fullmag_ir::EigenOperatorIR::Full2x2;
+    plan.operator.include_demag = true;
+    plan.enable_demag = true;
+    plan.demag_realization = Some(fullmag_ir::ResolvedFemDemagIR::PoissonRobin);
+    plan.domain_mesh_mode = fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir;
+    plan.damping_policy = EigenDampingPolicyIR::Ignore;
+    plan.target = fullmag_ir::EigenTargetIR::Nearest {
+        frequency_hz: 2.0e9,
+    };
+    add_x_floquet_shared_domain_airbox_to_plan(&mut plan);
+
+    assert!(
+        native_cpu_modal_window_has_floquet_dynamic_demag_path(&plan),
+        "nearest nonzero-k Floquet airbox demag should use the bounded native CPU provider path"
+    );
+    assert!(native_cpu_modal_window_enabled(&plan));
+    assert_eq!(native_cpu_modal_window_rejection_reason(&plan), None);
+
+    // A path carries one explicit global target frequency.  It is not silently
+    // expanded into per-sample target frequencies by the capability gate.
+    plan.k_sampling = Some(KSamplingIR::Path {
+        points: vec![
+            KPointIR {
+                label: Some("Γ".to_string()),
+                k_vector: [0.0, 0.0, 0.0],
+            },
+            KPointIR {
+                label: Some("X".to_string()),
+                k_vector: [1.0e6, 0.0, 0.0],
+            },
+        ],
+        samples_per_segment: vec![2],
+        closed: false,
+    });
+    assert!(
+        native_cpu_modal_window_has_floquet_dynamic_demag_path(&plan),
+        "a valid multi-k nearest request must keep its single global target"
+    );
+}
+
+#[test]
+fn native_cpu_modal_window_rejects_floquet_airbox_demag_without_both_domain_pair_classes() {
+    let mut plan = minimal_native_modal_plan();
+    plan.operator.kind = fullmag_ir::EigenOperatorIR::Full2x2;
+    plan.operator.include_demag = true;
+    plan.enable_demag = true;
+    plan.demag_realization = Some(fullmag_ir::ResolvedFemDemagIR::PoissonRobin);
+    plan.domain_mesh_mode = fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir;
+    plan.damping_policy = EigenDampingPolicyIR::Ignore;
+    add_x_floquet_shared_domain_airbox_to_plan(&mut plan);
+
+    let complete_stats = periodic_domain_pair_stats(&plan.mesh)
+        .expect("shared-domain fixture must have valid tet4 pair metadata");
+    assert!(complete_stats.magnetic_pair_count > 0);
+    assert!(complete_stats.airbox_pair_count > 0);
+
+    let magnetic_pair = plan
+        .mesh
+        .periodic_node_pairs
+        .iter()
+        .find(|pair| {
+            let mut mesh = plan.mesh.clone();
+            mesh.periodic_node_pairs = vec![pair.clone()];
+            periodic_domain_pair_stats(&mesh)
+                .map(|stats| stats.magnetic_pair_count == 1 && stats.airbox_pair_count == 0)
+                .unwrap_or(false)
+        })
+        .cloned()
+        .expect("fixture must expose a magnetic periodic pair");
+    let airbox_pair = plan
+        .mesh
+        .periodic_node_pairs
+        .iter()
+        .find(|pair| {
+            let mut mesh = plan.mesh.clone();
+            mesh.periodic_node_pairs = vec![pair.clone()];
+            periodic_domain_pair_stats(&mesh)
+                .map(|stats| stats.magnetic_pair_count == 0 && stats.airbox_pair_count == 1)
+                .unwrap_or(false)
+        })
+        .cloned()
+        .expect("fixture must expose an airbox periodic pair");
+
+    let mut magnetic_only = plan.clone();
+    magnetic_only.mesh.periodic_node_pairs = vec![magnetic_pair.clone()];
+    assert!(
+        !native_cpu_modal_window_has_floquet_dynamic_demag_path(&magnetic_only),
+        "a nonempty magnetic-only pair map must not satisfy the shared-domain demag contract"
+    );
+
+    let mut mixed_domain = plan;
+    mixed_domain.mesh.periodic_node_pairs = vec![fullmag_ir::MeshPeriodicNodePairIR {
+        pair_id: magnetic_pair.pair_id,
+        node_a: magnetic_pair.node_a,
+        node_b: airbox_pair.node_a,
+    }];
+    assert!(
+        !native_cpu_modal_window_has_floquet_dynamic_demag_path(&mixed_domain),
+        "a magnetic-to-airbox mixed pair must not be counted as a valid domain pair"
+    );
+}
+
+#[test]
+fn native_cpu_modal_window_rejects_nonfinite_or_nonpositive_floquet_nearest_target() {
+    for frequency_hz in [0.0, -1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        let mut plan = minimal_native_modal_plan();
+        plan.operator.kind = fullmag_ir::EigenOperatorIR::Full2x2;
+        plan.operator.include_demag = true;
+        plan.enable_demag = true;
+        plan.demag_realization = Some(fullmag_ir::ResolvedFemDemagIR::PoissonRobin);
+        plan.domain_mesh_mode = fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir;
+        plan.damping_policy = EigenDampingPolicyIR::Ignore;
+        plan.target = fullmag_ir::EigenTargetIR::Nearest { frequency_hz };
+        add_x_floquet_shared_domain_airbox_to_plan(&mut plan);
+
+        assert!(!native_cpu_modal_window_has_floquet_dynamic_demag_path(
+            &plan
+        ));
+        assert_eq!(
+            native_cpu_modal_window_rejection_reason(&plan),
+            Some("production_cpu_modal_unsupported_floquet_target")
+        );
+    }
 }
 
 #[test]

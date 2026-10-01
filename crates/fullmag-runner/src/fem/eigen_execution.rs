@@ -51,7 +51,6 @@ use super::eigen_projection::{
     project_complex_mode_to_tangent_basis, project_real_mode_to_tangent_basis, tangent_bases,
 };
 use super::eigen_reduction::build_reduction_map;
-use super::eigen_reduction::k_sampling_contains_nonzero;
 use super::eigen_shared_domain::{
     native_shared_domain_magnetic_assembly_available, native_shared_domain_magnetic_assembly_error,
     shared_domain_k0_runtime_unavailable_error, validate_eigen_equilibrium_certificate,
@@ -1569,13 +1568,15 @@ pub(super) fn execute_fem_eigen_inner(
         }
         return Err(error);
     }
-    let native_nonzero_k_shared_domain_provider_requested = use_native_modal_production
-        && !try_gpu
-        && plan.enable_demag
-        && plan.operator.include_demag
-        && matches!(plan.spin_wave_bc.kind(), SpinWaveBoundaryKindIR::Floquet)
-        && k_sampling_contains_nonzero(plan.k_sampling.as_ref())
-        && matches!(plan.operator.kind, fullmag_ir::EigenOperatorIR::Full2x2);
+    // Keep the executor tied to the same complete capability predicate as the
+    // planner.  This admits nearest-frequency diagnostics beside the existing
+    // window route without allowing a caller to bypass the Floquet airbox,
+    // Poisson, pair-map or nonzero-k guards.  Nearest remains selected-only;
+    // the native result must not be promoted to a complete spectrum/window.
+    let native_nonzero_k_shared_domain_provider_requested =
+        use_native_modal_production
+            && !try_gpu
+            && native_cpu_modal_window_has_floquet_dynamic_demag_path(plan);
     if !native_nonzero_k_shared_domain_provider_requested {
         reject_unsupported_floquet_dynamic_demag(&plan.spin_wave_bc, plan.operator.include_demag)?;
     }

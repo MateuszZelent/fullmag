@@ -1,5 +1,6 @@
 """Public DSL to IR regression for the frozen, demagnetizing DE smoke case."""
 from pathlib import Path
+import math
 import sys
 
 import pytest
@@ -22,6 +23,8 @@ import fullmag as fm
 def test_de_smoke_preserves_physical_problem(monkeypatch, sampling, ky, mode_count):
     monkeypatch.setenv("FULLMAG_DE_SMOKE_SAMPLING", sampling)
     monkeypatch.delenv("FULLMAG_DE_SMOKE_SOLVER_RTOL", raising=False)
+    monkeypatch.delenv("FULLMAG_DE_SMOKE_MODAL_TARGET", raising=False)
+    monkeypatch.delenv("FULLMAG_DE_SMOKE_TARGET_FREQUENCY_GHZ", raising=False)
     # Canonical benchmark settings must not silently change this small control.
     monkeypatch.setenv("FULLMAG_COMSOL_DISPERSION_CASE", "a1")
     fm.reset()
@@ -42,6 +45,9 @@ def test_de_smoke_preserves_physical_problem(monkeypatch, sampling, ky, mode_cou
     assert material["exchange_stiffness"] == 13e-12
     assert next(t for t in eigen["energy_terms"] if t["kind"] == "zeeman")["B"] == [0.1, 0, 0]
     meta = eigen["problem_meta"]["runtime_metadata"]
+    engine_source = (ROOT / "crates/fullmag-engine/src/lib.rs").read_text(encoding="utf-8")
+    assert "pub const MU0: f64 = 4.0 * PI * 1e-7;" in engine_source
+    assert meta["de_smoke"]["mu0_t_m_a"] == 4.0 * math.pi * 1e-7
     assert meta["de_smoke"]["requested_mode_count"] == mode_count
     assert meta["runtime_selection"]["device"] == "cpu"
     assert meta["study_universe"]["size"] == pytest.approx([40e-9, 40e-9, 4010e-9])
@@ -80,6 +86,58 @@ def test_de_smoke_preserves_physical_problem(monkeypatch, sampling, ky, mode_cou
     assert mode["indices"] == list(range(mode_count))
     assert mode["sample_selector"]["sample_indices"] == list(range(len(ky)))
     assert "dispersion_validation" not in meta
+
+
+def test_nearest_single_k_target_is_explicitly_selected_only(monkeypatch):
+    monkeypatch.setenv("FULLMAG_DE_SMOKE_SAMPLING", "k2")
+    monkeypatch.setenv("FULLMAG_DE_SMOKE_MODAL_TARGET", "nearest")
+    monkeypatch.setenv("FULLMAG_DE_SMOKE_TARGET_FREQUENCY_GHZ", "10.0")
+    fm.reset()
+    try:
+        loaded = fm.load_problem_from_script(
+            ROOT / "examples/fem_de_smoke_numeric.py", lightweight_assets=True)
+        eigen = loaded.stages[-1].problem.to_ir(
+            requested_backend="fem", execution_mode="strict",
+            execution_precision="double", include_geometry_assets=False)
+    finally:
+        fm.reset()
+    study = eigen["study"]
+    metadata = eigen["problem_meta"]["runtime_metadata"]["de_smoke"]
+    assert study["count"] == 1
+    assert study["target"] == {"kind": "nearest", "frequency_hz": 10.0e9}
+    assert metadata["modal_target"] == "nearest"
+    assert metadata["target_frequency_hz"] == 10.0e9
+    assert metadata["selection_scope"] == "selected_only"
+    assert metadata["window_complete"] is False
+    assert metadata["frequency_window_hz"] is None
+    assert metadata["k_vectors_rad_per_m"] == [[0.0, 2.0e6, 0.0]]
+
+
+@pytest.mark.parametrize("target", ["0", "-1", "nan", "inf", "-inf", "1e308", "not-a-number"])
+def test_nearest_target_rejects_nonpositive_nonfinite_or_invalid_frequency(monkeypatch, target):
+    monkeypatch.setenv("FULLMAG_DE_SMOKE_SAMPLING", "k2")
+    monkeypatch.setenv("FULLMAG_DE_SMOKE_MODAL_TARGET", "nearest")
+    monkeypatch.setenv("FULLMAG_DE_SMOKE_TARGET_FREQUENCY_GHZ", target)
+    fm.reset()
+    try:
+        with pytest.raises(ValueError, match="FULLMAG_DE_SMOKE_TARGET_FREQUENCY_GHZ"):
+            fm.load_problem_from_script(
+                ROOT / "examples/fem_de_smoke_numeric.py", lightweight_assets=True)
+    finally:
+        fm.reset()
+
+
+def test_nearest_target_rejects_multi_k_sampling(monkeypatch):
+    monkeypatch.setenv("FULLMAG_DE_SMOKE_SAMPLING", "two")
+    monkeypatch.setenv("FULLMAG_DE_SMOKE_MODAL_TARGET", "nearest")
+    monkeypatch.setenv("FULLMAG_DE_SMOKE_TARGET_FREQUENCY_GHZ", "10.0")
+    fm.reset()
+    try:
+        with pytest.raises(ValueError, match="single-k"):
+            fm.load_problem_from_script(
+                ROOT / "examples/fem_de_smoke_numeric.py", lightweight_assets=True)
+    finally:
+        fm.reset()
 
 
 def test_invalid_sampling_is_rejected(monkeypatch):

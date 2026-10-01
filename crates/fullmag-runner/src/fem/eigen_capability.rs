@@ -75,18 +75,14 @@ pub(crate) fn native_cpu_modal_window_has_floquet_dynamic_demag_path(
             plan.damping_policy,
             fullmag_ir::EigenDampingPolicyIR::Ignore
         )
-        || !matches!(
-            plan.target,
-            fullmag_ir::EigenTargetIR::FrequencyWindow { .. }
-        )
+        || !native_cpu_modal_floquet_target_supported(&plan.target)
         || !matches!(plan.spin_wave_bc.kind(), SpinWaveBoundaryKindIR::Floquet)
         || plan.domain_mesh_mode != fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir
         || plan.air_box_config.is_none()
         || !plan
             .demag_realization
             .is_some_and(|realization| realization.is_poisson())
-        || plan.mesh.periodic_node_pairs.is_empty()
-        || plan.mesh.periodic_boundary_pairs.is_empty()
+        || !native_shared_domain_mesh_metadata_valid(plan)
     {
         return false;
     }
@@ -111,6 +107,24 @@ pub(crate) fn native_cpu_modal_window_has_floquet_dynamic_demag_path(
                 })
         }
         None => false,
+    }
+}
+
+/// The native Floquet Schur operator supports two spectral selection modes:
+/// a bounded frequency window and a diagnostic nearest-frequency request.
+/// `Nearest` deliberately remains selected-only; it does not imply a complete
+/// window or a complete spectrum certificate.
+fn native_cpu_modal_floquet_target_supported(target: &fullmag_ir::EigenTargetIR) -> bool {
+    match target {
+        fullmag_ir::EigenTargetIR::FrequencyWindow { .. } => true,
+        // Keep this boundary fail-closed even when a plan was assembled
+        // directly instead of passing through the public IR validator.  The
+        // public contract requires a finite positive nearest target; NaN and
+        // infinity must never reach the native target-distance calculation.
+        fullmag_ir::EigenTargetIR::Nearest { frequency_hz } => {
+            frequency_hz.is_finite() && *frequency_hz > 0.0
+        }
+        fullmag_ir::EigenTargetIR::Lowest => false,
     }
 }
 
@@ -151,10 +165,7 @@ pub(crate) fn native_cpu_modal_window_rejection_reason(
     if shared_domain_k0_modal_requested(plan) {
         return Some("production_cpu_modal_periodic_airbox_k0_payload_missing");
     }
-    if matches!(
-        plan.target,
-        fullmag_ir::EigenTargetIR::FrequencyWindow { .. }
-    ) && matches!(plan.operator.kind, fullmag_ir::EigenOperatorIR::Full2x2)
+    if matches!(plan.operator.kind, fullmag_ir::EigenOperatorIR::Full2x2)
         && matches!(
             plan.damping_policy,
             fullmag_ir::EigenDampingPolicyIR::Ignore
@@ -165,6 +176,9 @@ pub(crate) fn native_cpu_modal_window_rejection_reason(
         )
         && k_sampling_contains_nonzero(plan.k_sampling.as_ref())
     {
+        if !native_cpu_modal_floquet_target_supported(&plan.target) {
+            return Some("production_cpu_modal_unsupported_floquet_target");
+        }
         if plan.operator.include_demag {
             return Some("production_cpu_modal_dynamic_demag_k_operator_missing");
         }
