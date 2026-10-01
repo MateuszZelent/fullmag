@@ -505,7 +505,9 @@ def render_loaded_problem_as_script(
         lines.append("")
         lines.extend(spin_transport_lines)
 
-    field_drive_lines = _render_field_drives(base_problem, surface=surface)
+    field_drive_lines = _render_field_drives(
+        base_problem, overrides=overrides, surface=surface
+    )
     if field_drive_lines:
         lines.append("")
         lines.extend(field_drive_lines)
@@ -3917,12 +3919,22 @@ def _render_field_profile_payload_expr(profile: dict[str, object]) -> str:
     raise ValueError(f"unsupported field profile kind: {kind}")
 
 
-def _render_field_drives(problem: Problem, *, surface: str) -> list[str]:
-    if not problem.field_drives:
+def _render_field_drives(
+    problem: Problem, *, overrides: dict[str, object], surface: str
+) -> list[str]:
+    drives = overrides.get("field_drives", problem.field_drives)
+    if not isinstance(drives, (list, tuple)):
+        raise TypeError("field_drives override must be a list")
+    if not drives:
         return []
     lines = ["# Regional field drives"]
-    for drive in problem.field_drives:
-        expression = _render_regional_field_drive_expr(drive)
+    for drive in drives:
+        if isinstance(drive, RegionalFieldDrive):
+            expression = _render_regional_field_drive_expr(drive)
+        elif isinstance(drive, dict):
+            expression = _render_regional_field_drive_payload_expr(drive)
+        else:
+            raise TypeError("field_drives override must contain regional drives")
         if surface == "study":
             lines.append(f"study.field_drives.add({expression})")
         else:

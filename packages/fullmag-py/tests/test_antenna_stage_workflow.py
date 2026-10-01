@@ -997,3 +997,82 @@ def test_scene_document_adapters_preserve_all_antenna_collections() -> None:
         assert scene[collection][0]["id"] == item_id
         assert rebuilt[collection][0]["id"] == item_id
         assert overrides[collection][0]["id"] == item_id
+
+
+def test_scene_document_round_trip_without_antenna_collections() -> None:
+    scene = build_scene_document_from_builder({"stages": []})
+    rebuilt = build_builder_from_scene_document(scene)
+    overrides = builder_overrides_from_scene_document(scene)
+
+    for collection in (
+        "antenna_port_modes",
+        "antenna_field_solve_stages",
+        "antenna_target_projections",
+        "solved_antenna_drives",
+        "antenna_spectrum_requests",
+    ):
+        assert collection not in scene
+        assert collection not in rebuilt
+        assert collection not in overrides
+
+
+def test_scene_document_preserves_regional_drive_without_antenna() -> None:
+    regional_drive = fm.RegionalFieldDrive(
+        id="regional-drive-1",
+        name="Existing regional drive",
+        target=fm.FieldTarget.global_domain(),
+        amplitude_B_T=0.001,
+        direction=(0, 1, 0),
+        spatial_profile=fm.UniformFieldProfile(),
+        waveform=fm.Constant(),
+    ).to_ir()
+    scene = build_scene_document_from_builder({"field_drives": [regional_drive]})
+    rebuilt = build_builder_from_scene_document(scene)
+    overrides = builder_overrides_from_scene_document(scene)
+
+    assert scene["field_drives"]["drives"] == [regional_drive]
+    assert rebuilt["field_drives"] == [regional_drive]
+    assert overrides["field_drives"] == [regional_drive]
+    assert "solved_antenna_drives" not in scene
+
+
+def test_scene_regional_drive_edit_survives_python_export_and_reload(tmp_path: Path) -> None:
+    source = tmp_path / "regional_drive.py"
+    source.write_text(
+        """import fullmag as fm
+study = fm.study("regional-drive-roundtrip")
+film = study.geometry(fm.Box(100e-9, 40e-9, 5e-9), name="film")
+film.Ms = 800e3
+film.Aex = 13e-12
+film.alpha = 0.01
+study.field_drives.add(fm.RegionalFieldDrive(
+    id="regional-1", name="Regional", target=fm.FieldTarget.global_domain(),
+    amplitude_B_T=0.001, direction=(0, 1, 0),
+    spatial_profile=fm.UniformFieldProfile(), waveform=fm.Constant(),
+))
+study.stages.add_run(stage_id="run", until=1e-12)
+""",
+        encoding="utf-8",
+    )
+    loaded = load_problem_from_script(source, lightweight_assets=True)
+    scene = build_scene_document_from_builder(export_builder_draft(loaded))
+    scene["field_drives"]["drives"][0]["amplitude_B_T"] = 0.002
+    rendered = render_loaded_problem_as_script(
+        loaded, overrides=builder_overrides_from_scene_document(scene)
+    )
+    exported = tmp_path / "regional_drive_export.py"
+    exported.write_text(rendered, encoding="utf-8")
+    reloaded = load_problem_from_script(exported, lightweight_assets=True)
+
+    assert reloaded.problem.field_drives[0].amplitude_B_T == 0.002
+    assert reloaded.problem.antenna_field_solve_stages == ()
+
+    scene["field_drives"]["drives"] = []
+    cleared = render_loaded_problem_as_script(
+        loaded, overrides=builder_overrides_from_scene_document(scene)
+    )
+    cleared_path = tmp_path / "regional_drive_cleared.py"
+    cleared_path.write_text(cleared, encoding="utf-8")
+    assert load_problem_from_script(
+        cleared_path, lightweight_assets=True
+    ).problem.field_drives == ()

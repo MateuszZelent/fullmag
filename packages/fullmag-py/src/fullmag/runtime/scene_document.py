@@ -1710,6 +1710,7 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
     _copy_present_collection(builder, overrides, "spin_torques")
     _copy_present_collection(builder, overrides, "spin_transports")
     _copy_present_collection(builder, overrides, "oersted_terms")
+    _copy_present_collection(builder, overrides, "field_drives")
     _copy_present_collection(builder, overrides, "antenna_port_modes")
     _copy_present_collection(builder, overrides, "antenna_field_solve_stages")
     _copy_present_collection(builder, overrides, "antenna_target_projections")
