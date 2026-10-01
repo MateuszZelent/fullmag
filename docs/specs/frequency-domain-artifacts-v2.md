@@ -1321,7 +1321,15 @@ Their singular manifest keys are `equilibrium_artifact_v8_path` and
 `equilibrium_artifact_v8_paths[]` and `linearization_state_v7_paths[]`.
 Kontrakt R4 dodaje tablice `accepted_fem_equilibrium_fields_v1_paths[]`,
 `accepted_fem_equilibrium_fields_v2_paths[]` i `linearization_identity_v2_paths[]`.
+Dodatkowe tablice `certified_fem_equilibrium_fields_v1_paths[]`,
+`certified_fem_equilibrium_fields_v2_paths[]`,
+`recomputed_fem_linearization_certificate_v1_paths[]` oraz
+`recomputed_fem_linearization_certificate_v2_paths[]` zachowują endpoint
+recomputed i certyfikat różnic. Puste tablice nie dowodzą replay; producent
+kontynuacji musi dostarczyć wszystkie payloady przed kwalifikacją R4.
 Wskazują rzeczywiście obecne immutable sidecars w `eigen/metadata/sample_NNNN/`.
+Konflikt różnych bajtów podpisanych dokumentów pod jedną ścieżką próbki
+jest błędem agregacji; deduplikacja nie wybiera wtedy pierwszego dokumentu.
 Relokacja zachowuje dokładne bajty dokumentu, preimages i source identity;
 selekcja pól modów nie usuwa dowodów stanu równowagi policzonych próbek.
 Dla spectrum-only `mode_field_storage_format = "none"`; dokumenty stanu

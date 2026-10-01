@@ -56,6 +56,11 @@
     {"id": "epsilon_rel", "latex": "\\epsilon_{X,\\mathrm{rel}}", "meaning": "relative field tolerance", "si_unit": "1"}
   ],
   "sources": [
+    {"id": "source-independent-python-field-replay", "path": "scripts/fem_equilibrium_field_replay.py", "symbol": "replay_accepted_recomputed_fields", "responsibility": "Replay binary field digests and component differences; explicitly report missing certificate/source context."},
+    {"id": "source-python-field-replay-regression", "path": "scripts/test_fem_equilibrium_field_replay.py", "symbol": "test_frozen_v1_and_v2_binary_field_digests_match_rust", "responsibility": "Frozen V1/V2 digests and negative replay/preimage cases without native compilation."},
+    {"id": "source-r4-sidecar-conflict-propagation", "path": "crates/fullmag-runner/src/fem/eigen_path.rs", "symbol": "execute_fem_eigen_path", "responsibility": "Propagate conflicting signed sidecar errors before manifest publication."},
+    {"id": "source-r4-sidecar-persistence", "path": "crates/fullmag-runner/src/fem/eigen_path_artifacts.rs", "symbol": "single_k_signed_state_artifact", "responsibility": "Preserve exact accepted, certified, and recomputed certificate bytes per sample independently of mode selection."},
+    {"id": "source-r4-sidecar-discovery", "path": "crates/fullmag-runner/src/fem/eigen_path_manifest.rs", "symbol": "build_eigen_path_frequency_domain_manifest", "responsibility": "Publish plural paths only for actual R4 sidecars; empty paths are not replay proof."},
     {"id": "source-certified-fields", "path": "crates/fullmag-runner/src/types.rs", "symbol": "CertifiedFemEquilibriumFields", "responsibility": "Versioned static field views and exact material-family paths."},
     {"id": "source-tolerance-contract", "path": "crates/fullmag-runner/src/types.rs", "symbol": "FEM_LINEARIZATION_FIELD_ABSOLUTE_TOLERANCE_A_PER_M", "responsibility": "Shared accepted/recomputed replay tolerances."},
     {"id": "source-native-accepted-publication", "path": "crates/fullmag-runner/src/fem/relax/finalize.rs", "symbol": "finalize_native_fem_relaxation", "responsibility": "Publish the accepted endpoint before the refreshed endpoint."},

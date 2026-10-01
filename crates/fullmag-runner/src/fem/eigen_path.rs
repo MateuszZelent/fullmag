@@ -925,7 +925,7 @@ pub(crate) fn execute_fem_eigen_path(
         .collect();
     let branch_table_requested = selection.branch_table_requested();
     let mut mode_artifacts = adapter.mode_artifacts.into_inner();
-    deduplicate_auxiliary_artifacts_by_path(&mut mode_artifacts);
+    deduplicate_auxiliary_artifacts_by_path(&mut mode_artifacts)?;
     // The synthetic K0 validation oracle does not synthesize topology-bound mode
     // fields unless the caller explicitly requested EigenMode output. In
     // particular, an EigenSpectrum-only K0 field sweep must not trigger a

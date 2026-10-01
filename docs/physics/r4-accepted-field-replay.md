@@ -98,8 +98,10 @@ not a modal residual, mesh-convergence, or frequency-error threshold.
 (assumptions-and-validity)=
 ## 4. Assumptions and validity limits
 
-- The accepted and recomputed snapshots have the same node count, schema,
-  finite values, decomposition, and content digest.
+- Oba endpointy mają zgodną liczbę węzłów i rodzinę schematu. Każdy ma
+  skończone pola, poprawną dekompozycję i własny odtworzony digest. Digesty
+  accepted/recomputed mogą się różnić, jeśli różnice pól mieszczą się
+  w zadanych tolerancjach.
 - The magnetization digest is unchanged while the native fields are refreshed.
   This binds the comparison to one equilibrium endpoint.
 - V1 contains exchange, demag, external, effective, and potential views.  V2
@@ -247,7 +249,10 @@ change slice and are therefore `NOT VERIFIED` here.
 - [ ] Managed FEM CPU numerical replay
 - [ ] Managed FEM GPU numerical replay and device evidence
 - [ ] Mesh/airbox/mode convergence and COMSOL/TetraX comparison
-- [ ] Path-remapper/manifest persistence for accepted V1/V2 sidecars
+- [x] Source path-remapper/manifest persistence for accepted V1/V2 sidecars
+- [x] Source path-remapper/manifest persistence for certified fields and recomputed certificates
+- [ ] Complete per-sample payload publication by the continuation binder
+- [ ] Managed execution of path-remapper/manifest persistence
 - [ ] Source-identity V2 binding of accepted/recomputed payloads
 
 (scientific-bibliography)=
@@ -272,4 +277,32 @@ change slice and are therefore `NOT VERIFIED` here.
 | Required caller | `crates/fullmag-runner/src/fem/eigen_execution.rs` — `execute_bias_field_sample_with_relaxation` | Decode accepted and verified handoff | FEM CPU/GPU | source-visible |
 | Verified handoff | `crates/fullmag-runner/src/fem/eigen_equilibrium_contract.rs` — `from_completed_relax_verified` | Gate modal continuation | FEM CPU/GPU | source-visible |
 | Static field schema guard | `crates/fullmag-runner/src/fem/eigen_equilibrium_contract.rs` — `validate_certified_equilibrium_fields` | Enforce decomposition and digest | FEM CPU/GPU | source-visible |
+| R4 conflict propagation | `crates/fullmag-runner/src/fem/eigen_path.rs` — `execute_fem_eigen_path` | Abort before publishing conflicting signed evidence | FEM CPU/GPU | source-visible; runtime pending |
+| R4 sidecar persistence | `crates/fullmag-runner/src/fem/eigen_path_artifacts.rs` — `single_k_signed_state_artifact` | Exact bytes, independent mode selection | FEM CPU/GPU | source-visible; native pending |
+| R4 sidecar discovery | `crates/fullmag-runner/src/fem/eigen_path_manifest.rs` — `build_eigen_path_frequency_domain_manifest` | Actual per-sample plural paths | FEM CPU/GPU | source-visible; runtime pending |
+| Independent Python field replay | `scripts/fem_equilibrium_field_replay.py` — `replay_accepted_recomputed_fields` | Binary field digests, differences, exact certificate preimage and explicit context limitations | FEM CPU/GPU | interpreted fixture checks; runtime pending |
+| Python field replay regression | `scripts/test_fem_equilibrium_field_replay.py` — `test_frozen_v1_and_v2_binary_field_digests_match_rust` | Frozen digests, mutations and strict preimage types | FEM CPU/GPU | 8 interpreted groups PASS |
 | Interpreted regression | `scripts/test_fem_accepted_recomputed_replay_contract.py` — `run_accepted_recomputed_replay_contract` | Cross-layer source and numerical contract | all FEM lanes | local interpreted check |
+
+## Aktualizacja R4 multi-k — 2026-10-01
+
+Agregator zachowuje dokładne bajty accepted fields, certified fields oraz
+recomputed certificate obu rodzin w `eigen/metadata/sample_NNNN/`. Manifest
+wylicza tylko rzeczywiście obecne artefakty. Ich zachowanie nie zależy od
+wyboru pól modów; spectrum-only nie traci dowodów równowagi. Przygotowana
+regresja natywna obejmuje próbki 0, 2, 7 i oba źródłowe prefixy. Nie została
+uruchomiona. Binder kontynuacji nadal musi zachować i opublikować wszystkie
+payloady; obecność pustych tablic nie zamyka replay R4.
+
+Dwa źródłowe prefixy mogą wskazać jeden docelowy plik próbki. Przy różnych
+bajtach podpisanego sidecara agregacja zwraca błąd przed usunięciem
+duplikatów; identyczne duplikaty są redukowane. Przygotowana regresja
+sprawdza ten konflikt oraz rzeczywisty producent manifestu dla obu rodzin.
+Kompilacja i wykonanie tych regresji pozostają niewykonane.
+
+Niezależny moduł Python odtwarza binarne digesty pól V1/V2 i różnice obu
+endpointów. Osiem grup regresji przechodzi, w tym mutacje, boolowe liczby,
+duplikaty JSON oraz powiązanie dokładnego preimage z odczytanym certyfikatem.
+Brak preimage, magnetyzacji, topologii albo tożsamości źródła pozostaje jawną
+limitacją. Moduł nie jest jeszcze podłączony do pełnej bramki manifestu R4;
+fixtures nie dowodzą odtworzenia bieżącego solvera ani kwalifikacji naukowej.

@@ -53,6 +53,14 @@ pub(super) fn build_eigen_path_frequency_domain_manifest(
         mode_artifacts, "accepted_fem_equilibrium_fields.v2.json");
     let linearization_identity_v2_paths = eigen_path_state_metadata_paths(
         mode_artifacts, "linearization_identity.v2.json");
+    let certified_fem_equilibrium_fields_v1_paths = eigen_path_state_metadata_paths(
+        mode_artifacts, "certified_fem_equilibrium_fields.v1.json");
+    let certified_fem_equilibrium_fields_v2_paths = eigen_path_state_metadata_paths(
+        mode_artifacts, "certified_fem_equilibrium_fields.v2.json");
+    let recomputed_fem_linearization_certificate_v1_paths = eigen_path_state_metadata_paths(
+        mode_artifacts, "recomputed_fem_linearization_certificate.v1.json");
+    let recomputed_fem_linearization_certificate_v2_paths = eigen_path_state_metadata_paths(
+        mode_artifacts, "recomputed_fem_linearization_certificate.v2.json");
     let mode_field_resources = mode_metadata_paths
         .iter()
         .filter_map(|path| parse_eigen_path_mode_metadata_path(path))
@@ -317,6 +325,10 @@ pub(super) fn build_eigen_path_frequency_domain_manifest(
             "accepted_fem_equilibrium_fields_v1_paths": accepted_fem_equilibrium_fields_v1_paths,
             "accepted_fem_equilibrium_fields_v2_paths": accepted_fem_equilibrium_fields_v2_paths,
             "linearization_identity_v2_paths": linearization_identity_v2_paths,
+            "certified_fem_equilibrium_fields_v1_paths": certified_fem_equilibrium_fields_v1_paths,
+            "certified_fem_equilibrium_fields_v2_paths": certified_fem_equilibrium_fields_v2_paths,
+            "recomputed_fem_linearization_certificate_v1_paths": recomputed_fem_linearization_certificate_v1_paths,
+            "recomputed_fem_linearization_certificate_v2_paths": recomputed_fem_linearization_certificate_v2_paths,
             "frequency_point_paths": [],
         },
         "resources": {

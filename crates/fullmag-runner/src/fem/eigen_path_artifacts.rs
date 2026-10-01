@@ -614,6 +614,14 @@ mod output_publication_tests {
         let filenames = [
             ("equilibrium", "accepted_fem_equilibrium_fields.v1.json"),
             ("equilibrium", "accepted_fem_equilibrium_fields.v2.json"),
+            ("equilibrium", "certified_fem_equilibrium_fields.v1.json"),
+            ("equilibrium", "certified_fem_equilibrium_fields.v2.json"),
+            ("equilibrium", "recomputed_fem_linearization_certificate.v1.json"),
+            ("equilibrium", "recomputed_fem_linearization_certificate.v2.json"),
+            ("eigen/metadata", "certified_fem_equilibrium_fields.v1.json"),
+            ("eigen/metadata", "certified_fem_equilibrium_fields.v2.json"),
+            ("eigen/metadata", "recomputed_fem_linearization_certificate.v1.json"),
+            ("eigen/metadata", "recomputed_fem_linearization_certificate.v2.json"),
             ("eigen/metadata", "linearization_identity.v2.json"),
             ("eigen/metadata", "equilibrium_artifact.v7.json"),
             ("eigen/metadata", "equilibrium_artifact.v8.json"),
@@ -646,6 +654,68 @@ mod output_publication_tests {
                     vec![spectrum_only[0].relative_path.clone()]);
             }
         }
+    }
+
+    #[test]
+    fn actual_path_manifest_publishes_both_field_replay_families() {
+        let model = crate::eigen::EigenSolverModel::ReferenceScalarTangent;
+        let result = crate::eigen::PathSolveResult {
+            samples: [0, 2, 7].into_iter().map(|sample_index| crate::eigen::SingleKSolveResult {
+                sample: KSampleDescriptor {
+                    sample_index, label: None, segment_index: None,
+                    path_s: sample_index as f64, t_in_segment: 0.0,
+                    k_vector: [0.0, sample_index as f64, 0.0],
+                },
+                modes: Vec::new(), relaxation_steps: 0, solver_model: model,
+                solver_notes: Vec::new(), solver_diagnostics: None,
+            }).collect(),
+            branches: Vec::new(), solver_model: model, notes: Vec::new(),
+            include_demag: false, dispersion_validation: None,
+            k0_kittel_validation: None, solver_policy: None,
+            dispersion_analytic_reference: None, k0_kittel_periodic_airbox_demag: None,
+        };
+        for version in ["v1", "v2"] {
+            let mut artifacts = Vec::new();
+            for sample_index in [0, 2, 7] {
+                for stem in ["accepted_fem_equilibrium_fields", "certified_fem_equilibrium_fields",
+                             "recomputed_fem_linearization_certificate"] {
+                    artifacts.push(AuxiliaryArtifact {
+                        relative_path: format!("eigen/metadata/sample_{sample_index:04}/{stem}.{version}.json"),
+                        bytes: b"signed".to_vec(),
+                    });
+                }
+            }
+            let manifest = build_eigen_path_frequency_domain_manifest(
+                FemEngine::CpuNative, &result, &artifacts,
+                &residual_transport_test_plan(), &[]);
+            for stem in ["accepted_fem_equilibrium_fields", "certified_fem_equilibrium_fields",
+                         "recomputed_fem_linearization_certificate"] {
+                let key = format!("{stem}_{version}_paths");
+                let expected = [0, 2, 7].map(|sample_index| {
+                    format!("eigen/metadata/sample_{sample_index:04}/{stem}.{version}.json")
+                });
+                assert_eq!(manifest["artifacts"][&key], serde_json::json!(expected));
+                let other_version = if version == "v1" { "v2" } else { "v1" };
+                let other_key = format!("{stem}_{other_version}_paths");
+                assert_eq!(manifest["artifacts"][&other_key], serde_json::json!([]));
+            }
+            assert_eq!(manifest["artifacts"]["mode_field_storage_format"], "none");
+        }
+    }
+
+    #[test]
+    fn conflicting_signed_sample_sidecars_fail_before_deduplication() {
+        let path = "eigen/metadata/sample_0007/certified_fem_equilibrium_fields.v2.json";
+        let artifact = |bytes: &[u8]| AuxiliaryArtifact {
+            relative_path: path.into(), bytes: bytes.to_vec(),
+        };
+        let mut identical = vec![artifact(b"signed"), artifact(b"signed")];
+        deduplicate_auxiliary_artifacts_by_path(&mut identical).unwrap();
+        assert_eq!(identical.len(), 1);
+        let mut conflicting = vec![artifact(b"signed"), artifact(b"modified")];
+        let error = deduplicate_auxiliary_artifacts_by_path(&mut conflicting).unwrap_err();
+        assert!(error.message.contains("conflicting_signed_eigen_path_artifacts"));
+        assert_eq!(conflicting.len(), 2, "failed validation must not discard evidence");
     }
 
     #[test]
@@ -2071,7 +2141,15 @@ fn single_k_signed_state_artifact(relative_path: &str) -> bool {
         | "eigen/metadata/accepted_fem_equilibrium_fields.v1.json"
         | "eigen/metadata/accepted_fem_equilibrium_fields.v2.json"
         | "equilibrium/accepted_fem_equilibrium_fields.v1.json"
-        | "equilibrium/accepted_fem_equilibrium_fields.v2.json")
+        | "equilibrium/accepted_fem_equilibrium_fields.v2.json"
+        | "equilibrium/certified_fem_equilibrium_fields.v1.json"
+        | "equilibrium/certified_fem_equilibrium_fields.v2.json"
+        | "equilibrium/recomputed_fem_linearization_certificate.v1.json"
+        | "equilibrium/recomputed_fem_linearization_certificate.v2.json"
+        | "eigen/metadata/certified_fem_equilibrium_fields.v1.json"
+        | "eigen/metadata/certified_fem_equilibrium_fields.v2.json"
+        | "eigen/metadata/recomputed_fem_linearization_certificate.v1.json"
+        | "eigen/metadata/recomputed_fem_linearization_certificate.v2.json")
 }
 
 pub(super) fn remap_single_k_mode_artifact_path(
@@ -2176,9 +2254,30 @@ pub(super) fn remap_single_k_mode_json_value(value: &mut serde_json::Value, samp
 
 pub(super) fn deduplicate_auxiliary_artifacts_by_path(
     artifacts: &mut Vec<crate::types::AuxiliaryArtifact>,
-) {
+) -> Result<(), RunError> {
+    // Two source prefixes can relocate to one signed sample path.  Never
+    // silently choose one equilibrium certificate when their bytes disagree.
+    let mut signed_payloads = std::collections::HashMap::<&str, &[u8]>::new();
+    for artifact in artifacts.iter() {
+        if !eigen_path_signed_state_artifact(&artifact.relative_path) {
+            continue;
+        }
+        if let Some(previous) = signed_payloads.insert(
+            artifact.relative_path.as_str(), artifact.bytes.as_slice())
+        {
+            if previous != artifact.bytes.as_slice() {
+                return Err(RunError {
+                    message: format!(
+                        "conflicting_signed_eigen_path_artifacts: {}",
+                        artifact.relative_path),
+                });
+            }
+        }
+    }
+    drop(signed_payloads);
     let mut seen = HashSet::new();
     artifacts.retain(|artifact| seen.insert(artifact.relative_path.clone()));
+    Ok(())
 }
 
 #[cfg(test)]

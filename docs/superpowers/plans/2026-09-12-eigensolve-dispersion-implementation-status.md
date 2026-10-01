@@ -4596,3 +4596,40 @@ naprawione: import używa wspólnego invalidation helper, remesh czyści
 mesh/completion/stage/accepted/certified cache. AktualnyCLIparserPASS,
 14lightchecksPASS, stageddiffPASS po usunięciu pustej liniiEOF noty.
 Native/build/runtime i V3/sourceidentity/pełny Pythonreplay pozostają OPEN.
+
+## R4 — kolejny checkpoint implementacji, 2026-10-01
+
+- `283ee3aaaf2ae6debb4b31a577ca6bbd2eff6bd9`: exact material preimage replay
+  wybiera namespace V1/V2 ze schematu, zachowuje Ku=0 i oryginalne bajty.
+  Niezależny oracle Python i mapa naukowa PASS; native tests przygotowane.
+- `fefe69fd1d960c5f69883370453d1d7f1534ccc6`: walidacja przed i po przejściu
+  RelaxedInitialState → Provided, bez ponownej relaksacji i bez ponownego
+  użycia jednej równowagi dla field sweepu. Trzy source checks PASS;
+  regresje drift m0/material/static/boundary/mesh są przygotowane.
+- `7967801ee4bf85596516c9ef17c9678011ec96f3`: Python sprawdza siedem tablic
+  endpointów/certyfikatu/identity, rodziny i sample-sety. 25 regresji PASS,
+  dziewięć istniejących V7 PASS. CLI jawnie raportuje R4 NOT VERIFIED;
+  `--require-r4-replay` nie dopuszcza częściowego dowodu.
+- Agregator zachowuje certified fields i recomputed certificate V1/V2
+  bajt w bajt, również spectrum-only. Konflikt dwóch podpisanych payloadów
+  jednej ścieżki kończy się błędem przed dedupikacją i publikacją manifestu.
+  Niezależne review bez blokera; przygotowano test rzeczywistego manifestu.
+- Niezależny Python field replay ma 8 grup PASS: frozen binary digests V1/V2,
+  różnice, tolerancje, Ku/anisotropy i typed exact certificate preimage.
+  Brak producer preimage/source-context nie jest ukrywany jako PASS.
+
+Nie wykonano native compilation/test execution ani nowego solvera.
+Najbliższy krytyczny krok R4: zachować accepted endpoint oraz recomputed
+certificate w handoff, opublikować je wraz z exact preimage i identity V2,
+wiążąc źródło, raw/canonical materiał, m0 i oddzielne topologie. Obecny
+verified constructor kontroluje dane, lecz handoff zachowuje tylko certified
+fields. Następnie podłączyć cały replay do głównego walidatora.
+
+MFEM 4.10 ma source pin i observed-version attestation; obraz nadal pending.
+Konkretny job #189 / 529ac93e81744c5faf50494306d50a11 potwierdzono running.
+Nie rozpoczęto równoległego ciężkiego imagebuild. #188 jest terminal failed
+6/50 podokien; lokalny cluster nie jest końcowym punktem dyspersji.
+Po bezpiecznym zwolnieniu runnera: nowy obraz/ABI → pełny SHA runtime-only
+build → Γ → signed DE/BV → kompletne artefakty, zbieżność i COMSOL A1.
+Zakres S00–S12, waveguide, interakcje, GPU, browser/FMS i integracja pozostają
+w celu. Nie oznaczono całego celu ani R4 jako ukończonych.

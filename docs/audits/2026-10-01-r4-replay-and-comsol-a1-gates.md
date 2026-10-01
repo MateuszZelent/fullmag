@@ -7,14 +7,15 @@ Stan źródeł bazowych: `7b49e7a1d` na branchu
 
 | Priorytet | Luka | Wymagana naprawa i dowód | Stan |
 |---|---|---|---|
-| P1 | Accepted digest sprawdzany tylko składniowo | Opublikować historyczne accepted fields i niezależnie replayować oba payloady oraz różnice | implementacja w toku |
+| P1 | Accepted digest sprawdzany tylko składniowo | Opublikować historyczne accepted fields i niezależnie replayować oba payloady oraz różnice | źródła fa67eb3fd; native/runtime otwarte |
 | P1 | V1-only założenia starszego K0 | V1 Ku-free; V2 Ku, także Ku=0; anisotropy, spójne schematy i tolerancje | otwarte |
-| P1 | Material namespace hardkodowane V1 | Wybrać namespace z dokładnego schema preimage V1/V2; odrzucać mieszane rodziny | otwarte |
-| P1 | Multi-k zmienia RelaxedInitialState na Provided | Walidować przed zmianą i osobno Provided z identycznym m0/mesh/signature/handoff | otwarte |
-| P1 | Path agregator gubi accepted i identity sidecars | Relokacja per sample, dokładne bajty signed payloads i manifest plural paths | źródła w toku |
+| P1 | Material namespace hardkodowane V1 | Wybrać namespace z dokładnego schema preimage V1/V2; odrzucać mieszane rodziny | helper 283ee3aaa; integracja/runtime otwarte |
+| P1 | Multi-k zmienia RelaxedInitialState na Provided | Walidować przed zmianą i osobno Provided z identycznym m0/mesh/signature/handoff | źródła fefe69fd1; runtime otwarte |
+| P1 | Path agregator gubi accepted i identity sidecars | Relokacja per sample, dokładne bajty signed payloads i manifest plural paths | źródła 5a2257f31; Python review i runtime otwarte |
 | P1 | K0 binder fixture i topology assumptions | Dodać realny manifest fixture; rozdzielić relax source topology i modal mixedV3 | otwarte |
 | P1 | Python verifier V1-only | V1/V2 replay, Ku i mixed-family fail-closed, single/multi-k | otwarte |
 | P2 | Canonical material mylone z raw provenance | Oba hashe i scope zachować oddzielnie w source identity | otwarte |
+| P1 | Verified constructor odrzuca payloady po kontroli | Zachować accepted endpoint i recomputed certificate w handoff oraz opublikować je w binderze dla każdej próbki; aktualny handoff przechowuje tylko certified fields | otwarte |
 | P2 | Modal identity bez jawnego linku recomputed | Wiązać accepted i recomputed payload przez handoff digest oraz źródłowe SHA | otwarte |
 | P2 | Cross-build snapshot policy | Jawny kontrakt producent/konsument i regresja niezgodnego snapshotu | otwarte |
 
@@ -64,3 +65,42 @@ Częściowy frequency-only comparator nie jest kwalifikacją pełnej A1.
 Stara kapsuła nie zawiera MFEM4.10 ani F01/R4. Nie restartowano procesu.
 MFEM source commit2548bbb9440603d6128d34daeaab0009ab53b5fb jest na remote;
 nowy image/ABI/runtime pending. Wszystkie S00–S12 pozostają w zakresie celu.
+
+## Aktualizacja po terminalnym #188 i review — 2026-10-01
+
+Powyższe obserwacje żywego #188 są historyczne. Kontroler zakończył się
+exit1, kontener nie istnieje, sześć z pięćdziesięciu podokien zawiodło.
+Nie ma nowego zaakceptowanego punktu dyspersji. Diagnoza jest w
+`2026-10-01-job188-frequency-window-failure.md`.
+
+Accepted/recomputed replay jest zapisany w `fa67eb3fd622c8d38cf9555ddabbc9af3c7257f6`:
+producent zapisuje oddzielny endpoint, Rust sprawdza oba payloady oraz różnice,
+CLI używa publicznego zweryfikowanego konstruktora, legacy builder jest
+wewnętrzny. Import stanu i remesh unieważniają stare kontynuacje.
+14 lekkich kontroli i parser CLI przeszły; native i runtime są niewykonane.
+
+Plural path validation jest w review. Wersja identity v2 nie określa obecności
+Ku i nie może automatycznie wymuszać accepted fields v2. Obsługa bieżących
+manifestów nie jest certyfikacją pełnego R4. Pozostają niezależny replay
+payloadów w Pythonie, producent i powiązanie identity, V3/source snapshot,
+material namespace V1/V2 i bezpieczny Prepared/Provided multi-k.
+
+Runner potwierdza aktywny #189 z głównego checkoutu; MFEM 4.10 nie jest jeszcze
+wdrożony. Źródła i kontrola observed version są zapisane na branchu zadania.
+Nie uruchamiać równoległego ciężkiego builda obrazu ani zmieniać cudzego joba.
+Po zwolnieniu runnera: nowy obraz i ABI → build aktualnego pełnego SHA bez
+kompilacji unit targets → terminalny Γ → pojedyncze signed DE/BV → pełna seria
+oraz bramki zbieżności i COMSOL. Pełny zakres S00–S12 pozostaje otwarty.
+
+Następne ustalenie źródłowe: `from_completed_relax_verified` sprawdza accepted
+fields i recomputed certificate, następnie legacy builder przechowuje tylko
+certified fields. Dlatego sama allowlista agregatora nie zapewnia dowodów
+dla izolowanego eigenrun. Binder musi dostać i opublikować wszystkie trzy
+payloady, a tożsamość musi wiązać ich digesty. Nowe tablice certified/recomputed
+w manifeście są przygotowaniem tej trasy, a nie dowodem jej wykonania.
+
+Checkpoint: Python discovery konsumuje już siedem tablic i ma 25 regresji
+PASS (7967801ee4bf85596516c9ef17c9678011ec96f3). Oddzielny moduł field replay
+ma osiem grup PASS, lecz nie jest jeszcze podłączony do full R4 gate.
+Konflikt różniących się signed bytes pod jedną ścieżką jest fail-closed.
+Nie zamyka to brakującego bindera, identity V2, runtime ani nauki.
