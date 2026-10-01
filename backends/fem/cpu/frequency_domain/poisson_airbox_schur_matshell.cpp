@@ -192,6 +192,31 @@ double production_modal_eigensolver_tolerance(double residual_tolerance) noexcep
         std::min(1.0e-8, 1.0e-3 * std::max(residual_tolerance, 0.0)));
 }
 
+struct BoundedKrylovDimensions {
+    std::uint64_t nev = 0;
+    std::uint64_t ncv = 0;
+    bool valid = false;
+};
+
+BoundedKrylovDimensions bounded_krylov_dimensions(
+    std::uint64_t dimension,
+    std::uint64_t requested_nev) noexcept
+{
+    if (dimension < 2u || requested_nev == 0u) {
+        return {};
+    }
+    const std::uint64_t nev = std::min(dimension - 1u, requested_nev);
+    // Keep the Krylov basis at twice the requested Ritz count where possible,
+    // but never exceed the operator dimension.  The guarded nev < dimension
+    // makes nev + 1 representable and guarantees a proper subspace.
+    const std::uint64_t doubled_nev =
+        nev > dimension / 2u ? dimension : 2u * nev;
+    const std::uint64_t ncv = std::min(
+        dimension,
+        std::max(nev + 1u, doubled_nev));
+    return {nev, ncv, ncv > nev && ncv <= dimension};
+}
+
 double complex_l2_norm(const std::vector<Complex> &values) noexcept
 {
     long double sum = 0.0L;
@@ -3547,6 +3572,9 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                 maximum_nev,
                 4u * static_cast<std::uint64_t>(requested_count));
         };
+        const auto resolved_ncv = [split_dimension](std::uint64_t nev) {
+            return bounded_krylov_dimensions(split_dimension, nev).ncv;
+        };
         if (problem.requested_mode_count >
                 std::numeric_limits<std::uint32_t>::max() / 4u ||
             maximum_nev == 0u) {
@@ -4047,9 +4075,14 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                         in_window_modes.push_back(&mode);
                     }
                 }
+                const std::uint64_t resolved_subwindow_nev =
+                    resolved_nev(subwindow_requested_mode_count);
+                const std::uint64_t resolved_subwindow_ncv =
+                    resolved_ncv(resolved_subwindow_nev);
                 append_subwindow_json(
                     "%s{\"pass\":\"%s\",\"subwindow_index\":%u,"
                     "\"shift_frequency_hz\":%.17g,\"requested_nev\":%llu,"
+                    "\"requested_ncv\":%llu,"
                     "\"status\":\"%s\",\"converged_eigenpair_count\":%u,"
                     "\"candidate_mode_count\":%u,"
                     "\"candidate_mode_count_kind\":\"raw_ritz_in_window\","
@@ -4096,8 +4129,8 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                     pass_index == 0u ? "base" : "refinement",
                     subwindow_index,
                     shifted_problem.target_frequency_hz,
-                    static_cast<unsigned long long>(
-                        resolved_nev(subwindow_requested_mode_count)),
+                    static_cast<unsigned long long>(resolved_subwindow_nev),
+                    static_cast<unsigned long long>(resolved_subwindow_ncv),
                     shifted_status == FrequencyDomainStatus::ok &&
                             !subwindow_coverage_failed
                         ? "ok"
@@ -4312,9 +4345,10 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                 "{\"schema_version\":\"poisson_airbox_frequency_window_certificate.v1\","
                 "\"status\":\"%s\","
                 "\"method\":\"shift_nev_refinement_subspace_v1\","
+                "\"krylov_subspace_policy\":\"bounded_double_nev_v1\","
                 "\"requested_min_hz\":%.17g,\"requested_max_hz\":%.17g,"
-                "\"requested_mode_count\":%u,\"requested_nev\":%llu,"
-                "\"refined_requested_mode_count\":%u,\"refined_nev\":%llu,"
+                "\"requested_mode_count\":%u,\"requested_nev\":%llu,\"requested_ncv\":%llu,"
+                "\"refined_requested_mode_count\":%u,\"refined_nev\":%llu,\"refined_ncv\":%llu,"
                 "\"base_schedule\":{\"state\":\"%s\","
                 "\"planned_subwindow_count\":%u,\"completed_subwindow_count\":%u,"
                 "\"failed_subwindow_count\":%u,\"cancelled\":%s},"
@@ -4333,8 +4367,10 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                 problem.frequency_max_hz,
                 problem.requested_mode_count,
                 static_cast<unsigned long long>(requested_nev),
+                static_cast<unsigned long long>(resolved_ncv(requested_nev)),
                 pass_effective_requested_mode_count[1],
                 static_cast<unsigned long long>(refined_nev),
+                static_cast<unsigned long long>(resolved_ncv(refined_nev)),
                 pass_state(0u),
                 pass_planned_subwindow_count[0],
                 pass_completed_subwindow_count[0],
@@ -4654,9 +4690,10 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                 "{\"schema_version\":\"poisson_airbox_frequency_window_certificate.v1\","
                 "\"status\":\"%s\","
                 "\"method\":\"shift_nev_refinement_subspace_v1\","
+                "\"krylov_subspace_policy\":\"bounded_double_nev_v1\","
                 "\"requested_min_hz\":%.17g,\"requested_max_hz\":%.17g,"
-                "\"requested_mode_count\":%u,\"requested_nev\":%llu,"
-                "\"refined_requested_mode_count\":%u,\"refined_nev\":%llu,"
+                "\"requested_mode_count\":%u,\"requested_nev\":%llu,\"requested_ncv\":%llu,"
+                "\"refined_requested_mode_count\":%u,\"refined_nev\":%llu,\"refined_ncv\":%llu,"
                 "\"discovered_mode_count\":%zu,\"accepted_mode_count\":0,"
                 "\"base_schedule\":{\"state\":\"%s\","
                 "\"planned_subwindow_count\":%u,\"completed_subwindow_count\":%u,"
@@ -4677,8 +4714,10 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                 problem.frequency_max_hz,
                 problem.requested_mode_count,
                 static_cast<unsigned long long>(requested_nev),
+                static_cast<unsigned long long>(resolved_ncv(requested_nev)),
                 pass_effective_requested_mode_count[1],
                 static_cast<unsigned long long>(refined_nev),
+                static_cast<unsigned long long>(resolved_ncv(refined_nev)),
                 discovered_mode_count,
                 pass_state(0u),
                 pass_planned_subwindow_count[0],
@@ -4932,9 +4971,10 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
             "{\"schema_version\":\"poisson_airbox_frequency_window_certificate.v1\","
             "\"status\":\"%s\","
             "\"method\":\"shift_nev_refinement_subspace_v1\","
+            "\"krylov_subspace_policy\":\"bounded_double_nev_v1\","
             "\"requested_min_hz\":%.17g,\"requested_max_hz\":%.17g,"
-            "\"requested_mode_count\":%u,\"requested_nev\":%llu,"
-            "\"refined_requested_mode_count\":%u,\"refined_nev\":%llu,"
+            "\"requested_mode_count\":%u,\"requested_nev\":%llu,\"requested_ncv\":%llu,"
+            "\"refined_requested_mode_count\":%u,\"refined_nev\":%llu,\"refined_ncv\":%llu,"
             "\"discovered_mode_count\":%zu,\"accepted_mode_count\":%u,"
             "\"base_schedule\":{\"state\":\"%s\","
             "\"planned_subwindow_count\":%u,\"completed_subwindow_count\":%u,"
@@ -4957,8 +4997,10 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
             problem.frequency_max_hz,
             problem.requested_mode_count,
             static_cast<unsigned long long>(requested_nev),
+            static_cast<unsigned long long>(resolved_ncv(requested_nev)),
             pass_effective_requested_mode_count[1],
             static_cast<unsigned long long>(refined_nev),
+            static_cast<unsigned long long>(resolved_ncv(refined_nev)),
             discovered_mode_count,
             aggregate.accepted_mode_count,
             pass_state(0u),
@@ -5133,18 +5175,27 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
         operator_context->poisson_factorization_setup_count;
     out_result->shift_solver_setup_count =
         operator_context->shift_solver_setup_count;
-    const PetscInt requested_pairs = std::max<PetscInt>(
-        1,
-        // Each physical mode is a two-dimensional J-equivalence class in the
-        // rotated-real pencil, and its conjugate branch contributes another
-        // two real Ritz vectors.  Request both branches so target-magnitude
-        // ties cannot return only the negative-frequency half.
-        static_cast<PetscInt>(std::max<std::uint32_t>(1u, problem.requested_mode_count) * 4u));
-    // Krylov-Schur requires a proper subspace: asking for the complete
-    // spectrum (nev == n) reaches an invalid dense projected problem in
-    // SLEPc/LAPACK and may terminate through XERBLA before the caller can
-    // observe a failure.  The production lane is selected-spectrum only.
-    const PetscInt nev = std::min(split_count - 1, requested_pairs);
+    // A standalone positive target needs the two-vector J-equivalence class.
+    // Window subcalls use the same target enum but retain four-vector coverage.
+    const std::uint64_t requested_pairs =
+        std::max<std::uint64_t>(1u, problem.requested_mode_count) *
+        (nearest_target && !borrowed_window_operator &&
+                 problem.target_frequency_hz > 0.0
+             ? 2u
+             : 4u);
+    const BoundedKrylovDimensions dimensions = bounded_krylov_dimensions(
+        split_count >= 2 ? static_cast<std::uint64_t>(split_count) : 0u,
+        requested_pairs);
+    if (!dimensions.valid) {
+        return fail_production_schur(
+            problem,
+            out_result,
+            FrequencyDomainStatus::validation_error,
+            "production shared-domain K0 Schur could not resolve bounded nev/ncv",
+            "production_krylov_dimensions_invalid");
+    }
+    const PetscInt nev = static_cast<PetscInt>(dimensions.nev);
+    const PetscInt ncv = static_cast<PetscInt>(dimensions.ncv);
     const PetscReal tolerance = static_cast<PetscReal>(problem.residual_tolerance);
     const PetscReal eigensolver_tolerance = static_cast<PetscReal>(
         production_modal_eigensolver_tolerance(problem.residual_tolerance));
@@ -5246,7 +5297,7 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
         EPSSetOperators(eps, schur_shell, split_mass) == 0 &&
         EPSSetProblemType(eps, EPS_GNHEP) == 0 &&
         EPSSetType(eps, EPSKRYLOVSCHUR) == 0 &&
-        EPSSetDimensions(eps, nev, PETSC_DEFAULT, PETSC_DEFAULT) == 0 &&
+        EPSSetDimensions(eps, nev, ncv, PETSC_DEFAULT) == 0 &&
         EPSSetWhichEigenpairs(eps, EPS_TARGET_MAGNITUDE) == 0 &&
         EPSSetTarget(eps, static_cast<PetscScalar>(target_eigenvalue)) == 0 &&
         EPSSetTrueResidual(eps, PETSC_TRUE) == 0 &&

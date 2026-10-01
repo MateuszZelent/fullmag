@@ -1,5 +1,14 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
+## S01/S12 — wspólny K0/nonzero-k i bounded Krylov, 2026-10-01
+
+Historia K0 została scalona i wypchnięta przez `9b14e53757412d91ba5cc955774e228fb71b8cf0`; checkpoint `1cf47b6d25b48cbb5b6813d6995ba5113fb03be4`. Wątek K0 utrzymuje freeze, 100 dirty/untracked pozycji zachowano. Wspólnym miejscem integracji pozostaje worktree nonzero-k. Raport: `docs/audits/2026-10-01-k0-nonzero-k-worktree-integration.md`.
+
+Pierwszy port EPS dodaje ograniczone `nev/ncv`, uint64 mnożenie żądania i jawne `EPSSetDimensions`. Standalone dodatni nearest używa 2x; wewnętrzne wywołania nearest borrowing window zachowują 4x, dzięki jawnej kontroli `!borrowed_window_operator`. Wszystkie trzy warianty certyfikatu okna i każdy wpis podokna raportują `ncv`. Przygotowano natywne regresje ncv/warunków retry, ale nie kompilowano ani nie uruchamiano ich zgodnie z zakazem. Kontrola 26 literalnych wywołań diagnostycznych i 18 testów interpretowanych/source/docs (w tym 5 regresji kontrolera printf): PASS źródłowy; mapa źródeł PASS; runtime/science NOT VERIFIED. Niezależny review bez blokującego P1/P2; przygotowana natywna regresja obejmuje wszystkie 50 par nev/ncv, ale nie została uruchomiona.
+
+Kolejny port EPS obejmie zachowanie liczników przy niepełnej konwergencji, ograniczone próbki odtworzonych Ritz i końcowy fail-closed bez accepted modes. Pakiety R4, mesh/Robin i qualification pozostają w planie; nie zastępujemy nimi Floquet ani Ku v8/v7. #188 controller90201 potwierdzony żywy w tej kontynuacji; jego immutable źródło nie zawiera nowych portów. Pełny cel S00–S12 nadal aktywny.
+
+
 ## F03/S08 — jednostki i HWHM obwiedni, 2026-10-01
 
 - Potwierdzono writer/spec: damping_rate_hz=frequency_imag_hz=HWHM, FWHM=2*imag. Shared spectralEnvelope liczy Hz, przelicza wyłącznie oś i nie dzieli HWHM przez2. Nieznane jednostki dają unsupported; label illustrative zamiast fizycznej intensywności.

@@ -1799,6 +1799,26 @@
       "path": "crates/fullmag-runner/src/fem/equilibrium_identity.rs",
       "symbol": "validate_supported_relax_source",
       "responsibility": "Reject unrepresented source physics before field certificate publication"
+    },
+    {
+      "id": "source-k0-bounded-krylov-policy",
+      "path": "backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.cpp",
+      "symbol": "bounded_krylov_dimensions",
+      "responsibility": "Bound nev/ncv to the real-split dimension; standalone positive nearest 2x, borrowed window 4x.",
+      "evidence_status": "source_visible / managed execution pending"
+    },
+    {
+      "id": "source-k0-printf-contract-check",
+      "path": "scripts/check_fem_schur_printf_contract.py",
+      "symbol": "check_source",
+      "responsibility": "Reject literal variadic diagnostic argument-count mismatches without native unit compilation.",
+      "evidence_status": "26 calls checked; source-only"
+    },
+    {
+      "id": "source-k0-bounded-krylov-window-regression",
+      "path": "backends/fem/tests/frequency_domain/poisson_airbox_modal_eigen_slepc_test.cpp",
+      "symbol": "void FrequencyWindowDoesNotRetryWhenOnlyTheGlobalRequestIsSaturated",
+      "responsibility": "Check explicit ncv bounds and local retry evidence; native compilation/execution pending."
     }
   ],
   "public_api": {

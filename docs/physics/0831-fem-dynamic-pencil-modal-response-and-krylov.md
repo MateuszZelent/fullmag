@@ -437,6 +437,28 @@ norm type. A positive KSP convergence reason does not resolve that missing
 measurement. See [`KSPPREONLY`](https://petsc.org/release/manualpages/KSP/KSPPREONLY/)
 and [`KSPGetResidualNorm`](https://petsc.org/release/manualpages/KSP/KSPGetResidualNorm/).
 
+The production shared-domain K0 Schur adapter uses an explicit bounded
+Krylov policy when integrating the K0 selected-spectrum implementation. For
+real-split dimension $N\ge2$, first cap $n_{ev}$ at $N-1$ and choose
+$n_{cv}=\min(N,\max(n_{ev}+1,2n_{ev}))$, using an overflow-safe bound for
+$2n_{ev}$. This controls memory and avoids requesting the complete projected
+spectrum; it does not certify convergence. See
+[EPSSetDimensions](https://slepc.upv.es/release/manualpages/EPS/EPSSetDimensions.html).
+A standalone positive nearest-frequency request uses two real Ritz vectors
+per requested physical mode, corresponding to its $J$-equivalence class.
+Frequency-window subcalls retain four-vector oversampling, even though their
+internal target enum is `nearest_frequency`: the borrowed window operator
+context identifies these calls. Zero/nonpositive targets also retain four.
+The window scheduler, refinement, coverage certificate, cancellation,
+cached preconditioner and original descriptor residual limits remain binding.
+A nonpositive EPS convergence reason never publishes an accepted mode;
+The next integration slice will reconstruct already converged Ritz vectors
+only for diagnostics and retain counters before divergence; these two
+changes are not yet present in this first bounded-dimensions slice. The integration is
+source-level until a new source-bound runtime-only build and scientific
+receipts verify both standalone K0 and full window behavior. The separate
+Floquet adapter retains its own Krylov policy below.
+
 For the small-mode shared-domain Floquet path, the solver currently requests
 `ncv = min(N, max(32, 2 nev))`, where `N` is the real-split operator dimension
 and `nev` is the number of requested Ritz values. This was a bounded convergence
@@ -1949,6 +1971,9 @@ visibility into runtime qualification.
 | Existing shared-domain Poisson owner | FEM CPU | `backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.hpp` + `assemble_poisson_airbox_shared_domain` | Preserve the existing K0/shared-domain assembly boundary while nonzero-k demag remains gated. | existing source contract tests | source visible; nonzero-k physics unvalidated | repository source |
 | Floquet pure-Neumann invertibility policy | FEM CPU | `backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp` + `assemble_poisson_airbox_shared_domain_payload` | For Floquet k, clear the k=0 gauge and defer scalar solvability to the phase-constrained operator factorization and residual checks; do not use a universal $|k|L$ cutoff. | source review; managed nonzero-k physics still unvalidated | source visible; nonzero-k physics unvalidated | [blob](https://github.com/MateuszZelent/fullmag/blob/7a8b57cf1ca6b64902cdee60945cebdda9e2bd4c/backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp) |
 | Cached K0 window preconditioning | FEM CPU | `backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.cpp` + `create_production_cached_window_preconditioner` | Retain demag in bounded cached preconditioning across shifts. | Managed runtime pending | source-visible / unvalidated | working tree |
+| Bounded K0 Krylov selected spectrum | FEM CPU | `backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.cpp` + `bounded_krylov_dimensions` | Keep standalone positive nearest 2x and borrowed window 4x; bounded explicit ncv and diagnostic evidence. | Native regression prepared; printf arity 26 calls checked | source-visible / unvalidated | working tree |
+| K0 diagnostic variadic safety | Source verification | `scripts/check_fem_schur_printf_contract.py` + `check_source` | Match literal printf placeholders with variadic arguments; reject missing ncv. | 26 literal calls plus 5 regression checks PASS | source verification only | working tree |
+| Bounded K0 window ncv regression | FEM CPU test source | `backends/fem/tests/frequency_domain/poisson_airbox_modal_eigen_slepc_test.cpp` + `void FrequencyWindowDoesNotRetryWhenOnlyTheGlobalRequestIsSaturated` | Verify bounded base/refined ncv and every subwindow's actual published request. | Native unit compilation prohibited; prepared only | NOT VERIFIED | working tree |
 | Coupled cached-window regression | FEM CPU | `backends/fem/tests/frequency_domain/poisson_airbox_modal_eigen_slepc_test.cpp` + `void FrequencyWindowRetainsDemagInBoundedCachedPreconditioner` | Known Schur frequency across shifts and fresh windows. | Native compilation prohibited; pending | source-visible / unvalidated | working tree |
 
 ### Anulowanie podczas materializacji preconditionera K0

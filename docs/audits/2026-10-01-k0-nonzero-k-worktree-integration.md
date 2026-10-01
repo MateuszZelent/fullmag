@@ -119,3 +119,15 @@ Merge commit `9b14e53757412d91ba5cc955774e228fb71b8cf0` ma rodziców `25d6f3ac6e
 | Native Windows runner | Osobny niedokończony zakres | Terminal receipt/ACL/deployment i wykonanie Windows EXE/DLL; nie przypisywać Linux receiptowi dowodu Windows. |
 
 Wspólny solver rozwijany dalej tylko w worktree nonzero-k. Wątek K0 otrzymał informację o tej bazie i polecenie utrzymania freeze, również przy automatycznej kontynuacji. Worktree K0 nadal przechowuje 100 pozycji dirty/untracked; nie wolno go usuwać przed rozliczeniem i integracją unikalnej pracy.
+
+## EPS — pierwszy spójny przyrost źródeł
+
+Przeniesiono wyłącznie bounded `nev/ncv`, jawny dobór przestrzeni oraz ncv diagnostics, nie cały dirty diff C++. Nearest dla dodatniego standalone celu używa 2x, natomiast wszystkie wewnętrzne subwindow nearest zachowują 4x dzięki `!borrowed_window_operator`. UInt64 multiplication usuwa ryzyko overflow przed castem. Zachowano cached preconditioner, cancellation i signed guards. Trzy certyfikaty i wpisy podokien raportują ncv.
+
+Niezależny source-only review nie znalazł blokującego P1/P2. Przygotowaną regresję rozszerzono z pierwszego wpisu na wszystkie 50 par nev/ncv; jej wykonanie pozostaje zabronione i NOT VERIFIED. Osobny brak dowodu rzeczywistego nev standalone2x kontra window4x pozostaje do zamknięcia przed runtime gate.
+
+Dowody: 18 testów interpretowanych/source/docs PASS, mapa źródeł PASS, 26 literalnych wywołań diagnostyki przeszło kontrolę arności. Kontrola rzeczywistego źródła z celowo usuniętym argumentem ncv jest odrzucana. To nie dowodzi kompilacji, konwergencji ani fizyki.
+
+Kontroler90201 nadal żywy; Docker7df4be7c5ace ma running=true, exit-code0 oznacza tu stan bieżący, nie sukces zakończenia. Gamma #188 przeszedł do refinement25/50 (window_s około8019). Wynik terminalny nie jest jeszcze dostępny. Nowy kod nie zmienia trwającej kapsuły.
+
+Dalej: EPS partial convergence/counters/bounded reconstructed diagnostics; zgodność etykiety GMRES i portability PETSc; następnie spójny R4, mesh/Robin oraz kwalifikacja. Pełny cel i bramki S00–S12 pozostają otwarte.

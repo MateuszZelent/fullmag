@@ -1514,6 +1514,56 @@ void FrequencyWindowDoesNotRetryWhenOnlyTheGlobalRequestIsSaturated()
     check(contains(result.window_certificate_json, "\"requested_nev\":8") &&
               contains(result.window_certificate_json, "\"refined_nev\":16"),
           "window certificate must publish the effective base/refinement nev");
+    check(count_occurrences(
+              result.executed_subwindows_json,
+              "\"requested_ncv\":") == 50u,
+          "every planned subwindow must publish its explicit SLEPc ncv");
+    check(contains(result.window_certificate_json,
+                   "\"krylov_subspace_policy\":\"bounded_double_nev_v1\""),
+          "window certificate must name the bounded Krylov-subspace policy");
+    const std::uint64_t split_dimension = 2u * result.q_dof_count;
+    const std::uint64_t requested_nev = static_cast<std::uint64_t>(
+        json_number_after(result.window_certificate_json, "\"requested_nev\":"));
+    const std::uint64_t requested_ncv = static_cast<std::uint64_t>(
+        json_number_after(result.window_certificate_json, "\"requested_ncv\":"));
+    const std::uint64_t expected_ncv = std::min(
+        split_dimension,
+        std::max(requested_nev + 1u, 2u * requested_nev));
+    check(requested_ncv == expected_ncv && requested_ncv <= split_dimension,
+          "base ncv must follow the explicit bounded policy and not exceed dimension");
+    const char *cursor = result.executed_subwindows_json;
+    std::uint32_t checked_subwindow_dimensions = 0u;
+    while (const char *nev_entry = std::strstr(cursor, "\"requested_nev\":")) {
+        const char *ncv_entry = std::strstr(nev_entry, "\"requested_ncv\":");
+        const char *next_nev_entry = std::strstr(
+            nev_entry + 1, "\"requested_nev\":");
+        check(ncv_entry != nullptr &&
+                  (next_nev_entry == nullptr || ncv_entry < next_nev_entry),
+              "every subwindow must bind ncv to its own nev");
+        if (ncv_entry == nullptr ||
+            (next_nev_entry != nullptr && ncv_entry >= next_nev_entry)) {
+            break;
+        }
+        const std::uint64_t local_nev = static_cast<std::uint64_t>(
+            json_number_after(nev_entry, "\"requested_nev\":"));
+        const std::uint64_t local_ncv = static_cast<std::uint64_t>(
+            json_number_after(ncv_entry, "\"requested_ncv\":"));
+        check(local_ncv > local_nev && local_ncv <= split_dimension &&
+                  local_ncv == std::min(
+                      split_dimension,
+                      std::max(local_nev + 1u, 2u * local_nev)),
+              "each subwindow ncv must follow the bounded policy");
+        ++checked_subwindow_dimensions;
+        cursor = ncv_entry + 1;
+    }
+    check(checked_subwindow_dimensions == 50u,
+          "all 50 subwindow dimension pairs must be checked");
+    check(json_number_after(result.window_certificate_json, "\"requested_ncv\":") >
+              json_number_after(result.window_certificate_json, "\"requested_nev\":"),
+          "window certificate must publish a bounded base ncv greater than nev");
+    check(json_number_after(result.window_certificate_json, "\"refined_ncv\":") >
+              json_number_after(result.window_certificate_json, "\"refined_nev\":"),
+          "window certificate must publish a bounded refinement ncv greater than nev");
 }
 
 void FrequencyWindowRetriesWhenALocalIntervalIsSaturated()
@@ -1545,6 +1595,15 @@ void FrequencyWindowRetriesWhenALocalIntervalIsSaturated()
         "\"refined_nev\":");
     check(requested_nev == 16.0 && refined_nev > requested_nev,
           "refinement must start above the effective base request after retry");
+    const std::uint64_t split_dimension = 2u * result.q_dof_count;
+    const std::uint64_t expected_base_ncv = std::min(
+        split_dimension,
+        std::max<std::uint64_t>(
+            static_cast<std::uint64_t>(requested_nev) + 1u,
+            2u * static_cast<std::uint64_t>(requested_nev)));
+    check(json_number_after(result.window_certificate_json, "\"requested_ncv\":") ==
+              static_cast<double>(expected_base_ncv),
+          "local retry must publish the resolved ncv for its larger effective nev");
     const double refined_requested_mode_count = json_number_after(
         result.window_certificate_json,
         "\"refined_requested_mode_count\":");
