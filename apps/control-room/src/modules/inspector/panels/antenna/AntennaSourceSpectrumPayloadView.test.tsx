@@ -71,6 +71,35 @@ describe("AntennaSourceSpectrumPayloadView", () => {
     }
   });
 
+  it("keeps a narrow peak visible when the k grid is bounded", async () => {
+    const kU = Array.from({ length: 129 }, (_, index) => index);
+    const power = Array(258).fill(1) as number[];
+    power[1] = 100;
+    mocks.payloads = {
+      k_u_rad_per_m: readyPayload(kU, "etag-ku"),
+      k_v_rad_per_m: readyPayload([0, 1], "etag-kv"),
+      amplitudes_re_im: readyPayload([1, 0], "etag-amplitudes"),
+      power: readyPayload(power, "etag-power"),
+    };
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => root.render(
+        <AntennaSourceSpectrumPayloadView
+          outputId="spectrum-1"
+          spectrum={{ ...spectrumFixture(), k_u_count: 129, power_count: 258, amplitude_count: 1 }}
+        />,
+      ));
+      expect(countByRole(container as unknown as TestNode, "gridcell")).toBe(128);
+      expect(hasGridCellTitle(container as unknown as TestNode, "k_u=1.000e+0")).toBe(true);
+      expect(container.textContent).toContain("Peak 1.000e+2");
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
   it("surfaces a failed binary resource without drawing stale cells", async () => {
     mocks.payloads = {
       k_u_rad_per_m: readyPayload([0, 1], "etag-ku"),
@@ -235,6 +264,12 @@ function countByRole(root: TestNode, role: string): number {
   };
   visit(root);
   return count;
+}
+
+function hasGridCellTitle(root: TestNode, needle: string): boolean {
+  if (root instanceof TestElement && root.getAttribute("role") === "gridcell" &&
+      root.getAttribute("title")?.includes(needle)) return true;
+  return root.childNodes.some((child) => hasGridCellTitle(child, needle));
 }
 
 function firstByRole(root: TestNode, role: string): TestElement | null {

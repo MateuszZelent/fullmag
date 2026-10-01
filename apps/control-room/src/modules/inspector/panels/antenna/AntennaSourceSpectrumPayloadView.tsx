@@ -11,7 +11,6 @@ import { useAntennaSourceSpectrumPayloadResource } from "@/kernel/resources/ante
 import type { ResourceResult } from "@/kernel/resources/resourceTypes";
 
 const MAX_AXIS_CELLS = 64;
-const MAX_RENDERED_CELLS = MAX_AXIS_CELLS * MAX_AXIS_CELLS;
 
 interface SpectrumPayloadViewProps {
   outputId: string;
@@ -95,8 +94,8 @@ export function AntennaSourceSpectrumPayloadView({
     ? payloads.value.kV[Math.floor(peak.index / payloads.value.kU.length)]
     : null;
   const renderedCellCount = cells.length;
-  const isDecimated =
-    payloads.value.kU.length * payloads.value.kV.length > MAX_RENDERED_CELLS;
+  const isBinned = payloads.value.kU.length > MAX_AXIS_CELLS ||
+    payloads.value.kV.length > MAX_AXIS_CELLS;
   const powerUnit = spectrum.payloads?.power.unit ?? `(${spectrum.amplitude_unit})^2`;
 
   return (
@@ -110,7 +109,7 @@ export function AntennaSourceSpectrumPayloadView({
           </p>
         </div>
         <span className="fm-antenna-spectrum__badge" data-status="ready">
-          {isDecimated ? "bounded" : "full grid"}
+          {isBinned ? "max-pooled" : "full grid"}
         </span>
       </div>
       <div
@@ -123,19 +122,19 @@ export function AntennaSourceSpectrumPayloadView({
       >
         {cells.map((cell) => (
           <span
-            aria-label={`k_u ${formatScientific(payloads.value.kU[cell.kUIndex])} ${spectrum.wave_vector_unit}, k_v ${formatScientific(payloads.value.kV[cell.kVIndex])} ${spectrum.wave_vector_unit}, power ${formatScientific(cell.power)} ${powerUnit}`}
+            aria-label={`${isBinned ? "bin maximum at " : ""}k_u ${formatScientific(payloads.value.kU[cell.kUIndex])} ${spectrum.wave_vector_unit}, k_v ${formatScientific(payloads.value.kV[cell.kVIndex])} ${spectrum.wave_vector_unit}, power ${formatScientific(cell.power)} ${powerUnit}`}
             className="fm-antenna-spectrum__cell"
             key={`${cell.kVIndex}:${cell.kUIndex}`}
             role="gridcell"
             style={{ opacity: 0.08 + 0.92 * cell.normalizedPower }}
-            title={`k_u=${formatScientific(payloads.value.kU[cell.kUIndex])} ${spectrum.wave_vector_unit}; k_v=${formatScientific(payloads.value.kV[cell.kVIndex])} ${spectrum.wave_vector_unit}; |H|²=${formatScientific(cell.power)} ${powerUnit}`}
+            title={`${isBinned ? "bin maximum: " : ""}k_u=${formatScientific(payloads.value.kU[cell.kUIndex])} ${spectrum.wave_vector_unit}; k_v=${formatScientific(payloads.value.kV[cell.kVIndex])} ${spectrum.wave_vector_unit}; |H|²=${formatScientific(cell.power)} ${powerUnit}`}
           />
         ))}
       </div>
       <div className="fm-antenna-spectrum__axes" aria-label="Source spectrum axes">
-        <span>u: {payloads.value.kU.length} · {spectrum.wave_vector_unit}</span>
-        <span>v: {payloads.value.kV.length} · {spectrum.wave_vector_unit}</span>
-        <span>cells: {renderedCellCount}{isDecimated ? " (decimated)" : ""}</span>
+        <span>u: {Math.min(MAX_AXIS_CELLS, payloads.value.kU.length)} / {payloads.value.kU.length} · {spectrum.wave_vector_unit}</span>
+        <span>v: {Math.min(MAX_AXIS_CELLS, payloads.value.kV.length)} / {payloads.value.kV.length} · {spectrum.wave_vector_unit}</span>
+        <span>cells: {renderedCellCount}{isBinned ? " (max-pooled)" : ""}</span>
       </div>
       <div className="fm-antenna-spectrum__summary" aria-label="Source spectrum peak">
         <span>
@@ -245,34 +244,46 @@ function validatePayloads(
 }
 
 function heatmapCells(kU: readonly number[], kV: readonly number[], power: readonly number[]): HeatmapCell[] {
-  const uIndices = boundedIndices(kU.length);
-  const vIndices = boundedIndices(kV.length);
-  const values = vIndices.flatMap((kVIndex) =>
-    uIndices.map((kUIndex) => power[kVIndex * kU.length + kUIndex] ?? Number.NaN),
-  );
-  const finiteValues = values.filter(Number.isFinite);
-  const max = finiteValues.length > 0 ? Math.max(...finiteValues) : 0;
-  const min = finiteValues.length > 0 ? Math.min(...finiteValues) : 0;
+  const uBins = Math.min(MAX_AXIS_CELLS, kU.length);
+  const vBins = Math.min(MAX_AXIS_CELLS, kV.length);
+  let min = Number.POSITIVE_INFINITY;
+  let max = Number.NEGATIVE_INFINITY;
+  for (const value of power) {
+    if (!Number.isFinite(value)) continue;
+    if (value < min) min = value;
+    if (value > max) max = value;
+  }
   const range = max > min ? max - min : 1;
-  return vIndices.flatMap((kVIndex) =>
-    uIndices.map((kUIndex) => {
-      const value = power[kVIndex * kU.length + kUIndex] ?? Number.NaN;
-      return {
-        kUIndex,
-        kVIndex,
-        normalizedPower: Number.isFinite(value) ? Math.max(0, Math.min(1, (value - min) / range)) : 0,
-        power: value,
-      };
-    }),
-  );
-}
-
-function boundedIndices(count: number): number[] {
-  if (count <= MAX_AXIS_CELLS) return Array.from({ length: count }, (_, index) => index);
-  const stride = Math.ceil(count / MAX_AXIS_CELLS);
-  const indices: number[] = [];
-  for (let index = 0; index < count; index += stride) indices.push(index);
-  return indices.slice(0, MAX_AXIS_CELLS);
+  const cells: HeatmapCell[] = [];
+  for (let vBin = 0; vBin < vBins; vBin += 1) {
+    const vStart = Math.floor(vBin * kV.length / vBins);
+    const vEnd = Math.floor((vBin + 1) * kV.length / vBins);
+    for (let uBin = 0; uBin < uBins; uBin += 1) {
+      const uStart = Math.floor(uBin * kU.length / uBins);
+      const uEnd = Math.floor((uBin + 1) * kU.length / uBins);
+      let selectedU = uStart;
+      let selectedV = vStart;
+      let selectedPower = Number.NEGATIVE_INFINITY;
+      for (let v = vStart; v < vEnd; v += 1) {
+        for (let u = uStart; u < uEnd; u += 1) {
+          const value = power[v * kU.length + u] ?? Number.NaN;
+          if (Number.isFinite(value) && value > selectedPower) {
+            selectedPower = value;
+            selectedU = u;
+            selectedV = v;
+          }
+        }
+      }
+      cells.push({
+        kUIndex: selectedU,
+        kVIndex: selectedV,
+        normalizedPower: Number.isFinite(selectedPower)
+          ? Math.max(0, Math.min(1, (selectedPower - min) / range)) : 0,
+        power: selectedPower,
+      });
+    }
+  }
+  return cells;
 }
 
 function formatScientific(value: number | undefined): string {
