@@ -1,6 +1,20 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
-## Aktualny stan — 2026-10-01, po commicie c5b14ffd4
+## Aktualny stan — 2026-10-01, checkpoint nearest e6214cb39
+
+Managed runtime-only build #194 przyjęty i potwierdzony `running`:
+`e4aef98d4f0442b0ae43b43b7d055305`, profil `fem-cpu-slepc-runtime-v2`,
+źródło `e6214cb39583b0644dc80a5f9183ce232a9f1246` (commit i push potwierdzone).
+Request key: `eigensolve-nearest-e6214cb39583-20261001`.
+Source digest: `9a4a1215693510af88d6bdb19e45d678e84d56a91061aa75ccb80226451ba227`.
+Kapsuła: `runs/eigensolve-dispersion-plan-20260-c5dfad6d7f548079/08f924ccf3d44f08a882dc94981cc5d5/source`.
+Źródło czyste; snapshot SHA `17e838ca1f4dd7bd78dd272b7de29a8337ce0a00f7ebf1164d3713abd385284b`.
+Brak jeszcze terminalnego receipt i obliczeń tego runtime. Nie ponawiać
+submission ani uruchamiać równoległego ciężkiego buildu. Po sukcesie:
+sprawdzić receipt/hashes/MFEM loader, dry-run, Γ nearest (cel 9 GHz), następnie
+osobne ±DE i ±BV dla k=2e6 rad/m. Cel Γ odsunięty od dokładnej wartości
+analitycznej, aby nie zadawać shiftu na znanym biegunie. Wyniki nadal muszą
+przejść oryginalne residuale, seam/phase, mesh, equilibrium i potential checks.
 
 Zapisano i wysłano dwa kolejne checkpointy:
 `c9f10a1d41780f88cdee2a36f21a430612343932` (terminalny audyt Γ) oraz
