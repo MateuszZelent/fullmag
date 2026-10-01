@@ -240,6 +240,10 @@ function validatePayloads(
   if (payloads.power.length !== payloads.kU.length * payloads.kV.length) {
     return "power payload does not match the declared k-grid";
   }
+  if (payloads.amplitudes.length !==
+      2 * spectrum.component_labels.length * payloads.power.length) {
+    return "complex amplitudes do not match the component and k-grid counts";
+  }
   if (payloads.kU.some((value) => !Number.isFinite(value)) ||
       payloads.kV.some((value) => !Number.isFinite(value))) {
     return "wave-vector payload contains a non-finite value";

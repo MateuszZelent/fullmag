@@ -38,7 +38,7 @@ describe("AntennaSourceSpectrumPayloadView", () => {
     mocks.payloads = {
       k_u_rad_per_m: readyPayload([0, 1], "etag-ku"),
       k_v_rad_per_m: readyPayload([0, 2], "etag-kv"),
-      amplitudes_re_im: readyPayload([1, 0, 2, -1], "etag-amplitudes"),
+      amplitudes_re_im: readyPayload([1, 0, 2, -1, 0, 1, 0, 1], "etag-amplitudes"),
       power: readyPayload([1, 5, 2, 3], "etag-power"),
     };
     const dom = installSimulationPreparationTestDom();
@@ -78,7 +78,7 @@ describe("AntennaSourceSpectrumPayloadView", () => {
     mocks.payloads = {
       k_u_rad_per_m: readyPayload(kU, "etag-ku"),
       k_v_rad_per_m: readyPayload([0, 1], "etag-kv"),
-      amplitudes_re_im: readyPayload([1, 0], "etag-amplitudes"),
+      amplitudes_re_im: readyPayload(Array(516).fill(0), "etag-amplitudes"),
       power: readyPayload(power, "etag-power"),
     };
     const dom = installSimulationPreparationTestDom();
@@ -88,7 +88,7 @@ describe("AntennaSourceSpectrumPayloadView", () => {
       await act(async () => root.render(
         <AntennaSourceSpectrumPayloadView
           outputId="spectrum-1"
-          spectrum={{ ...spectrumFixture(), k_u_count: 129, power_count: 258, amplitude_count: 1 }}
+          spectrum={{ ...spectrumFixture(), k_u_count: 129, power_count: 258, amplitude_count: 258 }}
         />,
       ));
       expect(countByRole(container as unknown as TestNode, "gridcell")).toBe(128);
@@ -104,7 +104,7 @@ describe("AntennaSourceSpectrumPayloadView", () => {
     mocks.payloads = {
       k_u_rad_per_m: readyPayload([0, 1], "etag-ku"),
       k_v_rad_per_m: readyPayload([0, 2], "etag-kv"),
-      amplitudes_re_im: readyPayload([1, 0, 2, -1], "etag-amplitudes"),
+      amplitudes_re_im: readyPayload([1, 0, 2, -1, 0, 1, 0, 1], "etag-amplitudes"),
       power: errorPayload("checksum mismatch"),
     };
     const dom = installSimulationPreparationTestDom();
@@ -129,13 +129,13 @@ describe("AntennaSourceSpectrumPayloadView", () => {
 
   it.each([
     ["k_u_rad_per_m", [Number.NaN, 1], "wave-vector payload contains a non-finite value"],
-    ["amplitudes_re_im", [1, 0, Number.POSITIVE_INFINITY, -1], "amplitude payload contains a non-finite value"],
+    ["amplitudes_re_im", [1, 0, Number.POSITIVE_INFINITY, -1, 0, 1, 0, 1], "amplitude payload contains a non-finite value"],
     ["power", [1, -5, 2, 3], "power payload contains a non-finite or negative value"],
   ] as const)("rejects invalid numeric data in %s", async (kind, values, expected) => {
     mocks.payloads = {
       k_u_rad_per_m: readyPayload([0, 1], "etag-ku"),
       k_v_rad_per_m: readyPayload([0, 2], "etag-kv"),
-      amplitudes_re_im: readyPayload([1, 0, 2, -1], "etag-amplitudes"),
+      amplitudes_re_im: readyPayload([1, 0, 2, -1, 0, 1, 0, 1], "etag-amplitudes"),
       power: readyPayload([1, 5, 2, 3], "etag-power"),
       [kind]: readyPayload([...values], `etag-${kind}`),
     };
@@ -154,11 +154,38 @@ describe("AntennaSourceSpectrumPayloadView", () => {
     }
   });
 
-  it("does not mask a missing published payload as an absent spectrum", async () => {
+  it("rejects an amplitude payload with fewer complex samples than the k grid", async () => {
     mocks.payloads = {
       k_u_rad_per_m: readyPayload([0, 1], "etag-ku"),
       k_v_rad_per_m: readyPayload([0, 2], "etag-kv"),
       amplitudes_re_im: readyPayload([1, 0, 2, -1], "etag-amplitudes"),
+      power: readyPayload([1, 5, 2, 3], "etag-power"),
+    };
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => root.render(
+        <AntennaSourceSpectrumPayloadView
+          outputId="spectrum-1"
+          spectrum={{ ...spectrumFixture(), amplitude_count: 2 }}
+        />,
+      ));
+      expect(container.textContent).toContain(
+        "complex amplitudes do not match the component and k-grid counts",
+      );
+      expect(countByRole(container as unknown as TestNode, "gridcell")).toBe(0);
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("does not mask a missing published payload as an absent spectrum", async () => {
+    mocks.payloads = {
+      k_u_rad_per_m: readyPayload([0, 1], "etag-ku"),
+      k_v_rad_per_m: readyPayload([0, 2], "etag-kv"),
+      amplitudes_re_im: readyPayload([1, 0, 2, -1, 0, 1, 0, 1], "etag-amplitudes"),
       power: errorPayload(
         new ControlRoomApiError(
           "payload is missing",
@@ -231,11 +258,11 @@ function errorPayload(error: Error | string): PayloadResource {
 
 function spectrumFixture(): AntennaSourceSpectrumResource {
   return {
-    amplitude_count: 2,
+    amplitude_count: 4,
     amplitude_unit: "A/m/A",
     coherent_gain: 1,
-    component: "vector_basis",
-    component_labels: ["x", "y", "z"],
+    component: "x",
+    component_labels: ["x"],
     content_digest: "sha256:spectrum",
     equivalent_noise_bandwidth_bins: 1,
     field_signature: "sha256:field",
