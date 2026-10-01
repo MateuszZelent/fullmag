@@ -1695,11 +1695,10 @@ pub(crate) fn solve_native_fem_steady_transport_rt0(
         let diagnostics = serde_json::from_str(&diagnostics_text).map_err(|error| RunError {
             message: format!("invalid native FEM OE-F1 diagnostics JSON: {error}"),
         })?;
-        if !oersted_result.maximum_pair_error_apm.is_finite() {
-            return Err(RunError {
-                message: "native FEM OE-F1 returned a non-finite pair error".into(),
-            });
-        }
+        validate_direct_oersted_convergence(
+            oersted_result.unconverged_pair_count,
+            oersted_result.maximum_pair_error_apm,
+        )?;
         Some(NativeFemOerstedField {
             field: h_xyz_apm,
             operator_version,
@@ -1800,6 +1799,25 @@ pub(crate) fn solve_native_fem_steady_transport_rt0(
     })
 }
 
+fn validate_direct_oersted_convergence(
+    unconverged_pair_count: u64,
+    maximum_pair_error_apm: f64,
+) -> Result<(), RunError> {
+    if !maximum_pair_error_apm.is_finite() {
+        return Err(RunError {
+            message: "native FEM OE-F1 returned a non-finite pair error".into(),
+        });
+    }
+    if unconverged_pair_count != 0 {
+        return Err(RunError {
+            message: format!(
+                "native FEM OE-F1 did not converge for {unconverged_pair_count} source-target pairs (maximum pair error {maximum_pair_error_apm:.17e} A/m)"
+            ),
+        });
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::descriptor::materialize_native_fem_steady_transport_request;
@@ -1817,6 +1835,14 @@ mod tests {
         TransportCouplingIR,
     };
     use std::collections::HashMap;
+
+    #[test]
+    fn direct_oersted_adapter_rejects_unconverged_pairs() {
+        assert!(validate_direct_oersted_convergence(0, 1.0e-9).is_ok());
+        let error = validate_direct_oersted_convergence(2, 1.0e-3).unwrap_err();
+        assert!(error.message.contains("2 source-target pairs"));
+        assert!(validate_direct_oersted_convergence(0, f64::NAN).is_err());
+    }
 
     fn request() -> NativeFemSteadyTransportRequest {
         NativeFemSteadyTransportRequest {
