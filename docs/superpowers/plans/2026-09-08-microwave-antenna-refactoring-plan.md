@@ -297,6 +297,23 @@ Powyższy JSON jest specyfikacją testowego kształtu, nie deklaracją obecnego 
 
 **Pliki:** nowe native `terminal_current_constraints.*`, istniejący steady transport i ABI, sys/engine wrappers, planner binder i runner `measured_port_current`; nowy native contract test.
 
+**Zależność ujawniona 2026-10-01 (przykład publiczny T18):** bieżący
+`AntennaFieldSolveStage.conservative_current_view_ref` jest autorskim
+łańcuchem, lecz `bind_resolved_antenna_field_solve` wymaga już w planie
+`charge.fem_cpu_double.conservative_current_view = Some(...)`. Publiczny
+`ConservativeCurrentView` zawiera identyfikatory wierzchołków, ściany,
+tożsamość siatki oraz piny rewizji. Nie ma dziś dowodu, że zwykły skrypt
+`fm.study(...).stages.add_antenna_field_solve(...)` może wygenerować ten
+widok z geometrii przed meshingiem i wykonać solve bez ręcznie wpisanych
+identyfikatorów konkretnej siatki. Testy stage-first potwierdzają authoring,
+referencje symboliczne i round-trip, ale nie uruchamiają natywnego solve.
+Przed publikacją skryptu 0950 jako wykonywalnego end-to-end T05/T12 muszą
+udostępnić jawny, zweryfikowany mechanizm tworzenia i wiązania konserwatywnego
+widoku po meshingu oraz jego provenance; alternatywnie przykład musi jawnie
+korzystać z wcześniej utworzonego, zgodnego artefaktu i testować jego piny.
+Nie należy zastępować tej luki fikcyjnym `cpw_closed_current_view` ani
+`fm.AntennaFieldSolve` z dawnego szkicu 0950.
+
 **Algorytm docelowy:** korzystać z liniowości H1 i terminalowej macierzy przewodności. Dla każdej składowej elektrycznie spójnej nadać jeden gauge, wyznaczyć reakcje terminalowe dla niezależnych jednostkowych potencjałów, rozwiązać mały układ terminalowy dla zadanych podpisanych strumieni, a potem odtworzyć potencjał i prąd przestrzenny. Nie pisać drugiego solve FEM w Rust.
 
 - [ ] W teście jednostkowym portu pokazać RED: przy wagach `(1,-0.5,-0.5)` certyfikat nie może akceptować wszystkich kombinacji znaków tych samych modułów prądu. Test dotyczy jawnie zdefiniowanych outward flux na outletach.
