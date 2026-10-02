@@ -285,3 +285,7 @@ pamięci i wszystkich lane'ów pozostają otwarte. P6 wynosi **52%**.
 69. [Pakowanie supervision i retry przygotowania](69-preparation-supervisor-retry-packaging.md)
     — uzupełnione dwa programy wymagane przez portable/MSI, instalacja/runpath
     i required outputs; 31 testów Python PASS, pełne pakiety/runtime otwarte.
+
+70. [Jednolity odbiór pakietu przez koordynator](70-coordinator-required-package-receipt.md)
+    — wspólny kontrakt 14 release outputs, odbiór receipt odrzuca brak/puste
+    programy; regresje trzech profili i identity archiwum PASS, runtime otwarty.

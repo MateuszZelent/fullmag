@@ -802,7 +802,8 @@ def execute_windows_container(
 def driver_identity() -> dict:
     return {name: digest(SCRIPT_DIR / name) for name in (
         "verify_saved_fem_archive_roundtrip.py", "fullmag_storage.py",
-        "local_runner/build_executor.py", "local_runner/worker_entrypoint.py")}
+        "local_runner/build_executor.py", "local_runner/worker_entrypoint.py",
+        "local_runner/build_entrypoint.py")}
 
 
 def inventory(root: Path) -> dict[str, dict]:

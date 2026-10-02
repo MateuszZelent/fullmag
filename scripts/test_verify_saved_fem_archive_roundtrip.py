@@ -20,6 +20,22 @@ SNAPSHOT = "b" * 64
 STAMP = f"[fullmag] build: 2026-10-01T12:00:00Z | commit: {COMMIT} | clean | source snapshot: {SNAPSHOT}"
 
 
+def test_driver_identity_tracks_required_output_contract(tmp_path, monkeypatch):
+    names = ("verify_saved_fem_archive_roundtrip.py", "fullmag_storage.py",
+             "local_runner/build_executor.py", "local_runner/worker_entrypoint.py",
+             "local_runner/build_entrypoint.py")
+    for name in names:
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"initial contract")
+    monkeypatch.setattr(MODULE, "SCRIPT_DIR", tmp_path)
+    before = MODULE.driver_identity()
+    assert "local_runner/build_entrypoint.py" in before
+    (tmp_path / "local_runner/build_entrypoint.py").write_bytes(b"changed contract")
+    after = MODULE.driver_identity()
+    assert after["local_runner/build_entrypoint.py"] != before["local_runner/build_entrypoint.py"]
+
+
 @pytest.mark.parametrize("stderr", [STAMP.replace(COMMIT, "c" * 40), STAMP + "x", STAMP + "\n" + STAMP,
                                     STAMP.replace("clean", "dirty"), ""])
 def test_rejects_mismatched_or_ambiguous_binary_identity(stderr):

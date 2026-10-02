@@ -116,9 +116,14 @@ PROFILES: dict[str, Profile] = {
     ),
 }
 
-REQUIRED_OUTPUTS = (
+BASE_REQUIRED_OUTPUTS = (
     "bin/fullmag-bin",
     "bin/fullmag-api",
+    "_fullmag_core.so",
+    "launcher-build-mode",
+    "web/index.html",
+)
+REQUIRED_OUTPUTS = BASE_REQUIRED_OUTPUTS + (
     "bin/fullmag-api-accepted-worker",
     "bin/fullmag-api-accepted-supervisor",
     "bin/fullmag-api-accepted-scheduler",
@@ -128,9 +133,6 @@ REQUIRED_OUTPUTS = (
     "bin/fullmag-api-accepted-fem-preparation-scheduler",
     "bin/fullmag-api-preparation-resource-pool",
     "bin/fullmag-api-preparation-retry",
-    "_fullmag_core.so",
-    "launcher-build-mode",
-    "web/index.html",
 )
 EXPECTED_BUILD_MARKER = {
     "fem-cpu-release": "fem-cpu",

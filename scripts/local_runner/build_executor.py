@@ -16,6 +16,7 @@ from local_runner.coordinator import CoordinatorError, docker, inspect_owned
 from local_runner.queue import JobQueue
 from local_runner.worker import _resolve_storage_dir, _format_cpus, _format_memory
 from local_runner.worker_entrypoint import verify_source
+from local_runner.build_entrypoint import BASE_REQUIRED_OUTPUTS, PROFILES as RELEASE_PROFILES, REQUIRED_OUTPUTS
 
 
 PROFILES = {
@@ -199,7 +200,8 @@ def validate_build_receipt(artifacts, job, journal):
     entries = receipt.get('artifacts')
     if not isinstance(entries, list) or not entries:
         raise ValueError('Build receipt has no artifacts')
-    required = {'outputs/.fullmag/local/' + name for name in ('bin/fullmag-bin', 'bin/fullmag-api', '_fullmag_core.so', 'web/index.html', 'launcher-build-mode')}
+    outputs = REQUIRED_OUTPUTS if job['profile'] in RELEASE_PROFILES else BASE_REQUIRED_OUTPUTS
+    required = {'outputs/.fullmag/local/' + name for name in outputs}
     if not required.issubset({entry.get('path') for entry in entries}):
         raise ValueError('Required build outputs missing')
     stages = receipt.get('stages', [])
@@ -215,6 +217,8 @@ def validate_build_receipt(artifacts, job, journal):
         artifact = validate_path(artifacts / relative, artifacts, 'build artifact')
         if not artifact.is_file() or artifact.stat().st_size != entry['size']:
             raise ValueError('Artifact size mismatch')
+        if relative in required and artifact.stat().st_size == 0:
+            raise ValueError('Required build output is empty: ' + relative)
         digest = artifact_sha256(artifact)
         if digest != entry['sha256']:
             raise ValueError('Artifact hash mismatch')
