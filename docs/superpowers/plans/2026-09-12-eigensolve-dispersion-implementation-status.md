@@ -1,5 +1,38 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
+## S07/S10 — rzeczywiste gamma w wynikach i oracle, 2026-10-02
+
+Usunięto referencyjne gamma z ogólnych writerów widma, pól modów i oracle
+Kittela. `PathSolveResult` przenosi obowiązkowy parametr z planu, także przez
+adapter fizycznego sweepu pola. Publisher FEM waliduje gamma przed obliczeniem
+i publikacją, sprawdza zgodność planu z wynikiem. Niedodatnie/nieskończone
+gamma, overflow gamma0/mu0 oraz nieskończona częstotliwość Kittela są błędem;
+nie mogą zostać zapisane jako null lub zastąpione wartością referencyjną.
+Czytnik porównuje gamma modów ze stałymi wykonania.
+
+Dowody: 213 testów istniejącego verifiera PASS (69,23 s), 6 nowych kontroli
+źródeł/algebry/czytnika PASS; parser Rust i mapa źródeł noty 0831 PASS.
+Kontrakty walidatora dokumentacji: 35 PASS (18,92 s).
+Przygotowano natywne regresje wartości niereferencyjnej, dwóch modeli Kittela,
+overflow i rozbieżności plan/wynik. Nie kompilowano ani nie wykonywano testów
+Rust/C++; managed runtime i walidacja fizyki pozostają NOT VERIFIED.
+Review wykrył dwa P2 (bezpośredni publisher FEM i overflow częstotliwości);
+poprawki włączono do tego etapu.
+
+Ta zmiana nie wyjaśnia historycznej różnicy DE około 2 MHz: tam gamma było
+referencyjne. Nie powstał nowy punkt numeryczny ani nowy wykres FEM.
+Pełny zakres S00–S12 pozostaje otwarty. Szczegóły:
+[audyt gamma](../../audits/2026-10-02-modal-gamma-provenance.md).
+
+Aktualny odczyt API: #196 nadal queued, worker_alive=true,
+accepting_jobs=true, active_jobs=[], waiting_for_disk; storage 173 936 640 B
+(około 166 MiB), poniżej 8 GiB. Sterownik session 7375 potwierdzony aktywny.
+Nie restartowano ani nie powielono zadania; nie usuwano danych. Kapsuła #196
+jest niezmienna i nie zawiera późniejszych zmian trackingu/gamma/2.5D.
+Po zwolnieniu miejsca: kontrola receipt buildu i sześciu pilotów DE/BV,
+następnie nowe obliczenia aktualnego checkpointu oraz signed ±25,
+kompletność/zbieżność i porównanie z COMSOL zgodnie z całym planem.
+
 ## Aktualny stan — 2026-10-02, checkpoint nearest 71ec3f159
 
 ### Kolejka #196 — wspólny checkpoint poprawek

@@ -2,6 +2,22 @@
 
 use super::*;
 
+pub(super) fn eigen_path_publication_gamma0(
+    plan: &FemEigenPlanIR,
+    result: &crate::eigen::PathSolveResult,
+) -> Result<f64, RunError> {
+    let validate = |value| crate::eigen::artifacts::validated_modal_gamma0(value)
+        .map_err(|error| RunError { message: error.to_string() });
+    let gamma0 = validate(result.gamma0_rad_s_per_a_m)?;
+    let plan_gamma0 = validate(plan.gyromagnetic_ratio)?;
+    if gamma0 != plan_gamma0 {
+        return Err(RunError {
+            message: "FEM eigen publication gamma0 differs from the executed plan".into(),
+        });
+    }
+    Ok(gamma0)
+}
+
 pub(super) fn eigen_path_mode_publication_json(
     mut value: Value,
     sample_index: usize,
@@ -160,6 +176,28 @@ pub(super) fn validate_eigen_path_selected_mode_artifacts(
 #[cfg(test)]
 mod output_publication_tests {
     use super::*;
+
+    #[test]
+    fn publication_gamma_rejects_overflow_and_plan_result_mismatch() {
+        let mut plan = residual_transport_test_plan();
+        let mut result = crate::eigen::PathSolveResult {
+            gamma0_rad_s_per_a_m: 1.7e5,
+            samples: Vec::new(), branches: Vec::new(), notes: Vec::new(),
+            solver_model: crate::eigen::EigenSolverModel::ReferenceScalarTangent,
+            include_demag: false, dispersion_validation: None, k0_kittel_validation: None,
+            solver_policy: None, dispersion_analytic_reference: None,
+            k0_kittel_periodic_airbox_demag: None,
+        };
+        plan.gyromagnetic_ratio = result.gamma0_rad_s_per_a_m;
+        assert_eq!(eigen_path_publication_gamma0(&plan, &result).unwrap(), 1.7e5);
+        result.gamma0_rad_s_per_a_m = 2.211e5;
+        assert!(eigen_path_publication_gamma0(&plan, &result).is_err());
+        for invalid in [0.0, -1.0, f64::NAN, f64::INFINITY, f64::MAX] {
+            plan.gyromagnetic_ratio = invalid;
+            result.gamma0_rad_s_per_a_m = invalid;
+            assert!(eigen_path_publication_gamma0(&plan, &result).is_err());
+        }
+    }
 
     fn residual_transport_test_plan() -> FemEigenPlanIR {
         let mesh = fullmag_ir::MeshIR {
@@ -831,6 +869,7 @@ mod output_publication_tests {
     fn actual_path_manifest_publishes_both_field_replay_families() {
         let model = crate::eigen::EigenSolverModel::ReferenceScalarTangent;
         let result = crate::eigen::PathSolveResult {
+            gamma0_rad_s_per_a_m: 2.211e5, // Explicit fixture parameter.
             samples: [0, 2, 7].into_iter().map(|sample_index| crate::eigen::SingleKSolveResult {
                 sample: KSampleDescriptor {
                     sample_index, label: None, segment_index: None,
@@ -1971,7 +2010,7 @@ pub(super) fn eigen_path_solver_diagnostics(
     result: &crate::eigen::PathSolveResult,
     published_mode_ids: &BTreeSet<SampleModeId>,
 ) -> serde_json::Value {
-    let gamma0_rad_s_per_a_m = plan.gyromagnetic_ratio;
+    let gamma0_rad_s_per_a_m = result.gamma0_rad_s_per_a_m;
     let public_mode_count = eigen_path_public_mode_count(result, published_mode_ids);
     let requested_production_shift_invert =
         result.solver_model == crate::eigen::EigenSolverModel::ProductionCpuShiftInvert;

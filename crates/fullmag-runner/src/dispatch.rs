@@ -4064,6 +4064,7 @@ mod tests {
     fn k0_multi_sample_path_is_not_classified_as_dispersion() {
         let solver_model = EigenSolverModel::ReferenceScalarTangent;
         let result = crate::eigen::PathSolveResult {
+            gamma0_rad_s_per_a_m: 2.211e5, // Explicit fixture parameter.
             samples: (0..3)
                 .map(|sample_index| crate::eigen::SingleKSolveResult {
                     sample: crate::eigen::KSampleDescriptor {
@@ -6739,6 +6740,7 @@ mod tests {
             frequency_max_hz: 1.0e13,
         };
         let path_result = crate::eigen::PathSolveResult {
+            gamma0_rad_s_per_a_m: 2.211e5, // Explicit fixture parameter.
             samples: vec![crate::eigen::SingleKSolveResult {
                 sample: crate::eigen::KSampleDescriptor {
                     sample_index: 0,
@@ -7033,6 +7035,7 @@ mod tests {
             frequency_max_hz: 1.0e13,
         };
         let path_result = crate::eigen::PathSolveResult {
+            gamma0_rad_s_per_a_m: 2.211e5, // Explicit fixture parameter.
             samples: Vec::new(),
             branches: Vec::new(),
             solver_model: EigenSolverModel::ProductionCpuShiftInvert,
@@ -7129,6 +7132,7 @@ mod tests {
             frequency_max_hz: 1.0e13,
         };
         let path_result = crate::eigen::PathSolveResult {
+            gamma0_rad_s_per_a_m: 2.211e5, // Explicit fixture parameter.
             samples: Vec::new(),
             branches: Vec::new(),
             solver_model: EigenSolverModel::ReferenceFull2x2Tangent,
@@ -7272,6 +7276,7 @@ mod tests {
             }],
         });
         let path_result = crate::eigen::PathSolveResult {
+            gamma0_rad_s_per_a_m: 2.211e5, // Explicit fixture parameter.
             samples: Vec::new(),
             branches: Vec::new(),
             solver_model: EigenSolverModel::ReferenceFull2x2Tangent,
@@ -7779,6 +7784,7 @@ mod tests {
         }
 
         let path_result = crate::eigen::PathSolveResult {
+            gamma0_rad_s_per_a_m: 2.211e5, // Explicit fixture parameter.
             samples,
             branches: vec![crate::eigen::TrackedBranch {
                 branch_id: 0,
@@ -8319,6 +8325,7 @@ mod tests {
             frequency_max_hz: 1.0e13,
         };
         let path_result = crate::eigen::PathSolveResult {
+            gamma0_rad_s_per_a_m: 2.211e5, // Explicit fixture parameter.
             samples: Vec::new(),
             branches: Vec::new(),
             solver_model: EigenSolverModel::ProductionCpuShiftInvert,
@@ -8392,6 +8399,7 @@ mod tests {
             frequency_max_hz: 1.0e13,
         };
         let path_result = crate::eigen::PathSolveResult {
+            gamma0_rad_s_per_a_m: 2.211e5, // Explicit fixture parameter.
             samples: Vec::new(),
             branches: Vec::new(),
             solver_model: EigenSolverModel::ProductionCpuShiftInvert,
@@ -8489,6 +8497,7 @@ mod tests {
             frequency_max_hz: 1.0e13,
         };
         let path_result = crate::eigen::PathSolveResult {
+            gamma0_rad_s_per_a_m: 2.211e5, // Explicit fixture parameter.
             samples: Vec::new(),
             branches: Vec::new(),
             solver_model: EigenSolverModel::ProductionCpuShiftInvert,

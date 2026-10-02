@@ -2428,6 +2428,48 @@ równowagi pozostają wymaganiami przed zaliczeniem S06/S07.
 | `source-tracking-consistent-basis-regression` | `crates/fullmag-runner/src/eigen/tracking.rs` | `exact_consistent_tracking_overlap_includes_offdiagonal_p1_mass` | Uncompiled analytic regression distinguishes consistent and diagonal mass |
 
 
+## Rzeczywisty parametr żyromagnetyczny w wynikach (S07/S10, źródła WIP)
+
+Wspólny `PathSolveResult` przechowuje jawny `gamma0_rad_s_per_a_m`,
+pochodzący z `FemEigenPlanIR.gyromagnetic_ratio`, bez domyślnej stałej
+materiałowej. Gamma0 ma jednostkę rad/(s A/m). Wartość gamma w rad/(s T)
+jest obliczana jako gamma0/mu0, zgodnie z istniejącą definicją SI tej noty.
+Writers spectrum i mode fields korzystają z tego samego rzeczywistego
+parametru. Zanim opublikują wynik, odrzucają wartości niedodatnie,
+nieskończone lub powodujące overflow przeliczenia gamma0/mu0.
+
+Oracle Kittela otrzymuje ten sam gamma0 przy obliczaniu oczekiwanej
+częstotliwości Larmora/thin-film oraz publikacji parametru fit. Parametr
+wchodzi z fizycznego planu także przez adapter bias-field sweep; nie jest
+odgadywany z częstotliwości ani ze stałej referencyjnej. Analityka pozostaje
+postprocessingiem i nie koryguje modów solvera. Python→ProblemIR,
+konwencja fazy, jednostki publicznych pól i dopuszczone lane pozostają takie
+same. Poprawka dotyczy wspólnej reprezentacji wyników; nie dowodzi
+wykonania FEM CPU/GPU ani zgodności z COMSOL. FDM nie otrzymuje nowej trasy.
+
+Weryfikacja wymaga wartości gamma0 innej niż Py reference, zgodności
+spectrum v2/v3, pól modów, parametru i oracle Kittela oraz odrzucenia
+invalid gamma0. Wymagane runtime/scientific gates pozostają osobnymi
+zadaniami; test źródeł i algebra nie zastępują solvera.
+
+Bezpośredni publisher FEM przed serializacją sprawdza poprawność gamma0
+planu i wyniku oraz ich zgodność. Oracle Kittela odrzuca także przepełnioną
+częstotliwość obliczoną ze skończonych wejść. Czytnik wiąże gamma każdego
+modu ze stałymi wykonania; sama zgodność gamma0=mu0*gamma jest za słaba.
+To kontrola kontraktu, a nie odtworzenie operatora.
+
+| Source ID | Plik | Symbol | Zakres dowodu |
+| --- | --- | --- | --- |
+| `source-modal-gamma-result` | `crates/fullmag-runner/src/eigen/types.rs` | `PathSolveResult` | Required actual plan gamma0 on solved results |
+| `source-modal-gamma-owner` | `crates/fullmag-runner/src/eigen/orchestrator.rs` | `run_path_or_single` | Carry actual plan gamma0 without material fallback |
+| `source-modal-gamma-guard` | `crates/fullmag-runner/src/eigen/artifacts/common.rs` | `validated_modal_gamma0` | Reject invalid gamma0 and unrepresentable SI conversion |
+| `source-modal-gamma-spectrum` | `crates/fullmag-runner/src/eigen/artifacts/modal_manifest.rs` | `summarize_mode` | Spectrum metadata uses actual gamma0 |
+| `source-modal-gamma-fields` | `crates/fullmag-runner/src/eigen/artifacts/mode_bundle.rs` | `write_mode_bundle` | Field metadata uses the same validated gamma0 |
+| `source-modal-gamma-kittel` | `crates/fullmag-runner/src/eigen/artifacts/kittel.rs` | `k0_kittel_expected_frequency_hz` | Actual gamma0 and finite positive frequency oracle |
+| `source-modal-gamma-fem-publication` | `crates/fullmag-runner/src/fem/eigen_path_artifacts.rs` | `eigen_path_publication_gamma0` | Validate result and plan before direct FEM JSON publication |
+| `source-modal-gamma-reader` | `scripts/verify_fem_frequency_domain_eigen_artifacts.py` | `validate_mode_gamma_matches_constants` | Bind mode gamma metadata to execution constants |
+| `source-modal-gamma-regression` | `crates/fullmag-runner/src/eigen/artifacts/tests.rs` | `actual_plan_gamma_is_shared_by_spectra_and_mode_fields` | Prepared uncompiled nonreference gamma regression |
+
 ## Dowód wybranej krawędzi trackingu (S06/S07, źródła WIP)
 
 Każdy nowy punkt gałęzi przechowuje opcjonalny, typowany rekord

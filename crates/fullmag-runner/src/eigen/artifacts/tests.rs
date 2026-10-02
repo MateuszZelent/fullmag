@@ -82,12 +82,87 @@ fn branch_writer_preserves_recorded_pair_policy_and_gap() {
     }
 }
 
+#[test]
+fn actual_plan_gamma_is_shared_by_spectra_and_mode_fields() {
+    let temp = TempDirGuard::new("actual-gamma");
+    let mut result = sample_result();
+    result.gamma0_rad_s_per_a_m = 1.7e5;
+    write_path_bundle(&temp.path, &result).unwrap();
+    write_mode_bundle(&temp.path, &result).unwrap();
+    let gamma = result.gamma0_rad_s_per_a_m / crate::MU0;
+    for name in ["spectrum.v2.json", "spectrum.v3.json", "path.json"] {
+        let payload: Value = serde_json::from_slice(&std::fs::read(
+            temp.path.join("eigen").join(name)).unwrap()).unwrap();
+        let mode = &payload["samples"][0]["modes"][0];
+        assert_eq!(mode["gamma0_rad_s_per_A_m"], result.gamma0_rad_s_per_a_m);
+        assert_eq!(mode["gamma_rad_s_T"], gamma);
+        assert_eq!(mode["mu0_T_m_per_A"], crate::MU0);
+    }
+    let payload: Value = serde_json::from_slice(&std::fs::read(
+        temp.path.join("eigen/modes/sample_0000/mode_0000.json")).unwrap()).unwrap();
+    assert_eq!(payload["gamma0_rad_s_per_A_m"], result.gamma0_rad_s_per_a_m);
+    assert_eq!(payload["gamma_rad_s_T"], gamma);
+}
+
+#[test]
+fn invalid_plan_gamma_cannot_publish_reference_metadata() {
+    for gamma0 in [0.0, -1.0, f64::NAN, f64::INFINITY, f64::MAX] {
+        let temp = TempDirGuard::new("invalid-gamma");
+        let mut result = sample_result_with_k0_kittel_sweep();
+        result.gamma0_rad_s_per_a_m = gamma0;
+        assert!(write_path_bundle(&temp.path, &result).is_err());
+        assert!(write_mode_bundle(&temp.path, &result).is_err());
+        assert!(build_kittel_fit_artifact(&result).is_err());
+        assert!(!temp.path.join("eigen").exists());
+    }
+}
+
+#[test]
+fn nonreference_gamma_drives_kittel_oracle_and_parameter() {
+    for model in ["macrospin_larmor", "thin_film_in_plane"] {
+        let mut result = sample_result_with_k0_kittel_sweep();
+        result.gamma0_rad_s_per_a_m = 1.7e5;
+        let validation = result.k0_kittel_validation.as_mut().unwrap();
+        validation.model = model.into();
+        validation.material.effective_magnetisation = Some(8e5);
+        let fields = validation.samples.iter().map(|sample| sample.bias_field[0]).collect::<Vec<_>>();
+        for (index, field) in fields.iter().copied().enumerate() {
+            let factor = if model == "macrospin_larmor" { field }
+                else { (field*(field+8e5)).sqrt() };
+            let frequency = result.gamma0_rad_s_per_a_m * factor / std::f64::consts::TAU;
+            result.samples[index].modes[0].frequency_real_hz = frequency;
+            result.samples[index].modes[0].angular_frequency_rad_per_s = std::f64::consts::TAU*frequency;
+            result.samples[index].modes[0].eigenvalue_imag = std::f64::consts::TAU*frequency;
+            result.branches[0].points[index].frequency_real_hz = frequency;
+        }
+        let fit = build_kittel_fit_artifact(&result).unwrap().unwrap();
+        assert_eq!(fit.parameters.iter().find(|param| param.name == "gamma0_rad_s_per_A_m")
+                   .unwrap().value, result.gamma0_rad_s_per_a_m);
+        for (index, point) in fit.points.iter().enumerate() {
+            assert_eq!(point.expected_frequency_hz, result.samples[index].modes[0].frequency_real_hz);
+            assert!(point.relative_frequency_error < 1e-12);
+        }
+    }
+}
+
+#[test]
+fn kittel_oracle_rejects_nonfinite_frequency_from_finite_inputs() {
+    let mut result = sample_result_with_k0_kittel_sweep();
+    // gamma0/mu0 is representable, but gamma0 * H0 is not.
+    result.gamma0_rad_s_per_a_m = 1e300;
+    for sample in &mut result.k0_kittel_validation.as_mut().unwrap().samples {
+        sample.bias_field = [1e100, 0.0, 0.0];
+    }
+    assert!(build_kittel_fit_artifact(&result).is_err());
+}
+
 fn sample_result() -> PathSolveResult {
     sample_result_with_solver_model(EigenSolverModel::ReferenceScalarTangent)
 }
 
 fn sample_result_with_solver_model(solver_model: EigenSolverModel) -> PathSolveResult {
     PathSolveResult {
+        gamma0_rad_s_per_a_m: 2.211e5, // Explicit fixture parameter.
         samples: vec![SingleKSolveResult {
             sample: KSampleDescriptor {
                 sample_index: 0,
@@ -253,6 +328,7 @@ fn single_sample_mode_provenance_prefers_enriched_root_diagnostics() {
         &result.samples[0],
         &result.samples[0].modes[0],
         result.solver_model,
+        result.gamma0_rad_s_per_a_m,
     );
 
     assert_eq!(

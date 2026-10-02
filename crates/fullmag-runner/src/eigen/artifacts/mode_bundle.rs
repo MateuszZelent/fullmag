@@ -173,6 +173,7 @@ fn write_complex_vector_field_payload(
 }
 
 pub fn write_mode_bundle(base_dir: &Path, result: &PathSolveResult) -> std::io::Result<()> {
+    let gamma0_rad_s_per_a_m = validated_modal_gamma0(result.gamma0_rad_s_per_a_m)?;
     for sample in &result.samples {
         let diagnostics = sample_native_solver_diagnostics(sample);
         for mode in &sample.modes {
@@ -279,8 +280,8 @@ pub fn write_mode_bundle(base_dir: &Path, result: &PathSolveResult) -> std::io::
                 phasor_convention: modal_phasor_convention(result.solver_model),
                 eigenvalue_mapping: modal_eigenvalue_mapping(result.solver_model),
                 omega_rad_s: mode.angular_frequency_rad_per_s,
-                gamma_rad_s_t: reference_modal_gamma_rad_s_t(),
-                gamma0_rad_s_per_a_m: REFERENCE_MODAL_GAMMA0_RAD_S_PER_A_M,
+                gamma_rad_s_t: gamma0_rad_s_per_a_m / crate::MU0,
+                gamma0_rad_s_per_a_m,
                 mu0_t_m_per_a: crate::MU0,
                 normalization: "unit_l2",
                 damping_policy: "ignore",

@@ -5,6 +5,8 @@ mod kittel;
 mod modal_manifest;
 mod mode_bundle;
 
+pub(crate) use common::validated_modal_gamma0;
+
 pub use super::response_block_real::{
     solve_and_write_field_driven_response_sweep_bundle,
     solve_and_write_field_driven_response_sweep_bundle_with_interrupt,

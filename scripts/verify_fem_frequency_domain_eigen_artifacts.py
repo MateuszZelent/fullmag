@@ -2574,6 +2574,17 @@ def validate_manifest_physics(manifest: dict) -> None:
     )
 
 
+def validate_mode_gamma_matches_constants(mode: dict, constants: dict, name: str) -> None:
+    """Bind modal gamma provenance to the execution constants, not merely to its SI conversion."""
+    for field in ("gamma0_rad_s_per_A_m", "gamma_rad_s_T", "mu0_T_m_per_A"):
+        actual = require_finite_number(mode.get(field), f"{name}.{field}")
+        expected = require_finite_number(constants.get(field), f"execution.constants.{field}")
+        if actual <= 0 or expected <= 0:
+            fail(f"{name}.{field} and execution.constants.{field} must be positive")
+        require_close(actual, expected, f"{name}.{field} vs execution constants",
+                      relative_tolerance=1e-12, absolute_tolerance=0.0)
+
+
 def validate_mode_diagnostics_fields(
     payload: dict,
     payload_path: str,
@@ -3097,6 +3108,7 @@ def validate_eigen_summary(
             spectrum_mode,
             summary_mode_path,
         )
+        validate_mode_gamma_matches_constants(mode, constants, summary_mode_path)
         validate_mode_diagnostics_fields(
             mode,
             summary_mode_path,

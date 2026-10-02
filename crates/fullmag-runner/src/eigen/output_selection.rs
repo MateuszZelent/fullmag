@@ -715,6 +715,7 @@ mod tests {
 
     fn result() -> PathSolveResult {
         PathSolveResult {
+            gamma0_rad_s_per_a_m: 2.211e5, // Explicit fixture parameter.
             samples: vec![
                 sample(10, Some("Gamma"), vec![mode(2, Some(7)), mode(9, Some(12))]),
                 sample(20, Some("X"), vec![mode(2, Some(12)), mode(15, None)]),

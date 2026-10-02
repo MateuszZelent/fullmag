@@ -1673,6 +1673,7 @@ mod tests {
     #[test]
     fn frequency_fallback_tracks_large_hz_modes_when_vectors_are_absent() {
         let mut result = PathSolveResult {
+            gamma0_rad_s_per_a_m: 2.211e5, // Explicit fixture parameter.
             samples: vec![
                 sample(
                     0,
@@ -1735,6 +1736,7 @@ mod tests {
     fn tracking_skips_empty_intermediate_samples_without_panicking() {
         let vector = [Complex64::new(1.0, 0.0), Complex64::new(0.0, 0.0)];
         let mut result = PathSolveResult {
+            gamma0_rad_s_per_a_m: 2.211e5, // Explicit fixture parameter.
             samples: vec![
                 sample(0, vec![mode(0, 1.0e9, vector)]),
                 sample(1, Vec::new()),
@@ -1857,6 +1859,7 @@ mod tests {
     fn max_branch_gap_zero_restarts_after_an_empty_sample() {
         let vector = [Complex64::new(1.0, 0.0), Complex64::new(0.0, 0.0)];
         let mut result = PathSolveResult {
+            gamma0_rad_s_per_a_m: 2.211e5, // Explicit fixture parameter.
             samples: vec![
                 sample(0, vec![mode(0, 1.0e9, vector)]),
                 sample(1, Vec::new()),
@@ -1900,6 +1903,7 @@ mod tests {
         let base = [Complex64::new(1.0, 0.25), Complex64::new(-0.5, 0.75)];
         let rotated = [base[0] * phase, base[1] * phase];
         let mut result = PathSolveResult {
+            gamma0_rad_s_per_a_m: 2.211e5, // Explicit fixture parameter.
             samples: vec![
                 sample(0, vec![mode(0, 1.0, base)]),
                 sample(1, vec![mode(0, 1.0, rotated)]),
@@ -2024,6 +2028,7 @@ mod tests {
         let previous = [Complex64::new(1.0, 0.0), Complex64::new(0.0, 0.0)];
         let current = [Complex64::new(0.8, 0.0), Complex64::new(0.6, 0.0)];
         let mut result = PathSolveResult {
+            gamma0_rad_s_per_a_m: 2.211e5, // Explicit fixture parameter.
             samples: vec![
                 sample(0, vec![mode(0, 1.0, previous)]),
                 sample(1, vec![mode(0, 1.0, current)]),
@@ -2063,6 +2068,7 @@ mod tests {
             Complex64::new(orthogonal_component, 0.0),
         ];
         let mut result = PathSolveResult {
+            gamma0_rad_s_per_a_m: 2.211e5, // Explicit fixture parameter.
             samples: vec![
                 sample(0, vec![mode(0, 1.0, previous)]),
                 sample(1, vec![mode(0, 1.0, current)]),
@@ -2146,6 +2152,7 @@ mod tests {
         assert!(edge_score(&valid, &nan_frequency, &cfg).is_finite());
 
         let mut result = PathSolveResult {
+            gamma0_rad_s_per_a_m: 2.211e5, // Explicit fixture parameter.
             samples: vec![
                 sample(0, vec![zero, nan]),
                 sample(
@@ -2179,6 +2186,7 @@ mod tests {
         let a = [Complex64::new(1.0, 0.0), Complex64::new(0.0, 0.0)];
         let b = [Complex64::new(0.0, 0.0), Complex64::new(1.0, 0.0)];
         let mut result = PathSolveResult {
+            gamma0_rad_s_per_a_m: 2.211e5, // Explicit fixture parameter.
             samples: vec![
                 sample(0, vec![mode(0, 1.0, a), mode(1, 2.0, b)]),
                 sample(1, vec![mode(0, 2.1, b), mode(1, 1.1, a)]),
@@ -2231,6 +2239,7 @@ mod tests {
         let raw_vectors = samples.iter().flat_map(|sample| &sample.modes)
             .map(|mode| mode.reduced_vector.clone()).collect::<Vec<_>>();
         let mut result = PathSolveResult {
+            gamma0_rad_s_per_a_m: 2.211e5, // Explicit fixture parameter.
             samples, branches: Vec::new(), solver_model: EigenSolverModel::ReferenceScalarTangent,
             notes: Vec::new(), include_demag: false, dispersion_validation: None,
             k0_kittel_validation: None, solver_policy: None, dispersion_analytic_reference: None,
@@ -2326,6 +2335,7 @@ mod tests {
             .all(|cosine| (*cosine - 1.0).abs() < 1.0e-12));
 
         let mut result = PathSolveResult {
+            gamma0_rad_s_per_a_m: 2.211e5, // Explicit fixture parameter.
             samples: vec![
                 sample(0, vec![previous_first, previous_second]),
                 // The raw order is intentionally reversed as well as
@@ -2504,6 +2514,7 @@ mod tests {
         split_second.node_mass_weights = Some(weights);
 
         let mut result = PathSolveResult {
+            gamma0_rad_s_per_a_m: 2.211e5, // Explicit fixture parameter.
             samples: vec![
                 sample(0, vec![previous_first, previous_second]),
                 // This is an exact crossing: the eigensolver is free to
@@ -2603,6 +2614,7 @@ mod tests {
         current_second.node_mass_weights = Some(weights);
 
         let mut result = PathSolveResult {
+            gamma0_rad_s_per_a_m: 2.211e5, // Explicit fixture parameter.
             samples: vec![
                 sample(0, vec![first_at_zero, second_at_zero]),
                 // Only branch zero advances, leaving branch one at sample 0.

@@ -10,10 +10,16 @@ use std::io::{Error, ErrorKind, Write};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[cfg(test)]
 pub(super) const REFERENCE_MODAL_GAMMA0_RAD_S_PER_A_M: f64 = 2.211e5;
 
-pub(super) fn reference_modal_gamma_rad_s_t() -> f64 {
-    REFERENCE_MODAL_GAMMA0_RAD_S_PER_A_M / crate::MU0
+pub(crate) fn validated_modal_gamma0(gamma0_rad_s_per_a_m: f64) -> std::io::Result<f64> {
+    if !gamma0_rad_s_per_a_m.is_finite() || gamma0_rad_s_per_a_m <= 0.0
+        || !(gamma0_rad_s_per_a_m / crate::MU0).is_finite() {
+        return Err(Error::new(ErrorKind::InvalidData,
+            "modal publication requires finite positive plan gamma0 with representable gamma0/mu0"));
+    }
+    Ok(gamma0_rad_s_per_a_m)
 }
 
 pub(super) fn finite_or_default(value: Option<f64>, default: f64) -> f64 {

@@ -553,6 +553,8 @@ pub struct K0KittelPeriodicAirboxDemagMetrics {
 
 #[derive(Debug, Clone)]
 pub struct PathSolveResult {
+    /// Actual plan gamma0 in rad/(s A/m); never a publication-time material default.
+    pub gamma0_rad_s_per_a_m: f64,
     pub samples: Vec<SingleKSolveResult>,
     pub branches: Vec<TrackedBranch>,
     pub solver_model: EigenSolverModel,

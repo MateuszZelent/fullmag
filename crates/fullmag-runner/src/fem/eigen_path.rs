@@ -497,6 +497,8 @@ pub(crate) fn execute_fem_eigen_path_with_producer_identity(
     producer_identity: Option<&fem_eigen::FemRelaxationProducerStageIdentity>,
 ) -> Result<ExecutedRun, RunError> {
     reject_reference_solver_for_dispersion_validation(plan)?;
+    crate::eigen::artifacts::validated_modal_gamma0(plan.gyromagnetic_ratio)
+        .map_err(|error| RunError { message: error.to_string() })?;
     let engine = match execution.lane() {
         FemEigenExecutionLane::Cpu => FemEngine::CpuNative,
         FemEigenExecutionLane::Gpu => FemEngine::NativeGpu,
@@ -968,6 +970,8 @@ pub(crate) fn execute_fem_eigen_path_with_producer_identity(
         None, // we collect artifacts manually below
         plan.mode_tracking.as_ref(),
     )?;
+    // Guard before any spectrum or mode JSON can serialize nonfinite gamma to null.
+    eigen_path_publication_gamma0(plan, &path_result)?;
     let last_accepted_magnetization = adapter.previous_accepted_magnetization.into_inner();
     let final_magnetization = if bias_field_sweep_requested(plan) {
         last_accepted_magnetization.ok_or_else(|| RunError {

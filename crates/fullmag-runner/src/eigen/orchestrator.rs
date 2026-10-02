@@ -86,6 +86,7 @@ pub fn run_path_or_single<S: SingleKSolver>(
     }
 
     let mut result = PathSolveResult {
+        gamma0_rad_s_per_a_m: plan.gyromagnetic_ratio,
         samples: sample_results,
         branches: Vec::new(),
         solver_model,

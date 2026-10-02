@@ -335,10 +335,12 @@ fn k0_kittel_mode_uniformity_score(mode: &SingleKModeResult) -> Option<f64> {
 fn k0_kittel_expected_frequency_hz(
     validation: &fullmag_ir::FemEigenK0KittelValidationIR,
     h0_a_per_m: f64,
+    gamma0_rad_s_per_a_m: f64,
 ) -> std::io::Result<f64> {
-    match validation.model.as_str() {
+    let gamma0_rad_s_per_a_m = validated_modal_gamma0(gamma0_rad_s_per_a_m)?;
+    let frequency = match validation.model.as_str() {
         "macrospin_larmor" => {
-            Ok(REFERENCE_MODAL_GAMMA0_RAD_S_PER_A_M * h0_a_per_m / std::f64::consts::TAU)
+            gamma0_rad_s_per_a_m * h0_a_per_m / std::f64::consts::TAU
         }
         "thin_film_in_plane" => {
             let effective_magnetisation = validation
@@ -350,18 +352,25 @@ fn k0_kittel_expected_frequency_hz(
                         "thin_film_in_plane Kittel validation requires finite effective_magnetisation",
                     )
                 })?;
-            Ok(REFERENCE_MODAL_GAMMA0_RAD_S_PER_A_M
+            gamma0_rad_s_per_a_m
                 * (h0_a_per_m * (h0_a_per_m + effective_magnetisation)).sqrt()
-                / std::f64::consts::TAU)
+                / std::f64::consts::TAU
         }
-        other => Err(invalid_k0_kittel_artifact(format!(
+        other => return Err(invalid_k0_kittel_artifact(format!(
             "unsupported K0 Kittel validation model: {other}"
         ))),
+    };
+    if !frequency.is_finite() || frequency <= 0.0 {
+        return Err(invalid_k0_kittel_artifact(
+            "K0 Kittel expected frequency must be finite and positive",
+        ));
     }
+    Ok(frequency)
 }
 
 fn k0_kittel_expected_points(
     validation: &fullmag_ir::FemEigenK0KittelValidationIR,
+    gamma0_rad_s_per_a_m: f64,
 ) -> std::io::Result<Vec<K0KittelExpectedPoint>> {
     validation
         .samples
@@ -387,7 +396,7 @@ fn k0_kittel_expected_points(
                 field_index,
                 sample_index: sample.sample_index as usize,
                 h0_a_per_m,
-                expected_frequency_hz: k0_kittel_expected_frequency_hz(validation, h0_a_per_m)?,
+                expected_frequency_hz: k0_kittel_expected_frequency_hz(validation, h0_a_per_m, gamma0_rad_s_per_a_m)?,
             })
         })
         .collect()
@@ -400,6 +409,7 @@ fn k0_kittel_expected_points(
 /// native operator.
 pub(crate) fn k0_kittel_validation_auxiliary_artifacts_from_bias_field_sweep(
     validation: &fullmag_ir::FemEigenK0KittelValidationIR,
+    gamma0_rad_s_per_a_m: f64,
     spectrum: &Value,
     branches: &Value,
     diagnostics: &Value,
@@ -407,6 +417,7 @@ pub(crate) fn k0_kittel_validation_auxiliary_artifacts_from_bias_field_sweep(
     mesh_resolution_m: f64,
     airbox_size_m: f64,
 ) -> std::io::Result<Vec<AuxiliaryArtifact>> {
+    let gamma0_rad_s_per_a_m = validated_modal_gamma0(gamma0_rad_s_per_a_m)?;
     let solver_model = solver_model_from_bias_field_sweep(spectrum, diagnostics);
     let branch_map = bias_field_branch_map(branches);
     let samples = spectrum
@@ -590,6 +601,7 @@ pub(crate) fn k0_kittel_validation_auxiliary_artifacts_from_bias_field_sweep(
         relative_kittel_frequency_error: 0.0,
     };
     let result = PathSolveResult {
+        gamma0_rad_s_per_a_m,
         samples: path_samples,
         branches: tracked_branches,
         solver_model,
@@ -1219,7 +1231,7 @@ pub fn build_kittel_fit_artifact(
     let Some(validation) = result.k0_kittel_validation.as_ref() else {
         return Ok(None);
     };
-    let expected_points = k0_kittel_expected_points(validation)?;
+    let expected_points = k0_kittel_expected_points(validation, result.gamma0_rad_s_per_a_m)?;
     if expected_points.is_empty() {
         return Ok(None);
     }
@@ -1277,7 +1289,7 @@ pub fn build_kittel_fit_artifact(
     };
     let mut parameters = vec![KittelFitParameterArtifact {
         name: "gamma0_rad_s_per_A_m".to_string(),
-        value: REFERENCE_MODAL_GAMMA0_RAD_S_PER_A_M,
+        value: validated_modal_gamma0(result.gamma0_rad_s_per_a_m)?,
         unit: "rad/(s A/m)".to_string(),
     }];
     if let Some(effective_magnetisation) = validation
@@ -1532,7 +1544,7 @@ pub(crate) fn k0_kittel_validation_auxiliary_artifacts(
     } else {
         None
     };
-    let expected_points = k0_kittel_expected_points(validation)?;
+    let expected_points = k0_kittel_expected_points(validation, result.gamma0_rad_s_per_a_m)?;
     if expected_points.len() < 3 {
         return Err(invalid_k0_kittel_artifact(
             "K0 Kittel validation requires at least three field samples",

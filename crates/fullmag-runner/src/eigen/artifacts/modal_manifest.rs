@@ -145,6 +145,7 @@ pub(super) fn summarize_mode(
     sample: &SingleKSolveResult,
     mode: &SingleKModeResult,
     solver_model: EigenSolverModel,
+    gamma0_rad_s_per_a_m: f64,
 ) -> ModeSummaryArtifact {
     let mode_field_id = eigen_mode_field_id(sample.sample.sample_index, mode.raw_mode_index);
     let mode_field_resource_key = eigen_mode_field_resource_key(&mode_field_id);
@@ -188,8 +189,8 @@ pub(super) fn summarize_mode(
         tangent_leakage_mean_abs: Some(tangent_leakage_mean_abs),
         tangent_leakage_max_abs: Some(tangent_leakage_max_abs.max(tangent_leakage_mean_abs)),
         omega_rad_s: mode.angular_frequency_rad_per_s,
-        gamma_rad_s_t: reference_modal_gamma_rad_s_t(),
-        gamma0_rad_s_per_a_m: REFERENCE_MODAL_GAMMA0_RAD_S_PER_A_M,
+        gamma_rad_s_t: gamma0_rad_s_per_a_m / crate::MU0,
+        gamma0_rad_s_per_a_m,
         mu0_t_m_per_a: crate::MU0,
         dominant_polarization: mode.dominant_polarization.clone(),
         k_vector: sample.sample.k_vector,
@@ -675,6 +676,7 @@ pub fn write_path_bundle_with_sample_namespace(
     result: &PathSolveResult,
     bias_field_sweep: bool,
 ) -> std::io::Result<()> {
+    let gamma0_rad_s_per_a_m = validated_modal_gamma0(result.gamma0_rad_s_per_a_m)?;
     let eigen_dir = base_dir.join("eigen");
     fs::create_dir_all(&eigen_dir)?;
     let samples: Vec<SampleArtifact> = result
@@ -691,7 +693,7 @@ pub fn write_path_bundle_with_sample_namespace(
             modes: sample
                 .modes
                 .iter()
-                .map(|mode| summarize_mode(sample, mode, result.solver_model))
+                .map(|mode| summarize_mode(sample, mode, result.solver_model, gamma0_rad_s_per_a_m))
                 .collect(),
         })
         .collect();
@@ -714,7 +716,7 @@ pub fn write_path_bundle_with_sample_namespace(
                 .iter()
                 .map(|mode| {
                     let mut value =
-                        serde_json::to_value(summarize_mode(sample, mode, result.solver_model))
+                        serde_json::to_value(summarize_mode(sample, mode, result.solver_model, gamma0_rad_s_per_a_m))
                             .expect("mode summary must serialize");
                     value["component_participation"] =
                         serde_json::to_value(&mode.component_participation)

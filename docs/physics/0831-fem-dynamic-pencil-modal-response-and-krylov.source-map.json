@@ -55,7 +55,16 @@
       ],
       "sources": [
         "source-dynamic-pencil",
-        "source-contract-regression"
+        "source-contract-regression",
+        "source-modal-gamma-result",
+        "source-modal-gamma-owner",
+        "source-modal-gamma-guard",
+        "source-modal-gamma-spectrum",
+        "source-modal-gamma-fields",
+        "source-modal-gamma-kittel",
+        "source-modal-gamma-fem-publication",
+        "source-modal-gamma-reader",
+        "source-modal-gamma-regression"
       ]
     },
     {
@@ -2090,6 +2099,60 @@
       "path": "crates/fullmag-runner/src/eigen/tracking.rs",
       "symbol": "signed_k_tracking_records_split_transport_without_mutating_raw_modes",
       "responsibility": "Prepared uncompiled signed-k split/degenerate regression"
+    },
+    {
+      "id": "source-modal-gamma-result",
+      "path": "crates/fullmag-runner/src/eigen/types.rs",
+      "symbol": "PathSolveResult",
+      "responsibility": "Required actual plan gamma0 on solved results"
+    },
+    {
+      "id": "source-modal-gamma-owner",
+      "path": "crates/fullmag-runner/src/eigen/orchestrator.rs",
+      "symbol": "run_path_or_single",
+      "responsibility": "Carry actual plan gamma0 without material fallback"
+    },
+    {
+      "id": "source-modal-gamma-guard",
+      "path": "crates/fullmag-runner/src/eigen/artifacts/common.rs",
+      "symbol": "validated_modal_gamma0",
+      "responsibility": "Reject invalid gamma0 and unrepresentable SI conversion"
+    },
+    {
+      "id": "source-modal-gamma-spectrum",
+      "path": "crates/fullmag-runner/src/eigen/artifacts/modal_manifest.rs",
+      "symbol": "summarize_mode",
+      "responsibility": "Spectrum metadata uses actual gamma0"
+    },
+    {
+      "id": "source-modal-gamma-fields",
+      "path": "crates/fullmag-runner/src/eigen/artifacts/mode_bundle.rs",
+      "symbol": "write_mode_bundle",
+      "responsibility": "Field metadata uses the same validated gamma0"
+    },
+    {
+      "id": "source-modal-gamma-kittel",
+      "path": "crates/fullmag-runner/src/eigen/artifacts/kittel.rs",
+      "symbol": "k0_kittel_expected_frequency_hz",
+      "responsibility": "Actual gamma0 and finite positive frequency oracle"
+    },
+    {
+      "id": "source-modal-gamma-fem-publication",
+      "path": "crates/fullmag-runner/src/fem/eigen_path_artifacts.rs",
+      "symbol": "eigen_path_publication_gamma0",
+      "responsibility": "Validate result and plan before direct FEM JSON publication"
+    },
+    {
+      "id": "source-modal-gamma-reader",
+      "path": "scripts/verify_fem_frequency_domain_eigen_artifacts.py",
+      "symbol": "validate_mode_gamma_matches_constants",
+      "responsibility": "Bind mode gamma metadata to execution constants"
+    },
+    {
+      "id": "source-modal-gamma-regression",
+      "path": "crates/fullmag-runner/src/eigen/artifacts/tests.rs",
+      "symbol": "actual_plan_gamma_is_shared_by_spectra_and_mode_fields",
+      "responsibility": "Prepared uncompiled nonreference gamma regression"
     }
   ],
   "public_api": {

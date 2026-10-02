@@ -428,6 +428,7 @@ fn append_physical_k0_kittel_artifacts(
     let generated =
         crate::eigen::artifacts::k0_kittel_validation_auxiliary_artifacts_from_bias_field_sweep(
             validation,
+            plan.gyromagnetic_ratio,
             &spectrum,
             &branches,
             &diagnostics,
