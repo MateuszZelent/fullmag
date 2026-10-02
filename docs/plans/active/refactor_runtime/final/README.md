@@ -265,3 +265,8 @@ CMake odrzuca brak CUDA compiler przy REQUIRE_GPU; Cargo przekazuje tę
 politykę. CPU modal SLEPc pozostaje jawnie dostępne przez override.
 11 configuration/wiring checks oraz 2 istniejące source contracts PASS;
 native compile/link/runtime i pełny P8-C nadal NOT VERIFIED.
+
+Zlecono [managed build FEM CPU 204](p8/02-fem-cpu-build-204.md) dokładnego
+commita `a55fa13d76052cdc5e3f96d8369127752061237d`. QUEUED za cudzym aktywnym
+buildem; terminalny receipt i artefakty NOT VERIFIED. Próba jest regresją
+Linux, nie kwalifikacją natywnego Windows. Sesja 3104 zachowana.
