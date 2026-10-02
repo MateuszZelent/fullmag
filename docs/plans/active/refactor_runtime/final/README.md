@@ -356,3 +356,7 @@ Gotowy MSI i runtime bez hostowego Python nadal NOT VERIFIED.
 obejmuje także scientific wheel PYD/DLL i odróżnia dostępność bibliotek
 od kwalifikacji loadera/runtime. Nowe regresje interpretowane PASS;
 realny pakiet Windows i kwalifikacja nadal NOT VERIFIED.
+
+[Managed build aktualnego mastera, 210](p8/11-current-master-managed-build-210.md)
+jest zgłoszony z niezmiennego commita; ostatni stan QUEUED. Odbiór pakietu,
+accepted FEM producer, realne HTTP/CAS i archive roundtrip pozostają otwarte.
