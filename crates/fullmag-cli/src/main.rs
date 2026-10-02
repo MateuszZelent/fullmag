@@ -69,6 +69,13 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
+        Command::Runtime(RuntimeCommand::ServiceEnsure { config }) => {
+            let owner = runtime_service_client::ensure(&config)?;
+            println!("{}", serde_json::to_string(&serde_json::json!({
+                "schema_version": "runtime_service_discovery.v1",
+                "status": "ready", "owner": owner,
+            }))?);
+        }
         Command::Runtime(RuntimeCommand::ServiceStatus { store, target, timeout_seconds }) => {
             let owner = runtime_service_client::probe(&store, &target, timeout_seconds)?;
             println!("{}", serde_json::to_string(&serde_json::json!({

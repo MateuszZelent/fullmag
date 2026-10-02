@@ -407,3 +407,5 @@ oddzielny terminalny dowód, a runtime/Windows pozostają otwarte.
 Checkpoint P7-C: [19 — żywe discovery runtime](p8/19-native-runtime-discovery.md).
 
 Checkpoint P7-C: [20 — klient zgodności runtime](p8/20-native-runtime-client.md).
+
+Checkpoint P7-C: [21 — launcher niezależnego runtime](p8/21-native-runtime-launcher.md).

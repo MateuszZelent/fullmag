@@ -17,6 +17,11 @@ use uuid::Uuid;
 
 use crate::repository_path::{checked_path, create_parent, validate_store_id};
 use crate::store::SessionStore;
+use crate::{
+    FmsPreparationResourceOffer, FmsPreparationResourcePool, FmsSchedulerResourceOffer,
+    FmsSchedulerResourcePool, FMS_PREPARATION_RESOURCE_POOL_SCHEMA,
+    FMS_SCHEDULER_RESOURCE_POOL_SCHEMA,
+};
 
 pub const RUNTIME_SERVICE_OWNER_SCHEMA: &str = "runtime_service_owner.v1";
 pub const RUNTIME_SERVICE_OWNER_PROTOCOL: &str = "stdin-v1";
@@ -781,5 +786,259 @@ mod tests {
         let _plan = store.gc_preview().unwrap();
         assert!(store.root().join(RUNTIME_SERVICE_OWNER_LOCK_PATH).is_file());
         assert_eq!(owner.descriptor().state, RuntimeServiceState::Starting);
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeServiceConfig {
+    pub schema_version: String,
+    pub store_root: PathBuf,
+    pub target_id: String,
+    pub compute_pool_id: String,
+    pub preparation_pool_id: String,
+    pub compute_resources: Vec<FmsSchedulerResourceOffer>,
+    pub preparation_resources: Vec<FmsPreparationResourceOffer>,
+    pub worker_timeout_seconds: u64,
+    pub preparation_timeout_seconds: u64,
+    pub heartbeat_interval_milliseconds: u64,
+    pub startup_timeout_seconds: u64,
+    pub drain_timeout_seconds: u64,
+}
+
+/// Serializes local launch decisions independently of the long-lived service lock.
+pub struct RuntimeServiceLaunchGuard {
+    _lock: File,
+    record_path: PathBuf,
+}
+
+impl RuntimeServiceLaunchGuard {
+    pub fn try_acquire(root: &Path) -> Result<Option<Self>> {
+        crate::writer::require_local_filesystem(root)?;
+        let path = match create_parent(root, "runtime-services/LAUNCH.lock") {
+            Ok(path) => path,
+            Err(error)
+                if error.chain().any(|e| {
+                    e.downcast_ref::<std::io::Error>()
+                        .is_some_and(|e| e.kind() == std::io::ErrorKind::AlreadyExists)
+                }) =>
+            {
+                return Ok(None)
+            }
+            Err(error) => return Err(error),
+        };
+        let lock = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(path)?;
+        match lock.try_lock() {
+            Ok(()) => Ok(Some(Self {
+                _lock: lock,
+                record_path: checked_path(root, "runtime-services/LAUNCH.json")?,
+            })),
+            Err(TryLockError::WouldBlock) => Ok(None),
+            Err(TryLockError::Error(error)) => Err(error.into()),
+        }
+    }
+
+    /// A previous uncertain launch without a terminal owner is never retried.
+    pub fn begin(&self, launch_id: &str, terminal_owner: bool) -> Result<()> {
+        let path = self.checked_record_path()?;
+        if let Some(bytes) = read_bounded_path(&path, "runtime launch record")? {
+            let record: RuntimeServiceLaunchRecord = serde_json::from_slice(&bytes)?;
+            if record.schema_version != "runtime_service_launch.v1"
+                || !matches!(
+                    record.state.as_str(),
+                    "starting" | "spawned" | "ready" | "failed"
+                )
+            {
+                bail!("invalid runtime launch record; controlled recovery required");
+            }
+            Uuid::parse_str(&record.launch_id)?;
+            if record.pid == Some(0)
+                || (matches!(record.state.as_str(), "spawned" | "ready") && record.pid.is_none())
+            {
+                bail!("invalid runtime launch PID observation");
+            }
+            if !terminal_owner && record.state != "failed" {
+                bail!("previous runtime launch outcome unknown; controlled recovery required");
+            }
+        }
+        self.publish(launch_id, "starting", None)
+    }
+
+    pub fn publish(&self, launch_id: &str, state: &str, pid: Option<u32>) -> Result<()> {
+        Uuid::parse_str(launch_id)?;
+        if !matches!(state, "starting" | "spawned" | "ready" | "failed") {
+            bail!("invalid launch phase");
+        }
+        let record = RuntimeServiceLaunchRecord {
+            schema_version: "runtime_service_launch.v1".into(),
+            launch_id: launch_id.into(),
+            state: state.into(),
+            pid,
+        };
+        crate::durability::atomic_write_owner(
+            &self.checked_record_path()?,
+            &serde_json::to_vec(&record)?,
+        )
+    }
+
+    fn checked_record_path(&self) -> Result<PathBuf> {
+        checked_path(
+            self.record_path
+                .parent()
+                .context("launch record parent missing")?,
+            "LAUNCH.json",
+        )
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RuntimeServiceLaunchRecord {
+    schema_version: String,
+    launch_id: String,
+    state: String,
+    pid: Option<u32>,
+}
+
+#[cfg(test)]
+mod launch_tests {
+    use super::*;
+
+    #[test]
+    fn launch_lock_serializes_and_unknown_attempt_survives_guard_drop() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(directory.path().join("store")).unwrap();
+        let first = RuntimeServiceLaunchGuard::try_acquire(store.root())
+            .unwrap()
+            .unwrap();
+        assert!(RuntimeServiceLaunchGuard::try_acquire(store.root())
+            .unwrap()
+            .is_none());
+        let first_id = Uuid::new_v4().to_string();
+        first.begin(&first_id, false).unwrap();
+        first.publish(&first_id, "spawned", Some(123)).unwrap();
+        drop(first);
+        let second = RuntimeServiceLaunchGuard::try_acquire(store.root())
+            .unwrap()
+            .unwrap();
+        let next_id = Uuid::new_v4().to_string();
+        assert!(second.begin(&next_id, false).is_err());
+        second.publish(&first_id, "failed", Some(123)).unwrap();
+        second.begin(&next_id, false).unwrap();
+    }
+}
+
+impl RuntimeServiceConfig {
+    /// Read a bounded configuration through the same path guard as the store.
+    pub fn read(path: &Path) -> Result<Self> {
+        if !path.is_absolute()
+            || path
+                .components()
+                .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
+            bail!("runtime service config path must be absolute without parent traversal");
+        }
+        let parent = path.parent().context("config parent missing")?;
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .context("config name is not UTF-8")?;
+        let mut bytes = Vec::new();
+        File::open(checked_path(parent, name)?)?
+            .take(65537)
+            .read_to_end(&mut bytes)?;
+        if bytes.len() > 65536 {
+            bail!("service config exceeds budget");
+        }
+        let config: Self = serde_json::from_slice(&bytes)?;
+        config.validate()?;
+        Ok(config)
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        if self.schema_version != "runtime_service_config.v1" {
+            bail!("unsupported runtime service configuration");
+        }
+        if !self.store_root.is_absolute()
+            || self
+                .store_root
+                .components()
+                .any(|p| matches!(p, std::path::Component::ParentDir))
+        {
+            bail!("runtime service store root must be absolute without parent traversal");
+        }
+        for id in [
+            &self.target_id,
+            &self.compute_pool_id,
+            &self.preparation_pool_id,
+        ] {
+            validate_store_id(id)?;
+        }
+        if self.compute_pool_id == self.preparation_pool_id {
+            bail!("compute and preparation pools must have distinct identities");
+        }
+        if self.compute_resources.is_empty() || self.preparation_resources.is_empty() {
+            bail!("service requires nonempty compute and preparation resource offers");
+        }
+        FmsSchedulerResourcePool {
+            schema_version: FMS_SCHEDULER_RESOURCE_POOL_SCHEMA.into(),
+            pool_id: self.compute_pool_id.clone(),
+            generation: 1,
+            resources: self.compute_resources.clone(),
+        }
+        .validate()?;
+        FmsPreparationResourcePool {
+            schema_version: FMS_PREPARATION_RESOURCE_POOL_SCHEMA.into(),
+            pool_id: self.preparation_pool_id.clone(),
+            generation: 1,
+            resources: self.preparation_resources.clone(),
+        }
+        .validate()?;
+        if self.compute_resources.iter().any(|r| {
+            !matches!(
+                r.kind,
+                crate::FmsResourceKind::Cpu | crate::FmsResourceKind::Gpu
+            )
+        }) {
+            bail!("service compute offers support only CPU/GPU");
+        }
+        let compute_ids = self
+            .compute_resources
+            .iter()
+            .map(|r| &r.resource_id)
+            .collect::<std::collections::BTreeSet<_>>();
+        if self
+            .preparation_resources
+            .iter()
+            .any(|r| compute_ids.contains(&r.resource_id))
+        {
+            bail!("compute and preparation resource IDs must be disjoint");
+        }
+        if [
+            self.worker_timeout_seconds,
+            self.preparation_timeout_seconds,
+            self.heartbeat_interval_milliseconds,
+            self.startup_timeout_seconds,
+            self.drain_timeout_seconds,
+        ]
+        .contains(&0)
+            || self.startup_timeout_seconds > 300
+            || [
+                self.worker_timeout_seconds,
+                self.preparation_timeout_seconds,
+                self.drain_timeout_seconds,
+            ]
+            .iter()
+            .any(|v| *v > 31_536_000)
+            || self.heartbeat_interval_milliseconds > 3_600_000
+        {
+            bail!("service timeouts must be positive; startup timeout must not exceed 300 seconds");
+        }
+        Ok(())
     }
 }

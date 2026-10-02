@@ -231,6 +231,11 @@ pub(crate) struct UiCli {
 
 #[derive(Subcommand)]
 pub(crate) enum RuntimeCommand {
+    /// Start once or attach to a compatible independently owned native service.
+    ServiceEnsure {
+        #[arg(long)]
+        config: PathBuf,
+    },
     /// Observe an already running native service without starting or stopping it.
     ServiceStatus {
         #[arg(long)]

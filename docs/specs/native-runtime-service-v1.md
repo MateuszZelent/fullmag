@@ -91,6 +91,15 @@ Wspólny deadline connect/write/read wynosi 1–30 sekund; descriptor i response
 mają limit 256 KiB. To diagnostyczny klient przyszłego attach, bez zmiany
 domyślnego zachowania UI i bez dowodu atomowej żywotności schedulerów.
 
+CLI `fullmag runtime service-ensure --config <absolute-json-path>` serializuje
+decyzję przez natywny LAUNCH.lock i zapisuje intent/PID w LAUNCH.json. Przy
+nieznanym wcześniejszym starcie bez terminalnego ownera odmawia nowego spawn.
+Do procesu przekazuje unikalną, zsynchronizowaną kopię konfiguracji. Status
+zawiera `configuration` z pamięci usługi; ensure wymaga jej pełnej zgodności.
+Usługa używa jednego deadline startup dla wszystkich faz; launcher dodaje
+10 sekund na utworzenie/załadowanie procesu. Timeout zachowuje proces i intent,
+bez kill/restart/takeover. Polecenie wymaga już zainicjalizowanego store.
+
 Oba admissions zamyka się przed oczekiwaniem na procesy. Aktywne workery kończą
 się według supervisor/lease/receipt. Błąd jednego schedulera drenuje drugi,
 lecz owner kończy jako failed/unknown, nigdy jako poprawny drained.

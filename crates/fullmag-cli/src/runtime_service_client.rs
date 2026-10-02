@@ -3,8 +3,8 @@ use anyhow::{bail, Context, Result};
 use fullmag_session::{
     repository_path::checked_path,
     runtime_service::{
-        validate_descriptor, RuntimeServiceOwnerDescriptor, RuntimeServiceState,
-        RUNTIME_SERVICE_OWNER_DESCRIPTOR_PATH,
+        validate_descriptor, RuntimeServiceConfig, RuntimeServiceLaunchGuard,
+        RuntimeServiceOwnerDescriptor, RuntimeServiceState, RUNTIME_SERVICE_OWNER_DESCRIPTOR_PATH,
     },
 };
 use serde::Deserialize;
@@ -24,6 +24,8 @@ struct StatusResponse {
     schema_version: String,
     nonce: String,
     owner: RuntimeServiceOwnerDescriptor,
+    #[serde(default)]
+    configuration: Option<RuntimeServiceConfig>,
 }
 
 fn require_ready(
@@ -52,6 +54,7 @@ fn validate_response(
     target: &str,
     commit: &str,
     snapshot: &str,
+    config: Option<&RuntimeServiceConfig>,
 ) -> Result<RuntimeServiceOwnerDescriptor> {
     let response: StatusResponse =
         serde_json::from_slice(bytes).context("decode native service status")?;
@@ -59,6 +62,11 @@ fn validate_response(
         bail!("native service status version/challenge mismatch");
     }
     require_ready(&response.owner, target, commit, snapshot)?;
+    if let Some(config) = config {
+        if response.configuration.as_ref() != Some(config) {
+            bail!("native service configuration mismatch; attach refused");
+        }
+    }
     let observed = &response.owner;
     if observed.owner_token != expected.owner_token
         || observed.process_start_token != expected.process_start_token
@@ -90,6 +98,20 @@ pub(crate) fn probe(
     if !(1..=30).contains(&timeout_seconds) {
         bail!("native service discovery timeout must be 1..30 seconds");
     }
+    probe_with_config(
+        store_root,
+        target,
+        Duration::from_secs(timeout_seconds),
+        None,
+    )
+}
+
+fn probe_with_config(
+    store_root: &Path,
+    target: &str,
+    timeout: Duration,
+    config: Option<&RuntimeServiceConfig>,
+) -> Result<RuntimeServiceOwnerDescriptor> {
     if !store_root.is_absolute()
         || !store_root.is_dir()
         || store_root
@@ -124,7 +146,7 @@ pub(crate) fn probe(
     if !address.is_ipv4() || !address.ip().is_loopback() || address.port() == 0 {
         bail!("native service discovery requires nonzero IPv4 loopback address");
     }
-    let deadline = Instant::now() + Duration::from_secs(timeout_seconds);
+    let deadline = Instant::now() + timeout;
     let mut stream = TcpStream::connect_timeout(&address, remaining(deadline)?)
         .context("native service unreachable; outcome unknown, restart refused")?;
     let nonce = uuid::Uuid::new_v4().to_string();
@@ -173,7 +195,165 @@ pub(crate) fn probe(
         target,
         identity.git_commit,
         identity.source_snapshot_sha256,
+        config,
     )
+}
+
+/// Attach to a compatible service or launch one once. Unknown outcomes are retained.
+pub(crate) fn ensure(config_path: &Path) -> Result<RuntimeServiceOwnerDescriptor> {
+    use std::process::{Command, Stdio};
+    let config = RuntimeServiceConfig::read(config_path)?;
+    if !config.store_root.is_dir() {
+        bail!("native service requires an existing initialized session store");
+    }
+    let gate_deadline = Instant::now() + Duration::from_secs(config.startup_timeout_seconds + 10);
+    let gate = loop {
+        if let Some(gate) = RuntimeServiceLaunchGuard::try_acquire(&config.store_root)? {
+            break gate;
+        }
+        std::thread::sleep(remaining(gate_deadline)?.min(Duration::from_millis(100)));
+    };
+    let mut terminal_owner = false;
+    let descriptor_path = checked_path(&config.store_root, RUNTIME_SERVICE_OWNER_DESCRIPTOR_PATH)?;
+    match std::fs::symlink_metadata(&descriptor_path) {
+        Ok(_) => {
+            let mut bytes = Vec::new();
+            File::open(&descriptor_path)?
+                .take((MAX_RESPONSE + 1) as u64)
+                .read_to_end(&mut bytes)?;
+            if bytes.len() > MAX_RESPONSE {
+                bail!("native service descriptor exceeds budget");
+            }
+            let owner: RuntimeServiceOwnerDescriptor = serde_json::from_slice(&bytes)?;
+            validate_descriptor(&owner)?;
+            if !matches!(
+                owner.state,
+                RuntimeServiceState::Drained | RuntimeServiceState::Failed
+            ) {
+                return probe_with_config(
+                    &config.store_root,
+                    &config.target_id,
+                    Duration::from_secs(3),
+                    Some(&config),
+                );
+            }
+            terminal_owner = true;
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error).context("observe owner before start; no automatic retry"),
+    }
+    let executable = std::env::current_exe()?.with_file_name(format!(
+        "fullmag-runtime-service{}",
+        std::env::consts::EXE_SUFFIX
+    ));
+    let parent = executable
+        .parent()
+        .context("native service executable parent missing")?;
+    let executable = checked_path(
+        parent,
+        executable
+            .file_name()
+            .unwrap()
+            .to_str()
+            .context("native service executable name invalid")?,
+    )?;
+    if !executable.is_file() {
+        bail!("native service binary missing; no alternate runtime fallback");
+    }
+    let log_id = uuid::Uuid::new_v4().to_string();
+    let pinned_path = fullmag_session::repository_path::create_parent(
+        &config.store_root,
+        &format!("runtime-services/launchers/{log_id}.config.json"),
+    )?;
+    let mut pinned = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&pinned_path)?;
+    pinned.write_all(&serde_json::to_vec(&config)?)?;
+    pinned.sync_all()?;
+    drop(pinned);
+    let stdout_path = fullmag_session::repository_path::create_parent(
+        &config.store_root,
+        &format!("runtime-services/launchers/{log_id}.stdout.log"),
+    )?;
+    let stderr_path = checked_path(
+        &config.store_root,
+        &format!("runtime-services/launchers/{log_id}.stderr.log"),
+    )?;
+    let output = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(stdout_path)?;
+    let errors = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(stderr_path)?;
+    let mut command = Command::new(executable);
+    command
+        .arg("--config")
+        .arg(&pinned_path)
+        .stdin(Stdio::null())
+        .stdout(output)
+        .stderr(errors);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000); // CREATE_NO_WINDOW; no console lifetime.
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setsid() == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+    }
+    // Log/setup failures before this point do not create an uncertain launch intent.
+    gate.begin(&log_id, terminal_owner)?;
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(error) => {
+            gate.publish(&log_id, "failed", None)?;
+            return Err(error).context("start native runtime service");
+        }
+    };
+    gate.publish(&log_id, "spawned", Some(child.id()))?;
+    let deadline = Instant::now() + Duration::from_secs(config.startup_timeout_seconds + 10);
+    loop {
+        if let Some(status) = child
+            .try_wait()
+            .context("observe native service startup; outcome unknown")?
+        {
+            gate.publish(&log_id, "failed", Some(child.id()))?;
+            bail!(
+                "native service exited during startup ({status}); inspect launcher logs {log_id}"
+            );
+        }
+        let budget = remaining(deadline).with_context(|| {
+            format!(
+                "native service PID {} startup unknown; retained without kill or restart",
+                child.id()
+            )
+        })?;
+        if let Ok(owner) = probe_with_config(
+            &config.store_root,
+            &config.target_id,
+            budget.min(Duration::from_secs(3)),
+            Some(&config),
+        ) {
+            if owner.pid != child.id() {
+                bail!("service startup owner PID mismatch; no takeover");
+            }
+            // Dropping Child closes its handle; it does not kill the service.
+            gate.publish(&log_id, "ready", Some(child.id()))?;
+            return Ok(owner);
+        }
+        std::thread::sleep(remaining(deadline)?.min(Duration::from_millis(100)));
+    }
 }
 
 #[cfg(test)]
@@ -216,7 +396,8 @@ mod tests {
             &expected,
             "desktop",
             &commit,
-            &snapshot
+            &snapshot,
+            None
         )
         .is_ok());
         assert!(validate_response(
@@ -225,7 +406,8 @@ mod tests {
             &expected,
             "desktop",
             &commit,
-            &snapshot
+            &snapshot,
+            None
         )
         .is_err());
         for field in ["owner", "start", "pool", "build", "state"] {
@@ -245,7 +427,8 @@ mod tests {
                     &expected,
                     "desktop",
                     &commit,
-                    &snapshot
+                    &snapshot,
+                    None
                 )
                 .is_err(),
                 "{field}"
@@ -256,5 +439,56 @@ mod tests {
     #[test]
     fn expired_deadline_is_unknown_and_never_restarted() {
         assert!(remaining(Instant::now() - Duration::from_secs(1)).is_err());
+    }
+
+    #[test]
+    fn attach_requires_exact_service_configuration() {
+        let expected = owner();
+        let budget = fullmag_session::FmsResourceBudget {
+            cpu_millis: 1000,
+            memory_bytes: 1024,
+            storage_bytes: 1024,
+            gpu_memory_bytes: 0,
+        };
+        let config = RuntimeServiceConfig {
+            schema_version: "runtime_service_config.v1".into(),
+            store_root: std::env::temp_dir(),
+            target_id: "desktop".into(),
+            compute_pool_id: "compute".into(),
+            preparation_pool_id: "prep".into(),
+            compute_resources: vec![fullmag_session::FmsSchedulerResourceOffer {
+                resource_id: "compute.cpu".into(),
+                kind: fullmag_session::FmsResourceKind::Cpu,
+                budget: budget.clone(),
+            }],
+            preparation_resources: vec![fullmag_session::FmsPreparationResourceOffer {
+                resource_id: "prep.cpu".into(),
+                budget,
+            }],
+            worker_timeout_seconds: 10,
+            preparation_timeout_seconds: 10,
+            heartbeat_interval_milliseconds: 100,
+            startup_timeout_seconds: 10,
+            drain_timeout_seconds: 10,
+        };
+        config.validate().unwrap();
+        let mut response = serde_json::json!({"schema_version":"runtime_service_status.v1",
+            "nonce":"fresh","owner":expected});
+        let check = |response: &serde_json::Value| {
+            validate_response(
+                &serde_json::to_vec(response).unwrap(),
+                "fresh",
+                &expected,
+                "desktop",
+                &"a".repeat(40),
+                &"b".repeat(64),
+                Some(&config),
+            )
+        };
+        assert!(check(&response).is_err());
+        response["configuration"] = serde_json::to_value(&config).unwrap();
+        assert!(check(&response).is_ok());
+        response["configuration"]["compute_resources"][0]["budget"]["memory_bytes"] = 2048.into();
+        assert!(check(&response).is_err());
     }
 }

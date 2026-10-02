@@ -2,7 +2,10 @@
 use anyhow::{bail, Context, Result};
 use fullmag_session::{
     repository_path::{checked_path, validate_store_id},
-    runtime_service::{RuntimeServiceChild, RuntimeServiceOwner, RuntimeServiceState},
+    runtime_service::{
+        RuntimeServiceChild, RuntimeServiceConfig as ServiceConfig, RuntimeServiceOwner,
+        RuntimeServiceState,
+    },
     FmsPreparationResourceOffer, FmsPreparationResourcePool, FmsSchedulerResourceOffer,
     FmsSchedulerResourcePool, SessionStore, FMS_PREPARATION_RESOURCE_POOL_SCHEMA,
     FMS_SCHEDULER_RESOURCE_POOL_SCHEMA,
@@ -19,107 +22,6 @@ use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpListener,
 };
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ServiceConfig {
-    schema_version: String,
-    store_root: PathBuf,
-    target_id: String,
-    compute_pool_id: String,
-    preparation_pool_id: String,
-    compute_resources: Vec<FmsSchedulerResourceOffer>,
-    preparation_resources: Vec<FmsPreparationResourceOffer>,
-    worker_timeout_seconds: u64,
-    preparation_timeout_seconds: u64,
-    heartbeat_interval_milliseconds: u64,
-    startup_timeout_seconds: u64,
-    drain_timeout_seconds: u64,
-}
-
-impl ServiceConfig {
-    fn validate(&self) -> Result<()> {
-        if self.schema_version != "runtime_service_config.v1" {
-            bail!("unsupported runtime service configuration");
-        }
-        if !self.store_root.is_absolute()
-            || self
-                .store_root
-                .components()
-                .any(|p| matches!(p, std::path::Component::ParentDir))
-        {
-            bail!("runtime service store root must be absolute without parent traversal");
-        }
-        for id in [
-            &self.target_id,
-            &self.compute_pool_id,
-            &self.preparation_pool_id,
-        ] {
-            validate_store_id(id)?;
-        }
-        if self.compute_pool_id == self.preparation_pool_id {
-            bail!("compute and preparation pools must have distinct identities");
-        }
-        if self.compute_resources.is_empty() || self.preparation_resources.is_empty() {
-            bail!("service requires nonempty compute and preparation resource offers");
-        }
-        FmsSchedulerResourcePool {
-            schema_version: FMS_SCHEDULER_RESOURCE_POOL_SCHEMA.into(),
-            pool_id: self.compute_pool_id.clone(),
-            generation: 1,
-            resources: self.compute_resources.clone(),
-        }
-        .validate()?;
-        FmsPreparationResourcePool {
-            schema_version: FMS_PREPARATION_RESOURCE_POOL_SCHEMA.into(),
-            pool_id: self.preparation_pool_id.clone(),
-            generation: 1,
-            resources: self.preparation_resources.clone(),
-        }
-        .validate()?;
-        if self.compute_resources.iter().any(|r| {
-            !matches!(
-                r.kind,
-                fullmag_session::FmsResourceKind::Cpu | fullmag_session::FmsResourceKind::Gpu
-            )
-        }) {
-            bail!("service compute offers support only CPU/GPU");
-        }
-        let compute_ids = self
-            .compute_resources
-            .iter()
-            .map(|r| &r.resource_id)
-            .collect::<std::collections::BTreeSet<_>>();
-        if self
-            .preparation_resources
-            .iter()
-            .any(|r| compute_ids.contains(&r.resource_id))
-        {
-            bail!("compute and preparation resource IDs must be disjoint");
-        }
-        if [
-            self.worker_timeout_seconds,
-            self.preparation_timeout_seconds,
-            self.heartbeat_interval_milliseconds,
-            self.startup_timeout_seconds,
-            self.drain_timeout_seconds,
-        ]
-        .contains(&0)
-            || self.startup_timeout_seconds > 300
-            || [
-                self.worker_timeout_seconds,
-                self.preparation_timeout_seconds,
-                self.drain_timeout_seconds,
-            ]
-            .iter()
-            .any(|v| *v > 31_536_000)
-            || self.heartbeat_interval_milliseconds > 3_600_000
-        {
-            bail!("service timeouts must be positive; startup timeout must not exceed 300 seconds");
-        }
-        Ok(())
-    }
-}
 
 struct SchedulerChild {
     role: &'static str,
@@ -341,6 +243,7 @@ fn publish_pools(
     bin: &Path,
     logs: &Path,
     unknown_publishers: &mut Vec<RuntimeServiceChild>,
+    deadline: Instant,
 ) -> Result<(u64, u64)> {
     let compute_prior = store
         .read_scheduler_resource_pool(&config.compute_pool_id)?
@@ -372,6 +275,9 @@ fn publish_pools(
                 .collect::<std::result::Result<Vec<_>, _>>()?,
         ),
     ] {
+        if Instant::now() >= deadline {
+            bail!("global native service startup deadline exceeded before publisher spawn");
+        }
         let (mut command, _) = logged_command(&executable(bin, name)?, logs, role)?;
         command
             .stdin(Stdio::null())
@@ -392,7 +298,6 @@ fn publish_pools(
                 identity.source_snapshot_sha256,
             );
         let mut process = command.spawn().context("start resource publisher")?;
-        let deadline = Instant::now() + Duration::from_secs(config.startup_timeout_seconds);
         loop {
             match process.try_wait() {
                 Ok(Some(status)) if status.success() => break,
@@ -517,9 +422,12 @@ async fn await_event(
     owner: &str,
     config: &ServiceConfig,
     generations: (u64, u64),
+    deadline: Instant,
 ) -> Result<()> {
-    let deadline = Instant::now() + Duration::from_secs(config.startup_timeout_seconds);
     loop {
+        if Instant::now() >= deadline {
+            bail!("global scheduler startup deadline exceeded before {event}");
+        }
         children.poll()?;
         let mut ready = true;
         for child in &children.0 {
@@ -588,7 +496,11 @@ fn valid_drain_request(bytes: &[u8], owner: &str) -> bool {
     control_command(bytes, owner) == Some(ControlCommand::Drain)
 }
 
-async fn drain_requested(listener: &TcpListener, owner: &RuntimeServiceOwner) -> Result<bool> {
+async fn drain_requested(
+    listener: &TcpListener,
+    owner: &RuntimeServiceOwner,
+    config: &ServiceConfig,
+) -> Result<bool> {
     let (mut stream, peer) =
         match tokio::time::timeout(Duration::from_millis(250), listener.accept()).await {
             Ok(result) => result.context("accept service control request")?,
@@ -626,6 +538,7 @@ async fn drain_requested(listener: &TcpListener, owner: &RuntimeServiceOwner) ->
             "schema_version": "runtime_service_status.v1",
             "nonce": nonce,
             "owner": owner.descriptor(),
+            "configuration": config,
         }),
         None => serde_json::json!({"status": "rejected"}),
     };
@@ -670,14 +583,8 @@ fn run() -> Result<()> {
     if !path.is_absolute() || args.next().is_some() {
         bail!("service requires exactly one absolute config path");
     }
-    let mut bytes = Vec::new();
-    File::open(&path)?.take(65537).read_to_end(&mut bytes)?;
-    if bytes.len() > 65536 {
-        bail!("service config exceeds budget");
-    }
-    let config: ServiceConfig =
-        serde_json::from_slice(&bytes).context("parse native service configuration")?;
-    config.validate()?;
+    let config = ServiceConfig::read(&path)?;
+    let startup_deadline = Instant::now() + Duration::from_secs(config.startup_timeout_seconds);
     let store = fullmag_runtime_control::retry_store_writer_busy(|| {
         SessionStore::open_existing(&config.store_root)
     })?;
@@ -726,18 +633,41 @@ fn run() -> Result<()> {
         let mut generations = None;
         let mut unknown_publishers = Vec::new();
         let work: Result<()> = async {
-            let pools = publish_pools(&config, &store, &bin, &logs, &mut unknown_publishers)?;
+            let pools = publish_pools(
+                &config,
+                &store,
+                &bin,
+                &logs,
+                &mut unknown_publishers,
+                startup_deadline,
+            )?;
             generations = Some(pools);
             for role in ["compute", "preparation"] {
                 children
                     .0
                     .push(spawn_scheduler(&config, &bin, &logs, role, &token)?);
             }
-            await_event(&mut children, "boot", &token, &config, pools).await?;
+            await_event(
+                &mut children,
+                "boot",
+                &token,
+                &config,
+                pools,
+                startup_deadline,
+            )
+            .await?;
             for child in &mut children.0 {
                 child.release()?;
             }
-            await_event(&mut children, "ready", &token, &config, pools).await?;
+            await_event(
+                &mut children,
+                "ready",
+                &token,
+                &config,
+                pools,
+                startup_deadline,
+            )
+            .await?;
             owner.publish(
                 RuntimeServiceState::Ready,
                 Some(pools.0),
@@ -747,7 +677,7 @@ fn run() -> Result<()> {
             let mut heartbeat = Instant::now();
             loop {
                 children.poll()?;
-                if drain_requested(&listener, &owner).await? {
+                if drain_requested(&listener, &owner, &config).await? {
                     break;
                 }
                 if heartbeat.elapsed() >= Duration::from_secs(1) {
