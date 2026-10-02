@@ -1,5 +1,30 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
+## Priorytet DE ±10 — naprawa kompilacji i ponowienie, 2026-10-02
+
+Build #196 zakończył się błędem kompilacji: `requested_linear_iterations`
+było zadeklarowane tylko w bloku tworzenia stanu Poissona, lecz użyte także
+poza nim przy konfiguracji shifted KSP. Commit
+`bb2a5f52916a828824592f32e2240be9c2e633e4` przenosi tę samą politykę
+iteracji do wspólnego zakresu; nie zmienia tolerancji ani fizyki.
+Commit jest na remote. Interpretowane kontrole reuse i Schur PASS;
+kontrola różnicowa odrzuca zakres starego źródła i akceptuje poprawkę.
+
+Nowy managed build #198: `d1ff1c5936494d83aea7ece3bff549a8`,
+profil `fem-cpu-slepc-runtime-v2`, dokładny commit poprawki, source digest
+`c586ff0959211467749073a5ae12431c08f6a0a85097c509a149dbf92d1f118b`.
+Przy zgłoszeniu oczekuje za aktywnym zadaniem #197 innego checkoutu.
+Nie przerwano jego pracy ani nie uruchomiono builda poza kolejką.
+
+Osobny observer w `scientific-batches/nonzero-k-validation/<job-id>`
+po zweryfikowanym sukcesie buildu uruchomi rzeczywiste DE +10 i −10 rad/µm,
+kolejno, L2 / 3 warstwy, demag włączony, nearest ze shiftem 11 GHz.
+Model pozostaje przypięty do `71ec3f159b47ee7a56e471020923248c2cac283f`.
+Shift nie jest wynikiem. Drugi observer waliduje receipty i fizyczne residuale
+przed aktualizacją wykresu. Nieudany pilot zatrzymuje serię do diagnozy.
+Na tym checkpointcie start solvera i nowe punkty są **NOT VERIFIED**;
+kolejka i działający observer nie dowodzą wykonania symulacji.
+
 ## S06/S12 — eksport rzeczywistych kandydatów, 2026-10-02
 
 Poprzedni fragment 3245183e841c365dce8cd4171ecaa6ef1c66199a jest na remote.
