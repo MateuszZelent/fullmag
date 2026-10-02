@@ -413,3 +413,5 @@ Checkpoint P7-C: [21 — launcher niezależnego runtime](p8/21-native-runtime-la
 Checkpoint P7-C: [22 — UI i kanoniczny accepted store](p8/22-native-ui-service-binding.md).
 
 Checkpoint P7-C: [23 — handshake store API](p8/23-api-accepted-store-handshake.md).
+
+Checkpoint P7-C: [24 — tożsamość procesu i HTTP fence](p8/24-api-instance-fence.md).

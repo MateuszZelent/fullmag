@@ -118,6 +118,17 @@ Brak/mismatch/null odmawia attach. Kontrolę powtarza się po starcie usługi.
 Binding jest obserwacją, nie lease instancji; CLI nadal odmawia reuse API,
 dopóki instancja nie zostanie przypięta również w kolejnych żądaniach klienta.
 
+API nadaje procesowi losowy, stały przez jego życie UUID i zwraca go w nagłówku
+`x-fullmag-api-instance`, również przy odmowie. Opcjonalny nagłówek żądania
+o tej samej nazwie musi mieć dokładnie jedną wartość zgodną z procesem.
+Mismatch, niepoprawna lub wielokrotna wartość daje HTTP 409 z kodem
+`API_INSTANCE_MISMATCH` przed dispatch handlera. Brak nagłówka zachowuje
+dotychczasowy kontrakt nieprzypiętych klientów. UUID nie jest tokenem autoryzacji.
+Launcher wymaga jednego kanonicznego niezerowego UUID w odpowiedzi handshake
+i identycznej instancji przed oraz po ensure. Nie zatrzymuje usługi po odmowie.
+Przekazywanie pin do UI oraz handshake WebSocket pozostają do implementacji;
+sam nagłówek backendu nie dowodzi ochrony całej otwartej aplikacji.
+
 Oba admissions zamyka się przed oczekiwaniem na procesy. Aktywne workery kończą
 się według supervisor/lease/receipt. Błąd jednego schedulera drenuje drugi,
 lecz owner kończy jako failed/unknown, nigdy jako poprawny drained.

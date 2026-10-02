@@ -18,7 +18,7 @@ use std::{
 
 const MAX_RESPONSE: usize = 256 * 1024;
 
-fn read_api_document(port: u16) -> Result<serde_json::Value> {
+fn read_api_document(port: u16) -> Result<(serde_json::Value, String)> {
     let deadline = Instant::now() + Duration::from_secs(5);
     let address = SocketAddr::from(([127, 0, 0, 1], port));
     let mut stream = TcpStream::connect_timeout(&address, remaining(deadline)?)?;
@@ -52,14 +52,35 @@ fn read_api_document(port: u16) -> Result<serde_json::Value> {
         bail!("API contract version mismatch before service attach");
     }
     let document: serde_json::Value = serde_json::from_str(body)?;
-    Ok(document)
+    let instance = require_api_instance_header(headers)?;
+    Ok((document, instance))
 }
 
-fn verify_api_store(port: u16, expected: &Path) -> Result<()> {
-    let document = read_api_document(port)?;
+fn require_api_instance_header(headers: &str) -> Result<String> {
+    let values: Vec<_> = headers
+        .lines()
+        .filter_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            name.eq_ignore_ascii_case("x-fullmag-api-instance")
+                .then(|| value.trim())
+        })
+        .collect();
+    let [value] = values.as_slice() else {
+        bail!("API instance identity missing or ambiguous");
+    };
+    let parsed = uuid::Uuid::parse_str(value).context("invalid API instance identity")?;
+    if parsed.is_nil() || parsed.to_string() != *value {
+        bail!("API instance identity must be a canonical nonzero UUID");
+    }
+    Ok((*value).to_owned())
+}
+
+fn verify_api_store(port: u16, expected: &Path) -> Result<String> {
+    let (document, instance) = read_api_document(port)?;
     let local = fullmag_build_info::identity();
     require_api_identity(&document, local.git_commit, local.source_snapshot_sha256)?;
-    require_api_store_binding(&document, expected)
+    require_api_store_binding(&document, expected)?;
+    Ok(instance)
 }
 
 fn require_api_store_binding(document: &serde_json::Value, expected: &Path) -> Result<()> {
@@ -106,11 +127,13 @@ pub fn ensure_for_application(
     let expected = crate::accepted_store::configured_submit_store_root(repo_root, state_root)
         .context("canonical accepted run storage is not configured; service start refused")?;
     require_application_store(&config.store_root, &expected)?;
-    verify_api_store(api_port, &expected)?;
+    let api_instance = verify_api_store(api_port, &expected)?;
     crate::retry_store_writer_busy(|| fullmag_session::SessionStore::open(expected.clone()))?;
     let owner = ensure_config(config)?;
     // Service startup may be long; recheck the API immediately before returning.
-    verify_api_store(api_port, &expected)?;
+    if verify_api_store(api_port, &expected)? != api_instance {
+        bail!("API instance changed during native service startup; attach refused");
+    }
     Ok(Some(owner))
 }
 
@@ -466,6 +489,22 @@ fn ensure_config(config: RuntimeServiceConfig) -> Result<RuntimeServiceOwnerDesc
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn api_instance_header_requires_one_canonical_nonzero_uuid() {
+        let id = "12345678-1234-4234-8234-123456789abc";
+        let valid = format!("HTTP/1.1 200 OK\r\nX-Fullmag-Api-Instance: {id}");
+        assert_eq!(super::require_api_instance_header(&valid).unwrap(), id);
+        for invalid in [
+            "HTTP/1.1 200 OK".to_owned(),
+            format!("{valid}\r\nx-fullmag-api-instance: {id}"),
+            "x-fullmag-api-instance: 00000000-0000-0000-0000-000000000000".to_owned(),
+            format!("x-fullmag-api-instance: {}", id.to_uppercase()),
+            "x-fullmag-api-instance: invalid".to_owned(),
+        ] {
+            assert!(super::require_api_instance_header(&invalid).is_err());
+        }
+    }
+
     use super::*;
 
     #[test]

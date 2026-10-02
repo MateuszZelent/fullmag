@@ -9,6 +9,7 @@ pub fn cors_layer() -> CorsLayer {
         .allow_headers(Any)
         .expose_headers([
             HeaderName::from_static("x-api-contract-version"),
+            HeaderName::from_static("x-fullmag-api-instance"),
             HeaderName::from_static("etag"),
             HeaderName::from_static("content-range"),
             HeaderName::from_static("x-request-id"),

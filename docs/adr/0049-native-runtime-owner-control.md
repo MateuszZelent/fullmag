@@ -89,6 +89,12 @@ automatycznie z obecnego launchera i nie zmienia działającej sesji 3104.
 
 Dokładny kontrakt: [native-runtime-service-v1](../specs/native-runtime-service-v1.md).
 
+HTTP API ma osobny UUID procesu. Opcjonalny pin żądania odrzuca replacement
+przed handlerem, a launcher porównuje UUID przed i po ensure. To nie jest
+autoryzacja ani pełny lease. Obecnie nieprzypięte klienty pozostają zgodne;
+HTTP facade, WebSocket i przekazanie pin do UI są otwartym obowiązkiem migracji.
+Usunięcie ograniczenia reuse API wymaga tych ścieżek i dowodu runtime.
+
 Publikatory również sprawdzają przypięty commit/snapshot przed otwarciem store.
 Procesy są obserwowane z deadline: niepotwierdzony publisher/scheduler pozostaje
 unknown z zachowanym PID i lease, bez automatycznego przejęcia. Częściowo
