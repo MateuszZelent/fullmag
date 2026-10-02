@@ -91,6 +91,45 @@ pozostają osobnymi bramkami przed produkcyjną integracją S09.
 S09 nadal wymaga typed realization/routing, managed MFEM owner,
 zewnętrznej domeny i jej zbieżności oraz porównania TetraX/3D.
 
+### S09 — H6: znak względny źródła i kontrakt potencjału
+
+Niezależne wyprowadzenie i review potwierdziły błąd bounded assemblera:
+przy fazie exp(-ikz) dodatnia prawa strona słaba jest S_perp + ik S_z,
+a kod łączył dodatni człon poprzeczny z ujemnym osiowym. Minus Schura
+ani kontrola samej symetrii k/−k nie naprawiają tego błędu.
+
+Wybrano kanoniczną konwencję descriptora P phi + A_phiq q = 0.
+Oba człony A_phiq są teraz ujemną kopią fizycznego źródła słabego;
+zmieniono znak członu poprzecznego, zachowując ujemny osiowy.
+Header i nota 0831 rozróżniają prawą stronę od bloku descriptora,
+co ustala również znak fizycznego potencjału przy rekonstrukcji.
+
+Dodano niezależny oracle kwadratury ekstrudowanej dla mieszanego
+zespolonego źródła P1, k=−3/0/+3 oraz trzech długości. Interpreted
+regresja wykryła błąd przed korektą i przechodzi po korekcie; nie wykonuje
+natywnego operatora. Natywna regresja kwadratury została przygotowana,
+lecz nie jest kompilowana zgodnie z obowiązującym zakazem.
+H6 jest naprawione źródłowo; runtime i integracja S09 nadal NOT VERIFIED.
+Review potwierdził znak poprawki. Uzupełniono jego uwagi P2: oracle
+uwzględnia x/y/z, fixture natywny używa obróconej ramy xy, a nota 0828
+odróżnia równanie silne od źródła słabego i bloku descriptora.
+Nowe otwarte P1: sprawdzić dense airbox bridge w
+`poisson_airbox_shared_domain.cpp`: lokalne `floquet_a_phiq` jest negowane,
+lecz `floquet_problem.tangent_source` może otrzymywać pierwotne dodatnie
+źródło. Wymagana jest spójność obu odbiorników z rekonstrukcją potencjału,
+regresja physical phi oraz ustalenie wpływu na dense/materialize route.
+Nie zmieniono tej ścieżki w przyroście H6 ani nie przypisano jej błędu
+pilotowi #196 bez sprawdzenia używanego routingu.
+B1, typed routing, managed MFEM owner, zbieżność domeny zewnętrznej
+i porównania 3D/TetraX pozostają otwarte. Nie zmieniono kapsuły #196
+ani operatora 3D, więc nie jest to wyjaśnienie jego wyników.
+
+Odczyt bieżący #196: queued; koordynator waiting_for_disk,
+brak aktywnego joba. Wolne storage 2 788 474 880 B (około 2,60 GiB),
+poniżej progu 8 GiB. Sterownik session 7375 potwierdzono nadal żywy.
+Walidacja dokumentacji poprzedniego commita
+6d31b787f8fbd774446c1e7a380d7418084f744f zakończyła się exit=0.
+
 ### Najnowszy wynik #195 i naprawa granicy build identity
 
 Koordynator zakończył #195 statusem `succeeded`; worker exit=0,

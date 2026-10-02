@@ -851,6 +851,42 @@ must be compared against a separately assembled 2D magnetostatic operator;
 it is not evidence that a 3D full-cell seam constraint can be removed. The
 waveguide path is the planned S09 realization and remains unvalidated.
 
+(waveguide-weak-source-sign)=
+Znak źródła słabego musi wynikać z całkowania przez części, a nie
+bezpośrednio ze znaku źródła w równaniu silnym. Dla konwencji
+$\exp(-\mathrm{i}kz)$ i fizycznego potencjału $\mathbf h_d=-D_{\mathbf k}\phi$:
+
+```{math}
+:label: eq-fem-waveguide-weak-source-sign
+\int_\Sigma \nabla_\perp\overline v\cdot\nabla_\perp\phi\,\mathrm dA
++k^2\int_\Sigma\overline v\phi\,\mathrm dA
+=\int_\Sigma\nabla_\perp\overline v\cdot\delta\mathbf M_\perp\,\mathrm dA
++\mathrm{i}k\int_\Sigma\overline v\delta M_z\,\mathrm dA.
+```
+
+$v$ jest bezrozmiarową zespoloną funkcją testową; kreska oznacza sprzężenie.
+Pozostałe symbole i jednostki podano wyżej oraz w tabeli miary przekroju.
+Równanie obejmuje magnetyzację przedłużoną zerem do powietrza i jednorodny
+Dirichlet na zewnętrznym brzegu; Robin dodaje swój dodatni blok brzegowy
+do lewej strony. Odpowiednie źródło ma jednostkę $\mathrm A$.
+Assembler zwraca blok descriptora, nie dodatnią prawą stronę:
+$P\phi+A_{\phi q}q=0$. Dlatego zarówno jego człon poprzeczny, jak i osiowy
+są ujemną kopią źródła słabego. Provider oblicza Schur
+$-A_{q\phi}P^{-1}A_{\phi q}$. Globalny minus obu bloków źródła nie zmienia
+Schura, lecz musi być spójny przy rekonstrukcji fizycznego potencjału.
+Hermitowskie sprzężenie bloku zwrotnego nadal
+wymaga odwrócenia znaku części urojonej.
+
+Regresja H6 porównuje mieszane zespolone źródło P1 z niezależną kwadraturą
+$\nabla\overline{(N_i\exp(-\mathrm{i}kz))}\cdot\delta\mathbf M$
+w domenie ekstrudowanej, podzieloną przez jej długość. Sprawdza dodatnie,
+zerowe i ujemne $k$. Błędny znak względny może przejść kontrolę samego
+sprzężenia przy odwróceniu $k$, dlatego ta kontrola nie wystarcza.
+Zmiana dotyczy wyłącznie bounded prototypu FEM CPU 2.5D; nie zmienia
+operatora 3D ani kapsuły #196. Python, ProblemIR, FDM i GPU nie otrzymują
+nowej trasy. Regresja interpretowana sprawdza wyprowadzenie i podłączenie
+źródłowe; wykonanie natywne oraz routing S09 pozostają NOT VERIFIED.
+
 (waveguide-section-measure)=
 Całka po przekroju 2D jest już całką na jednostkę długości osiowej.
 Dla osiowo niezmiennych funkcji P1 i ekstrudowanej domeny
@@ -3128,8 +3164,10 @@ benchmarku z niezerową wymianą. Status pozostaje diagnostic_oracle_only_not_FE
 | scripts/test_thin_film_thickness_oracle.py | test_exchange_free_surface_branch_converges_to_exact_damon_eshbach | Niezależny wzór DE dla A=0 i zbieżność N |
 | scripts/test_thin_film_thickness_oracle.py | test_exchange_free_gamma_limit_has_no_artificial_basis_splitting | Kittel w Γ, wszystkie mody bez wymiany |
 
-| Źródło miary przekroju S09 | Stabilny symbol | Kontrakt i dowód |
+| Źródło miary i znaku przekroju S09 | Stabilny symbol | Kontrakt i dowód |
 |---|---|---|
 | docs/physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md | DOC-ANCHOR:waveguide-section-measure | Tożsamość miary 2D i całki 3D podzielonej przez długość; kontrakt planowany, runtime niezweryfikowany |
+| docs/physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md | DOC-ANCHOR:waveguide-weak-source-sign | Rozróżnienie dodatniego źródła słabego i ujemnego bloku descriptora |
+| scripts/test_waveguide_axial_sign_source.py | extruded_weak_source | Niezależna kwadratura mieszanego źródła zespolonego; kontrola interpretowana, bez wykonania native |
 | backends/fem/cpu/frequency_domain/floquet_waveguide_cross_section.cpp | assemble_floquet_waveguide_cross_section_blocks | Bloki i geometria przekroju niezależne od metadanej długości; źródła, bez nowego managed wykonania |
-| backends/fem/tests/frequency_domain/floquet_waveguide_cross_section_test.cpp | main | Wywołuje regresję cross_section_is_independent_of_axial_comparison_length; test przygotowany, niekompilowany |
+| backends/fem/tests/frequency_domain/floquet_waveguide_cross_section_test.cpp | main | Wywołuje regresje miary oraz mixed_source_matches_independent_weak_quadrature; przygotowane, niekompilowane |

@@ -147,8 +147,14 @@ D_{\mathbf k}=\nabla_\perp-\mathrm{i}k\hat{\mathbf z},
 h_{d,z}=\mathrm{i}k\phi.
 ```
 
-The scalar k is signed along $\hat{\mathbf z}$, and the fields are normalized
-per unit waveguide length. The $k\mathbin{\to}0$ limit is a separate 2D
+The scalar k is signed along $\hat{\mathbf z}$. Weak integrals and energies
+are per unit waveguide length; potential and fields retain their SI units.
+Znak $-\mathrm{i}k\delta M_z$ powyżej dotyczy równania silnego.
+Po całkowaniu przez części dodatnia prawa strona słaba ma dodatni
+człon osiowy, natomiast w kontrakcie descriptora $P\phi+A_{\phi q}q=0$
+oba człony źródła w $A_{\phi q}$ są ujemne. Pełne wyprowadzenie i
+regresję mieszanego źródła podaje {ref}`waveguide-weak-source-sign`.
+The $k\mathbin{\to}0$ limit is a separate 2D
 operator check; it does not prove equivalence to removing seams from a 3D
 periodic cell. This is the planned S09 path inspired by TetraX arbitrary
 cross-section propagating modes.

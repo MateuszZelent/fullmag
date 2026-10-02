@@ -283,8 +283,12 @@ FrequencyDomainStatus assemble_floquet_waveguide_cross_section_blocks(
                         const double *frame = problem.tangent_frames_xyz +
                             6u * global_node + 3u * component;
                         const std::uint64_t q_column = 2u * magnetic_node + component;
-                        const double transverse = gradients[local_test][0] * frame[0] +
-                            gradients[local_test][1] * frame[1];
+                        // For exp(-ikz), integration by parts gives
+                        // P phi = int(grad(test)*M_perp + ik*test*M_z).
+                        // A_phiq is the descriptor block in P phi + A_phiq q=0,
+                        // hence BOTH source components carry a minus (H6).
+                        const double transverse = -(gradients[local_test][0] * frame[0] +
+                            gradients[local_test][1] * frame[1]);
                         const double axial = -frame[2];
                         add_entry(out_result->a_phiq_perp_row_major, q_dof_count,
                                   potential_row, q_column, source_weight * transverse);

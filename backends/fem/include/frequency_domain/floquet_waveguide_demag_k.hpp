@@ -15,10 +15,11 @@ namespace fullmag::fem::frequency_domain {
  *   A_qphi(k) = A_qphi_perp + i k A_qphi_axial,
  *   A_phiq(k) = A_phiq_perp + i k A_phiq_axial.
  *
- * The sign of the axial source belongs to A_phiq_axial.  For the convention
- * exp(-i k z), the Maxwell/magnetostatic source term is -i k delta M_z;
- * callers therefore provide that sign explicitly instead of relying on a
- * hidden convention in this provider.  The returned real-split matrix is
+ * Both source signs belong to the supplied blocks. For exp(-i k z),
+ * the physical weak RHS is S_perp + i k S_z. Under the descriptor convention
+ * P phi + A_phiq q = 0, A_phiq contains -(S_perp + i k S_z); copying the
+ * strong-form axial sign alone would give the wrong relative sign.
+ * The returned real-split matrix is
  * -A_qphi(k) P(k)^-1 A_phiq(k) in [Re(q), Im(q)] coordinates.
  *
  * This is a bounded algebraic oracle.  It deliberately does not claim to

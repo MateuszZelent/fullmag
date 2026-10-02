@@ -3,6 +3,7 @@
 
 #include <cassert>
 #include <cmath>
+#include <complex>
 #include <cstdint>
 #include <iostream>
 #include <vector>
@@ -23,7 +24,7 @@ FloquetWaveguideCrossSectionProblem reference_problem()
     static const std::uint32_t triangles[] = {0u, 1u, 2u};
     static const std::uint8_t magnetic[] = {1u};
     static const std::uint32_t magnetic_nodes[] = {0u, 1u, 2u};
-    // e1 is in x; e2 is axial z so the explicit -i*k source is observable.
+    // e1 is in x; e2 is axial z so the descriptor -i*k block is observable.
     static const double frames[] = {
         1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
         1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
@@ -103,6 +104,54 @@ void cross_section_is_independent_of_axial_comparison_length()
     }
 }
 
+void mixed_source_matches_independent_weak_quadrature()
+{
+    using Complex = std::complex<double>;
+    auto problem = reference_problem();
+    const double c = 1.0 / std::sqrt(2.0);
+    const double rotated_frames[] = {
+        c, c, 0.0, 0.0, 0.0, 1.0,
+        c, c, 0.0, 0.0, 0.0, 1.0,
+        c, c, 0.0, 0.0, 0.0, 1.0,
+    };
+    problem.tangent_frames_xyz = rotated_frames;
+    FloquetWaveguideCrossSectionBlockResult blocks{};
+    assert(assemble_floquet_waveguide_cross_section_blocks(problem, &blocks) ==
+           FrequencyDomainStatus::ok);
+    const Complex q[] = {{1.0, .2}, {.4, -.8}, {-.7, .4}, {1.1, .5}, {.3, -.9}, {-.2, .6}};
+    const double gradient_x[] = {-.5, .5, 0.0};
+    const double gradient_y[] = {-1.0, 0.0, 1.0};
+    const double barycentric[3][3] = {
+        {2.0/3.0, 1.0/6.0, 1.0/6.0},
+        {1.0/6.0, 2.0/3.0, 1.0/6.0},
+        {1.0/6.0, 1.0/6.0, 2.0/3.0},
+    };
+    // Exact degree-two triangle quadrature of grad(conj(v))*M.
+    // This includes both transverse and axial complex magnetization.
+    for (double k : {-3.0, 0.0, 3.0}) {
+        for (std::size_t row = 0; row < 3; ++row) {
+            Complex expected{};
+            for (const auto &bary : barycentric) {
+                Complex mx{}, mz{};
+                for (std::size_t node = 0; node < 3; ++node) {
+                    mx += 2.0 * c * bary[node] * q[2 * node];
+                    mz += 2.0 * bary[node] * q[2 * node + 1];
+                }
+                // Rotated e1 has identical x and y components.
+                expected += ((gradient_x[row] + gradient_y[row]) * mx +
+                             Complex{0.0, k} * bary[row] * mz) / 3.0;
+            }
+            Complex actual{};
+            for (std::size_t column = 0; column < 6; ++column) {
+                actual += Complex{blocks.a_phiq_perp_row_major[row * 6 + column],
+                                  k * blocks.a_phiq_axial_row_major[row * 6 + column]} * q[column];
+            }
+            // Descriptor residual is P phi + A_phiq q = 0.
+            assert(std::abs(actual + expected) < 1.0e-12);
+        }
+    }
+}
+
 void assembled_blocks_feed_the_waveguide_schur_provider()
 {
     const auto assembled = [&]() {
@@ -148,6 +197,7 @@ int main()
 {
     assembles_p1_blocks_and_per_length_diagnostics();
     cross_section_is_independent_of_axial_comparison_length();
+    mixed_source_matches_independent_weak_quadrature();
     assembled_blocks_feed_the_waveguide_schur_provider();
     malformed_cross_section_is_rejected();
     std::cout << "floquet waveguide cross-section contract tests passed\n";

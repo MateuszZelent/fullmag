@@ -29,9 +29,10 @@ namespace fullmag::fem::frequency_domain {
  * (audit finding B1,
  * docs/audits/2026-09-15-eigensolve-dispersion-correctness-audit.md).
  *
- * The axial source follows exp(-i k z): A_phiq_axial contains the explicit
- * minus sign for the -i k M_z source.  This module is deliberately bounded
- * and does not claim to be the managed MFEM production assembler; it is a
+ * For exp(-i k z), the weak source is S_perp + i k S_z. A_phiq is the
+ * descriptor block in P phi + A_phiq q = 0, so both its transverse and
+ * axial components are the NEGATIVE of that physical source. This module is
+ * deliberately bounded and is not the managed MFEM production assembler; it is a
  * deterministic element-level owner for contract and convergence tests.
  */
 struct FloquetWaveguideCrossSectionProblem {

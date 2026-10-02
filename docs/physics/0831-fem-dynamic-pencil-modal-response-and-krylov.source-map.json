@@ -316,6 +316,11 @@
       ]
     },
     {
+      "id": "eq-fem-waveguide-weak-source-sign",
+      "symbols": ["section_domain", "test_function", "potential", "gradient", "wave_number", "dynamic_magnetization_transverse", "area_measure"],
+      "sources": ["source-waveguide-weak-sign", "source-waveguide-cross-section", "source-waveguide-sign-oracle", "source-waveguide-section-regression"]
+    },
+    {
       "id": "eq-fem-waveguide-section-measure",
       "symbols": [
         "section_domain", "extrusion_length", "extruded_domain", "section_basis",
@@ -1521,14 +1526,28 @@
       "id": "source-waveguide-cross-section",
       "path": "backends/fem/cpu/frequency_domain/floquet_waveguide_cross_section.cpp",
       "symbol": "assemble_floquet_waveguide_cross_section_blocks",
-      "responsibility": "Assemble bounded 2D weak forms and physical section geometry independently of the axial comparison length.",
+      "responsibility": "Assemble bounded 2D weak forms independently of comparison length; use negative transverse and axial physical sources in the descriptor P phi + A_phiq q = 0.",
       "evidence_status": "source_visible / unvalidated"
     },
     {
       "id": "source-waveguide-section-regression",
       "path": "backends/fem/tests/frequency_domain/floquet_waveguide_cross_section_test.cpp",
       "symbol": "main",
-      "responsibility": "Check all section blocks and geometry across axial comparison lengths without compiling unit tests during the current restriction.",
+      "responsibility": "Check section measure and mixed complex P1 weak-source signs for signed k; native tests prepared without compilation during the current restriction.",
+      "evidence_status": "source_visible / native execution pending"
+    },
+    {
+      "id": "source-waveguide-weak-sign",
+      "path": "docs/physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md",
+      "symbol": "DOC-ANCHOR:waveguide-weak-source-sign",
+      "responsibility": "Derive physical weak RHS and distinguish it from the negative descriptor block.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "source-waveguide-sign-oracle",
+      "path": "scripts/test_waveguide_axial_sign_source.py",
+      "symbol": "extruded_weak_source",
+      "responsibility": "Independently integrate the physical extruded conjugate-test gradient with mixed complex magnetization; source checks are not native runtime evidence.",
       "evidence_status": "source_visible / native execution pending"
     },
     {
