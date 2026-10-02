@@ -304,6 +304,38 @@ class BuildEntryPointTests(unittest.TestCase):
         with self.assertRaises(entrypoint.BuildEntryPointError):
             entrypoint.validate_native_source_snapshot({"native_source_snapshot_sha256": expected}, None)
 
+    def _prepare_slepc_runtime_probe(self) -> tuple[Path, Path]:
+        output = self.workspace / ".fullmag" / "local"
+        runtime_bin = output / "bin" / "fullmag-bin"
+        runtime_library = output / "lib" / "libfullmag_fem.so.0"
+        runtime_bin.parent.mkdir(parents=True)
+        runtime_library.parent.mkdir(parents=True)
+        runtime_bin.write_bytes(b"binary")
+        runtime_library.write_bytes(b"library")
+        cargo_target = self.build / "cargo-targets" / "fem-cpu"
+        cmake_cache = (
+            cargo_target
+            / "release"
+            / "build"
+            / "fullmag-fem-sys"
+            / "probe"
+            / "out"
+            / "native-build"
+            / "CMakeCache.txt"
+        )
+        cmake_cache.parent.mkdir(parents=True)
+        cmake_cache.write_text(
+            "FULLMAG_ENABLE_CUDA:BOOL=ON\n"
+            "FULLMAG_ENABLE_FEM_GPU:BOOL=ON\n"
+            "FULLMAG_USE_MFEM_STACK:BOOL=ON\n"
+            "FULLMAG_FEM_WITH_SLEPC:BOOL=ON\n",
+            encoding="utf-8",
+        )
+        native_library = cmake_cache.parent / "backends" / "fem" / "libfullmag_fem.so.0"
+        native_library.parent.mkdir(parents=True)
+        native_library.write_bytes(b"library")
+        return runtime_bin, cargo_target
+
     def test_slepc_runtime_probe_records_binary_and_dependency_attestations(self) -> None:
         output = self.workspace / ".fullmag" / "local"
         runtime_bin = output / "bin" / "fullmag-bin"
@@ -375,12 +407,16 @@ class BuildEntryPointTests(unittest.TestCase):
             + "\n",
         )
         probe_environment: dict[str, str] = {}
+        probe_options: dict[str, object] = {}
 
         def fake_probe(*args, **kwargs):
             probe_environment.update(kwargs["env"])
+            probe_options.update({"timeout": kwargs["timeout"], "text": kwargs["text"]})
             return probe
 
         identity = self._identity()
+        stale_artifacts = self.root / "stale-artifacts"
+        stale_artifacts.mkdir()
         with patch.object(
             entrypoint.subprocess,
             "run",
@@ -415,7 +451,7 @@ class BuildEntryPointTests(unittest.TestCase):
             expected_snapshot = "b" * 64
             with self.assertRaisesRegex(entrypoint.BuildEntryPointError, "native library source snapshot"):
                 entrypoint._attest_slepc_runtime(
-                    self.workspace, self.artifacts,
+                    self.workspace, stale_artifacts,
                     {"FULLMAG_CARGO_TARGET_DIR": str(cargo_target), "LD_LIBRARY_PATH": "/opt/petsc/lib"},
                     identity, entrypoint._runtime_contract(
                         entrypoint.profile_for("fem-cpu-slepc-runtime-v1")
@@ -428,8 +464,37 @@ class BuildEntryPointTests(unittest.TestCase):
         dependency_attestation = json.loads(
             (self.artifacts / "dependency-attestation.json").read_text(encoding="utf-8")
         )
+        probe_state = json.loads(
+            (self.artifacts / "logs" / "slepc-runtime-availability.json").read_text(
+                encoding="utf-8"
+            )
+        )
         self.assertEqual(runtime_attestation["status"], "pass")
         self.assertTrue(runtime_attestation["availability"]["native_fem_cpu_available"])
+        self.assertEqual(probe_state["schema"], entrypoint.SLEPC_PROBE_SCHEMA)
+        self.assertEqual(probe_state["status"], "exited_zero")
+        self.assertEqual(probe_state["scope"], "subprocess_execution")
+        self.assertEqual(probe_state["validation"], "not_assessed")
+        self.assertEqual(probe_state["return_code"], 0)
+        self.assertEqual(probe_options["timeout"], 120)
+        self.assertTrue(probe_options["text"])
+        self.assertFalse(probe_state["stdout_truncated"])
+        self.assertFalse(probe_state["stderr_truncated"])
+        self.assertEqual(
+            (self.artifacts / "logs" / "slepc-runtime-availability.stdout.log").read_text(
+                encoding="utf-8"
+            ),
+            '{"native_fem_cpu_available": true}',
+        )
+        self.assertEqual(
+            (self.artifacts / "logs" / "slepc-runtime-availability.stderr.log").read_text(
+                encoding="utf-8"
+            ),
+            "[fullmag] build: test | source snapshot: "
+            + str(self._identity()["source_snapshot_sha256"])
+            + "\n",
+        )
+        self.assertNotIn("environment", probe_state)
         self.assertEqual(
             runtime_attestation["cuda_driver_compatibility_paths"],
             ["/usr/local/cuda/compat"],
@@ -453,6 +518,198 @@ class BuildEntryPointTests(unittest.TestCase):
         self.assertEqual(dependency_attestation["status"], "pass")
         self.assertTrue(
             dependency_attestation["dependency"]["modal_eigen_native_cpu_slepc_available"]
+        )
+
+    def test_slepc_runtime_probe_exit_zero_invalid_json_is_not_attestation_pass(self) -> None:
+        runtime_bin, cargo_target = self._prepare_slepc_runtime_probe()
+        artifacts = self.root / "artifacts-invalid-json"
+        artifacts.mkdir()
+        probe = entrypoint.subprocess.CompletedProcess(
+            [str(runtime_bin)],
+            0,
+            b"not-json",
+            b"probe completed\n",
+        )
+        with patch.object(entrypoint.subprocess, "run", return_value=probe), patch.object(
+            entrypoint.os, "access", return_value=True
+        ):
+            with self.assertRaisesRegex(
+                entrypoint.BuildEntryPointError,
+                "returned invalid JSON",
+            ):
+                entrypoint._attest_slepc_runtime(
+                    self.workspace,
+                    artifacts,
+                    {"FULLMAG_CARGO_TARGET_DIR": str(cargo_target)},
+                    self._identity(),
+                    entrypoint._runtime_contract(
+                        entrypoint.profile_for("fem-cpu-slepc-runtime-v1")
+                    ),
+                )
+        state = json.loads(
+            (artifacts / "logs" / "slepc-runtime-availability.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(state["status"], "exited_zero")
+        self.assertEqual(state["scope"], "subprocess_execution")
+        self.assertEqual(state["validation"], "not_assessed")
+        self.assertEqual(state["return_code"], 0)
+        self.assertFalse((artifacts / "runtime-attestation.json").exists())
+
+    def test_slepc_runtime_probe_records_nonzero_output(self) -> None:
+        runtime_bin, cargo_target = self._prepare_slepc_runtime_probe()
+        artifacts = self.root / "artifacts-nonzero"
+        artifacts.mkdir()
+        probe = entrypoint.subprocess.CompletedProcess(
+            [str(runtime_bin)],
+            17,
+            b"partial-json",
+            "native failure\n",
+        )
+        with patch.object(entrypoint.subprocess, "run", return_value=probe), patch.object(
+            entrypoint.os, "access", return_value=True
+        ):
+            with self.assertRaisesRegex(
+                entrypoint.BuildEntryPointError,
+                "availability probe exited 17",
+            ):
+                entrypoint._attest_slepc_runtime(
+                    self.workspace,
+                    artifacts,
+                    {"FULLMAG_CARGO_TARGET_DIR": str(cargo_target)},
+                    self._identity(),
+                    entrypoint._runtime_contract(
+                        entrypoint.profile_for("fem-cpu-slepc-runtime-v1")
+                    ),
+                )
+        state = json.loads(
+            (artifacts / "logs" / "slepc-runtime-availability.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(state["status"], "nonzero")
+        self.assertEqual(state["return_code"], 17)
+        self.assertEqual(
+            (artifacts / "logs" / "slepc-runtime-availability.stdout.log").read_text(
+                encoding="utf-8"
+            ),
+            "partial-json",
+        )
+        self.assertEqual(
+            (artifacts / "logs" / "slepc-runtime-availability.stderr.log").read_text(
+                encoding="utf-8"
+            ),
+            "native failure\n",
+        )
+
+    def test_slepc_runtime_probe_records_timeout_bytes_and_text_bounded(self) -> None:
+        runtime_bin, cargo_target = self._prepare_slepc_runtime_probe()
+        cases = (
+            (
+                "bytes",
+                b"x" * (entrypoint.SLEPC_PROBE_OUTPUT_LIMIT + 32),
+                b"timeout-bytes",
+            ),
+            ("text", "timeout-text", "stderr-text"),
+        )
+        for label, stdout, stderr in cases:
+            with self.subTest(label=label):
+                artifacts = self.root / f"artifacts-timeout-{label}"
+                artifacts.mkdir()
+                timeout = entrypoint.subprocess.TimeoutExpired(
+                    [str(runtime_bin)],
+                    entrypoint.SLEPC_PROBE_TIMEOUT_SECONDS,
+                    output=stdout,
+                    stderr=stderr,
+                )
+                with patch.object(
+                    entrypoint.subprocess,
+                    "run",
+                    side_effect=timeout,
+                ), patch.object(entrypoint.os, "access", return_value=True):
+                    with self.assertRaisesRegex(
+                        entrypoint.BuildEntryPointError,
+                        "availability probe timed out",
+                    ):
+                        entrypoint._attest_slepc_runtime(
+                            self.workspace,
+                            artifacts,
+                            {"FULLMAG_CARGO_TARGET_DIR": str(cargo_target)},
+                            self._identity(),
+                            entrypoint._runtime_contract(
+                                entrypoint.profile_for("fem-cpu-slepc-runtime-v1")
+                            ),
+                        )
+                state = json.loads(
+                    (artifacts / "logs" / "slepc-runtime-availability.json").read_text(
+                        encoding="utf-8"
+                    )
+                )
+                self.assertEqual(state["status"], "timeout")
+                self.assertIsNone(state["return_code"])
+                stdout_log = (
+                    artifacts / "logs" / "slepc-runtime-availability.stdout.log"
+                ).read_text(encoding="utf-8")
+                stderr_log = (
+                    artifacts / "logs" / "slepc-runtime-availability.stderr.log"
+                ).read_text(encoding="utf-8")
+                self.assertLessEqual(
+                    (artifacts / "logs" / "slepc-runtime-availability.stdout.log").stat().st_size,
+                    entrypoint.SLEPC_PROBE_OUTPUT_LIMIT,
+                )
+                if label == "bytes":
+                    self.assertTrue(state["stdout_truncated"])
+                    self.assertIn("output truncated", stdout_log)
+                    self.assertEqual(state["stdout_bytes"], entrypoint.SLEPC_PROBE_OUTPUT_LIMIT + 32)
+                else:
+                    self.assertFalse(state["stdout_truncated"])
+                    self.assertEqual(stdout_log, "timeout-text")
+                    self.assertEqual(stderr_log, "stderr-text")
+
+    def test_slepc_runtime_probe_records_unavailable_oserror(self) -> None:
+        runtime_bin, cargo_target = self._prepare_slepc_runtime_probe()
+        artifacts = self.root / "artifacts-unavailable"
+        artifacts.mkdir()
+        with patch.object(
+            entrypoint.subprocess,
+            "run",
+            side_effect=OSError("executable unavailable"),
+        ), patch.object(entrypoint.os, "access", return_value=True):
+            with self.assertRaisesRegex(
+                entrypoint.BuildEntryPointError,
+                "availability probe unavailable",
+            ):
+                entrypoint._attest_slepc_runtime(
+                    self.workspace,
+                    artifacts,
+                    {"FULLMAG_CARGO_TARGET_DIR": str(cargo_target)},
+                    self._identity(),
+                    entrypoint._runtime_contract(
+                        entrypoint.profile_for("fem-cpu-slepc-runtime-v1")
+                    ),
+                )
+        state = json.loads(
+            (artifacts / "logs" / "slepc-runtime-availability.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(state["status"], "unavailable")
+        self.assertIsNone(state["return_code"])
+        self.assertIn("OSError", state["error"])
+        self.assertEqual(state["stdout_bytes"], 0)
+        self.assertEqual(state["stderr_bytes"], 0)
+        self.assertEqual(
+            (artifacts / "logs" / "slepc-runtime-availability.stdout.log").read_text(
+                encoding="utf-8"
+            ),
+            "",
+        )
+        self.assertEqual(
+            (artifacts / "logs" / "slepc-runtime-availability.stderr.log").read_text(
+                encoding="utf-8"
+            ),
+            "",
         )
 
     def test_cuda_driver_compatibility_helper_requires_loadable_soname(self) -> None:

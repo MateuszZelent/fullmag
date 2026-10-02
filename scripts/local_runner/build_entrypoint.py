@@ -47,6 +47,13 @@ DEFAULT_JOBS = 2
 MAX_JOBS = 64
 MAX_CONTEXT_BYTES = 4 * 1024 * 1024
 MAX_ERROR_LENGTH = 4096
+SLEPC_PROBE_OUTPUT_LIMIT = 64 * 1024
+SLEPC_PROBE_TIMEOUT_SECONDS = 120
+SLEPC_PROBE_SCHEMA = "fullmag.fem.slepc_runtime.availability_probe.v1"
+SLEPC_PROBE_TRUNCATION_MARKER = (
+    "\n[fullmag] probe output truncated after "
+    f"{SLEPC_PROBE_OUTPUT_LIMIT} bytes\n"
+)
 ALLOWED_WORKSPACE_MOUNTPOINTS = frozenset(
     {".fullmag-build", ".fullmag-cargo", ".fullmag-rustup"}
 )
@@ -723,6 +730,95 @@ def _write_log(path: Path, data: str) -> None:
         raise BuildEntryPointError(f"refusing to replace existing stage log: {path}") from error
 
 
+def _bounded_probe_output(value: object) -> tuple[bytes, int, bool]:
+    """Bound the persisted representation of a subprocess stream."""
+
+    if value is None:
+        raw = b""
+    elif isinstance(value, bytes):
+        raw = value
+    elif isinstance(value, str):
+        raw = value.encode("utf-8", errors="replace")
+    else:
+        raw = str(value).encode("utf-8", errors="replace")
+    original_size = len(raw)
+    if original_size <= SLEPC_PROBE_OUTPUT_LIMIT:
+        return raw, original_size, False
+    marker = SLEPC_PROBE_TRUNCATION_MARKER.encode("utf-8")
+    prefix_size = max(0, SLEPC_PROBE_OUTPUT_LIMIT - len(marker))
+    bounded = raw[:prefix_size] + marker[:SLEPC_PROBE_OUTPUT_LIMIT - prefix_size]
+    return bounded, original_size, True
+
+
+def _write_probe_log(path: Path, data: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with path.open("xb") as stream:
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
+    except FileExistsError as error:
+        raise BuildEntryPointError(f"refusing to replace stage log: {path}") from error
+    except OSError as error:
+        raise BuildEntryPointError(f"cannot publish stage log: {path}") from error
+
+
+def _write_json_log(path: Path, payload: Mapping[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with path.open("x", encoding="utf-8", newline="\n") as stream:
+            json.dump(payload, stream, ensure_ascii=False, indent=2, sort_keys=True)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+    except FileExistsError as error:
+        raise BuildEntryPointError(f"refusing to replace probe evidence: {path}") from error
+    except OSError as error:
+        raise BuildEntryPointError(f"cannot publish probe evidence: {path}") from error
+
+
+def _write_slepc_probe_evidence(
+    artifacts: Path,
+    *,
+    status: str,
+    return_code: int | None,
+    stdout: object,
+    stderr: object,
+    error: BaseException | None,
+    started_at: str,
+    finished_at: str,
+) -> None:
+    """Persist bounded availability-probe output without serializing its environment."""
+
+    log_root = artifacts / "logs"
+    stdout_data, stdout_bytes, stdout_truncated = _bounded_probe_output(stdout)
+    stderr_data, stderr_bytes, stderr_truncated = _bounded_probe_output(stderr)
+    stdout_path = log_root / "slepc-runtime-availability.stdout.log"
+    stderr_path = log_root / "slepc-runtime-availability.stderr.log"
+    state_path = log_root / "slepc-runtime-availability.json"
+    _write_probe_log(stdout_path, stdout_data)
+    _write_probe_log(stderr_path, stderr_data)
+    state: dict[str, Any] = {
+        "schema": SLEPC_PROBE_SCHEMA,
+        "status": status,
+        "scope": "subprocess_execution",
+        "validation": "not_assessed",
+        "return_code": return_code,
+        "timeout_seconds": SLEPC_PROBE_TIMEOUT_SECONDS,
+        "started_at": started_at,
+        "finished_at": finished_at,
+        "stdout_log": stdout_path.relative_to(artifacts).as_posix(),
+        "stderr_log": stderr_path.relative_to(artifacts).as_posix(),
+        "stdout_bytes": stdout_bytes,
+        "stderr_bytes": stderr_bytes,
+        "stdout_truncated": stdout_truncated,
+        "stderr_truncated": stderr_truncated,
+    }
+    if error is not None:
+        state["error"] = _error_text(error)
+    _write_json_log(state_path, state)
+
+
 def _tail_text(path: Path, limit: int = 1024) -> str:
     """Read only a bounded byte window from the end of a stage log."""
 
@@ -1369,9 +1465,11 @@ def _attest_slepc_runtime(
             )
         _, mfem_sha256 = sha256_file(mfem_path)
         mfem_abi = {"path": str(mfem_path), "sha256": mfem_sha256}
+    probe_command = [str(runtime_bin), "runtime", "fem-availability", "--json"]
+    probe_started_at = _utc_now()
     try:
         probe = subprocess.run(
-            [str(runtime_bin), "runtime", "fem-availability", "--json"],
+            probe_command,
             cwd=str(workspace),
             env=probe_environment,
             stdin=subprocess.DEVNULL,
@@ -1379,10 +1477,44 @@ def _attest_slepc_runtime(
             stderr=subprocess.PIPE,
             text=True,
             check=False,
-            timeout=120,
+            timeout=SLEPC_PROBE_TIMEOUT_SECONDS,
         )
-    except (OSError, subprocess.TimeoutExpired) as error:
-        raise BuildEntryPointError(f"SLEPc runtime availability probe failed: {error}") from error
+    except subprocess.TimeoutExpired as error:
+        _write_slepc_probe_evidence(
+            artifacts,
+            status="timeout",
+            return_code=None,
+            stdout=getattr(error, "stdout", None),
+            stderr=getattr(error, "stderr", None),
+            error=error,
+            started_at=probe_started_at,
+            finished_at=_utc_now(),
+        )
+        raise BuildEntryPointError(
+            f"SLEPc runtime availability probe timed out after {SLEPC_PROBE_TIMEOUT_SECONDS}s"
+        ) from error
+    except OSError as error:
+        _write_slepc_probe_evidence(
+            artifacts,
+            status="unavailable",
+            return_code=None,
+            stdout=None,
+            stderr=None,
+            error=error,
+            started_at=probe_started_at,
+            finished_at=_utc_now(),
+        )
+        raise BuildEntryPointError(f"SLEPc runtime availability probe unavailable: {error}") from error
+    _write_slepc_probe_evidence(
+        artifacts,
+        status="exited_zero" if probe.returncode == 0 else "nonzero",
+        return_code=probe.returncode,
+        stdout=getattr(probe, "stdout", None),
+        stderr=getattr(probe, "stderr", None),
+        error=None,
+        started_at=probe_started_at,
+        finished_at=_utc_now(),
+    )
     if probe.returncode != 0:
         stderr = (probe.stderr or "").strip()[-1024:]
         raise BuildEntryPointError(
