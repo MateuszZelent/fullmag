@@ -15,11 +15,15 @@ import sqlite3
 import subprocess
 import sys
 import time
+import zipfile
 
+from control_room_port import is_bindable
 import run_comsol_dispersion_benchmark as managed
+from runtime_source_change_policy import is_non_runtime_path
 from validate_de_smoke_rows import validate_rows, validate_selected_only_diagnostics, SAMPLING
 from validate_de_physical_potential import validate_physical_potential, _extract_mesh
 import de_smoke_model_input as model_input
+from run_de_ui_model import copy_web
 
 MODEL = "examples/fem_de_film_100nm_numeric_pilot.py"
 NEAREST_PILOT = "de-smoke-nearest-k2"
@@ -51,6 +55,45 @@ GMRES_RESTART_CHOICES = ("8", "10", "12", "16", "30")
 MESH_LEVEL_CHOICES = ("L0", "L1", "L2", "L3")
 THICKNESS_LAYERS_CHOICES = ("3", "6", "9")
 MESH_LEVEL_ELEMENT_SIZES_M = {"L0": 10e-9, "L1": 7.5e-9, "L2": 5e-9, "L3": 3.75e-9}
+UI_API_PORT = 8081
+UI_WORKSPACE_ROOT = "/workspace/fullmag-ui-workspace"
+UI_STATE_ROOT = UI_WORKSPACE_ROOT + "/.fullmag"
+UI_WEB_ROOT = "/workspace/fullmag-web"
+OPENAPI_CONTRACT_PATHS = (
+    "apps/control-room/src/kernel/api/generated/openapi-v2.json",
+    "apps/control-room/src/kernel/api/generated/openapi-v2-types.ts",
+    "apps/control-room/src/kernel/api/generated/openapi-v2-client.ts",
+    "apps/control-room/src/kernel/api/generated/openapi-v2-paths.ts",
+)
+
+
+def validate_fms_archive(path):
+    """Validate the durable archive emitted by the live API export route."""
+
+    path = Path(path)
+    if not path.is_file() or path.stat().st_size == 0:
+        raise managed.BenchmarkError("UI archive is missing or empty")
+    try:
+        with zipfile.ZipFile(path) as archive:
+            if archive.testzip() is not None:
+                raise managed.BenchmarkError("UI archive contains a corrupt member")
+            names = set(archive.namelist())
+    except (OSError, zipfile.BadZipFile) as error:
+        raise managed.BenchmarkError("UI archive is not a valid .fms archive") from error
+    required = {"project/main.py", "project/current_live_snapshot.json"}
+    if not required.issubset(names):
+        raise managed.BenchmarkError("UI archive is missing the live project snapshot")
+    artifact_entries = sorted(
+        name for name in names if name.startswith("runs/") and "/artifacts/" in name
+    )
+    if not artifact_entries:
+        raise managed.BenchmarkError("UI archive contains no captured run artifacts")
+    return {
+        "path": path.name,
+        "size_bytes": path.stat().st_size,
+        "entry_count": len(names),
+        "artifact_entry_count": len(artifact_entries),
+    }
 
 
 def pilot_model(pilot):
@@ -110,6 +153,59 @@ def _modal_selection(pilot, target_frequency_ghz=None, spectral_target=None):
     return "nearest", target_frequency_hz
 
 
+def _frequency_window_bounds(
+    pilot, modal_target, frequency_min_ghz=None, frequency_max_ghz=None
+):
+    """Validate an optional DE-SMOKE frequency-window override in GHz."""
+
+    if frequency_min_ghz is None and frequency_max_ghz is None:
+        return None
+    if frequency_min_ghz is None or frequency_max_ghz is None:
+        raise managed.BenchmarkError(
+            "frequency-window override requires both --frequency-min-ghz and "
+            "--frequency-max-ghz"
+        )
+    if modal_target != "frequency_window":
+        raise managed.BenchmarkError(
+            "frequency-window bounds require --spectral-target frequency_window"
+        )
+    if not pilot.startswith("de-smoke-"):
+        raise managed.BenchmarkError(
+            "frequency-window bounds are supported only for DE-SMOKE pilots"
+        )
+    if isinstance(frequency_min_ghz, bool) or isinstance(frequency_max_ghz, bool):
+        raise managed.BenchmarkError(
+            "frequency-window bounds must be finite positive GHz values"
+        )
+    try:
+        minimum = float(frequency_min_ghz)
+        maximum = float(frequency_max_ghz)
+    except (TypeError, ValueError) as error:
+        raise managed.BenchmarkError(
+            "frequency-window bounds must be finite positive GHz values"
+        ) from error
+    if (
+        not math.isfinite(minimum)
+        or not math.isfinite(maximum)
+        or minimum <= 0.0
+        or maximum <= 0.0
+        or minimum >= maximum
+    ):
+        raise managed.BenchmarkError(
+            "frequency-window bounds must be finite positive values with min < max"
+        )
+    minimum_hz = minimum * 1.0e9
+    maximum_hz = maximum * 1.0e9
+    if not math.isfinite(minimum_hz) or not math.isfinite(maximum_hz):
+        raise managed.BenchmarkError("frequency-window bounds overflow finite Hz range")
+    return {
+        "min_ghz": minimum,
+        "max_ghz": maximum,
+        "min_hz": minimum_hz,
+        "max_hz": maximum_hz,
+    }
+
+
 def validate_model(context, pilot="de100"):
     model = pilot_model(pilot)
     entries = [entry for entry in context.manifest["files"] if entry["path"] == model]
@@ -123,10 +219,168 @@ def validate_model(context, pilot="de100"):
     return digest
 
 
-def compose_command(context, output, timeout_seconds=managed.DEFAULT_TIMEOUT_SECONDS, *, pilot="de100", external_model=False, dense_oracle=False, solver_rtol=None, eps_prefilter=None, shifted_ksp_rtol=None, gmres_restart=None, mesh_level=None, thickness_layers=None, nearest_target_frequency_ghz=None, spectral_target=None):
+def _replace_compose_env(command, key, value):
+    prefix = key + "="
+    for index in range(len(command) - 1):
+        if command[index] == "-e" and command[index + 1].startswith(prefix):
+            command[index + 1] = prefix + value
+            return
+    raise managed.BenchmarkError(f"managed Compose command is missing {key}")
+
+
+def _enable_ui_compose(command, output, web_root, host_port):
+    output = Path(output)
+    web_root = Path(web_root)
+    if not web_root.is_dir() or not (web_root / "index.html").is_file():
+        raise managed.BenchmarkError("--with-ui requires an attested web root containing index.html")
+    if isinstance(host_port, bool) or not isinstance(host_port, int) or not 1 <= host_port <= 65535:
+        raise managed.BenchmarkError("UI host port must be an integer in the range 1-65535")
+    if not output.is_dir():
+        raise managed.BenchmarkError("UI Compose command requires an existing output directory")
+
+    # The numerical route is intentionally isolated from Docker's default
+    # bridge.  UI mode opts into a loopback-only publish so the API and the
+    # browser can share one attested container without exposing it externally.
+    override_path = output / "compose.benchmark.override.yaml"
+    override_path.write_text(
+        "services:\n"
+        "  fem-modal-cpu:\n"
+        "    network_mode: bridge\n"
+        "    volumes: !reset []\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    _replace_compose_env(command, "FULLMAG_API_PORT", str(UI_API_PORT))
+    _replace_compose_env(command, "FULLMAG_REPO_ROOT", UI_WORKSPACE_ROOT)
+    _replace_compose_env(command, "FULLMAG_STATE_ROOT", UI_STATE_ROOT)
+    _replace_compose_env(command, "FULLMAG_DISABLE_PREVIEW_3D", "0")
+    _replace_compose_env(command, "FULLMAG_DISABLE_CHARTS", "0")
+    timeout_index = command.index("timeout")
+    service_index = timeout_index - 1
+    if command[service_index] != "fem-modal-cpu":
+        raise managed.BenchmarkError("managed Compose command service boundary changed")
+    command[service_index:service_index] = [
+        "--publish", f"127.0.0.1:{host_port}:{UI_API_PORT}",
+        "--tmpfs", f"{UI_WORKSPACE_ROOT}:rw,nosuid,nodev,size=1g",
+        "-v", f"{web_root.resolve()}:{UI_WEB_ROOT}:ro",
+        "-e", f"FULLMAG_WEB_STATIC_DIR={UI_WEB_ROOT}",
+    ]
+
+
+def _ui_archive_shell(pilot):
+    target = f"/workspace/benchmark-output/{pilot}.fms"
+    return [
+        "python3 - <<'PY'",
+        "import base64",
+        "import io",
+        "import json",
+        "import os",
+        "import tempfile",
+        "import time",
+        "import urllib.error",
+        "import urllib.request",
+        "import zipfile",
+        "status_url = 'http://127.0.0.1:8081/v2/sessions/current/status'",
+        "export_url = 'http://127.0.0.1:8081/v2/sessions/current/persistence/exports'",
+        "def get_json(url, headers=None):",
+        "    request = urllib.request.Request(url, headers=headers or {})",
+        "    with urllib.request.urlopen(request, timeout=60) as response:",
+        "        return json.load(response)",
+        "last_error = None",
+        "scope = None",
+        "status = None",
+        "for _ in range(60):",
+        "    try:",
+        "        status = get_json(status_url)",
+        "        session = status.get('session') if isinstance(status, dict) else None",
+        "        if not isinstance(session, dict):",
+        "            raise RuntimeError('status did not return a session summary')",
+        "        scope = session.get('request_scope_epoch') or session.get('session_epoch')",
+        "        if not isinstance(scope, str) or not scope:",
+        "            raise RuntimeError('status did not return request_scope_epoch/session_epoch')",
+        "        run = status.get('run')",
+        "        domain = status.get('domain')",
+        "        resources = status.get('resources')",
+        "        if not isinstance(run, dict):",
+        "            raise RuntimeError('status has no active completed run summary')",
+        "        cell_count = domain.get('cell_count') if isinstance(domain, dict) else None",
+        "        if isinstance(cell_count, bool) or not isinstance(cell_count, int) or cell_count <= 0:",
+        "            raise RuntimeError('status has no realized domain cells')",
+        "        field_catalog_revision = resources.get('field_catalog_revision') if isinstance(resources, dict) else None",
+        "        if (isinstance(field_catalog_revision, bool) or",
+        "                not isinstance(field_catalog_revision, int) or field_catalog_revision <= 0):",
+        "            raise RuntimeError('status has no published field catalog revision')",
+        "        break",
+        "    except urllib.error.HTTPError as error:",
+        "        detail = error.read().decode('utf-8', 'replace')[-1000:]",
+        "        if error.code != 404:",
+        "            raise RuntimeError(f'session status failed ({error.code}): {detail}')",
+        "        last_error = detail",
+        "        time.sleep(1)",
+        "    except (ValueError, TypeError, RuntimeError) as error:",
+        "        last_error = str(error)",
+        "        time.sleep(1)",
+        "else:",
+        "    raise RuntimeError(f'session status did not publish a usable run: {last_error}')",
+        "body = json.dumps({'profile': 'archive'}).encode('utf-8')",
+        "headers = {'Content-Type': 'application/json', 'x-fullmag-session-scope': scope}",
+        "request = urllib.request.Request(export_url, data=body, method='POST', headers=headers)",
+        "last_error = None",
+        "for _ in range(60):",
+        "    try:",
+        "        with urllib.request.urlopen(request, timeout=60) as response:",
+        "            payload = json.load(response)",
+        "        break",
+        "    except urllib.error.HTTPError as error:",
+        "        detail = error.read().decode('utf-8', 'replace')[-1000:]",
+        "        if error.code != 404:",
+        "            raise RuntimeError(f'archive export failed ({error.code}): {detail}')",
+        "        last_error = detail",
+        "        time.sleep(1)",
+        "else:",
+        "    raise RuntimeError(f'archive export did not observe a live session: {last_error}')",
+        "encoded = payload.get('fms_base64') if isinstance(payload, dict) else None",
+        "if not isinstance(encoded, str) or not encoded:",
+        "    raise RuntimeError('archive export did not return fms_base64')",
+        "try:",
+        "    raw = base64.b64decode(encoded, validate=True)",
+        "    with zipfile.ZipFile(io.BytesIO(raw)) as archive:",
+        "        if archive.testzip() is not None:",
+        "            raise RuntimeError('archive export contains a corrupt member')",
+        "        names = set(archive.namelist())",
+        "except (ValueError, zipfile.BadZipFile) as error:",
+        "    raise RuntimeError(f'archive export is not a valid .fms archive: {error}')",
+        "required = {'project/main.py', 'project/current_live_snapshot.json'}",
+        "if not required.issubset(names):",
+        "    raise RuntimeError('archive export is missing the live project snapshot')",
+        "if not any(name.startswith('runs/') and '/artifacts/' in name for name in names):",
+        "    raise RuntimeError('archive export contains no captured run artifacts')",
+        f"target = {target!r}",
+        "fd, temporary = tempfile.mkstemp(prefix='.fms-export-', dir=os.path.dirname(target))",
+        "try:",
+        "    with os.fdopen(fd, 'wb') as handle:",
+        "        handle.write(raw)",
+        "        handle.flush()",
+        "        os.fsync(handle.fileno())",
+        "    os.replace(temporary, target)",
+        "except BaseException:",
+        "    try:",
+        "        os.unlink(temporary)",
+        "    except FileNotFoundError:",
+        "        pass",
+        "    raise",
+        "print(json.dumps({'archive_path': target, 'size_bytes': len(raw), 'entry_count': len(names)}))",
+        "PY",
+    ]
+
+
+def compose_command(context, output, timeout_seconds=managed.DEFAULT_TIMEOUT_SECONDS, *, pilot="de100", external_model=False, dense_oracle=False, solver_rtol=None, eps_prefilter=None, shifted_ksp_rtol=None, gmres_restart=None, mesh_level=None, thickness_layers=None, nearest_target_frequency_ghz=None, spectral_target=None, frequency_min_ghz=None, frequency_max_ghz=None, ui_web_root=None, ui_host_port=UI_API_PORT):
     model = pilot_model(pilot)
     modal_target, target_frequency_hz = _modal_selection(
         pilot, nearest_target_frequency_ghz, spectral_target)
+    frequency_window = _frequency_window_bounds(
+        pilot, modal_target, frequency_min_ghz, frequency_max_ghz
+    )
     if thickness_layers is not None and (
             not pilot.startswith("de-smoke-") or thickness_layers not in THICKNESS_LAYERS_CHOICES):
         raise managed.BenchmarkError("thickness layers require a supported DE-SMOKE value")
@@ -154,7 +408,10 @@ def compose_command(context, output, timeout_seconds=managed.DEFAULT_TIMEOUT_SEC
     if external_model:
         command[command.index("run")+1:command.index("run")+1] = [
             "-v", f"{output / 'model-input.py'}:/workspace/benchmark-model.py:ro"]
-    command[-1] = "\n".join([
+    ui_enabled = ui_web_root is not None
+    if ui_enabled:
+        _enable_ui_compose(command, output, ui_web_root, ui_host_port)
+    shell = [
         "set -euo pipefail",
         "cd /workspace/capsule",
         "runtime_bin=/workspace/.fullmag/local/bin/fullmag-bin",
@@ -167,6 +424,11 @@ def compose_command(context, output, timeout_seconds=managed.DEFAULT_TIMEOUT_SEC
         *(["export FULLMAG_DE_SMOKE_TARGET_FREQUENCY_GHZ="
            + format(target_frequency_hz / 1.0e9, ".17g")]
           if modal_target == "nearest" else []),
+        *(["export FULLMAG_DE_SMOKE_FREQUENCY_MIN_GHZ="
+           + format(frequency_window["min_ghz"], ".17g"),
+            "export FULLMAG_DE_SMOKE_FREQUENCY_MAX_GHZ="
+           + format(frequency_window["max_ghz"], ".17g")]
+          if frequency_window is not None else []),
         *(["export FULLMAG_FLOQUET_DENSE_ORACLE=1"] if dense_oracle else []),
         *(["export FULLMAG_DE_SMOKE_SOLVER_RTOL=" + solver_rtol] if solver_rtol else []),
         *(["export FULLMAG_FLOQUET_EPS_PREFILTER_ABS=" + eps_prefilter] if eps_prefilter else []),
@@ -178,8 +440,68 @@ def compose_command(context, output, timeout_seconds=managed.DEFAULT_TIMEOUT_SEC
         'test -f "$source_script"',
         "case_dir=/workspace/benchmark-output/" + pilot,
         'mkdir "$case_dir"',
-        '"$runtime_bin" "$source_script" --backend fem --mode strict --precision double --headless --json --output-dir "$case_dir" >"$case_dir/runtime.log" 2>&1',
-    ])
+    ]
+    if ui_enabled:
+        shell.extend([
+            f"workspace_root={UI_WORKSPACE_ROOT}",
+            'test ! -L "$workspace_root"',
+            'mkdir -p "$workspace_root"',
+            'for path in /workspace/capsule/* /workspace/capsule/.[!.]*; do',
+            '  [ -e "$path" ] || continue',
+            '  name="$(basename "$path")"',
+            '  [ "$name" != ".fullmag" ] || exit 2',
+            '  [ "$name" != ".git" ] || exit 2',
+            '  ln -s "$path" "$workspace_root/$name"',
+            'done',
+            'mkdir -p "$workspace_root/.fullmag" "$workspace_root/.home"',
+            'export FULLMAG_REPO_ROOT="$workspace_root"',
+            'export FULLMAG_STATE_ROOT="$workspace_root/.fullmag"',
+            'export HOME="$workspace_root/.home"',
+            'export USERPROFILE="$HOME"',
+            'unset FULLMAG_FEATURE_FLAGS_FILE || true',
+            'export FULLMAG_SKIP_CONTROL_ROOM=1',
+            f"export FULLMAG_API_PORT={UI_API_PORT}",
+            f"export FULLMAG_WEB_STATIC_DIR={UI_WEB_ROOT}",
+            "export FULLMAG_DISABLE_PREVIEW_3D=0",
+            "export FULLMAG_DISABLE_CHARTS=0",
+            "api_bin=/workspace/.fullmag/local/bin/fullmag-api",
+            'test -x "$api_bin"',
+            'mkdir -p "$FULLMAG_STATE_ROOT"',
+            '"$api_bin" >"$case_dir/fullmag-api.log" 2>&1 &',
+            "api_pid=$!",
+            "cleanup_api() { kill \"$api_pid\" 2>/dev/null || true; wait \"$api_pid\" 2>/dev/null || true; }",
+            "trap cleanup_api EXIT",
+            'python3 - "$api_pid" <<\'PY\'',
+            "import os",
+            "import sys",
+            "import time",
+            "import urllib.request",
+            "pid = int(sys.argv[1])",
+            "last_error = None",
+            "for _ in range(90):",
+            "    try:",
+            "        os.kill(pid, 0)",
+            "        for endpoint in ('healthz', 'v1/openapi.json'):",
+            "            with urllib.request.urlopen(f'http://127.0.0.1:8081/{endpoint}', timeout=2) as response:",
+            "                if response.status != 200:",
+            "                    raise RuntimeError(f'{endpoint} returned {response.status}')",
+            "        break",
+            "    except Exception as error:",
+            "        last_error = error",
+            "        time.sleep(1)",
+            "else:",
+            "    raise SystemExit(f'fullmag-api did not become ready: {last_error}')",
+            "PY",
+        ])
+    solver_command = (
+        '"$runtime_bin" "$source_script" --backend fem --mode strict --precision double '
+        + ("--headless " if not ui_enabled else "")
+        + '--json --output-dir "$case_dir" >"$case_dir/runtime.log" 2>&1'
+    )
+    shell.append(solver_command)
+    if ui_enabled:
+        shell.extend(_ui_archive_shell(pilot))
+    command[-1] = "\n".join(shell)
     return command
 
 
@@ -362,10 +684,13 @@ def validate_thickness_layers_metadata(case, requested):
             "qualification": "NOT VERIFIED"}
 
 
-def execute(context, output, command, model_sha, timeout_seconds=managed.DEFAULT_TIMEOUT_SECONDS, *, pilot="de100", model_identity=None, dense_oracle=False, solver_rtol=None, eps_prefilter=None, shifted_ksp_rtol=None, gmres_restart=None, mesh_level=None, thickness_layers=None, nearest_target_frequency_ghz=None, spectral_target=None):
+def execute(context, output, command, model_sha, timeout_seconds=managed.DEFAULT_TIMEOUT_SECONDS, *, pilot="de100", model_identity=None, dense_oracle=False, solver_rtol=None, eps_prefilter=None, shifted_ksp_rtol=None, gmres_restart=None, mesh_level=None, thickness_layers=None, nearest_target_frequency_ghz=None, spectral_target=None, frequency_min_ghz=None, frequency_max_ghz=None, ui_enabled=False, ui_frontend=None, ui_host_port=UI_API_PORT):
     model = pilot_model(pilot)
     modal_target, target_frequency_hz = _modal_selection(
         pilot, nearest_target_frequency_ghz, spectral_target)
+    frequency_window = _frequency_window_bounds(
+        pilot, modal_target, frequency_min_ghz, frequency_max_ghz
+    )
     schema_name = "de100-pilot" if pilot == "de100" else "de-smoke"
     request = managed._run_request(context, output, (), command, timeout_seconds=timeout_seconds)
     request.update(schema=f"fullmag.{schema_name}.request.v1", operation=pilot + "-numerical-pilot",
@@ -383,7 +708,20 @@ def execute(context, output, command, model_sha, timeout_seconds=managed.DEFAULT
     request["target_frequency_hz"] = target_frequency_hz
     request["selection_scope"] = "selected_only" if modal_target == "nearest" else "frequency_window"
     request["window_complete"] = False if modal_target == "nearest" else None
+    request["frequency_window_override_ghz"] = (
+        {"min": frequency_window["min_ghz"], "max": frequency_window["max_ghz"]}
+        if frequency_window is not None else None
+    )
     request["source"]["public_model_files"] = [*managed.PUBLIC_MODEL_FILES] if model_identity else [model, *managed.PUBLIC_MODEL_FILES]
+    ui_metadata = {"enabled": bool(ui_enabled)}
+    if ui_enabled:
+        ui_metadata.update({
+            "host_port": ui_host_port,
+            "archive_path": f"{pilot}.fms",
+            "archive_profile": "archive",
+            "frontend": ui_frontend,
+        })
+    request["ui"] = ui_metadata
     if model_identity:
         request["model_source"] = model_identity
     request["scientific_gate"] = {"qualification": "NOT VERIFIED", "reason": "postsolve comparison and convergence required"}
@@ -392,7 +730,7 @@ def execute(context, output, command, model_sha, timeout_seconds=managed.DEFAULT
               "qualification": "NOT VERIFIED", "started_at_unix": time.time(),
               "job": request["job"], "source": request["source"], "runtime": request["runtime"],
               "model_sha256": model_sha, "return_code": None, "artifacts": None,
-              "container_cleanup": {"status": "not_requested"}}
+              "container_cleanup": {"status": "not_requested"}, "ui": ui_metadata}
     try:
         if model_identity:
             model_input.verify_model(output, model_identity)
@@ -431,6 +769,8 @@ def execute(context, output, command, model_sha, timeout_seconds=managed.DEFAULT
                 artifacts["mesh_level_resolution"] = validate_mesh_level_metadata(output / pilot, mesh_level)
             if thickness_layers is not None:
                 artifacts["thickness_layers_resolution"] = validate_thickness_layers_metadata(output / pilot, thickness_layers)
+            if ui_enabled:
+                result["ui"]["archive"] = validate_fms_archive(output / f"{pilot}.fms")
             result.update(status="completed_unqualified", artifacts=artifacts)
     except subprocess.TimeoutExpired:
         result["error"] = "host Compose watchdog expired after the container deadline and grace period"
@@ -456,12 +796,212 @@ def execute(context, output, command, model_sha, timeout_seconds=managed.DEFAULT
     return 0 if result["status"] == "completed_unqualified" else 1
 
 
+def _read_frontend_build_job(layout, job_id):
+    if not isinstance(job_id, str) or not managed.JOB_ID_RE.fullmatch(job_id):
+        raise managed.BenchmarkError("frontend build job identity is invalid")
+    storage = Path(layout["storage_root"])
+    database = managed._contained_path(
+        storage, "index/runner-jobs.sqlite", "frontend runner database"
+    )
+    managed._regular_file(database, "frontend runner database")
+    try:
+        connection = sqlite3.connect(database.as_uri() + "?mode=ro", uri=True, timeout=5)
+        connection.row_factory = sqlite3.Row
+        row = connection.execute(
+            """
+            SELECT job_id, owner, worktree_id, source_digest, profile,
+                   operation, payload, state, exit_code
+            FROM jobs WHERE job_id=?
+            """,
+            (job_id,),
+        ).fetchone()
+    except sqlite3.Error as error:
+        raise managed.BenchmarkError("cannot read the frontend runner job") from error
+    finally:
+        try:
+            connection.close()
+        except UnboundLocalError:
+            pass
+    if row is None:
+        raise managed.BenchmarkError("frontend runner job was not found")
+    job = dict(row)
+    try:
+        job["payload"] = json.loads(job["payload"])
+    except (TypeError, ValueError) as error:
+        raise managed.BenchmarkError("frontend runner job payload is invalid") from error
+    if not isinstance(job["payload"], dict):
+        raise managed.BenchmarkError("frontend runner job payload is not an object")
+    payload = job["payload"]
+    if (
+        job.get("profile") != "fem-cpu-release"
+        or job.get("operation") != "build"
+        or job.get("state") != "succeeded"
+        or job.get("exit_code") != 0
+        or job.get("worktree_id") != layout["worktree_id"]
+        or payload.get("origin_repo") is None
+        or not managed._same_path(payload["origin_repo"], layout["repo_root"])
+    ):
+        raise managed.BenchmarkError("frontend runner job does not satisfy the release preflight")
+    capture_id = payload.get("capture_id")
+    if not isinstance(capture_id, str) or not managed.CAPTURE_ID_RE.fullmatch(capture_id):
+        raise managed.BenchmarkError("frontend source capsule identity is invalid")
+    expected_capsule = f"runs/{layout['worktree_id']}/{capture_id}/source"
+    if payload.get("capsule_relative") != expected_capsule:
+        raise managed.BenchmarkError("frontend source capsule path is not canonical")
+    if not isinstance(job.get("source_digest"), str) or not managed.SHA256_RE.fullmatch(
+        job["source_digest"]
+    ):
+        raise managed.BenchmarkError("frontend source digest is invalid")
+    return job
+
+
+def _runtime_capsule_signature(manifest):
+    files = manifest.get("files")
+    if not isinstance(files, list):
+        raise managed.BenchmarkError("source capsule manifest has no file list")
+    signature = {}
+    for entry in files:
+        if not isinstance(entry, dict) or not isinstance(entry.get("path"), str):
+            raise managed.BenchmarkError("source capsule manifest has an invalid file entry")
+        path = entry["path"]
+        if is_non_runtime_path(path):
+            continue
+        signature[path] = tuple(
+            entry.get(key) for key in ("type", "mode", "size", "sha256", "target")
+        )
+    return signature
+
+
+def _exact_openapi_contract_signature(manifest, label):
+    files = manifest.get("files")
+    if not isinstance(files, list):
+        raise managed.BenchmarkError(f"{label} source capsule manifest has no file list")
+    entries = {
+        entry.get("path"): entry
+        for entry in files
+        if isinstance(entry, dict) and isinstance(entry.get("path"), str)
+    }
+    missing = [path for path in OPENAPI_CONTRACT_PATHS if path not in entries]
+    if missing:
+        raise managed.BenchmarkError(
+            f"{label} source capsule is missing generated OpenAPI contract: {missing[0]}"
+        )
+    signature = {}
+    for path in OPENAPI_CONTRACT_PATHS:
+        entry = entries[path]
+        if entry.get("type") != "file" or not isinstance(entry.get("sha256"), str):
+            raise managed.BenchmarkError(
+                f"{label} generated OpenAPI contract entry is invalid: {path}"
+            )
+        signature[path] = tuple(
+            entry.get(key) for key in ("type", "mode", "size", "sha256")
+        )
+    return signature
+
+
+def _require_runtime_capsule_compatibility(layout, context, build_root, frontend):
+    frontend_identity = frontend.get("native_source_identity")
+    if not isinstance(frontend_identity, dict):
+        raise managed.BenchmarkError("frontend build has no native source identity")
+    if (
+        context.native_identity.get("ignored_non_runtime_dirty") is not True
+        or frontend_identity.get("ignored_non_runtime_dirty") is not True
+    ):
+        raise managed.BenchmarkError(
+            "frontend/runtime capsule comparison requires ignore_non_runtime_dirty provenance"
+        )
+    trusted_context = managed._json_file(
+        Path(build_root) / "trusted/context.json", "frontend build context"
+    )
+    if trusted_context.get("native_source_identity") != frontend_identity:
+        raise managed.BenchmarkError("frontend trusted context identity mismatch")
+    frontend_job = _read_frontend_build_job(layout, frontend["job_id"])
+    if frontend_job["source_digest"] != trusted_context.get("source_digest"):
+        raise managed.BenchmarkError("frontend build context source digest mismatch")
+    payload = frontend_job["payload"]
+    storage = Path(layout["storage_root"])
+    capsule = managed._contained_path(
+        storage, payload["capsule_relative"], "frontend source capsule"
+    )
+    try:
+        manifest = managed.verify_source(capsule, frontend_job["source_digest"])
+    except (OSError, ValueError, TypeError, KeyError) as error:
+        raise managed.BenchmarkError("frontend source capsule verification failed") from error
+    if not isinstance(manifest.get("repo_root"), str) or not managed._same_path(
+        manifest["repo_root"], layout["repo_root"]
+    ):
+        raise managed.BenchmarkError("frontend source capsule origin differs from this worktree")
+    if manifest.get("resolved_commit") != frontend_identity.get("head_commit_full"):
+        raise managed.BenchmarkError("frontend source capsule commit differs from its build identity")
+    runtime_signature = _runtime_capsule_signature(context.manifest)
+    frontend_signature = _runtime_capsule_signature(manifest)
+    if runtime_signature != frontend_signature:
+        differing = sorted(
+            set(runtime_signature) ^ set(frontend_signature)
+            or {
+                path
+                for path in set(runtime_signature) & set(frontend_signature)
+                if runtime_signature[path] != frontend_signature[path]
+            }
+        )
+        first = differing[0] if differing else "<unknown>"
+        raise managed.BenchmarkError(
+            "frontend/runtime source capsules differ in runtime inputs: " + first
+        )
+    runtime_openapi_signature = _exact_openapi_contract_signature(
+        context.manifest, "runtime"
+    )
+    frontend_openapi_signature = _exact_openapi_contract_signature(
+        manifest, "frontend"
+    )
+    if runtime_openapi_signature != frontend_openapi_signature:
+        differing = [
+            path for path in OPENAPI_CONTRACT_PATHS
+            if runtime_openapi_signature[path] != frontend_openapi_signature[path]
+        ]
+        raise managed.BenchmarkError(
+            "frontend/runtime generated OpenAPI contracts differ: " + differing[0]
+        )
+    return {
+        "status": "compatible",
+        "comparison": "verified_capsule_runtime_entries",
+        "runtime_source_digest": context.manifest.get("source_digest"),
+        "frontend_source_digest": frontend_job["source_digest"],
+        "ignored_non_runtime_paths": True,
+        "openapi_contract_paths": list(OPENAPI_CONTRACT_PATHS),
+    }
+
+
+def _prepare_ui_web(layout, context, build_root, output):
+    build_root = Path(build_root).expanduser()
+    if not build_root.is_absolute():
+        build_root = Path(layout["repo_root"]) / build_root
+    destination = Path(output) / "ui-web"
+    frontend = copy_web(layout, build_root, destination)
+    frontend["capsule_compatibility"] = _require_runtime_capsule_compatibility(
+        layout, context, build_root, frontend
+    )
+    return destination, frontend
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo-root", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--job-id", required=True)
     parser.add_argument("--output-dir")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--with-ui", action="store_true",
+        help="start the matched API/web bundle and export a durable .fms archive",
+    )
+    parser.add_argument(
+        "--web-build-root",
+        help="attested managed web build root required by --with-ui",
+    )
+    parser.add_argument(
+        "--ui-port", type=int, default=UI_API_PORT,
+        help="loopback host port forwarding to the UI API (default: 8081)",
+    )
     parser.add_argument("--pilot", choices=tuple(PILOTS), default="de100")
     parser.add_argument("--mesh-level", choices=MESH_LEVEL_CHOICES,
                         help="explicit magnetic/interface mesh level for a standalone DE-SMOKE input")
@@ -486,8 +1026,27 @@ def main(argv=None):
         "--nearest-target-frequency-ghz",
         help="finite positive nearest-mode target for --spectral-target nearest",
     )
+    parser.add_argument(
+        "--frequency-min-ghz",
+        help="finite positive lower bound for a DE-SMOKE frequency-window override",
+    )
+    parser.add_argument(
+        "--frequency-max-ghz",
+        help="finite positive upper bound for a DE-SMOKE frequency-window override",
+    )
     args = parser.parse_args(argv)
     try:
+        if args.with_ui and not args.web_build_root:
+            raise ValueError("--with-ui requires --web-build-root")
+        if args.web_build_root and not args.with_ui:
+            raise ValueError("--web-build-root requires --with-ui")
+        if args.with_ui and args.dry_run:
+            raise ValueError("--with-ui cannot be combined with --dry-run")
+        if args.with_ui:
+            if isinstance(args.ui_port, bool) or not 1 <= args.ui_port <= 65535:
+                raise ValueError("--ui-port must be in the range 1-65535")
+            if not is_bindable("127.0.0.1", args.ui_port):
+                raise ValueError(f"UI host port is not bindable: 127.0.0.1:{args.ui_port}")
         layout = managed.fullmag_storage.resolve_layout(args.repo_root, "windows-native")
         input_data = None
         input_identity = None
@@ -502,10 +1061,16 @@ def main(argv=None):
         if args.dry_run:
             context = managed._validate_build_context(layout, managed._read_job(layout, args.job_id))
             model_sha = input_identity["sha256"] if input_identity else validate_model(context, args.pilot)
+            modal_target, _ = _modal_selection(
+                args.pilot, args.nearest_target_frequency_ghz, args.spectral_target
+            )
+            _frequency_window_bounds(
+                args.pilot, modal_target, args.frequency_min_ghz, args.frequency_max_ghz
+            )
             output = Path(layout["storage_root"]) / "runs" / layout["worktree_id"] / args.job_id / (args.pilot + "-preview")
             print(json.dumps({"status": "dry_run", "qualification": "NOT VERIFIED",
                               "model_sha256": model_sha, "model_source": input_identity,
-                              "command": compose_command(context, output, pilot=args.pilot, external_model=input_identity is not None, dense_oracle=args.dense_oracle, solver_rtol=args.solver_rtol, eps_prefilter=args.eps_prefilter, shifted_ksp_rtol=args.shifted_ksp_rtol, gmres_restart=args.gmres_restart, mesh_level=args.mesh_level, thickness_layers=args.thickness_layers, nearest_target_frequency_ghz=args.nearest_target_frequency_ghz, spectral_target=args.spectral_target)}, indent=2))
+                              "command": compose_command(context, output, pilot=args.pilot, external_model=input_identity is not None, dense_oracle=args.dense_oracle, solver_rtol=args.solver_rtol, eps_prefilter=args.eps_prefilter, shifted_ksp_rtol=args.shifted_ksp_rtol, gmres_restart=args.gmres_restart, mesh_level=args.mesh_level, thickness_layers=args.thickness_layers, nearest_target_frequency_ghz=args.nearest_target_frequency_ghz, spectral_target=args.spectral_target, frequency_min_ghz=args.frequency_min_ghz, frequency_max_ghz=args.frequency_max_ghz)}, indent=2))
             return 0
         with managed.fullmag_storage.build_lock(layout):
             context = managed._validate_build_context(layout, managed._read_job(layout, args.job_id))
@@ -515,7 +1080,40 @@ def main(argv=None):
             output.mkdir(parents=True, exist_ok=False)
             if input_data is not None:
                 model_input.stage_model(output, input_data)
-            return execute(context, output, compose_command(context, output, pilot=args.pilot, external_model=input_identity is not None, dense_oracle=args.dense_oracle, solver_rtol=args.solver_rtol, eps_prefilter=args.eps_prefilter, shifted_ksp_rtol=args.shifted_ksp_rtol, gmres_restart=args.gmres_restart, mesh_level=args.mesh_level, thickness_layers=args.thickness_layers, nearest_target_frequency_ghz=args.nearest_target_frequency_ghz, spectral_target=args.spectral_target), model_sha, pilot=args.pilot, model_identity=input_identity, dense_oracle=args.dense_oracle, solver_rtol=args.solver_rtol, eps_prefilter=args.eps_prefilter, shifted_ksp_rtol=args.shifted_ksp_rtol, gmres_restart=args.gmres_restart, mesh_level=args.mesh_level, thickness_layers=args.thickness_layers, nearest_target_frequency_ghz=args.nearest_target_frequency_ghz, spectral_target=args.spectral_target)
+            ui_web_root = None
+            ui_frontend = None
+            if args.with_ui:
+                ui_web_root, ui_frontend = _prepare_ui_web(
+                    layout, context, args.web_build_root, output
+                )
+            command = compose_command(
+                context, output, pilot=args.pilot,
+                external_model=input_identity is not None,
+                dense_oracle=args.dense_oracle, solver_rtol=args.solver_rtol,
+                eps_prefilter=args.eps_prefilter,
+                shifted_ksp_rtol=args.shifted_ksp_rtol,
+                gmres_restart=args.gmres_restart, mesh_level=args.mesh_level,
+                thickness_layers=args.thickness_layers,
+                nearest_target_frequency_ghz=args.nearest_target_frequency_ghz,
+                spectral_target=args.spectral_target,
+                frequency_min_ghz=args.frequency_min_ghz,
+                frequency_max_ghz=args.frequency_max_ghz,
+                ui_web_root=ui_web_root, ui_host_port=args.ui_port,
+            )
+            return execute(
+                context, output, command, model_sha, pilot=args.pilot,
+                model_identity=input_identity, dense_oracle=args.dense_oracle,
+                solver_rtol=args.solver_rtol, eps_prefilter=args.eps_prefilter,
+                shifted_ksp_rtol=args.shifted_ksp_rtol,
+                gmres_restart=args.gmres_restart, mesh_level=args.mesh_level,
+                thickness_layers=args.thickness_layers,
+                nearest_target_frequency_ghz=args.nearest_target_frequency_ghz,
+                spectral_target=args.spectral_target,
+                frequency_min_ghz=args.frequency_min_ghz,
+                frequency_max_ghz=args.frequency_max_ghz,
+                ui_enabled=args.with_ui, ui_frontend=ui_frontend,
+                ui_host_port=args.ui_port,
+            )
     except (managed.BenchmarkError, managed.fullmag_storage.StorageError, OSError, ValueError, sqlite3.Error, subprocess.SubprocessError, SyntaxError) as error:
         print(f"de100-pilot: {error}", file=sys.stderr)
         return 2

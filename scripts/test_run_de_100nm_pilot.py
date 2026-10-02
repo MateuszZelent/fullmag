@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 import json
+import zipfile
 import run_de_100nm_pilot as pilot
 
 
@@ -277,6 +278,139 @@ class PilotTests(unittest.TestCase):
         self.assertIn(str(Path("/outputs")) + ":/workspace/benchmark-output:rw", command)
         self.assertIn(str(Path("/capsule")) + ":/workspace/capsule:ro", command)
         self.assertNotIn("build", command)
+
+    def test_frequency_window_override_is_paired_and_explicit(self):
+        context = SimpleNamespace(source_tree=Path("/capsule"), runtime_root=Path("/runtime"),
+                                  image_digest="sha256:test",
+                                  job={"job_id": "a" * 32, "profile": "fem-cpu-slepc-runtime-v1"})
+        shell = pilot.compose_command(
+            context, Path("/outputs"), pilot="de-smoke-two",
+            frequency_min_ghz="10.9", frequency_max_ghz="11.5",
+        )[-1]
+        self.assertIn("FULLMAG_DE_SMOKE_FREQUENCY_MIN_GHZ=10.9", shell)
+        self.assertIn("FULLMAG_DE_SMOKE_FREQUENCY_MAX_GHZ=11.5", shell)
+        for minimum, maximum in (
+            ("10.9", None), (None, "11.5"), ("11.5", "10.9"),
+            ("nan", "11.5"), ("10.9", "inf"),
+        ):
+            with self.subTest(minimum=minimum, maximum=maximum), self.assertRaises(
+                pilot.managed.BenchmarkError
+            ):
+                pilot.compose_command(
+                    context, Path("/outputs"), pilot="de-smoke-two",
+                    frequency_min_ghz=minimum, frequency_max_ghz=maximum,
+                )
+        with self.assertRaises(pilot.managed.BenchmarkError):
+            pilot.compose_command(
+                context, Path("/outputs"), pilot="de-smoke-two",
+                spectral_target="nearest", frequency_min_ghz="10.9",
+                frequency_max_ghz="11.5",
+            )
+        with self.assertRaises(pilot.managed.BenchmarkError):
+            pilot.compose_command(
+                context, Path("/outputs"), pilot="de100",
+                frequency_min_ghz="10.9", frequency_max_ghz="11.5",
+            )
+
+    def test_with_ui_keeps_solver_resources_and_publishes_real_workspace(self):
+        context = SimpleNamespace(source_tree=Path("/capsule"), runtime_root=Path("/runtime"),
+                                  image_digest="sha256:test",
+                                  job={"job_id": "a" * 32, "profile": "fem-cpu-slepc-runtime-v1"})
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output = root / "output"
+            output.mkdir()
+            web = root / "web"
+            web.mkdir()
+            (web / "index.html").write_text("<html></html>", encoding="utf-8")
+            command = pilot.compose_command(
+                context, output, pilot="de-smoke-two", ui_web_root=web,
+                ui_host_port=18181,
+            )
+            shell = command[-1]
+            self.assertIn("--publish 127.0.0.1:18181:8081", " ".join(command))
+            self.assertIn(
+                "--tmpfs /workspace/fullmag-ui-workspace:rw,nosuid,nodev,size=1g",
+                " ".join(command),
+            )
+            self.assertIn("FULLMAG_REPO_ROOT=/workspace/fullmag-ui-workspace", " ".join(command))
+            self.assertIn("FULLMAG_STATE_ROOT=/workspace/fullmag-ui-workspace/.fullmag", " ".join(command))
+            self.assertIn("FULLMAG_SKIP_CONTROL_ROOM=1", shell)
+            self.assertIn("FULLMAG_DISABLE_PREVIEW_3D=0", shell)
+            self.assertIn("FULLMAG_DISABLE_CHARTS=0", shell)
+            self.assertIn("v2/sessions/current/status", shell)
+            self.assertIn("x-fullmag-session-scope", shell)
+            self.assertIn("resources.get('field_catalog_revision')", shell)
+            self.assertIn("not isinstance(field_catalog_revision, int)", shell)
+            self.assertIn("if error.code != 404:", shell)
+            self.assertNotIn("error.code not in (404, 409)", shell)
+            self.assertNotIn("--headless", shell)
+            self.assertTrue((output / "compose.benchmark.override.yaml").is_file())
+
+    def test_runtime_capsule_signature_ignores_only_declared_non_runtime_paths(self):
+        base = {
+            "files": [
+                {"path": "src/runtime.rs", "type": "file", "mode": "100644",
+                 "size": 1, "sha256": "a"},
+                {"path": "apps/control-room/src/App.tsx", "type": "file", "mode": "100644",
+                 "size": 1, "sha256": "b"},
+                {"path": "docs/design.md", "type": "file", "mode": "100644",
+                 "size": 1, "sha256": "c"},
+            ]
+        }
+        frontend = {
+            "files": [
+                base["files"][0],
+                {"path": "apps/control-room/src/App.tsx", "type": "file", "mode": "100644",
+                 "size": 2, "sha256": "changed"},
+                {"path": "docs/design.md", "type": "file", "mode": "100644",
+                 "size": 2, "sha256": "changed"},
+            ]
+        }
+        self.assertEqual(
+            pilot._runtime_capsule_signature(base),
+            pilot._runtime_capsule_signature(frontend),
+        )
+        frontend["files"][0] = {**frontend["files"][0], "sha256": "changed-runtime"}
+        self.assertNotEqual(
+            pilot._runtime_capsule_signature(base),
+            pilot._runtime_capsule_signature(frontend),
+        )
+
+    def test_openapi_contract_signature_is_exact_even_inside_frontend_tree(self):
+        manifest = {
+            "files": [
+                {"path": path, "type": "file", "mode": "100644",
+                 "size": index + 1, "sha256": str(index)}
+                for index, path in enumerate(pilot.OPENAPI_CONTRACT_PATHS)
+            ]
+        }
+        same = pilot._exact_openapi_contract_signature(manifest, "runtime")
+        changed = {**manifest, "files": [*manifest["files"]]}
+        changed["files"][0] = {**changed["files"][0], "sha256": "changed"}
+        self.assertNotEqual(
+            same, pilot._exact_openapi_contract_signature(changed, "frontend")
+        )
+        with self.assertRaisesRegex(pilot.managed.BenchmarkError, "missing generated"):
+            pilot._exact_openapi_contract_signature(
+                {"files": manifest["files"][1:]}, "frontend"
+            )
+
+    def test_fms_archive_requires_live_project_and_run_artifacts(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            archive_path = root / "pilot.fms"
+            with zipfile.ZipFile(archive_path, "w") as archive:
+                archive.writestr("project/main.py", "print('ok')\n")
+                archive.writestr("project/current_live_snapshot.json", "{}")
+                archive.writestr("runs/run-1/artifacts/eigen/spectrum.v2.json", "{}")
+            report = pilot.validate_fms_archive(archive_path)
+            self.assertEqual(report["artifact_entry_count"], 1)
+            with zipfile.ZipFile(archive_path, "w") as archive:
+                archive.writestr("project/main.py", "print('ok')\n")
+                archive.writestr("project/current_live_snapshot.json", "{}")
+            with self.assertRaisesRegex(pilot.managed.BenchmarkError, "no captured run"):
+                pilot.validate_fms_archive(archive_path)
 
 
     def test_signed_path_prefilter_diagnostic_keeps_physical_tolerance_unchanged(self):
