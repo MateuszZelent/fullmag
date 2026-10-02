@@ -12,6 +12,11 @@ use std::process::Command as ProcessCommand;
 use std::sync::Arc;
 
 pub(crate) fn repo_root() -> PathBuf {
+    if let Some(root) = std::env::current_exe().ok().and_then(|executable| {
+        fullmag_runtime_control::python_runtime::packaged_windows_root(&executable)
+    }) {
+        return root;
+    }
     if let Some(root) = std::env::var_os("FULLMAG_REPO_ROOT") {
         return PathBuf::from(root);
     }
@@ -26,11 +31,20 @@ pub(crate) fn repo_root() -> PathBuf {
 /// Resolve the writable per-user state root supplied by the launcher.  A
 /// packaged install may live below Program Files, so generated live-workspace
 /// files and mesh caches must not be placed next to the read-only binaries.
-pub(crate) fn state_root(repo_root: &Path) -> PathBuf {
-    std::env::var_os("FULLMAG_STATE_ROOT")
+pub(crate) fn state_root(repo_root: &Path) -> Result<PathBuf, ApiError> {
+    if let Some(configured) = std::env::var_os("FULLMAG_STATE_ROOT")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
-        .unwrap_or_else(|| repo_root.join(".fullmag"))
+    {
+        return Ok(configured);
+    }
+    fullmag_runtime_control::python_runtime::packaged_windows_state_root(repo_root)
+        .map(|root| root.unwrap_or_else(|| repo_root.join(".fullmag")))
+        .map_err(|error| {
+            ApiError::internal(format!(
+                "Windows package state directory unavailable: {error}"
+            ))
+        })
 }
 
 pub(crate) async fn sync_current_live_script_with_request(
@@ -387,15 +401,16 @@ pub(crate) fn scene_document_overrides(scene_document: &SceneDocument) -> Result
 }
 
 pub(crate) fn python_executable(repo_root: &Path) -> String {
+    let real_root = python_workspace_root(repo_root);
+    if let Some(candidate) =
+        fullmag_runtime_control::python_runtime::packaged_windows_python(&real_root)
+    {
+        return candidate.display().to_string();
+    }
     if let Ok(preferred) = std::env::var("FULLMAG_PYTHON") {
         return preferred;
     }
-    let real_root = if repo_root.join("packages/fullmag-py/src/fullmag").exists() {
-        repo_root
-    } else {
-        &self::repo_root()
-    };
-    if let Some(candidate) = python_path_candidates(real_root)
+    if let Some(candidate) = python_path_candidates(&real_root)
         .into_iter()
         .find(|candidate| candidate.is_file())
     {
@@ -404,18 +419,45 @@ pub(crate) fn python_executable(repo_root: &Path) -> String {
     "python3".to_string()
 }
 
+pub(crate) fn python_workspace_root(root: &Path) -> PathBuf {
+    if root.join("packages/fullmag-py/src/fullmag").exists()
+        || fullmag_runtime_control::python_runtime::packaged_windows_python(root).is_some()
+    {
+        root.to_path_buf()
+    } else {
+        self::repo_root()
+    }
+}
+
+pub(crate) fn configure_python_command(
+    root: &Path,
+    command: &mut ProcessCommand,
+) -> Result<(), ApiError> {
+    let root = python_workspace_root(root);
+    if fullmag_runtime_control::python_runtime::packaged_windows_python(&root).is_some() {
+        fullmag_runtime_control::python_runtime::configure_packaged_python(command, &root)
+            .map_err(|error| {
+                ApiError::internal(format!(
+                    "bundled Python runtime is incomplete or invalid: {error}"
+                ))
+            })?;
+    }
+    Ok(())
+}
+
 pub(crate) fn run_python_helper(
     repo_root: &Path,
     args: &[String],
 ) -> Result<std::process::Output, ApiError> {
-    let real_root = if repo_root.join("packages/fullmag-py/src/fullmag").exists() {
-        repo_root.to_path_buf()
-    } else {
-        self::repo_root()
-    };
+    let real_root = python_workspace_root(repo_root);
     let mut candidates = Vec::new();
+    let bundled_python =
+        fullmag_runtime_control::python_runtime::packaged_windows_python(&real_root);
+    let uses_bundle = bundled_python.is_some();
 
-    if let Ok(preferred) = std::env::var("FULLMAG_PYTHON") {
+    if let Some(bundled_python) = bundled_python {
+        candidates.push(bundled_python.display().to_string());
+    } else if let Ok(preferred) = std::env::var("FULLMAG_PYTHON") {
         candidates.push(preferred);
     } else {
         for candidate in python_path_candidates(&real_root) {
@@ -425,7 +467,7 @@ pub(crate) fn run_python_helper(
         }
     }
     for fallback in ["python3", "python"] {
-        if !candidates.iter().any(|candidate| candidate == fallback) {
+        if !uses_bundle && !candidates.iter().any(|candidate| candidate == fallback) {
             candidates.push(fallback.to_string());
         }
     }
@@ -433,7 +475,7 @@ pub(crate) fn run_python_helper(
     let pythonpath = real_root.join("packages").join("fullmag-py").join("src");
     let packaged_site_packages = real_root.join("python").join("site-packages");
     let python_extension_root = real_root.join(".fullmag").join("local");
-    let fem_mesh_cache_dir = state_root(&real_root)
+    let fem_mesh_cache_dir = state_root(&real_root)?
         .join("local")
         .join("cache")
         .join("fem_mesh_assets");
@@ -442,6 +484,7 @@ pub(crate) fn run_python_helper(
 
     for candidate in candidates {
         let mut command = ProcessCommand::new(&candidate);
+        configure_python_command(&real_root, &mut command)?;
         command.args(args);
         command.env("PYTHONUNBUFFERED", "1");
         command.env("FULLMAG_FEM_MESH_CACHE_DIR", &fem_mesh_cache_dir);
@@ -460,7 +503,7 @@ pub(crate) fn run_python_helper(
                 python_paths.push(existing.clone());
             }
         }
-        if !python_paths.is_empty() {
+        if !uses_bundle && !python_paths.is_empty() {
             command.env(
                 "PYTHONPATH",
                 python_paths.join(if cfg!(windows) { ";" } else { ":" }),

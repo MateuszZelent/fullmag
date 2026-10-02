@@ -345,3 +345,9 @@ ma źródłowy staging x64 embeddable, izolowane ścieżki, minor ABI 3.12,
 licencję/hash inventory i płaski audyt standard-library PYD. 149 różnych
 lekkich regresji PASS; executable probe jest atrapą, realny runtime/MSI
 i scientific wheel graph pozostają NOT VERIFIED.
+
+[Polityka launchera Python](p8/09-bundled-python-launcher-policy.md)
+wspólna dla CLI/API wybiera bundled interpreter i odrzuca zewnętrzny
+fallback w pakiecie Windows. Produkcyjne source checks CLI/API PASS;
+Rust regresje niewykonane z powodu zakazu kompilacji unit tests.
+Gotowy MSI i runtime bez hostowego Python nadal NOT VERIFIED.

@@ -365,8 +365,11 @@ fn packaged_install_root(self_exe: &Path) -> Option<PathBuf> {
         return None;
     }
     let install_root = bin_dir.parent()?.to_path_buf();
-    (install_root.join(".fullmag").is_dir() || install_root.join("web").is_dir())
-        .then_some(install_root)
+    (install_root.join(".fullmag").is_dir()
+        || install_root.join("web").is_dir()
+        || fullmag_runtime_control::python_runtime::packaged_windows_python(&install_root)
+            .is_some())
+    .then_some(install_root)
 }
 
 /// Return the writable per-user state directory used by the launcher.
@@ -381,6 +384,11 @@ pub(crate) fn runtime_state_root(root: &Path) -> PathBuf {
         if !configured.as_os_str().is_empty() {
             return configured;
         }
+    }
+    if let Some(state) = fullmag_runtime_control::python_runtime::packaged_windows_state_root(root)
+        .expect("Windows package requires a configured per-user state directory")
+    {
+        return state;
     }
 
     let packaged = std::env::current_exe()
@@ -2362,6 +2370,11 @@ pub(crate) fn command_exists(cmd: &str) -> bool {
 }
 
 pub(crate) fn repo_root() -> PathBuf {
+    if let Some(root) = std::env::current_exe().ok().and_then(|executable| {
+        fullmag_runtime_control::python_runtime::packaged_windows_root(&executable)
+    }) {
+        return root;
+    }
     if let Some(root) = std::env::var_os("FULLMAG_REPO_ROOT") {
         return PathBuf::from(root);
     }

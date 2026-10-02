@@ -573,6 +573,8 @@ pub fn load_accepted_run_snapshot(
     })
 }
 
+pub mod python_runtime;
+
 mod claim;
 pub use claim::{commit_claimed_task_admission, load_current_task_claim};
 

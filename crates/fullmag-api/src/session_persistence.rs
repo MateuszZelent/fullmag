@@ -3484,7 +3484,7 @@ fn convert_field_state_with_python(
     repo_root: &std::path::Path,
     artifact_path: &std::path::Path,
 ) -> Result<FieldStateJsonArtifact, String> {
-    let workspace_root = fullmag_python_workspace_root(repo_root);
+    let workspace_root = crate::script::python_workspace_root(repo_root);
     let python_path = workspace_root.join("packages/fullmag-py/src");
     let existing_python_path = std::env::var_os("PYTHONPATH");
     let mut python_path_value = std::ffi::OsString::from(python_path.as_os_str());
@@ -3494,12 +3494,18 @@ fn convert_field_state_with_python(
     }
 
     let python_exe = crate::script::python_executable(repo_root);
-    let output = std::process::Command::new(&python_exe)
+    let mut command = std::process::Command::new(&python_exe);
+    crate::script::configure_python_command(repo_root, &mut command)
+        .map_err(|error| format!("configuring Python field-state loader failed: {error}"))?;
+    command
         .arg("-m")
         .arg("fullmag.init.field_state_cli")
         .arg(artifact_path)
-        .env("PYTHONPATH", python_path_value)
-        .current_dir(&workspace_root)
+        .current_dir(&workspace_root);
+    if fullmag_runtime_control::python_runtime::packaged_windows_python(&workspace_root).is_none() {
+        command.env("PYTHONPATH", python_path_value);
+    }
+    let output = command
         .output()
         .map_err(|error| format!("running Python field-state loader failed: {error}"))?;
     if !output.status.success() {
@@ -3530,7 +3536,7 @@ fn write_field_state_with_python(
         ))
     })?;
 
-    let workspace_root = fullmag_python_workspace_root(repo_root);
+    let workspace_root = crate::script::python_workspace_root(repo_root);
     let python_path = workspace_root.join("packages/fullmag-py/src");
     let existing_python_path = std::env::var_os("PYTHONPATH");
     let mut python_path_value = std::ffi::OsString::from(python_path.as_os_str());
@@ -3540,19 +3546,27 @@ fn write_field_state_with_python(
     }
 
     let python_exe = crate::script::python_executable(repo_root);
-    let output = std::process::Command::new(&python_exe)
-        .arg("-m")
-        .arg("fullmag.init.field_state_cli")
-        .arg("write")
-        .arg(artifact_path)
-        .arg("--input-json")
-        .arg(&json_path)
-        .arg("--format")
-        .arg(format)
-        .env("PYTHONPATH", python_path_value)
-        .current_dir(&workspace_root)
-        .output()
-        .map_err(|error| ApiError::internal(format!("running Python field-state writer: {error}")));
+    let mut command = std::process::Command::new(&python_exe);
+    let output = crate::script::configure_python_command(repo_root, &mut command).and_then(|_| {
+        command
+            .arg("-m")
+            .arg("fullmag.init.field_state_cli")
+            .arg("write")
+            .arg(artifact_path)
+            .arg("--input-json")
+            .arg(&json_path)
+            .arg("--format")
+            .arg(format)
+            .current_dir(&workspace_root);
+        if fullmag_runtime_control::python_runtime::packaged_windows_python(&workspace_root)
+            .is_none()
+        {
+            command.env("PYTHONPATH", python_path_value);
+        }
+        command.output().map_err(|error| {
+            ApiError::internal(format!("running Python field-state writer: {error}"))
+        })
+    });
 
     let _ = std::fs::remove_file(&json_path);
 
@@ -3566,16 +3580,6 @@ fn write_field_state_with_python(
         )));
     }
     Ok(())
-}
-
-fn fullmag_python_workspace_root(repo_root: &std::path::Path) -> std::path::PathBuf {
-    if repo_root.join("packages/fullmag-py/src/fullmag").exists() {
-        return repo_root.to_path_buf();
-    }
-    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .canonicalize()
-        .unwrap_or_else(|_| repo_root.to_path_buf())
 }
 
 fn resolve_session_artifact_ref(

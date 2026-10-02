@@ -2444,10 +2444,14 @@ async fn main() {
     tracing_subscriber::fmt().with_env_filter("info").init();
 
     let repo_root = repo_root();
-    let current_workspace_root = crate::script::state_root(&repo_root)
+    let runtime_state_root = crate::script::state_root(&repo_root).unwrap_or_else(|error| {
+        tracing::error!("Cannot initialize runtime state: {error}");
+        std::process::exit(1);
+    });
+    let current_workspace_root = runtime_state_root
         .join("local-live")
         .join("current");
-    let current_command_journal_store_root = crate::script::state_root(&repo_root)
+    let current_command_journal_store_root = runtime_state_root
         .join("local-live")
         .join("session-store");
     let static_web_root = resolve_static_web_root(&repo_root);

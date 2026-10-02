@@ -36,8 +36,22 @@ Smoke producenta używa dołączonego interpretera, sprawdza izolację przy
 pustym PATH i zatrutym środowisku oraz importuje deklarowane runtime extras.
 Runtime identity, Python→IR, scientific PYD/DLL, clean install, upgrade,
 rollback i brak fallbacku launchera nadal wymagają rzeczywistych dowodów.
-CLI/API mają istniejących kandydatów packaged Python; ścisłe pierwszeństwo
-i odmowa zewnętrznego fallbacku pozostają osobnym etapem integracji.
+CLI/API korzystają ze wspólnej polityki `fullmag-runtime-control/python_runtime`.
+Windowsowy executable, `_pth` lub `share/version.json` oznacza obowiązek
+dołączonego runtime, także po utracie executable. Nie zastępujemy go
+FULLMAG_PYTHON, developerską venv lub PATH. Kontrolujemy podstawowe pliki
+i dokładny `_pth`, uruchamiamy z `-I -u`, usuwamy środowisko Python i
+ograniczamy PATH do bin/python aplikacji. To sprawdzenie layoutu, nie
+kryptograficzna kwalifikacja wszystkich plików podczas każdego startu.
+Starszy pakiet Windows bez tego runtime wymaga aktualizacji; nie korzysta
+z cichego fallbacku. Historyczny layout bin/fullmag + web/.fullmag także
+ustanawia pakiet, gdy nie jest checkoutem DSL. Wykryta instalacja Windows
+z bieżącego executable ma pierwszeństwo przed FULLMAG_REPO_ROOT.
+CLI i standalone API domyślnie zapisują stan do LOCALAPPDATA/Fullmag
+albo USERPROFILE/AppData/Local/Fullmag. Brak obu wymaga jawnego
+FULLMAG_STATE_ROOT; nie zapisujemy obok binariów ani w fallbacku temp.
+Checkout developerski bez markerów i Linux zachowują
+dotychczasowy wybór. Zachowanie runtime nadal wymaga kwalifikacji.
 
 Nie zmieniamy fizyki, ProblemIR, capability vocabulary ani API v2. Linux
 zachowuje swoją realizację. Aktualny lock Python jest niespójny i blokuje
