@@ -38,6 +38,13 @@ kontraktu źródłowego, nie wykonanie GPU ani pełnego pakietu.
   natywnego Windows/MSVC targetu. Pełnego hostowego buildu nie uruchomiono
   poza kolejką. Dostępność zatwierdzonego Windows executora wymaga ustalenia.
 
+Istnieje również job `build-windows` w `.github/workflows/release.yml` na
+windows-latest oraz MSI na self-hosted Windows Docker. Nie uruchomiono
+workflow release: tworzy wydanie/tag i obejmuje cargo test. To inna trasa
+niż brakujący target lokalnej kolejki, a jej obecność nie dowodzi aktualnego
+PASS. Historyczny P3/05 potwierdza katalog/replay po restarcie natywnego API;
+nie zalicza pełnego produktu, scratch-session checkpointów ani native FEM.
+
 Do zamknięcia: aktualny pakiet Windows, pusty startup i browser proof,
 Save/Open/checkpoint/restart/restore na lokalnym storage, natywne FEM
 MFEM/hypre/libCEED CPU i CUDA GPU wraz z zależnościami oraz kwalifikacją.
