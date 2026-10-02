@@ -755,6 +755,16 @@ pub(crate) struct ControlPlaneReady {
     pub frontend_child: Option<std::process::Child>,
 }
 
+fn control_room_node_program(root: &Path, dev_mode: bool) -> Option<PathBuf> {
+    if !dev_mode {
+        let bundled = root.join("bin").join(format!("node{EXE_SUFFIX}"));
+        if bundled.is_file() {
+            return Some(bundled);
+        }
+    }
+    command_exists("node").then(|| PathBuf::from("node"))
+}
+
 fn browser_control_room_assets(
     root: &Path,
     dev_mode: bool,
@@ -802,9 +812,9 @@ fn browser_control_room_assets(
         repo_built_static_web_root
     };
     let external_control_room_available = if dev_mode {
-        command_exists("node") && dev_server.is_file()
+        control_room_node_program(root, dev_mode).is_some() && dev_server.is_file()
     } else {
-        command_exists("node")
+        control_room_node_program(root, dev_mode).is_some()
             && dev_server.is_file()
             && static_web_root.join("index.html").is_file()
     };
@@ -954,7 +964,9 @@ pub(crate) fn bootstrap_control_plane(
                 None
             };
 
-            let mut command = ProcessCommand::new("node");
+            let node_program = control_room_node_program(&root, dev_mode)
+                .context("Control Room Node runtime is unavailable")?;
+            let mut command = ProcessCommand::new(node_program);
             command
                 .args([
                     "dev-server.mjs",

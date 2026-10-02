@@ -247,7 +247,7 @@ function Write-VersionMetadata {
     pe_dependency_audit = $peDependencyAudit
     pe_dependency_plan = $peDependencyPlan
     python_runtime = "external-python-3.12-or-newer"
-    node_runtime = "external-node-24.18-or-newer"
+    node_runtime = $nodeRuntimeInventory
     built_at_utc = $builtAt
   } | ConvertTo-Json -Depth 10
   [System.IO.File]::WriteAllText($Path, $payload, [System.Text.UTF8Encoding]::new($false))
@@ -316,14 +316,17 @@ function Write-StageManifest {
       "bin/fullmag-api-preparation-resource-pool.exe",
       "bin/fullmag-api-preparation-retry.exe",
       "bin/fullmag-ui.exe",
-      "bin/fullmag-bin.exe"
+      "bin/fullmag-bin.exe",
+      "bin/node.exe"
     )
     runtime_dlls = @($runtimeDllInventory)
     pe_dependency_audit = $peDependencyAudit
     pe_dependency_plan = $peDependencyPlan
+    node_runtime = $nodeRuntimeInventory
     runtimes = $runtimePaths
     share = @(
-      "share/version.json"
+      "share/version.json",
+      "share/licenses/node-LICENSE.txt"
     )
   }
   [System.IO.File]::WriteAllText($Path, ($manifest | ConvertTo-Json -Depth 10), [System.Text.UTF8Encoding]::new($false))
@@ -332,6 +335,8 @@ function Write-StageManifest {
 function Test-StagedLayout {
   $required = @(
     (Join-Path $StageRoot "bin\fullmag.exe"),
+    (Join-Path $StageRoot "bin\node.exe"),
+    (Join-Path $StageRoot "share\licenses\node-LICENSE.txt"),
     (Join-Path $StageRoot "bin\fullmag-api.exe"),
     (Join-Path $StageRoot "bin\fullmag-api-accepted-worker.exe"),
     (Join-Path $StageRoot "bin\fullmag-api-accepted-supervisor.exe"),
@@ -469,6 +474,17 @@ $dependencyRoots = @(Get-MsiDependencyRoots -RedistRoot $env:VCToolsRedistDir -C
   -ExtraRoots $extraDllRoots -Cuda:$BuildCuda)
 $nativeFemAssembly = $null
 
+if ([string]::IsNullOrWhiteSpace($env:FULLMAG_WINDOWS_NODE_RUNTIME_ROOT)) {
+  throw "Configure FULLMAG_WINDOWS_NODE_RUNTIME_ROOT with a native x64 Node distribution containing node.exe and LICENSE"
+}
+$nodeRuntimeInventoryPath = Join-Path $DistRoot "node-runtime-inputs.json"
+Ensure-Dir $DistRoot
+& python (Join-Path $PSScriptRoot "stage_node_runtime.py") inspect --root $env:FULLMAG_WINDOWS_NODE_RUNTIME_ROOT --output $nodeRuntimeInventoryPath
+if ($LASTEXITCODE -ne 0) { throw "Native Node runtime inspection failed with exit code $LASTEXITCODE" }
+$nodeRuntimeInventory = Get-Content -LiteralPath $nodeRuntimeInventoryPath -Raw | ConvertFrom-Json
+$nodeRuntimeInventorySha256 = (Get-FileHash -LiteralPath $nodeRuntimeInventoryPath -Algorithm SHA256).Hash
+$dependencyRoots += [string]$nodeRuntimeInventory.source_root
+
 Push-Location $RepoRoot
 try {
   pnpm install --frozen-lockfile
@@ -552,6 +568,11 @@ try {
   }
   Copy-OrAliasLauncher (Join-Path $ReleaseDir "fullmag-bin.exe") (Join-Path $ReleaseDir "fullmag.exe") (Join-Path $binDir "fullmag-bin.exe")
   Require-File (Join-Path $binDir "fullmag-bin.exe")
+  if ((Get-FileHash -LiteralPath $nodeRuntimeInventoryPath -Algorithm SHA256).Hash -ne $nodeRuntimeInventorySha256) {
+    throw "Node runtime inventory changed before staging"
+  }
+  & python (Join-Path $PSScriptRoot "stage_node_runtime.py") stage --inventory $nodeRuntimeInventoryPath --destination $StageRoot
+  if ($LASTEXITCODE -ne 0) { throw "Native Node runtime staging failed with exit code $LASTEXITCODE" }
 
   $runtimeDllSources = @(Get-ChildItem -LiteralPath $ReleaseDir -Filter "*.dll" -File -ErrorAction SilentlyContinue |
     Select-Object -ExpandProperty FullName)
@@ -602,6 +623,15 @@ try {
   & python @peAuditArgs
   if ($LASTEXITCODE -ne 0) { throw "Staged PE dependency audit failed with exit code $LASTEXITCODE" }
   $peDependencyAudit = Get-Content -LiteralPath $peAuditPath -Raw | ConvertFrom-Json
+  $stagedNodeVersion = (& (Join-Path $binDir "node.exe") --version 2>&1 | Out-String).Trim()
+  if ($LASTEXITCODE -ne 0 -or $stagedNodeVersion -ne [string]$nodeRuntimeInventory.version) {
+    throw "Staged Node runtime failed its version smoke check: $stagedNodeVersion"
+  }
+  foreach ($nodeFile in $nodeRuntimeInventory.files) {
+    if ((Get-FileHash -LiteralPath (Join-Path $StageRoot $nodeFile.path) -Algorithm SHA256).Hash.ToLowerInvariant() -ne $nodeFile.sha256) {
+      throw "Staged Node runtime changed during dependency audit: $($nodeFile.path)"
+    }
+  }
   if ($BuildPlan.fem_enabled) {
     $availabilityOutput = (& (Join-Path $binDir "fullmag.exe") runtime fem-availability --json | Out-String)
     if ($LASTEXITCODE -ne 0) { throw "Staged FEM availability probe failed with exit code $LASTEXITCODE" }

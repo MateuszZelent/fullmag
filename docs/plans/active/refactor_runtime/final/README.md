@@ -322,3 +322,8 @@ planu nie są awansowane przez ten dowód źródłowy.
 uzupełnia wspólny zestaw plików Node dla MSI, eksportu lokalnego i portable.
 Rzeczywisty start HTTP z katalogu pakietu i staging MSI: PASS. Pełna
 instalacja Windows oraz kwalifikacja wydania pozostają NOT VERIFIED.
+
+[Dołączony Node Windows](p8/05-bundled-windows-node.md) usuwa wymaganie Node
+z PATH dla nowego MSI: jawne wejście z licencją, SHA-256 i wspólny audyt PE.
+Actual copied Node z pustym PATH oraz produkcyjny source check CLI: PASS.
+Dołączenie Pythona i pełna instalacja Windows pozostają otwarte.

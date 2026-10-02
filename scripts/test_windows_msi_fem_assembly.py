@@ -277,6 +277,7 @@ $BuildCuda=$true; $BuildPlan=Get-FullmagMsiBuildPlan -FemMode gpu -Cuda -Depende
 $BuildFeatures=$BuildPlan.features; $ProductVersion='0.1.0'; $StageRoot='fixture-stage'
 $sourceIdentity=@{fixture=$true}; $runtimeDllInventory=@(); $nativeFemAssembly=$null
 $peDependencyAudit=@{images=@()}; $peDependencyPlan=@{sources=@()}
+$nodeRuntimeInventory=@{schema_version=1; kind='bundled-windows-x64-node'; version='v24.19.0'; files=@(@{path='bin/node.exe';sha256='fixture-node-hash'})}
 Write-RuntimeManifests -RuntimesRoot (Join-Path $Fixture 'runtimes')
 Write-VersionMetadata -Path (Join-Path $Fixture 'version.json')
 Write-StageManifest -Path (Join-Path $Fixture 'stage.json')
@@ -288,3 +289,10 @@ Write-StageManifest -Path (Join-Path $Fixture 'stage.json')
         data=file.read_bytes()
         assert not data.startswith(b'\xef\xbb\xbf'),file
         assert isinstance(json.loads(data.decode('utf-8')),dict)
+    for name in ('version.json', 'stage.json'):
+        payload=json.loads((tmp_path/name).read_text(encoding='utf-8'))
+        assert payload['node_runtime']['version']=='v24.19.0'
+        assert payload['node_runtime']['files'][0]['sha256']=='fixture-node-hash'
+    stage=json.loads((tmp_path/'stage.json').read_text(encoding='utf-8'))
+    assert 'bin/node.exe' in stage['bin']
+    assert 'share/licenses/node-LICENSE.txt' in stage['share']
