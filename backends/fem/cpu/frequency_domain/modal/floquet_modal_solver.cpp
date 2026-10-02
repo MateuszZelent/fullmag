@@ -23,6 +23,9 @@
 namespace fullmag::fem::frequency_domain {
 namespace {
 
+// Shared by always-available diagnostics and the optional PETSc implementation.
+constexpr double kFloquetShiftedGmresBreakdownTolerance = 2.0;
+
 bool finite_nonzero_k(const ModalEigenRequest &request) noexcept
 {
     const double *values = request.operator_request.k_vector_rad_m;
@@ -860,7 +863,6 @@ FloquetFullDescriptorDiagnostics certify_floquet_full_descriptor(
 // that residual, then restart from the explicitly rebuilt vector.  This does
 // not relax convergence: KSP remains error-if-not-converged and independent
 // shifted-system and original-descriptor residuals remain mandatory below.
-constexpr PetscReal kFloquetShiftedGmresBreakdownTolerance = 2.0;
 constexpr PetscInt kFloquetShiftedGmresDefaultRestart = 8;
 // Materializing the exact Schur action is bounded to the small validation
 // systems for which it is inexpensive.  It gives shift-invert an LU
