@@ -1,6 +1,8 @@
 #[path = "accepted_fem_preparer.rs"]
 mod accepted_fem_preparer;
 
+mod worker_startup_gate;
+
 use anyhow::{Context, Result, bail};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -15,6 +17,7 @@ struct PreparerArgs {
     resource_id: String,
     preparation_attempt_id: String,
     lease_token: String,
+    startup_gate: bool,
 }
 
 fn main() {
@@ -26,6 +29,10 @@ fn main() {
 
 fn run() -> Result<()> {
     let args = parse_args()?;
+    if args.startup_gate {
+        worker_startup_gate::wait_for_release(std::io::stdin().lock())
+            .context("wait for supervisor process-tree ownership")?;
+    }
     let store = fullmag_session::SessionStore::open_existing(&args.store_root)
         .with_context(|| format!("open session store `{}`", args.store_root.display()))?;
     let started = Instant::now();
@@ -75,6 +82,7 @@ fn parse_args() -> Result<PreparerArgs> {
     let mut resource_id = None;
     let mut preparation_attempt_id = None;
     let mut lease_token = None;
+    let mut startup_gate = None;
     let mut args = std::env::args_os().skip(1);
     while let Some(argument) = args.next() {
         let flag = argument
@@ -84,6 +92,12 @@ fn parse_args() -> Result<PreparerArgs> {
             .next()
             .with_context(|| format!("preparer option `{flag}` requires a value"))?;
         match flag {
+            worker_startup_gate::STARTUP_GATE_FLAG if startup_gate.is_none() => {
+                if value.to_str() != Some(worker_startup_gate::STARTUP_GATE_VERSION) {
+                    bail!("unsupported preparer startup gate version");
+                }
+                startup_gate = Some(true);
+            }
             "--store-root" if store_root.is_none() => store_root = Some(PathBuf::from(value)),
             "--run-id" if run_id.is_none() => {
                 run_id = Some(
@@ -139,5 +153,6 @@ fn parse_args() -> Result<PreparerArgs> {
         preparation_attempt_id: preparation_attempt_id
             .context("missing required --preparation-attempt-id")?,
         lease_token: lease_token.context("missing required --lease-token")?,
+        startup_gate: startup_gate.unwrap_or(false),
     })
 }

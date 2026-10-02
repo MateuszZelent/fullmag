@@ -1,5 +1,9 @@
 # Fullmag — finalny audyt i plan refaktoryzacji
 
+Checkpoint 02.10.2026: [P8-16 — drzewa procesów Windows](p8/16-windows-owned-worker-process-tree.md)
+obejmuje worker/preparer wspólną własnością OS przed uruchomieniem solvera.
+Usługa runtime niezależna od UI oraz native testy pozostają otwarte.
+
 Checkpoint 02.10.2026: [P8-15 — Submit zainstalowanego Windows](p8/15-installed-windows-submit-store.md)
 usuwa zależność wyboru magazynu runów produktu od konfiguracji checkoutu.
 Native Windows i trwałość pozostają NOT VERIFIED; procenty bez zmian.

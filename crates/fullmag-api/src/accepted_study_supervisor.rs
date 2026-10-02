@@ -8,9 +8,13 @@ use serde::{Deserialize, Serialize};
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, ExitStatus, Output, Stdio};
+use std::process::{Command, ExitStatus, Output, Stdio};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
+
+#[path = "owned_worker_process.rs"]
+mod owned_worker_process;
+use owned_worker_process::OwnedWorkerProcess;
 
 const SUPERVISOR_DIRECTORY: &str = "supervisor-slots";
 const LEGACY_SINGLE_WORKER_SLOT: &str = "slot-0";
@@ -744,8 +748,7 @@ where
         use std::os::windows::process::CommandExt;
         command.creation_flags(windows_sys::Win32::System::Threading::CREATE_NEW_PROCESS_GROUP);
     }
-    let child = command
-        .spawn()
+    let child = OwnedWorkerProcess::spawn(&mut command)
         .with_context(|| format!("spawn accepted worker `{}`", worker_executable.display()))?;
     observe_child(
         child,
@@ -774,7 +777,7 @@ fn worker_gpu_uuid(lease: &fullmag_session::FmsResourceLease) -> Result<Option<S
 }
 
 fn observe_child<H, C>(
-    mut child: Child,
+    mut child: OwnedWorkerProcess,
     timeout: Option<Duration>,
     heartbeat_interval: Option<Duration>,
     mut heartbeat: H,
@@ -795,6 +798,12 @@ where
         .context("accepted worker stderr pipe is unavailable")?;
     let stdout_reader = spawn_output_reader(stdout);
     let stderr_reader = spawn_output_reader(stderr);
+    if let Some(reason) = child.take_startup_failure() {
+        let status = child.wait().context("confirm failed worker startup cleanup")?;
+        let mut outcome = collect_child_output(status, false, false, process_id, None, stdout_reader, stderr_reader)?;
+        outcome.control_failure_reason = Some(reason);
+        return Ok(outcome);
+    }
     let process_start_token = match process_start_token(process_id) {
         Ok(token) => token,
         Err(error) => {
@@ -1221,6 +1230,9 @@ fn worker_process_exit_receipt(
         lease.resource_id,
         lease.lease_token,
     );
+    let status_success = outcome.output.status.success()
+        && !outcome.timed_out
+        && outcome.control_failure_reason.is_none();
     let receipt = FmsWorkerProcessExitReceipt {
         schema_version: FMS_WORKER_PROCESS_EXIT_RECEIPT_SCHEMA.into(),
         receipt_id: format!(
@@ -1236,11 +1248,11 @@ fn worker_process_exit_receipt(
         lease_heartbeat_sequence: lease.heartbeat_sequence,
         process_id: outcome.process_id,
         process_start_token: outcome.process_start_token.clone(),
-        status_success: outcome.output.status.success(),
+        status_success,
         exit_code: outcome.output.status.code(),
         timed_out: outcome.timed_out,
         stop_requested: outcome.stop_requested,
-        failure_reason: if outcome.output.status.success() {
+        failure_reason: if status_success {
             None
         } else {
             Some(worker_failure_reason(outcome))
@@ -1710,6 +1722,7 @@ fn is_coordinator_watermark_conflict(error: &anyhow::Error) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::process::Child;
     use std::time::{Duration, Instant};
 
     fn temporary_store(name: &str) -> (PathBuf, SessionStore) {
@@ -1719,6 +1732,59 @@ mod tests {
         ));
         let store = SessionStore::open(&root).unwrap();
         (root, store)
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn zero_exit_cannot_publish_success_after_control_failure_or_timeout() {
+        #[cfg(unix)]
+        use std::os::unix::process::ExitStatusExt;
+        #[cfg(windows)]
+        use std::os::windows::process::ExitStatusExt;
+        use fullmag_application::{AttemptId, LeaseToken, OwnershipEpoch, ResourceBudget,
+            ResourceKind, ResourceLease, RunId, TaskClaim, TaskId};
+        let budget = ResourceBudget { cpu_millis: 1000, memory_bytes: 1048576,
+            gpu_memory_bytes: 0, storage_bytes: 1048576 };
+        let claim = TaskClaim {
+            run_id: RunId::parse("run-test").unwrap(),
+            task_id: TaskId::parse("task-test").unwrap(),
+            attempt_id: AttemptId::parse("attempt-test").unwrap(),
+            ownership_epoch: OwnershipEpoch::new(1).unwrap(),
+            lease: ResourceLease { resource_id: "cpu-test".into(), kind: ResourceKind::Cpu,
+                budget, lease_token: LeaseToken::parse("lease-test").unwrap(), heartbeat_sequence: 1 },
+        };
+        let now = chrono::Utc::now();
+        let lease = FmsResourceLease {
+            schema_version: fullmag_session::FMS_RESOURCE_LEASE_SCHEMA.into(),
+            resource_id: "cpu-test".into(), kind: fullmag_session::FmsResourceKind::Cpu,
+            budget: fullmag_session::FmsResourceBudget { cpu_millis: 1000, memory_bytes: 1048576,
+                gpu_memory_bytes: 0, storage_bytes: 1048576 },
+            run_id: "run-test".into(), task_id: "task-test".into(), attempt_id: "attempt-test".into(),
+            ownership_epoch: 1, lease_token: "lease-test".into(),
+            state: fullmag_session::FmsResourceLeaseState::Active,
+            acquired_at: now, heartbeat_at: now, heartbeat_sequence: 1, released_at: None,
+        };
+        for (timed_out, control_failure) in [(false, Some("startup release failed")), (true, None), (false, None)] {
+            let outcome = ObservedWorkerProcess {
+                output: Output { status: ExitStatus::from_raw(0), stdout: Vec::new(), stderr: Vec::new() },
+                timed_out, stop_requested: false, process_id: 42, process_start_token: None,
+                control_failure_reason: control_failure.map(str::to_owned),
+            };
+            let receipt = worker_process_exit_receipt(&claim, &lease, &outcome).unwrap();
+            let json = serde_json::to_value(&receipt).unwrap();
+            assert_eq!(receipt.exit_code, Some(0));
+            if timed_out || control_failure.is_some() {
+                assert_eq!(json["status_success"], false);
+                assert!(json["failure_reason"].as_str().is_some_and(|value| !value.is_empty()));
+            } else {
+                assert_eq!(json["status_success"], true);
+                assert!(receipt.failure_reason.is_none());
+            }
+            if let Some(reason) = control_failure {
+                let expected = format!("accepted worker supervisor control failed: {reason}");
+                assert_eq!(receipt.failure_reason.as_deref(), Some(expected.as_str()));
+            }
+        }
     }
 
     #[test]
@@ -1819,7 +1885,7 @@ mod tests {
             .unwrap();
         let started = Instant::now();
         let outcome = observe_child(
-            child,
+            OwnedWorkerProcess::unowned_test_fixture(child),
             Some(Duration::from_secs(5)),
             Some(Duration::from_millis(20)),
             || Ok(true),
@@ -1847,7 +1913,7 @@ mod tests {
             .unwrap();
         let started = Instant::now();
         let outcome = observe_child(
-            child,
+            OwnedWorkerProcess::unowned_test_fixture(child),
             Some(Duration::from_secs(5)),
             Some(Duration::from_millis(20)),
             || Ok(true),
@@ -1882,7 +1948,7 @@ mod tests {
         let started = Instant::now();
         let mut heartbeat_count = 0_u64;
         let outcome = observe_child(
-            child,
+            OwnedWorkerProcess::unowned_test_fixture(child),
             Some(Duration::from_millis(100)),
             Some(Duration::from_millis(20)),
             || {

@@ -5,6 +5,8 @@ mod accepted_fem_study_worker;
 #[path = "accepted_study_worker.rs"]
 mod accepted_study_worker;
 
+mod worker_startup_gate;
+
 use anyhow::{Context, Result, bail};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -16,6 +18,7 @@ struct WorkerArgs {
     store_root: PathBuf,
     run_id: String,
     task_id: String,
+    startup_gate: bool,
 }
 
 fn main() {
@@ -27,6 +30,10 @@ fn main() {
 
 fn run() -> Result<()> {
     let args = parse_args()?;
+    if args.startup_gate {
+        worker_startup_gate::wait_for_release(std::io::stdin().lock())
+            .context("wait for supervisor process-tree ownership")?;
+    }
     let store = fullmag_session::SessionStore::open_existing(&args.store_root)
         .with_context(|| format!("open session store `{}`", args.store_root.display()))?;
     let started = Instant::now();
@@ -75,6 +82,7 @@ fn parse_args() -> Result<WorkerArgs> {
     let mut store_root = None;
     let mut run_id = None;
     let mut task_id = None;
+    let mut startup_gate = None;
     let mut args = std::env::args_os().skip(1);
     while let Some(argument) = args.next() {
         let flag = argument
@@ -84,6 +92,12 @@ fn parse_args() -> Result<WorkerArgs> {
             .next()
             .with_context(|| format!("worker option `{flag}` requires a value"))?;
         match flag {
+            worker_startup_gate::STARTUP_GATE_FLAG if startup_gate.is_none() => {
+                if value.to_str() != Some(worker_startup_gate::STARTUP_GATE_VERSION) {
+                    bail!("unsupported worker startup gate version");
+                }
+                startup_gate = Some(true);
+            }
             "--store-root" if store_root.is_none() => store_root = Some(PathBuf::from(value)),
             "--run-id" if run_id.is_none() => {
                 run_id = Some(
@@ -109,5 +123,6 @@ fn parse_args() -> Result<WorkerArgs> {
         store_root: store_root.context("missing required --store-root")?,
         run_id: run_id.context("missing required --run-id")?,
         task_id: task_id.context("missing required --task-id")?,
+        startup_gate: startup_gate.unwrap_or(false),
     })
 }

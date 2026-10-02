@@ -10,9 +10,13 @@ use fullmag_session::{
 use std::fs;
 use std::io::Read;
 use std::path::Path;
-use std::process::{Child, Command, ExitStatus, Stdio};
+use std::process::{Command, ExitStatus, Stdio};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
+
+#[path = "owned_worker_process.rs"]
+mod owned_worker_process;
+use owned_worker_process::OwnedWorkerProcess;
 
 const STORE_WRITER_RETRY_LIMIT: Duration = Duration::from_secs(5);
 const STORE_WRITER_RETRY_DELAY: Duration = Duration::from_millis(10);
@@ -248,8 +252,7 @@ where
         use std::os::windows::process::CommandExt;
         command.creation_flags(windows_sys::Win32::System::Threading::CREATE_NEW_PROCESS_GROUP);
     }
-    let child = command
-        .spawn()
+    let child = OwnedWorkerProcess::spawn(&mut command)
         .with_context(|| format!("spawn FEM preparer `{}`", executable.display()))?;
     observe_child(child, timeout, heartbeat_interval, &mut heartbeat)
 }
@@ -264,7 +267,7 @@ fn validate_preparer_executable(executable: &Path) -> Result<()> {
 }
 
 fn observe_child<H>(
-    mut child: Child,
+    mut child: OwnedWorkerProcess,
     timeout: Duration,
     heartbeat_interval: Duration,
     heartbeat: &mut H,
@@ -283,6 +286,20 @@ where
         .context("FEM preparer stderr pipe is unavailable")?;
     let stdout_reader = spawn_output_reader(stdout);
     let stderr_reader = spawn_output_reader(stderr);
+    if let Some(reason) = child.take_startup_failure() {
+        let status = child
+            .wait()
+            .context("confirm failed preparer startup cleanup")?;
+        return collect_child_output(
+            status,
+            false,
+            process_id,
+            None,
+            Some(reason),
+            stdout_reader,
+            stderr_reader,
+        );
+    }
     let process_start_token = match process_start_token(process_id) {
         Ok(token) => token,
         Err(error) => {
