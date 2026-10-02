@@ -546,23 +546,49 @@ async fn await_event(
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct DrainRequest {
+struct ControlRequest {
     schema_version: String,
     owner_token: String,
     command: String,
+    #[serde(default)]
+    nonce: Option<String>,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum ControlCommand {
+    Drain,
+    Status { nonce: String },
+}
+
+fn control_command(bytes: &[u8], owner: &str) -> Option<ControlCommand> {
+    let request = serde_json::from_slice::<ControlRequest>(bytes).ok()?;
+    if request.schema_version != "runtime_service_control.v1" || request.owner_token != owner {
+        return None;
+    }
+    match request.command.as_str() {
+        "drain" if request.nonce.is_none() => Some(ControlCommand::Drain),
+        "status" => {
+            let nonce = request.nonce?;
+            if nonce.is_empty()
+                || nonce.len() > 128
+                || !nonce
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+            {
+                return None;
+            }
+            Some(ControlCommand::Status { nonce })
+        }
+        _ => None,
+    }
+}
+
+#[cfg(test)]
 fn valid_drain_request(bytes: &[u8], owner: &str) -> bool {
-    serde_json::from_slice::<DrainRequest>(bytes)
-        .ok()
-        .is_some_and(|r| {
-            r.schema_version == "runtime_service_control.v1"
-                && r.owner_token == owner
-                && r.command == "drain"
-        })
+    control_command(bytes, owner) == Some(ControlCommand::Drain)
 }
 
-async fn drain_requested(listener: &TcpListener, owner: &str) -> Result<bool> {
+async fn drain_requested(listener: &TcpListener, owner: &RuntimeServiceOwner) -> Result<bool> {
     let (mut stream, peer) =
         match tokio::time::timeout(Duration::from_millis(250), listener.accept()).await {
             Ok(result) => result.context("accept service control request")?,
@@ -589,18 +615,25 @@ async fn drain_requested(listener: &TcpListener, owner: &str) -> Result<bool> {
         Ok::<_, std::io::Error>(bytes)
     })
     .await;
-    let valid = match parsed {
-        Ok(Ok(bytes)) => valid_drain_request(&bytes, owner),
-        _ => false,
+    let command = match parsed {
+        Ok(Ok(bytes)) => control_command(&bytes, owner.owner_token()),
+        _ => None,
     };
-    let response = if valid {
-        b"{\"status\":\"draining\"}\n".as_slice()
-    } else {
-        b"{\"status\":\"rejected\"}\n".as_slice()
+    let drain = command == Some(ControlCommand::Drain);
+    let response = match command {
+        Some(ControlCommand::Drain) => serde_json::json!({"status": "draining"}),
+        Some(ControlCommand::Status { nonce }) => serde_json::json!({
+            "schema_version": "runtime_service_status.v1",
+            "nonce": nonce,
+            "owner": owner.descriptor(),
+        }),
+        None => serde_json::json!({"status": "rejected"}),
     };
+    let mut response = serde_json::to_vec(&response)?;
+    response.push(b'\n');
     // A disconnected client must not undo an already authenticated drain.
-    let _ = tokio::time::timeout(Duration::from_secs(1), stream.write_all(response)).await;
-    Ok(valid)
+    let _ = tokio::time::timeout(Duration::from_secs(1), stream.write_all(&response)).await;
+    Ok(drain)
 }
 
 fn pools_match(
@@ -714,7 +747,7 @@ fn run() -> Result<()> {
             let mut heartbeat = Instant::now();
             loop {
                 children.poll()?;
-                if drain_requested(&listener, &token).await? {
+                if drain_requested(&listener, &owner).await? {
                     break;
                 }
                 if heartbeat.elapsed() >= Duration::from_secs(1) {
@@ -851,6 +884,25 @@ mod tests {
         assert!(!valid_drain_request(br#"{"schema_version":"runtime_service_control.v2","owner_token":"owner-a","command":"drain"}"#, "owner-a"));
         assert!(!valid_drain_request(br#"{"schema_version":"runtime_service_control.v1","owner_token":"owner-a","command":"stop"}"#, "owner-a"));
         assert!(!valid_drain_request(br#"{"schema_version":"runtime_service_control.v1","owner_token":"owner-a","command":"drain","extra":true}"#, "owner-a"));
+    }
+    #[test]
+    fn status_requires_owner_version_and_bounded_challenge() {
+        let request = br#"{"schema_version":"runtime_service_control.v1","owner_token":"owner-a","command":"status","nonce":"fresh-123"}"#;
+        assert_eq!(
+            control_command(request, "owner-a"),
+            Some(ControlCommand::Status {
+                nonce: "fresh-123".into()
+            })
+        );
+        assert_eq!(control_command(request, "owner-b"), None);
+        for nonce in ["", "invalid space", &"a".repeat(129)] {
+            let request = serde_json::json!({"schema_version":"runtime_service_control.v1", "owner_token":"owner-a", "command":"status", "nonce":nonce});
+            assert_eq!(
+                control_command(&serde_json::to_vec(&request).unwrap(), "owner-a"),
+                None
+            );
+        }
+        assert_eq!(control_command(br#"{"schema_version":"runtime_service_control.v1","owner_token":"owner-a","command":"status"}"#, "owner-a"), None);
     }
     #[test]
     #[cfg(any(windows, target_os = "linux"))]

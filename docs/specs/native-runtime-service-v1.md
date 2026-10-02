@@ -64,8 +64,23 @@ owner descriptor. Klient wysyła JSON zakończony LF, maksymalnie 4096 bajtów:
 Nieznane pola, wersja, polecenie i obcy token są odrzucane. Timeout klienta
 nie jest dowodem zatrzymania. Odpowiedź draining potwierdza żądanie; terminalne
 zakończenie potwierdza dopiero owner drained wraz z wynikami obu procesów.
-Ready w pliku nie dowodzi żywego ownera: przyszły attach musi sprawdzić kanał
-instancji i build, nie bazować na wieku/PID ani samym pliku.
+Ready w pliku nie dowodzi żywego ownera. Odczytowe discovery używa polecenia
+`status` z tokenem ownera oraz świeżym losowym `nonce` (1–128 znaków ASCII:
+litery, cyfry, myślnik lub podkreślenie):
+
+```json
+{"schema_version":"runtime_service_control.v1","owner_token":"<token-z-descriptora>","command":"status","nonce":"<nowe-losowe-wyzwanie>"}
+```
+
+Odpowiedź `runtime_service_status.v1` zawiera to samo `nonce` i `owner` z
+pamięci procesu posiadającego native lock. Status nie zamyka admission.
+Klient musi sprawdzić nonce, owner/process-start token, target, pełny
+commit/snapshot oraz stan ready i obie generacje przed attach. Mismatch lub
+brak odpowiedzi nie pozwala na attach ani automatyczny restart.
+Descriptor opisuje ostatnią obserwację schedulera/pul, odświeżaną w pętli;
+odpowiedź nie kwalifikuje solvera ani sprzętu. Serwer obsługuje status w pętli
+ready. Podczas startup/drain timeout nie oznacza zakończenia usługi.
+Launcher/UI jeszcze nie korzystają z tego kanału.
 
 Oba admissions zamyka się przed oczekiwaniem na procesy. Aktywne workery kończą
 się według supervisor/lease/receipt. Błąd jednego schedulera drenuje drugi,

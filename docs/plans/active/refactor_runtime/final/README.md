@@ -403,3 +403,5 @@ kroku. Pakiet i trwałość nadal wymagają rzeczywistego odbioru.
 jest w istniejącej kolejce z przypiętego commita zawierającego późniejsze
 poprawki state i driver. QUEUED nie oznacza PASS; build 210 zachowuje swój
 oddzielny terminalny dowód, a runtime/Windows pozostają otwarte.
+
+Checkpoint P7-C: [19 — żywe discovery runtime](p8/19-native-runtime-discovery.md).
