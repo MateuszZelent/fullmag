@@ -222,3 +222,59 @@ Python 3.11 usunięto przez strumieniowy SHA-256 w blokach 1 MiB, kompatybilny
 z Python 3.10. Test porównuje hash obrazu z niezależnie obliczoną wartością.
 Automatyczne zbieranie całego bundle CRT/CUDA/FEM nadal pozostaje do realizacji;
 bramka wykrywa ten brak zamiast przepuszczać niekompletny pakiet.
+
+## Fragment: zbieranie DLL z jawnych SDK roots
+
+`plan_pe_dependencies.py` przechodzi cały graph zwykłych i delay importów
+EXE/DLL w bin przed dodatkowym kopiowaniem. Wymagane biblioteki pośrednie
+muszą mieć jednoznaczny hash w jawnych katalogach źródłowych. Dopuszczone
+identyczne duplikaty wybierane są deterministycznie; różne wersje pod tą
+samą nazwą, brak zależności lub zły target kończą się błędem. Planner nie
+mutuje stagingu; sprawdza hashe podczas i po analizie.
+
+Packager wybiera katalogi CRT/OpenMP/CXXAMP z x64 redist wybranego MSVC,
+a dla CUDA katalog użytego nvcc oraz bin/x64. Obsługuje starszy płaski układ
+bin i obecny układ CUDA 13.3. Dodatkowe wejścia SDK/operator prefix wskazuje
+`FULLMAG_WINDOWS_MSI_DLL_ROOTS` (średniki); nie są to nowe output roots.
+Nie ma niejawnego wyszukiwania PATH, System32 ani innych wersji SDK.
+Windows components/API sets oraz jawny NVIDIA driver pozostają external.
+Źródła i hashe planu trafiają do obu manifestów. Przed copy weryfikowane są
+zarówno staged images, jak i wybrane źródła; po copy hashe muszą odpowiadać
+planowi. Następnie działa niezależna finalna bramka PE.
+
+App-local redist jest opisany przez
+[Microsoft](https://learn.microsoft.com/en-us/cpp/windows/deployment-in-visual-cpp?view=msvc-170);
+[NVIDIA FAQ](https://developer.nvidia.com/cuda/faq) rozróżnia bibliotekę
+sterownika nvcuda i toolkit runtime cudart. Ten fragment nie publikuje
+wydania ani nie kwalifikuje wszystkich komponentów do redystrybucji.
+License inventory i wymagane release checks nadal obowiązują.
+
+Weryfikacja: 24 planner/PowerShell regresje PASS; 23 PE i 15 storage
+regresji PASS po współdzieleniu polityki/hash helper (62 łącznie). Zakres
+obejmuje transitive closure, cykle, brak biblioteki pośredniej bez copy,
+konflikty/identyczne duplikaty, zły target, zmianę źródeł podczas analizy,
+brak niejawnego PATH fallbacku, jawny driver, selekcję CPU/CUDA roots i
+odmowę zmienionego staged/source hash przed copy.
+
+Diagnostyka rzeczywistych SDK: istniejący MSVC dumpbin.exe w prywatnym bin
+→ plan dobrał vcruntime140.dll z MSVC redist 14.44.35112 → copy/hash/final
+PE audit PASS (2 obrazy). Osobny bin z OS EXE i istniejącym cudart64_13.dll
+z CUDA 13.3 również przeszedł analizę statycznych/delay imports. Żadnego
+obrazu nie uruchamiano, niczego nie kompilowano. To dowody mechanizmu na
+istniejących artefaktach, nie runtime Fullmaga ani CUDA device execution.
+
+Brak kompletnego Windows FEM prefix, profile/receipt kolejki, Fullmag MSI
+artefaktów i clean install/open/upgrade/rollback. Dynamiczne LoadLibrary,
+ABI/symbole, Python native extensions, minimalny Windows i security updates
+app-local DLL nadal wymagają dalszego wdrożenia i weryfikacji. P8-C otwarty.
+
+Review wykryło i poprawiono P1: nvcuda.dll nie może występować w staged
+bin ani w SDK roots, również przy CUDA. Dopuszczony pozostaje wyłącznie
+import z wymaganiem zewnętrznego sterownika dla wariantu CUDA. Dodano
+regresje obu wariantów staged/source i niezależnego audytu finalnego.
+Poprawiono również P2: już staged DLL musi mieć identyczny hash z matching
+kandydatami jawnego SDK; nie wygrywa przez samą obecność w bin.
+
+Ponowne scoped review potwierdziło zamknięcie wskazanych P1/P2 bez nowych
+P0/P1. Po poprawkach 62 regresje PASS; ponowna diagnostyka MSVC SDK
+plan/copy/audit również PASS (jedna CRT DLL, dwa obrazy, bez wykonania).

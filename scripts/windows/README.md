@@ -31,6 +31,22 @@ niepuste pliki i hashe. Native FDM pochodzi z bieżącego profilu, z katalogu
 się najnowszego pliku ze starych Cargo build directories. Inventory/hash nie
 zastępuje audytu importów ani testu zgodności ABI.
 
+Przed kopiowaniem dodatkowych DLL `plan_pe_dependencies.py` wyznacza pełny
+zbiór zwykłych/delay importów `bin`, również importów bibliotek pośrednich.
+Źródła są jawne: `VCToolsRedistDir/x64` wybranego MSVC (CRT/OpenMP/CXXAMP),
+katalog nvcc i jego `x64` tylko dla CUDA, oraz opcjonalne katalogi operatora
+w `FULLMAG_WINDOWS_MSI_DLL_ROOTS` (lista oddzielona średnikami). Ostatnia
+zmienna wskazuje istniejące wejścia SDK/dependency prefix, nie nowy storage
+ani alternatywny katalog wyników. Nie ma automatycznego przeszukiwania PATH,
+System32 ani innych wersji SDK. Brak zależności, konflikt nazwy z różnymi
+hashami, zły target lub zmiana pliku zatrzymują plan przed dodatkowym copy.
+Kopiowane są tylko potrzebne DLL; manifesty zapisują ich źródła i hashe.
+Nvcuda.dll nie może być w bin ani w SDK root; sterownik jest wyłącznie
+zewnętrznym wymaganiem CUDA. Staged DLL również nie może różnić się od
+kandydata o tej samej nazwie w jawnym SDK.
+Staged EXE/DLL i SDK sources są ponownie sprawdzane przed copy, a wyniki copy
+muszą zgadzać się z planem. Dane wejściowe nie są uruchamiane.
+
 Przed tworzeniem MSI `verify_pe_dependencies.py` sprawdza AMD64/PE32+ oraz
 zwykłe i opóźnione importy każdej EXE/DLL w `bin`, przez MSVC dumpbin.
 Biblioteki aplikacji, CRT i CUDA runtime muszą być w bundle; dopuszczone są

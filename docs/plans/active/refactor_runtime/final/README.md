@@ -283,3 +283,9 @@ w bundle zatrzymuje pakowanie, graph zależności trafia do manifestów.
 21 regresji PE i 15 storage PASS; real MSVC dumpbin sprawdzono na istniejącym
 Windows notepad.exe (56 importów), nie na buildzie Fullmaga. Runtime ABI,
 native FEM i clean install pozostają NOT VERIFIED; pełny P8-C otwarty.
+
+Pakowanie Windows wyznacza teraz transitive DLL closure przed dodatkowym
+copy z jawnych MSVC/CUDA/operator SDK roots; plan i source hashes zapisuje
+w manifestach. 24 planner/PowerShell oraz 23 PE i 15 storage regresji
+PASS (62). Real MSVC redist plan/copy/audit PASS, bez Fullmag build/runtime.
+Pełny natywny FEM, Windows receipt i install/recovery pozostają otwarte.

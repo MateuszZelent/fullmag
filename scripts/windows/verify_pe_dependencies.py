@@ -21,7 +21,13 @@ wtsapi32.dll urlmon.dll'''.split())
 API_SET = re.compile(r'^(?:api-ms-win-|ext-ms-win-)[a-z0-9-]+\.dll$')
 
 
+def require_not_driver(path):
+    if path.name.lower() == 'nvcuda.dll':
+        raise ValueError('NVIDIA driver nvcuda.dll must not be bundled or sourced from SDK roots')
+
+
 def require_x64_pe(path):
+    require_not_driver(path)
     with path.open('rb') as stream:
         dos = stream.read(64)
         if len(dos) != 64 or dos[:2] != b'MZ':
@@ -67,6 +73,24 @@ def dump_imports(path, dumpbin):
     return parse_dependents(result.stdout)
 
 
+def file_sha256(path):
+    hasher = hashlib.sha256()
+    with path.open('rb') as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b''):
+            hasher.update(chunk)
+    return hasher.hexdigest()
+
+
+def external_resolution(name, allow_cuda_driver=False):
+    if API_SET.fullmatch(name):
+        return 'windows_api_set'
+    if name in SYSTEM_IMPORTS:
+        return 'windows_component'
+    if name == 'nvcuda.dll' and allow_cuda_driver:
+        return 'external_nvidia_driver'
+    return None
+
+
 def audit_bin(directory, dumpbin, allow_cuda_driver=False):
     directory = directory.resolve(strict=True)
     images = sorted((p for p in directory.iterdir() if p.suffix.lower() in ('.exe', '.dll')), key=lambda p: p.name.lower())
@@ -87,20 +111,12 @@ def audit_bin(directory, dumpbin, allow_cuda_driver=False):
         for name in dump_imports(path, dumpbin):
             if name in names:
                 kind = 'bundled'
-            elif API_SET.fullmatch(name):
-                kind = 'windows_api_set'
-            elif name in SYSTEM_IMPORTS:
-                kind = 'windows_component'
-            elif name == 'nvcuda.dll' and allow_cuda_driver:
-                kind = 'external_nvidia_driver'
+            elif external_resolution(name, allow_cuda_driver):
+                kind = external_resolution(name, allow_cuda_driver)
             else:
                 raise ValueError(f'Missing staged dependency: {path.name} -> {name}')
             dependencies.append({'name': name, 'resolution': kind})
-        hasher = hashlib.sha256()
-        with path.open('rb') as stream:
-            for chunk in iter(lambda: stream.read(1024 * 1024), b''):
-                hasher.update(chunk)
-        digest = hasher.hexdigest()
+        digest = file_sha256(path)
         records.append({'path': 'bin/' + path.name,
                         'sha256': digest,
                         'imports': dependencies})

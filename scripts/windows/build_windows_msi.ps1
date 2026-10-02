@@ -69,6 +69,37 @@ function Import-VsEnvironment {
   Write-Host "Imported MSVC environment from $vcvars"
 }
 
+function Get-MsiDependencyRoots {
+  param([string]$RedistRoot, [string]$CudaCompiler, [string[]]$ExtraRoots, [switch]$Cuda)
+  $roots = @()
+  if ($RedistRoot) {
+    $x64Root = Join-Path $RedistRoot "x64"
+    if (-not (Test-Path -LiteralPath $x64Root -PathType Container)) {
+      throw "MSVC x64 redist directory is missing: $x64Root"
+    }
+    $roots += @(Get-ChildItem -LiteralPath $x64Root -Directory | Where-Object {
+      $_.Name -match '^Microsoft\.VC[0-9]+\.(CRT|OpenMP|CXXAMP)$'
+    } | Select-Object -ExpandProperty FullName)
+  }
+  if ($Cuda) {
+    if (-not $CudaCompiler -or -not (Test-Path -LiteralPath $CudaCompiler -PathType Leaf)) {
+      throw "CUDA compiler path is required for runtime dependency discovery"
+    }
+    $cudaBin = Split-Path -Parent ([System.IO.Path]::GetFullPath($CudaCompiler))
+    $roots += $cudaBin
+    $cudaX64 = Join-Path $cudaBin "x64"
+    if (Test-Path -LiteralPath $cudaX64 -PathType Container) { $roots += $cudaX64 }
+  }
+  foreach ($root in @($ExtraRoots)) {
+    if ([string]::IsNullOrWhiteSpace($root) -or -not (Test-Path -LiteralPath $root -PathType Container)) {
+      throw "Declared MSI dependency directory is missing: $root"
+    }
+    $roots += [System.IO.Path]::GetFullPath($root)
+  }
+  $roots | Sort-Object -Unique
+}
+
+
 function Ensure-Dir {
   param([string]$Path)
   New-Item -ItemType Directory -Force -Path $Path | Out-Null
@@ -206,6 +237,7 @@ function Write-VersionMetadata {
     build_features = if ($BuildCuda) { @("cuda") } else { @() }
     runtime_dlls = @($runtimeDllInventory)
     pe_dependency_audit = $peDependencyAudit
+    pe_dependency_plan = $peDependencyPlan
     python_runtime = "external-python-3.12-or-newer"
     node_runtime = "external-node-24.18-or-newer"
     built_at_utc = $builtAt
@@ -274,6 +306,7 @@ function Write-StageManifest {
     )
     runtime_dlls = @($runtimeDllInventory)
     pe_dependency_audit = $peDependencyAudit
+    pe_dependency_plan = $peDependencyPlan
     runtimes = $runtimePaths
     share = @(
       "share/version.json"
@@ -408,6 +441,9 @@ if ($BuildCuda) {
 
 Import-VsEnvironment
 Require-Command "dumpbin.exe"
+$extraDllRoots = if ($env:FULLMAG_WINDOWS_MSI_DLL_ROOTS) { $env:FULLMAG_WINDOWS_MSI_DLL_ROOTS.Split(';') } else { @() }
+$dependencyRoots = @(Get-MsiDependencyRoots -RedistRoot $env:VCToolsRedistDir -CudaCompiler $env:CUDACXX `
+  -ExtraRoots $extraDllRoots -Cuda:$BuildCuda)
 
 Push-Location $RepoRoot
 try {
@@ -496,6 +532,30 @@ try {
     $runtimeDllSources += $nativeFdmDll.FullName
   }
   $runtimeDllInventory = @(Copy-RuntimeDllSet -SourcePaths $runtimeDllSources -BinDirectory $binDir)
+  $pePlanPath = Join-Path $DistRoot "windows-pe-dependency-plan.json"
+  $pePlanArgs = @((Join-Path $PSScriptRoot "plan_pe_dependencies.py"), "--bin", $binDir,
+    "--dumpbin", (Get-Command dumpbin.exe).Source, "--output", $pePlanPath)
+  foreach ($root in $dependencyRoots) { $pePlanArgs += @("--dependency-root", $root) }
+  if ($BuildCuda) { $pePlanArgs += "--allow-cuda-driver" }
+  & python @pePlanArgs
+  if ($LASTEXITCODE -ne 0) { throw "Staged DLL closure planning failed with exit code $LASTEXITCODE" }
+  $peDependencyPlan = Get-Content -LiteralPath $pePlanPath -Raw | ConvertFrom-Json
+  foreach ($entry in $peDependencyPlan.staged_images.PSObject.Properties) {
+    if ((Get-FileHash -LiteralPath (Join-Path $binDir $entry.Name) -Algorithm SHA256).Hash.ToLowerInvariant() -ne $entry.Value) {
+      throw "Staged PE changed after dependency planning: $($entry.Name)"
+    }
+  }
+  foreach ($source in $peDependencyPlan.sources) {
+    if ((Get-FileHash -LiteralPath $source.source -Algorithm SHA256).Hash.ToLowerInvariant() -ne $source.sha256) {
+      throw "Planned SDK DLL changed before staging: $($source.name)"
+    }
+  }
+  $runtimeDllInventory += @(Copy-RuntimeDllSet -SourcePaths @($peDependencyPlan.sources | ForEach-Object { $_.source }) -BinDirectory $binDir)
+  foreach ($source in $peDependencyPlan.sources) {
+    if ((Get-FileHash -LiteralPath (Join-Path $binDir $source.name) -Algorithm SHA256).Hash.ToLowerInvariant() -ne $source.sha256) {
+      throw "Planned SDK DLL changed during staging: $($source.name)"
+    }
+  }
   $peAuditPath = Join-Path $DistRoot "windows-pe-dependencies.json"
   $peAuditArgs = @((Join-Path $PSScriptRoot "verify_pe_dependencies.py"), "--bin", $binDir,
     "--dumpbin", (Get-Command dumpbin.exe).Source, "--output", $peAuditPath)

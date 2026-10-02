@@ -139,3 +139,11 @@ def test_cli_failure_emits_no_report(tmp_path):
     assert result.returncode == 1
     assert 'Staged bin contains no EXE' in result.stderr
     assert not (tmp_path/'audit.json').exists()
+
+
+@pytest.mark.parametrize('cuda', [False, True])
+def test_staged_nvidia_driver_is_never_redistributed(tmp_path, monkeypatch, cuda):
+    image(tmp_path/'app.exe'); image(tmp_path/'nvcuda.dll')
+    monkeypatch.setattr(pe,'dump_imports',lambda path, tool: ['nvcuda.dll'] if path.name == 'app.exe' else [])
+    with pytest.raises(ValueError,match='NVIDIA driver nvcuda.dll must not be bundled'):
+        pe.audit_bin(tmp_path,Path('unused'),cuda)
