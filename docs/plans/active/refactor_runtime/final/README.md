@@ -15,6 +15,14 @@ dlatego nie podnosi procentów P3/P5.
 
 ## Dokumenty finalne
 
+Checkpoint 02.10.2026: [P6-71 — kod wdrożonego runnera](p6/71-deployed-runner-contract-gap.md)
+potwierdza, że źródłowe kontrole pakietu z P6-68–70 nie są jeszcze wdrożone.
+Aktualizacja musi zachować siedem operatorowo dopuszczonych profili; nie wolno
+zastąpić rozszerzonego entrypointu wariantem trzech profili. Bieżący odczyt
+runnera: 88 084 480 B wolnego, brak aktywnych jobs, `waiting_for_disk`.
+Zgoda na dokładny manifest cache P6-67 oczekuje; niczego nie usunięto.
+Natywny build, runtime i pełny plan pozostają otwarte; procenty bez zmian.
+
 Checkpoint 02.10.2026: [P6-65a — bezpośredni powrót do current view](p6/65a-direct-current-viewport.md)
 usuwa zależność powrotu od reopen workspace. Przycisk czyści lokalny wybór;
 browser `373378d47ba04d3ba20dc86c24975b79` PASS potwierdza ten sam viewport/canvas,
@@ -25,8 +33,8 @@ P6 około 52%, cały plan około 49%.
 Checkpoint 02.10.2026: [P6-65 — zapisane pole w jednym viewportcie](p6/65-saved-field-single-viewport.md)
 ma produkcyjne źródła i niezależny review PASS oraz pełny browser fixture
 `d836530e926145f58d371a3f3506764d` PASS. F32/F64, support, osobne kamery,
-negative cases i reopen live mają dowód; native HTTP/archive, pozostałe
-reprezentacje, bezpośredni deselect i kwalifikacja pozostają otwarte.
+negative cases i reopen live mają dowód; bezpośredni deselect odebrano później
+w P6-65a. Native HTTP/archive, pozostałe reprezentacje i kwalifikacja pozostają otwarte.
 P6 około 52%, cały plan około 49%.
 
 Checkpoint 02.10.2026: [P6-66 — producent accepted FEM CPU](p6/66-accepted-fem-cpu-producer-contract.md)
@@ -34,7 +42,8 @@ Checkpoint 02.10.2026: [P6-66 — producent accepted FEM CPU](p6/66-accepted-fem
 receipt-only recovery bez drugiego solve. Produkcyjne źródła worker/API i review
 PASS; commit `d6d1b31cd7eb5e706210e7c0e2c7d4815b362acf` jest na remote.
 Nowy managed build i native archive roundtrip czekają na pojemność runnera:
-ostatni odczyt 02.10.2026 to 867 024 896 B wolnego przy minimum 8 GiB.
+ówczesny odczyt 02.10.2026: 867 024 896 B wolnego przy minimum 8 GiB;
+aktualniejszy pomiar jest w P6-71 powyżej.
 Stan runtime, nauka i release pozostają NOT VERIFIED; procenty bez zmian.
 
 Checkpoint 01.10.2026: [P6-64 — transport zapisanej geometrii](p6/64-pinned-saved-geometry-transport.md)

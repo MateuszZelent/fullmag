@@ -289,3 +289,8 @@ pamięci i wszystkich lane'ów pozostają otwarte. P6 wynosi **52%**.
 70. [Jednolity odbiór pakietu przez koordynator](70-coordinator-required-package-receipt.md)
     — wspólny kontrakt 14 release outputs, odbiór receipt odrzuca brak/puste
     programy; regresje trzech profili i identity archiwum PASS, runtime otwarty.
+
+71. [Różnica kodu wdrożonego runnera](71-deployed-runner-contract-gap.md)
+    — aktywny entrypoint wymaga nadal 5 outputów i ma rozszerzone profile;
+    ustalone hashe, zachowanie 7 dopuszczonych profili konieczne przy integracji,
+    pojemność około 84 MiB i brak wykonania nowego buildu.
