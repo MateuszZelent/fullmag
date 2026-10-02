@@ -6,6 +6,8 @@ publish.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+fullmag-build-info.workspace = true
+uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
 serde_json.workspace = true
 serde.workspace = true
@@ -20,3 +22,6 @@ fullmag-runner = { path = "../fullmag-runner" }
 
 [dev-dependencies]
 tempfile = "3"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

@@ -1361,15 +1361,18 @@ dependencies = [
  "chrono",
  "fullmag-application",
  "fullmag-authoring",
+ "fullmag-build-info",
  "fullmag-ir",
  "fullmag-plan",
  "fullmag-quantities",
  "fullmag-runner",
  "fullmag-session",
+ "libc",
  "serde",
  "serde_json",
  "sha2",
  "tempfile",
+ "uuid",
 ]
 
 [[package]]

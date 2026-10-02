@@ -71,6 +71,13 @@ impl ApiSidecar {
 
         let mut sidecar = Self { child, port };
         sidecar.wait_healthy()?;
+        if std::env::var_os("FULLMAG_RUNTIME_SERVICE_CONFIG").is_some() {
+            fullmag_runtime_control::runtime_service_client::verify_api_build(port)
+                .map_err(|error| format!("API identity check before service attach failed: {error:#}"))?;
+        }
+        fullmag_runtime_control::runtime_service_client::ensure_for_application(
+            &repo_root, &state_root,
+        ).map_err(|error| format!("native runtime service attach failed: {error:#}"))?;
         Ok(sidecar)
     }
 

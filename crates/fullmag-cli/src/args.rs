@@ -231,7 +231,8 @@ pub(crate) struct UiCli {
 
 #[derive(Subcommand)]
 pub(crate) enum RuntimeCommand {
-    /// Start once or attach to a compatible independently owned native service.
+    /// Internal operator-level start/attach for an explicitly selected store.
+    #[command(hide = true)]
     ServiceEnsure {
         #[arg(long)]
         config: PathBuf,

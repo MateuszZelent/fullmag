@@ -619,12 +619,27 @@ fn launch_ui(ui: UiCli) -> Result<()> {
     } else {
         "hub"
     };
-    let ready = crate::control_room::bootstrap_control_plane(
+    let mut ready = crate::control_room::bootstrap_control_plane(
         &session_id,
         ui.dev,
         ui.web_port,
         live_workspace.as_ref(),
     )?;
+    let owns_api = ready.api_child.is_some();
+    let control_room_guard = crate::control_room::ControlRoomGuard::active(
+        ready.web_port,
+        ready.api_child.take(),
+        ready.frontend_child.take(),
+    );
+    let root = crate::control_room::repo_root();
+    let state_root = crate::control_room::runtime_state_root(&root);
+    if std::env::var_os("FULLMAG_RUNTIME_SERVICE_CONFIG").is_some() && !owns_api {
+        bail!("native service attach requires an API started by this launcher; reused API store identity is not verified");
+    }
+    if std::env::var_os("FULLMAG_RUNTIME_SERVICE_CONFIG").is_some() {
+        fullmag_runtime_control::runtime_service_client::verify_api_build(crate::control_room::api_port())?;
+    }
+    fullmag_runtime_control::runtime_service_client::ensure_for_application(&root, &state_root)?;
     let mut ui_child = crate::control_room::open_in_tauri(&ready, intent)?;
     let scratch_runtime = if live_workspace.is_none() {
         let executable = std::env::current_exe().context("failed to resolve fullmag executable")?;
@@ -636,11 +651,6 @@ fn launch_ui(ui: UiCli) -> Result<()> {
     } else {
         None
     };
-    let control_room_guard = crate::control_room::ControlRoomGuard::active(
-        ready.web_port,
-        ready.api_child,
-        ready.frontend_child,
-    );
     let _ = ui_child.wait();
     drop(control_room_guard);
     drop(scratch_runtime);

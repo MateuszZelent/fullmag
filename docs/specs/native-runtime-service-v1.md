@@ -100,6 +100,15 @@ Usługa używa jednego deadline startup dla wszystkich faz; launcher dodaje
 10 sekund na utworzenie/załadowanie procesu. Timeout zachowuje proces i intent,
 bez kill/restart/takeover. Polecenie wymaga już zainicjalizowanego store.
 
+CLI UI i desktop sidecar używają wspólnego `ensure_for_application` przy
+jawnym FULLMAG_RUNTIME_SERVICE_CONFIG. Root konfiguracji musi odpowiadać
+wspólnemu resolverowi accepted store API; local-live store jest odrzucany.
+Store inicjalizuje się dopiero po porównaniu. UI otwiera się po potwierdzeniu
+start/attach. Guard API/UI nie obejmuje procesu usługi. CLI odmawia reuse API
+przy tej konfiguracji do czasu implementacji handshake tożsamości jego store.
+Brak konfiguracji pozostawia authoring dostępny; domyślne zasoby produktu
+i całościowy cutover execution nadal wymagają implementacji i kwalifikacji.
+
 Oba admissions zamyka się przed oczekiwaniem na procesy. Aktywne workery kończą
 się według supervisor/lease/receipt. Błąd jednego schedulera drenuje drugi,
 lecz owner kończy jako failed/unknown, nigdy jako poprawny drained.
