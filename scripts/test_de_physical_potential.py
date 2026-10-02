@@ -10,7 +10,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from validate_de_physical_potential import ValidationError, validate_physical_potential
+from validate_de_physical_potential import (
+    ValidationError,
+    validate_physical_potential,
+)
 
 
 class PhysicalPotentialFixture:
@@ -301,6 +304,48 @@ class PhysicalPotentialValidatorTests(unittest.TestCase):
         report = self.fixture.validate()
         self.assertEqual(report["status"], "consistent")
         self.assertEqual(report["comparison"]["max_absolute_error"], 0.0)
+
+    def test_near_zero_p1_component_uses_forward_roundoff_bound(self) -> None:
+        # The tangential gradient of this airbox-face Tet4 is obtained by
+        # cancelling shape-gradient terms of order 1e8.  A separately
+        # evaluated producer can therefore differ by a few ulps even when
+        # the stored field is the exact gradient of an affine potential.
+        self.fixture.nodes = [
+            [7.487890384e-09, 7.25477277e-09, 1.976634752e-06],
+            [7.487890384e-09, 7.25477277e-09, 2.005e-06],
+            [8.660254038e-09, 2.5e-09, 2.005e-06],
+            [1.1698254483e-08, 4.957476082e-09, 2.005e-06],
+        ]
+        self.fixture.elements = [[0, 1, 2, 3]]
+        constant = complex(-3.177689136536224, -1.6442226039687564)
+        coefficients = (0j, 0j, complex(1.2e8, -6.0e7))
+        self.fixture.phi = [
+            constant + sum(coefficient * coordinate for coefficient, coordinate in zip(coefficients, node))
+            for node in self.fixture.nodes
+        ]
+        # For phi = c0 + cx*x + cy*y + cz*z, the exact Tet4 field is -c.
+        self.fixture.field = [-coefficient for coefficient in coefficients]
+        self.fixture._write_metadata()
+        self.fixture.write_artifacts()
+
+        report = self.fixture.validate()
+        self.assertEqual(report["status"], "consistent")
+        self.assertEqual(report["comparison"]["mismatch_count"], 0)
+        self.assertGreater(report["comparison"]["max_forward_error_bound"], 0.0)
+        self.assertLessEqual(
+            report["comparison"]["max_absolute_error"],
+            report["comparison"]["max_forward_error_bound"] + 1.0e-10,
+        )
+
+        # A 1e-2 A/m perturbation is far outside the local roundoff envelope
+        # while remaining tiny compared with the physical z component.
+        self.fixture.field[0] += complex(1.0e-2, 0.0)
+        self.fixture.write_artifacts()
+        report = self.fixture.validate()
+        self.assertEqual(report["status"], "mismatch")
+        self.assertGreater(report["comparison"]["mismatch_count"], 0)
+        first = report["comparison"]["first_mismatch"]
+        self.assertGreater(first["absolute_error"], first["forward_error_bound"] + 1.0e-10)
 
     def test_manifest_path_traversal_is_rejected(self) -> None:
         manifest = self.fixture._manifest()

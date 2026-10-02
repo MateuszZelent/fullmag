@@ -1141,3 +1141,83 @@ To parametr wyboru częstotliwości, bez zmiany LLG, geometrii, materiałów, de
 Dla diagnostyki ±10 rad/µm używamy jawnego okna 10.9–11.5 GHz wokół referencji n=0 11.2354 GHz. To odrębne wejście obliczeń, zapisane w provenance, a nie dowód pełnego spektrum 8.5–12 GHz. Szerokie przeszukiwanie pozostaje otwarte: aktualny runtime przerwał je na pustym pierwszym podoknie [8.5,10.25] GHz mimo kandydata 11.2053 GHz, którego niezależnego residualu jeszcze nie oceniono. Nie wolno wnioskować o akceptacji z samej częstotliwości ani z zera w niezmierzonym residualu.
 
 Źródła: `_configured_frequency_window_hz` i `study.stages.add_eigenmodes` w przykładzie oraz regresje wejścia `scripts/test_de_smoke_model.py`. Weryfikacja Python sprawdza lowering do Hz, parowanie parametrów, odrzucenie nieprawidłowych wartości i zachowanie modelu. Dowód managed solvera, walidacja artefaktów i zgodność z analityką pozostają wymagane osobno.
+
+
+(de-physical-potential-roundoff)=
+## Niezależna rekonstrukcja pola potencjału i błąd zaokrągleń
+
+<!-- DOC-ANCHOR:de-physical-potential-roundoff -->
+
+Artefakt `fem_modal_physical_potential.v1` publikuje węzłowy potencjał P1
+oraz stałe elementowo składowe
+$H_{e,a}=-\sum_{i=0}^{3}\phi_i g_{i,a}$, gdzie
+$g_{i,a}=\partial_aN_i$. Walidator odtwarza ten wzór z zapisanej łączności i
+współrzędnych. Producent oraz walidator wykonują rekonstrukcję niezależnie,
+więc przy składowej bliskiej zeru nie wolno używać stałego absolutnego progu
+oderwanego od skali składników.
+
+Dla arytmetyki IEEE-754 binary64 przyjmujemy $u=2^{-53}=\epsilon/2$ oraz
+standardowy bound $\gamma_n=nu/(1-nu)$. Lokalny bound dla porównywanej
+składowej ma postać:
+
+```{math}
+:label: eq-poisson-airbox-p1-gradient-roundoff
+B_{e,a}=\gamma_{104}
+ \left(\sum_{i=0}^{3}|\phi_i|\right)
+ \left(\sum_{i=0}^{3}|g_{i,a}|\right),
+\qquad
+|H^{\mathrm{stored}}_{e,a}-H^{\mathrm{reconstructed}}_{e,a}|
+\le r\,\max\left(|H^{\mathrm{stored}}_{e,a}|,
+ |H^{\mathrm{reconstructed}}_{e,a}|,s_0\right)+B_{e,a}.
+```
+
+| $u=2^{-53}$ | IEEE-754 binary64 unit roundoff | $1$ |
+| $\gamma_n=nu/(1-nu)$ | standard finite-operation forward-error factor | $1$ |
+| $B_{e,a}$ | local P1 gradient reconstruction roundoff bound | $\mathrm{A\,m^{-1}}$ |
+
+Liczba $104$ nie jest dopasowana do wyniku. Obejmuje dwa niezależne
+obliczenia (producent i walidator), z których każde ma konserwatywnie
+20 operacji dla jednej składowej gradientu Tet4 (9 operacji iloczynów
+wektorowych, 5 dla wyznacznika, 3 dzielenia i 3 sumowania węzła zerowego)
+oraz 32 operacje dla czterech zespolonych iloczynów i akumulacji pola:
+$2(20+32)=104$. Implementacja oblicza $\gamma_{104}$ jawnie; nie zmienia
+`rtol=1e-10` ani skali $s_0=1\,\mathrm{A\,m^{-1}}$, lecz dodaje wyłącznie
+lokalny bound propagacji roundoff. Pole z błędem większym od tej sumy nadal
+jest odrzucane.
+
+Zakres tego boundu jest ograniczony do skończonej arytmetyki rekonstrukcji na
+tej samej, nieosobliwej geometrii Tet4. Kontrola orientacji, degeneracji,
+hasha topologii i zgodności metadanych pozostaje wymagana; bound nie jest
+certyfikatem jakości siatki, demagnetyzacji ani fizyki T4. Przy zmianie
+geometrii lub źródłowej łączności wynik wymaga ponownej walidacji, a nie
+zwiększenia $\gamma_n$.
+
+Niezależne obliczenie w 80-cyfrowej arytmetyce dziesiętnej dla zachowanego
+artefaktu DE przy $k_y=+10\,\mathrm{rad/\mu m}$ potwierdziło przyczynę.
+W najgorszym elemencie 29924 składowa $H_x$ ma wartość wysokiej precyzji
+około $10^{-71}\,\mathrm{A\,m^{-1}}$, rekonstrukcja binary64 daje zero,
+a zapisany producentem field ma
+$(-1.8940503\cdot10^{-7}-9.8003304\cdot10^{-8}i)\,\mathrm{A\,m^{-1}}$.
+Różnica $2.13258\cdot10^{-7}\,\mathrm{A\,m^{-1}}$ wynika z kasowania
+składników gradientu, nie z innego wzoru fizycznego. Dla $k_y=-10$ ten sam
+element ma wysokoprecyzyjną składową $H_x$ około $10^{-70}$, a różnica
+binary64–artefakt wynosi $4.75595\cdot10^{-7}\,\mathrm{A\,m^{-1}}$.
+Oba zachowane artefakty mają zgodny fingerprint siatki i przechodzą walidację
+po zastosowaniu lokalnego boundu. Test syntetyczny używa znanego potencjału
+afinicznego, którego dokładny field jest znany analitycznie; akceptuje błąd
+roundoff i odrzuca perturbację $10^{-2}\,\mathrm{A\,m^{-1}}$.
+
+Źródła: `scripts/validate_de_physical_potential.py` (`_gamma`,
+`_reconstruct_field_with_bounds`, `validate_physical_potential`) oraz
+`scripts/test_de_physical_potential.py`
+(`test_near_zero_p1_component_uses_forward_roundoff_bound`). Jest to
+niezależna kontrola spójności zapisu pola; jej status `consistent` nie
+kwalifikuje solvera, demagnetyzacji ani zgodności dyspersji z analityką.
+
+| Źródło | Symbol |
+|---|---|
+| `examples/fem_de_smoke_numeric.py` | `_configured_frequency_window_hz` |
+| `scripts/validate_de_physical_potential.py` | `_gamma` |
+| `scripts/validate_de_physical_potential.py` | `_reconstruct_field_with_bounds` |
+| `scripts/validate_de_physical_potential.py` | `validate_physical_potential` |
+| `scripts/test_de_physical_potential.py` | `test_near_zero_p1_component_uses_forward_roundoff_bound` |

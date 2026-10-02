@@ -32,6 +32,30 @@ QUALIFICATION = "NOT VERIFIED"
 DEFAULT_RTOL = 1.0e-10
 DEFAULT_ZERO_SCALE = 1.0
 DEGENERACY_RELATIVE_TOL = 1.0e-14
+# The producer and this independent checker evaluate the same P1 gradient
+# from separately serialized mesh coordinates.  Tangential gradients at a
+# Dirichlet airbox face can be the result of cancelling three terms of order
+# 1e8.  Keep the requested relative tolerance for physical discrepancies,
+# while accounting explicitly for the finite-precision forward error of that
+# cancellation.  The operation count is derived below from the scalar
+# Tet4-gradient and complex four-node accumulation paths, then doubled for
+# the two independent evaluations being compared.
+FLOAT64_UNIT_ROUNDOFF = sys.float_info.epsilon / 2.0
+TET4_GRADIENT_OPERATION_COUNT = 20  # 9 cross + 5 determinant + 3 divide + 3 nodal sum
+COMPLEX_FIELD_OPERATION_COUNT = 32  # 4 complex products (24) + 4 complex sums (8)
+GRADIENT_FORWARD_OPERATION_COUNT = 2 * (
+    TET4_GRADIENT_OPERATION_COUNT + COMPLEX_FIELD_OPERATION_COUNT
+)
+
+
+def _gamma(operation_count: int) -> float:
+    """Return Higham's ``gamma_n = n*u/(1-n*u)`` rounding bound."""
+
+    numerator = operation_count * FLOAT64_UNIT_ROUNDOFF
+    return numerator / (1.0 - numerator)
+
+
+GRADIENT_FORWARD_GAMMA = _gamma(GRADIENT_FORWARD_OPERATION_COUNT)
 SHA256_RE = re.compile(r"^sha256:([0-9a-fA-F]{64})$")
 
 
@@ -346,16 +370,50 @@ def _tet4_gradients(nodes: Sequence[tuple[float, float, float]], element: Sequen
 
 
 def _reconstruct_field(phi: Sequence[complex], nodes: Sequence[tuple[float, float, float]], elements: Sequence[Sequence[int]]) -> list[complex]:
+    reconstructed, _ = _reconstruct_field_with_bounds(phi, nodes, elements)
+    return reconstructed
+
+
+def _reconstruct_field_with_bounds(
+    phi: Sequence[complex],
+    nodes: Sequence[tuple[float, float, float]],
+    elements: Sequence[Sequence[int]],
+) -> tuple[list[complex], list[float]]:
+    """Reconstruct ``-grad(phi)`` and its per-component roundoff envelope.
+
+    ``sum(abs(phi_i)) * sum(abs(grad_i))`` is the forward-error scale for a
+    P1 component when the shape-gradient terms are independently rounded and
+    then accumulated.  This matters for nearly cancelling components, where
+    the physical result is near zero although the terms are not.  The local
+    multiplier is ``gamma_n`` for the explicitly counted float64 operations
+    in the producer and checker.  It is an error bound for reconstruction
+    arithmetic on the same non-degenerate Tet4 geometry, not a replacement
+    for the configured relative comparison tolerance or a mesh-conditioning
+    certificate.
+    """
     reconstructed: list[complex] = []
+    forward_error_bounds: list[float] = []
     for element_index, element in enumerate(elements):
         gradients = _tet4_gradients(nodes, element, element_index)
+        potential_l1 = math.fsum(abs(phi[node_index]) for node_index in element)
         for axis in range(3):
             value = 0j
             for local_index, node_index in enumerate(element):
                 value -= phi[node_index] * gradients[local_index][axis]
             _require(math.isfinite(value.real) and math.isfinite(value.imag), f"reconstructed field is non-finite at element {element_index}, component {axis}")
             reconstructed.append(value)
-    return reconstructed
+            gradient_l1 = math.fsum(abs(gradients[local_index][axis]) for local_index in range(4))
+            forward_error_bound = (
+                GRADIENT_FORWARD_GAMMA
+                * potential_l1
+                * gradient_l1
+            )
+            _require(
+                math.isfinite(forward_error_bound),
+                f"reconstruction forward-error bound is non-finite at element {element_index}, component {axis}",
+            )
+            forward_error_bounds.append(forward_error_bound)
+    return reconstructed, forward_error_bounds
 
 
 def validate_physical_potential(
@@ -371,7 +429,9 @@ def validate_physical_potential(
 
     ``rtol`` is dimensionless and ``zero_scale`` is in the demag field's
     declared A/m unit. The comparison rule is explicitly
-    ``abs(error) <= rtol * max(abs(expected), abs(reconstructed), zero_scale)``.
+    ``abs(error) <= rtol * max(abs(expected), abs(reconstructed), zero_scale)
+    + forward_error_bound``. The local roundoff envelope is computed from
+    the potential and shape-gradient terms; it does not certify mesh conditioning.
     Contract and geometry errors raise :class:`ValidationError`; a numerical
     mismatch is returned as a report with ``status == "mismatch"``.
     """
@@ -401,7 +461,7 @@ def validate_physical_potential(
 
     phi = _read_complex_values(potential_path, potential_count, "potential_full.bin")
     stored_field = _read_complex_values(field_path, field_count * 3, "demag_element_full.bin")
-    reconstructed = _reconstruct_field(phi, nodes, elements)
+    reconstructed, forward_error_bounds = _reconstruct_field_with_bounds(phi, nodes, elements)
 
     max_abs_error = 0.0
     max_normalized_error = 0.0
@@ -413,13 +473,14 @@ def validate_physical_potential(
         element_index, component = divmod(flat_index, 3)
         error = abs(expected - actual)
         scale = max(abs(expected), abs(actual), float(zero_scale))
+        tolerance = float(rtol) * scale + forward_error_bounds[flat_index]
         normalized_error = error / scale
         if normalized_error > max_normalized_error:
             max_normalized_error = normalized_error
             worst_element = element_index
             worst_component = component
         max_abs_error = max(max_abs_error, error)
-        if error > float(rtol) * scale:
+        if error > tolerance:
             mismatch_count += 1
             if first_mismatch is None:
                 first_mismatch = {
@@ -431,13 +492,18 @@ def validate_physical_potential(
                     "reconstructed_imag": actual.imag,
                     "absolute_error": error,
                     "scale": scale,
+                    "forward_error_bound": forward_error_bounds[flat_index],
+                    "tolerance": tolerance,
                 }
 
     status = "consistent" if mismatch_count == 0 else "mismatch"
     comparison: dict[str, Any] = {
         "rtol": float(rtol),
         "zero_scale": float(zero_scale),
-        "tolerance_rule": "abs(error) <= rtol * max(abs(stored), abs(reconstructed), zero_scale)",
+        "forward_error_operation_count": GRADIENT_FORWARD_OPERATION_COUNT,
+        "forward_error_gamma": GRADIENT_FORWARD_GAMMA,
+        "max_forward_error_bound": max(forward_error_bounds, default=0.0),
+        "tolerance_rule": "abs(error) <= rtol * max(abs(stored), abs(reconstructed), zero_scale) + gamma_104 * sum(abs(phi_i)) * sum(abs(grad_i)); gamma_n = n * (eps / 2) / (1 - n * (eps / 2))",
         "node_count": len(nodes),
         "element_count": len(elements),
         "max_absolute_error": max_abs_error,

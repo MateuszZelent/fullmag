@@ -96,6 +96,11 @@
       "id": "eq-poisson-airbox-component-participation",
       "symbols": ["modal_object_set", "modal_component", "modal_component_coefficients", "object_consistent_mass", "component_quadratic_measure", "component_total_measure", "component_participation_fraction"],
       "sources": ["source-runner-component-participation", "source-runner-eigen-v2-writer", "source-component-participation-doc-test"]
+    },
+    {
+      "id": "eq-poisson-airbox-p1-gradient-roundoff",
+      "symbols": ["potential", "gradient", "demag_field", "forward_error_bound", "machine_epsilon", "gamma_n"],
+      "sources": ["source-de-physical-potential-gamma", "source-de-physical-potential-reconstruction", "source-de-physical-potential-validation", "source-de-physical-potential-regression"]
     }
   ],
   "symbols": [
@@ -153,7 +158,10 @@
     {"id": "component_quadratic_measure", "latex": "$E[o,c]$", "meaning": "component quadratic mass measure", "si_unit": "$\\mathrm{m^3}$"},
     {"id": "component_total_measure", "latex": "$E_{\\mathrm{total}}$", "meaning": "summed modal measure", "si_unit": "$\\mathrm{m^3}$"},
     {"id": "component_participation_fraction", "latex": "$p[o,c]$, $p_{\\mathrm{object}}[o]$, $p_{\\mathrm{global}}[c]$", "meaning": "object-component, object-total and global-component participation fractions", "si_unit": "$1$"},
-    {"id": "component_participation_tolerance", "latex": "$\\varepsilon_{\\mathrm{sum}}$, $\\varepsilon_{\\mathrm{mach}}$", "meaning": "participation-sum tolerance and float64 machine epsilon", "si_unit": "$1$"}
+    {"id": "component_participation_tolerance", "latex": "$\\varepsilon_{\\mathrm{sum}}$, $\\varepsilon_{\\mathrm{mach}}$", "meaning": "participation-sum tolerance and float64 machine epsilon", "si_unit": "$1$"},
+    {"id": "machine_epsilon", "latex": "$u=2^{-53}$", "meaning": "IEEE-754 binary64 unit roundoff", "si_unit": "$1$"},
+    {"id": "gamma_n", "latex": "$\\gamma_n=nu/(1-nu)$", "meaning": "standard finite-operation forward-error factor", "si_unit": "$1$"},
+    {"id": "forward_error_bound", "latex": "$B_{e,a}$", "meaning": "local P1 gradient reconstruction roundoff bound", "si_unit": "$\\mathrm{A\\,m^{-1}}$"}
   ],
   "sources": [
     {
@@ -327,6 +335,30 @@
       "path": "examples/fem_de_smoke_numeric.py",
       "symbol": "_configured_frequency_window_hz",
       "responsibility": "Validate paired diagnostic GHz bounds and lower the unchanged FrequencyWindow target to SI Hz; retain resolved bounds in provenance."
+    },
+    {
+      "id": "source-de-physical-potential-gamma",
+      "path": "scripts/validate_de_physical_potential.py",
+      "symbol": "_gamma",
+      "responsibility": "Evaluate Higham's gamma-n finite-operation binary64 forward-error factor."
+    },
+    {
+      "id": "source-de-physical-potential-reconstruction",
+      "path": "scripts/validate_de_physical_potential.py",
+      "symbol": "_reconstruct_field_with_bounds",
+      "responsibility": "Independently reconstruct the Tet4 -grad(phi) artifact and propagate the local binary64 forward-error envelope."
+    },
+    {
+      "id": "source-de-physical-potential-validation",
+      "path": "scripts/validate_de_physical_potential.py",
+      "symbol": "validate_physical_potential",
+      "responsibility": "Compare stored and reconstructed fields with the unchanged physical relative tolerance plus the explicit local roundoff bound."
+    },
+    {
+      "id": "source-de-physical-potential-regression",
+      "path": "scripts/test_de_physical_potential.py",
+      "symbol": "test_near_zero_p1_component_uses_forward_roundoff_bound",
+      "responsibility": "Check an analytically known affine potential on a cancellation-prone Tet4 and reject a field perturbation outside the local roundoff envelope."
     }
   ],
   "public_api": {
