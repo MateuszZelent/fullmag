@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { MODEL_READINESS_PATH, MODEL_SCENE_PATH } from "@/kernel/api/apiPaths";
+import { ControlRoomApiError } from "@/kernel/api/ControlRoomApi";
 import { CommandRegistry } from "@/kernel/commands/CommandRegistry";
 import type { CommandContext } from "@/kernel/commands/commandTypes";
 import { KernelContext } from "@/kernel/KernelContext";
@@ -24,6 +25,7 @@ import {
   buildRuntimeCommandControlResourceData,
   runtimeCommandControlSessionStatusEquals,
   selectRuntimeCommandControlSessionStatus,
+  useCurrentRunResource,
   useModelReadinessResource,
   useRuntimeCommandControlResourceData,
 } from "./studyRuntimeResources";
@@ -130,6 +132,56 @@ describe("production runtime command resource provider", () => {
         expect(readinessLoad).toHaveBeenCalledTimes(1);
         expect(container.textContent).toBe("7");
       });
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("treats an absent current run as an empty resource without emitting a load failure", async () => {
+    const currentRunLoad = vi.fn(() =>
+      Promise.reject(new ControlRoomApiError("no active run", 404)),
+    );
+    const bus = new EventBus<KernelEventMap>();
+    const failures: KernelEventMap["resource:load-failed"][] = [];
+    bus.on("resource:load-failed", (event) => {
+      failures.push(event);
+    });
+    const resources = new ResourceInvalidationController(bus);
+    const kernel = {
+      api: { simulation: { currentRun: currentRunLoad } },
+      bus,
+      diagnosticRecorder: new DiagnosticRecorderController({
+        config: { enabled: false },
+      }),
+      resources,
+    } as unknown as KernelApi;
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    dom.document.body.appendChild(container);
+    const root = createRoot(container as unknown as Element);
+    let latest: ReturnType<typeof useCurrentRunResource> | null = null;
+
+    function Harness() {
+      latest = useCurrentRunResource();
+      return null;
+    }
+
+    try {
+      await act(async () => {
+        root.render(
+          <KernelContext.Provider value={kernel}>
+            <Harness />
+          </KernelContext.Provider>,
+        );
+      });
+      await vi.waitFor(() => {
+        expect(currentRunLoad).toHaveBeenCalledTimes(1);
+        expect(latest?.status).toBe("ready");
+      });
+      expect(latest?.data).toBeNull();
+      expect(latest?.error).toBeNull();
+      expect(failures).toEqual([]);
     } finally {
       await act(async () => root.unmount());
       dom.restore();

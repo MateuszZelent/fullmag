@@ -118,6 +118,140 @@ async function waitFor(
 }
 
 describe("useSimulationPreparation", () => {
+  it("treats an unavailable preparation snapshot as absent without emitting a load failure", async () => {
+    const load = vi.fn(() =>
+      Promise.reject(
+        new ControlRoomApiError("simulation preparation unavailable", 404),
+      ),
+    );
+    const { bus, kernel, resources } = makeKernel(load);
+    const failures: KernelEventMap["resource:load-failed"][] = [];
+    const unsubscribeFailure = bus.on("resource:load-failed", (event) => {
+      failures.push(event);
+    });
+    const observations: PreparationResult[] = [];
+    const dom = installTestDom();
+    const root = createRoot(dom.document.createElement("div") as unknown as Element);
+    resources.invalidate(SIMULATION_PREPARATION_PATH, 1);
+
+    try {
+      await act(async () => {
+        root.render(
+          <KernelContext.Provider value={kernel}>
+            <Probe observations={observations} />
+          </KernelContext.Provider>,
+        );
+      });
+      await waitFor(
+        () => observations.some((observation) => observation.status === "ready"),
+        "missing preparation snapshot was not normalized as absent",
+      );
+
+      expect(load).toHaveBeenCalledTimes(1);
+      expect(resultSnapshot(observations.at(-1)!)).toEqual({
+        data: null,
+        error: null,
+        revision: 1,
+        status: "ready",
+      });
+      expect(failures).toEqual([]);
+    } finally {
+      unsubscribeFailure();
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("keeps a missing preparation error when status advertises a required revision", async () => {
+    const load = vi.fn(() =>
+      Promise.reject(
+        new ControlRoomApiError("simulation preparation unavailable", 404),
+      ),
+    );
+    const { bus, kernel, resources } = makeKernel(load);
+    const failures: KernelEventMap["resource:load-failed"][] = [];
+    const unsubscribeFailure = bus.on("resource:load-failed", (event) => {
+      failures.push(event);
+    });
+    const observations: PreparationResult[] = [];
+    const dom = installTestDom();
+    const root = createRoot(dom.document.createElement("div") as unknown as Element);
+    resources.invalidate(SIMULATION_PREPARATION_PATH, 8);
+
+    try {
+      await act(async () => {
+        root.render(
+          <KernelContext.Provider value={kernel}>
+            <Probe observations={observations} requiredRevision={8} />
+          </KernelContext.Provider>,
+        );
+      });
+      await waitFor(
+        () => observations.some((observation) => observation.status === "error"),
+        "missing required preparation revision was normalized away",
+      );
+
+      expect(resultSnapshot(observations.at(-1)!)).toMatchObject({
+        data: null,
+        error: expect.objectContaining({
+          message: "simulation preparation unavailable",
+        }),
+        revision: 8,
+        status: "error",
+      });
+      expect(failures).toEqual([
+        expect.objectContaining({
+          resourceKey: SIMULATION_PREPARATION_PATH,
+          revision: 8,
+          status: 404,
+        }),
+      ]);
+    } finally {
+      unsubscribeFailure();
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("keeps a session-scope 404 visible when no preparation revision is published", async () => {
+    const load = vi.fn(() =>
+      Promise.reject(
+        new ControlRoomApiError("no active local live workspace", 404),
+      ),
+    );
+    const { kernel, resources } = makeKernel(load);
+    const observations: PreparationResult[] = [];
+    const dom = installTestDom();
+    const root = createRoot(dom.document.createElement("div") as unknown as Element);
+    resources.invalidate(SIMULATION_PREPARATION_PATH, 1);
+
+    try {
+      await act(async () => {
+        root.render(
+          <KernelContext.Provider value={kernel}>
+            <Probe observations={observations} />
+          </KernelContext.Provider>,
+        );
+      });
+      await waitFor(
+        () => observations.some((observation) => observation.status === "error"),
+        "session-scope preparation failure was normalized away",
+      );
+
+      expect(resultSnapshot(observations.at(-1)!)).toMatchObject({
+        data: null,
+        error: expect.objectContaining({
+          message: "no active local live workspace",
+        }),
+        revision: 1,
+        status: "error",
+      });
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
   it("retries a failed load while the status advertises an unread preparation revision", async () => {
     vi.useFakeTimers();
     updateRealtimeCommunicationPolicy({ error_retry_ms: 10 });
