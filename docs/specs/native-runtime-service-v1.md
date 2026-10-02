@@ -82,6 +82,15 @@ odpowiedź nie kwalifikuje solvera ani sprzętu. Serwer obsługuje status w pęt
 ready. Podczas startup/drain timeout nie oznacza zakończenia usługi.
 Launcher/UI jeszcze nie korzystają z tego kanału.
 
+Odczytowy klient CLI: `fullmag runtime service-status --store <absolute-root>
+--target <target-id> [--timeout-seconds 3]`. Porównuje target i pełny
+commit/snapshot ze swoim buildem, owner/process-start token, PID/host, adres
+oraz obie tożsamości/generacje pul. Przy zgodnym ready zwraca JSON
+`runtime_service_discovery.v1`; błędy kończą komendę bez restartu/takeover.
+Wspólny deadline connect/write/read wynosi 1–30 sekund; descriptor i response
+mają limit 256 KiB. To diagnostyczny klient przyszłego attach, bez zmiany
+domyślnego zachowania UI i bez dowodu atomowej żywotności schedulerów.
+
 Oba admissions zamyka się przed oczekiwaniem na procesy. Aktywne workery kończą
 się według supervisor/lease/receipt. Błąd jednego schedulera drenuje drugi,
 lecz owner kończy jako failed/unknown, nigdy jako poprawny drained.

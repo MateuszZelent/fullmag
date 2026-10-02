@@ -231,6 +231,15 @@ pub(crate) struct UiCli {
 
 #[derive(Subcommand)]
 pub(crate) enum RuntimeCommand {
+    /// Observe an already running native service without starting or stopping it.
+    ServiceStatus {
+        #[arg(long)]
+        store: PathBuf,
+        #[arg(long)]
+        target: String,
+        #[arg(long, default_value_t = 3, value_parser = clap::value_parser!(u64).range(1..=30))]
+        timeout_seconds: u64,
+    },
     /// Internal cold integrity gate for an explicitly pinned saved FEM tensor.
     #[command(hide = true)]
     VerifySavedFemSnapshot {

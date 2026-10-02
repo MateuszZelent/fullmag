@@ -377,7 +377,8 @@ fn read_bounded_from_file(file: &mut File, maximum: usize, context: &str) -> Res
     Ok(bytes)
 }
 
-fn validate_descriptor(descriptor: &RuntimeServiceOwnerDescriptor) -> Result<()> {
+/// Validate a received owner record without opening or writing a session store.
+pub fn validate_descriptor(descriptor: &RuntimeServiceOwnerDescriptor) -> Result<()> {
     if descriptor.schema_version != RUNTIME_SERVICE_OWNER_SCHEMA {
         bail!(
             "unsupported runtime service owner schema `{}`",
