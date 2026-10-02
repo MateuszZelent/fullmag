@@ -748,18 +748,6 @@ pub(crate) fn execute_fem_eigen_path_with_producer_identity(
                     metrics,
                 )?;
             }
-            self.mode_artifacts
-                .borrow_mut()
-                .extend(remap_single_k_mode_artifacts(
-                    &executed.auxiliary_artifacts,
-                    sample.sample_index,
-                    &eigen_path_candidate_mode_indices(
-                        &self.publication_outputs,
-                        sample,
-                        plan.count,
-                    ),
-                )?);
-
             // Parse the spectrum artifact to extract mode results
             let spectrum_bytes = executed
                 .auxiliary_artifacts
@@ -787,6 +775,22 @@ pub(crate) fn execute_fem_eigen_path_with_producer_identity(
                     })?;
             let native_mode_identities =
                 eigen_path_native_mode_identities(modes_array, sample.sample_index)?;
+            let available_mode_indices = native_mode_identities.iter()
+                .map(|(raw, _)| u32::try_from(*raw).map_err(|_| RunError {
+                    message: "native raw mode identity exceeds output selector range".to_string(),
+                }))
+                .collect::<Result<BTreeSet<_>, _>>()?;
+            self.mode_artifacts
+                .borrow_mut()
+                .extend(remap_single_k_mode_artifacts(
+                    &executed.auxiliary_artifacts,
+                    sample.sample_index,
+                    &eigen_path_candidate_mode_indices(
+                        &self.publication_outputs,
+                        sample,
+                        &available_mode_indices,
+                    ),
+                )?);
             let mut modes = Vec::with_capacity(modes_array.len());
             for (mode_json, (raw_mode_index, frequency_real_hz)) in
                 modes_array.iter().zip(native_mode_identities)

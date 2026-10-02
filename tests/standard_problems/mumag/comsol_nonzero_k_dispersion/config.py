@@ -180,7 +180,7 @@ def mode_field_selection(case: BenchmarkCase) -> tuple[tuple[int, ...], tuple[in
         )
     all_fields = raw in {"1", "true", "yes"}
     if all_fields:
-        return tuple(range(requested_mode_count(case))), ()
+        return (), ()
     return (tuple(range(TARGET_BANDS)) if case.use_path else (0,)), (
         MODE_FIELD_SAMPLE_INDICES if case.use_path else (0,)
     )
@@ -199,11 +199,7 @@ def guide_metadata(case: BenchmarkCase) -> dict[str, object]:
     mode_indices, sample_indices = mode_field_selection(case)
     all_fields = not sample_indices
     if all_fields:
-        mode_field_policy = (
-            "all_61_samples_x_24_modes"
-            if case.use_path
-            else "all_1_sample_x_1_mode"
-        )
+        mode_field_policy = "all_solver_modes_at_all_samples"
     else:
         mode_field_policy = (
             f"first_{len(mode_indices)}_modes_at_control_samples"
@@ -310,6 +306,7 @@ def guide_metadata(case: BenchmarkCase) -> dict[str, object]:
             "mode_field_export": {
                 "policy": mode_field_policy,
                 "mode_indices": list(mode_indices),
+                "all_modes": all_fields,
                 "sample_indices": list(sample_indices),
                 "all_fields_opt_in": "FULLMAG_COMSOL_DISPERSION_ALL_FIELDS=1",
             },

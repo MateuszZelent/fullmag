@@ -1722,6 +1722,8 @@ pub enum OutputIR {
     },
     EigenMode {
         field: String,
+        #[serde(default, skip_serializing_if = "mode_selection_is_false")]
+        all_modes: bool,
         #[serde(default)]
         indices: Vec<u32>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1766,6 +1768,10 @@ pub enum OutputIR {
 
 fn default_include_branch_table() -> bool {
     true
+}
+
+fn mode_selection_is_false(value: &bool) -> bool {
+    !*value
 }
 
 impl OutputIR {

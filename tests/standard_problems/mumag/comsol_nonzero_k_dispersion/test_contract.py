@@ -415,10 +415,24 @@ def test_all_mode_fields_are_an_explicit_opt_in_without_changing_the_sweep() -> 
         eigen = eigen_ir["study"]
         assert eigen["k_sampling"]["samples_per_segment"] == [20, 20, 20]
         mode_output = eigen["sampling"]["outputs"][-1]
-        assert mode_output["indices"] == list(range(MODE_COUNT))
+        assert mode_output["indices"] == []
+        assert mode_output["all_modes"] is True
         assert "sample_selector" not in mode_output
         metadata = _benchmark_metadata(eigen_ir)["outputs"]["mode_field_export"]
-        assert metadata["policy"] == "all_61_samples_x_24_modes"
+        assert metadata["policy"] == "all_solver_modes_at_all_samples"
+        assert metadata["all_modes"] is True
+        from fullmag.runtime.script_builder import render_loaded_problem_as_script
+        from tempfile import TemporaryDirectory
+        rendered = render_loaded_problem_as_script(loaded)
+        assert 'all_modes=True' in rendered
+        with TemporaryDirectory() as directory:
+            exported = Path(directory) / "problem.py"
+            exported.write_text(rendered, encoding="utf-8")
+            replay = fm.load_problem_from_script(exported, lightweight_assets=True)
+            replay_ir = replay.stages[-1].problem.to_ir(
+                requested_backend="fem", execution_mode="strict",
+                execution_precision="double", include_geometry_assets=False)
+            assert replay_ir["study"]["sampling"]["outputs"][-1] == mode_output
     finally:
         if previous_case is None:
             os.environ.pop("FULLMAG_COMSOL_DISPERSION_CASE", None)

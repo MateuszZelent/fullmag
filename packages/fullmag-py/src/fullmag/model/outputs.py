@@ -250,9 +250,12 @@ class SaveMode:
     branches: Sequence[int] = ()
     sample_indices: Sequence[int] = ()
     sample_labels: Sequence[str] = ()
+    all_modes: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "field", require_non_empty(self.field, "field"))
+        if type(self.all_modes) is not bool:
+            raise ValueError("all_modes must be a boolean")
         normalized = _normalize_nonnegative_indices(self.indices, "mode indices")
         if len(set(normalized)) != len(normalized):
             raise ValueError("mode indices must be unique")
@@ -264,7 +267,9 @@ class SaveMode:
         if len(set(normalized_branches)) != len(normalized_branches):
             raise ValueError("branch indices must be unique")
         object.__setattr__(self, "branches", normalized_branches)
-        if not normalized and not normalized_branches:
+        if self.all_modes and (normalized or normalized_branches):
+            raise ValueError("all_modes cannot be combined with indices or branches")
+        if not self.all_modes and not normalized and not normalized_branches:
             raise ValueError(
                 "SaveMode requires at least one raw mode index or tracked branch index"
             )
@@ -300,6 +305,8 @@ class SaveMode:
         }
         if self.branches:
             payload["branches"] = list(self.branches)
+        if self.all_modes:
+            payload["all_modes"] = True
         if self.sample_indices or self.sample_labels:
             payload["sample_selector"] = {
                 "sample_indices": list(self.sample_indices),

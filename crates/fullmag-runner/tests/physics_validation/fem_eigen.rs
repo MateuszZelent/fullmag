@@ -57,6 +57,7 @@ fn fem_eigen_smoke_completes_without_errors() {
         },
         OutputIR::EigenMode {
             field: "mode".to_string(),
+            all_modes: false,
             indices: vec![0u32],
             branches: vec![],
             sample_selector: None,
@@ -225,6 +226,7 @@ fn fem_eigen_modes_are_non_trivial() {
         },
         OutputIR::EigenMode {
             field: "mode".to_string(),
+            all_modes: false,
             indices: vec![0u32, 1u32],
             branches: vec![],
             sample_selector: None,

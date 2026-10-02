@@ -234,6 +234,35 @@ Do not route the request to the other representation, to K0, or to a finite
 isolated airbox. Re-enable only after the failed gate is rerun with a recorded
 error budget.
 
+## Uzupełnienie kontraktu eksportu — 2026-10-02
+
+Pełny replay trackingu wymaga pól wszystkich kandydatów zwróconych przez
+solver. Raw mode IDs mogą być nieciągłe, dlatego zakres 0..requested_count
+nie oznacza wszystkich wyników. Wprowadzamy addytywne all_modes: bool
+w OutputIR::EigenMode, z domyślnym False i pomijaniem False w serializacji.
+SaveMode(all_modes=True) i study.save("mode", all_modes=True) zachowują
+ten zamiar w kanonicznym Python→IR→Python round-trip.
+
+True jest rozłączne z indices i branches; selektory próbek nadal obowiązują.
+Rozstrzygnięcie wyjścia odbywa się na rzeczywistych identyfikatorach wyników,
+bez renumeracji i bez zmiany liczby żądanych eigenpairs, fizyki, urządzenia
+lub fallbacku. Wewnętrzny eksport pól trackingu stosuje ten sam zamiar,
+a ścieżka zatrzymuje pola dopiero po odczytaniu rzeczywistych raw IDs.
+Pokrycie zwróconych kandydatów nie jest dowodem kompletności widma.
+
+Dotknięte są DSL/eksport skryptu, IR/validator, wspólny selektor artefaktów,
+single-k FEM i publikacja ścieżki oraz benchmark C0/C1/A1. Nie wprowadzamy
+endpointu, nowego transportu pól ani osobnego modelu frontendowego; istniejący
+skrypt jest kanonicznym dokumentem autorstwa. UI nie dostaje dodatkowego
+selektora w tym fragmencie. Istniejące jawne raw/branch wybory zachowują
+semantykę. Starszy runtime bez tego pola odrzuci pusty selector przy walidacji;
+nowy skrypt wymaga odpowiadającej mu wersji runtime.
+
+Wycofanie opt-in przywraca dotychczasowy bounded eksport. False/brak pola
+pozostają kompatybilne. Wdrożenie wymaga testów walidacji, round-trip,
+nieciągłych raw IDs i selektorów próbek oraz managed runtime. Testy natywne
+mogą być przygotowane, lecz ich kompilacja jest obecnie zabroniona.
+
 ## References
 
 - Approved implementation plan:

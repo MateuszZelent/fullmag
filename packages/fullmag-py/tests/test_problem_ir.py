@@ -184,6 +184,26 @@ def test_save_dispersion_preserves_branch_table_option_in_python_ir() -> None:
     }
 
 
+def test_save_all_modes_has_explicit_intent_without_assumed_raw_ids() -> None:
+    assert fm.SaveMode(all_modes=True, sample_indices=[3]).to_ir() == {
+        "kind": "eigen_mode", "field": "mode", "indices": [], "all_modes": True,
+        "sample_selector": {"sample_indices": [3], "sample_labels": []},
+    }
+    assert "all_modes" not in fm.SaveMode(indices=[64, 91]).to_ir()
+    for selector in ({"indices": [64]}, {"branches": [3]}):
+        with pytest.raises(ValueError, match="cannot be combined"):
+            fm.SaveMode(all_modes=True, **selector)
+    for value in (0, 1, "true", None):
+        with pytest.raises(ValueError, match="boolean"):
+            fm.SaveMode(all_modes=value)
+    fm.reset()
+    try:
+        with pytest.raises(ValueError, match="only to mode"):
+            fm.save("spectrum", all_modes=True)
+    finally:
+        fm.reset()
+
+
 @pytest.mark.parametrize("value", [1.5, True, "1", 2**32])
 def test_save_mode_selectors_require_integer_ids(value) -> None:
     with pytest.raises(ValueError, match="integers"):

@@ -5971,6 +5971,7 @@ class StudyBuilder:
         every: SamplingPeriod | None = None,
         indices: Sequence[int] | None = None,
         branches: Sequence[int] | None = None,
+        all_modes: bool = False,
         sample_indices: Sequence[int] | None = None,
         sample_labels: Sequence[str] | None = None,
         field: str = "mode",
@@ -5989,6 +5990,7 @@ class StudyBuilder:
             every=every,
             indices=indices,
             branches=branches,
+            all_modes=all_modes,
             sample_indices=sample_indices,
             sample_labels=sample_labels,
             field=field,
@@ -8513,6 +8515,7 @@ def save(
     every: SamplingPeriod | None = None,
     indices: Sequence[int] | None = None,
     branches: Sequence[int] | None = None,
+    all_modes: bool = False,
     sample_indices: Sequence[int] | None = None,
     sample_labels: Sequence[str] | None = None,
     field: str = "mode",
@@ -8540,9 +8543,16 @@ def save(
         sinc drive. Required for field/scalar outputs, ignored for eigen outputs.
     indices, branches : sequence of int, optional
         Raw mode indices or tracked branch indices for ``"mode"`` output.
+    all_modes : bool, optional
+        Save every returned solver mode at selected samples. Cannot be
+        combined with indices or branches; does not request extra eigenpairs.
     sample_indices, sample_labels : sequence, optional
         Optional sample selectors for ``"mode"`` output.
     """
+    if type(all_modes) is not bool:
+        raise ValueError("all_modes must be a boolean")
+    if all_modes and quantity != "mode":
+        raise ValueError("all_modes applies only to mode output")
     _state._outputs_explicit = True
     if quantity in _EIGEN_QUANTITIES:
         if quantity == "spectrum":
@@ -8555,6 +8565,7 @@ def save(
                     field=field,
                     indices=tuple(indices or ()),
                     branches=tuple(branches or ()),
+                    all_modes=all_modes,
                     sample_indices=tuple(sample_indices or ()),
                     sample_labels=tuple(sample_labels or ()),
                 )

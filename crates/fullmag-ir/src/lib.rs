@@ -911,6 +911,7 @@ impl ProblemIR {
                 }
                 OutputIR::EigenMode {
                     field,
+                    all_modes,
                     indices,
                     branches,
                     sample_selector,
@@ -918,11 +919,14 @@ impl ProblemIR {
                     if field.trim().is_empty() {
                         errors.push("eigen_mode field must not be empty".to_string());
                     }
-                    if indices.is_empty() && branches.is_empty() {
+                    if !all_modes && indices.is_empty() && branches.is_empty() {
                         errors.push(
                             "eigen_mode must contain at least one mode index or branch index"
                                 .to_string(),
                         );
+                    }
+                    if *all_modes && (!indices.is_empty() || !branches.is_empty()) {
+                        errors.push("eigen_mode all_modes cannot be combined with indices or branches".to_string());
                     }
                     if indices
                         .iter()

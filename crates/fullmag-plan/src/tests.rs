@@ -11091,6 +11091,7 @@ fn fem_eigen_backend_with_mesh_asset_plans_successfully() {
                 },
                 fullmag_ir::OutputIR::EigenMode {
                     field: "mode".to_string(),
+                    all_modes: false,
                     indices: vec![0, 1],
                     branches: vec![],
                     sample_selector: None,
@@ -18843,9 +18844,27 @@ mod eigen_output_validation_tests {
     use crate::validate::validate_eigen_outputs;
     use fullmag_ir::{OutputIR, SampleSelectorIR};
 
+    #[test]
+    fn all_modes_is_valid_and_conflicting_or_duplicate_requests_are_rejected() {
+        let output = OutputIR::EigenMode {
+            field: "mode".into(), all_modes: true, indices: vec![], branches: vec![], sample_selector: None,
+        };
+        let mut errors = Vec::new();
+        validate_eigen_outputs(&[output.clone()], &mut errors);
+        assert!(errors.is_empty(), "{errors:?}");
+        validate_eigen_outputs(&[output.clone(), output.clone()], &mut errors);
+        assert!(errors.iter().any(|error| error.contains("all modes more than once")));
+        errors.clear();
+        let mut conflicting = output;
+        if let OutputIR::EigenMode { indices, .. } = &mut conflicting { indices.push(64); }
+        validate_eigen_outputs(&[conflicting], &mut errors);
+        assert!(errors.iter().any(|error| error.contains("all_modes cannot be combined")));
+    }
+
     fn mode_output_with_selector(index: u32, sample_selector: SampleSelectorIR) -> OutputIR {
         OutputIR::EigenMode {
             field: "mode".to_string(),
+            all_modes: false,
             indices: vec![index],
             branches: Vec::new(),
             sample_selector: Some(sample_selector),

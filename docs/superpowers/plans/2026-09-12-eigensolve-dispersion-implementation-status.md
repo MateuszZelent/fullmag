@@ -1,5 +1,45 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
+## S06/S12 — eksport rzeczywistych kandydatów, 2026-10-02
+
+Poprzedni fragment 3245183e841c365dce8cd4171ecaa6ef1c66199a jest na remote.
+Naprawiono źródłowy P1 eksportu ALL_FIELDS: jawne SaveMode/all_modes=True
+przechodzi przez study.save, IR, validator IR, planner, selektor wyjść,
+native single-k i publikację ścieżki. True wyklucza indices/branches,
+False/brak pola zachowuje dotychczasowy kontrakt. Round-trip skryptu
+zachowuje flagę i selektory próbek.
+
+Wewnętrzny eksport trackingu też używa wszystkich zwróconych modów.
+Single-k zapisuje rzeczywiste zwrócone sloty; ścieżka odczytuje natywne
+raw IDs z walidowanego widma przed zatrzymaniem artefaktów. Lista
+kandydatów nie jest już filtrowana przez raw_id < requested_count.
+Nie renumerujemy modów ani nie utożsamiamy tego pokrycia z kompletnością
+widma. Nadmiar ponad zakres identyfikatora powoduje błąd zamiast pominięcia.
+
+Review wykrył pominięty odbiornik planner/validate.rs; poprawiono jego
+wyczerpujący wzorzec, empty selector, konflikt i duplicate-all validation.
+CLI zachowuje all_modes z pustymi indeksami, nie usuwa też konfliktowych
+indeksów przed walidacją tego wariantu. Historyczne helpery
+eigen_path_public_mode_indices/eigen_path_mode_artifact_indices mają
+wyłącznie testowe wywołania i opisują dawną numerację slotów; bieżąca
+publikacja używa select_eigen_outputs i rzeczywistych raw IDs.
+
+Dowody: 40 Python/IR/benchmark tests PASS, w tym pełny canonical script
+round-trip opt-in; 4 cross-consumer sourcechecks PASS; parser rustfmt
+17 zmienionych plików Rust PASS; focused source-map PASS. Rust regressions
+IR/planner/output_selection/path przygotowane, lecz NIE skompilowane
+zgodnie z zakazem. Parser i testy Python nie dowodzą typecheck ani runtime.
+
+Po korekcie wszystkich odbiorników pełniejszy zakres Python/IR/benchmark
+i script-builder: 75 tests + 28 subtests PASS (2,58 s). Niezależny read-only
+review nie znalazł pozostałego P1/P2 w tym fragmencie. Nie wykonano native
+compile ani obliczeń; nie zwiększamy na tej podstawie statusu naukowego.
+
+P1 producenta zamknięty na poziomie źródeł; pełna kampania wymaga nowego
+managed buildu i rzeczywistych pól. Kapsuła #196 jest starsza i pozostaje
+niezmieniona. S06/S12, punkty DE/BV, COMSOL A1, kompletność i zbieżność,
+S08 browser, S09/GPU i końcowa integracja pozostają otwarte.
+
 ## S06/S12 — certyfikat tabeli i początkowe wiązanie wszystkich pól, 2026-10-02
 
 Po bazie 62320ee8f2fd9fbe1562ff0d84c7fadf8ddc1e0a porównanie obejmuje

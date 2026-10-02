@@ -5002,6 +5002,7 @@ fn eigenmodes_with_spectrum_and_mode_outputs_validate() {
                 },
                 OutputIR::EigenMode {
                     field: "mode".to_string(),
+                    all_modes: false,
                     indices: vec![0, 1],
                     branches: vec![],
                     sample_selector: None,
@@ -6225,6 +6226,7 @@ fn eigenmodes_accept_dispersion_or_diagnostics_output_without_redundant_spectrum
 fn eigen_output_selectors_round_trip_through_canonical_ir() {
     let mode = OutputIR::EigenMode {
         field: "mode".to_string(),
+        all_modes: false,
         indices: vec![],
         branches: vec![2, 0],
         sample_selector: Some(SampleSelectorIR {
@@ -6273,6 +6275,7 @@ fn eigen_output_selectors_round_trip_through_canonical_ir() {
         legacy_mode,
         OutputIR::EigenMode {
             field: "mode".to_string(),
+            all_modes: false,
             indices: vec![0],
             branches: vec![],
             sample_selector: None,
@@ -6318,6 +6321,7 @@ fn eigen_mode_branch_only_output_is_valid_and_empty_selector_is_rejected() {
             stage_autosave: None,
             outputs: vec![OutputIR::EigenMode {
                 field: "mode".to_string(),
+                all_modes: false,
                 indices: vec![],
                 branches: vec![1],
                 sample_selector: None,
@@ -6327,10 +6331,29 @@ fn eigen_mode_branch_only_output_is_valid_and_empty_selector_is_rejected() {
     };
     assert!(ir.validate().is_ok());
 
+    let all: OutputIR = serde_json::from_value(serde_json::json!({
+        "kind": "eigen_mode", "field": "mode", "all_modes": true, "indices": []
+    })).unwrap();
+    assert_eq!(serde_json::to_value(&all).unwrap()["all_modes"], true);
+    let legacy: OutputIR = serde_json::from_value(serde_json::json!({
+        "kind": "eigen_mode", "field": "mode", "indices": [64, 91]
+    })).unwrap();
+    assert!(serde_json::to_value(&legacy).unwrap().get("all_modes").is_none());
+    let mut all_ir = ir.clone();
+    if let StudyIR::Eigenmodes { sampling, .. } = &mut all_ir.study {
+        sampling.outputs = vec![all];
+    }
+    assert!(all_ir.validate().is_ok());
+    if let StudyIR::Eigenmodes { sampling, .. } = &mut all_ir.study {
+        if let OutputIR::EigenMode { indices, .. } = &mut sampling.outputs[0] { indices.push(64); }
+    }
+    assert!(all_ir.validate().unwrap_err().iter().any(|error| error.contains("all_modes cannot be combined")));
+
     let mut invalid = ir;
     if let StudyIR::Eigenmodes { sampling, .. } = &mut invalid.study {
         sampling.outputs[0] = OutputIR::EigenMode {
             field: "mode".to_string(),
+            all_modes: false,
             indices: vec![],
             branches: vec![],
             sample_selector: Some(SampleSelectorIR::default()),

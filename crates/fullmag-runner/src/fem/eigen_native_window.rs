@@ -26,7 +26,7 @@ use super::eigen_native_result::{
     merge_poisson_airbox_modal_result_diagnostics, native_bloch_floquet_modes_from_result_json,
     native_modal_modes_from_result_json, normalize_native_window_subwindows,
 };
-use super::eigen_output::{json_artifact, k_vector_json, requested_mode_indices};
+use super::eigen_output::{json_artifact, k_vector_json, requested_mode_indices_for_result};
 use super::eigen_physical_potential::{
     doubled_real_split_to_complex, physical_potential_artifacts,
 };
@@ -784,7 +784,7 @@ pub(super) fn execute_native_modal_window(
                 })?),
             );
         }
-        for raw_mode_index in requested_mode_indices(outputs) {
+        for raw_mode_index in requested_mode_indices_for_result(outputs, modes.len())? {
             let mode_index = raw_mode_index as usize;
             let Some(mode) = modes.get(mode_index) else {
                 continue;

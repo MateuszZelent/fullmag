@@ -12,7 +12,7 @@ use super::eigen_output::{
     classify_polarization, damping_policy_label, demag_realization_label, dispersion_csv,
     dispersion_v2_csv, equilibrium_source_json, floquet_potential_payload_bytes,
     floquet_potential_payload_path, json_artifact, k_vector_json, modal_sample_id,
-    normalization_label, requested_mode_indices, solver_kind_label, spin_wave_bc_json,
+    normalization_label, requested_mode_indices_for_result, solver_kind_label, spin_wave_bc_json,
     spin_wave_bc_label, write_eigen_v2_bundle,
 };
 use super::eigen_policy::resolved_demag_realization;
@@ -308,7 +308,7 @@ pub(super) fn native_modal_artifacts(
             });
         }
     }
-    let requested_modes = requested_mode_indices(outputs);
+    let requested_modes = requested_mode_indices_for_result(outputs, modes.len())?;
     let wants_spectrum = outputs
         .iter()
         .any(|output| matches!(output, OutputIR::EigenSpectrum { .. }));

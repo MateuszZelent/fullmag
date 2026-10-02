@@ -1775,18 +1775,21 @@ fn eigen_sampling_from(base: &fullmag_ir::SamplingIR, mode_count: u32) -> fullma
         .cloned()
         .collect();
     for output in &mut outputs {
-        if let fullmag_ir::OutputIR::EigenMode { indices, .. } = output {
-            indices.retain(|index| *index < mode_count);
+        if let fullmag_ir::OutputIR::EigenMode { indices, all_modes, .. } = output {
+            if !*all_modes {
+                indices.retain(|index| *index < mode_count);
+            }
         }
     }
     outputs.retain(|output| {
         !matches!(
             output,
             fullmag_ir::OutputIR::EigenMode {
+                all_modes,
                 indices,
                 branches,
                 ..
-            } if indices.is_empty() && branches.is_empty()
+            } if !all_modes && indices.is_empty() && branches.is_empty()
         )
     });
     if !outputs.iter().any(|output| {
@@ -9123,6 +9126,7 @@ mod tests {
             },
             fullmag_ir::OutputIR::EigenMode {
                 field: "mode".to_string(),
+                all_modes: false,
                 indices: vec![0, 1],
                 branches: vec![],
                 sample_selector: None,
@@ -9373,6 +9377,7 @@ mod tests {
                 },
                 fullmag_ir::OutputIR::EigenMode {
                     field: "mode".to_string(),
+                    all_modes: false,
                     indices: vec![0, 1, 7],
                     branches: vec![],
                     sample_selector: None,
@@ -9475,6 +9480,7 @@ mod tests {
             },
             fullmag_ir::OutputIR::EigenMode {
                 field: "mode".to_string(),
+                all_modes: false,
                 indices: vec![0, 1, 7],
                 branches: vec![],
                 sample_selector: None,

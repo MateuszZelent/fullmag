@@ -8829,6 +8829,7 @@ fn cpu_full_2x2_frequency_window_uses_native_modal_artifact_path() {
             },
             OutputIR::EigenMode {
                 field: "mode".to_string(),
+                all_modes: false,
                 indices: vec![0],
                 branches: vec![],
                 sample_selector: None,
@@ -8912,6 +8913,7 @@ fn cpu_full_2x2_nonzero_floquet_window_uses_native_bloch_payload_artifact_path()
             },
             OutputIR::EigenMode {
                 field: "mode".to_string(),
+                all_modes: false,
                 indices: vec![0],
                 branches: vec![],
                 sample_selector: None,

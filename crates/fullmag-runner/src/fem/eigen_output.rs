@@ -38,6 +38,19 @@ pub(super) fn requested_mode_indices(outputs: &[OutputIR]) -> std::collections::
         .collect()
 }
 
+/// Native single-k artifacts use the actual returned vector slots. Path
+/// publication resolves public raw identities from the emitted spectrum.
+pub(super) fn requested_mode_indices_for_result(outputs: &[OutputIR], returned_count: usize) -> Result<BTreeSet<u32>, RunError> {
+    if outputs.iter().any(|output| matches!(output, OutputIR::EigenMode { all_modes: true, .. })) {
+        let count = u32::try_from(returned_count).map_err(|_| RunError {
+            message: "returned native mode count exceeds output selector range".to_string(),
+        })?;
+        Ok((0..count).collect())
+    } else {
+        Ok(requested_mode_indices(outputs))
+    }
+}
+
 pub(super) fn json_artifact(
     path: impl Into<String>,
     value: &serde_json::Value,

@@ -42,6 +42,7 @@ impl DispersionCurveSelection {
 pub(crate) enum OutputSelectionError {
     EmptyEigenModeField,
     EmptyEigenModeSelector,
+    ConflictingAllModeSelector,
     EmptySampleSelector,
     EmptySampleLabel,
     EmptyDispersionCurveName,
@@ -89,6 +90,7 @@ impl fmt::Display for OutputSelectionError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::EmptyEigenModeField => formatter.write_str("eigen_mode field must not be empty"),
+            Self::ConflictingAllModeSelector => formatter.write_str("eigen_mode all_modes cannot be combined with indices or branches"),
             Self::EmptyEigenModeSelector => formatter.write_str(
                 "eigen_mode must contain at least one raw mode index or tracked branch index",
             ),
@@ -349,6 +351,7 @@ pub(crate) fn select_eigen_outputs(
             }
             OutputIR::EigenMode {
                 field,
+                all_modes,
                 indices,
                 branches,
                 sample_selector,
@@ -356,11 +359,15 @@ pub(crate) fn select_eigen_outputs(
                 if field.trim().is_empty() {
                     return Err(OutputSelectionError::EmptyEigenModeField);
                 }
-                if indices.is_empty() && branches.is_empty() {
+                if !all_modes && indices.is_empty() && branches.is_empty() {
                     return Err(OutputSelectionError::EmptyEigenModeSelector);
+                }
+                if *all_modes && (!indices.is_empty() || !branches.is_empty()) {
+                    return Err(OutputSelectionError::ConflictingAllModeSelector);
                 }
                 mode_requests.push(ModeRequest {
                     field: field.trim(),
+                    all_modes: *all_modes,
                     indices,
                     branches,
                     sample_selector: sample_selector.as_ref(),
@@ -412,7 +419,7 @@ pub(crate) fn select_eigen_outputs(
                 let branch_matches = mode
                     .branch_id
                     .is_some_and(|branch_id| requested_branches.contains(&branch_id));
-                if requested_indices.contains(&mode.raw_mode_index) || branch_matches {
+                if request.all_modes || requested_indices.contains(&mode.raw_mode_index) || branch_matches {
                     let mode_id = SampleModeId::new(sample_index, mode.raw_mode_index);
                     request_mode_ids.insert(mode_id);
                 }
@@ -449,6 +456,7 @@ pub(crate) fn select_eigen_outputs(
 
 struct ModeRequest<'a> {
     field: &'a str,
+    all_modes: bool,
     indices: &'a [u32],
     branches: &'a [u32],
     sample_selector: Option<&'a SampleSelectorIR>,
@@ -783,6 +791,7 @@ mod tests {
             &result(),
             &[OutputIR::EigenMode {
                 field: " mode ".to_string(),
+                all_modes: false,
                 indices: vec![15],
                 branches: vec![7],
                 sample_selector: Some(SampleSelectorIR {
@@ -811,6 +820,21 @@ mod tests {
     }
 
     #[test]
+    fn all_modes_uses_returned_sparse_ids_and_preserves_sample_selection() {
+        let output = OutputIR::EigenMode {
+            field: "mode".to_string(), all_modes: true, indices: vec![], branches: vec![],
+            sample_selector: Some(SampleSelectorIR { sample_indices: vec![10], sample_labels: vec![] }),
+        };
+        let selection = select_eigen_outputs(&result(), &[output.clone()]).unwrap();
+        assert_eq!(selection.field_modes_for_sample(10).collect::<Vec<_>>(), vec![2, 9]);
+        assert!(selection.field_modes_for_sample(20).next().is_none());
+        let mut conflicting = output;
+        if let OutputIR::EigenMode { indices, .. } = &mut conflicting { indices.push(64); }
+        assert_eq!(select_eigen_outputs(&result(), &[conflicting]).unwrap_err(),
+                   OutputSelectionError::ConflictingAllModeSelector);
+    }
+
+    #[test]
     fn repeated_sample_label_selects_all_matching_path_samples() {
         let mut path_result = result();
         path_result
@@ -821,6 +845,7 @@ mod tests {
             &path_result,
             &[OutputIR::EigenMode {
                 field: "mode".to_string(),
+                all_modes: false,
                 indices: vec![2],
                 branches: vec![],
                 sample_selector: Some(SampleSelectorIR {
@@ -906,6 +931,7 @@ mod tests {
             &result(),
             &[OutputIR::EigenMode {
                 field: "mode".to_string(),
+                all_modes: false,
                 indices: vec![9],
                 branches: vec![],
                 sample_selector: Some(SampleSelectorIR {
@@ -936,6 +962,7 @@ mod tests {
             (
                 OutputIR::EigenMode {
                     field: "mode".to_string(),
+                    all_modes: false,
                     indices: vec![2],
                     branches: vec![],
                     sample_selector: Some(SampleSelectorIR {
@@ -948,6 +975,7 @@ mod tests {
             (
                 OutputIR::EigenMode {
                     field: "mode".to_string(),
+                    all_modes: false,
                     indices: vec![2],
                     branches: vec![],
                     sample_selector: Some(SampleSelectorIR {
@@ -960,6 +988,7 @@ mod tests {
             (
                 OutputIR::EigenMode {
                     field: "mode".to_string(),
+                    all_modes: false,
                     indices: vec![],
                     branches: vec![99],
                     sample_selector: None,
@@ -969,6 +998,7 @@ mod tests {
             (
                 OutputIR::EigenMode {
                     field: "mode".to_string(),
+                    all_modes: false,
                     indices: vec![99],
                     branches: vec![],
                     sample_selector: None,
@@ -986,6 +1016,7 @@ mod tests {
     fn malformed_empty_selectors_are_rejected() {
         let empty_mode = OutputIR::EigenMode {
             field: "mode".to_string(),
+            all_modes: false,
             indices: vec![],
             branches: vec![],
             sample_selector: None,
@@ -997,6 +1028,7 @@ mod tests {
 
         let empty_samples = OutputIR::EigenMode {
             field: "mode".to_string(),
+            all_modes: false,
             indices: vec![2],
             branches: vec![],
             sample_selector: Some(SampleSelectorIR::default()),

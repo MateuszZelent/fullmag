@@ -6406,6 +6406,7 @@ mod tests {
             },
             OutputIR::EigenMode {
                 field: "mode".to_string(),
+                all_modes: false,
                 indices: vec![1],
                 branches: vec![],
                 sample_selector: None,

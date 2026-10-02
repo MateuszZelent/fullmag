@@ -2736,6 +2736,44 @@ selekcja węzłów Gamma, następnie kompilacja/runtime i walidacja naukowa.
 | source-tracking-initial-field-snapshot | `scripts/validate_comsol_dispersion_scientific_gate.py` | `_tracking_input_hashes` |
 
 
+### Jawny eksport wszystkich modów solvera
+
+SaveMode(all_modes=True) i study.save("mode", all_modes=True) oznaczają
+eksport każdego modu obecnego w rzeczywistym wyniku dla wybranych próbek.
+Nie oznaczają range(requested_count) ani kompletności fizycznego widma.
+Raw IDs pozostają niezmienione. Parametr ma typ bool, domyślnie False,
+jednostkę $1$ i mapowanie study.sampling.outputs[].all_modes w ProblemIR dla
+kind=eigen_mode. True nie może być łączone z indices lub branches;
+niewłaściwy typ lub konflikt selektorów jest błędem. sample_indices
+i sample_labels zachowują dotychczasowe znaczenie.
+
+False jest pomijane w JSON, a brak pola odtwarza False. Istniejące
+selektory raw i branch zachowują semantykę. Eksport Python zachowuje
+all_modes=True. Rozstrzygnięcie selektora następuje po solve na rzeczywistych
+identyfikatorach, bez renumeracji i bez żądania dodatkowych eigenpairs.
+Wewnętrzny eksport kandydatów trackingu również używa rzeczywistego wyniku;
+nie może ograniczać pól do requested_count przed publikacją ścieżki.
+
+To backend-neutralny zamiar wyjścia dla istniejących ścieżek eigensolve,
+bez zmiany operatora, jednostek, requested/resolved device, fallbacku ani
+kwalifikacji FDM CPU/GPU lub FEM CPU/GPU. Większy eksport może zwiększyć
+koszt pamięci i storage. Publiczny parametr nie stanowi dowodu obsługi
+samego eigensolve na niewspieranej konfiguracji. Kompilacja i managed
+runtime nowego selektora wymagają osobnej weryfikacji.
+
+| Parametr | Typ i default | SI | Walidacja | Python→IR |
+|---|---|---|---|---|
+| SaveMode.all_modes / study.save.all_modes | bool, False | $1$ | Dokładny bool; True wyklucza indices i branches | study.sampling.outputs[].all_modes, kind=eigen_mode; False pomijane |
+
+| Source ID | Źródło | Symbol |
+|---|---|---|
+| source-all-mode-python | `packages/fullmag-py/src/fullmag/model/outputs.py` | `class SaveMode` |
+| source-all-mode-ir | `crates/fullmag-ir/src/study.rs` | `OutputIR` |
+| source-all-mode-selection | `crates/fullmag-runner/src/eigen/output_selection.rs` | `select_eigen_outputs` |
+| source-all-mode-native-result | `crates/fullmag-runner/src/fem/eigen_output.rs` | `requested_mode_indices_for_result` |
+| source-all-mode-path-retention | `crates/fullmag-runner/src/fem/eigen_path_artifacts.rs` | `eigen_path_candidate_mode_indices` |
+| source-all-mode-python-test | `packages/fullmag-py/tests/test_problem_ir.py` | `test_save_all_modes_has_explicit_intent_without_assumed_raw_ids` |
+
 ### Integralność legacy odczytu pól i wag
 
 Odczyt Kittel nie może usuwać wadliwych wag, dopisywać zerowych

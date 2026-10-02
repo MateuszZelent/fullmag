@@ -145,6 +145,7 @@ study.save(
     "mode",
     field="mode",
     indices=mode_field_indices,
+    all_modes=not mode_field_indices,
     sample_indices=mode_field_samples,
 )
 

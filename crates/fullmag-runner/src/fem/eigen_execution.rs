@@ -36,7 +36,7 @@ use super::eigen_output::{
     classify_polarization, damping_imaginary_factor, damping_policy_label, dispersion_csv,
     dispersion_v2_csv, equilibrium_source_json, json_artifact, k_vector_json,
     merge_modal_transport_diagnostics, modal_sample_id, modal_tangent_transport_diagnostics,
-    normalization_label, requested_mode_indices, solver_capabilities, solver_kind_label,
+    normalization_label, requested_mode_indices_for_result, solver_capabilities, solver_kind_label,
     solver_limitations, solver_notes, spin_wave_bc_json, spin_wave_bc_label, write_eigen_v2_bundle,
 };
 use super::eigen_policy::{
@@ -1998,7 +1998,6 @@ pub(super) fn execute_fem_eigen_inner(
         Vec::new()
     };
 
-    let requested_modes = requested_mode_indices(outputs);
     let wants_spectrum = outputs
         .iter()
         .any(|output| matches!(output, OutputIR::EigenSpectrum { .. }));
@@ -2012,6 +2011,7 @@ pub(super) fn execute_fem_eigen_inner(
     } else {
         real_eigenpairs.len()
     };
+    let requested_modes = requested_mode_indices_for_result(outputs, total_modes)?;
     let mut modes_summary = Vec::with_capacity(total_modes);
     let participation_context = modal_participation_mesh_context(plan);
     let tangent_leakage_mass_weights = reduction

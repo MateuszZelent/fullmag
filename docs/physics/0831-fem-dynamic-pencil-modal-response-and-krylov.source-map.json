@@ -29,8 +29,20 @@
   "equations": [
     {
       "id": "eq-tracking-subspace-raw-assignment",
-      "symbols": ["tracking_assignment_rotation", "tracking_assignment_weight", "tracking_assignment_indices", "tracking_assignment_permutations", "tracking_assignment_permutation", "tracking_assignment_tolerance"],
-      "sources": ["source-tracking-subspace-assignment-weights", "source-tracking-assignment-optimum", "source-tracking-assignment-replay", "source-tracking-assignment-enumeration"]
+      "symbols": [
+        "tracking_assignment_rotation",
+        "tracking_assignment_weight",
+        "tracking_assignment_indices",
+        "tracking_assignment_permutations",
+        "tracking_assignment_permutation",
+        "tracking_assignment_tolerance"
+      ],
+      "sources": [
+        "source-tracking-subspace-assignment-weights",
+        "source-tracking-assignment-optimum",
+        "source-tracking-assignment-replay",
+        "source-tracking-assignment-enumeration"
+      ]
     },
     {
       "id": "eq-periodic-mode-seam-relative",
@@ -2343,6 +2355,42 @@
       "path": "crates/fullmag-runner/src/eigen/artifacts/tests.rs",
       "symbol": "actual_plan_gamma_is_shared_by_spectra_and_mode_fields",
       "responsibility": "Prepared uncompiled nonreference gamma regression"
+    },
+    {
+      "id": "source-all-mode-python",
+      "path": "packages/fullmag-py/src/fullmag/model/outputs.py",
+      "symbol": "class SaveMode",
+      "responsibility": "Validate explicit all_modes intent and serialize without guessed raw IDs"
+    },
+    {
+      "id": "source-all-mode-ir",
+      "path": "crates/fullmag-ir/src/study.rs",
+      "symbol": "OutputIR",
+      "responsibility": "Additive all_modes bool; absent and false preserve historical selectors"
+    },
+    {
+      "id": "source-all-mode-selection",
+      "path": "crates/fullmag-runner/src/eigen/output_selection.rs",
+      "symbol": "select_eigen_outputs",
+      "responsibility": "Select actual returned IDs with unchanged sample selectors"
+    },
+    {
+      "id": "source-all-mode-native-result",
+      "path": "crates/fullmag-runner/src/fem/eigen_output.rs",
+      "symbol": "requested_mode_indices_for_result",
+      "responsibility": "Export actual returned native vector slots without truncation to requested count"
+    },
+    {
+      "id": "source-all-mode-path-retention",
+      "path": "crates/fullmag-runner/src/fem/eigen_path_artifacts.rs",
+      "symbol": "eigen_path_candidate_mode_indices",
+      "responsibility": "Retain actual raw candidate IDs parsed from the returned spectrum"
+    },
+    {
+      "id": "source-all-mode-python-test",
+      "path": "packages/fullmag-py/tests/test_problem_ir.py",
+      "symbol": "test_save_all_modes_has_explicit_intent_without_assumed_raw_ids",
+      "responsibility": "Executed Python contract checks; not managed runtime evidence"
     }
   ],
   "public_api": {

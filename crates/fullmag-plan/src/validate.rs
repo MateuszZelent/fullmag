@@ -963,17 +963,24 @@ pub(crate) fn validate_eigen_outputs(outputs: &[OutputIR], errors: &mut Vec<Stri
             }
             OutputIR::EigenMode {
                 field,
+                all_modes,
                 indices,
                 branches,
                 sample_selector,
             } => {
-                if indices.is_empty() && branches.is_empty() {
+                if !all_modes && indices.is_empty() && branches.is_empty() {
                     errors.push(format!(
                         "eigen mode output '{}' must request at least one mode or branch index",
                         field
                     ));
                 }
+                if *all_modes && (!indices.is_empty() || !branches.is_empty()) {
+                    errors.push(format!("eigen mode output '{}' all_modes cannot be combined with indices or branches", field));
+                }
                 let selector_key = canonical_sample_selector(sample_selector.as_ref());
+                if *all_modes && !seen.insert(format!("eigen_mode_all:{field}:{selector_key:?}")) {
+                    errors.push(format!("eigen mode output '{}' requests all modes more than once", field));
+                }
                 for index in indices {
                     let key = (field.clone(), *index, selector_key.clone());
                     if !seen_eigen_modes.insert(key) {

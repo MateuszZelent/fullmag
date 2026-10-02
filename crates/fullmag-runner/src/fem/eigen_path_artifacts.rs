@@ -440,6 +440,7 @@ mod output_publication_tests {
         };
         let output = OutputIR::EigenMode {
             field: "mode".into(),
+            all_modes: false,
             indices: vec![0, 1],
             branches: vec![],
             sample_selector: Some(fullmag_ir::SampleSelectorIR {
@@ -448,14 +449,14 @@ mod output_publication_tests {
             }),
         };
         assert_eq!(
-            eigen_path_candidate_mode_indices(&[output.clone()], &sample, 24),
+            eigen_path_candidate_mode_indices(&[output.clone()], &sample, &(0..24).collect()),
             BTreeSet::from([0, 1])
         );
         sample.sample_index = 11;
-        assert!(eigen_path_candidate_mode_indices(&[output.clone()], &sample, 24).is_empty());
+        assert!(eigen_path_candidate_mode_indices(&[output.clone()], &sample, &(0..24).collect()).is_empty());
         sample.label = Some("Gamma".into());
         assert_eq!(
-            eigen_path_candidate_mode_indices(&[output.clone()], &sample, 24),
+            eigen_path_candidate_mode_indices(&[output.clone()], &sample, &(0..24).collect()),
             BTreeSet::from([0, 1])
         );
         let mut branch_output = output;
@@ -463,9 +464,14 @@ mod output_publication_tests {
             branches.push(3);
         }
         assert_eq!(
-            eigen_path_candidate_mode_indices(&[branch_output], &sample, 24).len(),
+            eigen_path_candidate_mode_indices(&[branch_output], &sample, &(0..24).collect()).len(),
             24
         );
+        let all_output = OutputIR::EigenMode {
+            field: "mode".into(), all_modes: true, indices: vec![], branches: vec![], sample_selector: None,
+        };
+        assert_eq!(eigen_path_candidate_mode_indices(&[all_output], &sample, &BTreeSet::from([64, 91])),
+                   BTreeSet::from([64, 91]));
     }
 
     #[test]
@@ -1014,6 +1020,7 @@ mod output_publication_tests {
         let outputs = vec![
             OutputIR::EigenMode {
                 field: "selected".into(),
+                all_modes: false,
                 indices: vec![1],
                 branches: vec![4],
                 sample_selector: Some(fullmag_ir::SampleSelectorIR {
@@ -1357,11 +1364,11 @@ pub(super) fn eigen_path_tracking_outputs(outputs: &[OutputIR], mode_count: u32)
         });
     }
 
-    let tracking_modes = (0..mode_count).collect::<Vec<_>>();
-    if !tracking_modes.is_empty() {
+    if mode_count > 0 {
         tracking_outputs.push(OutputIR::EigenMode {
             field: "mode".to_string(),
-            indices: tracking_modes,
+            all_modes: true,
+            indices: vec![],
             branches: vec![],
             sample_selector: None,
         });
@@ -2319,11 +2326,12 @@ fn finite_or_default(value: Option<f64>, default: f64) -> f64 {
 pub(super) fn eigen_path_candidate_mode_indices(
     outputs: &[OutputIR],
     sample: &crate::eigen::KSampleDescriptor,
-    mode_count: u32,
+    available_mode_indices: &BTreeSet<u32>,
 ) -> BTreeSet<u32> {
     let mut result = BTreeSet::new();
     for output in outputs {
         let OutputIR::EigenMode {
+            all_modes,
             indices,
             branches,
             sample_selector,
@@ -2348,10 +2356,10 @@ pub(super) fn eigen_path_candidate_mode_indices(
         if !selected_sample {
             continue;
         }
-        if !branches.is_empty() || indices.is_empty() {
-            result.extend(0..mode_count);
+        if *all_modes || !branches.is_empty() {
+            result.extend(available_mode_indices.iter().copied());
         } else {
-            result.extend(indices.iter().copied().filter(|index| *index < mode_count));
+            result.extend(indices.iter().copied().filter(|index| available_mode_indices.contains(index)));
         }
     }
     result

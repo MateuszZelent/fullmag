@@ -5554,6 +5554,8 @@ def _render_outputs(problem: Problem, magnet_vars: dict[str, str], *, surface: s
             continue
         if isinstance(output, SaveMode):
             kwargs: list[str] = []
+            if output.all_modes:
+                kwargs.append("all_modes=True")
             if output.field != "mode":
                 kwargs.append(f"field={_py_repr(output.field)}")
             if output.indices:
