@@ -1,5 +1,53 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
+## Aktualny stan wykonania — 2026-10-02, po buildach #203–#211
+
+Ten checkpoint zastępuje wcześniejsze deklaracje bieżącego stanu jobów i
+liczby punktów; poniższe sekcje zachowują historię. Pełny zakres S00–S12
+z planu nonzero-k pozostaje obowiązujący. Adaptacyjne wykonanie jest
+rozszerzeniem S05/S08, nie zamiennikiem fizyki ani kwalifikacji całego celu.
+
+| Bramka | Dowód bieżący | Stan |
+|---|---|---|
+| DE +10 rad/µm | 11.205285324405772 GHz; pełny residual 2.277784989202247e-10 | Punkt zaakceptowany technicznie |
+| DE −10 rad/µm | 11.205285254344654 GHz; pełny residual 2.4809101991678807e-10 | Punkt zaakceptowany technicznie |
+| Integralność obu punktów | Ponownie sprawdzono 12 hashy plików run-request/result, metadata, dispersion, spectrum i mode względem raportu wykresu | PASS dla dokładnych bajtów |
+| Odniesienie analityczne | Uniform n0: 11.235414178890272 GHz; różnica około −0.26816% | Porównanie dostępne; brak dowodu zbieżności |
+| Wykres | de-priority-k10-validated-v2.png/.pdf, dwa rzeczywiste punkty | Dostępny; qualification NOT VERIFIED |
+| Signed15 | ±2 nie przeszły shifted GMRES; 13 dodatkowych punktów nieukończone | OPEN; bez tworzenia punktów przez symetrię |
+| Reader #208 | Import kopii rzeczywistego FMS i spectrum +10; WebGL działa, topology nie przyjęte wskutek deadline | Częściowy browser proof; S08 OPEN |
+| PreviewState / viewport | Poprawki źródeł importu i lokalnego topology deadline 15 s | Managed frontend i browser po poprawce OPEN |
+| Adaptive CPU/RAM | Polityka Python/IR/API/UI, Linux sampler i osobne procesy; Python, produkcyjny TypeScript i React Doctor PASS | Runtime i zgodność serial/adaptive OPEN |
+| SLEPc #209 | Terminal failed, exit 2; osiem błędów Rust, cztery przyczyny poprawione i reviewed | Nie jest dopuszczonym runtime |
+| SLEPc #211 | c554c5361f014228a301380b8ed3487c, queued w FIFO za #210 | Nowy produkcyjny build oczekuje |
+| Pełna nauka i integracja | Γ/signed DE/BV, COMSOL A1, zbieżności, pełne pola/tracking, falowód, interakcje, GPU i integration cycle | S00–S12 nadal OPEN |
+
+Źródła ±10: job #203 d30406a2ef6d42cb9120ce04d58d646a,
+profil fem-cpu-slepc-runtime-v2, model 6cf0b786dc688e6a6993f7273df96dcb50727b1b.
+Dane są w kanonicznym storage pod scientific-batches/nonzero-k-validation/
+d30406a2ef6d42cb9120ce04d58d646a; raport de-priority-k10-validated-v2-report.json
+zachowuje ścieżki oraz hashe wszystkich wejść i wyników. Odczyt kontrolny
+priority-k10-evidence-refresh.json jest w katalogu wizualizacji tego wątku.
+Wynik integrity refresh nie jest ponownym wykonaniem solvera ani pełną nauką.
+
+Build #211 jest niezmiennym snapshotem
+b85acbd0d354acf7f554f72e8697c06c1508de8ff9d51fcbd8831aa38aad452c,
+native identity 501308a35be5cfd1fafbbb83831f48efbef988ddd0d5dadf5ec33e0f18cd30ca.
+Nie uruchomiono obejścia FIFO ani symulacji na nieudanym #209. Następnie:
+terminalny receipt/ABI → próba serial/adaptive z identycznym certyfikatem,
+siatką, k i tolerancjami → rzeczywisty OpenAPI/client → produkcyjny frontend
+oraz import oryginalnego FMS i pełny browser proof. Błąd ±2 wymaga osobnej
+diagnozy GMRES, bez osłabienia fizycznego residualu 1e-8.
+
+Diagnoza ±2: [korekta hipotezy GMRES](../../audits/2026-10-02-signed-k2-gmres-restart-diagnostic.md).
+Źródło i zaakceptowane artefakty dowodzą PC_RIGHT/unpreconditioned; ponowne
+przełączenie side nie jest uzasadnioną poprawką.
+
+Szczegóły regulatora i osobne bramki:
+[plan adaptacyjnego wykonania](2026-10-02-adaptive-dispersion-execution.md).
+Zakaz kompilowania unit tests zachowany; nie wykonano końcowego merge ani
+cleanup worktree, gdyż wymagane bramki całego zadania pozostają otwarte.
+
 ## Priorytet DE ±10 — naprawa kompilacji i ponowienie, 2026-10-02
 
 Build #196 zakończył się błędem kompilacji: `requested_linear_iterations`
