@@ -1,3 +1,5 @@
+mod scheduler_owner_control;
+
 #[path = "accepted_fem_preparation_supervisor.rs"]
 mod accepted_fem_preparation_supervisor;
 
@@ -23,6 +25,7 @@ struct SchedulerArgs {
     pool_id: String,
     preparer_executable: Option<PathBuf>,
     resident: bool,
+    owner_control: bool,
     max_concurrency: usize,
     max_tasks: Option<usize>,
     max_idle_polls: usize,
@@ -89,6 +92,21 @@ fn run() -> Result<()> {
     if !args.resident {
         return run_scheduler(args, shutdown_requested);
     }
+    let owner_control = args.owner_control;
+    let owner_observed = Arc::new(AtomicBool::new(false));
+    let mut owner_receiver = if owner_control {
+        Some(
+            scheduler_owner_control::monitor(
+                std::io::stdin(),
+                Arc::clone(&shutdown_requested),
+                Arc::clone(&owner_observed),
+            )
+            .context("start scheduler owner-control monitor")?,
+        )
+    } else {
+        None
+    };
+    let listen_signals = !owner_control || !cfg!(windows);
     let scheduler_shutdown = Arc::clone(&shutdown_requested);
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_io()
@@ -98,11 +116,28 @@ fn run() -> Result<()> {
         let mut scheduler =
             tokio::task::spawn_blocking(move || run_scheduler(args, scheduler_shutdown));
         tokio::select! {
-            result = &mut scheduler => result.context("join preparation scheduler loop")?,
-            signal = wait_for_shutdown_signal() => {
+            result = &mut scheduler => {
+                // The monitor closes admission before sending its result. Preserve
+                // protocol errors even if the scheduler drains before notification.
+                if owner_observed.load(Ordering::Acquire) {
+                    scheduler_owner_control::wait(&mut owner_receiver).await?;
+                }
+                result.context("join preparation scheduler loop")?
+            }
+            signal = wait_for_shutdown_signal(), if listen_signals => {
                 shutdown_requested.store(true, Ordering::Release);
+                let drained = scheduler.await.context("join draining preparation scheduler loop")?;
+                if owner_observed.load(Ordering::Acquire) {
+                    scheduler_owner_control::wait(&mut owner_receiver).await?;
+                }
                 signal?;
-                scheduler.await.context("join draining preparation scheduler loop")?
+                drained
+            }
+            owner = scheduler_owner_control::wait(&mut owner_receiver) => {
+                shutdown_requested.store(true, Ordering::Release);
+                let drained = scheduler.await.context("join owner-draining preparation scheduler loop")?;
+                owner?;
+                drained
             }
         }
     })
@@ -633,6 +668,7 @@ fn parse_args() -> Result<SchedulerArgs> {
         .map(|value| parse_bool("--resident", value))
         .transpose()?
         .unwrap_or(false);
+    let owner_control = scheduler_owner_control::parse(values.remove("--owner-control"), resident)?;
     let max_concurrency = values
         .remove("--max-concurrency")
         .map(|value| parse_usize("--max-concurrency", value))
@@ -683,6 +719,7 @@ fn parse_args() -> Result<SchedulerArgs> {
         pool_id,
         preparer_executable,
         resident,
+        owner_control,
         max_concurrency,
         max_tasks,
         max_idle_polls,

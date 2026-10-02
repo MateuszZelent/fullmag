@@ -1,3 +1,5 @@
+mod scheduler_owner_control;
+
 #[path = "accepted_study_supervisor.rs"]
 mod accepted_study_supervisor;
 
@@ -30,6 +32,7 @@ struct SchedulerArgs {
     run_ids: Vec<String>,
     discover_runs: bool,
     resident: bool,
+    owner_control: bool,
     pool_id: Option<String>,
     discover_resources: bool,
     resources: Vec<SchedulerResourceOffer>,
@@ -174,6 +177,21 @@ fn run() -> Result<()> {
     if !args.resident {
         return run_scheduler(args, shutdown_requested);
     }
+    let owner_control = args.owner_control;
+    let owner_observed = Arc::new(AtomicBool::new(false));
+    let mut owner_receiver = if owner_control {
+        Some(
+            scheduler_owner_control::monitor(
+                std::io::stdin(),
+                Arc::clone(&shutdown_requested),
+                Arc::clone(&owner_observed),
+            )
+            .context("start scheduler owner-control monitor")?,
+        )
+    } else {
+        None
+    };
+    let listen_signals = !owner_control || !cfg!(windows);
     let scheduler_shutdown = Arc::clone(&shutdown_requested);
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_io()
@@ -184,12 +202,27 @@ fn run() -> Result<()> {
             tokio::task::spawn_blocking(move || run_scheduler(args, scheduler_shutdown));
         tokio::select! {
             result = &mut scheduler => {
+                // The monitor closes admission before sending its result. Preserve
+                // protocol errors even if the scheduler drains before notification.
+                if owner_observed.load(Ordering::Acquire) {
+                    scheduler_owner_control::wait(&mut owner_receiver).await?;
+                }
                 result.context("join resident scheduler loop")?
             }
-            signal = wait_for_shutdown_signal() => {
+            signal = wait_for_shutdown_signal(), if listen_signals => {
                 shutdown_requested.store(true, Ordering::Release);
+                let drained = scheduler.await.context("join draining resident scheduler loop")?;
+                if owner_observed.load(Ordering::Acquire) {
+                    scheduler_owner_control::wait(&mut owner_receiver).await?;
+                }
                 signal?;
-                scheduler.await.context("join draining resident scheduler loop")?
+                drained
+            }
+            owner = scheduler_owner_control::wait(&mut owner_receiver) => {
+                shutdown_requested.store(true, Ordering::Release);
+                let drained = scheduler.await.context("join owner-draining resident scheduler loop")?;
+                owner?;
+                drained
             }
         }
     })
@@ -723,6 +756,7 @@ fn parse_args() -> Result<SchedulerArgs> {
         .map(|value| parse_bool("--resident", value))
         .transpose()?
         .unwrap_or(false);
+    let owner_control = scheduler_owner_control::parse(values.remove("--owner-control"), resident)?;
     let pool_id = values
         .remove("--pool-id")
         .map(|value| {
@@ -880,6 +914,7 @@ fn parse_args() -> Result<SchedulerArgs> {
         run_ids,
         discover_runs,
         resident,
+        owner_control,
         pool_id,
         discover_resources,
         resources,
