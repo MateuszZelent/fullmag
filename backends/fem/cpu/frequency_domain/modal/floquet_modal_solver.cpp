@@ -2834,6 +2834,11 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
     const PetscReal target_shift = static_cast<PetscReal>(
         omega_rad_s_from_frequency_hz(
             std::max(0.0, spectral_request.target_frequency_hz)));
+    // Both fresh Poisson setup and every shifted solve use the request policy.
+    const PetscInt requested_linear_iterations =
+        spectral_request.max_linear_iterations > 0
+            ? static_cast<PetscInt>(spectral_request.max_linear_iterations)
+            : PETSC_DEFAULT;
     if (!state->initialized) {
         context.phase_sign = requested_phase_sign;
         context.q_complex_count = static_cast<PetscInt>(
@@ -2877,10 +2882,6 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
         // Keep both KSP layers explicit.  PETSC_DEFAULT is part of the selected
         // PETSc policy here; query the resolved value below instead of reporting
         // a guessed zero or introducing a hidden absolute-tolerance constant.
-        const PetscInt requested_linear_iterations =
-        spectral_request.max_linear_iterations > 0
-            ? static_cast<PetscInt>(spectral_request.max_linear_iterations)
-            : PETSC_DEFAULT;
         PC poisson_pc = nullptr;
         // This preonly LU computes P(k)^-1 inside the physical Schur operator.
         // A factorization shift would change that inverse, so an unusable P(k)

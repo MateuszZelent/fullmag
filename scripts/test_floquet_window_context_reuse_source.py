@@ -232,6 +232,20 @@ def main() -> None:
         "incomplete hard-error certificate",
     )
 
+    # A declaration inside fresh-state setup is invisible to the shifted KSP
+    # setup, which runs for both fresh and reused windows (managed build #196).
+    declaration = "const PetscInt requested_linear_iterations ="
+    if floquet.count(declaration) != 1:
+        raise AssertionError("linear iteration policy must have one shared declaration")
+    position = floquet.index(declaration)
+    fresh_setup = floquet.index("if (!state->initialized)", position)
+    poisson_setup = floquet.index("KSPSetTolerances(", fresh_setup)
+    if not position < fresh_setup < poisson_setup:
+        raise AssertionError("linear iteration policy must precede fresh-state setup")
+    require(floquet[position:fresh_setup], "spectral_request.max_linear_iterations",
+            "request-derived shared linear iteration budget")
+    require(floquet[position:fresh_setup], "PETSC_DEFAULT", "default iteration policy")
+
     check_three_shift_normalization()
     check_hard_failure_stops_window_model()
     check_unsafe_eps_lifetime_model()
