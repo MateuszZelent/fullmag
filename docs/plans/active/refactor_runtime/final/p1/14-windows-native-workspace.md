@@ -49,3 +49,25 @@ Do zamknięcia: aktualny pakiet Windows, pusty startup i browser proof,
 Save/Open/checkpoint/restart/restore na lokalnym storage, natywne FEM
 MFEM/hypre/libCEED CPU i CUDA GPU wraz z zależnościami oraz kwalifikacją.
 Źródła i test dispatch nie zastępują tych dowodów. Sesja 3104 zachowana.
+
+## Korekta po niezależnym review
+
+Review wykrył P1: wcześniejszy launcher budował CLI/API, ale nie wymagane
+`fullmag-ui.exe`. Dla trybów wymagających Control Room dodano do buildu
+`fullmag-desktop`, weryfikację wytworzenia UI i jego path/hash w manifeście.
+Build=false wymaga istniejącego pliku i zgodnego desktop_binary_sha256;
+starszy manifest bez tej informacji jest odrzucany z instrukcją rebuild.
+Headless binary-only nie otrzymuje zależności desktopowej.
+
+Aktualne lekkie regresje: 12/12 PASS (exit 0). Pięć nowych przypadków wykonuje
+rzeczywiste funkcje PowerShell: poprawny hash, brak pliku, zmieniony plik,
+brak hasha oraz pusty plik nawet z poprawnym hashem. Fixture hashujące nie są
+binariami ani dowodem otwarcia okna.
+Nie uruchomiono ciężkiego buildu ani kompilacji unit tests. Native runtime
+i kwalifikacja wszystkich lane'ów nadal NOT VERIFIED.
+
+Drugi review wskazał ryzyko wspólnego `--features cuda` dla desktopu.
+Build CLI/API i desktopu rozdzielono na osobne komendy; solver zachowuje
+CUDA, desktop nie otrzymuje tej flagi. Cztery regresje wykonują rzeczywistą
+konstrukcję komend przez atrapę Invoke-External dla CPU/CUDA z desktopem
+i bez. Końcowy zestaw: 16/16 PASS (exit 0), bez kompilacji Rust.

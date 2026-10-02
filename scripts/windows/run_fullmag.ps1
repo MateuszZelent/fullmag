@@ -189,6 +189,18 @@ function Get-Sha256File {
   }
 }
 
+function Assert-FullmagDesktopRuntime {
+  param([string]$Path, [string]$ExpectedHash)
+  if (-not (Test-Path -LiteralPath $Path -PathType Leaf) -or
+      (Get-Item -LiteralPath $Path).Length -eq 0) {
+    throw "Native Fullmag desktop binary is missing at $Path; rerun with build=True"
+  }
+  if ($ExpectedHash -notmatch '^[0-9a-f]{64}$' -or
+      (Get-Sha256File $Path) -ne $ExpectedHash) {
+    throw "Native Fullmag desktop hash does not match the build manifest; rerun with build=True"
+  }
+}
+
 function Import-VsEnvironment {
   $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
   if (-not (Test-Path -LiteralPath $vswhere -PathType Leaf)) {
@@ -431,6 +443,7 @@ $PythonExe = Join-Path $PythonVenv "Scripts\python.exe"
 $ManifestPath = Join-Path $BuildRoot "windows-runtime\build-manifest.json"
 $FullmagExe = Join-Path $TargetRoot "$TargetTriple\release\fullmag.exe"
 $FullmagApiExe = Join-Path $TargetRoot "$TargetTriple\release\fullmag-api.exe"
+$FullmagUiExe = Join-Path $TargetRoot "$TargetTriple\release\fullmag-ui.exe"
 $StaticControlRoom = Join-Path $RepoRoot "apps\control-room\out\index.html"
 $needsControlRoomToolchain = $Frontend -eq "static" -or
   (-not $BuildOnly -and $RunMode -in @("interactive", "workspace"))
@@ -560,6 +573,13 @@ if ($BuildMode -eq "true") {
   Push-Location $RepoRoot
   try {
     Invoke-External "cargo" $cargoArguments
+    if ($needsControlRoomToolchain) {
+      # CUDA belongs to the solver packages, not the desktop shell.
+      Invoke-External "cargo" @(
+        "build", "--locked", "--release", "--target", $TargetTriple,
+        "-p", "fullmag-desktop"
+      )
+    }
   }
   finally {
     Pop-Location
@@ -570,6 +590,11 @@ if ($BuildMode -eq "true") {
   }
   if (-not (Test-Path -LiteralPath $FullmagApiExe -PathType Leaf)) {
     throw "Native Fullmag API binary was not produced at $FullmagApiExe"
+  }
+  if ($needsControlRoomToolchain -and (
+      -not (Test-Path -LiteralPath $FullmagUiExe -PathType Leaf) -or
+      (Get-Item -LiteralPath $FullmagUiExe).Length -eq 0)) {
+    throw "Native Fullmag desktop binary was not produced at $FullmagUiExe"
   }
   $nativeFdmDll = $null
   if ($useCuda) {
@@ -589,6 +614,7 @@ if ($BuildMode -eq "true") {
     target_triple = $TargetTriple
     binary = $FullmagExe
     api_binary = $FullmagApiExe
+    desktop_binary = if ($needsControlRoomToolchain) { $FullmagUiExe } else { $null }
     backend = if ($Backend -eq "auto") { "auto" } else { $Backend }
     cuda = $useCuda
     features = if ($useCuda) { @("cuda") } else { @() }
@@ -610,6 +636,7 @@ if ($BuildMode -eq "true") {
     static_web_sha256 = if ($Frontend -eq "static") { Get-DirectorySha256 (Split-Path -Parent $StaticControlRoom) } else { $null }
     binary_sha256 = Get-Sha256File $FullmagExe
     api_binary_sha256 = Get-Sha256File $FullmagApiExe
+    desktop_binary_sha256 = if ($needsControlRoomToolchain) { Get-Sha256File $FullmagUiExe } else { $null }
     native_fdm_dll_sha256 = if ($nativeFdmDll) { Get-Sha256File $nativeFdmDll } else { $null }
     built_at_utc = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
   }
@@ -653,6 +680,9 @@ else {
   if ([string]$manifest.binary_sha256 -ne $binaryHash -or
       [string]$manifest.api_binary_sha256 -ne $apiBinaryHash) {
     throw "Existing Windows runtime binary hash does not match its manifest; rerun with build=True"
+  }
+  if ($needsControlRoomToolchain) {
+    Assert-FullmagDesktopRuntime -Path $FullmagUiExe -ExpectedHash ([string]$manifest.desktop_binary_sha256)
   }
   if ($Frontend -eq "static" -and
       [string]$manifest.static_web_sha256 -ne (Get-DirectorySha256 (Split-Path -Parent $StaticControlRoom))) {

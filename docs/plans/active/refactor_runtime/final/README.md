@@ -237,3 +237,9 @@ została wycofana jako rozwiązanie produktu, nie wymaga już tej decyzji.
 [Natywny pusty workspace](p1/14-windows-native-workspace.md) dodano do launchera;
 7 lekkich regresji PASS. Aktualny natywny pakiet, FEM oraz pełny storage/restart
 pozostają NOT VERIFIED. Sesja 3104 zachowana; procenty planu bez awansu.
+
+Review natywnego Windows ujawnił brak budowy desktopowego UI w launcherze;
+source increment uzupełniono o `fullmag-desktop`, niepusty plik i hash manifestu.
+16 regresji PS/Python i 6 kontroli źródeł PASS. [P8-C — luki Windows](p8/01-windows-native-gaps.md)
+określa dalsze zadania ABI, dependency bundle, pakowania, executora i recovery.
+Build/runtime Windows i pełne FEM nadal NOT VERIFIED; P8 nie został zamknięty.

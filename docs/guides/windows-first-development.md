@@ -30,6 +30,12 @@ problemu w UI, więc ten tryb odrzuca parametry obliczeń zamiast je ignorować.
 Nie uruchomiono jeszcze tego polecenia z aktualnym natywnym pakietem:
 testy argumentów nie są dowodem startupu, zapisu ani wykonania FEM.
 
+Build obejmujący Control Room musi wytworzyć również `fullmag-ui.exe`
+z pakietu `fullmag-desktop`. Manifest zapisuje `desktop_binary_sha256`,
+a launcher sprawdza ten hash przed użyciem istniejącego pakietu.
+Starszy manifest bez hasha UI wymaga przebudowy; samo kopiowanie dowolnego
+`fullmag-ui.exe` nie jest dopuszczonym naprawieniem pakietu.
+
 The canonical FEM entry point is `scripts/windows/run_fullmag_fem.ps1`. It does
 not invoke `wsl.exe`: Docker Desktop may use WSL2 internally, but Fullmag does
 not depend on an interactive WSL distribution or a WSL checkout. The historical
