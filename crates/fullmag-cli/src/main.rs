@@ -115,7 +115,7 @@ fn main() -> Result<()> {
         Command::Runtime(RuntimeCommand::FemAvailability { json }) => {
             let gpu = fullmag_runner::native_fem_gpu_status();
             let payload = serde_json::json!({
-                "native_fem_cpu_available": fullmag_runner::is_native_fem_cpu_available(),
+                "native_fem_cpu_available": gpu.cpu_available,
                 "native_fem_gpu_available": gpu.available,
                 "visible_cuda_device_count": gpu.visible_cuda_device_count,
                 "requested_gpu_index": gpu.requested_gpu_index,

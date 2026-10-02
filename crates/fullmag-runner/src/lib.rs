@@ -1465,6 +1465,7 @@ pub fn is_native_fem_gpu_available() -> bool {
 
 #[derive(Debug, Clone)]
 pub struct NativeFemGpuStatus {
+    pub cpu_available: bool,
     pub available: bool,
     pub visible_cuda_device_count: i32,
     pub requested_gpu_index: i32,
@@ -1477,6 +1478,7 @@ pub struct NativeFemGpuStatus {
 pub fn native_fem_gpu_status() -> NativeFemGpuStatus {
     let availability = native_fem::native_availability();
     NativeFemGpuStatus {
+        cpu_available: availability.native_fem_cpu_available,
         available: availability.native_fem_gpu_available,
         visible_cuda_device_count: availability.visible_cuda_device_count,
         requested_gpu_index: availability.requested_gpu_index,

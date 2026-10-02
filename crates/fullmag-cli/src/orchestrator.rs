@@ -14085,6 +14085,7 @@ mod tests {
     #[test]
     fn fem_gpu_preflight_reports_available_vram() {
         let status = fullmag_runner::NativeFemGpuStatus {
+            cpu_available: true,
             available: true,
             visible_cuda_device_count: 1,
             requested_gpu_index: -1,
@@ -14106,6 +14107,7 @@ mod tests {
     #[test]
     fn fem_gpu_preflight_reports_native_availability_reason() {
         let status = fullmag_runner::NativeFemGpuStatus {
+            cpu_available: false,
             available: false,
             visible_cuda_device_count: 0,
             requested_gpu_index: -1,
