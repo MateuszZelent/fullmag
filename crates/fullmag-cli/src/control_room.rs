@@ -76,6 +76,10 @@ fn web_public_url(port: u16) -> String {
 
 fn frontend_public_url(listen_port: u16) -> std::io::Result<String> {
     let port = match std::env::var("FULLMAG_WEB_PUBLIC_PORT") {
+        Ok(_) if !crate::control_room_ports::public_mapping_matches(listen_port) => {
+            return Err(std::io::Error::new(std::io::ErrorKind::AddrInUse,
+                "frontend listener moved after a collision; update the configured host/tunnel port mapping"));
+        }
         Ok(value) => value
             .parse::<u16>()
             .ok()
@@ -100,52 +104,60 @@ pub(crate) fn internal_live_api_url(path: &str) -> String {
     )
 }
 
-pub(crate) fn resolve_api_port() -> Result<u16> {
-    if let Ok(raw) = std::env::var("FULLMAG_API_PORT") {
-        let raw = raw.trim();
-        let port = raw
-            .parse::<u16>()
-            .with_context(|| format!("FULLMAG_API_PORT must be a valid u16 port, got '{raw}'"))?;
-        if port == 0 {
-            return Ok(0);
+pub(crate) fn init_api_port_with_web(
+    preferred_web: Option<u16>,
+) -> Result<crate::control_room_ports::PortAllocationGuard> {
+    let preferred_api = std::env::var("FULLMAG_API_PORT")
+        .map(|raw| {
+            raw.trim()
+                .parse::<u16>()
+                .context("FULLMAG_API_PORT must be a valid u16 port")
+        })
+        .unwrap_or(Ok(8081))?;
+    if std::env::var_os("FULLMAG_ATTACHED_SESSION_ID").is_some() {
+        if preferred_api == 0 || std::env::var_os("FULLMAG_API_PORT").is_none() {
+            bail!("attached execution requires an explicit supervisor API port");
         }
+        if std::env::var("FULLMAG_SKIP_CONTROL_ROOM").ok().as_deref() != Some("1") {
+            bail!("attached execution must use its supervisor's UI, not launch another control plane");
+        }
+        // The scratch supervisor has already verified its API before spawning
+        // this child. Do not repeat the large OpenAPI probe during publication.
+        init_api_port_explicit(preferred_api)?;
+        return Ok(crate::control_room_ports::PortAllocationGuard::attached());
+    }
+    let allocation_root = std::env::var_os("FULLMAG_PROJECT_STORAGE_ROOT")
+        .map(PathBuf::from)
+        .map(|root| root.join("index"))
+        .unwrap_or_else(|| runtime_state_root(&repo_root()));
+    let (port, guard) = crate::control_room_ports::initialize(
+        preferred_api,
+        preferred_web.unwrap_or(3100),
+        &allocation_root,
+    )?;
+    init_api_port_explicit(port)?;
+    Ok(guard)
+}
+
+pub(crate) fn control_plane_instance_id() -> &'static str {
+    static INSTANCE: OnceLock<String> = OnceLock::new();
+    INSTANCE.get_or_init(|| {
         if std::env::var_os("FULLMAG_ATTACHED_SESSION_ID").is_some() {
-            // The scratch supervisor already verified this API before spawning
-            // the attached child.  Re-reading the large OpenAPI document here
-            // races with the first live snapshot on busy local Windows hosts.
-            return Ok(port);
+            if let Ok(instance) = std::env::var("FULLMAG_INSTANCE_ID") {
+                return instance;
+            }
         }
-        if api_bridge_is_ready(port) || port_is_bindable(port) {
-            return Ok(port);
-        }
-        bail!("requested FULLMAG_API_PORT={port} is not bindable and does not serve a compatible fullmag-api");
-    }
-
-    if api_bridge_is_ready(8081) || port_is_bindable(8081) {
-        return Ok(8081);
-    }
-
-    const CANDIDATE_API_PORTS: &[u16] = &[8080, 8082, 8083, 8084, 8085, 8086, 8087, 8088, 8089];
-    for &port in CANDIDATE_API_PORTS {
-        if api_bridge_is_ready(port) {
-            return Ok(port);
-        }
-        if port_is_bindable(port) {
-            return Ok(port);
-        }
-    }
-    allocate_ephemeral_api_port().with_context(|| {
-        format!(
-            "no free API port found in {:?}, and ephemeral loopback port allocation failed",
-            CANDIDATE_API_PORTS
-        )
+        format!("instance-{}", uuid::Uuid::new_v4())
     })
 }
 
-pub(crate) fn init_api_port() -> Result<()> {
-    RESOLVED_API_PORT
-        .set(resolve_api_port()?)
-        .map_err(|_| anyhow::anyhow!("API port already resolved"))
+pub(crate) fn control_plane_state_root(root: &Path) -> PathBuf {
+    let base = runtime_state_root(root);
+    if std::env::var_os("FULLMAG_ATTACHED_SESSION_ID").is_some() {
+        base
+    } else {
+        base.join("instances").join(control_plane_instance_id())
+    }
 }
 
 fn resolve_headless_api_port_with(
@@ -346,7 +358,6 @@ impl Drop for ControlRoomGuard {
             TerminalLogSource::Cli,
             format!("tearing down control room (port {web_port})"),
         );
-        stop_control_room_frontend_processes(web_port);
     }
 }
 
@@ -841,8 +852,11 @@ pub(crate) fn bootstrap_control_plane(
     requested_port: Option<u16>,
     live_workspace: Option<&LocalLiveWorkspace>,
 ) -> Result<ControlPlaneReady> {
+    if std::env::var_os("FULLMAG_ATTACHED_SESSION_ID").is_some() {
+        bail!("attached workers cannot create or replace their supervisor's control plane");
+    }
     let root = repo_root();
-    let state_root = runtime_state_root(&root);
+    let state_root = control_plane_state_root(&root);
     let log_dir = state_root.join("logs");
     let url_file = state_root.join("control-room-url.txt");
     let listen_port_file = state_root.join("control-room-listen-port.txt");
@@ -880,7 +894,9 @@ pub(crate) fn bootstrap_control_plane(
             })
             .unwrap_or(false);
 
-    let api_child = if api_port() != 0 && api_bridge_is_ready(api_port()) {
+    let api_child = if std::env::var_os("FULLMAG_ATTACHED_SESSION_ID").is_some()
+        && api_bridge_is_ready(api_port())
+    {
         terminal_logger().emit(
             TerminalLogSource::Api,
             format!("reusing fullmag-api on :{} ...", api_port()),
@@ -932,30 +948,16 @@ pub(crate) fn bootstrap_control_plane(
         live_workspace.publish_snapshot();
     }
 
-    let web_port = resolve_web_port(requested_port, &listen_port_file)?;
+    let web_port = match crate::control_room_ports::web_port() {
+        Some(port) => port,
+        None => resolve_web_port(requested_port, &listen_port_file)?,
+    };
     let desired_signature = control_room_launch_signature(dev_mode, &api_base_url());
 
     if external_control_room_available {
         let public_url = frontend_public_url(web_port)?;
-        let web_cache_dir = web_dir.join(".next");
-        let current_mode = fs::read_to_string(&mode_file).ok();
-
-        if port_is_listening(web_port)
-            && (!frontend_is_ready(web_port)
-                || current_mode.as_deref().map(str::trim) != Some(desired_signature.as_str()))
-        {
-            terminal_logger().emit(
-                TerminalLogSource::Web,
-                format!("restarting control room on :{} ...", web_port),
-            );
-            stop_control_room_frontend_processes(web_port);
-            if dev_mode {
-                let _ = fs::remove_dir_all(&web_cache_dir);
-            }
-        }
-
         let mut frontend_child = None;
-        if !frontend_is_ready(web_port) {
+        {
             terminal_logger().emit(
                 TerminalLogSource::Web,
                 format!("starting control room on :{} ...", web_port),
@@ -989,6 +991,7 @@ pub(crate) fn bootstrap_control_plane(
                 .current_dir(&web_dir)
                 .env("FULLMAG_API_PROXY_TARGET", api_base_url())
                 .env("FULLMAG_WEB_PUBLIC_HOST", web_public_host())
+                .env("FULLMAG_INSTANCE_ID", control_plane_instance_id())
                 .stdin(Stdio::null());
             if stream_web_logs_to_terminal {
                 terminal_logger().emit(
@@ -1016,8 +1019,7 @@ pub(crate) fn bootstrap_control_plane(
             }
 
             let mut child = BootstrapProcessGuard::new(ChildProcess(
-                command
-                    .spawn()
+                crate::control_room_ports::spawn(&mut command, false, true)
                     .context("failed to spawn control room server")?,
             ));
             if let Some(log_file) = terminal_log_file {
@@ -1036,6 +1038,15 @@ pub(crate) fn bootstrap_control_plane(
                 if Instant::now() >= bootstrap_deadline {
                     break false;
                 }
+                if let Some(status) = frontend_child
+                    .as_mut()
+                    .unwrap()
+                    .process_mut()
+                    .0
+                    .try_wait()?
+                {
+                    bail!("owned control room exited before becoming ready: {status}");
+                }
                 if frontend_is_ready_for_bootstrap(web_port) {
                     break true;
                 }
@@ -1044,16 +1055,21 @@ pub(crate) fn bootstrap_control_plane(
             if !frontend_ready {
                 bail!("control room did not become ready on :{}", web_port);
             }
-        } else {
-            terminal_logger().emit(
-                TerminalLogSource::Web,
-                format!("reusing control room on :{}", web_port),
-            );
         }
 
         let _ = fs::write(&url_file, &public_url);
-        let _ = fs::write(&listen_port_file, web_port.to_string());
+        fs::write(&listen_port_file, web_port.to_string())?;
+        let discovery = serde_json::json!({
+            "schema": "fullmag.launcher-instance.v1", "instance_id": control_plane_instance_id(),
+            "session_id": session_id, "state": "ready", "launcher_pid": std::process::id(),
+            "api_port": api_port(), "web_port": web_port, "api_url": api_base_url(),
+            "web_url": public_url, "state_root": state_root,
+        });
+        let temporary = state_root.join("instance.json.tmp");
+        fs::write(&temporary, serde_json::to_vec_pretty(&discovery)?)?;
+        fs::rename(&temporary, state_root.join("instance.json"))?;
 
+        crate::control_room_ports::finish_startup();
         return Ok(ControlPlaneReady {
             api_port: api_port(),
             web_url: format!("{public_url}/"),
@@ -1071,10 +1087,23 @@ pub(crate) fn bootstrap_control_plane(
             );
         }
 
+        let public_url = web_public_url(api_port());
+        fs::write(&url_file, &public_url)?;
+        fs::write(&listen_port_file, api_port().to_string())?;
+        let discovery = serde_json::json!({
+            "schema": "fullmag.launcher-instance.v1", "instance_id": control_plane_instance_id(),
+            "session_id": session_id, "state": "ready", "launcher_pid": std::process::id(),
+            "api_port": api_port(), "web_port": api_port(), "api_url": api_base_url(),
+            "web_url": public_url, "state_root": state_root,
+        });
+        let temporary = state_root.join("instance.json.tmp");
+        fs::write(&temporary, serde_json::to_vec_pretty(&discovery)?)?;
+        fs::rename(&temporary, state_root.join("instance.json"))?;
+        crate::control_room_ports::finish_startup();
         return Ok(ControlPlaneReady {
             api_port: api_port(),
-            web_url: format!("{}/", web_public_url(api_port())),
-            web_port,
+            web_url: format!("{public_url}/"),
+            web_port: api_port(),
             api_child: api_child.map(|child| child.release().0),
             frontend_child: None,
         });
@@ -1238,39 +1267,19 @@ pub(crate) fn spawn_control_room(
     Ok((ready.web_port, ready.api_child, ready.frontend_child))
 }
 
-fn resolve_web_port(requested: Option<u16>, listen_port_file: &Path) -> Result<u16> {
-    const CANDIDATE_PORTS: &[u16] = &[3000, 3001, 3002, 3003, 3004, 3005, 3010];
-
-    if let Some(port) = requested {
-        if port_is_listening(port) || port_is_bindable(port) {
-            return Ok(port);
-        }
-        bail!(
-            "requested --web-port={port} is not available for the 0.0.0.0 frontend listener; choose another port or stop the process using it"
-        );
-    }
-
-    if let Ok(stored) = fs::read_to_string(listen_port_file) {
-        if let Ok(port) = stored.trim().parse::<u16>() {
-            if port != 0 && (port_is_listening(port) || port_is_bindable(port)) {
-                return Ok(port);
-            }
-        }
-    }
-
-    for &port in CANDIDATE_PORTS {
-        if port_is_listening(port) {
-            return Ok(port);
-        }
-    }
-
-    for &port in CANDIDATE_PORTS {
+fn resolve_web_port(requested: Option<u16>, _listen_port_file: &Path) -> Result<u16> {
+    const CANDIDATE_PORTS: &[u16] = &[3100, 3101, 3102, 3103, 3104, 3105, 3110];
+    if let Some(port) = requested.filter(|port| *port != 0) {
         if port_is_bindable(port) {
             return Ok(port);
         }
     }
-
-    bail!("no free port found in {:?}", CANDIDATE_PORTS)
+    for &port in CANDIDATE_PORTS {
+        if Some(port) != requested && port_is_bindable(port) {
+            return Ok(port);
+        }
+    }
+    allocate_ephemeral_api_port()
 }
 
 pub(crate) fn port_is_listening(port: u16) -> bool {
@@ -1303,7 +1312,7 @@ mod web_port_tests {
     }
 
     #[test]
-    fn explicit_occupied_web_port_is_rejected_before_frontend_spawn() {
+    fn occupied_preferred_web_port_selects_another_listener() {
         let listener = TcpListener::bind((std::net::Ipv4Addr::UNSPECIFIED, 0))
             .expect("wildcard test listener should bind");
         let port = listener
@@ -1315,14 +1324,13 @@ mod web_port_tests {
             std::process::id()
         ));
 
-        let error = resolve_web_port(Some(port), &url_file)
-            .expect_err("an occupied explicit web port must fail before spawning Next");
-        assert!(error.to_string().contains("--web-port"));
+        let selected = resolve_web_port(Some(port), &url_file).unwrap();
+        assert_ne!(selected, port);
     }
 }
 
 fn allocate_ephemeral_api_port() -> Result<u16> {
-    let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::from(LOOPBACK_V4_OCTETS), 0))?;
+    let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::UNSPECIFIED, 0))?;
     let port = listener.local_addr()?.port();
     if port == 0 {
         bail!("kernel returned port 0 for loopback API listener probe");
@@ -1339,7 +1347,7 @@ fn frontend_is_ready_for_bootstrap(port: u16) -> bool {
 }
 
 fn static_control_room_is_ready(port: u16, timeout: Duration) -> bool {
-    if !api_is_ready(port) {
+    if !api_bridge_is_ready_with_identity(port, true) {
         return false;
     }
 
@@ -1371,76 +1379,14 @@ fn frontend_is_ready_with_timeout(port: u16, timeout: Duration) -> bool {
         .send()
         .map(|response| {
             let status = response.status();
-            status.is_success() || status.is_redirection()
+            (status.is_success() || status.is_redirection())
+                && response
+                    .headers()
+                    .get("x-fullmag-instance-id")
+                    .and_then(|value| value.to_str().ok())
+                    == Some(control_plane_instance_id())
         })
         .unwrap_or(false)
-}
-
-fn stop_control_room_frontend_processes(port: u16) {
-    #[cfg(windows)]
-    {
-        let needle = format!(":{port}");
-        if let Ok(output) = ProcessCommand::new("netstat")
-            .args(["-ano", "-p", "tcp"])
-            .stdin(Stdio::null())
-            .output()
-        {
-            let text = String::from_utf8_lossy(&output.stdout);
-            let mut pids = std::collections::BTreeSet::new();
-            for line in text.lines() {
-                let fields = line.split_whitespace().collect::<Vec<_>>();
-                if fields.len() >= 5
-                    && fields[0].eq_ignore_ascii_case("TCP")
-                    && fields[1].contains(&needle)
-                    && fields[3].eq_ignore_ascii_case("LISTENING")
-                {
-                    if let Ok(pid) = fields[4].parse::<u32>() {
-                        pids.insert(pid);
-                    }
-                }
-            }
-            for pid in pids {
-                let _ = ProcessCommand::new("taskkill")
-                    .args(["/PID", &pid.to_string(), "/T", "/F"])
-                    .stdin(Stdio::null())
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .status();
-            }
-        }
-    }
-
-    #[cfg(not(windows))]
-    {
-        let hosts = [
-            "0.0.0.0".to_string(),
-            std::net::Ipv4Addr::from(LOOPBACK_V4_OCTETS).to_string(),
-            LOCALHOST_HTTP_HOST.to_string(),
-        ];
-        for host in hosts {
-            for pattern in [
-                format!("next dev --hostname {host} --port {port}"),
-                format!("next dev .*--hostname {host}.*--port {port}"),
-                format!("next dev .*--hostname {host}.*-p {port}"),
-                format!("next dev .*--port {port}"),
-                format!("next dev .*-p {port}"),
-                format!("node dev-server.mjs --hostname {host} --port {port}"),
-                format!("node dev-server.mjs .*--hostname {host}.*--port {port}"),
-            ] {
-                let _ = ProcessCommand::new("pkill")
-                    .args(["-f", &pattern])
-                    .stdin(Stdio::null())
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .status();
-            }
-        }
-    }
-
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while port_is_listening(port) && Instant::now() < deadline {
-        std::thread::sleep(Duration::from_millis(100));
-    }
 }
 
 pub(crate) fn api_is_ready(port: u16) -> bool {
@@ -2059,7 +2005,7 @@ pub(crate) fn spawn_fullmag_api(
 ) -> Result<std::process::Child> {
     let packaged_root = packaged_install_root(self_exe);
     let runtime_root = packaged_root.clone().unwrap_or_else(|| root.to_path_buf());
-    let state_root = runtime_state_root(&runtime_root);
+    let state_root = control_plane_state_root(&runtime_root);
     let sibling_api = self_exe.with_file_name(format!("fullmag-api{EXE_SUFFIX}"));
     let web_static_dir = {
         let candidates = [
@@ -2106,6 +2052,7 @@ pub(crate) fn spawn_fullmag_api(
             .env("FULLMAG_API_PORT", api_port().to_string())
             .env("FULLMAG_REPO_ROOT", &runtime_root)
             .env("FULLMAG_STATE_ROOT", &state_root)
+            .env("FULLMAG_INSTANCE_ID", control_plane_instance_id())
             .env("FULLMAG_WEB_STATIC_DIR", &web_static_dir)
             .stdin(Stdio::null());
         if stream_logs_to_terminal {
@@ -2118,8 +2065,7 @@ pub(crate) fn spawn_fullmag_api(
         if disable_static_control_room {
             command.env("FULLMAG_DISABLE_STATIC_CONTROL_ROOM", "1");
         }
-        let mut child = command
-            .spawn()
+        let mut child = crate::control_room_ports::spawn(&mut command, true, true)
             .with_context(|| format!("failed to spawn fullmag-api binary {}", path.display()))?;
         if let Some(log_file) = terminal_log_file {
             terminal_logger().attach_child(&mut child, TerminalLogSource::Api, log_file)?;
@@ -2274,8 +2220,24 @@ fn wait_for_api_ready(port: u16, child: &mut std::process::Child, timeout: Durat
         // contract.  Health alone can be served by an unrelated stale process
         // on the requested port.  Source snapshots are strict when present;
         // direct ad-hoc `cargo run` builds may legitimately report `unknown`.
+        if let Some(status) = child.try_wait().context("failed to poll owned API")? {
+            bail!("owned fullmag-api exited before becoming ready: {status}");
+        }
         if !health_seen {
-            health_seen = api_is_ready(port);
+            health_seen = reqwest::blocking::Client::builder()
+                .timeout(Duration::from_millis(500))
+                .build()?
+                .get(format!("http://{LOCALHOST_HTTP_HOST}:{port}/healthz"))
+                .send()
+                .map(|response| {
+                    response.status().is_success()
+                        && response
+                            .headers()
+                            .get("x-fullmag-instance-id")
+                            .and_then(|value| value.to_str().ok())
+                            == Some(control_plane_instance_id())
+                })
+                .unwrap_or(false);
         }
         if health_seen && Instant::now() >= next_contract_probe {
             if api_bridge_is_ready_for_startup(port) {

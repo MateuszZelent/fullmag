@@ -35,8 +35,8 @@ param(
   [Alias("skip_local_changes")]
   [switch]$SkipLocalChanges,
 
-  [ValidateRange(1, 65535)]
-  [int]$WebPort = 3100
+  [ValidateRange(0, 65535)]
+  [int]$WebPort = 0
 )
 
 $ErrorActionPreference = "Stop"
@@ -126,6 +126,23 @@ function Require-Command {
     throw "Missing required command: $Name"
   }
 }
+
+$InstanceId = if ($env:FULLMAG_INSTANCE_ID -and $env:FULLMAG_INSTANCE_ID.Trim()) {
+  $env:FULLMAG_INSTANCE_ID.Trim()
+} else {
+  [Guid]::NewGuid().ToString("N")
+}
+if ($InstanceId -notmatch '^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$') {
+  throw "FULLMAG_INSTANCE_ID contains unsafe characters: $InstanceId"
+}
+$InstanceStateRoot = if ($env:FULLMAG_STATE_ROOT -and $env:FULLMAG_STATE_ROOT.Trim()) {
+  Resolve-AbsolutePath $env:FULLMAG_STATE_ROOT
+} else {
+  Join-Path ([string]$StorageLayout.runtime_root) "instances\$InstanceId"
+}
+Ensure-Directory $InstanceStateRoot
+$env:FULLMAG_INSTANCE_ID = $InstanceId
+$env:FULLMAG_STATE_ROOT = $InstanceStateRoot
 
 function Invoke-External {
   param(
@@ -448,7 +465,7 @@ $StaticControlRoom = Join-Path $RepoRoot "apps\control-room\out\index.html"
 $needsControlRoomToolchain = $Frontend -eq "static" -or
   (-not $BuildOnly -and $RunMode -in @("interactive", "workspace"))
 
-$nextDistDir = if ($needsControlRoomToolchain -and $Frontend -eq "dev") {
+$nextDistDir = if ($needsControlRoomToolchain -and $Frontend -eq "dev" -and $WebPort -gt 0) {
   ".next-control-room-$WebPort"
 } else {
   $null
@@ -805,7 +822,11 @@ if ($RunMode -eq "headless") {
   $cliArguments += @("--headless", "--json")
 }
 else {
-  $cliArguments += @("--web-port", $WebPort.ToString())
+  if ($WebPort -gt 0) {
+    $cliArguments += @("--web-port", $WebPort.ToString())
+  } else {
+    Write-Host "Native Fullmag will allocate an isolated API/UI port pair automatically"
+  }
 }
 
 Write-Host "Windows native Fullmag runtime"

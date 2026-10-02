@@ -11,6 +11,7 @@ mod args;
 mod command_bridge;
 mod communication_policy;
 mod control_room;
+mod control_room_ports;
 mod dev_smoke;
 mod diagnostics;
 mod feature_flags;
@@ -583,7 +584,7 @@ fn handle_session(cmd: args::SessionSubcommand) -> Result<()> {
 }
 
 fn launch_ui(ui: UiCli) -> Result<()> {
-    crate::control_room::init_api_port()?;
+    let _port_reservations = crate::control_room::init_api_port_with_web(ui.web_port)?;
     let (session_id, live_workspace) = if let Some(script) = ui.script.as_ref() {
         let (session_id, live_workspace) =
             orchestrator::prepare_live_workspace_for_ui(script, ui.backend, ui.mode, ui.precision)?;

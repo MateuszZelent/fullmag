@@ -10,6 +10,115 @@ from local_runner import build_executor as executor
 
 
 class BuildExecutorTests(unittest.TestCase):
+    def _managed_browser_container(self, *, token='a' * 32):
+        project = 'fullmag-browser-' + token
+        image = 'sha256:' + 'b' * 64
+        command = ('set -eu; mkdir /state/workspace; '
+                   'cd /source; exec /package/bin/fullmag-api')
+        return {
+            'Name': '/' + project + '-browser-1',
+            'Image': image,
+            'Config': {
+                'Image': image,
+                'User': '65532:65532',
+                'Entrypoint': [],
+                'Cmd': ['bash', '-c', command],
+                'WorkingDir': '/source',
+                'Labels': {
+                    'com.docker.compose.config-hash': 'config-hash',
+                    'com.docker.compose.container-number': '1',
+                    'com.docker.compose.oneoff': 'False',
+                    'com.docker.compose.project': project,
+                    'com.docker.compose.project.config_files': '/state/compose.json',
+                    'com.docker.compose.project.working_dir': '/state',
+                    'com.docker.compose.service': 'browser',
+                },
+            },
+            'HostConfig': {
+                'ReadonlyRootfs': True,
+                'Privileged': False,
+                'NetworkMode': 'bridge',
+                'CapDrop': ['ALL'],
+                'SecurityOpt': ['no-new-privileges:true'],
+                'NanoCpus': 4 * 10**9,
+                'Memory': 2 * 1024**3,
+                'PidsLimit': 128,
+                'DeviceRequests': [],
+                'Devices': [],
+                'DeviceCgroupRules': [],
+            },
+            'Mounts': [
+                {'Type': 'bind', 'Source': 'C:/source', 'Destination': '/source'},
+                {'Type': 'bind', 'Source': 'C:/package', 'Destination': '/package'},
+                {'Type': 'bind', 'Source': 'C:/state', 'Destination': '/state'},
+            ],
+        }
+
+    def test_attested_managed_browser_namespace_does_not_block_build(self):
+        container = self._managed_browser_container()
+        self.assertTrue(executor.is_attested_managed_browser_container(container))
+        self.assertFalse(executor.is_blocking_fullmag_container(container))
+
+    def test_unknown_fullmag_container_still_blocks_build(self):
+        container = self._managed_browser_container()
+        del container['Config']['Labels']['com.docker.compose.config-hash']
+        self.assertFalse(executor.is_attested_managed_browser_container(container))
+        self.assertTrue(executor.is_blocking_fullmag_container(container))
+
+    def test_malformed_container_metadata_fails_closed(self):
+        self.assertFalse(executor.is_attested_managed_browser_container({'Name': None}))
+        self.assertTrue(executor.is_blocking_fullmag_container({'Name': None}))
+
+    def test_browser_attestation_requires_exact_service_and_namespace(self):
+        container = self._managed_browser_container()
+        labels = container['Config']['Labels']
+        labels['com.docker.compose.service'] = 'api'
+        self.assertFalse(executor.is_attested_managed_browser_container(container))
+        labels['com.docker.compose.service'] = 'browser'
+        labels['com.docker.compose.project'] = 'fullmag-browser-b'
+        self.assertFalse(executor.is_attested_managed_browser_container(container))
+
+    def test_browser_attestation_rejects_privileged_container(self):
+        container = self._managed_browser_container()
+        container['HostConfig']['Privileged'] = True
+        self.assertFalse(executor.is_attested_managed_browser_container(container))
+
+    def test_browser_attestation_rejects_malformed_image_or_security_metadata(self):
+        container = self._managed_browser_container()
+        container['Image'] = 7
+        self.assertFalse(executor.is_attested_managed_browser_container(container))
+        container = self._managed_browser_container()
+        container['HostConfig']['SecurityOpt'] = 7
+        self.assertFalse(executor.is_attested_managed_browser_container(container))
+
+    def test_browser_attestation_rejects_gpu_request(self):
+        container = self._managed_browser_container()
+        container['HostConfig']['DeviceRequests'] = [{'Driver': 'nvidia'}]
+        self.assertFalse(executor.is_attested_managed_browser_container(container))
+
+    def test_browser_attestation_rejects_oversized_resources(self):
+        container = self._managed_browser_container()
+        container['HostConfig']['NanoCpus'] += 1
+        self.assertFalse(executor.is_attested_managed_browser_container(container))
+        container = self._managed_browser_container()
+        container['HostConfig']['Memory'] += 1
+        self.assertFalse(executor.is_attested_managed_browser_container(container))
+
+    def test_browser_attestation_rejects_non_api_command(self):
+        container = self._managed_browser_container()
+        container['Config']['Cmd'][2] = 'set -eu; cargo build --release'
+        self.assertFalse(executor.is_attested_managed_browser_container(container))
+
+    def test_browser_attestation_rejects_socket_or_device_mounts(self):
+        container = self._managed_browser_container()
+        container['Mounts'].append({
+            'Type': 'bind', 'Source': '/var/run/docker.sock', 'Destination': '/tmp/host.sock'})
+        self.assertFalse(executor.is_attested_managed_browser_container(container))
+        container = self._managed_browser_container()
+        container['Mounts'].append({
+            'Type': 'bind', 'Source': '/dev/nvidia0', 'Destination': '/gpu0'})
+        self.assertFalse(executor.is_attested_managed_browser_container(container))
+
     def _write_release_receipt(self, root, *, profile='fem-cpu-release', empty=None, accepted=True):
         outputs = ['bin/fullmag-bin', 'bin/fullmag-api', '_fullmag_core.so',
                    'web/index.html', 'launcher-build-mode']

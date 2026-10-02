@@ -2591,11 +2591,13 @@ async fn main() {
         .and_then(|v| v.parse().ok())
         .unwrap_or(8081);
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
-    info!(%addr, "starting fullmag-api");
-
-    let listener = tokio::net::TcpListener::bind(addr)
+    let listener = launcher_listener(addr)
         .await
         .expect("binding API listener should succeed");
+    let bound_addr = listener
+        .local_addr()
+        .expect("bound API address should be available");
+    info!(addr = %bound_addr, "starting fullmag-api");
 
     axum::serve(listener, app)
         .await
@@ -2653,11 +2655,63 @@ fn resolve_static_web_root(repo_root: &Path) -> Option<PathBuf> {
         .find(|path| path.join("index.html").is_file())
 }
 
-async fn healthz() -> Json<HealthResponse> {
-    Json(HealthResponse {
-        status: "ok",
-        service: "fullmag-api",
-    })
+async fn launcher_listener(addr: SocketAddr) -> std::io::Result<tokio::net::TcpListener> {
+    #[cfg(unix)]
+    if let Some(raw) = std::env::var_os("FULLMAG_API_LISTENER_FD") {
+        use std::os::fd::FromRawFd;
+        let fd = raw
+            .to_string_lossy()
+            .parse::<std::os::fd::RawFd>()
+            .map_err(|_| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "invalid launcher listener descriptor",
+                )
+            })?;
+        if fd < 3 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "launcher descriptor must not be stdio",
+            ));
+        }
+        // Validate ownership input before constructing an owning socket handle.
+        if unsafe { libc::fcntl(fd, libc::F_GETFD) } == -1 {
+            return Err(std::io::Error::last_os_error());
+        }
+        // The launcher transfers this descriptor exclusively to this child.
+        let listener = unsafe { std::net::TcpListener::from_raw_fd(fd) };
+        let actual = listener.local_addr()?;
+        if actual != addr {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "launcher listener address mismatch",
+            ));
+        }
+        let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+        if flags == -1 || unsafe { libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC) } == -1
+        {
+            return Err(std::io::Error::last_os_error());
+        }
+        listener.set_nonblocking(true)?;
+        return tokio::net::TcpListener::from_std(listener);
+    }
+    tokio::net::TcpListener::bind(addr).await
+}
+
+async fn healthz() -> (axum::http::HeaderMap, Json<HealthResponse>) {
+    let mut headers = axum::http::HeaderMap::new();
+    if let Ok(instance) = std::env::var("FULLMAG_INSTANCE_ID") {
+        if let Ok(value) = axum::http::HeaderValue::from_str(&instance) {
+            headers.insert("x-fullmag-instance-id", value);
+        }
+    }
+    (
+        headers,
+        Json(HealthResponse {
+            status: "ok",
+            service: "fullmag-api",
+        }),
+    )
 }
 
 async fn vision() -> Json<VisionResponse> {
