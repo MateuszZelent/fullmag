@@ -1,6 +1,6 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
-## Aktualny stan wykonania — 2026-10-02, po buildach #203–#211
+## Aktualny stan wykonania — 2026-10-03, po buildach #203–#213
 
 Ten checkpoint zastępuje wcześniejsze deklaracje bieżącego stanu jobów i
 liczby punktów; poniższe sekcje zachowują historię. Pełny zakres S00–S12
@@ -17,11 +17,13 @@ rozszerzeniem S05/S08, nie zamiennikiem fizyki ani kwalifikacji całego celu.
 | Signed15 | ±2 nie przeszły shifted GMRES; 13 dodatkowych punktów nieukończone | OPEN; bez tworzenia punktów przez symetrię |
 | Reader #208 | Import kopii rzeczywistego FMS i spectrum +10; WebGL działa, topology nie przyjęte wskutek deadline | Częściowy browser proof; S08 OPEN |
 | PreviewState / viewport | Poprawki źródeł importu i lokalnego topology deadline 15 s | Managed frontend i browser po poprawce OPEN |
-| Adaptive CPU/RAM | Polityka Python/IR/API/UI, Linux sampler i osobne procesy; wcześniejsze kontrole produkcyjnego TypeScript/React Doctor PASS; 40 interpretowanych regresji sterownika prób PASS | Runtime i zgodność serial/adaptive OPEN |
-| Telemetria puli na żywo | Próbka regulatora → istniejący zasób etapów Study → Inspector; active/admission/limit są rozdzielone | Implementacja źródeł w toku; późniejszy kod poza kapsułą #211 |
+| Adaptive CPU/RAM | Polityka Python/IR/API/UI, Linux sampler i osobne procesy; wcześniejsze kontrole produkcyjnego TypeScript/React Doctor PASS; 64 interpretowane regresje sterownika prób i 3 publicznego DSL PASS; aktualny produkcyjny TypeScript: 799 wejść, zero test/spec | Runtime i zgodność serial/adaptive OPEN |
+| Telemetria puli na żywo | Próbka regulatora → istniejący zasób etapów Study → Inspector; active/admission/limit są rozdzielone | Źródła i review domen CPU oraz wire PASS; poza kapsułą #211, w kapsule #213; runtime/UI OPEN |
 | Diagnostyka awarii ±2 | Zapis konfiguracji KSP przed EPSSolve; review źródłowe PASS, przygotowana regresja natywna | Native build/runtime OPEN; poza kapsułą #211 |
 | SLEPc #209 | Terminal failed, exit 2; osiem błędów Rust, cztery przyczyny poprawione i reviewed | Nie jest dopuszczonym runtime |
-| SLEPc #211 | c554c5361f014228a301380b8ed3487c, running w FIFO; exit_code=null | Produkcyjny build trwa; receipt/runtime OPEN |
+| SLEPc #211 | c554c5361f014228a301380b8ed3487c, terminal failed, exit 2; native-build exit 0; runtime fem-availability timeout 120 s | Kompilacja PASS; runtime/receipt niezaliczone; nie uruchomiono prób solvera |
+| SLEPc #213 | 9e4d278669bc4d92a8895294b7e19db6, queued; aktualny CPU-domain sampler, live telemetry oraz opt-in Schur diagnostics | Receipt/runtime OPEN; bez zmiany FIFO |
+| S09 nodalne Ms | Dokładne momenty P1 w bounded assemblerze, 9 interpretowanych kontroli; commit 1cee2db614fcd920dbc0cfd4293df9dd3098c70d | Source-only; native regression nieskompilowana; produkcyjny MFEM/TetraX/3D OPEN |
 | Pełna nauka i integracja | Γ/signed DE/BV, COMSOL A1, zbieżności, pełne pola/tracking, falowód, interakcje, GPU i integration cycle | S00–S12 nadal OPEN |
 
 Źródła ±10: job #203 d30406a2ef6d42cb9120ce04d58d646a,
@@ -31,6 +33,17 @@ d30406a2ef6d42cb9120ce04d58d646a; raport de-priority-k10-validated-v2-report.jso
 zachowuje ścieżki oraz hashe wszystkich wejść i wyników. Odczyt kontrolny
 priority-k10-evidence-refresh.json jest w katalogu wizualizacji tego wątku.
 Wynik integrity refresh nie jest ponownym wykonaniem solvera ani pełną nauką.
+
+Terminalny #211 zachowano z failed receiptem i logami. Rzeczywisty proces
+fem-availability był aktywny przed timeoutem (około 105% CPU, 50 MiB RSS).
+Nie jest to zanik obserwacji ani dowód dostępności CPU/SLEPc. Timeout 120 s
+zakończył sam executor. Brakuje partial stdout/stderr tej sondy, gdyż obecny
+trusted helper gubi je w obsłudze TimeoutExpired; poprawka diagnostyczna
+jest w lokalnym commicie 4bb7c3736808ca7e194782292cc9beda99e0356f
+(42 interpretowane regresje PASS), bez wdrożenia do aktywnego koordynatora.
+#213 pozostaje osobną zamrożoną kapsułą w FIFO. Próby serial/adaptive nie
+wystartują na failed #211; przed kolejnym ponowieniem potrzebna jest diagnoza
+startupu zamiast automatycznego zwiększania timeoutu.
 
 Build #211 jest niezmiennym snapshotem
 b85acbd0d354acf7f554f72e8697c06c1508de8ff9d51fcbd8831aa38aad452c,
@@ -5878,3 +5891,7 @@ sterowniki są w kanonicznym scientific-batches/nonzero-k-validation/
 febe368724ec4e76a1da88ad24878a9b, pliki priority-k10-*. Symetria nie jest
 używana do tworzenia punktów. W chwili checkpointu nadal 0 nowych punktów;
 build i oba obserwatory są aktywne, kwalifikacja całego celu pozostaje OPEN.
+
+## S09 — nodalne Ms i jednostki źródła, 2026-10-03
+
+Lokalny commit `1cee2db614fcd920dbc0cfd4293df9dd3098c70d` naprawia całkowanie nodalnego Ms w bounded assemblerze przekroju. Zamiast Ms w węźle źródła razy mass używa dokładnych momentów P1 stopnia drugiego i trzeciego. Gałąź bez nodalnego bufora zachowuje dotychczasową arytmetykę uniform. Nota [0832](../../physics/0832-fem-waveguide-nodal-ms-quadrature.md) rozróżnia bezwymiarowe delta_m od delta_M [A/m] oraz A_phiq_perp [A] od A_phiq_axial [A m]. Review domknęło błędy oznaczeń i jednostek. Dziewięć interpretowanych kontroli PASS; regresja odróżnia historyczną błędną regułę, mapa JSON ma poprawne referencje i jednostki. Native test przygotowano, bez kompilacji. To nie jest ukończone S09: typed production routing, owner MFEM, exchange k², rekonstrukcja pól, boundary/k→0, TetraX i extruded3D nadal OPEN.
