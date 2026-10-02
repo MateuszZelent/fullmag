@@ -273,3 +273,7 @@ pamięci i wszystkich lane'ów pozostają otwarte. P6 wynosi **52%**.
 65a. [Bezpośredni powrót do bieżącego viewportu](65a-direct-current-viewport.md)
      — lokalne czyszczenie pinned selection bez API mutation i reload;
      produkcyjne źródła, review oraz browser z tym samym canvasem PASS.
+
+67. [Propozycja zwolnienia miejsca na runnerze](67-terminal-frontend-cache-proposal.md)
+    — 44 dokładne fizyczne katalogi cache zakończonych prób, 10,66 GiB;
+    raporty i źródła pozostają, nic nie usunięto, zgoda na manifest oczekuje.
