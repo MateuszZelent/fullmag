@@ -30,8 +30,13 @@ impl ApiSidecar {
         let repo_root = discover_repo_root(&api_exe);
         let web_static_dir = resolve_web_static_dir(&repo_root);
 
-        let log_dir = repo_root.join(".fullmag").join("logs");
-        let _ = std::fs::create_dir_all(&log_dir);
+        let state_root = sidecar_state_root(
+            &repo_root,
+            std::env::var_os("FULLMAG_STATE_ROOT").map(PathBuf::from),
+        )?;
+        let log_dir = state_root.join("logs");
+        std::fs::create_dir_all(&log_dir)
+            .map_err(|e| format!("failed to create API log directory: {e}"))?;
 
         let stdout_file = std::fs::File::create(log_dir.join("fullmag-api.log"))
             .map_err(|e| format!("failed to create api log: {e}"))?;
@@ -43,6 +48,7 @@ impl ApiSidecar {
         cmd.current_dir(&repo_root)
             .env("FULLMAG_API_PORT", port.to_string())
             .env("FULLMAG_REPO_ROOT", &repo_root)
+            .env("FULLMAG_STATE_ROOT", &state_root)
             .stdin(Stdio::null())
             .stdout(stdout_file)
             .stderr(stderr_file);
@@ -163,6 +169,11 @@ fn packaged_root_marker(root: &std::path::Path) -> bool {
 }
 
 fn discover_repo_root(api_exe: &std::path::Path) -> PathBuf {
+    // The installed executable owns asset discovery, even if a shell still
+    // carries a development checkout override.
+    if let Some(root) = fullmag_runtime_control::python_runtime::packaged_windows_root(api_exe) {
+        return root;
+    }
     if let Ok(root) = std::env::var("FULLMAG_REPO_ROOT") {
         return PathBuf::from(root);
     }
@@ -172,6 +183,21 @@ fn discover_repo_root(api_exe: &std::path::Path) -> PathBuf {
             .and_then(|e| find_repo_root_from(&e))
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
     })
+}
+
+fn sidecar_state_root(
+    repo_root: &std::path::Path,
+    configured: Option<PathBuf>,
+) -> Result<PathBuf, String> {
+    if let Some(root) = configured.filter(|path| !path.as_os_str().is_empty()) {
+        if !root.is_absolute() {
+            return Err("FULLMAG_STATE_ROOT must be an absolute path".to_string());
+        }
+        return Ok(root);
+    }
+    fullmag_runtime_control::python_runtime::packaged_windows_state_root(repo_root)
+        .map(|root| root.unwrap_or_else(|| repo_root.join(".fullmag")))
+        .map_err(|error| format!("Windows package state directory unavailable: {error}"))
 }
 
 fn resolve_web_static_dir(repo_root: &std::path::Path) -> Option<PathBuf> {
@@ -189,7 +215,33 @@ fn resolve_web_static_dir(repo_root: &std::path::Path) -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::packaged_install_root;
+    use super::{packaged_install_root, sidecar_state_root};
+
+    #[test]
+    fn explicit_state_root_is_shared_with_the_api() {
+        let root = tempfile::tempdir().unwrap();
+        let state = root.path().join("user-state");
+        assert_eq!(
+            sidecar_state_root(root.path(), Some(state.clone())).unwrap(),
+            state
+        );
+    }
+
+    #[test]
+    fn relative_state_override_is_rejected_before_creating_logs() {
+        let root = tempfile::tempdir().unwrap();
+        assert!(sidecar_state_root(root.path(), Some("relative-state".into())).is_err());
+        assert!(!root.path().join(".fullmag/logs").exists());
+    }
+
+    #[test]
+    fn source_checkout_uses_its_existing_state_directory() {
+        let root = tempfile::tempdir().unwrap();
+        assert_eq!(
+            sidecar_state_root(root.path(), None).unwrap(),
+            root.path().join(".fullmag")
+        );
+    }
 
     #[test]
     fn packaged_install_root_is_derived_from_bin_executable() {

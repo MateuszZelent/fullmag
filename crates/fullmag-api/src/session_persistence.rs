@@ -673,11 +673,49 @@ struct HysteresisMagnetizationSnapshotArtifact {
 // ── Helpers ────────────────────────────────────────────────────────────
 
 fn session_store_root(state: &AppState) -> std::path::PathBuf {
-    state
-        .repo_root
-        .join(".fullmag")
-        .join("local-live")
-        .join("session-store")
+    session_store_path(
+        &state.repo_root,
+        state.current_command_journal_store_root.as_deref(),
+    )
+}
+
+fn session_store_path(
+    repo_root: &std::path::Path,
+    configured: Option<&std::path::Path>,
+) -> std::path::PathBuf {
+    // Startup resolves the writable state once. Checkpoints and the command
+    // journal must use that same store, including installed Windows packages.
+    configured
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(|| {
+            repo_root
+                .join(".fullmag")
+                .join("local-live")
+                .join("session-store")
+        })
+}
+
+#[cfg(test)]
+mod session_store_path_tests {
+    use super::session_store_path;
+
+    #[test]
+    fn checkpoint_store_uses_the_frozen_startup_state_root() {
+        let directory = tempfile::tempdir().unwrap();
+        let install = directory.path().join("read-only-install");
+        let store = directory.path().join("user-state/local-live/session-store");
+        assert_eq!(session_store_path(&install, Some(&store)), store);
+        assert!(!install.exists());
+    }
+
+    #[test]
+    fn unconfigured_legacy_state_keeps_its_existing_store() {
+        let directory = tempfile::tempdir().unwrap();
+        assert_eq!(
+            session_store_path(directory.path(), None),
+            directory.path().join(".fullmag/local-live/session-store")
+        );
+    }
 }
 
 fn default_checkpoint_profile() -> SaveProfile {

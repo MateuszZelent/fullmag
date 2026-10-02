@@ -370,3 +370,8 @@ nadal pozostają otwarte.
 kontynuację przygotowania przez solver, trwały wynik, publiczny SolutionSet
 i pin z produkcyjną kontrolą native snapshot. 85 regresji PASS; rzeczywiste
 wykonanie w zweryfikowanym obrazie, archive i nauka nadal NOT VERIFIED.
+
+[Writable state desktopu Windows](p8/12-windows-desktop-writable-state.md)
+usuwa zapis logów obok instalacji i wiąże checkpointy z rootem stanu API.
+Kontrole źródłowe PASS; natywny pakiet, rzeczywisty zapis/restart/restore
+i wydanie pozostają NOT VERIFIED. Docker nie jest wymaganiem produktu Windows.
