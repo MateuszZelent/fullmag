@@ -119,6 +119,13 @@ PROFILES: dict[str, Profile] = {
 REQUIRED_OUTPUTS = (
     "bin/fullmag-bin",
     "bin/fullmag-api",
+    "bin/fullmag-api-accepted-worker",
+    "bin/fullmag-api-accepted-supervisor",
+    "bin/fullmag-api-accepted-scheduler",
+    "bin/fullmag-api-resource-pool",
+    "bin/fullmag-api-accepted-fem-preparer",
+    "bin/fullmag-api-accepted-fem-preparation-scheduler",
+    "bin/fullmag-api-preparation-resource-pool",
     "_fullmag_core.so",
     "launcher-build-mode",
     "web/index.html",
@@ -639,6 +646,8 @@ def _validate_required_outputs(output: Path, profile: Profile) -> None:
     for relative, path in zip(REQUIRED_OUTPUTS, _required_output_paths(output)):
         if path.is_symlink() or not path.is_file():
             raise BuildEntryPointError(f"required Fullmag output is missing: {relative}")
+        if path.stat().st_size == 0:
+            raise BuildEntryPointError(f"required Fullmag output is empty: {relative}")
     marker = output / "launcher-build-mode"
     try:
         observed = marker.read_text(encoding="utf-8").strip()

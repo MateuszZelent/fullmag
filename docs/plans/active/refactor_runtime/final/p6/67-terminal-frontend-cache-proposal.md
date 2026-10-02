@@ -15,6 +15,12 @@ Dokładne bezwzględne cele: [manifest JSON](67a-terminal-frontend-cache-manifes
 - Runner montuje cały storage do `/storage`; mount nie został zignorowany. Aktualny odczyt: brak aktywnych jobs, zdrowy worker, `waiting_for_disk`, 631881728 B wolnego (około 0,59 GiB), próg 8 GiB.
 - Przed wykonaniem ponowić kontrole aktywnych procesów, mountów, kolejki, receipt i containment, w tym wszystkich przodków ścieżek. Stwierdzone użycie wyklucza dany cel.
 
+Niezależny przegląd z 02.10.2026: brak P0/P1. Potwierdzono 44 unikalne cele,
+dokładną sumę rozmiarów, mapping junctionów, brak nieoczekiwanych reparse points
+w celach i przodkach oraz brak aktywnych zarejestrowanych PID-ów serwerów.
+Przegląd nie zastępuje ponownej kontroli użycia bezpośrednio przed operacją
+ani zgody na usunięcie; manifest pozostaje niezmieniony.
+
 Przewodnik `docs/guides/fullmag-build-storage-governance.md` wymaga: „pozostałe usuwanie wymaga osobnej autoryzacji dla dokładnych celów”. Zgoda dotycząca `_to_delete_legacy_web` nie obejmuje tych cache.
 
 ## Kandydaci

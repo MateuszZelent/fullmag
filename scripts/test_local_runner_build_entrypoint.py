@@ -125,10 +125,41 @@ class BuildEntryPointTests(unittest.TestCase):
         (output / "web").mkdir()
         (output / "bin" / "fullmag-bin").write_bytes(b"cli")
         (output / "bin" / "fullmag-api").write_bytes(b"api")
+        for name in (
+            "fullmag-api-accepted-worker",
+            "fullmag-api-accepted-supervisor",
+            "fullmag-api-accepted-scheduler",
+            "fullmag-api-resource-pool",
+            "fullmag-api-accepted-fem-preparer",
+            "fullmag-api-accepted-fem-preparation-scheduler",
+            "fullmag-api-preparation-resource-pool",
+        ):
+            (output / "bin" / name).write_bytes(b"accepted-runtime")
         (output / "_fullmag_core.so").write_bytes(b"core")
         (output / "launcher-build-mode").write_text(marker + "\n", encoding="utf-8")
         (output / "web" / "index.html").write_text("<html />", encoding="utf-8")
         return output
+
+    def test_incomplete_accepted_runtime_package_is_rejected(self) -> None:
+        output = self._write_outputs()
+        binaries = sorted(output.joinpath("bin").glob("fullmag-api-*"))
+        self.assertEqual(len(binaries), 7)
+        for binary in binaries:
+            with self.subTest(binary=binary.name):
+                original = binary.read_bytes()
+                binary.unlink()
+                try:
+                    with self.assertRaisesRegex(entrypoint.BuildEntryPointError, binary.name):
+                        entrypoint._validate_required_outputs(output, entrypoint.profile_for(self.profile))
+                finally:
+                    binary.write_bytes(original)
+
+    def test_empty_accepted_runtime_binary_is_rejected(self) -> None:
+        output = self._write_outputs()
+        binary = output / "bin" / "fullmag-api-accepted-fem-preparer"
+        binary.write_bytes(b"")
+        with self.assertRaisesRegex(entrypoint.BuildEntryPointError, binary.name):
+            entrypoint._validate_required_outputs(output, entrypoint.profile_for(self.profile))
 
     def test_profile_environment_cannot_silently_fallback(self) -> None:
         identity = self._identity()
