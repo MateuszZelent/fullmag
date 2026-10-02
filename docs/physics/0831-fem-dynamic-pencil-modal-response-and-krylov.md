@@ -2676,6 +2676,11 @@ i raw assignment wewnątrz tej samej grupy jest akceptowane. Alternatywny
 zestaw grup przy remisie wyboru klastrów pozostaje odrzucany; nie wolno
 interpretować takiego odrzucenia jako dowodu błędu fizycznego solvera.
 
+assignment_replay=pass wymaga również zgodności początkowych branch_id z
+indeksami slotów modów w pierwszej próbce, dokładnie w kolejności zwróconej
+przez solver (`scripts/comsol_tracking_replay.py::verify_initial_assignment`).
+Nie jest to sortowanie po częstotliwości ani po raw_mode_index. Błędny seed
+zachowuje osobny wynik metryk, lecz wyklucza certyfikat przypisania.
 assignment_replay=pass wymaga zgodności wszystkich kroków, ich grup i ram,
 nie tylko lokalnych score. Główna bramka sprawdza liczbę i kolejność kroków
 względem widma, a początkowy snapshot hashy obejmuje metadane, widmo,

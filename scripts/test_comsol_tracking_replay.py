@@ -34,10 +34,37 @@ class TrackingReplayTests(unittest.TestCase):
             confidence = 1. if index == 0 else .85 + .15 * _frequency_score(frequency - 1e6, frequency, None)
             points.append(dict(sample_index=index, raw_mode_index=raw, frequency_real_hz=frequency,
                                frequency_imag_hz=0., tracking_confidence=confidence))
-        self.branches = _tracking_fixture_payload([dict(branch_id=3, points=points)])
+        self.branches = _tracking_fixture_payload([dict(branch_id=0, points=points)])
 
     def replay(self):
         return replay_recorded_frames(self.metric, self.modes, self.branches, self.samples)
+
+    def test_noncanonical_seed_branch_id_cannot_certify_assignment(self):
+        self.branches["branches"][0]["branch_id"] = 37
+        result = self.replay()
+        self.assertEqual(result["assignment_replay"], "NOT VERIFIED")
+        self.assertEqual(result["initial_assignment_verification"]["status"], "fail")
+
+    def test_swapped_seed_ids_cannot_certify_assignment(self):
+        self.subspace_path()
+        first, second = self.branches["branches"]
+        first["branch_id"], second["branch_id"] = second["branch_id"], first["branch_id"]
+        # Use only the initial sample: no subsequent edge can reveal this swap.
+        self.samples = self.samples[:1]
+        for branch in self.branches["branches"]:
+            branch["points"] = branch["points"][:1]
+        result = self.replay()
+        self.assertEqual(result["initial_assignment_verification"]["status"], "fail")
+
+    def test_seed_check_uses_solver_slots_not_raw_sort_or_branch_table_order(self):
+        self.subspace_path()
+        self.samples = self.samples[:2]
+        for branch in self.branches["branches"]:
+            branch["points"] = branch["points"][:2]
+        self.branches["branches"].reverse()
+        result = self.replay()
+        self.assertEqual(result["initial_assignment_verification"]["status"], "pass")
+        self.assertEqual(result["assignment_replay"], "pass")
 
     def test_pair_signed_path_and_variable_raw_ids(self):
         result = self.replay()
@@ -60,7 +87,7 @@ class TrackingReplayTests(unittest.TestCase):
 
     def test_locally_valid_but_globally_inferior_pair_assignment_is_rejected(self):
         branch = copy.deepcopy(self.branches["branches"][0])
-        branch["branch_id"] = 4
+        branch["branch_id"] = 1
         for index, point in enumerate(branch["points"]):
             raw = (8, 6, 5)[index]
             frequency = 2e10 + index * 1e6
@@ -87,7 +114,7 @@ class TrackingReplayTests(unittest.TestCase):
 
     def subspace_path(self, angle=None):
         branch = copy.deepcopy(self.branches["branches"][0])
-        branch["branch_id"] = 4
+        branch["branch_id"] = 1
         for index, point in enumerate(branch["points"]):
             raw = (8, 6, 5)[index]
             point["raw_mode_index"] = raw
@@ -102,7 +129,7 @@ class TrackingReplayTests(unittest.TestCase):
             self.modes[(1, 2)]["envelope"] = np.cos(angle) * self.x + np.sin(angle) * self.y
             self.modes[(1, 6)]["envelope"] = -np.sin(angle) * self.x + np.cos(angle) * self.y
         subspace = dict(rank=2, previous_cluster=0, current_cluster=0,
-                        branch_ids=[3, 4], previous_raw_mode_indices=[9, 8],
+                        branch_ids=[0, 1], previous_raw_mode_indices=[9, 8],
                         current_raw_mode_indices=[2, 6], principal_cosines=[1., 1.], principal_minimum=1.)
         for branch in self.branches["branches"]:
             point = branch["points"][1]
@@ -223,7 +250,7 @@ class TrackingReplayTests(unittest.TestCase):
             self.samples[0]["modes"][slot]["frequency_real_hz"] = frequency
             branch["points"][1]["tracking_confidence"] = 1.
             branch["points"][1]["tracking_edge"]["transition"] = "split_to_degenerate"
-        # Branch 3/raw9 wins the equal-distance tie over branch4/raw8,
+        # Branch 0/raw9 wins the equal-distance tie over branch1/raw8,
         # so previous_cluster=0 is the producer anchor. Raw sorting gives1.
         result = self.replay()
         self.assertEqual(result["status"], "pass")
@@ -243,10 +270,10 @@ class TrackingReplayDiskTests(unittest.TestCase):
             key: mode[key] for key in ("raw_mode_index", "frequency_real_hz", "frequency_imag_hz")}])
         point = dict(sample_index=0, raw_mode_index=7, frequency_real_hz=1e10,
                      frequency_imag_hz=0., tracking_confidence=1.)
-        branches = _tracking_fixture_payload([dict(branch_id=3, points=[point])])
+        branches = _tracking_fixture_payload([dict(branch_id=0, points=[point])])
         (self.root / "eigen/spectrum.v2.json").write_text(json.dumps(dict(samples=[sample])))
         (self.root / "eigen/branches.v2.json").write_text(json.dumps(branches))
-        result = replay_tracking_fields(self.root, selected_branch_ids=[3])
+        result = replay_tracking_fields(self.root, selected_branch_ids=[0])
         self.assertEqual(result["status"], "pass", result)
         self.assertEqual(result["qualification"], "NOT VERIFIED")
         self.assertTrue(any(item["path"] == "eigen/branches.v2.json" for item in result["file_hashes"]))
@@ -275,14 +302,14 @@ class TrackingReplayDiskTests(unittest.TestCase):
                 key: mode[key] for key in ("raw_mode_index", "frequency_real_hz", "frequency_imag_hz")}]))
             points.append(dict(sample_index=index, raw_mode_index=raw,
                 frequency_real_hz=mode["frequency_real_hz"], frequency_imag_hz=0., tracking_confidence=1.))
-        branches = _tracking_fixture_payload([dict(branch_id=3, points=points)])
+        branches = _tracking_fixture_payload([dict(branch_id=0, points=points)])
         (self.root / "eigen/spectrum.v2.json").write_text(json.dumps(dict(samples=samples)))
         (self.root / "eigen/branches.v2.json").write_text(json.dumps(branches))
         return branches
 
     def test_disk_signed_path_replays_actual_edges(self):
         self.write_pair_path()
-        result = replay_tracking_fields(self.root, selected_branch_ids=[3])
+        result = replay_tracking_fields(self.root, selected_branch_ids=[0])
         self.assertEqual(result["status"], "pass", result)
         self.assertEqual(len(result["replayed_edges"]), 2)
         self.assertEqual(result["qualification"], "NOT VERIFIED")
@@ -296,7 +323,7 @@ class TrackingReplayDiskTests(unittest.TestCase):
         candidate["raw_mode_index"] = 41
         spectrum["samples"][1]["modes"].append(candidate)
         path.write_text(json.dumps(spectrum))
-        result = replay_tracking_fields(self.root, selected_branch_ids=[3])
+        result = replay_tracking_fields(self.root, selected_branch_ids=[0])
         self.assertEqual(result["status"], "missing", result)
         self.assertTrue(any("mode_0041" in reason for reason in result["reasons"]))
 
@@ -323,7 +350,7 @@ class TrackingReplayDiskTests(unittest.TestCase):
 
     def test_unselected_candidate_is_loaded_and_hashed(self):
         self.add_unselected_candidate_field()
-        result = replay_tracking_fields(self.root, selected_branch_ids=[3])
+        result = replay_tracking_fields(self.root, selected_branch_ids=[0])
         self.assertEqual(result["status"], "pass", result)
         self.assertEqual(result["candidate_field_coverage"]["exported_candidate_count"], 4)
         self.assertTrue(any("mode_0041/vector.bin" in item["path"] for item in result["file_hashes"]))
@@ -334,7 +361,7 @@ class TrackingReplayDiskTests(unittest.TestCase):
         mode = json.loads(path.read_text())
         mode["frequency_real_hz"] *= 1.01
         path.write_text(json.dumps(mode))
-        result = replay_tracking_fields(self.root, selected_branch_ids=[3])
+        result = replay_tracking_fields(self.root, selected_branch_ids=[0])
         self.assertEqual(result["status"], "fail", result)
         self.assertTrue(any("candidate field frequency" in reason for reason in result["reasons"]))
 
@@ -344,7 +371,7 @@ class TrackingReplayDiskTests(unittest.TestCase):
         spectrum = json.loads(path.read_text())
         spectrum["samples"][1]["modes"].append(spectrum["samples"][1]["modes"][-1])
         path.write_text(json.dumps(spectrum))
-        result = replay_tracking_fields(self.root, selected_branch_ids=[3])
+        result = replay_tracking_fields(self.root, selected_branch_ids=[0])
         self.assertEqual(result["status"], "fail", result)
         self.assertTrue(any("duplicate candidate" in reason for reason in result["reasons"]))
 
@@ -359,7 +386,7 @@ class TrackingReplayDiskTests(unittest.TestCase):
                 spectrum = json.loads(spectrum_path.read_text())
                 spectrum["samples"][1]["modes"][-1]["frequency_real_hz"] = frequency
                 spectrum_path.write_text(json.dumps(spectrum))
-                result = replay_tracking_fields(self.root, selected_branch_ids=[3])
+                result = replay_tracking_fields(self.root, selected_branch_ids=[0])
                 self.assertEqual(result["status"], "fail", result)
                 self.assertTrue(any("positive" in reason for reason in result["reasons"]))
 
@@ -368,7 +395,7 @@ class TrackingReplayDiskTests(unittest.TestCase):
         branches["branches"][0]["points"][1]["tracking_confidence"] = .8
         (self.root / "eigen/branches.v2.json").write_text(json.dumps(branches))
         (self.root / "tracking_replay.json").write_text(json.dumps(dict(status="pass", qualification="QUALIFIED")))
-        result = replay_tracking_fields(self.root, selected_branch_ids=[3])
+        result = replay_tracking_fields(self.root, selected_branch_ids=[0])
         self.assertEqual(result["status"], "fail")
         self.assertTrue(any("confidence" in reason for reason in result["reasons"]))
 
@@ -421,14 +448,14 @@ class TrackingReplayDiskTests(unittest.TestCase):
                 ("raw_mode_index", "frequency_real_hz", "frequency_imag_hz")})
             points.append(dict(sample_index=index, raw_mode_index=raw, frequency_real_hz=2e10,
                                frequency_imag_hz=0., tracking_confidence=1.))
-        extra = _tracking_fixture_payload([dict(branch_id=8, points=points)])["branches"][0]
+        extra = _tracking_fixture_payload([dict(branch_id=1, points=points)])["branches"][0]
         branches["branches"].append(extra)
         spectrum_path.write_text(json.dumps(spectrum))
         (self.root / "eigen/branches.v2.json").write_text(json.dumps(branches))
-        result = replay_tracking_fields(self.root, selected_branch_ids=[3])
+        result = replay_tracking_fields(self.root, selected_branch_ids=[0])
         self.assertEqual(result["status"], "pass", result)
         self.assertEqual(result["replayed_branch_scope"], "all_candidates")
-        self.assertEqual(result["selected_branch_ids"], [3])
+        self.assertEqual(result["selected_branch_ids"], [0])
         self.assertEqual(result["branch_count"], 2)
         self.assertEqual(result["assignment_replay"], "pass")
         self.assertEqual(result["candidate_field_coverage"]["exported_candidate_count"], 6)

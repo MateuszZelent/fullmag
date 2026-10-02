@@ -5750,3 +5750,16 @@ kontrakt solvera i publiczne C ABI z nested operator diagnostics. Focused
 review bez nowych P1/P2; source-only wiring i scientific source-map PASS.
 Native testy nie były kompilowane. Wykonanie i wartości w artefaktach solvera
 wymagają nowego managed builda spójnego SHA; #193 nie zawiera tego przyrostu.
+
+## S05 — kontrola początkowego przydziału gałęzi, 2026-10-02
+
+Niezależny replay porównuje początkowe branch_id z kolejnością slotów modów
+solvera. Przestawione lub niekanoniczne identyfikatory wykluczają certyfikat
+assignment_replay, nawet gdy kolejne metryki są poprawne. Regresja wykazała
+fałszywy PASS na poprzedniej implementacji; po poprawce 31 testów replay PASS.
+Nie jest to dowód wykonania FEM ani zamknięcie S05: narodziny, przerwy i zaniki
+gałęzi nadal wymagają pełnego odtworzenia historii.
+
+Job #196 (febe368724ec4e76a1da88ad24878a9b) odczytany jako queued.
+Aktualny pomiar hosta: około 4 MB wolnego na C:, później około 2,6 MB.
+Brak nowych punktów dyspersji. Nie uruchomiono nowych buildów ani czyszczenia.

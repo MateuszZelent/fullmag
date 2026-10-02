@@ -117,6 +117,17 @@ def verify_global_prediction(metric, prediction, points, current, frames, method
                 recorded_mean_score=measured / len(points), predicted_mean_score=optimum / len(points))
 
 
+def verify_initial_assignment(by_branch, sample):
+    """Replay native seed allocation in original solver mode order."""
+    sample_id = sample["sample_index"]
+    actual = {identity: points[sample_id]["raw_mode_index"]
+              for identity, points in by_branch.items() if sample_id in points}
+    expected = {slot: mode["raw_mode_index"] for slot, mode in enumerate(sample["modes"])}
+    if any(type(identity) is not int or identity < 0 for identity in actual) or actual != expected:
+        return dict(status="fail", reason="seed branch IDs differ from native solver mode order")
+    return dict(status="pass", branch_count=len(expected))
+
+
 def replay_recorded_frames(metric, modes, branches, samples, *, candidate_branch_ids=None):
     """Reconstruct every chosen frame/metric; inputs already bound by caller.
 
@@ -143,6 +154,7 @@ def replay_recorded_frames(metric, modes, branches, samples, *, candidate_branch
         by_branch[identity] = points
     if not by_branch:
         raise ValueError("no tracked branches to replay")
+    initial_assignment = verify_initial_assignment(by_branch, samples[0])
     frequencies = {}
     for sample in samples:
         if not isinstance(sample["k_vector"], list) or any(
@@ -323,9 +335,10 @@ def replay_recorded_frames(metric, modes, branches, samples, *, candidate_branch
             "replayed_edges": records,
             "global_policy_predictions": global_predictions,
             "global_assignment_verification": assignment_checks,
+            "initial_assignment_verification": initial_assignment,
             "frequency_group_candidates_replay": "pass" if any("frequency_group_candidate" in record for record in records) else "not_applicable",
             "subspace_raw_assignment_replay": "pass" if any("subspace_raw_assignment" in record for record in records) else "not_applicable",
-            "assignment_replay": "pass" if assignment_checks and all(check["status"] == "pass" for check in assignment_checks) else "NOT VERIFIED",
+            "assignment_replay": "pass" if initial_assignment["status"] == "pass" and assignment_checks and all(check["status"] == "pass" for check in assignment_checks) else "NOT VERIFIED",
             "qualification": "NOT VERIFIED"}
 
 
