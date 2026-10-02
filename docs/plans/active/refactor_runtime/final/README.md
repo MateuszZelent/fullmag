@@ -259,3 +259,9 @@ Installer Windows kieruje DLL obok EXE, kontroluje konflikty nazw/hashów
 i zapisuje inventory DLL w manifestach. 8 regresji rzeczywistej funkcji
 PowerShell PASS. Pełny bundle zależności FEM/CUDA i clean install nadal
 NOT VERIFIED; brak awansu procentów ani publikacji wydania.
+
+Konfiguracja FEM rozdziela teraz jawny CPU build bez CUDA i wymagane GPU.
+CMake odrzuca brak CUDA compiler przy REQUIRE_GPU; Cargo przekazuje tę
+politykę. CPU modal SLEPc pozostaje jawnie dostępne przez override.
+11 configuration/wiring checks oraz 2 istniejące source contracts PASS;
+native compile/link/runtime i pełny P8-C nadal NOT VERIFIED.

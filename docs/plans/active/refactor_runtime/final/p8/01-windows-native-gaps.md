@@ -109,3 +109,44 @@ To nie jest walidacja PE, ABI ani kompletności zależności tranzytywnych.
 Brakujące DLL MFEM/hypre/libCEED/PETSc/SLEPc/CUDA, native FEM build i runtime,
 storage governance installera oraz clean install/open/upgrade/rollback
 pozostają otwarte. Nie opublikowano wydania.
+
+## Fragment: rozdzielenie konfiguracji FEM CPU i wymaganego GPU
+
+Review konfiguracji wykazał dwa problemy: MFEM stack wymuszał próbę CUDA
+również w profilu CPU, a `FULLMAG_FEM_REQUIRE_GPU` nie docierało do CMake.
+Brak kompilatora CUDA mógł więc zakończyć konfigurację jako CPU-only mimo
+require GPU. To błąd polityki buildu; nie jest dowodem wykonanego fallbacku
+solvera, którego osobne zabezpieczenia nadal wymagają runtime qualification.
+
+`FULLMAG_FEM_ENABLE_CUDA=OFF` pozwala teraz wybrać build MFEM bez CUDA:
+Cargo przekazuje `FULLMAG_ENABLE_CUDA=OFF` i `FULLMAG_ENABLE_FEM_GPU=OFF`.
+Domyślne zachowanie bez nowej zmiennej pozostaje zgodne z wcześniejszym
+ustawieniem MFEM stack. Jawny CPU wariant domyślnie wyłącza SLEPc; operator
+może nadal jawnie ustawić `FULLMAG_FEM_WITH_SLEPC=ON` dla modalnych zadań CPU.
+Nie usunięto CPU eigensolve ani nie przypisano go wyłącznie GPU.
+
+Wymagane GPU trafia do CMake jako `FULLMAG_FEM_REQUIRE_GPU=ON`. Wspólna
+funkcja w `native/cmake/RequireFemGpu.cmake` odrzuca wyłączony MFEM stack,
+CUDA albo FEM GPU. Root CMake odrzuca brak CUDA compiler przed opcjonalnym
+wyłączeniem CUDA. Backend również sprawdza wymagane flagi. Oba build scripts
+Cargo śledzą moduł; FEM śledzi nową zmienną środowiska.
+
+Lokalny profil FEM CPU w Makefile wybiera CUDA OFF i domyślnie SLEPc OFF,
+z zachowaniem jawnego override SLEPc. Managed GPU exporter wybiera CUDA ON
+i REQUIRE_GPU=1. Nie zmieniono historycznej nazwy feature `fem-gpu`, która
+obecnie obejmuje również runtime CPU; nie zmieniono planner legality ani
+requested/resolved execution.
+
+Weryfikacja: `scripts/test_fem_build_policy.py` 11 PASS: osiem kombinacji
+flag, CPU bez CUDA probe, wymagane GPU z brakiem compiler i wiring source
+check. Dwa przypadki frontdoor wykonują produkcyjny root CMake z jedyną
+zamianą inicjalizacji kompilatorów na `LANGUAGES NONE`, jawnie pustymi
+backend fixtures i kontrolowanym CUDA probe. Poprzedni root CMake nie
+przechodzi regresji required GPU/no compiler. Dwa istniejące build source
+contracts PASS, rustfmt/diff oraz bash syntax check exporter PASS.
+
+Nie wykonano skryptu Cargo, native compile/link, managed CPU/GPU runtime
+ani kwalifikacji Windows. Prebuilt `FULLMAG_FEM_LIB_DIR` nadal wymaga osobnej
+walidacji rzeczywistych capabilities; ta bramka sprawdza konfigurację buildu.
+Wersjonowany MSVC MFEM/HYPRE/libCEED prefix, zależności modalne, manifesty
+ABI/CRT, staging DLL, natywny launcher FEM i actual execution pozostają otwarte.

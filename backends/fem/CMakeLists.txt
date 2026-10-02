@@ -7,6 +7,9 @@ option(FULLMAG_ENABLE_FEM_GPU "Build FEM GPU backend sources" ON)
 option(FULLMAG_USE_MFEM_STACK "Build FEM backend against MFEM/libCEED/hypre" OFF)
 option(FULLMAG_FEM_WITH_SLEPC "Build FEM frequency-domain dependency slice against PETSc/SLEPc" ON)
 option(FULLMAG_ENABLE_NVTX "Enable phase-level FEM GPU NVTX ranges" OFF)
+option(FULLMAG_FEM_REQUIRE_GPU "Fail configuration unless FEM GPU can be built" OFF)
+include("${CMAKE_SOURCE_DIR}/cmake/RequireFemGpu.cmake")
+fullmag_require_fem_gpu_configuration()
 
 if(FULLMAG_ENABLE_CUDA AND FULLMAG_ENABLE_FEM_GPU AND NOT CMAKE_CUDA_ARCHITECTURES)
     message(FATAL_ERROR

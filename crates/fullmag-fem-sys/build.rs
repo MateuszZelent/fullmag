@@ -90,6 +90,7 @@ fn main() {
     println!("cargo:rerun-if-changed=../../native/include/fullmag_fem.h");
     println!("cargo:rerun-if-changed=../../native/CMakeLists.txt");
     println!("cargo:rerun-if-changed=../../native/cmake/ImportFullmagFdm.cmake");
+    println!("cargo:rerun-if-changed=../../native/cmake/RequireFemGpu.cmake");
     println!("cargo:rerun-if-changed=../../backends/fem/CMakeLists.txt");
     rerun_if_changed_tree("../../backends/fem/core");
     rerun_if_changed_tree("../../backends/fem/cpu");
@@ -100,6 +101,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=FULLMAG_FEM_LIB_DIR");
     println!("cargo:rerun-if-env-changed=FULLMAG_USE_MFEM_STACK");
     println!("cargo:rerun-if-env-changed=FULLMAG_FEM_REQUIRE_GPU");
+    println!("cargo:rerun-if-env-changed=FULLMAG_FEM_ENABLE_CUDA");
     println!("cargo:rerun-if-env-changed=FULLMAG_FEM_WITH_SLEPC");
     println!("cargo:rerun-if-env-changed=FULLMAG_ENABLE_NVTX");
 
@@ -122,9 +124,18 @@ fn main() {
     };
     let use_mfem_stack = env_flag("FULLMAG_USE_MFEM_STACK");
     let require_gpu = env_flag("FULLMAG_FEM_REQUIRE_GPU");
+    // Preserve legacy defaults while allowing an explicit CPU-only MFEM build.
+    let enable_cuda = if std::env::var_os("FULLMAG_FEM_ENABLE_CUDA").is_some() {
+        env_flag("FULLMAG_FEM_ENABLE_CUDA")
+    } else {
+        use_mfem_stack
+    };
+    if require_gpu && !enable_cuda {
+        panic!("FULLMAG_FEM_REQUIRE_GPU=1 conflicts with FULLMAG_FEM_ENABLE_CUDA=OFF");
+    }
     let enable_nvtx = env_flag("FULLMAG_ENABLE_NVTX");
     let with_slepc = std::env::var("FULLMAG_FEM_WITH_SLEPC").unwrap_or_else(|_| {
-        if use_mfem_stack {
+        if use_mfem_stack && enable_cuda {
             "ON".to_string()
         } else {
             "OFF".to_string()
@@ -144,9 +155,20 @@ fn main() {
         .arg(format!("-DCMAKE_BUILD_TYPE={}", cmake_build_type))
         .arg(format!(
             "-DFULLMAG_ENABLE_CUDA={}",
-            if use_mfem_stack { "ON" } else { "OFF" }
+            if enable_cuda { "ON" } else { "OFF" }
         ))
-        .arg("-DFULLMAG_ENABLE_FEM_GPU=ON")
+        .arg(format!(
+            "-DFULLMAG_ENABLE_FEM_GPU={}",
+            if use_mfem_stack && enable_cuda {
+                "ON"
+            } else {
+                "OFF"
+            }
+        ))
+        .arg(format!(
+            "-DFULLMAG_FEM_REQUIRE_GPU={}",
+            if require_gpu { "ON" } else { "OFF" }
+        ))
         .arg(format!(
             "-DFULLMAG_USE_MFEM_STACK={}",
             if use_mfem_stack { "ON" } else { "OFF" }
