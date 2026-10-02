@@ -1,5 +1,32 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
+## S06/S12 — provenance wymagane w bramce COMSOL, 2026-10-02
+
+Bieżące źródła po checkpointcie `9d036af61c49cca7b3a5b0519405d85691d3b91a`
+ujawniły lukę: `_validate_branches` akceptował kompletną tabelę częstotliwości
+bez zapisanych krawędzi trackingu. Wykonana regresja na tym SHA była RED
+(`pass` zamiast `fail`). Nowy kod wymaga dla C1/A1 kompletnego provenance,
+spójnej masy P1, rzeczywistych sąsiadów ścieżki i zgodnych par/podprzestrzeni;
+odrzuca frequency fallback, metrykę diagonalną/Euclidean i gaps/restarts.
+Wykorzystuje istniejący niezależny walidator polityki oraz kątów głównych.
+Historyczne tabele pozostają czytelne, ale nie przechodzą tej bramki.
+
+Kontrole: 7 nowych Python PASS, 49 istniejących testów gate PASS (63,53 s),
+mapa źródeł 0831 PASS. Fixture'y zawierają wyłącznie syntetyczne records;
+ich sukces nie dowodzi ciągłości modów solvera. Raport zachowuje jawne
+`field_metric_replay=NOT VERIFIED`. Replay pól, physical crossing/split/merge,
+k-step convergence oraz runtime S06/S12 nadal są do wykonania.
+Zmiana nie uruchamia obliczeń ani nie zamyka kwalifikacji COMSOL.
+
+P1 review globalnego statusu naprawiono: kampania ma odrębny
+`campaign_contract_status`; C1/A1 pozostają `not_qualified` i `NOT VERIFIED`
+przez brak wykonywanego `tracking_field_metric_replay`. Agregator wymaga
+również jawnej kwalifikacji naukowej. Pełny field-metric replay nie jest
+zaimplementowany: kolejny etap musi odtworzyć hash-bound pola, spójną masę,
+MAC, kąty główne i continuity, bez przyjmowania deklaracji autora JSON.
+
+Szczegóły: [audyt bramki trackingu](../../audits/2026-10-02-comsol-tracking-record-gate.md).
+
 ## S07/S10 — rzeczywiste gamma w wynikach i oracle, 2026-10-02
 
 Checkpoint źródłowy: `91473c678aeb8806aaaf423239ae80654dc1b4be`.

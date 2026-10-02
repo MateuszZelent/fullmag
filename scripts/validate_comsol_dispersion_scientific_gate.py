@@ -26,6 +26,7 @@ from verify_fem_frequency_domain_eigen_artifacts import (
     p00_demag_factor,
     require_kalinikos_slab_n0_material_and_bias,
     validate_mode_diagnostics_fields,
+    validate_tracking_edge_provenance,
 )
 
 
@@ -1011,6 +1012,49 @@ def _validate_spectrum(
     return sample_map, mode_map
 
 
+def _validate_branch_tracking_evidence(
+    branches: Mapping[str, Any],
+    selected: Sequence[Mapping[str, Any]],
+    sample_order: Sequence[int],
+    reasons: list[str],
+) -> dict[str, Any]:
+    """Require recorded consistent-mass continuity; this does not replay mode fields."""
+    start = len(reasons)
+    try:
+        validate_tracking_edge_provenance(dict(branches), list(sample_order))
+    except SystemExit as error:
+        reasons.append(f"tracking provenance is invalid: {error}")
+        return _new_check("fail", field_metric_replay="NOT VERIFIED")
+    if branches.get("tracking_policy_availability") != "complete":
+        reasons.append("scientific tracked branches require complete tracking provenance")
+        return _new_check("missing", field_metric_replay="NOT VERIFIED")
+    positions = {sample: index for index, sample in enumerate(sample_order)}
+    edge_count = 0
+    for branch in selected:
+        for point in branch.get("points", []):
+            edge = point.get("tracking_edge")
+            label = f"branch {branch.get('branch_id')} sample {point.get('sample_index')}"
+            if not isinstance(edge, Mapping):
+                reasons.append(f"{label} has no tracking edge evidence")
+                continue
+            position = positions.get(point.get("sample_index"))
+            if position == 0:
+                continue  # The shared validator already requires a genuine initial seed.
+            if position is None or edge.get("previous_sample_index") != sample_order[position - 1]:
+                reasons.append(f"{label} tracking does not connect adjacent path samples")
+            if edge.get("score_source") not in {
+                "modal_overlap_weighted_score", "modal_subspace_transport_score",
+            } or edge.get("metric") != "consistent_p1_tet4_cartesian_nodal_envelope":
+                reasons.append(f"{label} requires consistent-mass overlap or subspace evidence")
+            if edge.get("skipped_sample_count") != 0:
+                reasons.append(f"{label} scientific tracking cannot contain a sample gap")
+            edge_count += 1
+    if not selected:
+        reasons.append("scientific tracking has no selected complete branches")
+    return _new_check("pass" if len(reasons) == start else "fail",
+                      recorded_edge_count=edge_count, field_metric_replay="NOT VERIFIED")
+
+
 def _validate_branches(
     branches: Mapping[str, Any],
     case: str,
@@ -1114,6 +1158,9 @@ def _validate_branches(
                     f"selected branch {first_branch.get('branch_id')} is not the lowest positive branch at sample {sample_index}"
                 )
                 fundamental_branch_check = "fail"
+    tracking_evidence = _validate_branch_tracking_evidence(
+        branches, selected, sorted(expected_indices), reasons,
+    ) if case in PATH_CASES else _new_check("not_applicable")
     return selected, _new_check(
         "pass" if len(selected) == target and fundamental_branch_check != "fail" and len(reasons) == initial_reason_count else "fail",
         branch_count=len(parsed),
@@ -1122,6 +1169,7 @@ def _validate_branches(
         sample_count=(1 if case == "c0" else EXPECTED_PATH_SAMPLE_COUNT),
         selected_branch_ids=[int(branch["branch_id"]) for branch in selected],
         fundamental_branch_check=fundamental_branch_check,
+        tracking_provenance=tracking_evidence,
     )
 
 
@@ -2665,12 +2713,24 @@ def validate_case(
         sample_count=len(sample_map),
         mode_count=len(mode_map),
     )
+    campaign_contract_status = "pass" if not reasons else "fail"
+    # Recorded scores are necessary, but they are not an independent replay of
+    # hash-bound mode fields and mass operators. Never promote that missing gate.
+    tracking_replay = _new_check("not_applicable")
+    if case in PATH_CASES:
+        tracking_replay = _new_check("missing", qualification="NOT VERIFIED")
+        reasons.append(
+            "scientific tracking qualification requires executed hash-bound field-metric replay; "
+            "recorded provenance alone is insufficient"
+        )
     status = "qualified" if not reasons else "not_qualified"
     return {
         "schema_version": GATE_SCHEMA,
         "case_id": case,
         "status": status,
         "qualification": "QUALIFIED" if status == "qualified" else "NOT VERIFIED",
+        "campaign_contract_status": campaign_contract_status,
+        "scientific_qualification": "qualified" if status == "qualified" else "not_verified",
         "reasons": reasons,
         "checks": {
             "artifact_binding": evidence_check,
@@ -2679,6 +2739,7 @@ def validate_case(
             "finite_values": finite_check,
             "spectrum_samples": _new_check("pass" if len(sample_map) == (1 if case == "c0" else EXPECTED_PATH_SAMPLE_COUNT) else "fail", sample_count=len(sample_map)),
             "tracked_branches": branch_check,
+            "tracking_field_metric_replay": tracking_replay,
             "dispersion_csv": csv_check,
             "postsolve_analytic_columns": analytic_columns_check,
             "kittel": kittel_check,
@@ -2705,10 +2766,11 @@ def validate_requested_cases(case_results: Mapping[str, Mapping[str, Any]], case
         result = case_results.get(case)
         if not isinstance(result, Mapping):
             reasons.append(f"scientific gate result is missing for case {case}")
-        elif result.get("status") != "qualified" or result.get("reasons") != []:
+        elif result.get("status") != "qualified" or result.get("reasons") != [] \
+                or result.get("scientific_qualification") != "qualified":
             # A failed/missing status fails independently of optional prose.
             # Empty reasons must never promote an unsuccessful child to pass.
-            reasons.append(f"{case}: scientific gate status is {result.get('status')!r}, expected 'qualified' with an empty reason list")
+            reasons.append(f"{case}: scientific gate status is {result.get('status')!r}, expected 'qualified' with an empty reason list and verified scientific qualification")
             child_reasons = result.get("reasons")
             if isinstance(child_reasons, list):
                 reasons.extend(f"{case}: {reason}" for reason in child_reasons if isinstance(reason, str) and reason)

@@ -410,7 +410,10 @@
         "source-tracking-edge-producer",
         "source-tracking-edge-writer",
         "source-tracking-edge-signed-regression",
-        "source-tracking-edge-artifact-validator"
+        "source-tracking-edge-artifact-validator",
+        "source-comsol-tracking-record-gate",
+        "source-comsol-tracking-record-regression",
+        "source-comsol-tracking-qualification"
       ]
     },
     {
@@ -2071,6 +2074,24 @@
       "symbol": "test_native_solver_keeps_residual_and_selected_only_policies",
       "evidence_status": "interpreted source checks PASS; native compilation, managed runtime and physics qualification pending",
       "responsibility": "Freeze public target transfer, unchanged residual policies, selected-only output and the prepared Rust single/path regressions."
+    },
+    {
+      "id": "source-comsol-tracking-qualification",
+      "path": "scripts/validate_comsol_dispersion_scientific_gate.py",
+      "symbol": "validate_case",
+      "responsibility": "Separate campaign contract pass from scientific qualification; missing field replay blocks C1/A1 QUALIFIED"
+    },
+    {
+      "id": "source-comsol-tracking-record-gate",
+      "path": "scripts/validate_comsol_dispersion_scientific_gate.py",
+      "symbol": "_validate_branch_tracking_evidence",
+      "responsibility": "Require recorded adjacent consistent-mass edges before the C1/A1 branch gate; field replay remains separate"
+    },
+    {
+      "id": "source-comsol-tracking-record-regression",
+      "path": "scripts/test_comsol_tracking_provenance_gate.py",
+      "symbol": "test_scientific_branch_gate_rejects_complete_table_without_provenance",
+      "responsibility": "Executed regression rejects a complete frequency table lacking assignment evidence"
     },
     {
       "id": "source-tracking-edge-artifact-validator",

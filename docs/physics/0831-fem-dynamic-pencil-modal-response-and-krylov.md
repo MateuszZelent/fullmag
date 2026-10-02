@@ -2479,6 +2479,24 @@ w metadanych następuje dopiero po przejściu wspólnej bramki.
 
 ## Dowód wybranej krawędzi trackingu (S06/S07, źródła WIP)
 
+Bramka naukowa COMSOL dla C1/A1 wymaga kompletnego zapisu krawędzi,
+bez frequency fallback, restartu i przerwy między kolejnymi punktami k.
+Przyjęte przypisania muszą korzystać ze spójnej masy P1 i skalarnych
+overlapów albo osobnych kątów głównych podprzestrzeni. Historyczna tabela
+gałęzi bez rekordu pozostaje czytelna, lecz nie kwalifikuje tego dowodu.
+Kontrola strukturalna i declared score nie zastępują replay rzeczywistych
+pól/metryki ani fizycznej walidacji crossing/split/merge.
+Raport oddziela `campaign_contract_status` od `scientific_qualification`.
+Dla C1/A1 brak wykonanego replay hash-bound pól, overlapów i kątów głównych
+blokuje globalne `QUALIFIED`, nawet gdy wszystkie kontrakty kampanii przeszły.
+Deklaracja autora artefaktu nie może zastąpić wykonania tej bramki.
+
+| Source ID | Plik | Symbol | Zakres dowodu |
+| --- | --- | --- | --- |
+| `source-comsol-tracking-record-gate` | `scripts/validate_comsol_dispersion_scientific_gate.py` | `_validate_branch_tracking_evidence` | Wykonana kontrola strukturalna, bez replay pól |
+| `source-comsol-tracking-qualification` | `scripts/validate_comsol_dispersion_scientific_gate.py` | `validate_case` | Brak field replay blokuje globalne QUALIFIED dla C1/A1 |
+| `source-comsol-tracking-record-regression` | `scripts/test_comsol_tracking_provenance_gate.py` | `test_scientific_branch_gate_rejects_complete_table_without_provenance` | RED na poprzednim kodzie, GREEN po wymaganiu provenance |
+
 Każdy nowy punkt gałęzi przechowuje opcjonalny, typowany rekord
 `TrackingEdgeProvenance`, utworzony w chwili przyjęcia przypisania.
 Rekord zawiera rzeczywistą politykę `ModeTrackingIR` (metoda, próg,

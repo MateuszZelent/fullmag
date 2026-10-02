@@ -32,6 +32,32 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _tracking_fixture_payload(branches):
+    """Synthetic assignment records for contract tests, never physical tracking evidence."""
+    branches = copy.deepcopy(branches)
+    policy = dict(method="overlap_hungarian", overlap_floor=0.5,
+                  frequency_window_hz=None, max_branch_gap=0)
+    for branch in branches:
+        previous = None
+        for point in branch["points"]:
+            seed = previous is None
+            source = "seed" if seed else "modal_overlap_weighted_score"
+            point["tracking_score_source"] = source
+            point["overlap_prev"] = None if seed else 1.0
+            point["tracking_edge"] = dict(
+                policy=policy.copy(), score_source=source,
+                metric="unavailable" if seed else "consistent_p1_tet4_cartesian_nodal_envelope",
+                transition="seed" if seed else "pair",
+                previous_sample_index=None if seed else previous["sample_index"],
+                previous_raw_mode_index=None if seed else previous["raw_mode_index"],
+                skipped_sample_count=0, subspace=None,
+            )
+            previous = point
+    return dict(schema_version="eigen_branches.v2", branches=branches,
+                tracking_policy_availability="complete", tracking_method=policy["method"],
+                overlap_floor=policy["overlap_floor"], frequency_window_hz=None)
+
+
 def _write_json(path: Path, value: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, indent=2), encoding="utf-8")
@@ -286,10 +312,7 @@ def _write_bundle(
         "mode_count": sum(len(sample["modes"]) for sample in samples),
         "samples": samples,
     })
-    _write_json(case_dir / root / "eigen/branches.v2.json", {
-        "schema_version": "eigen_branches.v2",
-        "branches": branches,
-    })
+    _write_json(case_dir / root / "eigen/branches.v2.json", _tracking_fixture_payload(branches))
     _write_json(case_dir / root / "frequency_domain/manifest.v1.json", {
         "schema_version": "frequency_domain_manifest.v1",
         "analysis_family": "magnetic_frequency_domain", "study_product": "modal_eigen",
@@ -410,10 +433,7 @@ def _make_case(root: Path, case: str = "c1") -> Path:
         "mode_count": sum(len(sample["modes"]) for sample in samples),
         "samples": samples,
     })
-    _write_json(case_dir / "eigen/branches.v2.json", {
-        "schema_version": "eigen_branches.v2",
-        "branches": branches,
-    })
+    _write_json(case_dir / "eigen/branches.v2.json", _tracking_fixture_payload(branches))
     dispersion = case_dir / "eigen/dispersion.csv"
     dispersion.parent.mkdir(parents=True, exist_ok=True)
     with dispersion.open("w", encoding="utf-8", newline="") as stream:
@@ -607,7 +627,7 @@ class ScientificGateTests(unittest.TestCase):
                 )
             _write_json(evidence_path, evidence)
             report = gate.validate_case(case_dir, "c1", parameters_path=PARAMETERS, kpath_path=KPATH)
-        self.assertEqual(report["status"], "qualified", report["reasons"][:12])
+        self.assertEqual(report["campaign_contract_status"], "pass", report["reasons"][:12])
         airbox_check = report["checks"]["airbox_convergence"]
         self.assertTrue(airbox_check["adjacent_comparisons"])
         self.assertTrue(all(
@@ -866,7 +886,7 @@ class ScientificGateTests(unittest.TestCase):
             self.assertTrue(any("increments grow" in reason for reason in report["reasons"]))
             self.assertTrue(all(check["status"] == "pass" for check in report["checks"]["mesh_convergence"]["adjacent_comparisons"]))
 
-    def test_all_cases_have_executable_positive_numeric_gate(self):
+    def test_campaign_contract_pass_cannot_qualify_missing_tracking_replay(self):
         with tempfile.TemporaryDirectory() as directory:
             results = {}
             for case in ("c0", "c1", "a1"):
@@ -875,8 +895,12 @@ class ScientificGateTests(unittest.TestCase):
                         _make_case(Path(directory), case), case,
                         parameters_path=PARAMETERS, kpath_path=KPATH,
                     )
-                    self.assertEqual(results[case]["status"], "qualified", results[case]["reasons"][:8])
-            self.assertEqual(gate.validate_requested_cases(results, ("c0", "c1", "a1"))["status"], "qualified")
+                    self.assertEqual(results[case]["campaign_contract_status"], "pass", results[case]["reasons"][:8])
+                    self.assertEqual(results[case]["status"], "qualified" if case == "c0" else "not_qualified")
+                    if case in gate.PATH_CASES:
+                        self.assertEqual(results[case]["qualification"], "NOT VERIFIED")
+                        self.assertEqual(results[case]["checks"]["tracking_field_metric_replay"]["status"], "missing")
+            self.assertEqual(gate.validate_requested_cases(results, ("c0", "c1", "a1"))["status"], "not_qualified")
 
     def test_resolved_spatial_material_override_cannot_claim_homogeneous_ks(self):
         metadata = _native_metadata("c1", "mesh-L1", 2e-6, 24)
@@ -907,7 +931,7 @@ class ScientificGateTests(unittest.TestCase):
         ))
         self.assertTrue(any("gyromagnetic_ratio" in reason for reason in reasons))
 
-    def test_full_c1_numeric_case_qualifies_only_with_bound_controls_and_convergence(self):
+    def test_full_c1_contract_pass_requires_controls_and_convergence_but_is_not_qualification(self):
         with tempfile.TemporaryDirectory() as directory:
             report = gate.validate_case(
                 _make_case(Path(directory), "c1"),
@@ -915,7 +939,9 @@ class ScientificGateTests(unittest.TestCase):
                 parameters_path=PARAMETERS,
                 kpath_path=KPATH,
             )
-        self.assertEqual(report["status"], "qualified", report["reasons"][:12])
+        self.assertEqual(report["campaign_contract_status"], "pass", report["reasons"][:12])
+        self.assertEqual(report["status"], "not_qualified")
+        self.assertTrue(any("field-metric replay" in reason for reason in report["reasons"]))
         self.assertEqual(report["checks"]["tracked_branches"]["target_band_count"], 8)
         self.assertEqual(report["checks"]["spectrum_samples"]["sample_count"], 61)
         self.assertEqual(report["checks"]["kalinikos_slab_n0"]["status"], "pass")
