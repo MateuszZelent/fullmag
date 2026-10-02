@@ -155,6 +155,10 @@ rzeczywisty command, inventory przed/po, manifest i ścieżki. Nie deklaruje si�
 
 ### Dokument CAE a infrastruktura hosta
 
+[ADR 0048](0048-installed-windows-run-storage.md) rozszerza tę politykę
+o magazyn runów zainstalowanego produktu Windows, bez checkoutu developerskiego.
+Nie zmienia resolvera buildów ani konfiguracji storage operatora.
+
 Dokument CAE i hostowa infrastruktura mają różne tożsamości oraz cykle życia:
 
 | Pojęcie | Właściciel i znaczenie | Czego nie zastępuje |

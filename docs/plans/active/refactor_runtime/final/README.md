@@ -1,5 +1,9 @@
 # Fullmag — finalny audyt i plan refaktoryzacji
 
+Checkpoint 02.10.2026: [P8-15 — Submit zainstalowanego Windows](p8/15-installed-windows-submit-store.md)
+usuwa zależność wyboru magazynu runów produktu od konfiguracji checkoutu.
+Native Windows i trwałość pozostają NOT VERIFIED; procenty bez zmian.
+
 Data audytu: 20.09.2026. Rewalidacja checkpointu: 23.09.2026. Baza audytu: `14c8e73a6f3c55f4fc080835a6156f2a4db8f111`, lokalny `master`.
 
 **Werdykt:** zachować projektowy kierunek CAE, ale wdrażać go po zabezpieczeniu persystencji, uzgodnieniu istniejących kontraktów i ustaleniu jednej tożsamości wykonania. Refaktoryzacja obejmuje authoring, Python/IR, planowanie, wykonanie, FDM/FEM CPU/GPU, storage, API, Control Room, desktop oraz kwalifikację. Nie oznacza przepisywania wszystkich solverów ani automatycznego rozszerzenia zakresu fizyki.

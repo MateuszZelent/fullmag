@@ -39,12 +39,49 @@ pub(crate) fn configured_submit_backlog_limit() -> Result<NonZeroUsize> {
         .with_context(|| format!("{ACCEPTED_RUN_BACKLOG_LIMIT_ENV} must be greater than zero"))
 }
 
-/// Accept only the layout exported by the managed storage resolver. Direct
-/// API launches without that validated environment cannot publish new runs.
-pub(crate) fn configured_submit_store_root(repo_root: &Path) -> Option<PathBuf> {
-    let storage_root = PathBuf::from(std::env::var_os("FULLMAG_PROJECT_STORAGE_ROOT")?);
-    let runs_root = PathBuf::from(std::env::var_os("FULLMAG_RUNS_ROOT")?);
-    let worktree_id = std::env::var("FULLMAG_WORKTREE_ID").ok()?;
+/// Developer launches require the managed resolver. An installed Windows
+/// executable owns a separate user-data store, without a source checkout.
+pub(crate) fn configured_submit_store_root(
+    repo_root: &Path,
+    runtime_state_root: &Path,
+) -> Option<PathBuf> {
+    let packaged_root = std::env::current_exe().ok().and_then(|executable| {
+        fullmag_runtime_control::python_runtime::packaged_windows_root(&executable)
+    });
+    submit_store_root_for_layout(
+        repo_root,
+        runtime_state_root,
+        packaged_root.as_deref(),
+        std::env::var_os("FULLMAG_PROJECT_STORAGE_ROOT"),
+        std::env::var_os("FULLMAG_RUNS_ROOT"),
+        std::env::var_os("FULLMAG_WORKTREE_ID"),
+    )
+}
+
+fn submit_store_root_for_layout(
+    repo_root: &Path,
+    runtime_state_root: &Path,
+    packaged_root: Option<&Path>,
+    storage_root: Option<std::ffi::OsString>,
+    runs_root: Option<std::ffi::OsString>,
+    worktree_id: Option<std::ffi::OsString>,
+) -> Option<PathBuf> {
+    if storage_root.is_none() && runs_root.is_none() && worktree_id.is_none() {
+        let install_root = std::fs::canonicalize(packaged_root?).ok()?;
+        if install_root != std::fs::canonicalize(repo_root).ok()? {
+            return None;
+        }
+        let state_root = writable_product_state_path(runtime_state_root)?;
+        if state_root.starts_with(&install_root) || install_root.starts_with(&state_root) {
+            return None;
+        }
+        return writable_product_state_path(&state_root.join("runs").join("session-store"));
+    }
+    // Any managed configuration selects that route exclusively. A broken
+    // resolver environment must never silently change the data destination.
+    let storage_root = PathBuf::from(storage_root?);
+    let runs_root = PathBuf::from(runs_root?);
+    let worktree_id = worktree_id?.into_string().ok()?;
     if !storage_root.is_absolute()
         || !runs_root.is_absolute()
         || worktree_id.is_empty()
@@ -79,6 +116,47 @@ pub(crate) fn configured_submit_store_root(repo_root: &Path) -> Option<PathBuf> 
         return None;
     }
     Some(canonical_runs.join("session-store"))
+}
+
+/// Resolve a possibly new user-data directory without creating it. Reject
+/// links along existing ancestors before SessionStore enforces its FS/lease
+/// boundary. Missing directories are initialized only by the store owner.
+fn writable_product_state_path(path: &Path) -> Option<PathBuf> {
+    if !path.is_absolute()
+        || path
+            .components()
+            .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return None;
+    }
+    let mut nearest_existing = None;
+    for ancestor in path.ancestors() {
+        match std::fs::symlink_metadata(ancestor) {
+            Ok(metadata) => {
+                #[cfg(windows)]
+                let reparse = {
+                    use std::os::windows::fs::MetadataExt;
+                    metadata.file_attributes() & 0x400 != 0
+                };
+                #[cfg(not(windows))]
+                let reparse = false;
+                if !metadata.is_dir() || metadata.file_type().is_symlink() || reparse {
+                    return None;
+                }
+                if nearest_existing.is_none() {
+                    nearest_existing = Some(ancestor);
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return None,
+        }
+    }
+    let existing = nearest_existing?;
+    Some(
+        std::fs::canonicalize(existing)
+            .ok()?
+            .join(path.strip_prefix(existing).ok()?),
+    )
 }
 
 /// Resolve one exact portable project archive before accepting a durable run.
@@ -459,6 +537,126 @@ mod tests {
     use fullmag_plan::StudyProblemCatalogEntry;
     use fullmag_runtime_control::validate_requested_execution;
     use serde_json::json;
+
+    #[test]
+    fn installed_submit_store_uses_new_user_state_without_creating_directories() {
+        let root =
+            std::env::temp_dir().join(format!("fullmag-installed-submit-{}", uuid::Uuid::new_v4()));
+        let install = root.join("install");
+        std::fs::create_dir_all(&install).unwrap();
+        let state = root.join("user-data").join("Fullmag");
+        let expected = std::fs::canonicalize(&root)
+            .unwrap()
+            .join("user-data/Fullmag/runs/session-store");
+        assert_eq!(
+            submit_store_root_for_layout(&install, &state, Some(&install), None, None, None),
+            Some(expected)
+        );
+        assert!(!state.exists());
+        assert_eq!(
+            submit_store_root_for_layout(&install, &state, None, None, None, None),
+            None
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn installed_submit_store_rejects_partial_managed_environment_and_install_state() {
+        let root =
+            std::env::temp_dir().join(format!("fullmag-installed-submit-{}", uuid::Uuid::new_v4()));
+        let install = root.join("install");
+        std::fs::create_dir_all(&install).unwrap();
+        let state = root.join("user-data");
+        for layout in [
+            (Some(root.clone().into_os_string()), None, None),
+            (None, Some(root.clone().into_os_string()), None),
+            (None, None, Some("worktree".into())),
+            (Some("".into()), Some("".into()), Some("".into())),
+        ] {
+            assert_eq!(
+                submit_store_root_for_layout(
+                    &install,
+                    &state,
+                    Some(&install),
+                    layout.0,
+                    layout.1,
+                    layout.2
+                ),
+                None
+            );
+        }
+        for invalid_state in [
+            install.join("data"),
+            root.clone(),
+            PathBuf::from("relative"),
+            state.join("../escape"),
+        ] {
+            assert_eq!(
+                submit_store_root_for_layout(
+                    &install,
+                    &invalid_state,
+                    Some(&install),
+                    None,
+                    None,
+                    None
+                ),
+                None
+            );
+        }
+        assert_eq!(
+            submit_store_root_for_layout(&root, &state, Some(&install), None, None, None),
+            None
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn installed_submit_store_rejects_junction_run_directory() {
+        let root =
+            std::env::temp_dir().join(format!("fullmag-installed-submit-{}", uuid::Uuid::new_v4()));
+        let install = root.join("install");
+        let state = root.join("user-data");
+        let outside = root.join("outside");
+        for directory in [&install, &state, &outside] {
+            std::fs::create_dir_all(directory).unwrap();
+        }
+        let junction = state.join("runs");
+        let status = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&junction)
+            .arg(&outside)
+            .status()
+            .unwrap();
+        assert!(status.success(), "mklink /J failed: {status:?}");
+        let selected =
+            submit_store_root_for_layout(&install, &state, Some(&install), None, None, None);
+        let outside_unchanged = !outside.join("session-store").exists();
+        std::fs::remove_dir(&junction).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+        assert_eq!(selected, None);
+        assert!(outside_unchanged);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn installed_submit_store_rejects_linked_run_directory() {
+        let root =
+            std::env::temp_dir().join(format!("fullmag-installed-submit-{}", uuid::Uuid::new_v4()));
+        let install = root.join("install");
+        let state = root.join("user-data");
+        let outside = root.join("outside");
+        for directory in [&install, &state, &outside] {
+            std::fs::create_dir_all(directory).unwrap();
+        }
+        std::os::unix::fs::symlink(&outside, state.join("runs")).unwrap();
+        assert_eq!(
+            submit_store_root_for_layout(&install, &state, Some(&install), None, None, None),
+            None
+        );
+        assert!(!outside.join("session-store").exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn durable_adapter_replays_across_store_restart_and_rejects_conflict() {
