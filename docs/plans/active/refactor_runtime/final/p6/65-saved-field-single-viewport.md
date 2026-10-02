@@ -81,6 +81,25 @@ jest zamykany przed przywróceniem poprawnego fixture, aby jego pending retry
 nie był przypisany do nowo otwartego live. Niezależny review potwierdził te
 korekty jako poprawę zakresu dowodu, bez maskowania właściwych mutacji.
 
+## Review przy commicie
+
+Commit przyrostu: `c25bb5ae8314e74dd5f426e407442d16c0e04029`.
+Hook React Doctor przeskanował 20 staged plików: 70/100, 15 nieblokujących
+ostrzeżeń. Nie wyłączono ani nie suppressowano reguł.
+
+- `html-label-has-single-control`: istniejący OrbitDebugField obejmuje output
+  i input w jednej etykiecie; potwierdzona uwaga dostępności, wysoka pewność,
+  zakres istniejącego debug UI pozostaje do osobnej korekty.
+- Pięć `async-await-in-loop`: celowe yield między bounded batchami, aby
+  przeglądarka mogła przetwarzać klatki/anulowanie; nie jest niezależnym
+  zewnętrznym I/O do bezwarunkowego Promise.all. Wysoka pewność.
+- Trzy porównania długości: kamera jest konstruowana i klonowana jako
+  dokładne trójki; `toFiniteVector3` normalizuje patche. W tym kontrakcie
+  brak długości nie zmienia wyniku porównania. Wysoka pewność.
+- Chained iteration, trzy kopie przed sortowaniem i dwa dostępy w pętli:
+  sygnały do pomiaru wydajności; brak wykazanego błędu lub nieograniczonego
+  kosztu w tym przyroście. Nie zastępują otwartej bramki peak memory/performance.
+
 ## Nadal otwarte
 
 Backend HTTP z rzeczywistym native snapshotem, archive roundtrip, semantyczna
