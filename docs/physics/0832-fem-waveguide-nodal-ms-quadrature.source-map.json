@@ -1,0 +1,203 @@
+{
+  "document": {
+    "path": "docs/physics/0832-fem-waveguide-nodal-ms-quadrature.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "source_visible / unvalidated",
+      "reason": "Bounded P1 cross-section assembler has exact nodal-Ms moments; no managed runtime artifact is attached."
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "This note changes no GPU realization or managed GPU route."
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "This note owns a FEM cross-section integral only."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "This note owns a FEM cross-section integral only."
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-waveguide-nodal-ms-field",
+      "symbols": ["Ms_field", "shape_functions", "tangent_amplitude", "delta_m", "delta_M"],
+      "sources": ["source-cross-section-struct", "source-cross-section-assembly"]
+    },
+    {
+      "id": "eq-waveguide-nodal-ms-transverse-moment",
+      "symbols": ["Ms_field", "triangle_area", "transverse_moment"],
+      "sources": ["source-cross-section-struct", "source-cross-section-assembly", "source-native-regression", "source-interpreted-regression"]
+    },
+    {
+      "id": "eq-waveguide-nodal-ms-axial-moment",
+      "symbols": ["Ms_field", "triangle_area", "axial_moment", "triple_shape_coefficient"],
+      "sources": ["source-cross-section-struct", "source-cross-section-assembly", "source-native-regression", "source-interpreted-regression"]
+    },
+    {
+      "id": "eq-waveguide-physical-and-descriptor-source",
+      "symbols": ["wave_number", "physical_source", "descriptor_source", "Aphiq_perp", "Aphiq_axial", "delta_m", "delta_M"],
+      "sources": ["source-cross-section-struct", "source-cross-section-assembly", "source-native-regression", "source-interpreted-regression"]
+    },
+    {
+      "id": "eq-waveguide-old-source-node-mismatch",
+      "symbols": ["legacy_source_node_moment", "transverse_moment", "axial_moment"],
+      "sources": ["source-interpreted-regression"]
+    },
+    {
+      "id": "eq-waveguide-per-length-section",
+      "symbols": ["triangle_area", "normalization_length"],
+      "sources": ["source-cross-section-struct", "source-native-regression"]
+    }
+  ],
+  "symbols": [
+    {
+      "id": "Ms_field",
+      "symbol": "M_s(r)",
+      "si_unit": "A m^-1",
+      "meaning": "P1-interpolated saturation magnetization on one cross-section triangle."
+    },
+    {
+      "id": "shape_functions",
+      "symbol": "N_i",
+      "si_unit": "1",
+      "meaning": "P1 barycentric shape functions."
+    },
+    {
+      "id": "tangent_amplitude",
+      "symbol": "e_j q_j",
+      "si_unit": "1",
+      "meaning": "Tangent-frame perturbation coefficient at source node j."
+    },
+    {
+      "id": "delta_m",
+      "symbol": "delta_m(r)",
+      "si_unit": "1",
+      "meaning": "Dimensionless normalized tangent perturbation interpolated with P1 shape functions."
+    },
+    {
+      "id": "delta_M",
+      "symbol": "delta_M(r)",
+      "si_unit": "A m^-1",
+      "meaning": "Physical magnetization perturbation equal to M_s(r) delta_m(r)."
+    },
+    {
+      "id": "triangle_area",
+      "symbol": "|T|",
+      "si_unit": "m^2",
+      "meaning": "Positive two-dimensional area of the cross-section triangle."
+    },
+    {
+      "id": "transverse_moment",
+      "symbol": "W_perp(j)",
+      "si_unit": "A m",
+      "meaning": "Integral of M_s N_j over the triangle."
+    },
+    {
+      "id": "axial_moment",
+      "symbol": "W_axial(i,j)",
+      "si_unit": "A m",
+      "meaning": "Integral of M_s N_i N_j over the triangle."
+    },
+    {
+      "id": "triple_shape_coefficient",
+      "symbol": "c(i,j,l)",
+      "si_unit": "1",
+      "meaning": "Exact P1 triple-product coefficient: 6, 2 or 1."
+    },
+    {
+      "id": "wave_number",
+      "symbol": "k",
+      "si_unit": "rad m^-1",
+      "meaning": "Signed propagation wave number along z."
+    },
+    {
+      "id": "physical_source",
+      "symbol": "S_i",
+      "si_unit": "A",
+      "meaning": "Physical weak source before descriptor negation."
+    },
+    {
+      "id": "descriptor_source",
+      "symbol": "A_phiq q",
+      "si_unit": "A",
+      "meaning": "Returned descriptor source satisfying P phi + A_phiq q = 0."
+    },
+    {
+      "id": "Aphiq_perp",
+      "symbol": "A_phiq_perp",
+      "si_unit": "A",
+      "meaning": "Real transverse descriptor source block."
+    },
+    {
+      "id": "Aphiq_axial",
+      "symbol": "A_phiq_axial",
+      "si_unit": "A m",
+      "meaning": "Real axial descriptor block before multiplication by i*k."
+    },
+    {
+      "id": "legacy_source_node_moment",
+      "symbol": "W_old",
+      "si_unit": "A m",
+      "meaning": "Historical source-node Ms times mass weights rejected for variable nodal Ms."
+    },
+    {
+      "id": "normalization_length",
+      "symbol": "normalization_length_m",
+      "si_unit": "m",
+      "meaning": "Positive comparison extrusion length; it does not rescale section matrices."
+    }
+  ],
+  "sources": [
+    {
+      "id": "source-cross-section-struct",
+      "path": "backends/fem/include/frequency_domain/floquet_waveguide_cross_section.hpp",
+      "symbol": "FloquetWaveguideCrossSectionProblem",
+      "status": "source-visible",
+      "claim": "Documents typed nodal P1 Ms semantics, exact transverse and axial moments, and the preserved uniform branch."
+    },
+    {
+      "id": "source-cross-section-assembly",
+      "path": "backends/fem/cpu/frequency_domain/floquet_waveguide_cross_section.cpp",
+      "symbol": "assemble_floquet_waveguide_cross_section_blocks",
+      "status": "source-visible",
+      "claim": "Validates nodal Ms and assembles exact P1 source moments while retaining uniform arithmetic."
+    },
+    {
+      "id": "source-native-regression",
+      "path": "backends/fem/tests/frequency_domain/floquet_waveguide_cross_section_test.cpp",
+      "symbol": "nodal_ms_matches_independent_degree_three_quadrature_for_signed_k",
+      "status": "prepared / uncompiled",
+      "claim": "Uses independent degree-three quadrature, variable nodal Ms, signed k, mixed source and uniform recovery."
+    },
+    {
+      "id": "source-interpreted-regression",
+      "path": "scripts/test_waveguide_nodal_ms_quadrature_source.py",
+      "symbol": "WaveguideNodalMsQuadratureTests",
+      "status": "interpreted source-only",
+      "claim": "Checks the exact moments, independent quadrature, signed-k conjugacy, uniform legacy formula, and that historical source-node Ms times mass differs for variable Ms."
+    },
+    {
+      "id": "source-material-contract",
+      "path": "docs/physics/0104-material-regions-parameter-fields-and-interface-couplings.md",
+      "symbol": "owner quadrature material parameter",
+      "status": "source-visible",
+      "claim": "Provides the canonical material-parameter-at-owner-quadrature contract used by this correction."
+    }
+  ],
+  "public_api": {
+    "status": "unchanged",
+    "parameters": [],
+    "reason": "The bounded native struct already carried the optional nodal buffer; this change fixes its numerical interpretation without adding Python DSL, ProblemIR, planner or capability fields."
+  }
+}

@@ -259,26 +259,55 @@ FrequencyDomainStatus assemble_floquet_waveguide_cross_section_blocks(
             if (problem.magnetic_element_mask[triangle] == 0u) {
                 continue;
             }
+            const bool has_nodal_ms = problem.saturation_magnetization_a_per_m != nullptr;
+            double local_ms[3] = {0.0, 0.0, 0.0};
+            double local_ms_sum = 0.0;
+            if (has_nodal_ms) {
+                for (int local = 0; local < 3; ++local) {
+                    local_ms[local] = problem.saturation_magnetization_a_per_m[nodes[local]];
+                    local_ms_sum += local_ms[local];
+                }
+            }
             for (int local_test = 0; local_test < 3; ++local_test) {
                 const std::uint64_t potential_row = nodes[local_test];
                 for (int local_source = 0; local_source < 3; ++local_source) {
                     const std::uint32_t global_node = nodes[local_source];
                     const auto compact = magnetic_order.find(global_node);
                     const std::uint64_t magnetic_node = compact->second;
-                    const double ms = problem.saturation_magnetization_a_per_m != nullptr
-                        ? problem.saturation_magnetization_a_per_m[global_node]
-                        : problem.uniform_saturation_magnetization_a_per_m;
-                    // Transverse term integrates a constant gradient against
-                    // int(N_source) dA = area/3, for any vertex (audit finding H5:
-                    // this part was already correct).
-                    const double source_weight = area * ms / 3.0;
-                    // Axial (M_z) term is int(N_test * N_source) dA: the consistent
-                    // P1 triangle mass matrix, area/6 on the diagonal (local_test ==
-                    // local_source) and area/12 off-diagonal -- not area/3 uniformly
-                    // (audit finding H5,
-                    // docs/audits/2026-09-15-eigensolve-dispersion-correctness-audit.md).
-                    const double axial_weight = area * ms *
-                        (local_test == local_source ? (1.0 / 6.0) : (1.0 / 12.0));
+                    double source_weight = 0.0;
+                    double axial_weight = 0.0;
+                    if (!has_nodal_ms) {
+                        // Preserve the established uniform branch exactly:
+                        // int(N_source) dA = area/3 and the consistent P1 mass
+                        // matrix for the axial term.
+                        const double ms = problem.uniform_saturation_magnetization_a_per_m;
+                        source_weight = area * ms / 3.0;
+                        axial_weight = area * ms *
+                            (local_test == local_source ? (1.0 / 6.0) : (1.0 / 12.0));
+                    } else {
+                        // Ms is interpolated as a nodal P1 coefficient.  The
+                        // transverse integrand has degree two and the axial
+                        // integrand has degree three; use their exact triangle
+                        // moments rather than treating Ms at the source node as
+                        // an element constant.
+                        double axial_moment = 0.0;
+                        for (int local_coefficient = 0; local_coefficient < 3;
+                             ++local_coefficient) {
+                            const int equal_pairs =
+                                (local_test == local_source ? 1 : 0) +
+                                (local_test == local_coefficient ? 1 : 0) +
+                                (local_source == local_coefficient ? 1 : 0);
+                            const double triple_moment = equal_pairs == 3
+                                ? 6.0
+                                : (equal_pairs == 1 ? 2.0 : 1.0);
+                            axial_moment += local_ms[local_coefficient] * triple_moment;
+                        }
+                        // The transverse moment is the equivalent compact form
+                        // of sum_l Ms_l (2 if l == source else 1).
+                        source_weight = area *
+                            (local_ms_sum + local_ms[local_source]) / 12.0;
+                        axial_weight = area * axial_moment / 60.0;
+                    }
                     for (int component = 0; component < 2; ++component) {
                         const double *frame = problem.tangent_frames_xyz +
                             6u * global_node + 3u * component;

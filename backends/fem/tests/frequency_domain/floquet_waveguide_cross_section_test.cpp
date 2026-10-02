@@ -48,6 +48,15 @@ FloquetWaveguideCrossSectionProblem reference_problem()
     return problem;
 }
 
+FloquetWaveguideCrossSectionProblem nodal_ms_problem()
+{
+    auto problem = reference_problem();
+    static const double nodal_ms[] = {1.5, 2.5, 4.0};
+    problem.saturation_magnetization_a_per_m = nodal_ms;
+    problem.saturation_magnetization_count = 3u;
+    return problem;
+}
+
 void assembles_p1_blocks_and_per_length_diagnostics()
 {
     const auto problem = reference_problem();
@@ -152,6 +161,97 @@ void mixed_source_matches_independent_weak_quadrature()
     }
 }
 
+void nodal_ms_matches_independent_degree_three_quadrature_for_signed_k()
+{
+    using Complex = std::complex<double>;
+    auto problem = nodal_ms_problem();
+    const double c = 1.0 / std::sqrt(2.0);
+    const double rotated_frames[] = {
+        c, c, 0.0, 0.0, 0.0, 1.0,
+        c, c, 0.0, 0.0, 0.0, 1.0,
+        c, c, 0.0, 0.0, 0.0, 1.0,
+    };
+    problem.tangent_frames_xyz = rotated_frames;
+    FloquetWaveguideCrossSectionBlockResult blocks{};
+    assert(assemble_floquet_waveguide_cross_section_blocks(problem, &blocks) ==
+           FrequencyDomainStatus::ok);
+
+    const Complex q[] = {{1.0, .2}, {.4, -.8}, {-.7, .4}, {1.1, .5}, {.3, -.9},
+                         {-.2, .6}};
+    const double nodal_ms[] = {1.5, 2.5, 4.0};
+    const double gradient_x[] = {-.5, .5, 0.0};
+    const double gradient_y[] = {-1.0, 0.0, 1.0};
+    // Dunavant degree-three rule, written as barycentric coordinates.  The
+    // negative centroid weight is intentional; the rule is exact for the
+    // cubic Ms*N_test*N_source axial integrand.
+    const double barycentric[4][3] = {
+        {1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0},
+        {0.6, 0.2, 0.2},
+        {0.2, 0.6, 0.2},
+        {0.2, 0.2, 0.6},
+    };
+    const double quadrature_weights[] = {-27.0 / 48.0, 25.0 / 48.0, 25.0 / 48.0,
+                                         25.0 / 48.0};
+
+    for (double k : {-3.0, 0.0, 3.0}) {
+        for (std::size_t row = 0; row < 3; ++row) {
+            Complex physical_source{};
+            for (std::size_t point = 0; point < 4; ++point) {
+                const auto &bary = barycentric[point];
+                double ms = 0.0;
+                Complex mx{};
+                Complex my{};
+                Complex mz{};
+                for (std::size_t node = 0; node < 3; ++node) {
+                    ms += bary[node] * nodal_ms[node];
+                    mx += bary[node] * c * q[2u * node];
+                    my += bary[node] * c * q[2u * node];
+                    mz += bary[node] * q[2u * node + 1u];
+                }
+                physical_source += quadrature_weights[point] * ms *
+                    (Complex{gradient_x[row], 0.0} * mx +
+                     Complex{gradient_y[row], 0.0} * my +
+                     Complex{0.0, k * bary[row]} * mz);
+            }
+            // The reference triangle has area one.  A_phiq is the negative
+            // descriptor copy of the physical weak source.
+            Complex descriptor_source{};
+            for (std::size_t column = 0; column < 6; ++column) {
+                descriptor_source +=
+                    Complex{blocks.a_phiq_perp_row_major[row * 6 + column],
+                            k * blocks.a_phiq_axial_row_major[row * 6 + column]} * q[column];
+            }
+            assert(std::abs(descriptor_source + physical_source) < 1.0e-12);
+        }
+    }
+}
+
+void uniform_nodal_ms_recovers_the_legacy_uniform_branch()
+{
+    auto uniform = reference_problem();
+    auto nodal = reference_problem();
+    static const double nodal_ms[] = {2.0, 2.0, 2.0};
+    nodal.saturation_magnetization_a_per_m = nodal_ms;
+    nodal.saturation_magnetization_count = 3u;
+    FloquetWaveguideCrossSectionBlockResult uniform_blocks{};
+    FloquetWaveguideCrossSectionBlockResult nodal_blocks{};
+    assert(assemble_floquet_waveguide_cross_section_blocks(uniform, &uniform_blocks) ==
+           FrequencyDomainStatus::ok);
+    assert(assemble_floquet_waveguide_cross_section_blocks(nodal, &nodal_blocks) ==
+           FrequencyDomainStatus::ok);
+    const auto compare = [](const std::vector<double> &left,
+                            const std::vector<double> &right) {
+        assert(left.size() == right.size());
+        for (std::size_t index = 0; index < left.size(); ++index) {
+            assert(std::abs(left[index] - right[index]) < 1.0e-14);
+        }
+    };
+    compare(uniform_blocks.a_phiq_perp_row_major, nodal_blocks.a_phiq_perp_row_major);
+    compare(uniform_blocks.a_phiq_axial_row_major, nodal_blocks.a_phiq_axial_row_major);
+    compare(uniform_blocks.a_qphi_perp_row_major, nodal_blocks.a_qphi_perp_row_major);
+    compare(uniform_blocks.a_qphi_axial_row_major, nodal_blocks.a_qphi_axial_row_major);
+}
+
 void assembled_blocks_feed_the_waveguide_schur_provider()
 {
     const auto assembled = [&]() {
@@ -198,6 +298,8 @@ int main()
     assembles_p1_blocks_and_per_length_diagnostics();
     cross_section_is_independent_of_axial_comparison_length();
     mixed_source_matches_independent_weak_quadrature();
+    nodal_ms_matches_independent_degree_three_quadrature_for_signed_k();
+    uniform_nodal_ms_recovers_the_legacy_uniform_branch();
     assembled_blocks_feed_the_waveguide_schur_provider();
     malformed_cross_section_is_rejected();
     std::cout << "floquet waveguide cross-section contract tests passed\n";

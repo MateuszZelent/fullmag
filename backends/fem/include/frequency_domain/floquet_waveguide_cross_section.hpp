@@ -34,6 +34,28 @@ namespace fullmag::fem::frequency_domain {
  * axial components are the NEGATIVE of that physical source. This module is
  * deliberately bounded and is not the managed MFEM production assembler; it is a
  * deterministic element-level owner for contract and convergence tests.
+ *
+ * When `saturation_magnetization_a_per_m` is supplied, it is a canonical nodal
+ * P1 coefficient, not a source-node constant.  On every triangle
+ *
+ *   Ms(r) = sum_l Ms_l N_l(r),
+ *   delta_m(r) = sum_j N_j(r) e_j q_j,
+ *   delta_M(r) = Ms(r) delta_m(r).
+ *
+ * Here delta_m is dimensionless and delta_M is the physical perturbation in
+ * A/m. The weak source below uses delta_m multiplied by Ms(r) exactly once.
+ *
+ * The assembler therefore evaluates the transverse source with
+ *
+ *   int(Ms N_j) dA = area/12 sum_l Ms_l (2 if l == j else 1),
+ *
+ * and the axial source with
+ *
+ *   int(Ms N_i N_j) dA = area/60 sum_l Ms_l c(i,j,l),
+ *
+ * where c is 6 when all three indices are equal, 2 when exactly two are
+ * equal, and 1 otherwise.  These are exact P1 coefficient integrals.  A null
+ * nodal pointer retains the original uniform branch and its P1 mass weights.
  */
 struct FloquetWaveguideCrossSectionProblem {
     std::uint64_t node_count = 0;
