@@ -2578,6 +2578,8 @@ Brak zależnej gałęzi, restart/gap lub brak pola oznacza brak pełnego replay.
 Odczyt z dysku wymaga pól każdego raw modu zapisanego w widmie, także
 kandydatów nieprzypisanych do wybranych gałęzi. Każde pole jest wiązane
 z sample/raw ID, podpisanym wektorem k i zespoloną częstotliwością widma.
+Część rzeczywista częstotliwości każdego eksportowanego kandydata musi
+być dodatnia, zgodnie z kontraktem dodatniej gałęzi widma benchmarku.
 Pokrycie eksportowanego zbioru kandydatów nie dowodzi kompletności widma
 solvera ani optimum globalnego przydziału. Brak pola kandydata blokuje
 replay, zamiast pozostawić je poza kontrolą. Kampania musi jawnie zachować

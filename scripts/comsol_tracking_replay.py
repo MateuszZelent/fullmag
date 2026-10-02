@@ -72,6 +72,8 @@ def bind_candidate_fields(samples, modes):
             raise ValueError("invalid candidate signed k vector")
         for mode in sample["modes"]:
             field = modes[(sample["sample_index"], mode["raw_mode_index"])]
+            if _number(mode["frequency_real_hz"], "candidate spectrum frequency") <= 0:
+                raise ValueError("candidate spectrum frequency must be positive")
             if not np.allclose(field["k_vector_rad_per_m"], k, rtol=1e-12, atol=1e-10):
                 raise ValueError("candidate field signed k differs from spectrum")
             for name in ("frequency_real_hz", "frequency_imag_hz"):

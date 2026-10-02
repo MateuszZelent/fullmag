@@ -2,6 +2,14 @@
 
 ## S06/S12 — pola wszystkich eksportowanych kandydatów, 2026-10-02
 
+Checkpoint `4abbc363a776c35ac9d823a7655a960d878a4bd3` jest na remote;
+pełne 50 testów gate PASS (67,856 s). Niezależny read-only review nie
+znalazł P1. Wskazany P2 dodatniej częstotliwości nieprzypisanych kandydatów
+naprawiono: standalone replay wymaga real frequency > 0 tak samo jak
+główny gate. Spójne zero/ujemne wartości w widmie i metadanych są odrzucane;
+50 testów trackingu PASS. Eksport wszystkich pól zwiększa liczbę plików
+z 6×8 do 61×24 dla pełnej ścieżki; jego koszt runtime pozostaje do pomiaru.
+
 Po checkpointcie `f2d0d7219798c1b526aca5ae7f675ef09ef3086f` odczyt
 trackingu obejmuje każdy raw mode zapisany w widmie, także nieprzypisany
 do wybranych gałęzi. Wszystkie pola przechodzą istniejący certyfikat fazy,

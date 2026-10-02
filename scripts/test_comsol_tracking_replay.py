@@ -260,6 +260,21 @@ class TrackingReplayDiskTests(unittest.TestCase):
         self.assertEqual(result["status"], "fail", result)
         self.assertTrue(any("duplicate candidate" in reason for reason in result["reasons"]))
 
+    def test_coherent_nonpositive_unselected_candidate_is_rejected(self):
+        path = self.add_unselected_candidate_field()
+        for frequency in (0., -1e10):
+            with self.subTest(frequency=frequency):
+                mode = json.loads(path.read_text())
+                mode["frequency_real_hz"] = frequency
+                path.write_text(json.dumps(mode))
+                spectrum_path = self.root / "eigen/spectrum.v2.json"
+                spectrum = json.loads(spectrum_path.read_text())
+                spectrum["samples"][1]["modes"][-1]["frequency_real_hz"] = frequency
+                spectrum_path.write_text(json.dumps(spectrum))
+                result = replay_tracking_fields(self.root, selected_branch_ids=[3])
+                self.assertEqual(result["status"], "fail", result)
+                self.assertTrue(any("positive" in reason for reason in result["reasons"]))
+
     def test_disk_forged_score_and_supplied_verdict_cannot_pass(self):
         branches = self.write_pair_path()
         branches["branches"][0]["points"][1]["tracking_confidence"] = .8
