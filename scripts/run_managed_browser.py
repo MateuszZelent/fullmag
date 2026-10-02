@@ -94,12 +94,17 @@ def compose_spec(image, source, package, state, port):
                   (package, "/package", True), (state, "/state", False))]
     # The capsule cannot acquire mountpoint directories. Create only symlinks
     # in private state; all source members still resolve into the read-only bind.
-    entry = ('set -eu; mkdir /state/workspace; '
+    entry = ('set -eu; [ ! -L /state/workspace ] || exit 2; '
+             'mkdir -p /state/workspace; '
              'for path in /source/* /source/.[!.]*; do '
              '[ -e "$path" ] || continue; name="${path##*/}"; '
              '[ "$name" != ".fullmag" ] || exit 2; '
-             'ln -s "$path" "/state/workspace/$name"; done; '
-             'mkdir /state/workspace/.fullmag; '
+             'target="/state/workspace/$name"; '
+             'if [ -L "$target" ]; then '
+             '[ "$(readlink "$target")" = "$path" ] || exit 2; '
+             'else [ ! -e "$target" ] || exit 2; ln -s "$path" "$target"; fi; done; '
+             '[ ! -L /state/workspace/.fullmag ] || exit 2; '
+             'mkdir -p /state/workspace/.fullmag; '
              'cd /state/workspace; exec /package/bin/fullmag-api')
     return {"services": {"browser": {
         "image": image, "pull_policy": "never", "init": True,

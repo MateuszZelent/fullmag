@@ -30,7 +30,7 @@ def test_cpu_package_has_only_private_writable_state(tmp_path):
     assert service["command"][:2] == ["bash", "-c"]
     assert service["command"][2].endswith("exec /package/bin/fullmag-api")
     assert '$${path##*/}' in service["command"][2]
-    assert "mkdir /state/workspace/.fullmag" in service["command"][2]
+    assert "mkdir -p /state/workspace/.fullmag" in service["command"][2]
     assert "ln -s /state /state/workspace/.fullmag" not in service["command"][2]
     assert service["environment"]["FULLMAG_STATE_ROOT"] == "/state/workspace/.fullmag"
     assert service["environment"]["FULLMAG_REPO_ROOT"] == "/state/workspace"

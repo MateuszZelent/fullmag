@@ -62,3 +62,23 @@ projektu, restart kontenera i restore checkpointu to osobne dowody.
 Wolumen external w Compose zachowuje niezależny cykl życia; eksport/restore
 jest obowiązkiem adaptera, a nie skutkiem restartu kontenera.
 Źródło mechanizmu: [Docker — Volumes](https://docs.docker.com/engine/storage/volumes/).
+
+## Wynik niezależnego przeglądu — wymagania przed wdrożeniem
+
+- Wolumen musi być montowany dokładnie pod /state. SessionStore nadal
+  wyprowadza root z repo_root/.fullmag/local-live/session-store; samo
+  FULLMAG_STATE_ROOT nie przekierowuje wszystkich konsumentów.
+- Świeży wolumen wymaga ograniczonego bootstrapu własności UID/GID 65532
+  bez privileged, sieci i socketu Docker. Nie chownować żadnych istniejących
+  cache lub cudzych danych. Zachować pełny inspect/bootstrap receipt.
+- current_live_state jest w pamięci i startuje puste. Restart nie jest
+  automatyczną rehydratacją. Odtworzenie definicji przez API, skryptu,
+  identity i ewentualnych checkpointów musi być jawnie sprawdzone.
+- Nie kopiować aktywnego SessionStore przez surowy tar. Preferować kanoniczny
+  eksport FMS przez API; surowy eksport wymaga zatrzymanego właściciela,
+  bez aktywnych writerów i dopuszczonego, spójnego snapshotu repozytorium.
+- Restore wykonać do świeżego prywatnego wolumenu, sprawdzić scenę, IDs,
+  skrypt i właściwą klasę restore. Kopia samego model/scene nie zachowuje
+  wyników obliczeń ani wszystkich stanów runtime.
+
+Przegląd nie zmienia PROPOSED na ACCEPTED i nie udziela zgody na provisioning.
