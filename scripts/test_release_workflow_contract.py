@@ -84,6 +84,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         windows = WINDOWS_MSI_SCRIPT.read_text(encoding="utf-8")
         packaged_binaries = (
             "fullmag-api-accepted-scheduler",
+            "fullmag-runtime-service",
             "fullmag-api-resource-pool",
             "fullmag-api-accepted-fem-preparer",
             "fullmag-api-accepted-fem-preparation-supervisor",

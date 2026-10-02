@@ -1,3 +1,5 @@
+mod worker_startup_gate;
+
 use anyhow::{Context, Result, bail};
 use fullmag_session::{
     FMS_PREPARATION_RESOURCE_POOL_SCHEMA, FmsPreparationResourceOffer, FmsPreparationResourcePool,
@@ -22,6 +24,7 @@ fn main() {
 
 fn run() -> Result<()> {
     let args = parse_args()?;
+    worker_startup_gate::verify_runtime_owner_build()?;
     let pool = FmsPreparationResourcePool {
         schema_version: FMS_PREPARATION_RESOURCE_POOL_SCHEMA.into(),
         pool_id: args.pool_id,

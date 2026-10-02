@@ -1,6 +1,6 @@
 # ADR 0049 — właściciel lokalnego runtime i kanał drain schedulerów
 
-Status: accepted; kanał sterowania zaimplementowany w źródłach, usługa lokalna planned, runtime NOT VERIFIED.
+Status: accepted; kanał i niezależny proces usługi zaimplementowane w źródłach; UI attach/detach i recovery planned, runtime NOT VERIFIED.
 Data: 03.10.2026.
 
 ## Kontekst i decyzja
@@ -60,3 +60,37 @@ pracują; właściciel utracony → drain; invalid token → drain i exit nonzer
 reconnect/orphan bez podwójnego schedulera; receipt i leases zachowane.
 Rollback usuwa opcję właściciela z uruchomienia schedulera i przywraca
 sterowanie konsolą, dopiero po drain. Nie kasuje runów ani ich leases.
+
+## Realizacja źródłowa usługi — 03.10.2026
+
+`fullmag-runtime-service` z `--config <absolute-json-path>` zajmuje jedną
+natywną blokadę dla całego SessionStore. Descriptor nie jest lease zadania
+ani dowodem zdrowia procesu. Poprzedni starting/ready/draining/unknown bez
+blokady wymaga kontrolowanego recovery; PID i wiek nie pozwalają przejąć ownera.
+
+Usługa publikuje jawnie skonfigurowane pule compute/preparation przez istniejące
+publikatory. Oba schedulery startują z zamkniętą bramką admission. Boot event
+potwierdza PID, owner token, rolę, protokół oraz pełny commit i snapshot buildu
+przed odczytaniem store i uruchomieniem zadań. Dopiero po zgodności obu eventów
+usługa zwalnia bramki. Ready wymaga potwierdzenia generacji obu pul.
+
+Własny endpoint TCP na losowym porcie loopback przyjmuje ograniczony JSON line
+`runtime_service_control.v1`, owner_token i command=drain. Jest prywatnym
+adapterem procesu, nie nowym publicznym OpenAPI. Żądanie wymaga tokenu z lokalnego
+descriptora; katalog stanu musi pozostać niedostępny niezaufanym użytkownikom.
+ACK draining nie jest terminalnym receiptem. Zamknięcie UI nie wysyła drain.
+
+Przy błędzie usługa zamyka admission obu dzieci przed czekaniem na którekolwiek.
+Drained wymaga obu terminalnych wyników exit=0 i przypiętych eventów drained.
+Błąd obserwacji procesu zachowuje unknown, a pozostałe błędy nie stają się sukcesem.
+Operational owner/lock/logs są poza naukowym grafem CAS i eksportem FMS;
+import nadal wymaga pustego, izolowanego store. Ten fragment nie uruchamia usługi
+automatycznie z obecnego launchera i nie zmienia działającej sesji 3104.
+
+Dokładny kontrakt: [native-runtime-service-v1](../specs/native-runtime-service-v1.md).
+
+Publikatory również sprawdzają przypięty commit/snapshot przed otwarciem store.
+Procesy są obserwowane z deadline: niepotwierdzony publisher/scheduler pozostaje
+unknown z zachowanym PID i lease, bez automatycznego przejęcia. Częściowo
+opublikowane generacje są odczytywane także po błędzie drugiego publishera.
+Ready preparation jest niezależne od slotu zajętego przez odzyskiwany task.

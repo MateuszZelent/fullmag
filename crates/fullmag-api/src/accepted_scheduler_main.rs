@@ -1,4 +1,5 @@
 mod scheduler_owner_control;
+mod worker_startup_gate;
 
 #[path = "accepted_study_supervisor.rs"]
 mod accepted_study_supervisor;
@@ -33,6 +34,7 @@ struct SchedulerArgs {
     discover_runs: bool,
     resident: bool,
     owner_control: bool,
+    startup_gate: bool,
     pool_id: Option<String>,
     discover_resources: bool,
     resources: Vec<SchedulerResourceOffer>,
@@ -173,6 +175,12 @@ fn main() {
 
 fn run() -> Result<()> {
     let args = parse_args()?;
+    worker_startup_gate::verify_runtime_owner_build()?;
+    if args.startup_gate {
+        scheduler_owner_control::announce("boot", "compute", None, None)?;
+        worker_startup_gate::wait_for_release(std::io::stdin().lock())
+            .context("wait for runtime service admission release")?;
+    }
     let shutdown_requested = Arc::new(AtomicBool::new(false));
     if !args.resident {
         return run_scheduler(args, shutdown_requested);
@@ -197,7 +205,7 @@ fn run() -> Result<()> {
         .enable_io()
         .build()
         .context("build resident scheduler signal runtime")?;
-    runtime.block_on(async move {
+    let result = runtime.block_on(async move {
         let mut scheduler =
             tokio::task::spawn_blocking(move || run_scheduler(args, scheduler_shutdown));
         tokio::select! {
@@ -225,7 +233,11 @@ fn run() -> Result<()> {
                 drained
             }
         }
-    })
+    });
+    if owner_control && result.is_ok() {
+        scheduler_owner_control::announce("drained", "compute", None, None)?;
+    }
+    result
 }
 
 async fn wait_for_shutdown_signal() -> Result<()> {
@@ -375,6 +387,14 @@ fn run_scheduler(args: SchedulerArgs, shutdown_requested: Arc<AtomicBool>) -> Re
                             }
                         }
                         observed_resource_ids.insert(resource.resource_id.clone());
+                    }
+                    if args.owner_control && resource_pool.is_none() {
+                        scheduler_owner_control::announce(
+                            "ready",
+                            "compute",
+                            Some(pool_id),
+                            Some(discovered.generation),
+                        )?;
                     }
                     current_resources = resources;
                     resource_pool = Some(discovered);
@@ -757,6 +777,10 @@ fn parse_args() -> Result<SchedulerArgs> {
         .transpose()?
         .unwrap_or(false);
     let owner_control = scheduler_owner_control::parse(values.remove("--owner-control"), resident)?;
+    let startup_gate = scheduler_owner_control::parse(values.remove("--startup-gate"), resident)?;
+    if startup_gate && !owner_control {
+        bail!("scheduler startup gate requires --owner-control stdin-v1");
+    }
     let pool_id = values
         .remove("--pool-id")
         .map(|value| {
@@ -915,6 +939,7 @@ fn parse_args() -> Result<SchedulerArgs> {
         discover_runs,
         resident,
         owner_control,
+        startup_gate,
         pool_id,
         discover_resources,
         resources,

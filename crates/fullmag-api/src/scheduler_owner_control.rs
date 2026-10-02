@@ -78,6 +78,35 @@ fn require_explicit_drain(cause: DrainCause) -> Result<()> {
     Ok(())
 }
 
+/// Compact versioned events; enabled only for runtime-owned child processes.
+pub fn announce(
+    event: &str,
+    role: &str,
+    pool_id: Option<&str>,
+    generation: Option<u64>,
+) -> Result<()> {
+    use std::io::Write;
+    let identity = fullmag_build_info::identity();
+    println!(
+        "{}",
+        serde_json::to_string(&serde_json::json!({
+            "schema_version": "scheduler_owner_event.v1",
+            "event": event,
+            "role": role,
+            "protocol": "stdin-v1",
+            "pid": std::process::id(),
+            "owner_token": std::env::var("FULLMAG_RUNTIME_SERVICE_OWNER").ok(),
+            "pool_id": pool_id,
+            "generation": generation,
+            "git_commit": identity.git_commit,
+            "source_snapshot_sha256": identity.source_snapshot_sha256,
+        }))?
+    );
+    std::io::stdout()
+        .flush()
+        .context("flush scheduler owner event")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

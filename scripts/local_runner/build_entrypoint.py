@@ -127,6 +127,7 @@ REQUIRED_OUTPUTS = BASE_REQUIRED_OUTPUTS + (
     "bin/fullmag-api-accepted-worker",
     "bin/fullmag-api-accepted-supervisor",
     "bin/fullmag-api-accepted-scheduler",
+    "bin/fullmag-runtime-service",
     "bin/fullmag-api-resource-pool",
     "bin/fullmag-api-accepted-fem-preparer",
     "bin/fullmag-api-accepted-fem-preparation-supervisor",

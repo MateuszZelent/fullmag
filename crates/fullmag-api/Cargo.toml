@@ -40,6 +40,12 @@ name = "fullmag-api-accepted-scheduler"
 path = "src/accepted_scheduler_main.rs"
 
 [[bin]]
+name = "fullmag-runtime-service"
+path = "src/runtime_service_main.rs"
+test = false
+bench = false
+
+[[bin]]
 name = "fullmag-api-resource-pool"
 path = "src/resource_pool_main.rs"
 

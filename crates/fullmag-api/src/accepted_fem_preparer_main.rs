@@ -29,6 +29,7 @@ fn main() {
 
 fn run() -> Result<()> {
     let args = parse_args()?;
+    worker_startup_gate::verify_runtime_owner_build()?;
     if args.startup_gate {
         worker_startup_gate::wait_for_release(std::io::stdin().lock())
             .context("wait for supervisor process-tree ownership")?;

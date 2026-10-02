@@ -50,6 +50,7 @@ require_file "$BUNDLE_ROOT/bin/fullmag-api"
 require_file "$BUNDLE_ROOT/bin/fullmag-api-accepted-worker"
 require_file "$BUNDLE_ROOT/bin/fullmag-api-accepted-supervisor"
 require_file "$BUNDLE_ROOT/bin/fullmag-api-accepted-scheduler"
+require_file "$BUNDLE_ROOT/bin/fullmag-runtime-service"
 require_file "$BUNDLE_ROOT/bin/fullmag-api-resource-pool"
 require_file "$BUNDLE_ROOT/bin/fullmag-api-accepted-fem-preparer"
 require_file "$BUNDLE_ROOT/bin/fullmag-api-accepted-fem-preparation-supervisor"
@@ -72,6 +73,7 @@ check_no_missing_ldd "$BUNDLE_ROOT/bin/fullmag-api"
 check_no_missing_ldd "$BUNDLE_ROOT/bin/fullmag-api-accepted-worker"
 check_no_missing_ldd "$BUNDLE_ROOT/bin/fullmag-api-accepted-supervisor"
 check_no_missing_ldd "$BUNDLE_ROOT/bin/fullmag-api-accepted-scheduler"
+check_no_missing_ldd "$BUNDLE_ROOT/bin/fullmag-runtime-service"
 check_no_missing_ldd "$BUNDLE_ROOT/bin/fullmag-api-resource-pool"
 check_no_missing_ldd "$BUNDLE_ROOT/bin/fullmag-api-accepted-fem-preparer"
 check_no_missing_ldd "$BUNDLE_ROOT/bin/fullmag-api-accepted-fem-preparation-supervisor"
@@ -86,6 +88,7 @@ check_runpath_contains "$BUNDLE_ROOT/bin/fullmag-api" '$ORIGIN/../lib'
 check_runpath_contains "$BUNDLE_ROOT/bin/fullmag-api-accepted-worker" '$ORIGIN/../lib'
 check_runpath_contains "$BUNDLE_ROOT/bin/fullmag-api-accepted-supervisor" '$ORIGIN/../lib'
 check_runpath_contains "$BUNDLE_ROOT/bin/fullmag-api-accepted-scheduler" '$ORIGIN/../lib'
+check_runpath_contains "$BUNDLE_ROOT/bin/fullmag-runtime-service" '$ORIGIN/../lib'
 check_runpath_contains "$BUNDLE_ROOT/bin/fullmag-api-resource-pool" '$ORIGIN/../lib'
 check_runpath_contains "$BUNDLE_ROOT/bin/fullmag-api-accepted-fem-preparer" '$ORIGIN/../lib'
 check_runpath_contains "$BUNDLE_ROOT/bin/fullmag-api-accepted-fem-preparation-supervisor" '$ORIGIN/../lib'

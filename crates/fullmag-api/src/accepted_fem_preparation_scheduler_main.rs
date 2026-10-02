@@ -1,4 +1,5 @@
 mod scheduler_owner_control;
+mod worker_startup_gate;
 
 #[path = "accepted_fem_preparation_supervisor.rs"]
 mod accepted_fem_preparation_supervisor;
@@ -26,6 +27,7 @@ struct SchedulerArgs {
     preparer_executable: Option<PathBuf>,
     resident: bool,
     owner_control: bool,
+    startup_gate: bool,
     max_concurrency: usize,
     max_tasks: Option<usize>,
     max_idle_polls: usize,
@@ -88,6 +90,12 @@ fn main() {
 
 fn run() -> Result<()> {
     let args = parse_args()?;
+    worker_startup_gate::verify_runtime_owner_build()?;
+    if args.startup_gate {
+        scheduler_owner_control::announce("boot", "preparation", None, None)?;
+        worker_startup_gate::wait_for_release(std::io::stdin().lock())
+            .context("wait for runtime service admission release")?;
+    }
     let shutdown_requested = Arc::new(AtomicBool::new(false));
     if !args.resident {
         return run_scheduler(args, shutdown_requested);
@@ -112,7 +120,7 @@ fn run() -> Result<()> {
         .enable_io()
         .build()
         .context("build preparation scheduler signal runtime")?;
-    runtime.block_on(async move {
+    let result = runtime.block_on(async move {
         let mut scheduler =
             tokio::task::spawn_blocking(move || run_scheduler(args, scheduler_shutdown));
         tokio::select! {
@@ -140,7 +148,11 @@ fn run() -> Result<()> {
                 drained
             }
         }
-    })
+    });
+    if owner_control && result.is_ok() {
+        scheduler_owner_control::announce("drained", "preparation", None, None)?;
+    }
+    result
 }
 
 async fn wait_for_shutdown_signal() -> Result<()> {
@@ -210,6 +222,7 @@ fn run_scheduler(args: SchedulerArgs, shutdown_requested: Arc<AtomicBool>) -> Re
     let mut checkpoint_sequence = checkpoint
         .map(|checkpoint| checkpoint.sequence)
         .unwrap_or(0);
+    let mut owner_ready = false;
     let mut idle_poll_count = 0usize;
     let mut consecutive_idle_polls = 0usize;
 
@@ -232,6 +245,20 @@ fn run_scheduler(args: SchedulerArgs, shutdown_requested: Arc<AtomicBool>) -> Re
             break;
         }
 
+        if args.owner_control && !owner_ready {
+            if let Some(pool) =
+                retry_store_writer_busy(|| store.read_preparation_resource_pool(&args.pool_id))?
+            {
+                validate_pool_progress(observed_pool.as_ref(), &pool, &active)?;
+                scheduler_owner_control::announce(
+                    "ready",
+                    "preparation",
+                    Some(&args.pool_id),
+                    Some(pool.generation),
+                )?;
+                owner_ready = true;
+            }
+        }
         let durable_active =
             retry_store_writer_busy(|| store.list_active_preparation_resource_leases())?;
         let mut started_any = false;
@@ -669,6 +696,10 @@ fn parse_args() -> Result<SchedulerArgs> {
         .transpose()?
         .unwrap_or(false);
     let owner_control = scheduler_owner_control::parse(values.remove("--owner-control"), resident)?;
+    let startup_gate = scheduler_owner_control::parse(values.remove("--startup-gate"), resident)?;
+    if startup_gate && !owner_control {
+        bail!("scheduler startup gate requires --owner-control stdin-v1");
+    }
     let max_concurrency = values
         .remove("--max-concurrency")
         .map(|value| parse_usize("--max-concurrency", value))
@@ -720,6 +751,7 @@ fn parse_args() -> Result<SchedulerArgs> {
         preparer_executable,
         resident,
         owner_control,
+        startup_gate,
         max_concurrency,
         max_tasks,
         max_idle_polls,

@@ -1,3 +1,5 @@
+mod worker_startup_gate;
+
 use anyhow::{bail, Context, Result};
 use fullmag_session::{
     FmsResourceBudget, FmsResourceKind, FmsSchedulerResourceOffer, FmsSchedulerResourcePool,
@@ -48,6 +50,7 @@ fn main() {
 
 fn run() -> Result<()> {
     let args = parse_args()?;
+    worker_startup_gate::verify_runtime_owner_build()?;
     let discovery = args
         .discovery
         .as_ref()

@@ -473,6 +473,14 @@ impl StoreWalker {
                     }
                     self.walk_manifest_namespace(&entry.path())?;
                 }
+                // Native service ownership and logs contain no scientific CAS refs.
+                // They are neither archive roots nor GC sweep candidates.
+                "runtime-services" => {
+                    reject_link_chain(&self.root, "runtime-services")?;
+                    if !entry.file_type()?.is_dir() {
+                        bail!("runtime service operational root is not a directory");
+                    }
+                }
                 // These are writer-owned transient namespaces.  They are not
                 // roots and are never swept by this graph walk.
                 "temp" | "staging" => {

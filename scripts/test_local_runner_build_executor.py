@@ -16,7 +16,7 @@ class BuildExecutorTests(unittest.TestCase):
         if accepted:
             outputs += ['bin/' + name for name in (
                 'fullmag-api-accepted-worker', 'fullmag-api-accepted-supervisor',
-                'fullmag-api-accepted-scheduler', 'fullmag-api-resource-pool',
+                'fullmag-api-accepted-scheduler', 'fullmag-runtime-service', 'fullmag-api-resource-pool',
                 'fullmag-api-accepted-fem-preparer',
                 'fullmag-api-accepted-fem-preparation-supervisor',
                 'fullmag-api-accepted-fem-preparation-scheduler',

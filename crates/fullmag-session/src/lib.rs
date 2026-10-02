@@ -27,6 +27,7 @@ pub mod mesh_operation;
 pub mod materialized_dataset;
 pub mod reachability;
 pub mod repository_path;
+pub mod runtime_service;
 pub mod solution_set_catalog;
 pub mod solution_field_geometry;
 pub mod solution_tensor_field;

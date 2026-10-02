@@ -1,5 +1,9 @@
 # Fullmag — finalny audyt i plan refaktoryzacji
 
+Checkpoint 03.10.2026: [P7-C/P8 — niezależny proces runtime](p8/18-native-runtime-service.md)
+— source owner lock, gated scheduler startup, loopback drain i packaging;
+49 lekkich testów pakowania PASS. UI attach/detach i runtime pozostają otwarte.
+
 Checkpoint 03.10.2026: [P7-C/P8 — kanał właściciela runtime](p8/17-native-runtime-owner-control.md)
 — oba schedulery mają prywatny drain niezależny od konsoli Windows;
 utrata właściciela drenuje i raportuje błąd. Usługa i UI attach/detach nadal

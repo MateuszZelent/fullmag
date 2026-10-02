@@ -129,6 +129,7 @@ class BuildEntryPointTests(unittest.TestCase):
             "fullmag-api-accepted-worker",
             "fullmag-api-accepted-supervisor",
             "fullmag-api-accepted-scheduler",
+            "fullmag-runtime-service",
             "fullmag-api-resource-pool",
             "fullmag-api-accepted-fem-preparer",
             "fullmag-api-accepted-fem-preparation-supervisor",
@@ -144,8 +145,8 @@ class BuildEntryPointTests(unittest.TestCase):
 
     def test_incomplete_accepted_runtime_package_is_rejected(self) -> None:
         output = self._write_outputs()
-        binaries = sorted(output.joinpath("bin").glob("fullmag-api-*"))
-        self.assertEqual(len(binaries), 9)
+        binaries = sorted(output.joinpath("bin").glob("fullmag-api-*")) + [output / "bin" / "fullmag-runtime-service"]
+        self.assertEqual(len(binaries), 10)
         for binary in binaries:
             with self.subTest(binary=binary.name):
                 original = binary.read_bytes()
@@ -155,6 +156,13 @@ class BuildEntryPointTests(unittest.TestCase):
                         entrypoint._validate_required_outputs(output, entrypoint.profile_for(self.profile))
                 finally:
                     binary.write_bytes(original)
+
+    def test_empty_native_runtime_service_is_rejected(self) -> None:
+        output = self._write_outputs()
+        binary = output / "bin" / "fullmag-runtime-service"
+        binary.write_bytes(b"")
+        with self.assertRaisesRegex(entrypoint.BuildEntryPointError, binary.name):
+            entrypoint._validate_required_outputs(output, entrypoint.profile_for(self.profile))
 
     def test_empty_accepted_runtime_binary_is_rejected(self) -> None:
         output = self._write_outputs()
