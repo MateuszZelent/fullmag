@@ -103,6 +103,10 @@ run-comsol-dispersion-benchmark job_id cases="c0,c1,a1" timeout_seconds="21600":
 run-de-100nm-pilot job_id:
     {{storage_python}} "{{repo_root}}/scripts/run_de_100nm_pilot.py" --repo-root "{{repo_root}}" --job-id {{quote(job_id)}}
 
+# Bounded forensic startup probe; consumes only a terminal failed CPU/SLEPc job.
+diagnose-managed-fem-startup job_id:
+    {{storage_python}} "{{repo_root}}/scripts/diagnose_managed_fem_startup.py" --repo-root "{{repo_root}}" --job-id {{quote(job_id)}}
+
 # Frozen 10 nm DE control; sampling is k0, k2, two, five or signed-eleven.
 run-de-smoke job_id sampling="two" model_ref="":
     {{storage_python}} "{{repo_root}}/scripts/run_de_100nm_pilot.py" --repo-root "{{repo_root}}" --job-id {{quote(job_id)}} --pilot {{quote("de-smoke-" + sampling)}} {{if model_ref == "" { "" } else { "--model-ref " + quote(model_ref) }}}
