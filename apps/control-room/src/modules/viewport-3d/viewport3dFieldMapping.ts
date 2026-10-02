@@ -13,6 +13,20 @@ import {
 } from "./viewport3dVectorColoring";
 import { isDivergingScalarPalette } from "../../shared/visualization/scalarColorPalette";
 
+/**
+ * Renderer-facing field vector contract.  The API decoder currently emits
+ * float64 values, while durable saved fields may be bounded float32 payloads.
+ * Mapping only reads ArrayLike numbers, so retain the producer dtype and
+ * avoid widening a saved buffer merely to satisfy the live decoder type.
+ */
+export type Viewport3DFieldVector = Omit<
+  DecodedFieldVector,
+  "dtype" | "values"
+> & {
+  dtype: "float32" | "float64";
+  values: Float32Array | Float64Array;
+};
+
 export interface ScalarRange {
   max: number;
   min: number;
@@ -126,7 +140,7 @@ export function fieldTransformNeedsChunking(
 }
 
 export function buildVertexScalarColors(
-  fieldVector: DecodedFieldVector | null | undefined,
+  fieldVector: Viewport3DFieldVector | null | undefined,
   vertexCount: number,
   maxSynchronousPoints = VIEWPORT_3D_SYNC_COLOR_POINT_LIMIT,
   colorMode = "magnitude",
@@ -158,7 +172,7 @@ export function buildVertexScalarColors(
 }
 
 export function buildSampledScalarColors(
-  fieldVector: DecodedFieldVector | null | undefined,
+  fieldVector: Viewport3DFieldVector | null | undefined,
   pointIndices: Uint32Array | null | undefined,
   colorMode = "magnitude",
   colorPalette = "viridis",
@@ -225,7 +239,7 @@ export function buildSampledScalarColors(
  * neutral material instead of painting a wrong cell with a neighboring value.
  */
 export function buildFdmSampledScalarColors(
-  fieldVector: DecodedFieldVector | null | undefined,
+  fieldVector: Viewport3DFieldVector | null | undefined,
   cellOrdinals: Uint32Array | null | undefined,
   domainCellCount: number,
   colorMode = "magnitude",
@@ -297,7 +311,7 @@ export function buildFdmSampledScalarColors(
 }
 
 export function buildMappedVertexScalarColors(
-  fieldVector: DecodedFieldVector | null | undefined,
+  fieldVector: Viewport3DFieldVector | null | undefined,
   targetNodeIndices: Uint32Array | null | undefined,
   vertexCount: number,
   maxSynchronousPoints = VIEWPORT_3D_SYNC_COLOR_POINT_LIMIT,
@@ -362,7 +376,7 @@ export function buildMappedVertexScalarColors(
 }
 
 export function buildSurfaceFaceScalarColors(
-  fieldVector: DecodedFieldVector | null | undefined,
+  fieldVector: Viewport3DFieldVector | null | undefined,
   surfaceIndices: Uint32Array | null | undefined,
   vertexCount: number,
   colorMode = "magnitude",
@@ -509,7 +523,7 @@ export function buildSurfaceFaceScalarColors(
 }
 
 export function buildThicknessAverageZScalarColors(
-  fieldVector: DecodedFieldVector | null | undefined,
+  fieldVector: Viewport3DFieldVector | null | undefined,
   positions: ArrayLike<number> | null | undefined,
   surfaceIndices: Uint32Array | null | undefined,
   vertexCount: number,
@@ -671,7 +685,7 @@ export function buildThicknessAverageZScalarColors(
 }
 
 export async function buildVertexScalarColorsChunked(
-  fieldVector: DecodedFieldVector,
+  fieldVector: Viewport3DFieldVector,
   options: ChunkedFieldTransformOptions = {},
 ): Promise<ScalarColorBuffer | null> {
   const chunkSize = Math.max(Math.floor(options.chunkSize ?? 10_000), 1);
@@ -745,7 +759,7 @@ export async function buildVertexScalarColorsChunked(
 }
 
 export function fieldVectorSupportsScalarColorMode(
-  fieldVector: Pick<DecodedFieldVector, "nComp">,
+  fieldVector: Pick<Viewport3DFieldVector, "nComp">,
   colorMode: Viewport3DVectorColorMode,
 ): boolean {
   return colorMode !== "orientation" || fieldVector.nComp >= 3;
@@ -753,7 +767,7 @@ export function fieldVectorSupportsScalarColorMode(
 
 export function fieldVectorUsesDirectNodeOrder(
   fieldVector:
-    | Pick<DecodedFieldVector, "indexing" | "nodeIndices" | "pointCount">
+    | Pick<Viewport3DFieldVector, "indexing" | "nodeIndices" | "pointCount">
     | null
     | undefined,
   nodeCount: number,
@@ -819,7 +833,7 @@ function resolveDivergingSymmetricRange(
  * for large meshes (> 50K points).
  */
 async function resolveScalarRangeChunked(
-  fieldVector: DecodedFieldVector,
+  fieldVector: Viewport3DFieldVector,
   colorMode: string,
   colorPalette: string,
   chunkSize: number,
@@ -860,7 +874,7 @@ async function resolveScalarRangeChunked(
 }
 
 export function resolveScalarRange(
-  fieldVector: DecodedFieldVector,
+  fieldVector: Viewport3DFieldVector,
   colorMode = "magnitude",
   colorPalette = "viridis",
 ): ScalarRange {
@@ -890,7 +904,7 @@ export function resolveScalarRange(
 }
 
 export function resolveScalarRangeDiagnostics(
-  fieldVector: DecodedFieldVector,
+  fieldVector: Viewport3DFieldVector,
   colorMode = "magnitude",
 ): ScalarRangeDiagnostics {
   const resolvedColorMode = normalizeViewport3DVectorColorMode(
@@ -952,7 +966,7 @@ export function resolveScalarRangeDiagnostics(
 }
 
 function buildNodeToFieldIndexMap(
-  fieldVector: DecodedFieldVector,
+  fieldVector: Viewport3DFieldVector,
   vertexCount: number,
   targetNodeIndices?: ArrayLike<number> | null,
 ): Map<number, number> | null {
@@ -1035,7 +1049,7 @@ function buildWorldZProjectedVectors({
   positions,
   vertexCount,
 }: {
-  fieldVector: DecodedFieldVector;
+  fieldVector: Viewport3DFieldVector;
   nodeToFieldIndex: ReadonlyMap<number, number>;
   positions: ArrayLike<number>;
   vertexCount: number;
@@ -1199,7 +1213,7 @@ function resolveWorldZProjectionSuitability({
 }
 
 function averageFieldVectorComponents(
-  fieldVector: DecodedFieldVector,
+  fieldVector: Viewport3DFieldVector,
   fieldA: number,
   fieldB: number,
   fieldC: number,
@@ -1212,7 +1226,7 @@ function averageFieldVectorComponents(
 }
 
 function averageFieldComponent(
-  fieldVector: DecodedFieldVector,
+  fieldVector: Viewport3DFieldVector,
   fieldA: number,
   fieldB: number,
   fieldC: number,
@@ -1228,7 +1242,7 @@ function averageFieldComponent(
 }
 
 function fieldComponent(
-  fieldVector: DecodedFieldVector,
+  fieldVector: Viewport3DFieldVector,
   fieldIndex: number,
   component: number,
 ): number {
@@ -1353,7 +1367,7 @@ function scalarRangeDiagnosticsFromValues(
 }
 
 function buildVertexScalarColorsUnchecked(
-  fieldVector: DecodedFieldVector,
+  fieldVector: Viewport3DFieldVector,
   vertexCount: number,
   colorMode: Viewport3DVectorColorMode,
   colorPalette: string,
@@ -1395,7 +1409,7 @@ function percentileIndex(count: number, percentile: number): number {
 }
 
 function writeScalarColors(
-  fieldVector: DecodedFieldVector,
+  fieldVector: Viewport3DFieldVector,
   colors: Float32Array,
   range: ScalarRange,
   start: number,
@@ -1451,7 +1465,7 @@ function writeLinearRgb(
 }
 
 function writeVectorValue(
-  fieldVector: DecodedFieldVector,
+  fieldVector: Viewport3DFieldVector,
   sourceIndex: number,
   targetValues: Float32Array,
   targetIndex: number,
@@ -1464,7 +1478,7 @@ function writeVectorValue(
 }
 
 function colorAt(
-  fieldVector: DecodedFieldVector,
+  fieldVector: Viewport3DFieldVector,
   pointIndex: number,
   colorMode: Viewport3DVectorColorMode,
   range: Viewport3DScalarColorRange,
@@ -1502,7 +1516,7 @@ function colorAt(
 }
 
 function scalarAt(
-  fieldVector: DecodedFieldVector,
+  fieldVector: Viewport3DFieldVector,
   pointIndex: number,
   colorMode: Viewport3DVectorColorMode,
 ): number {
@@ -1572,7 +1586,7 @@ function shaderScalarModeSupports(mode: Viewport3DVectorColorMode): boolean {
 
 function shaderVectorModeSupports(
   mode: Viewport3DVectorColorMode,
-  fieldVector: DecodedFieldVector,
+  fieldVector: Viewport3DFieldVector,
 ): boolean {
   return mode === "orientation" && fieldVector.nComp >= 3;
 }

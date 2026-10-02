@@ -15,6 +15,21 @@ dlatego nie podnosi procentów P3/P5.
 
 ## Dokumenty finalne
 
+Checkpoint 02.10.2026: [P6-65 — zapisane pole w jednym viewportcie](p6/65-saved-field-single-viewport.md)
+ma produkcyjne źródła i niezależny review PASS oraz pełny browser fixture
+`d836530e926145f58d371a3f3506764d` PASS. F32/F64, support, osobne kamery,
+negative cases i reopen live mają dowód; native HTTP/archive, pozostałe
+reprezentacje, bezpośredni deselect i kwalifikacja pozostają otwarte.
+P6 około 52%, cały plan około 49%.
+
+Checkpoint 02.10.2026: [P6-66 — producent accepted FEM CPU](p6/66-accepted-fem-cpu-producer-contract.md)
+łączy preflight, wykonanie native, exact final state, typed cancellation oraz
+receipt-only recovery bez drugiego solve. Produkcyjne źródła worker/API i review
+PASS; commit `d6d1b31cd7eb5e706210e7c0e2c7d4815b362acf` jest na remote.
+Nowy managed build i native archive roundtrip czekają na pojemność runnera:
+ostatni odczyt 02.10.2026 to 867 024 896 B wolnego przy minimum 8 GiB.
+Stan runtime, nauka i release pozostają NOT VERIFIED; procenty bez zmian.
+
 Checkpoint 01.10.2026: [P6-64 — transport zapisanej geometrii](p6/64-pinned-saved-geometry-transport.md)
 łączy przypięty dataset z metadanymi, topologią FMMT v2 i supportem FMSP v1.
 Źródła, codegen i API hygiene PASS; HTTP i viewport pozostają otwarte.

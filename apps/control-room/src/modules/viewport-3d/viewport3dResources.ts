@@ -1410,7 +1410,7 @@ export function resolveViewport3DFieldVectorCollectionResourceKey(
     : `${DATA_FIELDS_PATH}#viewport-3d:${kind}-field-vectors:none`;
 }
 
-export function useViewport3DDomainMeta() {
+export function useViewport3DDomainMeta(enabled = true) {
   const { api } = useKernel();
   const sessionIdentity = useViewport3DSessionIdentity();
   const resourceKey = sessionIdentity
@@ -1422,14 +1422,14 @@ export function useViewport3DDomainMeta() {
   );
 
   return useResource({
-    enabled: sessionIdentity !== null,
+    enabled: enabled && sessionIdentity !== null,
     load,
     resolveRevision: resolveDomainMetaRevision,
     resourceKey,
   });
 }
 
-export function useViewport3DDomainTopology() {
+export function useViewport3DDomainTopology(enabled = true) {
   const { api } = useKernel();
   const sessionIdentity = useViewport3DSessionIdentity();
   const resourceKey = sessionIdentity
@@ -1451,7 +1451,7 @@ export function useViewport3DDomainTopology() {
   );
 
   return useResource({
-    enabled: sessionIdentity !== null,
+    enabled: enabled && sessionIdentity !== null,
     load,
     resolveRevision: () => topologyCache.peek(resourceKey)?.etag ?? null,
     resourceKey,
@@ -2440,7 +2440,7 @@ export function useViewport3DMeshQualityData(enabled = true) {
   });
 }
 
-export function useViewport3DSharedDomainManifest() {
+export function useViewport3DSharedDomainManifest(enabled = true) {
   const { api } = useKernel();
   const sessionIdentity = useViewport3DSessionIdentity();
   const resourceKey = sessionIdentity
@@ -2456,14 +2456,14 @@ export function useViewport3DSharedDomainManifest() {
   );
 
   return useResource({
-    enabled: sessionIdentity !== null,
+    enabled: enabled && sessionIdentity !== null,
     load,
     resolveRevision: resolveSharedDomainManifestRevision,
     resourceKey,
   });
 }
 
-export function useViewport3DScene() {
+export function useViewport3DScene(enabled = true) {
   const { api } = useKernel();
   const sessionIdentity = useViewport3DSessionIdentity();
   const resourceKey = sessionIdentity
@@ -2475,13 +2475,13 @@ export function useViewport3DScene() {
   );
 
   return useResource({
-    enabled: sessionIdentity !== null,
+    enabled: enabled && sessionIdentity !== null,
     load,
     resourceKey,
   });
 }
 
-export function useViewport3DUniverse() {
+export function useViewport3DUniverse(enabled = true) {
   const { api } = useKernel();
   const sessionIdentity = useViewport3DSessionIdentity();
   const resourceKey = sessionIdentity
@@ -2493,7 +2493,7 @@ export function useViewport3DUniverse() {
   );
 
   return useResource({
-    enabled: sessionIdentity !== null,
+    enabled: enabled && sessionIdentity !== null,
     load,
     resolveRevision: resolveUniverseRevision,
     resourceKey,

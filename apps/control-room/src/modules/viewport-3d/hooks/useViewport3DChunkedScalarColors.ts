@@ -2,8 +2,6 @@
 
 import { useEffect, useMemo, useReducer, useRef } from "react";
 
-import type { DecodedFieldVector } from "@/kernel/api/codecs";
-
 import { buildViewport3DFieldColorJobKey } from "../build-engine/viewport3dBuildJobKeys";
 import { buildVertexScalarColorsOffMainThread } from "../viewport3dColorTransformScheduler";
 import {
@@ -11,6 +9,7 @@ import {
   fieldTransformNeedsChunking,
   type ScalarColorBuffer,
   type ScalarRange,
+  type Viewport3DFieldVector,
 } from "../viewport3dFieldMapping";
 import type {
   Viewport3DFieldColorBuildTarget,
@@ -448,11 +447,11 @@ export function shouldBuildViewport3DPartChunkedScalarColor({
   explicitPartFieldVector: boolean;
   globalColorModes: readonly string[];
   globalColorPalette: string;
-  globalFieldVector: DecodedFieldVector | null | undefined;
+  globalFieldVector: Viewport3DFieldVector | null | undefined;
   globalScalarRange: ScalarRange | null | undefined;
   mode: string;
   palette: string;
-  partFieldVector: DecodedFieldVector;
+  partFieldVector: Viewport3DFieldVector;
   scalarRange: ScalarRange | null | undefined;
 }): boolean {
   const globalChunkedColorAvailable =
@@ -528,8 +527,8 @@ export function useViewport3DChunkedScalarColors({
   enabled: boolean;
   fieldRevision?: string | number | null;
   fieldScalarRangesByMode?: ReadonlyMap<string, ScalarRange>;
-  fieldVector: DecodedFieldVector | null | undefined;
-  partFieldVectors?: ReadonlyMap<string, DecodedFieldVector>;
+  fieldVector: Viewport3DFieldVector | null | undefined;
+  partFieldVectors?: ReadonlyMap<string, Viewport3DFieldVector>;
   partTargetFieldBuffers?: ReadonlyMap<string, Viewport3DTargetFieldBuffer>;
   partScalarColorModes?: ReadonlyMap<string, string>;
   partScalarColorPalettes?: ReadonlyMap<string, string>;
@@ -564,7 +563,7 @@ export function useViewport3DChunkedScalarColors({
     if (!topology || !partScalarColorModes) return [];
     const specs: Array<{
       fieldBufferId: string | null;
-      fieldVector: DecodedFieldVector;
+      fieldVector: Viewport3DFieldVector;
       mode: string;
       partId: string;
       palette: string;
@@ -1124,7 +1123,7 @@ export function resolveViewport3DChunkedFieldColorTarget(
     | Viewport3DTopologyRenderModel<Viewport3DRenderablePart>
     | null
     | undefined,
-  fieldVector: DecodedFieldVector | null | undefined,
+  fieldVector: Viewport3DFieldVector | null | undefined,
 ): Viewport3DFieldColorBuildTarget | null {
   if (!topology || !fieldVector) return null;
   if (!chunkedFieldVectorMatchesTopology(fieldVector, topology)) return null;
@@ -1172,14 +1171,14 @@ export function resolveViewport3DChunkedPartFieldInput({
   partId,
   partTargetFieldBuffers,
 }: {
-  fieldVector: DecodedFieldVector | null | undefined;
-  partFieldVectors?: ReadonlyMap<string, DecodedFieldVector>;
+  fieldVector: Viewport3DFieldVector | null | undefined;
+  partFieldVectors?: ReadonlyMap<string, Viewport3DFieldVector>;
   partId: string;
   partTargetFieldBuffers?: ReadonlyMap<string, Viewport3DTargetFieldBuffer>;
 }): {
   explicitPartFieldBuffer: Viewport3DTargetFieldBuffer | null;
-  explicitPartFieldVector: DecodedFieldVector | null;
-  partFieldVector: DecodedFieldVector | null;
+  explicitPartFieldVector: Viewport3DFieldVector | null;
+  partFieldVector: Viewport3DFieldVector | null;
 } {
   const input = resolveViewport3DTargetFieldInput({
     fallbackFieldVector: fieldVector,
@@ -1197,7 +1196,7 @@ export function resolveViewport3DChunkedPartFieldInput({
 export function resolveViewport3DChunkedPartFieldColorTarget(
   topology: Viewport3DTopologyRenderModel<Viewport3DRenderablePart>,
   partModel: Viewport3DTopologyPartRenderModel<Viewport3DRenderablePart>,
-  fieldVector: DecodedFieldVector,
+  fieldVector: Viewport3DFieldVector,
 ): Viewport3DFieldColorBuildTarget | null {
   if (!chunkedFieldVectorMatchesTopology(fieldVector, topology)) return null;
   if (fieldVectorUsesDirectNodeOrder(fieldVector, topology.nodeCount)) {
@@ -1253,7 +1252,7 @@ export function resolveViewport3DChunkedPartProjectionTarget(
   topology: Viewport3DTopologyRenderModel<Viewport3DRenderablePart>,
   partModel: Viewport3DTopologyPartRenderModel<Viewport3DRenderablePart>,
   projectionMode: Viewport3DChunkedProjectionMode,
-  fieldVector?: DecodedFieldVector | null,
+  fieldVector?: Viewport3DFieldVector | null,
 ): Viewport3DFieldColorBuildTarget | null {
   if (projectionMode === "raw_nodal") return null;
   const surfaceIndices = partModel.surfaceIndices;
@@ -1292,7 +1291,7 @@ export function resolveViewport3DChunkedPartProjectionTarget(
 }
 
 function resolveChunkedProjectionFieldVectorNodeIndices(
-  fieldVector: DecodedFieldVector,
+  fieldVector: Viewport3DFieldVector,
   partModel: Viewport3DTopologyPartRenderModel<Viewport3DRenderablePart>,
   topology: Viewport3DTopologyRenderModel<Viewport3DRenderablePart>,
 ): Uint32Array | null {
@@ -1343,7 +1342,7 @@ function resolveChunkedProjectionFieldVectorNodeIndices(
 }
 
 function chunkedFieldVectorMatchesTopology(
-  fieldVector: DecodedFieldVector,
+  fieldVector: Viewport3DFieldVector,
   topology: Viewport3DTopologyRenderModel<Viewport3DRenderablePart>,
 ): boolean {
   return resolveViewport3DFieldDomainCompatibility({
@@ -1358,7 +1357,7 @@ function chunkedFieldVectorMatchesTopology(
 }
 
 function resolveChunkedFieldVectorNodeIndices(
-  fieldVector: DecodedFieldVector,
+  fieldVector: Viewport3DFieldVector,
   topology: Viewport3DTopologyRenderModel<Viewport3DRenderablePart>,
 ): Uint32Array | null {
   if (

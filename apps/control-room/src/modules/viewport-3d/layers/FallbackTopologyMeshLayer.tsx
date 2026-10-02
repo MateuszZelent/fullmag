@@ -418,6 +418,7 @@ function FallbackTopologyMeshPrimitives({
             <primitive attach="material" object={scalarShaderMaterial} />
           ) : (
             <meshBasicMaterial
+              key={hasScalarColors ? "fallback-vertex-colors" : "fallback-solid"}
               color={surfaceMaterialColorFromSettings(
                 renderSettings,
                 colors.mesh,

@@ -18,6 +18,7 @@ import type {
 import {
   type ChunkedFieldTransformOptions,
   type ScalarColorBuffer,
+  type Viewport3DFieldVector,
 } from "./viewport3dFieldMapping";
 
 export interface Viewport3DColorTransformBuildOptions
@@ -50,7 +51,7 @@ let colorTransformWorkerClient:
 let colorTransformWorkerFallbackReason: string | null | undefined;
 
 export async function buildVertexScalarColorsOffMainThread(
-  fieldVector: DecodedFieldVector,
+  fieldVector: Viewport3DFieldVector,
   options: Viewport3DColorTransformBuildOptions = {},
 ): Promise<ScalarColorBuffer> {
   throwIfAborted(options.signal);
@@ -91,12 +92,12 @@ interface Viewport3DColorTransformBuildExecutionOptions
 }
 
 async function executeVertexScalarColorBuild(
-  fieldVector: DecodedFieldVector,
+  fieldVector: Viewport3DFieldVector,
   options: Viewport3DColorTransformBuildExecutionOptions = {},
 ): Promise<ScalarColorBuffer> {
   throwIfAborted(options.signal);
   const client = getColorTransformWorkerClient();
-  if (client) {
+  if (client && isFloat64FieldVector(fieldVector)) {
     try {
       return await client.transform(fieldVector, options);
     } catch (error) {
@@ -105,7 +106,7 @@ async function executeVertexScalarColorBuild(
       options.recordFallback?.(colorTransformWorkerFallbackReason);
       colorTransformWorkerClient = null;
     }
-  } else {
+  } else if (!client) {
     options.recordFallback?.(
       colorTransformWorkerFallbackReason ?? "worker-unavailable",
     );
@@ -175,7 +176,7 @@ export function getViewport3DColorTransformWorkerRuntimeCounts(): { timers: numb
 export function getViewport3DColorTransformPendingJobCount(): number { return colorTransformBuildJobScheduler?.getPendingJobCount() ?? 0; }
 
 function estimateFieldColorInputBytes(
-  fieldVector: DecodedFieldVector,
+  fieldVector: Viewport3DFieldVector,
   target: Viewport3DFieldColorBuildTarget | undefined,
 ): number {
   return estimateViewport3DFieldColorBuildInputBytes({
@@ -185,7 +186,7 @@ function estimateFieldColorInputBytes(
 }
 
 function estimateFieldColorOutputBytes(
-  fieldVector: DecodedFieldVector,
+  fieldVector: Viewport3DFieldVector,
   options: Viewport3DColorTransformBuildOptions,
 ): number {
   return estimateViewport3DFieldColorBuildOutputBytes({
@@ -197,12 +198,18 @@ function estimateFieldColorOutputBytes(
 }
 
 function defaultFieldColorTarget(
-  fieldVector: DecodedFieldVector,
+  fieldVector: Viewport3DFieldVector,
 ): Viewport3DFieldColorBuildTarget {
   return {
     kind: "full-domain",
     vertexCount: fieldVector.pointCount,
   };
+}
+
+function isFloat64FieldVector(
+  fieldVector: Viewport3DFieldVector,
+): fieldVector is DecodedFieldVector {
+  return fieldVector.dtype === "float64" && fieldVector.values instanceof Float64Array;
 }
 
 function cloneFieldColorBuildTargetForWorker(

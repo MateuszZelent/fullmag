@@ -155,6 +155,45 @@ describe("resolveViewport3DFieldDomainCompatibility", () => {
     ).toEqual({ reason: "compatible", status: "compatible" });
   });
 
+  it("keeps saved transport scope fencing separate from mesh topology identity", () => {
+    const geometryObjectRef = "geometry-object-1";
+    const savedScopeKey = "saved-field-viewport:dataset-1:range-0";
+    const field = {
+      formatVersion: 2,
+      indexing: "explicit_node_indices" as const,
+      meshTopologyHash: "h",
+      meshTopologyRevision: geometryObjectRef,
+      nodeIndices: Uint32Array.from([0, 2]),
+      pointCount: 2,
+    };
+
+    expect(
+      resolveViewport3DFieldDomainCompatibility({
+        domain: {
+          ...domain,
+          meshTopologyRevision: geometryObjectRef,
+        },
+        field,
+      }),
+    ).toMatchObject({ status: "degraded", reason: "fmvp-v2-legacy" });
+
+    expect(
+      resolveViewport3DFieldDomainCompatibility({
+        domain: {
+          ...domain,
+          meshTopologyRevision: geometryObjectRef,
+        },
+        field: {
+          ...field,
+          meshTopologyRevision: savedScopeKey,
+        },
+      }),
+    ).toMatchObject({
+      reason: "mesh-topology-revision-mismatch",
+      status: "mismatch",
+    });
+  });
+
   it("does not pass an FMVP v3 field into a different FDM generation", () => {
     const field = {
       domainGenerationId: "generation-a",

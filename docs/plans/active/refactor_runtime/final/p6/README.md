@@ -265,3 +265,7 @@ pamięci i wszystkich lane'ów pozostają otwarte. P6 wynosi **52%**.
     — preflight przed solverem, typed cancellation, receipt-only recovery i
     exact final state; produkcyjne źródła worker/API oraz review PASS,
     managed build blokowany pojemnością, runtime i nauka pozostają otwarte.
+
+65. [Zapisane pole w jednym viewportcie](65-saved-field-single-viewport.md)
+    — pinned geometry/support/FMDS, F32/F64, atomic upload i oddzielne kamery;
+    źródła, review oraz browser fixture PASS, native/runtime/nauka otwarte.

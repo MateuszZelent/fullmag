@@ -15,6 +15,7 @@ import type {
   Viewport3DFieldComponentDemand,
   Viewport3DFieldScopeKind,
 } from "./viewport3DFieldDataPlan";
+import type { Viewport3DFieldVector } from "../viewport3dFieldMapping";
 import { buildViewport3DFieldResourceRequestId } from "./viewport3DFieldDataPlan";
 import {
   resolveViewport3DFieldDomainCompatibility,
@@ -83,8 +84,8 @@ export type Viewport3DTargetFieldInputSource =
 
 export interface Viewport3DTargetFieldInput {
   explicitFieldBuffer: Viewport3DTargetFieldBuffer | null;
-  explicitFieldVector: DecodedFieldVector | null;
-  fieldVector: DecodedFieldVector | null;
+  explicitFieldVector: Viewport3DFieldVector | null;
+  fieldVector: Viewport3DFieldVector | null;
   source: Viewport3DTargetFieldInputSource;
 }
 
@@ -327,8 +328,8 @@ export function resolveViewport3DTargetFieldInput({
   partId,
   targetFieldBuffers,
 }: {
-  fallbackFieldVector: DecodedFieldVector | null | undefined;
-  legacyPartFieldVectors?: ReadonlyMap<string, DecodedFieldVector>;
+  fallbackFieldVector: Viewport3DFieldVector | null | undefined;
+  legacyPartFieldVectors?: ReadonlyMap<string, Viewport3DFieldVector>;
   partId: string;
   targetFieldBuffers?: ReadonlyMap<string, Viewport3DTargetFieldBuffer>;
 }): Viewport3DTargetFieldInput {

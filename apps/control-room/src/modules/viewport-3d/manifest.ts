@@ -12,6 +12,12 @@ import type {
 } from "./viewport3dStore";
 import type { Viewport3DVisualProfileId } from "./viewport3dVisualProfile";
 
+function isSavedMaterializedDatasetSelection(context: CommandContext): boolean {
+  const selection = context.selection?.get();
+  return selection?.kind === "results.materialized_dataset" &&
+    selection.ref?.type === "materialized-dataset";
+}
+
 const VISUAL_PROFILE_COMMANDS: Array<{
   id: string;
   profileId: Viewport3DVisualProfileId;
@@ -214,7 +220,9 @@ export const viewport3dManifest: ModuleManifest = {
         scope: "viewport",
         run: (context) => {
           viewport3dStore.resetCamera();
-          context.cameraRegistry?.patchCamera(DEFAULT_CAMERA_REGISTRY_STATE);
+          if (!isSavedMaterializedDatasetSelection(context)) {
+            context.cameraRegistry?.patchCamera(DEFAULT_CAMERA_REGISTRY_STATE);
+          }
           return { status: "completed" };
         },
       },
@@ -296,7 +304,9 @@ export const viewport3dManifest: ModuleManifest = {
           // Update the local store immediately so the viewport responds without
           // waiting for the backend round-trip.
           viewport3dStore.setCameraProjection(nextProjection);
-          context.cameraRegistry?.patchCamera({ projection: nextProjection });
+          if (!isSavedMaterializedDatasetSelection(context)) {
+            context.cameraRegistry?.patchCamera({ projection: nextProjection });
+          }
           return { status: "completed" };
         },
       },

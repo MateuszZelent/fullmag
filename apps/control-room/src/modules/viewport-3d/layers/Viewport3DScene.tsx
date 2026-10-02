@@ -111,6 +111,7 @@ import {
   FdmUniverseOutsideSupportLayer,
   SelectionHighlightLayer,
 } from "./BoundsLayers";
+import { FallbackTopologyMeshLayer } from "./FallbackTopologyMeshLayer";
 import { TopologyMeshLayer } from "./TopologyMeshLayer";
 import { MeshSizeHighlightLayer } from "./MeshSizeHighlightLayer";
 import {
@@ -264,6 +265,7 @@ interface Viewport3DSceneProps {
   orbitDebugCommitRevision: number;
   orbitDebugRevision: number;
   fallbackSettings: VisualizationTargetSettings;
+  savedViewportActive: boolean;
   primitiveModel: Viewport3DPrimitiveRenderModel | null;
   resetCameraRevision: number;
   requestDiagnostics: RequestDiagnosticsController;
@@ -1160,6 +1162,7 @@ function Viewport3DModelLayerStack({
   visualizationRevision,
   fdmCuboidLayerEnabled,
   sceneLayersEnabled,
+  savedViewportActive,
   stageVisibility,
 }: Pick<
   Viewport3DSceneProps,
@@ -1222,6 +1225,7 @@ function Viewport3DModelLayerStack({
 > & {
   fdmCuboidLayerEnabled: boolean;
   materialProfile: ReturnType<typeof resolveViewport3DMaterialProfile>;
+  savedViewportActive: boolean;
   sceneLayersEnabled: boolean;
   stageVisibility: Viewport3DModelLayerStageVisibility;
   onMoveGestureActiveChange: (active: boolean) => void;
@@ -1455,7 +1459,8 @@ function Viewport3DModelLayerStack({
         primitiveModel={primitiveModel}
         selectedObjectId={selectedObjectId}
       />
-      {!fdmLaneActive &&
+      {!savedViewportActive &&
+      !fdmLaneActive &&
       viewport3DTopologyMeshLayerEnabledFromBrowserConfig() ? (
         <group visible={stageVisibility.baseGeometry}>
           <TopologyMeshLayer
@@ -1744,6 +1749,8 @@ export function Viewport3DScene({
   fdmNativeLayerViews,
   fdmTargetViews,
   fdmSettings,
+  femDomain,
+  fallbackSettings,
   frozenSpinsOverlayModel,
   frozenSpinsOverlayVisible,
   fieldModel,
@@ -1777,6 +1784,7 @@ export function Viewport3DScene({
   orbitDebugAngles,
   orbitDebugCommitRevision,
   orbitDebugRevision,
+  savedViewportActive,
   primitiveModel,
   regionOverlayMode,
   regionOverlays,
@@ -2090,6 +2098,7 @@ export function Viewport3DScene({
         selectedObjectId={selectedObjectId}
         selectedRegionId={selectedRegionId}
         sceneLayersEnabled={sceneLayersEnabled}
+        savedViewportActive={savedViewportActive}
         stageVisibility={stageVisibility}
         topology={topology}
         topologyFreshness={topologyFreshness}
@@ -2101,6 +2110,28 @@ export function Viewport3DScene({
         vectorStyle={vectorStyle}
         visualizationRevision={visualizationRevision}
       />
+      {savedViewportActive &&
+      stageVisibility.baseGeometry &&
+      sceneLayersEnabled &&
+      viewport3DTopologyMeshLayerEnabledFromBrowserConfig() ? (
+        <group>
+          <FallbackTopologyMeshLayer
+            colors={colors}
+            femDomain={femDomain}
+            fallbackSettings={fallbackSettings}
+            fieldModel={fieldModel}
+            materialProfile={materialProfile}
+            meshQualityColors={null}
+            onSelectDomain={() => undefined}
+            onSelectPart={() => undefined}
+            sessionIdentity={sessionIdentity}
+            topologyModel={topologyModel}
+            tracker={tracker}
+            vectorColorMode={vectorColorMode}
+            vectorStyle={vectorStyle}
+          />
+        </group>
+      ) : null}
       {frozenSpinsOverlayVisible && frozenSpinsOverlayModel ? (
         <FrozenSpinsOverlay
           color={
