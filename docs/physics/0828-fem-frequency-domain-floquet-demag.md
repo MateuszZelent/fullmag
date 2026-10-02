@@ -523,6 +523,25 @@ models, phase convention, representation, normalization, device, precision,
 reason and latest residual. A failed capability check is a correct result. No
 fallback may erase the physical k or report a K0 calculation as nonzero-k.
 
+(frequency-subwindow-exhaustion-contract)=
+### 7.1 Semantyka pustego podokna częstotliwości
+
+W produkcyjnej ścieżce CPU/SLEPc `window_exhausted` oznacza wyłącznie czyste
+wyczerpanie jednego podokna. EPS musi zgłosić dodatni powód zbieżności i co
+najmniej jedną dodatnią parę własną, ale żadna z tych par nie może należeć do
+bieżącego przedziału. W tym przypadku nie wolno mieć odrzuceń residualu,
+błędów ewaluacji pary, nierzeczywistych wartości własnych, błędów wektora ani
+nieudanej rekonstrukcji potencjału. Solver może wtedy przejść do następnego
+podokna tego samego żądania częstotliwości.
+
+Ujemny lub nieustalony powód EPS, odrzucenie oryginalnego residualu albo błąd
+rekonstrukcji pozostają błędem solvera i zatrzymują agregację. Nie są zamieniane
+na `window_exhausted` tylko dlatego, że wynik nie zawiera zaakceptowanego moda.
+Żądanie `Nearest` zachowuje tę samą bramkę: brak zaakceptowanego moda nie jest
+wynikiem częstotliwości. Ta klasyfikacja rozdziela postęp po sąsiednich
+podoknach od certyfikacji residualu opisanego w {eq}`eq-0828-original-residual`;
+nie podnosi statusu runtime ani kwalifikacji fizycznej.
+
 (implementation-mapping)=
 ## 8. Implementation mapping
 
@@ -649,6 +668,7 @@ visibility into runtime or physical qualification.
 | Waveguide nonzero-k demagnetization oracle | FEM CPU | backends/fem/include/frequency_domain/floquet_waveguide_demag_k.hpp + build_floquet_waveguide_demag_k_real_split | Provide the bounded 2.5D modified-Helmholtz and Schur oracle; transverse MFEM assembly and open-boundary convergence remain separate. | fem_floquet_waveguide_demag_k_contract source is present; managed compile/runtime unvalidated | integrated in source; managed execution and physics unverified |
 | Shared harmonic pencil | common native | backends/fem/include/frequency_domain/linearized_dynamic_pencil.hpp + apply_Aomega | Preserve the shared i omega B_alpha minus L convention. | existing dynamic-pencil contract tests | source visible; managed physics unvalidated |
 | CPU descriptor boundary | FEM CPU | backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.hpp + solve_poisson_airbox_modal_eigen_cpu_schur | Reconstruct the full descriptor and original residual. | focused CPU Schur tests | source visible; managed qualification absent |
+| Empty frequency subwindow classification | FEM CPU | backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp + subwindow_is_clean_empty_window | Continue only after a positively converged EPS set proves that the current interval is empty; keep EPS, residual and reconstruction failures fail-closed. | scripts/test_floquet_window_context_reuse_source.py + check_clean_empty_subwindow_continues_model | source visible; managed runtime unvalidated |
 | Contract regression | documentation | scripts/test_frequency_domain_math_contract_docs.py + test_dynamic_demag_and_response_observables_use_si_contract | Protect SI and support wording. | focused documentation test | source visible; not numerical evidence |
 
 | Reduced Floquet descriptor certificate | FEM CPU | backends/fem/cpu/frequency_domain/floquet_dynamic_demag_k.cpp + certify_floquet_realified_mode | source-floquet-descriptor-certification: reconstruct potential and test original reduced equations | isolated contract test passed; managed and geometric BC unverified | source visible |

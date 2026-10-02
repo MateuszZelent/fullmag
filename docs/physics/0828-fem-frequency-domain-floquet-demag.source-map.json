@@ -622,6 +622,20 @@
       "responsibility": "Own the native CPU Floquet sparse modal solve and resolved KSP diagnostics; runtime and physical qualification remain unverified."
     },
     {
+      "id": "source-frequency-subwindow-contract",
+      "path": "backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp",
+      "symbol": "subwindow_is_clean_empty_window",
+      "responsibility": "Classify a frequency subwindow as exhausted only after positive EPS convergence with no in-window mode and no residual, eigenpair, vector or potential-reconstruction rejection; preserve fail-closed solver errors.",
+      "evidence_status": "source contract; managed runtime NOT VERIFIED"
+    },
+    {
+      "id": "source-frequency-subwindow-regression",
+      "path": "scripts/test_floquet_window_context_reuse_source.py",
+      "symbol": "check_clean_empty_subwindow_continues_model",
+      "responsibility": "Freeze continuation after a clean empty subwindow and rejection after nonpositive EPS or physical residual failure; this is interpreted source evidence, not native runtime evidence.",
+      "evidence_status": "source contract; managed runtime NOT VERIFIED"
+    },
+    {
       "id": "source-n0-projection-contract",
       "path": "docs/physics/0828-fem-frequency-domain-floquet-demag.md",
       "symbol": "DOC-ANCHOR:n0-field-projection-contract",

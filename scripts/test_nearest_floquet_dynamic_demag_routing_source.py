@@ -65,6 +65,43 @@ def test_capability_accepts_nearest_only_with_the_existing_floquet_guards() -> N
     )
 
 
+def test_planner_accepts_nearest_only_when_the_native_target_is_supported() -> None:
+    planner = read("crates/fullmag-plan/src/fem.rs")
+    helper_start = planner.index(
+        "fn floquet_airbox_dynamic_demag_target_supported("
+    )
+    helper_end = planner.index(
+        "/// Return whether the narrow, production-owned nonzero-k Floquet demag lane",
+        helper_start,
+    )
+    helper = planner[helper_start:helper_end]
+    for needle in (
+        "EigenTargetIR::FrequencyWindow",
+        "EigenTargetIR::Nearest { frequency_hz }",
+        "frequency_hz.is_finite() && *frequency_hz > 0.0",
+        "EigenTargetIR::Lowest => false",
+    ):
+        require(helper, needle, f"planner Floquet target guard {needle}")
+
+    path_start = planner.index(
+        "fn floquet_airbox_dynamic_demag_cpu_plan_supported("
+    )
+    path_end = planner.index(
+        "/// Keep the planner boundary aligned with the local terms",
+        path_start,
+    )
+    capability = planner[path_start:path_end]
+    require(
+        capability,
+        "floquet_airbox_dynamic_demag_target_supported(target)",
+        "planner/native Floquet target predicate binding",
+    )
+    if "matches!(target, fullmag_ir::EigenTargetIR::FrequencyWindow { .. })" in capability:
+        raise AssertionError(
+            "planner must not restrict the native Floquet route to frequency_window"
+        )
+
+
 def test_resolution_and_executor_share_the_bounded_native_route() -> None:
     resolution = read("crates/fullmag-runner/src/fem/eigen_execution_resolution.rs")
     execution = read("crates/fullmag-runner/src/fem/eigen_execution.rs")
@@ -282,6 +319,7 @@ def test_native_rust_contract_prepares_nearest_single_and_path_cases() -> None:
 def main() -> None:
     checks = (
         test_capability_accepts_nearest_only_with_the_existing_floquet_guards,
+        test_planner_accepts_nearest_only_when_the_native_target_is_supported,
         test_resolution_and_executor_share_the_bounded_native_route,
         test_public_target_is_transferred_without_per_sample_retargeting,
         test_native_solver_keeps_residual_and_selected_only_policies,

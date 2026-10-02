@@ -1093,6 +1093,36 @@ const char *stop_reason_or_default(
         "slepc_production_solve_failed";
 }
 
+bool subwindow_is_clean_empty_window(
+    const SLEPcTinyGyrotropicModalEigenResult &slepc_result) noexcept
+{
+    const char *unsupported_reason =
+        slepc_result.unsupported_reason != nullptr
+            ? slepc_result.unsupported_reason : "";
+    // The ABI stores SLEPc's EPSConvergedReason as an int.  SLEPc uses zero
+    // for EPS_CONVERGED_ITERATING and negative values for divergence.  A
+    // positive reason plus converged pairs is therefore required before an
+    // empty frequency interval may be treated as an exhausted subwindow.
+    // Every candidate-rejection counter must remain zero: a residual, vector,
+    // reconstruction or EPS failure is a hard failure, never an empty band.
+    return !slepc_result.ok &&
+        slepc_result.status != nullptr &&
+        std::strcmp(slepc_result.status, "solve_error") == 0 &&
+        std::strcmp(unsupported_reason,
+                    "no_positive_frequency_eigenpair_in_window") == 0 &&
+        slepc_result.eps_converged_reason_available &&
+        slepc_result.eps_converged_reason > 0 &&
+        slepc_result.converged_eigenpair_count > 0 &&
+        slepc_result.positive_frequency_candidate_count > 0 &&
+        slepc_result.frequency_window_candidate_count == 0 &&
+        slepc_result.residual_evaluation_candidate_count == 0 &&
+        slepc_result.residual_rejection_count == 0 &&
+        slepc_result.non_real_rotated_eigenvalue_count == 0 &&
+        slepc_result.eigenpair_evaluation_failure_count == 0 &&
+        slepc_result.mode_vector_failure_count == 0 &&
+        slepc_result.potential_reconstruction_failure_count == 0;
+}
+
 bool is_frequency_window(const ModalEigenRequest &request) noexcept
 {
     const char *target_kind = request.target_kind != nullptr ? request.target_kind : "";
@@ -1177,8 +1207,7 @@ const char *subwindow_stop_reason(
     if (slepc_result.ok) {
         return "converged";
     }
-    if (std::strcmp(slepc_result.unsupported_reason, "no_positive_frequency_eigenpair_in_window") == 0 ||
-        std::strcmp(slepc_result.unsupported_reason, "no_accepted_positive_frequency_mode") == 0) {
+    if (subwindow_is_clean_empty_window(slepc_result)) {
         return "window_exhausted";
     }
     if (std::strcmp(slepc_result.unsupported_reason, "residual_tolerance_not_met") == 0) {
@@ -1190,14 +1219,20 @@ const char *subwindow_stop_reason(
 bool subwindow_requires_fail_closed(
     const SLEPcTinyGyrotropicModalEigenResult &slepc_result) noexcept
 {
-    // A solver/validation error is different from an exhausted search window
-    // or a residual rejection.  Continuing after it could combine modes from
-    // a different state with an invalidated shared-domain context and publish
-    // a misleading partial window as complete.
-    return !slepc_result.ok &&
-        slepc_result.status != nullptr &&
-        (std::strcmp(slepc_result.status, "solve_error") == 0 ||
-         std::strcmp(slepc_result.status, "validation_error") == 0);
+    // A clean empty interval is not a solver failure: a converged positive EPS
+    // set can simply have its nearest positive mode in a later subwindow.
+    // Every other solve/validation error remains fail-closed so an EPS failure
+    // or rejected physical residual can never be published as a nearest mode.
+    if (slepc_result.ok || slepc_result.status == nullptr) {
+        return false;
+    }
+    if (std::strcmp(slepc_result.status, "validation_error") == 0) {
+        return true;
+    }
+    if (std::strcmp(slepc_result.status, "solve_error") != 0) {
+        return false;
+    }
+    return !subwindow_is_clean_empty_window(slepc_result);
 }
 
 std::string production_window_diagnostics_json(

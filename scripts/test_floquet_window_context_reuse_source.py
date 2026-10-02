@@ -107,6 +107,57 @@ def check_hard_failure_stops_window_model() -> None:
         raise AssertionError("model did not retain the hard failure")
 
 
+def check_clean_empty_subwindow_continues_model() -> None:
+    # An EPS-converged interval with no in-window positive pair is exhausted,
+    # not failed.  A residual rejection or nonpositive EPS reason remains
+    # hard and must stop before a later mode can be published as complete.
+    attempts = (
+        {
+            "status": "solve_error",
+            "reason": "no_positive_frequency_eigenpair_in_window",
+            "eps_reason": 1,
+            "converged": 13,
+            "positive": 13,
+            "in_window": 0,
+            "residual_evaluations": 0,
+            "residual_rejections": 0,
+        },
+        {"status": "ok", "reason": "", "eps_reason": 1, "converged": 1},
+    )
+    def is_clean_empty(attempt: dict[str, int | str]) -> bool:
+        return (
+            attempt["status"] == "solve_error"
+            and attempt["reason"] == "no_positive_frequency_eigenpair_in_window"
+            and attempt["eps_reason"] > 0
+            and attempt["converged"] > 0
+            and attempt["positive"] > 0
+            and attempt["in_window"] == 0
+            and attempt["residual_evaluations"] == 0
+            and attempt["residual_rejections"] == 0
+        )
+
+    processed = []
+    for attempt in attempts:
+        processed.append(attempt)
+        if attempt["status"] == "solve_error" and not is_clean_empty(attempt):
+            break
+    if len(processed) != 2 or processed[-1]["status"] != "ok":
+        raise AssertionError("clean empty subwindow did not continue")
+
+    rejected = dict(attempts[0])
+    rejected["reason"] = "floquet_original_descriptor_residual_not_met"
+    rejected["residual_rejections"] = 1
+    if rejected["status"] != "solve_error":
+        raise AssertionError("residual rejection model lost solve failure")
+    if rejected["residual_rejections"] == 0:
+        raise AssertionError("residual rejection was treated as clean empty")
+
+    diverged = dict(attempts[0])
+    diverged["eps_reason"] = -1
+    if is_clean_empty(diverged):
+        raise AssertionError("nonpositive EPS reason was treated as clean empty")
+
+
 def check_unsafe_eps_lifetime_model() -> None:
     # Model the ownership decision made after a hard EPSSolve error.  The
     # borrowed EPS graph is retained, while the reusable context is made
@@ -218,6 +269,39 @@ def main() -> None:
     )
     require(
         production,
+        "bool subwindow_is_clean_empty_window(",
+        "explicit clean empty subwindow predicate",
+    )
+    for needle, label in (
+        (
+            '"no_positive_frequency_eigenpair_in_window"',
+            "window-only empty classification",
+        ),
+        ("eps_converged_reason > 0", "positive EPS convergence guard"),
+        ("residual_evaluation_candidate_count == 0", "empty residual-evaluation guard"),
+        ("residual_rejection_count == 0", "empty residual-rejection guard"),
+        ("non_real_rotated_eigenvalue_count == 0", "empty non-real-eigenvalue guard"),
+        ("eigenpair_evaluation_failure_count == 0", "empty eigenpair-evaluation guard"),
+        ("mode_vector_failure_count == 0", "empty mode-vector guard"),
+        ("potential_reconstruction_failure_count == 0", "empty potential guard"),
+        ("return !subwindow_is_clean_empty_window(slepc_result);",
+         "fail-closed fallback for non-clean solve errors"),
+    ):
+        require(production, needle, label)
+    stop_reason_start = production.index("const char *subwindow_stop_reason(")
+    stop_reason_end = production.index(
+        "bool subwindow_requires_fail_closed(", stop_reason_start
+    )
+    stop_reason_source = production[stop_reason_start:stop_reason_end]
+    require(
+        stop_reason_source,
+        "if (subwindow_is_clean_empty_window(slepc_result))",
+        "stop reason uses the full clean-empty predicate",
+    )
+    if "no_accepted_positive_frequency_mode" in stop_reason_source:
+        raise AssertionError("mode rejection must not be classified as empty")
+    require(
+        production,
         "subwindow_hard_failure",
         "aggregate fail-closed state",
     )
@@ -248,6 +332,7 @@ def main() -> None:
 
     check_three_shift_normalization()
     check_hard_failure_stops_window_model()
+    check_clean_empty_subwindow_continues_model()
     check_unsafe_eps_lifetime_model()
     print("PASS: interpreted Floquet reuse/admission/fail-closed contract and normalization")
 

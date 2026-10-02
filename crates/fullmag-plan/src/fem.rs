@@ -1578,6 +1578,29 @@ fn allows_k0_kittel_synthetic_demag_factor(
     })
 }
 
+/// Keep the planner target boundary identical to the native Floquet Schur
+/// provider.  A nearest-frequency request is a selected-only diagnostic: it
+/// has one finite positive global target and does not claim a complete window
+/// or spectrum.  The native provider applies the same boundary before
+/// materializing the request, so the planner must not reject it earlier.
+fn floquet_airbox_dynamic_demag_target_supported(
+    target: &fullmag_ir::EigenTargetIR,
+) -> bool {
+    match target {
+        fullmag_ir::EigenTargetIR::FrequencyWindow {
+            frequency_min_hz,
+            frequency_max_hz,
+        } => frequency_min_hz.is_finite()
+            && frequency_max_hz.is_finite()
+            && *frequency_min_hz >= 0.0
+            && *frequency_max_hz > *frequency_min_hz,
+        fullmag_ir::EigenTargetIR::Nearest { frequency_hz } => {
+            frequency_hz.is_finite() && *frequency_hz > 0.0
+        }
+        fullmag_ir::EigenTargetIR::Lowest => false,
+    }
+}
+
 /// Return whether the narrow, production-owned nonzero-k Floquet demag lane
 /// is explicitly requested by the problem.  The native runner owns a bounded
 /// Poisson-airbox Schur provider for this slice; all other combinations stay
@@ -1618,7 +1641,7 @@ fn floquet_airbox_dynamic_demag_cpu_plan_supported(
     operator.include_demag
         && enable_demag
         && matches!(operator.kind, fullmag_ir::EigenOperatorIR::Full2x2)
-        && matches!(target, fullmag_ir::EigenTargetIR::FrequencyWindow { .. })
+        && floquet_airbox_dynamic_demag_target_supported(target)
         && matches!(damping_policy, fullmag_ir::EigenDampingPolicyIR::Ignore)
         && spin_wave_bc.kind() == fullmag_ir::SpinWaveBoundaryKindIR::Floquet
         && magnetostatic_bc == fullmag_ir::MagnetostaticBoundaryConditionIR::FloquetAirbox
