@@ -15,6 +15,13 @@ dlatego nie podnosi procentów P3/P5.
 
 ## Dokumenty finalne
 
+Checkpoint 02.10.2026: [P6-65a — bezpośredni powrót do current view](p6/65a-direct-current-viewport.md)
+usuwa zależność powrotu od reopen workspace. Przycisk czyści lokalny wybór;
+browser `373378d47ba04d3ba20dc86c24975b79` PASS potwierdza ten sam viewport/canvas,
+current camera, WebGL 613×634 i brak mutacji runtime/saved fetch. Źródła i review
+PASS; native, nauka, pozostałe reprezentacje i pełna kwalifikacja nadal otwarte.
+P6 około 52%, cały plan około 49%.
+
 Checkpoint 02.10.2026: [P6-65 — zapisane pole w jednym viewportcie](p6/65-saved-field-single-viewport.md)
 ma produkcyjne źródła i niezależny review PASS oraz pełny browser fixture
 `d836530e926145f58d371a3f3506764d` PASS. F32/F64, support, osobne kamery,

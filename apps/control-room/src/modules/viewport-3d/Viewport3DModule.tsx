@@ -2555,6 +2555,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
     <section
       aria-label="3D viewport"
       className="fm-viewport-3d"
+      data-view-source={savedViewportActive ? "saved" : "current"}
       data-camera-position={sceneProps.cameraState.position.join(" ")}
       data-camera-projection={sceneProps.cameraProjection}
       data-camera-target={sceneProps.cameraState.target.join(" ")}
@@ -2618,6 +2619,22 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
       onPointerDown={() => kernel.layout.setFocusedSlot(slotId)}
     >
       <div aria-live="polite" className="fm-viewport-3d__hud">
+        {savedViewportActive && sessionIdentity ? (
+          <fieldset
+            aria-label="Viewport source"
+            className="fm-viewport-3d__region-modes"
+          >
+            <Button
+              aria-label="Return to current view"
+              onClick={onClearSelection}
+              size="sm"
+              type="button"
+              variant="secondary"
+            >
+              Current view
+            </Button>
+          </fieldset>
+        ) : null}
         <span>{quantityId}</span>
         <span>{selectedLabel}</span>
         {hysteresisReplayLabel ? <span>{hysteresisReplayLabel}</span> : null}

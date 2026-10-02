@@ -146,7 +146,7 @@ async function main() {
       state.liveResourceRequests.push({
         method,
         path: url.pathname,
-        mount: state.viewportPhase === "live-return" ? "live-return" : "saved-workspace",
+        mount: state.activeWorkspaceMount ?? "saved-workspace",
       });
     }
     const isVisualizationClientAck =
@@ -463,6 +463,25 @@ async function main() {
     assert.equal(unavailableSaved.topology_freshness, "unknown", "HTTP 503 saved geometry retained current topology freshness.");
     assert.match(unavailableSaved.viewport_text, /saved domain unavailable/i, "HTTP 503 saved geometry retained the previous saved field scene.");
     assert.equal(liveResourceRequestCount(state), liveBeforeSaved, "HTTP 503 saved geometry fetched live resources.");
+    // Clear only the client-owned historical selection. The same mounted
+    // viewport must resume current resources without mutating the solver.
+    const savedViewportHandle = await page.locator(".fm-viewport-3d").elementHandle();
+    const savedCanvasHandle = await page.locator(".fm-viewport-3d canvas").first().elementHandle();
+    assert.ok(savedViewportHandle && savedCanvasHandle, "Saved viewport DOM is missing before direct return.");
+    const savedRequestCountsBeforeDirectLive = savedBinaryRequestCounts(state);
+    state.viewportPhase = "live-direct-return";
+    await page.getByRole("button", { name: "Return to current view", exact: true }).click();
+    await page.locator('.fm-viewport-3d[data-view-source="current"]').waitFor({ state: "visible", timeout: timeoutMs });
+    const directLiveProof = await assertLiveViewportRendered(page, state);
+    assert.equal(await savedViewportHandle.evaluate((node) => node === document.querySelector(".fm-viewport-3d")), true, "Direct return replaced the mounted viewport.");
+    assert.equal(await savedCanvasHandle.evaluate((node) => node === document.querySelector(".fm-viewport-3d canvas")), true, "Direct return replaced the WebGL canvas.");
+    const liveCameraAfterDirectReturn = await readViewportCameraSnapshot(page);
+    assert.deepEqual(liveCameraAfterDirectReturn, liveCameraBeforeSaved, "Direct return inherited the saved camera.");
+    assert.equal(await page.getByRole("button", { name: "Return to current view", exact: true }).count(), 0, "Current view retained its saved-source control.");
+    assert.deepEqual(savedBinaryRequestCounts(state), savedRequestCountsBeforeDirectLive, "Direct return fetched saved resources after clearing their selection.");
+    assert.equal(state.cameraMutationRequests.length, cameraMutationsBeforeSaved, "Direct return mutated the live camera.");
+    await captureScreenshot(page, state, "pinned-materialized-dataset-direct-current.png");
+
     assert.ok(state.startupWarnings.length - warningsBeforeActive <= 1, "Repeated shell startup mount warning within the saved viewport phase.");
     const warningsBeforeLiveReturn = state.startupWarnings.length;
     // Unmount the erroring saved workspace before restoring the fixture.
@@ -470,6 +489,7 @@ async function main() {
     // misattributed to the newly opened live document.
     await page.goto("about:blank", { waitUntil: "load", timeout: timeoutMs });
     state.savedGeometryMode = null;
+    state.activeWorkspaceMount = "live-return";
     state.viewportPhase = "live-return";
     const savedRequestCountsBeforeLive = savedBinaryRequestCounts(state);
     await page.goto(workspaceUrl, { waitUntil: "domcontentloaded", timeout: timeoutMs });
@@ -529,6 +549,13 @@ async function main() {
         mismatch_unavailable: true,
         unavailable_503_fail_closed: true,
         stale_saved_field_suppressed_on_error: true,
+        direct_live_return: {
+          ...directLiveProof,
+          viewport_preserved: true,
+          canvas_preserved: true,
+          camera: liveCameraAfterDirectReturn,
+          saved_resources_stopped: true,
+        },
         live_return: liveProof,
       },
       live_bootstrap: liveBootstrapProof,

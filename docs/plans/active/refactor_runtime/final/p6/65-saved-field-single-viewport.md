@@ -103,9 +103,12 @@ ostrzeżeń. Nie wyłączono ani nie suppressowano reguł.
 ## Nadal otwarte
 
 Backend HTTP z rzeczywistym native snapshotem, archive roundtrip, semantyczna
-własność Object/Airbox, pozostałe reprezentacje/quantities, bezpośredni powrót
-saved→live bez reopen, fit/reset/projection w browserze, pomiar peak memory,
+własność Object/Airbox, pozostałe reprezentacje/quantities, fit/reset/projection w browserze, pomiar peak memory,
 parytet CPU/GPU, nauka i release pozostają osobnymi bramkami.
 
 Fixture nie kwalifikuje solvera ani native representation. P6 około 52%,
 cały plan około 49%; ten przyrost nie zamyka całego etapu.
+
+Bezpośredni powrót saved→current bez reopen został odebrany osobno w
+[P6-65a](65a-direct-current-viewport.md); wcześniejszy receipt P6-65 pozostaje
+dowodem reopen, a nie tej późniejszej akcji.

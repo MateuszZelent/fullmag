@@ -269,3 +269,7 @@ pamięci i wszystkich lane'ów pozostają otwarte. P6 wynosi **52%**.
 65. [Zapisane pole w jednym viewportcie](65-saved-field-single-viewport.md)
     — pinned geometry/support/FMDS, F32/F64, atomic upload i oddzielne kamery;
     źródła, review oraz browser fixture PASS, native/runtime/nauka otwarte.
+
+65a. [Bezpośredni powrót do bieżącego viewportu](65a-direct-current-viewport.md)
+     — lokalne czyszczenie pinned selection bez API mutation i reload;
+     produkcyjne źródła, review oraz browser z tym samym canvasem PASS.
