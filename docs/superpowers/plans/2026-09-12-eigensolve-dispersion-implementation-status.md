@@ -1,5 +1,33 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
+## S06/S12 — pola wszystkich eksportowanych kandydatów, 2026-10-02
+
+Po checkpointcie `f2d0d7219798c1b526aca5ae7f675ef09ef3086f` odczyt
+trackingu obejmuje każdy raw mode zapisany w widmie, także nieprzypisany
+do wybranych gałęzi. Wszystkie pola przechodzą istniejący certyfikat fazy,
+mesh/support/metryki oraz wiązanie podpisanego k i zespolonej częstotliwości.
+Raport zawiera liczbę eksportowanych kandydatów i ich hashe. Brak pola
+kandydata daje missing; niespójna częstotliwość lub duplicate ID daje fail.
+Pokrycie eksportu nie dowodzi kompletności widma solvera ani globalnego
+optimum przypisania; te bramki nadal NOT VERIFIED.
+
+Znaleziono też konkretny brak orkiestracji: domyślne mode_field_selection
+ogranicza próbki, a polecenie kampanii nie aktywowało istniejącego opt-in.
+Każdy case COMSOL benchmarku ustawia teraz jawnie
+FULLMAG_COMSOL_DISPERSION_ALL_FIELDS=1. Zwiększa to wolumen eksportu;
+nie zmienia parametrów fizycznych, solvera ani istniejącej kapsuły #196.
+
+Dowody: dwa rzeczywiste RED przed poprawką (pominięty kandydat bez pola
+oraz brak flagi w komendzie), następnie 49 testów trackingu i 19 testów
+orkiestracji PASS, 2 regresje agregacji gate PASS, focused source-map PASS.
+Pola testów są syntetyczne; nowych numerycznych punktów FEM nadal brak.
+Następny krok: odtworzyć wybór klastrów i globalną politykę przydziału
+z tego hash-bound zbioru kandydatów.
+
+#196 został ponownie odczytany: state=queued, exit_code=null; nie restartowano
+ani nie zlecono duplikatu. Ostatni pomiar runnera 710 070 272 B pozostaje
+poniżej progu 8 GiB. Pełna realizacja S00–S12 i integracja są nadal otwarte.
+
 ## S06/S12 — optimum raw assignment wewnątrz grupy, 2026-10-02
 
 Domknięto lokalną część P2 z checkpointu

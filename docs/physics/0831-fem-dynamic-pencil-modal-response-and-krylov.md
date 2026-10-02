@@ -2575,6 +2575,14 @@ zmianę częstotliwości, zgodnie z finite_frequency_score_values.
 Zgodność algebraiczna wykorzystuje tolerancję bezwymiarową 1e-9;
 nie jest tolerancją residualu eigenproblem ani zgodności z analityką.
 Brak zależnej gałęzi, restart/gap lub brak pola oznacza brak pełnego replay.
+Odczyt z dysku wymaga pól każdego raw modu zapisanego w widmie, także
+kandydatów nieprzypisanych do wybranych gałęzi. Każde pole jest wiązane
+z sample/raw ID, podpisanym wektorem k i zespoloną częstotliwością widma.
+Pokrycie eksportowanego zbioru kandydatów nie dowodzi kompletności widma
+solvera ani optimum globalnego przydziału. Brak pola kandydata blokuje
+replay, zamiast pozostawić je poza kontrolą. Kampania musi jawnie zachować
+wszystkie pola przez FULLMAG_COMSOL_DISPERSION_ALL_FIELDS=1; domyślny
+ograniczony eksport nie wystarcza do replay całej ścieżki.
 Sukces ma osobny status metryki; brak replay przydziału/cluster selection
 nadal blokuje naukową kwalifikację C1/A1. Mechanizm nie zmienia solvera,
 publicznego Python/IR ani metod fizycznych i nie dowodzi zbieżności.

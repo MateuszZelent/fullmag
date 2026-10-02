@@ -668,6 +668,7 @@ def _shell_case_command(cases: Sequence[str]) -> str:
                 f"case_dir=/workspace/benchmark-output/{case}",
                 'mkdir "$case_dir"',
                 f"FULLMAG_COMSOL_DISPERSION_CASE={quoted_case} \\",
+                "FULLMAG_COMSOL_DISPERSION_ALL_FIELDS=1 \\",
                 "FULLMAG_API_PORT=0 \\",
                 "FULLMAG_DISABLE_PREVIEW_3D=1 \\",
                 "FULLMAG_DISABLE_CHARTS=1 \\",

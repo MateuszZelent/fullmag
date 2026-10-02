@@ -200,6 +200,66 @@ class TrackingReplayDiskTests(unittest.TestCase):
         self.assertEqual(len(result["replayed_edges"]), 2)
         self.assertEqual(result["qualification"], "NOT VERIFIED")
 
+    def test_unselected_candidate_without_field_blocks_replay(self):
+        self.write_pair_path()
+        path = self.root / "eigen/spectrum.v2.json"
+        spectrum = json.loads(path.read_text())
+        candidate = copy.deepcopy(spectrum["samples"][1]["modes"][0])
+        candidate["raw_mode_index"] = 41
+        spectrum["samples"][1]["modes"].append(candidate)
+        path.write_text(json.dumps(spectrum))
+        result = replay_tracking_fields(self.root, selected_branch_ids=[3])
+        self.assertEqual(result["status"], "missing", result)
+        self.assertTrue(any("mode_0041" in reason for reason in result["reasons"]))
+
+    def add_unselected_candidate_field(self):
+        self.write_pair_path()
+        path = self.root / "eigen/spectrum.v2.json"
+        spectrum = json.loads(path.read_text())
+        candidate = copy.deepcopy(spectrum["samples"][1]["modes"][0])
+        candidate["raw_mode_index"] = 41
+        spectrum["samples"][1]["modes"].append(candidate)
+        path.write_text(json.dumps(spectrum))
+        original = self.root / "eigen/modes/sample_0001/mode_0002.json"
+        mode = json.loads(original.read_text())
+        mode["raw_mode_index"] = 41
+        source = self.root / mode["compatibility_binary_payload_path"]
+        relative = "eigen/mode_fields/sample_0001/mode_0041/vector.bin"
+        target = self.root / relative
+        target.parent.mkdir(parents=True)
+        target.write_bytes(source.read_bytes())
+        mode["compatibility_binary_payload_path"] = relative
+        mode_path = self.root / "eigen/modes/sample_0001/mode_0041.json"
+        mode_path.write_text(json.dumps(mode))
+        return mode_path
+
+    def test_unselected_candidate_is_loaded_and_hashed(self):
+        self.add_unselected_candidate_field()
+        result = replay_tracking_fields(self.root, selected_branch_ids=[3])
+        self.assertEqual(result["status"], "pass", result)
+        self.assertEqual(result["candidate_field_coverage"]["exported_candidate_count"], 4)
+        self.assertTrue(any("mode_0041/vector.bin" in item["path"] for item in result["file_hashes"]))
+        self.assertEqual(result["assignment_replay"], "NOT VERIFIED")
+
+    def test_unselected_candidate_frequency_mismatch_is_rejected(self):
+        path = self.add_unselected_candidate_field()
+        mode = json.loads(path.read_text())
+        mode["frequency_real_hz"] *= 1.01
+        path.write_text(json.dumps(mode))
+        result = replay_tracking_fields(self.root, selected_branch_ids=[3])
+        self.assertEqual(result["status"], "fail", result)
+        self.assertTrue(any("candidate field frequency" in reason for reason in result["reasons"]))
+
+    def test_duplicate_unselected_candidate_id_is_rejected(self):
+        self.add_unselected_candidate_field()
+        path = self.root / "eigen/spectrum.v2.json"
+        spectrum = json.loads(path.read_text())
+        spectrum["samples"][1]["modes"].append(spectrum["samples"][1]["modes"][-1])
+        path.write_text(json.dumps(spectrum))
+        result = replay_tracking_fields(self.root, selected_branch_ids=[3])
+        self.assertEqual(result["status"], "fail", result)
+        self.assertTrue(any("duplicate candidate" in reason for reason in result["reasons"]))
+
     def test_disk_forged_score_and_supplied_verdict_cannot_pass(self):
         branches = self.write_pair_path()
         branches["branches"][0]["points"][1]["tracking_confidence"] = .8

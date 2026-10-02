@@ -251,6 +251,7 @@ class ComsolDispersionBenchmarkTests(unittest.TestCase):
     def test_case_shell_is_allow_listed_and_runs_each_case_once(self):
         script = benchmark._shell_case_command(("c0", "a1"))
         self.assertEqual(script.count("FULLMAG_COMSOL_DISPERSION_CASE="), 2)
+        self.assertEqual(script.count("FULLMAG_COMSOL_DISPERSION_ALL_FIELDS=1"), 2)
         self.assertIn("case_dir=/workspace/benchmark-output/c0", script)
         self.assertIn("case_dir=/workspace/benchmark-output/a1", script)
         self.assertIn("--headless --json --output-dir", script)

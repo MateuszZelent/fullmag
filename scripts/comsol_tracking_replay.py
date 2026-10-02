@@ -41,6 +41,44 @@ def _frequency_score(previous, current, window):
     return 1. / (1. + delta / max(abs(previous), abs(current), 1.))
 
 
+def spectrum_candidate_selections(samples):
+    """Inventory every exported candidate, without inferring solver completeness."""
+    selections = []
+    seen_samples = set()
+    for sample in samples:
+        identity = sample["sample_index"]
+        if type(identity) is not int or identity < 0 or identity in seen_samples:
+            raise ValueError("invalid candidate sample ID")
+        seen_samples.add(identity)
+        seen_raw = set()
+        for mode in sample["modes"]:
+            raw = mode["raw_mode_index"]
+            if type(raw) is not int or raw < 0 or raw in seen_raw:
+                raise ValueError("invalid or duplicate candidate raw ID")
+            seen_raw.add(raw)
+            selections.append((identity, raw))
+    if not selections:
+        raise ValueError("empty spectrum candidate inventory")
+    return selections
+
+
+def bind_candidate_fields(samples, modes):
+    """Bind unselected candidates as strictly as selected tracking endpoints."""
+    for sample in samples:
+        k = sample["k_vector"]
+        if not isinstance(k, list) or len(k) != 3 or any(
+            type(value) not in (int, float) or not math.isfinite(value) for value in k
+        ):
+            raise ValueError("invalid candidate signed k vector")
+        for mode in sample["modes"]:
+            field = modes[(sample["sample_index"], mode["raw_mode_index"])]
+            if not np.allclose(field["k_vector_rad_per_m"], k, rtol=1e-12, atol=1e-10):
+                raise ValueError("candidate field signed k differs from spectrum")
+            for name in ("frequency_real_hz", "frequency_imag_hz"):
+                _close(_number(mode[name], "candidate spectrum frequency"), field[name],
+                       f"candidate field {name}", relative=True)
+
+
 def replay_recorded_frames(metric, modes, branches, samples):
     """Reconstruct every chosen frame/metric; inputs already bound by caller.
 
@@ -228,14 +266,14 @@ def replay_tracking_fields(case_dir, *, selected_branch_ids=None, expected_hashe
                             selected.add(dependency)
                             pending.append(dependency)
             branches = {**branches, "branches": [branch for branch in branches["branches"] if branch["branch_id"] in selected]}
-        selections = [(point["sample_index"], point["raw_mode_index"])
-                      for branch in branches["branches"] for point in branch["points"]]
+        selections = spectrum_candidate_selections(spectrum["samples"])
         for sample, raw in selections:
             for relative in (f"eigen/modes/sample_{sample:04d}/mode_{raw:04d}.json",
                              f"eigen/mode_fields/sample_{sample:04d}/mode_{raw:04d}/vector.bin"):
                 if not (root / relative).is_file():
                     raise FileNotFoundError(f"tracking field payload missing: {relative}")
         fields = load_tracking_fields(root, selections)
+        bind_candidate_fields(spectrum["samples"], fields["modes"])
         bound_hashes = hashes + fields["file_hashes"]
         if expected_hashes is not None:
             measured = {item["path"]: item["sha256"] for item in bound_hashes}
@@ -243,7 +281,9 @@ def replay_tracking_fields(case_dir, *, selected_branch_ids=None, expected_hashe
                 if measured.get(relative) != expected:
                     raise ValueError(f"tracking replay input differs from gate-bound artifact: {relative}")
         report = replay_recorded_frames(fields["metric"], fields["modes"], branches, spectrum["samples"])
-        report.update(file_hashes=bound_hashes, reasons=[])
+        report.update(file_hashes=bound_hashes, reasons=[],
+            candidate_field_coverage={"status": "pass", "exported_candidate_count": len(selections),
+                                      "solver_spectral_completeness": "NOT VERIFIED"})
     except (OSError, ValueError, TypeError, KeyError, IndexError, OverflowError, AttributeError) as error:
         report["reasons"] = [str(error)]
         # Missing fields fail closed without pretending the replay executed.
