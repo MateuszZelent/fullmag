@@ -19,6 +19,30 @@ def fixture():
     return payload, before
 
 
+@pytest.mark.parametrize("fault", [None, "accepted_stale", "mutated_revision", "missing_epoch", "wrong_error", "wrong_session", "status_error"])
+def test_workspace_scope_gate_detects_runtime_regressions(monkeypatch, fault):
+    calls = []
+    def request(url, **kwargs):
+        calls.append((url, kwargs))
+        if url.endswith("/status"):
+            return (503 if fault == "status_error" else 200), {"session": {"session_id": "other" if fault == "wrong_session" else "same", "session_epoch": "same@1",
+                                    "request_scope_epoch": "" if fault == "missing_epoch" else "api:1"}}
+        header = kwargs["request_headers"]["x-fullmag-session-scope"]
+        if "obsolete" in header:
+            assert "session=same&epoch=same%401&" in header
+            return (200 if fault == "accepted_stale" else 409), {"code": "conflict", "message": "unrelated_conflict" if fault == "wrong_error" else "request_context_stale"}
+        prior_reads = sum(1 for path, options in calls if path == url and "obsolete" not in options.get("request_headers", {}).get("x-fullmag-session-scope", ""))
+        return 200, {"revision": 2 if fault == "mutated_revision" and prior_reads > 1 else 1}
+    monkeypatch.setattr(probe, "json_request", request)
+    if fault is None:
+        result = probe.probe_workspace_scope("http://private-api", "same")
+        assert len(result["checked"]) == 8
+        assert result["workspace_resources_unchanged"]
+    else:
+        with pytest.raises(probe.ApiRuntimeSmokeError):
+            probe.probe_workspace_scope("http://private-api", "same")
+
+
 def test_runtime_free_recovery_requires_explicit_no_session(monkeypatch):
     monkeypatch.setattr(probe, "json_request", lambda *args, **kwargs: (404, {"code": "not_found"}))
     assert probe.runtime_free_recovery("http://localhost") == {"status": 404, "code": "not_found"}

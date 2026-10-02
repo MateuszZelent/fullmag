@@ -27,6 +27,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from urllib.parse import quote
 import uuid
 
 
@@ -76,9 +77,11 @@ def json_request(
     payload: object | None = None,
     timeout: float = 10.0,
     expected_error: int | None = None,
+    request_headers: dict[str, str] | None = None,
 ) -> tuple[int, object]:
     body = None
     headers = {"accept": "application/json"}
+    headers.update(request_headers or {})
     if payload is not None:
         body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
         headers["content-type"] = "application/json"
@@ -105,6 +108,46 @@ def runtime_free_recovery(base_url: str) -> dict:
     if status != 404 or not isinstance(payload, dict) or payload.get("code") != "not_found":
         raise ApiRuntimeSmokeError("recovery must reject a request without an active session")
     return {"status": status, "code": payload["code"]}
+
+
+def probe_workspace_scope(base_url: str, expected_session_id: str) -> dict:
+    """Check compatibility routes only on this driver's private scratch API."""
+    status_code, status = json_request(f"{base_url}/v2/sessions/current/status")
+    session = status.get("session", {}) if isinstance(status, dict) else {}
+    if status_code != 200 or not isinstance(session, dict) or session.get("session_id") != expected_session_id:
+        raise ApiRuntimeSmokeError("status does not belong to the private scratch session")
+    fields = ("session_id", "session_epoch", "request_scope_epoch")
+    if any(not isinstance(session.get(field), str) or not session[field].strip() for field in fields):
+        raise ApiRuntimeSmokeError("scratch status has incomplete request scope")
+    def scope(request_epoch: str) -> dict[str, str]:
+        return {"x-fullmag-session-scope":
+                f"session={quote(session['session_id'], safe='')}"
+                f"&epoch={quote(session['session_epoch'], safe='')}"
+                f"&request_scope_epoch={quote(request_epoch, safe='')}"}
+    current = scope(session["request_scope_epoch"])
+    # Same scientific session identity; only the request generation is stale.
+    stale = scope(session["request_scope_epoch"] + "-obsolete")
+    checked = []
+    for suffix in ("selection", "tree/active-node", "ribbon", "layout"):
+        url = f"{base_url}/v2/sessions/current/workspace/{suffix}"
+        code, before = json_request(url, request_headers=current)
+        if code != 200 or not isinstance(before, dict) or type(before.get("revision")) is not int or before["revision"] < 0:
+            raise ApiRuntimeSmokeError(f"workspace resource missing revision: {suffix}")
+        for method in ("GET", "PUT"):
+            payload = None if method == "GET" else {key: value for key, value in before.items() if key != "revision"}
+            code, error = json_request(url, method=method, payload=payload,
+                                   request_headers=stale, expected_error=409)
+            if (code != 409 or not isinstance(error, dict)
+                    or error.get("code") != "conflict"
+                    or error.get("message") != "request_context_stale"):
+                raise ApiRuntimeSmokeError(f"stale workspace {method} accepted: {suffix}")
+            checked.append(f"{method} {suffix}")
+        code, after = json_request(url, request_headers=current)
+        if code != 200 or after != before:
+            raise ApiRuntimeSmokeError(f"stale request changed workspace resource: {suffix}")
+    return {"state": "passed", "checked": checked,
+            "same_session_stale_request_epoch_rejected": True,
+            "workspace_resources_unchanged": True, "solver_started": False}
 
 
 def free_loopback_port() -> int:
@@ -544,6 +587,8 @@ def run(repo_root: Path, *, include_websocket: bool = False, include_project_run
                     receipt["realtime_websocket"] = run_realtime_websocket_probe(
                         repo_root, base_url, paths, env
                     )
+                    receipt["workspace_scope"] = probe_workspace_scope(base_url, scratch_session["session_id"])
+                    receipt["runtime_scope"].append("GET/PUT workspace compatibility routes with obsolete request_scope_epoch")
                     receipt["scratch_session"] = {
                         "session_id": scratch_session.get("session_id"),
                         "backend": "fdm",

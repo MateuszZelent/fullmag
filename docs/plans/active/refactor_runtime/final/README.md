@@ -15,6 +15,12 @@ dlatego nie podnosi procentów P3/P5.
 
 ## Dokumenty finalne
 
+Checkpoint domknięcia 02.10.2026: [warunki odbioru P1/P3/P3a/P5](07-domkniecie-etapow.md).
+Dodano bramkę stale scope ośmiu operacji workspace; 11 regresji skryptu PASS,
+managed runtime otwarty. Build 197 z przypiętego mastera pracuje. Audyt startupu
+potwierdza, że zachowanie workspace nie usuwa jeszcze blokującego modalu.
+Żaden z etapów nie otrzymuje 100% na podstawie tego checkpointu.
+
 Checkpoint 02.10.2026: [P6-71 — kod wdrożonego runnera](p6/71-deployed-runner-contract-gap.md)
 potwierdza, że źródłowe kontrole pakietu z P6-68–70 nie są jeszcze wdrożone.
 Aktualizacja musi zachować siedem operatorowo dopuszczonych profili; nie wolno
