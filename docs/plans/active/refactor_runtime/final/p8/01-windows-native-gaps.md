@@ -9,7 +9,7 @@ Status całej bramki: NOT VERIFIED. Audyt źródeł nie jest kwalifikacją runti
 | 2 | Unix rpath, konfiguracja CMake i brak eksportu publicznego C ABI na MSVC. | Wykonano fragment źródłowy: rpath według targetu Cargo, jawny `--config`, MSVC import library w wybranym config lub płaskim Ninja; jawny eksport 86 funkcji i symbolu danych ABI. Runtime DLL staging pozostaje otwarty. | Preprocessing MSVC C/C++: 6 PASS; 2 istniejące source contracts PASS. Pełny Windows link/DLL launch oraz Linux regression build: NOT VERIFIED. |
 | 3 | External FDM był rozpoznawany tylko jako Linux `.so`. | Wykonano target-aware imported target: MSVC DLL + `.lib`, MinGW DLL + `.dll.a`, Linux `.so`/`.so.0`; Cargo śledzi moduł CMake. | 12 configure-only cases PASS; actual Windows/Linux link i runtime NOT VERIFIED. |
 | 4 | Natywny launcher odrzuca FEM; `run_fullmag_fem.ps1` uruchamia Linux container. | Natywny dependency bundle MFEM/hypre/libCEED i odpowiednie adaptery Windows dla CPU, następnie CUDA GPU; osobno potrzebne workflow dependencies. | Native FEM CPU i FEM GPU receipts, requested/resolved execution oraz wymagane bramki fizyki. GPU bez cichego CPU fallbacku. |
-| 5 | `build_windows_msi.ps1` publikuje tylko manifesty FDM; brak FEM dependency bundle. | Pakować zweryfikowane native binaries, import/runtime dependencies, statyczne UI i Python; nie kopiować Linux libraries. Usunąć niekontrolowane fallbacki i uporządkować staging przez resolver. | Instalacja na czystym Windows i dependency inventory/hashes; brak Docker/WSL/Linux w ścieżce wykonania. |
+| 5 | MSI ma manifesty tylko FDM i brak FEM dependency bundle. DLL trafiały do `lib`, poza katalogiem startującego EXE. | Wykonano fragment stagingu DLL obok EXE, z inventory/hashami i kontrolą konfliktów. Nadal wymagane transitive dependency closure FEM/CUDA, pełne native binaries/UI/Python oraz staging przez resolver. | 8 regresji PS stagingu PASS; actual MSI/clean install/dependency closure NOT VERIFIED. |
 | 6 | Lokalny katalog `local_runner/build_executor.py` obsługuje Linux/container profile; release Windows CI jest inną trasą. | Ustalić zarządzany Windows/MSVC executor albo odrębną kwalifikowaną trasę CI bez publikacji wydania. Nie nazywać profilu Linux dowodem Windows. | Windows target receipt, source snapshot, niepuste artefakty i terminalny exit 0. Zachować zakaz kompilacji unit tests do odwołania. |
 | 7 | Windows writer jest zaimplementowany; directory-sync/power-loss nie są kwalifikowane. Scratch session jest również stanem w pamięci. | Zweryfikować lokalny storage, atomowy zapis, lock/recovery, jawne odtworzenie sesji i eksporty. Nie przenosić wymagań Linux 9p na natywny Windows. | New/Open/Save, checkpoint, restart/restore na Windows; ten sam dokument/IDs i zgodne dane, bez synthetic PASS. Power-loss osobny dowód. |
 | 8 | Brak dowodu całego produktu bez developer checkout/toolchain. | Clean install/open/upgrade/rollback; wspólne Python/IR/API/UI i cztery lane'y. | Macierz P8-D i pełne bramki z planu głównego; żadna brakująca realizacja nie zostaje ukryta przez zmianę zakresu. |
@@ -80,3 +80,32 @@ pary fikstur Windows. Ścieżki ze spacjami są objęte kontrolą.
 Runtime staging, dependency inventory, actual link i natywny launch pozostają
 NOT VERIFIED. Ten moduł nie przełącza CPU/GPU, nie uruchamia solvera ani nie
 wprowadza fallbacku. P8-C nadal otwarte.
+
+## Fragment: DLL obok plików EXE w installerze
+
+`scripts/windows/build_windows_msi.ps1` kopiuje DLL z release oraz wymagany
+native FDM CUDA DLL do `bin`. Wcześniej trafiały do `lib`, a MSI dodawał do
+PATH tylko `bin`. Ustawienie PATH dla procesów potomnych przez
+`control_room.rs::configure_repo_local_library_env` nie rozwiązuje zależności
+wymaganej przed wejściem w kod startującego EXE. Katalog programu jest
+elementem standardowej kolejności wyszukiwania DLL w Windows:
+[Microsoft — DLL search order](https://learn.microsoft.com/en-us/windows/win32/dlls/dynamic-link-library-search-order).
+
+`Copy-RuntimeDllSet` sprawdza całą listę przed kopiowaniem: wymagane regularne,
+niepuste pliki `.dll`; nazwy porównywane bez rozróżniania wielkości liter;
+różne hashe pod tą samą nazwą są błędem. Konflikt z istniejącym plikiem
+stagingu również zatrzymuje operację przed kopiowaniem. Identyczne duplikaty
+są idempotentne. Po skopiowaniu hash jest ponownie sprawdzany; wersja i
+manifest stagingu zapisują `runtime_dlls` z relatywną ścieżką oraz SHA-256.
+`Test-StagedLayout` ponownie kontroluje te pliki przed tworzeniem MSI.
+
+`scripts/test_windows_msi_dll_staging.py`: 8 PASS. Wykonano rzeczywistą funkcję
+PowerShell wyodrębnioną z AST installera, na jawnych fiksturach bajtowych.
+Sprawdzono copy/hash, brak pliku, katalog, pusty plik, złe rozszerzenie,
+konflikt nazw/hashów, zachowanie istniejącego pliku i identyczne duplikaty.
+Nie budowano ani nie instalowano MSI, nie kompilowano unit tests.
+
+To nie jest walidacja PE, ABI ani kompletności zależności tranzytywnych.
+Brakujące DLL MFEM/hypre/libCEED/PETSc/SLEPc/CUDA, native FEM build i runtime,
+storage governance installera oraz clean install/open/upgrade/rollback
+pozostają otwarte. Nie opublikowano wydania.

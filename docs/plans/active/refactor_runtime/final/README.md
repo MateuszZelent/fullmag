@@ -254,3 +254,8 @@ native FEM launch i regresja Linux pozostają otwarte; procenty bez awansu.
 Zewnętrzny FDM w CMake rozpoznaje teraz osobno runtime DLL i import library
 Windows; Linux `.so`/`.so.0` zachowano. 12 configure-only cases PASS, bez
 kompilacji/linkowania, na jawnych fiksturach. Runtime i pełny P8-C niezaliczone.
+
+Installer Windows kieruje DLL obok EXE, kontroluje konflikty nazw/hashów
+i zapisuje inventory DLL w manifestach. 8 regresji rzeczywistej funkcji
+PowerShell PASS. Pełny bundle zależności FEM/CUDA i clean install nadal
+NOT VERIFIED; brak awansu procentów ani publikacji wydania.

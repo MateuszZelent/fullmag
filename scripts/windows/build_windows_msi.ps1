@@ -122,6 +122,44 @@ function Require-File {
   }
 }
 
+function Copy-RuntimeDllSet {
+  param([string[]]$SourcePaths, [string]$BinDirectory)
+  # Validate the complete set before copying; a basename conflict must not
+  # silently select a different runtime dependency.
+  $sources = @{}
+  foreach ($sourcePath in $SourcePaths) {
+    if (-not (Test-Path -LiteralPath $sourcePath -PathType Leaf)) {
+      throw "Runtime DLL is missing: $sourcePath"
+    }
+    $source = Get-Item -LiteralPath $sourcePath
+    if ($source.Extension -ine ".dll" -or $source.Length -eq 0) {
+      throw "Runtime DLL must be a nonempty .dll file: $sourcePath"
+    }
+    $hash = (Get-FileHash -LiteralPath $source.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($sources.ContainsKey($source.Name) -and $sources[$source.Name].sha256 -ne $hash) {
+      throw "Conflicting runtime DLL basename: $($source.Name)"
+    }
+    $sources[$source.Name] = @{ source = $source.FullName; sha256 = $hash }
+  }
+  foreach ($name in $sources.Keys) {
+    $destination = Join-Path $BinDirectory $name
+    if (Test-Path -LiteralPath $destination) {
+      if (-not (Test-Path -LiteralPath $destination -PathType Leaf) -or
+          (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash.ToLowerInvariant() -ne $sources[$name].sha256) {
+        throw "Conflicting staged runtime DLL: $name"
+      }
+    }
+  }
+  foreach ($name in @($sources.Keys | Sort-Object)) {
+    $destination = Join-Path $BinDirectory $name
+    Copy-Item -LiteralPath $sources[$name].source -Destination $destination -Force
+    if ((Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash.ToLowerInvariant() -ne $sources[$name].sha256) {
+      throw "Staged runtime DLL hash mismatch: $name"
+    }
+    [ordered]@{ path = "bin/$name"; sha256 = $sources[$name].sha256 }
+  }
+}
+
 function Write-VersionMetadata {
   param([string]$Path)
   $gitSha = (git -C $RepoRoot rev-parse HEAD).Trim()
@@ -136,6 +174,7 @@ function Write-VersionMetadata {
     git_short = $gitShort
     source_identity = $sourceIdentity
     build_features = if ($BuildCuda) { @("cuda") } else { @() }
+    runtime_dlls = @($runtimeDllInventory)
     python_runtime = "external-python-3.12-or-newer"
     node_runtime = "external-node-24.18-or-newer"
     built_at_utc = $builtAt
@@ -202,6 +241,7 @@ function Write-StageManifest {
       "bin/fullmag-ui.exe",
       "bin/fullmag-bin.exe"
     )
+    runtime_dlls = @($runtimeDllInventory)
     runtimes = $runtimePaths
     share = @(
       "share/version.json"
@@ -232,6 +272,13 @@ function Test-StagedLayout {
   if ($BuildCuda) { $required += (Join-Path $StageRoot "runtimes\fdm-cuda\manifest.json") }
   foreach ($path in $required) {
     Require-File $path
+  }
+  foreach ($dll in $runtimeDllInventory) {
+    $path = Join-Path $StageRoot $dll.path
+    Require-File $path
+    if ((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant() -ne $dll.sha256) {
+      throw "Runtime DLL changed after staging: $($dll.path)"
+    }
   }
 }
 
@@ -410,13 +457,13 @@ try {
   Copy-OrAliasLauncher (Join-Path $ReleaseDir "fullmag-bin.exe") (Join-Path $ReleaseDir "fullmag.exe") (Join-Path $binDir "fullmag-bin.exe")
   Require-File (Join-Path $binDir "fullmag-bin.exe")
 
-  Get-ChildItem -Path $ReleaseDir -Filter "*.dll" -ErrorAction SilentlyContinue | ForEach-Object {
-    Copy-Item -Force $_.FullName (Join-Path $libDir $_.Name)
-  }
+  $runtimeDllSources = @(Get-ChildItem -LiteralPath $ReleaseDir -Filter "*.dll" -File -ErrorAction SilentlyContinue |
+    Select-Object -ExpandProperty FullName)
   if ($BuildCuda) {
     $nativeFdmDll = Find-NativeFdmDll
-    Copy-Item -Force $nativeFdmDll.FullName (Join-Path $libDir "fullmag_fdm.dll")
+    $runtimeDllSources += $nativeFdmDll.FullName
   }
+  $runtimeDllInventory = @(Copy-RuntimeDllSet -SourcePaths $runtimeDllSources -BinDirectory $binDir)
 
   Require-File (Join-Path $RepoRoot "apps\control-room\out\index.html")
   Copy-Tree (Join-Path $RepoRoot "apps\control-room\out") $webDir
