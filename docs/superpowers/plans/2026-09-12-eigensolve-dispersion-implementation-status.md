@@ -17,9 +17,11 @@ rozszerzeniem S05/S08, nie zamiennikiem fizyki ani kwalifikacji całego celu.
 | Signed15 | ±2 nie przeszły shifted GMRES; 13 dodatkowych punktów nieukończone | OPEN; bez tworzenia punktów przez symetrię |
 | Reader #208 | Import kopii rzeczywistego FMS i spectrum +10; WebGL działa, topology nie przyjęte wskutek deadline | Częściowy browser proof; S08 OPEN |
 | PreviewState / viewport | Poprawki źródeł importu i lokalnego topology deadline 15 s | Managed frontend i browser po poprawce OPEN |
-| Adaptive CPU/RAM | Polityka Python/IR/API/UI, Linux sampler i osobne procesy; Python, produkcyjny TypeScript i React Doctor PASS | Runtime i zgodność serial/adaptive OPEN |
+| Adaptive CPU/RAM | Polityka Python/IR/API/UI, Linux sampler i osobne procesy; wcześniejsze kontrole produkcyjnego TypeScript/React Doctor PASS; 40 interpretowanych regresji sterownika prób PASS | Runtime i zgodność serial/adaptive OPEN |
+| Telemetria puli na żywo | Próbka regulatora → istniejący zasób etapów Study → Inspector; active/admission/limit są rozdzielone | Implementacja źródeł w toku; późniejszy kod poza kapsułą #211 |
+| Diagnostyka awarii ±2 | Zapis konfiguracji KSP przed EPSSolve; review źródłowe PASS, przygotowana regresja natywna | Native build/runtime OPEN; poza kapsułą #211 |
 | SLEPc #209 | Terminal failed, exit 2; osiem błędów Rust, cztery przyczyny poprawione i reviewed | Nie jest dopuszczonym runtime |
-| SLEPc #211 | c554c5361f014228a301380b8ed3487c, queued w FIFO za #210 | Nowy produkcyjny build oczekuje |
+| SLEPc #211 | c554c5361f014228a301380b8ed3487c, running w FIFO; exit_code=null | Produkcyjny build trwa; receipt/runtime OPEN |
 | Pełna nauka i integracja | Γ/signed DE/BV, COMSOL A1, zbieżności, pełne pola/tracking, falowód, interakcje, GPU i integration cycle | S00–S12 nadal OPEN |
 
 Źródła ±10: job #203 d30406a2ef6d42cb9120ce04d58d646a,

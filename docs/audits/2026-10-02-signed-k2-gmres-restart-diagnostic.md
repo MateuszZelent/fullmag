@@ -62,3 +62,27 @@ backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp
 (agregacja podokien i diagnostyki),
 scripts/validate_de_smoke_rows.py oraz scripts/validate_de_physical_potential.py
 (niezależne artefakty i pełne bramki). Parser/source review nie dowodzi runtime.
+
+## Dodatkowe rozdzielenie hipotez — bieżący odczyt
+
+Konfiguracja zachowanej kampanii signed15-v1 dla obu znaków k=2 rad/µm
+ma odniesienie n0 9.7257242838410924 GHz i okno
+[8.990724283841093, 9.990724283841093] GHz. Środek okna to
+9.490724283841093 GHz; nie jest to 11 GHz z osobnej próby ±10.
+Okno obejmuje oczekiwaną podstawową gałąź, więc prosty błąd polegający na
+użyciu okna ±10 dla ±2 nie wyjaśnia obecnej awarii. Źródło:
+signed15-v1/signed15-config.json w storage kampanii #203 oraz
+cases/kp2-attempt-001/run-request.json (frequency_window_override_ghz).
+Nie jest to dowód kompletności widma ani zbieżności.
+
+W aktualnym właścicielu natywnym próg materializacji dokładnego
+preconditionera Schura wynosi 512 wymiarów real-split. Powyżej niego
+create_native_floquet_shifted_preconditioner duplikuje rotated_a_qq, czyli
+korzysta z przybliżenia magnetic-only. Mały dense oracle ma oddzielną
+bramkę q_complex_dof_count <= 256, czyli real-split <= 512.
+Dlatego nie można przenosić skuteczności małego exact-Schur fixture na
+większy benchmark ani uznać odmowy oracle za brak operatora produkcyjnego.
+Te progi nie zostały zmienione. Następna diagnostyka powinna mierzyć
+powtarzalność i liniowość action na kilku wektorach bez globalnej
+materializacji, podawać rzeczywisty wymiar i użyty preconditioner oraz
+zachowywać rozdział faktów od hipotezy przyczyny.
