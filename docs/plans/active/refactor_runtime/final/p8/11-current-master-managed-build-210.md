@@ -1,6 +1,8 @@
 # P8-C / P6 — managed build bieżącego mastera, zadanie 210
 
-Data: 02.10.2026. Stan: **QUEUED**, nie PASS. Pełny cel P0–P8 aktywny.
+Data: 02.10.2026. Stan: **SUCCEEDED / exit 0 — build PASS**.
+Pełny cel P0–P8 aktywny. Master oznacza wersję przypiętą przy zgłoszeniu,
+nie późniejsze commity drivera ani poprawki katalogu danych Windows.
 
 Zlecono istniejącemu Fullmag_build_runner produkcyjny build profilu
 `fem-cpu-release` z niezmiennego commita:
@@ -14,12 +16,43 @@ Zlecono istniejącemu Fullmag_build_runner produkcyjny build profilu
 | Capsule source digest | `a707355d44dce76c97ca8f2ea7eca5620c66b040fa35a7b78abc50b6871ce92e` |
 | Native source snapshot SHA-256 | `98bf2ebd06d26cb6d9bb22e6d288e8d41c4a5b88491bd18d3ccc628f29abdaa2` |
 | Snapshot | `source_snapshot_dirty=false`, brak dirty paths |
-| Ostatni odczyt | `queued`, exit code null |
+| Ostatni odczyt | `succeeded`, exit code 0 |
 
-Dirty zmiany głównego checkoutu nie są wejściem tego buildu. Receipt
-produkcyjnego buildu i artefakty jeszcze nie istnieją jako terminalny dowód.
+Dirty zmiany głównego checkoutu nie są wejściem tego buildu. Terminalny
+receipt i artefakty odebrano bez restartu lub ponownego zgłoszenia zadania.
 Nie kompilujemy testów jednostkowych: profil wykonuje produkcyjne
 `make install-cli-dev`, instalację zależności frontendu i `make web-build-static`.
+
+## Terminalny odbiór
+
+Kontener db5743b6a4c1 zakończył się z ExitCode=0, OOMKilled=false,
+FinishedAt=2026-10-02T20:55:18.94153597Z. Kolejka przez krótki czas nadal
+pokazywała RUNNING podczas końcowej walidacji; nie traktowano tego jako
+powodu restartu. Koordynator następnie opublikował terminalny receipt.
+
+| Dowód | Wynik |
+|---|---|
+| native-build | exit 0 |
+| frontend-dependencies | exit 0 |
+| frontend-build, TypeScript i static export | exit 0 |
+| validate_build_receipt | 122 artefakty, 291 682 519 B, wszystkie rozmiary/hashe PASS |
+| verify_source | niezmienna kapsuła commit/source digest PASS |
+| managed_fem_runtime_package.load_package | terminalny receipt, trusted hashes, dokładny commit/snapshot, 8 wymaganych binariów i 3 aliasy biblioteki FEM PASS |
+| build-receipt SHA-256 | `73f5d210bb43a0bf535b890a002ddf2a7498bccbd7ab81a2aa60053c80057231` |
+| coordinator receipt SHA-256 | `38d716f91b01caeb98024b35d4889b4ea6cb004069ebd5832c841382780862ec` |
+| pinned image | `sha256:e9b8ec88b9a9ea09a6cd5e3ad3945fcabd269541f1cdd24ffafd3dff3925399d` |
+
+Zweryfikowane binaria: fullmag-api, fullmag-api-preparation-resource-pool,
+fullmag-api-accepted-fem-preparer, fullmag-api-accepted-fem-preparation-scheduler,
+fullmag-bin, fullmag-api-resource-pool, fullmag-api-accepted-scheduler
+i fullmag-api-accepted-worker. Receipt jest w kanonicznym storage pod
+runs/fullmag-0950f4dca4ffe38f/c4311c015f624b7087dea436064d8a99.
+
+To dowód produkcyjnego buildu Linux FEM CPU i gotowego wejścia drivera.
+Nie uruchamia solvera, nie kwalifikuje fizyki ani Windows. Wykryte wcześniej
+v9fs na hostowym bindzie nadal blokuje writer SessionStore; nie provisionowano
+wolumenu i nie omijano guardu. Runtime wrapper oraz rzeczywisty solver/pin/archive
+pozostają otwarte. Sesja 3104 zachowana.
 
 ## Klient i stan wspólnej kolejki
 

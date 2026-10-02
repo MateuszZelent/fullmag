@@ -62,7 +62,9 @@ po ich naprawie końcowe re-review: **brak P0/P1**. Nie jest to dowód runtime.
 Nowy kod nie jest jeszcze podłączony do managed runtime wrappera z inspekcją
 rzeczywistego obrazu i preflightem hostowego mapowania storage. Nie uruchamiać
 go jako zastępczej kwalifikacji bez tej bramki. Build 210 pozostaje konkretnym
-wejściem; ostatni odczyt RUNNING, bez terminalnego receiptu.
+wejściem; odebrano terminalny SUCCEEDED/exit 0 i zweryfikowano pakiet,
+osiem binariów oraz trzy aliasy biblioteki FEM. Szczegóły: [build 210](../p8/11-current-master-managed-build-210.md).
+Ten odbiór nie zastępuje brakującego wrappera i rzeczywistego wykonania drivera.
 
 Ten driver nie kwalifikuje fizyki, FEM GPU, FDM, wydania Windows ani migracji.
 Nie wykonuje jeszcze FMS export/import. Archive gate P6-61 wymaga rzeczywistego

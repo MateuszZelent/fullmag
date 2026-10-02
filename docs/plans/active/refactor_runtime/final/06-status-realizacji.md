@@ -1,5 +1,14 @@
 # Status realizacji całego planu refaktoryzacji
 
+Checkpoint 02.10.2026: managed Linux FEM CPU build 210 ma terminalny
+SUCCEEDED/exit 0. Zweryfikowano 122 artifact hashes, 291 682 519 B,
+niezmienną kapsułę i gotowy pakiet ośmiu binariów dla accepted FEM CPU
+na dokładnym SHA 8beacd295cb295d2460e55606dabff39f4aa7f77.
+[Odbiór 210](p8/11-current-master-managed-build-210.md). Nie zawiera późniejszych
+zmian drivera i Windows state. Runtime wrapper, wspierany trwały storage,
+solver/pin/archive oraz natywny Windows pozostają NOT VERIFIED.
+Nie podnosimy procentów na podstawie samego buildu; cały P0–P8 aktywny.
+
 Checkpoint 02.10.2026, P8-C: managed Linux FEM CPU build 204 zakończony
 SUCCEEDED/exit 0, zweryfikowano 119 artifact hashes i 291 618 738 B na
 dokładnym SHA `a55fa13d76052cdc5e3f96d8369127752061237d`.

@@ -358,8 +358,9 @@ od kwalifikacji loadera/runtime. Nowe regresje interpretowane PASS;
 realny pakiet Windows i kwalifikacja nadal NOT VERIFIED.
 
 [Managed build aktualnego mastera, 210](p8/11-current-master-managed-build-210.md)
-jest zgłoszony z niezmiennego commita; ostatni stan RUNNING. Odbiór pakietu,
-accepted FEM producer, realne HTTP/CAS i archive roundtrip pozostają otwarte.
+ma terminalny SUCCEEDED/exit 0; 122 artefakty i niezmienna kapsuła PASS.
+Konsument gotowego pakietu potwierdził osiem binariów i bibliotekę FEM.
+Accepted FEM execution, realne HTTP/CAS i archive roundtrip pozostają otwarte.
 
 [Przygotowanie FEM z gotowego pakietu](p6/73-managed-preparation-package-reuse.md)
 dodaje zweryfikowany konsument receiptu i tryb bez kompilacji. 55 lekkich
