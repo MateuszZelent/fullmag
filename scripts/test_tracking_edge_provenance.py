@@ -3,11 +3,15 @@
 These checks do not execute the Rust tracker or qualify a FEM runtime.
 """
 import cmath
+import copy
 from pathlib import Path
 import re
+import sys
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
+from verify_fem_frequency_domain_eigen_artifacts import validate_tracking_edge_provenance, validate_tracking_alias
 
 
 def code(path):
@@ -26,6 +30,64 @@ def normalized(a):
 
 
 class TrackingEdgeProvenanceTests(unittest.TestCase):
+    def test_independent_artifact_validator_binds_policy_and_endpoints(self):
+        policy = dict(method="overlap_hungarian", overlap_floor=.9, max_branch_gap=0)
+        seed = dict(sample_index=10, raw_mode_index=19, tracking_score_source="seed",
+                    tracking_edge=dict(policy=policy, score_source="seed", metric="unavailable",
+                                       transition="seed", previous_sample_index=None,
+                                       previous_raw_mode_index=None, skipped_sample_count=0, subspace=None))
+        point = dict(sample_index=20, raw_mode_index=23,
+                     tracking_score_source="modal_subspace_transport_score", overlap_prev=None,
+                     tracking_edge=dict(policy=policy, score_source="modal_subspace_transport_score",
+                                        metric="consistent_p1_tet4_cartesian_nodal_envelope",
+                                        transition="split_to_degenerate", previous_sample_index=10,
+                                        previous_raw_mode_index=19, skipped_sample_count=0,
+                                        subspace=dict(rank=2, previous_cluster=0, current_cluster=0,
+                                                      branch_ids=[0, 1], previous_raw_mode_indices=[19, 42],
+                                                      current_raw_mode_indices=[17, 23],
+                                                      principal_cosines=[1., 1.], principal_minimum=1.)))
+        branches = dict(tracking_method="overlap_hungarian", overlap_floor=.9, frequency_window_hz=None,
+                        tracking_policy_availability="complete", branches=[dict(branch_id=0, points=[seed, point])])
+        validate_tracking_edge_provenance(branches, [10, 20])
+        alias = copy.deepcopy(branches)
+        alias["schema_version"] = "2"
+        validate_tracking_alias(branches, alias)
+        alias["branches"][0]["points"][1]["raw_mode_index"] = 99
+        with self.assertRaises(SystemExit):
+            validate_tracking_alias(branches, alias)
+        unavailable_policy = copy.deepcopy(branches)
+        unavailable_policy.pop("tracking_policy_availability")
+        with self.assertRaises(SystemExit):
+            validate_tracking_edge_provenance(unavailable_policy, [10, 20])
+        stale = copy.deepcopy(branches)
+        stale_point = copy.deepcopy(stale["branches"][0]["points"][1])
+        stale_point["sample_index"] = 30
+        stale_point["tracking_edge"]["skipped_sample_count"] = 1
+        stale_point["tracking_edge"]["policy"]["max_branch_gap"] = 1
+        stale["branches"][0]["points"].append(stale_point)
+        with self.assertRaises(SystemExit):
+            validate_tracking_edge_provenance(stale, [10, 20, 30])
+        for key, invalid in (("previous_sample_index", 20), ("previous_raw_mode_index", 42),
+                             ("skipped_sample_count", 1), ("score_source", "seed")):
+            broken = copy.deepcopy(branches)
+            broken["branches"][0]["points"][1]["tracking_edge"][key] = invalid
+            with self.subTest(key=key), self.assertRaises(SystemExit):
+                validate_tracking_edge_provenance(broken, [10, 20])
+        for key, invalid in (("rank", 3), ("principal_minimum", .8),
+                             ("principal_cosines", [1., float("nan")]),
+                             ("current_raw_mode_indices", [17, 17])):
+            broken = copy.deepcopy(branches)
+            broken["branches"][0]["points"][1]["tracking_edge"]["subspace"][key] = invalid
+            with self.subTest(key=key), self.assertRaises(SystemExit):
+                validate_tracking_edge_provenance(broken, [10, 20])
+        partial = copy.deepcopy(branches)
+        partial["branches"][0]["points"][1]["tracking_edge"] = None
+        partial.update(tracking_policy_availability="missing_or_mixed", tracking_method=None, overlap_floor=None)
+        validate_tracking_edge_provenance(partial, [10, 20])
+        partial["overlap_floor"] = .9
+        with self.assertRaises(SystemExit):
+            validate_tracking_edge_provenance(partial, [10, 20])
+
     def test_assignment_records_actual_subspace_and_policy(self):
         tracker = code("crates/fullmag-runner/src/eigen/tracking.rs")
         self.assertIn("principal_cosines: cluster.transport.principal_cosines.clone()", tracker)

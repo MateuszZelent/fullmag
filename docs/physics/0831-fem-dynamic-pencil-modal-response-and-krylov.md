@@ -2469,6 +2469,15 @@ Mapa implementacji: `crates/fullmag-runner/src/eigen/types.rs` +
 | `source-tracking-edge-producer` | `crates/fullmag-runner/src/eigen/tracking.rs` | `track_branches` | źródła WIP; bez managed runtime |
 | `source-tracking-edge-writer` | `crates/fullmag-runner/src/eigen/artifacts/modal_manifest.rs` | `write_branch_bundle_with_sample_namespace` | źródła WIP; bez managed runtime |
 | `source-tracking-edge-signed-regression` | `crates/fullmag-runner/src/eigen/tracking.rs` | `signed_k_tracking_records_split_transport_without_mutating_raw_modes` | źródła WIP; bez managed runtime |
+| `source-tracking-edge-artifact-validator` | `scripts/verify_fem_frequency_domain_eigen_artifacts.py` | `validate_tracking_edge_provenance` | niezależna walidacja rekordu; bez replay pól/runtime |
+
+Opcjonalny rekord jest sprawdzany także przez niezależny czytnik artefaktów:
+polityka, zgodność endpointów, liczba pominiętych próbek, metryka/score,
+rząd i skończone cosinusy kątów głównych muszą być wzajemnie zgodne.
+`previous_raw_mode_index` wiąże także zwykłą parę. Selekcja outputów może
+pominąć poprzednik w opublikowanej tablicy; walidator nie zastępuje go
+ostatnim zachowanym punktem. Jest to kontrola kontraktu, nie odtworzenie
+operatora ani numeryczny dowód ciągłości podprzestrzeni.
 
 ## Odtwarzanie metryki trackingu z artefaktów (S07, źródła WIP)
 

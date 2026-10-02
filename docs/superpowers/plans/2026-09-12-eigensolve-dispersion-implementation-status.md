@@ -166,6 +166,22 @@ brak aktywnych jobów, waiting_for_disk. Najnowszy pomiar wolnego storage:
 
 ### S06/S07 — zapis rzeczywistej krawędzi trackingu, 2026-10-02
 
+Pierwszy checkpoint zapisano i wysłano jako
+`4cee42f3f52fab5f3923ecddc87c6e64e9ad2e26`. Dalsze review wskazało P1
+rozbieżnej semantyki policy custom/generic writer: naprawiono writer FEM,
+aby pola pochodziły z recorded policy albo były null. Wzmocniono native
+fixture o jawne sample/raw ID/signed k oraz oba aliasy i brak policy.
+Dodano niezależny czytnik tracking_edge, sprawdzający policy, predecessor
+sample/raw mode, gap, metric/source i principal-angle/rank/ID.
+Kontrole końcowej wersji: 220 testów i 8 subtestów PASS (verifier + nowe
+kontrole trackingu, 71,93 s),
+parser Rust PASS. Native fixture nadal niekompilowane; brak nowych punktów FEM.
+Końcowy health runnera: 70 860 800 B wolnego (~67,6 MiB),
+worker_alive/accepting_jobs true, active_jobs puste, waiting_for_disk.
+Niezależne końcowe review: brak P1; wskazane P2 domknięto przez kontrolę
+zgodności aliasu w verifierze, wymaganie jawnego policy availability dla
+obecnych rekordów i rozróżnienie restartu od braku wektorów w diagnostics.
+
 Naprawiono w źródłach P1 utraty provenance przypisania: `TrackedBranchPoint`
 przechowuje `TrackingEdgeProvenance` utworzone przy przyjęciu edge. Oba
 writery przenoszą ten rekord, wraz z polityką, metryką, poprzednią próbką,

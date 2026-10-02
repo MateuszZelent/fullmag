@@ -398,7 +398,8 @@
         "source-tracking-edge-record",
         "source-tracking-edge-producer",
         "source-tracking-edge-writer",
-        "source-tracking-edge-signed-regression"
+        "source-tracking-edge-signed-regression",
+        "source-tracking-edge-artifact-validator"
       ]
     },
     {
@@ -2059,6 +2060,12 @@
       "symbol": "test_native_solver_keeps_residual_and_selected_only_policies",
       "evidence_status": "interpreted source checks PASS; native compilation, managed runtime and physics qualification pending",
       "responsibility": "Freeze public target transfer, unchanged residual policies, selected-only output and the prepared Rust single/path regressions."
+    },
+    {
+      "id": "source-tracking-edge-artifact-validator",
+      "path": "scripts/verify_fem_frequency_domain_eigen_artifacts.py",
+      "symbol": "validate_tracking_edge_provenance",
+      "responsibility": "Independent policy, endpoint, gap and principal-angle record validation without qualifying runtime"
     },
     {
       "id": "source-tracking-edge-record",

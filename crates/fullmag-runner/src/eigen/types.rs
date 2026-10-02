@@ -451,6 +451,7 @@ pub struct TrackingEdgeProvenance {
     pub metric: TrackingMetricDefinition,
     pub transition: TrackingTransition,
     pub previous_sample_index: Option<usize>,
+    pub previous_raw_mode_index: Option<usize>,
     pub skipped_sample_count: usize,
     pub subspace: Option<TrackingSubspaceEvidence>,
 }

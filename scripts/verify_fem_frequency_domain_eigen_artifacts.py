@@ -5621,6 +5621,150 @@ def require_int_list(value: object, name: str) -> list[int]:
     return value
 
 
+def validate_tracking_alias(branches: dict, alias: dict) -> None:
+    """Check the common contract; legacy schema/diagnostic envelopes may differ."""
+    keys = ["branches", "solver_model"]
+    if "tracking_policy_availability" in branches or "tracking_policy_availability" in alias:
+        keys.extend(["tracking_method", "overlap_floor", "frequency_window_hz", "tracking_policy_availability"])
+    for key in keys:
+        require_equal(alias.get(key), branches.get(key), f"branches.json alias {key}")
+
+
+def validate_tracking_edge_provenance(branches: dict, sample_order: list[int]) -> None:
+    """Validate optional assignment evidence without qualifying a subspace as pair overlap."""
+    positions = {sample: position for position, sample in enumerate(sample_order)}
+    policies = []
+    missing = False
+    for branch in require_object_list(branches.get("branches"), "branches.branches"):
+        branch_id = require_non_negative_int(branch.get("branch_id"), "branch_id")
+        points = require_object_list(branch.get("points"), "branch.points")
+        by_sample = {require_non_negative_int(point.get("sample_index"), "branch point.sample_index"): point
+                     for point in points}
+        if len(by_sample) != len(points) and any(point.get("tracking_edge") is not None for point in points):
+            fail("tracking_edge branch cannot contain duplicate sample points")
+        for point in points:
+            edge = point.get("tracking_edge")
+            if edge is None:
+                missing = True
+                continue  # historical artifact: no edge evidence is claimed
+            if not isinstance(edge, dict):
+                fail("tracking_edge must be an object or null")
+            policy = edge.get("policy")
+            if not isinstance(policy, dict):
+                fail("tracking_edge.policy must be an object")
+            method = policy.get("method")
+            if method not in {"overlap_greedy", "overlap_hungarian"}:
+                fail("tracking_edge.policy.method is unsupported")
+            floor = require_finite_number(policy.get("overlap_floor"), "tracking_edge.overlap_floor")
+            if not 0 <= floor <= 1:
+                fail("tracking_edge.overlap_floor must be in [0, 1]")
+            window = policy.get("frequency_window_hz")
+            if window is not None and require_finite_number(window, "tracking_edge.frequency_window_hz") <= 0:
+                fail("tracking_edge.frequency_window_hz must be positive")
+            max_gap = require_non_negative_int(policy.get("max_branch_gap"), "tracking_edge.max_branch_gap")
+            policies.append(policy)
+            require_equal(edge.get("score_source"), point.get("tracking_score_source"), "tracking_edge.score_source")
+            transition = edge.get("transition")
+            source = edge.get("score_source")
+            sample = require_non_negative_int(point.get("sample_index"), "tracking_edge sample")
+            if sample not in positions:
+                fail("tracking_edge current sample is unknown")
+            gap = require_non_negative_int(edge.get("skipped_sample_count"), "tracking_edge.skipped_sample_count")
+            metric = edge.get("metric")
+            if metric not in {"consistent_p1_tet4_cartesian_nodal_envelope", "diagonal_nodal_mass",
+                              "euclidean", "unavailable"}:
+                fail("tracking_edge.metric is unsupported")
+            if transition in {"seed", "new_branch"}:
+                require_equal(source, "seed" if transition == "seed" else "modal_overlap_unavailable",
+                              "tracking_edge seed/restart source")
+                if transition == "seed" and positions[sample] != 0:
+                    fail("tracking_edge seed must belong to the first sample")
+                if transition == "new_branch" and positions[sample] == 0:
+                    fail("tracking_edge new_branch cannot be an initial seed")
+                if points[0] is not point or edge.get("previous_sample_index") is not None or \
+                        edge.get("previous_raw_mode_index") is not None or gap or edge.get("subspace") is not None:
+                    fail("tracking_edge seed/restart cannot claim a predecessor or subspace")
+                require_equal(metric, "unavailable", "tracking_edge seed metric")
+                if point.get("overlap_prev") is not None:
+                    fail("tracking_edge seed/restart cannot claim pair overlap")
+                continue
+            previous = require_non_negative_int(edge.get("previous_sample_index"), "tracking_edge.previous_sample_index")
+            previous_raw = require_non_negative_int(edge.get("previous_raw_mode_index"), "tracking_edge.previous_raw_mode_index")
+            if previous not in positions or positions[previous] >= positions[sample]:
+                fail("tracking_edge predecessor must be an earlier known sample")
+            if any(positions[previous] < positions[retained] < positions[sample]
+                   for retained in by_sample if retained in positions):
+                fail("tracking_edge predecessor cannot skip a retained branch point")
+            require_equal(gap, positions[sample] - positions[previous] - 1, "tracking_edge gap")
+            if gap > max_gap:
+                fail("tracking_edge gap exceeds recorded policy")
+            if previous in by_sample:
+                require_equal(previous_raw, by_sample[previous].get("raw_mode_index"), "tracking_edge predecessor raw mode")
+            # Output selection may omit the predecessor; never invent an endpoint from the retained array.
+            subspace = edge.get("subspace")
+            if transition == "pair":
+                if subspace is not None:
+                    fail("tracking_edge pair cannot claim a subspace")
+                if source == "frequency_score_fallback":
+                    require_equal(metric, "unavailable", "tracking_edge fallback metric")
+                    if point.get("overlap_prev") is not None:
+                        fail("tracking_edge frequency fallback cannot claim pair overlap")
+                elif source in {"modal_overlap_weighted_score", "modal_overlap_unweighted_score"}:
+                    expected_metrics = {"consistent_p1_tet4_cartesian_nodal_envelope", "diagonal_nodal_mass"} \
+                        if source == "modal_overlap_weighted_score" else {"euclidean"}
+                    if metric not in expected_metrics:
+                        fail("tracking_edge pair metric disagrees with score source")
+                    overlap = require_finite_number(point.get("overlap_prev"), "tracking_edge pair overlap")
+                    if not floor <= overlap <= 1:
+                        fail("tracking_edge pair overlap violates recorded floor")
+                else:
+                    fail("tracking_edge pair source is unsupported")
+                continue
+            if transition not in {"degenerate_to_degenerate", "split_to_degenerate", "degenerate_to_split"}:
+                fail("tracking_edge transition is unsupported")
+            require_equal(source, "modal_subspace_transport_score", "tracking_edge subspace source")
+            if metric == "unavailable" or point.get("overlap_prev") is not None or not isinstance(subspace, dict):
+                fail("tracking_edge subspace requires a metric and separate principal-angle evidence")
+            rank = require_non_negative_int(subspace.get("rank"), "tracking_edge subspace rank")
+            if rank < 2:
+                fail("tracking_edge subspace rank must be at least two")
+            arrays = {}
+            for key in ("branch_ids", "previous_raw_mode_indices", "current_raw_mode_indices"):
+                values = subspace.get(key)
+                if not isinstance(values, list) or len(values) != rank:
+                    fail(f"tracking_edge subspace {key} must match rank")
+                arrays[key] = [require_non_negative_int(value, key) for value in values]
+                if len(set(arrays[key])) != rank:
+                    fail(f"tracking_edge subspace {key} must be unique")
+            if branch_id not in arrays["branch_ids"]:
+                fail("tracking_edge subspace does not contain current branch")
+            slot = arrays["branch_ids"].index(branch_id)
+            require_equal(arrays["previous_raw_mode_indices"][slot], previous_raw, "tracking_edge subspace predecessor raw mode")
+            if point.get("raw_mode_index") not in arrays["current_raw_mode_indices"]:
+                fail("tracking_edge subspace does not contain current raw mode")
+            cosines = subspace.get("principal_cosines")
+            if not isinstance(cosines, list) or len(cosines) != rank:
+                fail("tracking_edge principal cosines must match rank")
+            cosines = [require_finite_number(value, "tracking_edge principal cosine") for value in cosines]
+            if any(not 0 <= value <= 1 for value in cosines):
+                fail("tracking_edge principal cosines must be in [0, 1]")
+            minimum = require_finite_number(subspace.get("principal_minimum"), "tracking_edge principal minimum")
+            require_close(minimum, min(cosines), "tracking_edge principal minimum", absolute_tolerance=1e-12)
+            if minimum < floor:
+                fail("tracking_edge principal minimum violates recorded floor")
+            for key in ("previous_cluster", "current_cluster"):
+                require_non_negative_int(subspace.get(key), key)
+    availability = branches.get("tracking_policy_availability")
+    if policies and availability is None:
+        fail("tracking_edge evidence requires tracking_policy_availability")
+    if availability is not None:
+        complete = bool(policies) and not missing and all(policy == policies[0] for policy in policies)
+        require_equal(availability, "complete" if complete else "missing_or_mixed", "tracking policy availability")
+        for key in ("tracking_method", "overlap_floor", "frequency_window_hz"):
+            policy_key = "method" if key == "tracking_method" else key
+            require_equal(branches.get(key), policies[0].get(policy_key) if complete else None, key)
+
+
 def require_branch_id(value: object, name: str) -> int:
     if isinstance(value, int) and value >= 0:
         return value
@@ -6611,6 +6755,9 @@ def main(argv: list[str] | None = None) -> int:
 
     spectrum = load_json(root / "eigen/spectrum.v2.json")
     branches = load_json(root / "eigen/branches.v2.json")
+    legacy_branches_path = root / "eigen/branches.json"
+    if legacy_branches_path.exists():
+        validate_tracking_alias(branches, load_json(legacy_branches_path))
     summary = load_json(root / "eigen/metadata/eigen_summary.json")
     manifest = load_json(root / "frequency_domain/manifest.v1.json")
     solver_diagnostics = load_json(root / "eigen/diagnostics/solver.v1.json")
@@ -6884,6 +7031,7 @@ def main(argv: list[str] | None = None) -> int:
         require_production_gamma_k_path=args.require_production_gamma_k_path,
     )
 
+    validate_tracking_edge_provenance(branches, list(known_samples))
     branch_modes: set[tuple[int, int]] = set()
     branch_ids_by_mode: dict[tuple[int, int], int] = {}
     tracking_sources_by_mode: dict[tuple[int, int], str] = {}

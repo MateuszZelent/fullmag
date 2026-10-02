@@ -2841,3 +2841,15 @@ produkcyjnej bramki ciągłości. Minimum kątów głównych nie zastępuje
 rekordów; `tracking_policy_availability` wynosi complete albo missing_or_mixed.
 Pola method/floor są null w drugim przypadku. Uszkodzone obecne provenance
 jest błędem importu. Dotychczasowa skalarna bramka produkcyjna pozostaje bez zmian.
+
+Niezależny walidator sprawdza obecne rekordy: policy method/floor/window/gap,
+source/metric/transition, previous_sample_index i previous_raw_mode_index,
+rank/ID/principal cosines oraz zgodność obu warstw metadanych polityki.
+Sprawdzenie kontraktu nie jest numerycznym replay pól. Output selection
+może pominąć poprzednik, więc walidator nie wymyśla nowego poprzednika
+z ostatniego opublikowanego punktu.
+Jeśli istnieje `branches.json`, jego punkty, solver_model i wspólna
+polityka muszą być zgodne z v2; różnica schema/diagnostic envelope jest
+dozwolona dla zgodności historycznej. Obecne tracking_edge wymagają jawnego
+tracking_policy_availability. Predecessor nie może pomijać zachowanego
+punktu tej samej gałęzi.

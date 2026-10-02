@@ -1056,11 +1056,6 @@ pub(crate) fn execute_fem_eigen_path_with_producer_identity(
         "sample_count": v2_samples.len(),
         "samples": v2_samples.clone(),
     });
-    let tracking_cfg = plan.mode_tracking.clone().unwrap_or_default();
-    let tracking_method = serde_json::to_value(tracking_cfg.method)
-        .ok()
-        .and_then(|value| value.as_str().map(ToOwned::to_owned))
-        .unwrap_or_else(|| "overlap_hungarian".to_string());
     let phase_convention = serde_json::to_value(plan.spin_wave_bc.phase_convention())
         .ok()
         .and_then(|value| value.as_str().map(ToOwned::to_owned))
@@ -1088,8 +1083,14 @@ pub(crate) fn execute_fem_eigen_path_with_producer_identity(
         eigen_path_tracking_score_summary(&path_result);
     let modal_overlap_unavailable_reason = if modal_overlap_available {
         serde_json::Value::Null
+    } else if path_result.branches.iter().flat_map(|branch| &branch.points).any(|point|
+        point.tracking_edge.as_ref().is_some_and(|edge|
+            matches!(edge.transition, crate::eigen::types::TrackingTransition::NewBranch))) {
+        serde_json::json!("tracking_restart_without_predecessor")
+    } else if tracking_score_source == "frequency_score_fallback" {
+        serde_json::json!("mode_vectors_unavailable")
     } else {
-        serde_json::json!("mode_vectors_not_carried_by_multi_k_orchestrator")
+        serde_json::json!("tracking_metric_or_edge_evidence_unavailable")
     };
     let gap_count = path_result
         .branches
@@ -1234,7 +1235,8 @@ pub(crate) fn execute_fem_eigen_path_with_producer_identity(
             }))
         })
         .collect();
-    let tracking_policy_availability = if crate::eigen::tracking::recorded_tracking_policy(&path_result).is_some() {
+    let recorded_policy = crate::eigen::tracking::recorded_tracking_policy(&path_result);
+    let tracking_policy_availability = if recorded_policy.is_some() {
         "complete"
     } else {
         "missing_or_mixed"
@@ -1242,11 +1244,11 @@ pub(crate) fn execute_fem_eigen_path_with_producer_identity(
     let branches_v2 = serde_json::json!({
         "schema_version": "eigen_branches.v2",
         "tracking_policy_availability": tracking_policy_availability,
-        "tracking_method": tracking_method,
+        "tracking_method": recorded_policy.map(|policy| policy.method),
         "tracking_score_source": tracking_score_source,
         "modal_overlap_available": modal_overlap_available,
-        "overlap_floor": tracking_cfg.overlap_floor,
-        "frequency_window_hz": tracking_cfg.frequency_window_hz,
+        "overlap_floor": recorded_policy.map(|policy| policy.overlap_floor),
+        "frequency_window_hz": recorded_policy.and_then(|policy| policy.frequency_window_hz),
         "branches": v2_branches.clone(),
         "diagnostics": {
             "min_overlap": min_overlap,
@@ -1278,9 +1280,9 @@ pub(crate) fn execute_fem_eigen_path_with_producer_identity(
                 "schema_version": "2",
                 "tracking_policy_availability": tracking_policy_availability,
                 "solver_model": path_result.solver_model.as_str(),
-                "tracking_method": tracking_method,
-                "overlap_floor": tracking_cfg.overlap_floor,
-                "frequency_window_hz": tracking_cfg.frequency_window_hz,
+                "tracking_method": recorded_policy.map(|policy| policy.method),
+                "overlap_floor": recorded_policy.map(|policy| policy.overlap_floor),
+                "frequency_window_hz": recorded_policy.and_then(|policy| policy.frequency_window_hz),
                 "branches": v2_branches,
             }))
             .unwrap_or_default(),

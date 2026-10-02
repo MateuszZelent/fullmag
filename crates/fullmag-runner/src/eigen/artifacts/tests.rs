@@ -62,9 +62,24 @@ fn branch_writer_preserves_recorded_pair_policy_and_gap() {
         temp.path.join("eigen/branches.v2.json")).unwrap()).unwrap();
     assert_eq!(payload["tracking_method"], "overlap_hungarian");
     assert_eq!(payload["overlap_floor"], 0.7);
+    assert_eq!(payload["tracking_policy_availability"], "complete");
     assert_eq!(payload["branches"][0]["points"][1]["tracking_edge"],
                serde_json::to_value(edge).unwrap());
     assert_eq!(payload["branches"][0]["points"][1]["raw_mode_index"], 13);
+    let legacy: Value = serde_json::from_slice(&std::fs::read(
+        temp.path.join("eigen/branches.json")).unwrap()).unwrap();
+    for key in ["branches", "tracking_method", "overlap_floor", "frequency_window_hz",
+                "tracking_policy_availability"] { assert_eq!(payload[key], legacy[key]); }
+    result.branches[0].points[1].tracking_edge = None;
+    write_branch_bundle(&temp.path, &result).unwrap();
+    for name in ["branches.v2.json", "branches.json"] {
+        let partial: Value = serde_json::from_slice(&std::fs::read(
+            temp.path.join("eigen").join(name)).unwrap()).unwrap();
+        assert_eq!(partial["tracking_policy_availability"], "missing_or_mixed");
+        assert!(partial["tracking_method"].is_null());
+        assert!(partial["overlap_floor"].is_null());
+        assert!(partial["frequency_window_hz"].is_null());
+    }
 }
 
 fn sample_result() -> PathSolveResult {

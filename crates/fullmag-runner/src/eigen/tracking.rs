@@ -1200,6 +1200,7 @@ fn seed_tracking_edge(cfg: &ModeTrackingIR, transition: TrackingTransition) -> T
         metric: TrackingMetricDefinition::Unavailable,
         transition,
         previous_sample_index: None,
+        previous_raw_mode_index: None,
         skipped_sample_count: 0,
         subspace: None,
     }
@@ -1369,6 +1370,7 @@ pub fn track_branches(result: &mut PathSolveResult, config: Option<&ModeTracking
                 metric: tracking_metric(mode_view(current_mode)),
                 transition: TrackingTransition::Pair,
                 previous_sample_index: Some(last_point.sample_index),
+                previous_raw_mode_index: Some(last_point.raw_mode_index),
                 skipped_sample_count: sample_position - previous_position - 1,
                 subspace: None,
             };
@@ -2253,9 +2255,14 @@ mod tests {
             }
         }
         assert_eq!(result.branches[0].points[2].raw_mode_index, 5);
+        assert_eq!(result.branches[0].points.iter().map(|point| point.sample_index)
+            .collect::<Vec<_>>(), vec![10, 20, 30]);
+        assert_eq!(result.samples.iter().map(|sample| sample.sample.k_vector[0])
+            .collect::<Vec<_>>(), vec![-25e6, 0.0, 25e6]);
+        assert_eq!(result.branches[0].points[0].raw_mode_index, 19);
+        assert_eq!(result.branches[0].points[1].raw_mode_index, 23);
         assert_eq!(result.branches[0].points[2].frequency_real_hz, 9.0005e9);
-        assert_ne!(result.branches[0].points[0].frequency_real_hz,
-                   result.branches[0].points[2].frequency_real_hz); // preserve nonreciprocity
+        assert_eq!(result.branches[0].points[0].frequency_real_hz, 9.0e9);
         assert_eq!(raw_vectors, result.samples.iter().flat_map(|sample| &sample.modes)
             .map(|mode| mode.reduced_vector.clone()).collect::<Vec<_>>());
     }
