@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Verify accepted-run FEM preparation through production processes.
 
-The route builds the native FEM library and production API/CLI binaries from
-one source identity, submits an immutable FEM RunSpec through public HTTP v2,
-publishes a dedicated Meshing pool, and runs the accepted FEM preparation
+The managed-package route validates already-built API/CLI/native artifacts
+and performs no compilation. The standalone legacy route builds from one
+source identity. Both submit an immutable FEM RunSpec through public HTTP v2,
+publish a dedicated Meshing pool, and run the accepted FEM preparation
 scheduler.  It accepts success only when the exact task receipt, process
 launch/exit proofs, released preparation lease, and public readiness projection
 agree.  This is a process/runtime gate; it does not qualify solver physics.
@@ -258,12 +259,35 @@ def validate_durable_evidence(
     }
 
 
-def run(repo_root: Path, build_root: Path, output_root: Path) -> tuple[int, dict[str, object]]:
+def run(repo_root: Path, build_root: Path | None, output_root: Path, *,
+        managed_build_run_root: Path | None = None, storage_root: Path | None = None,
+        expected_commit: str | None = None, expected_snapshot: str | None = None) -> tuple[int, dict[str, object]]:
+    managed = None
+    if managed_build_run_root is not None:
+        if os.name == "nt":
+            raise AcceptedFemPreparationRuntimeError("Managed Linux package requires the managed Linux runtime route")
+        if storage_root is None or expected_commit is None or expected_snapshot is None:
+            raise AcceptedFemPreparationRuntimeError("Managed package requires storage and exact source identities")
+        import fullmag_storage as storage
+        from managed_fem_runtime_package import load_package
+        output_root = storage.validate_path(output_root, storage_root, "runtime evidence root")
+        package_root = storage.validate_path(managed_build_run_root, storage_root, "managed package root")
+        if output_root == package_root or output_root in package_root.parents or package_root in output_root.parents:
+            raise AcceptedFemPreparationRuntimeError("Runtime output must not overlap the managed package")
+        managed = load_package(package_root, storage_root, expected_commit, expected_snapshot, BINARIES)
+    elif build_root is None:
+        raise AcceptedFemPreparationRuntimeError("A managed package or build root is required")
     invocation_id = uuid.uuid4().hex
+    worktree_id = f"accepted-fem-preparation-{invocation_id}"
     run_root = output_root / invocation_id
     state_root = run_root / "state"
     runs_root = run_root / "runs"
-    for path in (build_root, run_root, state_root, runs_root):
+    if managed is not None:
+        from managed_fem_runtime_package import runtime_runs_root
+        runs_root = runtime_runs_root(repo_root, storage_root, worktree_id)
+        if runs_root == package_root or runs_root in package_root.parents or package_root in runs_root.parents:
+            raise AcceptedFemPreparationRuntimeError('Runtime runs must not overlap the managed package')
+    for path in (run_root, state_root, runs_root):
         path.mkdir(parents=True, exist_ok=True)
     receipt_path = run_root / "receipt.json"
     receipt: dict[str, object] = {
@@ -291,14 +315,25 @@ def run(repo_root: Path, build_root: Path, output_root: Path) -> tuple[int, dict
         request_path = run_root / "accepted-fem-request.json"
         write_atomic_json(request_path, request)
         receipt["fixture"] = fixture
-        identity = source_identity.capture(repo_root, ignore_non_runtime_dirty=True)
+        driver_identity = source_identity.capture(repo_root, ignore_non_runtime_dirty=True)
+        identity = managed[2] if managed is not None else driver_identity
+        receipt["driver_source_identity"] = driver_identity
         receipt["source_identity"] = identity
-        env = {str(key): str(value) for key, value in os.environ.items()}
+        if managed is None:
+            env = {str(key): str(value) for key, value in os.environ.items()}
+        else:
+            # Runtime dependencies must come from the pinned runtime image,
+            # never from inherited loader paths, preload hooks or host overrides.
+            home_root = run_root / 'home'
+            home_root.mkdir()
+            env = {'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8', 'HOME': str(home_root)}
+            env['FULLMAG_PROJECT_STORAGE_ROOT'] = str(Path(storage_root).resolve())
+            env['FULLMAG_REPO_ROOT'] = str(repo_root)
         env.update(
             {
                 "FULLMAG_STATE_ROOT": str(state_root),
                 "FULLMAG_RUNS_ROOT": str(runs_root),
-                "FULLMAG_WORKTREE_ID": f"accepted-fem-preparation-{invocation_id[:12]}",
+                "FULLMAG_WORKTREE_ID": worktree_id,
                 "FULLMAG_SOURCE_GIT_COMMIT": str(identity["head_commit_full"]),
                 "FULLMAG_SOURCE_WORKTREE_STATE": "dirty" if identity["source_snapshot_dirty"] else "clean",
                 "FULLMAG_SOURCE_SNAPSHOT_SHA256": str(identity["source_snapshot_sha256"]),
@@ -308,11 +343,20 @@ def run(repo_root: Path, build_root: Path, output_root: Path) -> tuple[int, dict
             }
         )
         Path(env["TMPDIR"]).mkdir(parents=True, exist_ok=True)
-        receipt["state"] = "building"
+        receipt["state"] = "binding_managed_package" if managed is not None else "building"
         write_atomic_json(receipt_path, receipt)
-        binaries, binary_evidence, build_commands = build_runtime(
-            repo_root, build_root, run_root, env
-        )
+        if managed is None:
+            binaries, binary_evidence, build_commands = build_runtime(
+                repo_root, build_root, run_root, env
+            )
+        else:
+            binaries, binary_evidence, _, libraries = managed
+            env["FULLMAG_FEM_LIB_DIR"] = str(libraries)
+            env["LD_LIBRARY_PATH"] = str(libraries)
+            env.update(FULLMAG_FORCE_LOCAL_FEM_CPU="1", FULLMAG_FEM_EXECUTION="cpu",
+                       FULLMAG_FEM_MFEM_DEVICE="cpu", FULLMAG_FEM_REQUIRE_GPU="0",
+                       FULLMAG_FEM_REQUIRE_CEED="0", FULLMAG_DISABLE_MANAGED_FEM_GPU_RUNTIME="1")
+            build_commands = []
         receipt["binaries"] = binary_evidence
         receipt["build_commands"] = build_commands
 
@@ -449,10 +493,16 @@ def run(repo_root: Path, build_root: Path, output_root: Path) -> tuple[int, dict
         after_identity = source_identity.capture(repo_root, ignore_non_runtime_dirty=True)
         receipt["source_identity_after"] = after_identity
         receipt["source_changed_during_run"] = (
-            after_identity["source_snapshot_sha256"] != identity["source_snapshot_sha256"]
+            after_identity["source_snapshot_sha256"] != driver_identity["source_snapshot_sha256"]
         )
         if receipt["source_changed_during_run"]:
             raise AcceptedFemPreparationRuntimeError("source identity changed during runtime verification")
+        if managed is not None:
+            from managed_fem_runtime_package import load_package
+            refreshed = load_package(managed_build_run_root, storage_root, expected_commit, expected_snapshot, BINARIES)
+            if refreshed[1] != binary_evidence:
+                raise AcceptedFemPreparationRuntimeError("Managed package changed during runtime verification")
+            receipt["managed_package_unchanged"] = True
         receipt["state"] = "passed"
         exit_code = 0
     except BaseException as error:
@@ -474,11 +524,19 @@ def run(repo_root: Path, build_root: Path, output_root: Path) -> tuple[int, dict
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo-root", type=Path, required=True)
-    parser.add_argument("--build-root", type=Path, required=True)
+    inputs = parser.add_mutually_exclusive_group(required=True)
+    inputs.add_argument("--build-root", type=Path)
+    inputs.add_argument("--managed-build-run-root", type=Path)
+    parser.add_argument("--storage-root", type=Path)
+    parser.add_argument("--expected-commit")
+    parser.add_argument("--expected-snapshot")
     parser.add_argument("--output-root", type=Path, required=True)
     args = parser.parse_args(argv)
     try:
-        return run(args.repo_root.resolve(), args.build_root.resolve(), args.output_root.resolve())[0]
+        return run(args.repo_root.resolve(), args.build_root.resolve() if args.build_root else None,
+                   args.output_root.resolve(), managed_build_run_root=args.managed_build_run_root,
+                   storage_root=args.storage_root, expected_commit=args.expected_commit,
+                   expected_snapshot=args.expected_snapshot)[0]
     except Exception as error:
         print(f"accepted FEM preparation runtime failed before receipt: {type(error).__name__}: {error}", file=sys.stderr)
         return 2
