@@ -82,3 +82,61 @@ def test_cli_rejects_fem_to_fdm_transfer_without_canonical_target_grid_identity(
 
     assert exit_code == 1
     assert "canonical target grid identity" in stderr.getvalue()
+
+
+def test_cli_uses_actual_relaxation_end_as_next_stage_start(tmp_path: Path) -> None:
+    stage_starts: list[float] = []
+
+    class _ClockStage(_Stage):
+        def to_ir(self, **kwargs) -> dict[str, object]:
+            stage_starts.append(kwargs["stage_start_time_s"])
+            return super().to_ir(**kwargs)
+
+    loaded = SimpleNamespace(
+        problem=SimpleNamespace(name="stage_clock"),
+        source_path=tmp_path / "stage_clock.py",
+        script_source="",
+        stages=(_ClockStage("flat_relax"), _ClockStage("flat_run")),
+        auto_execute_stages=True,
+        study_pipeline_document=lambda: None,
+    )
+    simulation = SimpleNamespace(
+        backend=SimpleNamespace(value="fdm"),
+        mode=SimpleNamespace(value="strict"),
+        precision=SimpleNamespace(value="double"),
+    )
+    relax_end = 0.4e-12
+    run_end = 0.9e-12
+    payloads = [
+        {
+            "status": "completed",
+            "steps": [{"step": 1, "time": relax_end}],
+            "final_magnetization": [[1.0, 0.0, 0.0]],
+        },
+        {
+            "status": "completed",
+            "steps": [{"step": 1, "time": run_end}],
+            "final_magnetization": [[1.0, 0.0, 0.0]],
+        },
+    ]
+    aggregate: list[dict[str, object]] = []
+
+    def capture_result(payload, **_kwargs):
+        aggregate.append(payload)
+        return SimpleNamespace(status="completed")
+
+    with (
+        patch("fullmag.runtime.cli.load_problem_from_script", return_value=loaded),
+        patch("fullmag.runtime.cli.Simulation", return_value=simulation),
+        patch("fullmag.runtime.cli.run_problem_json", side_effect=payloads),
+        patch("fullmag.runtime.cli.extract_fem_mesh_ir", return_value=None),
+        patch("fullmag.runtime.cli.result_from_run_payload", side_effect=capture_result),
+        patch("fullmag.runtime.cli.build_summary", return_value={"status": "completed"}),
+    ):
+        exit_code = runtime_cli.main(
+            [str(loaded.source_path), "--json", "--output-dir", str(tmp_path)]
+        )
+
+    assert exit_code == 0
+    assert stage_starts == [0.0, relax_end]
+    assert [step["time"] for step in aggregate[0]["steps"]] == [relax_end, run_end]
