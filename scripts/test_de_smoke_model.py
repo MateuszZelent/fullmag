@@ -254,3 +254,40 @@ def test_dense_oracle_is_explicitly_bounded_to_k2_pilot(monkeypatch):
     assert "export FULLMAG_FLOQUET_EPS_PREFILTER_ABS=1e-8" in multi_eps[-1]
     with pytest.raises(pilot.managed.BenchmarkError, match="unsupported"):
         pilot.compose_command(None, ROOT, pilot="de-smoke-k2", shifted_ksp_rtol="0.01")
+
+
+@pytest.mark.parametrize("sampling,vector", [("k10", [0, 1e7, 0]), ("k-10", [0, -1e7, 0])])
+def test_explicit_window_preserves_signed_numeric_demag_model(monkeypatch, sampling, vector):
+    monkeypatch.setenv("FULLMAG_DE_SMOKE_SAMPLING", sampling)
+    monkeypatch.setenv("FULLMAG_DE_SMOKE_MODAL_TARGET", "frequency_window")
+    monkeypatch.setenv("FULLMAG_DE_SMOKE_FREQUENCY_MIN_GHZ", "10.9")
+    monkeypatch.setenv("FULLMAG_DE_SMOKE_FREQUENCY_MAX_GHZ", "11.5")
+    fm.reset()
+    try:
+        loaded = fm.load_problem_from_script(ROOT / "examples/fem_de_smoke_numeric.py", lightweight_assets=True)
+        ir = loaded.stages[-1].problem.to_ir(requested_backend="fem", execution_mode="strict", execution_precision="double", include_geometry_assets=False)
+    finally:
+        fm.reset()
+    assert ir["study"]["target"] == {"kind": "frequency_window", "frequency_min_hz": 10.9e9, "frequency_max_hz": 11.5e9}
+    assert ir["study"]["operator"] == {"kind": "full_2x2", "include_demag": True}
+    assert ir["study"]["magnetostatic_bc"] == "floquet_airbox"
+    assert ir["study"]["k_sampling"] == {"kind": "single", "k_vector": vector}
+    assert ir["problem_meta"]["runtime_metadata"]["de_smoke"]["frequency_window_hz"] == [10.9e9, 11.5e9]
+    assert sorted(term["kind"] for term in ir["energy_terms"]) == ["demag", "exchange", "zeeman"]
+
+
+@pytest.mark.parametrize("lower,upper,target", [("10.9", None, "frequency_window"), (None, "11.5", "frequency_window"), ("nan", "11.5", "frequency_window"), ("10.9", "inf", "frequency_window"), ("0", "11.5", "frequency_window"), ("-1", "11.5", "frequency_window"), ("12", "11.5", "frequency_window"), ("11.5", "11.5", "frequency_window"), ("10.9", "1e308", "frequency_window"), ("bad", "11.5", "frequency_window"), ("10.9", "11.5", "nearest")])
+def test_explicit_window_rejects_invalid_or_incompatible_bounds(monkeypatch, lower, upper, target):
+    monkeypatch.setenv("FULLMAG_DE_SMOKE_SAMPLING", "k10")
+    monkeypatch.setenv("FULLMAG_DE_SMOKE_MODAL_TARGET", target)
+    for key, value in (("FULLMAG_DE_SMOKE_FREQUENCY_MIN_GHZ", lower), ("FULLMAG_DE_SMOKE_FREQUENCY_MAX_GHZ", upper)):
+        if value is None:
+            monkeypatch.delenv(key, raising=False)
+        else:
+            monkeypatch.setenv(key, value)
+    fm.reset()
+    try:
+        with pytest.raises(ValueError, match="FULLMAG_DE_SMOKE_FREQUENCY"):
+            fm.load_problem_from_script(ROOT / "examples/fem_de_smoke_numeric.py", lightweight_assets=True)
+    finally:
+        fm.reset()

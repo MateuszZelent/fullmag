@@ -321,6 +321,12 @@
       "path": "crates/fullmag-runner/src/eigen/artifacts/field_sweep.rs",
       "symbol": "field_sweep_axis",
       "responsibility": "Emit the bias_field_a_per_m scan axis, A/m unit and mu0_H display conversion."
+    },
+    {
+      "id": "source-de-smoke-explicit-window",
+      "path": "examples/fem_de_smoke_numeric.py",
+      "symbol": "_configured_frequency_window_hz",
+      "responsibility": "Validate paired diagnostic GHz bounds and lower the unchanged FrequencyWindow target to SI Hz; retain resolved bounds in provenance."
     }
   ],
   "public_api": {

@@ -43,6 +43,27 @@ if MODAL_TARGET not in {"frequency_window", "nearest"}:
         "FULLMAG_DE_SMOKE_MODAL_TARGET must be 'frequency_window' or 'nearest', "
         f"got {MODAL_TARGET!r}"
     )
+def _configured_frequency_window_hz(default_min, default_max, modal_target):
+    names = ("FULLMAG_DE_SMOKE_FREQUENCY_MIN_GHZ", "FULLMAG_DE_SMOKE_FREQUENCY_MAX_GHZ")
+    values = [os.environ.get(name) for name in names]
+    if values == [None, None]:
+        return default_min, default_max
+    if any(value is None for value in values):
+        raise ValueError("FULLMAG_DE_SMOKE_FREQUENCY_MIN_GHZ and FULLMAG_DE_SMOKE_FREQUENCY_MAX_GHZ must be provided together")
+    if modal_target != "frequency_window":
+        raise ValueError("FULLMAG_DE_SMOKE_FREQUENCY_MIN_GHZ/MAX_GHZ require frequency_window")
+    try:
+        bounds = [float(value) * 1e9 for value in values]
+    except ValueError as exc:
+        raise ValueError("FULLMAG_DE_SMOKE_FREQUENCY_MIN_GHZ/MAX_GHZ must be numbers") from exc
+    if not all(math.isfinite(value) and value > 0 for value in bounds) or bounds[0] >= bounds[1]:
+        raise ValueError("FULLMAG_DE_SMOKE_FREQUENCY_MIN_GHZ/MAX_GHZ must be finite, positive and strictly ordered")
+    return tuple(bounds)
+
+
+FREQUENCY_MIN_HZ, FREQUENCY_MAX_HZ = _configured_frequency_window_hz(
+    FREQUENCY_MIN_HZ, FREQUENCY_MAX_HZ, MODAL_TARGET)
+
 if MODAL_TARGET == "nearest" and not IS_SINGLE:
     raise ValueError(
         "FULLMAG_DE_SMOKE_MODAL_TARGET=nearest requires exactly one single-k sampling point"
