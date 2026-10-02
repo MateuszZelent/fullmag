@@ -2555,6 +2555,15 @@ z eq-de-bv-profile-overlap (nie jego kwadrat). Dla podprzestrzeni stosuje
 dwukrotną ortogonalizację w tej samej metryce i SVD macierzy cross-Gram.
 Liniowo zależna baza jest błędem; nie wolno zmniejszyć rzędu po cichu.
 Helper algebraiczny nie sprawdza hashów artefaktów ani decyzji przydziału.
+Adapter odczytu najpierw wykonuje niezależny certyfikat fazy, następnie
+ponownie sprawdza SHA-256 tych samych bajtów metadanych i pól. Wyznacza
+fingerprint v3 z rzeczywistej siatki i odtwarza uporządkowany support,
+kompaktowe Tet4 oraz objętości z jawnej partycji magnetycznej. Rekord masy
+musi odpowiadać tej geometrii; sam deklarowany fingerprint nie wystarcza.
+Transport ram wyznacza bieżącą bazę przemnożoną przez polarną rotację
+Procrustesa cross-Gram. Kolejne overlapy używają tej ramy.
+Adapter i algebra nadal nie dowodzą globalnie optymalnego przydziału
+branch IDs ani kompletności pasm, więc nie otwierają bramki QUALIFIED.
 Po degeneracji konieczny jest dodatkowo replay przetransportowanej ramy;
 raw-to-raw overlap nie zastępuje tego replay. Do jego wykonania C1/A1
 pozostają NOT VERIFIED. Jest to diagnostyka CPU, bez zmiany Python/IR,
@@ -2587,6 +2596,9 @@ selekcja węzłów Gamma, następnie kompilacja/runtime i walidacja naukowa.
 | source-tracking-consistent-publication | `crates/fullmag-runner/src/eigen/artifacts/mode_bundle.rs` | `ModeArtifact` |
 | source-comsol-tracking-metric-algebra | `scripts/comsol_tracking_metric.py` | `principal_cosines` |
 | source-comsol-tracking-metric-tests | `scripts/test_comsol_tracking_metric.py` | `test_rotated_degenerate_basis` |
+| source-comsol-tracking-frame-transport | `scripts/comsol_tracking_metric.py` | `transport` |
+| source-comsol-tracking-field-reader | `scripts/comsol_tracking_fields.py` | `load_tracking_fields` |
+| source-comsol-tracking-field-tests | `scripts/test_comsol_tracking_fields.py` | `test_actual_certificate_and_geometry` |
 
 
 ### Integralność legacy odczytu pól i wag

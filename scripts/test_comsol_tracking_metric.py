@@ -56,6 +56,28 @@ class TrackingMetricTests(unittest.TestCase):
             self.metric.principal_cosines([self.x, self.y], [self.x, z]), [0, 1]
         )
 
+    def test_transport_recovers_previous_frame_for_next_edge(self):
+        rotated = [(self.x + 1j * self.y) / np.sqrt(2),
+                   (1j * self.x + self.y) / np.sqrt(2)]
+        cosines, frames = self.metric.transport([self.x, self.y], rotated)
+        np.testing.assert_allclose(cosines, [1, 1])
+        self.assertAlmostEqual(self.metric.overlap(frames[0], self.x), 1)
+        self.assertAlmostEqual(self.metric.overlap(frames[1], self.y), 1)
+        self.assertAlmostEqual(self.metric.overlap(rotated[0], self.x), 2 ** -.5)
+
+    def test_persisted_metric_matches_geometry(self):
+        record = {"schema": "fullmag.tracking_consistent_p1_metric.v1",
+                  "definition_id": "consistent_p1_tet4_cartesian_nodal_envelope.v1",
+                  "source_mesh_topology_sha256": "sha256:test",
+                  "physical_node_indices": [0, 1, 2, 3],
+                  "tetra": [[0, 1, 2, 3]], "volumes_m3": [1/6]}
+        self.metric.validate_persisted_metric(record, "sha256:test")
+        for key, value in (("volumes_m3", [1/3]), ("tetra", [[0, 1, 3, 2]]),
+                           ("physical_node_indices", [0, 1, 2, True]),
+                           ("source_mesh_topology_sha256", "sha256:other")):
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                self.metric.validate_persisted_metric({**record, key: value}, "sha256:test")
+
 
 if __name__ == "__main__":
     unittest.main()

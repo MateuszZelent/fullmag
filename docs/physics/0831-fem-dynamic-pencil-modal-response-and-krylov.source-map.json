@@ -2076,6 +2076,24 @@
       "responsibility": "Freeze public target transfer, unchanged residual policies, selected-only output and the prepared Rust single/path regressions."
     },
     {
+      "id": "source-comsol-tracking-field-reader",
+      "path": "scripts/comsol_tracking_fields.py",
+      "symbol": "load_tracking_fields",
+      "responsibility": "Recheck phase-certified bytes, reconstruct geometry fingerprint and bind consistent metric to explicit magnetic support"
+    },
+    {
+      "id": "source-comsol-tracking-field-tests",
+      "path": "scripts/test_comsol_tracking_fields.py",
+      "symbol": "test_actual_certificate_and_geometry",
+      "responsibility": "Synthetic payload roundtrip and corruption checks, not solver or scientific qualification"
+    },
+    {
+      "id": "source-comsol-tracking-frame-transport",
+      "path": "scripts/comsol_tracking_metric.py",
+      "symbol": "transport",
+      "responsibility": "Independent mass-metric Procrustes frames; does not select or qualify raw branch assignments"
+    },
+    {
       "id": "source-comsol-tracking-metric-algebra",
       "path": "scripts/comsol_tracking_metric.py",
       "symbol": "principal_cosines",

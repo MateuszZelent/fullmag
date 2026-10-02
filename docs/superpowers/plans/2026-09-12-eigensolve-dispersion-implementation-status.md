@@ -1,5 +1,29 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
+## S06/S12 — odczyt pól i transport ram replay, 2026-10-02
+
+Dodano `load_tracking_fields`: wykonuje rzeczywisty certyfikat fazy,
+ponownie sprawdza bajty i SHA-256, wyznacza fingerprint v3 siatki oraz
+sprawdza rekord masy względem jawnej partycji, supportu, kompaktowego
+connectivity i objętości. Odrzuca zmienione bajty, spójnie sfałszowany
+deklarowany digest, brak supportu/metryki i jednoczesną masę diagonalną.
+Dodano niezależny transport Procrustesa; test pokazuje, że overlap z
+przetransportowaną ramą wynosi 1, gdy raw-to-raw daje 1/sqrt(2).
+
+Kontrole: 24 testy trackingu PASS (11 algebra, 6 odczyt, 7 istniejące
+provenance), 16 istniejących certyfikatu fazy PASS. Wszystkie nowe pola
+to syntetyczne fixture'y. Nie wykonano solvera ani testów natywnych.
+Odczyt nie jest jeszcze podłączony do bramki C1/A1; pozostaje NOT VERIFIED.
+Następny etap: wiązanie endpointów z widmem, odtworzenie wszystkich ramek
+w kolejności ścieżki, porównanie overlap/score/principal angles oraz
+weryfikacja przydziałów. Brakujące gate nie mogą przyjąć statusu pass
+tylko na podstawie poprawnego odczytu pól.
+
+Kontrola runtime tego etapu: sterownik session 7375 nadal aktywny;
+runner worker_alive=true, accepting_jobs=true, active_jobs=[],
+waiting_for_disk, storage_free_bytes=156 786 688 B. #196 nadal oczekuje;
+nie utworzono nowego joba ani nowego punktu FEM, nie usunięto danych.
+
 ## S06/S12 — niezależna algebra replay, 2026-10-02
 
 Dodano `scripts/comsol_tracking_metric.py`: lokalna forma masy Tet4 zamiast

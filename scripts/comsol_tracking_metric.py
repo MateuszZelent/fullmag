@@ -93,3 +93,48 @@ class Tet4TrackingMetric:
             raise ValueError("subspace ranks differ")
         cross = np.array([[self.inner(a, b) for b in right] for a in left])
         return np.sort(np.clip(np.linalg.svd(cross, compute_uv=False), 0, 1))
+
+    def transport(self, previous, current):
+        """Return principal cosines and current basis in the previous frame.
+
+        No raw-mode assignment is inferred. Output frame order follows the
+        input previous branch order and is retained for subsequent edges.
+        """
+        left, right = self.basis(previous), self.basis(current)
+        if len(left) != len(right) or len(left) < 2:
+            raise ValueError("transport requires equal subspace ranks >= 2")
+        cross = np.array([[self.inner(a, b) for b in right] for a in left])
+        u, singular, vh = np.linalg.svd(cross)
+        rotation = vh.conj().T @ u.conj().T
+        frames = [sum((rotation[j, i] * right[j] for j in range(len(right))),
+                      np.zeros_like(right[0])) for i in range(len(left))]
+        return np.sort(np.clip(singular, 0, 1)), frames
+
+    def validate_persisted_metric(self, record, source_mesh_topology_sha256):
+        """Bind the producer's compact mass record to reconstructed geometry."""
+        keys = {"schema", "definition_id", "source_mesh_topology_sha256",
+                "physical_node_indices", "tetra", "volumes_m3"}
+        if not isinstance(record, dict) or set(record) != keys:
+            raise ValueError("invalid persisted tracking metric fields")
+        if record["schema"] != "fullmag.tracking_consistent_p1_metric.v1" \
+                or record["definition_id"] != "consistent_p1_tet4_cartesian_nodal_envelope.v1":
+            raise ValueError("unsupported tracking metric schema/definition")
+        if record["source_mesh_topology_sha256"] != source_mesh_topology_sha256:
+            raise ValueError("tracking metric mesh fingerprint differs")
+        nodes = record["physical_node_indices"]
+        tetra = record["tetra"]
+        if not isinstance(nodes, list) or any(type(x) is not int for x in nodes) \
+                or nodes != self.support.tolist():
+            raise ValueError("tracking metric magnetic node support differs")
+        if not isinstance(tetra, list) or any(
+            not isinstance(row, list) or len(row) != 4 or any(type(x) is not int for x in row)
+            for row in tetra
+        ) or tetra != np.searchsorted(self.support, self.cells).tolist():
+            raise ValueError("tracking metric compact connectivity differs")
+        if any(isinstance(item, (bool, np.bool_))
+               for item in np.asarray(record["volumes_m3"], dtype=object).flat):
+            raise ValueError("tracking metric volumes must not contain booleans")
+        volumes = _as_real_array(record["volumes_m3"], name="volumes_m3", ndim=1)
+        if volumes.shape != self.volumes_m3.shape or np.any(volumes <= 0) \
+                or not np.allclose(volumes, self.volumes_m3, rtol=1e-12, atol=0):
+            raise ValueError("tracking metric volumes differ from geometry")
