@@ -1,6 +1,6 @@
 # Windows-first development
 
-Windows is the host build and orchestration environment. The supported lanes are:
+Windows is the host build and orchestration environment. The current development routes are:
 
 | Lane | Build/runtime |
 |---|---|
@@ -8,6 +8,27 @@ Windows is the host build and orchestration environment. The supported lanes are
 | FDM GPU | native Windows/MSVC + CUDA Toolkit |
 | FEM CPU | Docker Desktop Linux container |
 | FEM GPU | Docker Desktop Linux/CUDA container |
+
+## Docelowy produkt Windows — doprecyzowanie 02.10.2026
+
+Pakiet Windows ma uruchamiać UI, zapisywać/odtwarzać projekty i sesje oraz
+wykonywać deklarowane realizacje FDM/FEM bez Docker Desktop, WSL i Linuxa.
+Tabela powyżej opisuje bieżące trasy rozwojowe; kontenerowy FEM nie realizuje
+docelowej bramki natywnego produktu. Pełny pakiet Windows pozostaje
+**NOT VERIFIED**. Osobny Linux/managed target zachowuje swoje bramki.
+
+Launcher deweloperski ma teraz jawny tryb pustego workspace:
+
+```powershell
+.\scripts\windows\run_fullmag.ps1 -BuildMode false -Frontend static -RunMode workspace -WebPort 3197
+```
+
+Wymaga wcześniej zbudowanego, zgodnego natywnego pakietu i statycznego UI;
+nie buduje brakującego pakietu ani nie obchodzi manifestu/hashów. Wywołuje
+`fullmag ui` bez skryptu. Backend i urządzenie wybiera się przy tworzeniu
+problemu w UI, więc ten tryb odrzuca parametry obliczeń zamiast je ignorować.
+Nie uruchomiono jeszcze tego polecenia z aktualnym natywnym pakietem:
+testy argumentów nie są dowodem startupu, zapisu ani wykonania FEM.
 
 The canonical FEM entry point is `scripts/windows/run_fullmag_fem.ps1`. It does
 not invoke `wsl.exe`: Docker Desktop may use WSL2 internally, but Fullmag does

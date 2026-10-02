@@ -13,7 +13,7 @@ param(
   [ValidateSet("auto", "cpu", "gpu")]
   [string]$Device = "auto",
 
-  [ValidateSet("interactive", "headless")]
+  [ValidateSet("interactive", "headless", "workspace")]
   [string]$RunMode = "interactive",
 
   [string]$ScriptPath,
@@ -41,6 +41,16 @@ param(
 
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
+
+# Workspace opens the authoring shell; execution intent is chosen in the UI.
+# Reject simulation inputs instead of silently dropping them from `fullmag ui`.
+if ($RunMode -eq "workspace" -and (
+    $ScriptPath -or $OutputDir -or $InitialMagnetizationState -or
+    $InitialMagnetizationStateFormat -or $InitialMagnetizationStateDataset -or
+    $null -ne $InitialMagnetizationStateSampleIndex -or
+    $Backend -ne "auto" -or $Device -ne "auto")) {
+  throw "Workspace mode opens an empty authoring shell; choose backend/device in the UI and omit simulation inputs"
+}
 
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $TargetTriple = "x86_64-pc-windows-msvc"
@@ -423,7 +433,7 @@ $FullmagExe = Join-Path $TargetRoot "$TargetTriple\release\fullmag.exe"
 $FullmagApiExe = Join-Path $TargetRoot "$TargetTriple\release\fullmag-api.exe"
 $StaticControlRoom = Join-Path $RepoRoot "apps\control-room\out\index.html"
 $needsControlRoomToolchain = $Frontend -eq "static" -or
-  (-not $BuildOnly -and $RunMode -eq "interactive")
+  (-not $BuildOnly -and $RunMode -in @("interactive", "workspace"))
 
 $nextDistDir = if ($needsControlRoomToolchain -and $Frontend -eq "dev") {
   ".next-control-room-$WebPort"
@@ -683,6 +693,19 @@ if ($BuildOnly) {
   Write-Host "- cargo target: $TargetRoot"
   Write-Host "- cache root: $CacheRoot"
   Write-Host "- rustup home: $RustupHome"
+  exit 0
+}
+
+if ($RunMode -eq "workspace") {
+  $workspaceArguments = @("ui", "--web-port", $WebPort.ToString())
+  if ($Frontend -eq "dev") { $workspaceArguments += "--dev" }
+  Push-Location $RepoRoot
+  try {
+    Invoke-External $FullmagExe $workspaceArguments
+  }
+  finally {
+    Pop-Location
+  }
   exit 0
 }
 

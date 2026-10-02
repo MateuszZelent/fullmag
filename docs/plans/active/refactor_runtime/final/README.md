@@ -227,3 +227,13 @@ Kontrola pakietu z 21.09.2026: parsery `inventory.json`, `02-baseline-manifest.j
 Aktualizacja startupu 02.10.2026: ACK scope i invalidacja replacement naprawione w źródłach; nowy build/browser NOT VERIFIED. Checkpointy BLOCKED: symlink w pierwotnym launcherze, a po jego naprawie nieobsługiwany filesystem Desktop 9p. Runner ma poniżej 8 GiB wolnego storage i wykrywa istniejący runtime. Sesja użytkownika na 3104 zachowana. Szczegóły: [raport startupu](p1/10-browser-empty-startup.md).
 
 Kolejny checkpoint 02.10.2026: miejsce odblokowane (43,8 GB wolnego podczas preflight), zlecono [build nr 200](p1/12-startup-rebuild-200.md) czystego commita z poprawkami UI. Backend w kompilacji, terminalny receipt NOT VERIFIED. Import definicji sceny na prywatne 3114 PASS, oryginał 3104 bez zmian. [Propozycja magazynu sesji Desktop](p1/11-desktop-session-storage-proposal.md) pozostaje do decyzji operatora; nie provisionowano wolumenu.
+
+Nowszy checkpoint 02.10.2026 zastępuje stan RUNNING powyżej: build 200
+SUCCEEDED/exit 0, pakiet zweryfikowany. Na 3124 pusty FDM i replacement FEM
+bez reloadu PASS; ACK transport 200 z pełnym scope. Przyjęcie pustej sceny
+nadal zgłasza timeout, a checkpointy 500/9p — pełny startup nie jest zaliczony.
+Operator wymaga niezależnego Windows bez Docker/WSL/Linux; propozycja wolumenu
+została wycofana jako rozwiązanie produktu, nie wymaga już tej decyzji.
+[Natywny pusty workspace](p1/14-windows-native-workspace.md) dodano do launchera;
+7 lekkich regresji PASS. Aktualny natywny pakiet, FEM oraz pełny storage/restart
+pozostają NOT VERIFIED. Sesja 3104 zachowana; procenty planu bez awansu.
