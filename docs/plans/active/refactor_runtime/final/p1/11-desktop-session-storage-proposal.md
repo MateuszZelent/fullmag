@@ -1,7 +1,14 @@
 # Propozycja: trwały magazyn sesji Docker Desktop
 
-Status: PROPOSED — wymaga decyzji operatora; niczego nie provisionowano.
+Status: SUPERSEDED jako rekomendacja produktu — niczego nie provisionowano.
 Data: 02.10.2026.
+
+Operator doprecyzował, że produkt Windows ma działać całkowicie niezależnie
+od Linuxa, WSL i Dockera. Poniższy wolumen dotyczyłby wyłącznie środowiska
+testowego Linux/Docker i nie zamyka Windows packaging ani persistence.
+Nie oczekujemy zgody na niego jako rozwiązanie produkcyjne. Zachowujemy
+opis jako historyczne rozpoznanie problemu 9p; kierunek produktu określa
+P8-C w planie głównym. Natywny zapis Windows wymaga osobnej weryfikacji.
 
 ## Problem
 

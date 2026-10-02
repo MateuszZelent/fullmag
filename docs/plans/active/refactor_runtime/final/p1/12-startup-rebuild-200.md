@@ -1,6 +1,6 @@
 # Startup — ponowne zlecenie buildu nr 200
 
-Data: 02.10.2026. Stan: RUNNING; terminalny wynik NOT VERIFIED.
+Data: 02.10.2026. Stan: build SUCCEEDED (exit 0); pełny startup/persistence NOT VERIFIED.
 
 Poprzednia blokada pojemności zniknęła: worker_alive=true,
 accepting_jobs=true, brak worker_error, wolne 43 795 341 312 B podczas preflight.
@@ -19,6 +19,34 @@ API runnera początkowo potwierdziło prepare=running. Worker zakończył
 przygotowanie i opublikował native-build start; kompilacja jest w trakcie.
 Brak terminalnego receipt nie jest PASS ani failure.
 Nie zgłaszamy ponownie tego samego zadania po timeout obserwatora.
+
+Późniejszy terminalny receipt potwierdził succeeded/exit 0. Launcher
+zweryfikował trusted documents, clean commit i hash inventory pakietu;
+build receipt SHA256: fc388fc12dd3ebc01291f5655b4e65cb84088e230cc1ecdeb7aeca68f19efd69.
+
+## Przeglądarka nowego pakietu — dowód częściowy
+
+Osobny port 3124, run 8d6b9d1d0fa046ba8a552c7319805448,
+container a0122c2160f98c1681e0e454383dab17366dbe1a2c5cef1c4cb59a3a980e18eb.
+Image/mount/loopback attestation PASS. Launcher zakończył się exit 1,
+zachowując kontener: filesystem 9p/0x1021997 odrzucony przez guard.
+Nie zaliczamy pełnego startu ani persistence.
+
+UI: utworzenie pustego FDM HTTP 201; zastąpienie własnej pustej sesji
+przez FEM HTTP 201 bez reloadu. Nagłówek i workspace pokazują Startup 200 FEM,
+Objects 0, Mesh not built; brak blokującego modalu. Stare scope zwróciło 409,
+nowe status/solver/status zwróciło 200. Oba rzeczywiste client-acks mają
+pełne request_scope_epoch i HTTP 200, więc wcześniejsze ACK 400 usunięto.
+Payload ACK nadal zgłasza failed: visualization render adoption timed out;
+to odrębny nierozwiązany problem przyjęcia pustej sceny, nie render PASS.
+Canvas istnieje, contextLost=false, drawing buffer 554x337.
+Checkpoints nadal HTTP 500; preparation i runs/current HTTP 404 przy pustej
+sesji. Nie uruchomiono meshera/solvera, nie restartowano sesji 3104.
+Dowody: [sieć](13-startup-200-network.json),
+[widok](13-startup-200-browser.jpg).
+
+Decyzja operatora: produkt Windows bez Docker/WSL/Linux. Wolumen nie jest
+rozwiązaniem produktu; P8-C rozszerzono o jawną bramkę natywnej dystrybucji.
 
 Sesja 3104 pozostaje dostępna: jeden obiekt, brak aktywnego solvera.
 Dwie karty przeglądarki odczytano bez reloadu. W widocznym Inspectorze Universe
@@ -52,3 +80,5 @@ symlink .fullmag exit 2. Nie restartowano API, nie mutowano sesji ani źródeł.
 Probe directories zachowano. Dowód: [receipt](12-bootstrap-probe.json).
 11 lekkich regresji Python PASS. Ten fragment nie zalicza odtworzenia aktywnej
 sesji po restarcie, trwałości storage ani checkpointów.
+
+Dodatkowy odczyt model/script na obecnym 3104 zwrócił 400: active local live workspace does not expose a script path. Nie zachowano przez ten endpoint skryptu; backup/import powyżej dotyczy SceneResource, nie kompletnego resume/FMS. Nie należy przedstawiać tej kopii jako backupu wszystkich stanów runtime.

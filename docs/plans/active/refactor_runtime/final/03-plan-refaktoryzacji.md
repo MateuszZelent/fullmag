@@ -214,11 +214,19 @@ Rollback P7 ogranicza admission nowych kampanii/targetów; nie porzuca działaj�
 |---|---|---|
 | P8-A | Usunąć mutable current writers, globalny workspace gate, dual-truth authoring i zbędne adaptery. Zachować nazwane import/CLI compatibility readers. | Inventory tras/metod i symboli bez nieoznaczonych legacy consumers; kompletne namespace contexts, jeden writer/queue. |
 | P8-B | Zaktualizować backend masterplan, ADR/spec, canonical physics/source maps, Python examples i public docs. | Link/parser/source-map checks; odpowiednie przykłady i docs render; żadnej planned capability opisanej jako qualified. |
-| P8-C | Zbudować i sprawdzić pakiety Windows/desktop i wspierany managed Linux; version handshake Rust/Python/API/native. | Managed build receipts, source identity, nonempty artifacts; clean install/open/upgrade/rollback smoke. |
+| P8-C | Zbudować i sprawdzić niezależny natywny pakiet Windows/desktop oraz wspierany managed Linux; version handshake Rust/Python/API/native. Windows nie wymaga Docker Desktop, WSL ani Linuxa do uruchomienia produktu. | Receipts właściwego targetu, source identity, nonempty artifacts; clean install/open/upgrade/rollback smoke. Windows: UI, zapis/odtworzenie i deklarowane FDM/FEM CPU/GPU sprawdzone bez Docker/WSL; brak lane'u jest niezrealizowaną bramką, nie cichym fallbackiem. |
 | P8-D | Przeprowadzić macierz CAE i lane qualification; fault/recovery/performance/soak. | Raport 04 z wykonanymi required rows, bez „skip=pass”; jawne unsupported poza release scope. |
 | P8-E | Wymagane review/CI/PR/merge oraz lokalna weryfikacja i cleanup zadania. | Pełny wynikowy SHA, PR, status CI/review, registry i dokładny cleanup lub konkretny blocked. |
 
 Wydanie może promować wyłącznie zakres wskazany w macierzy kwalifikacji. Jeżeli refaktor zmienia wszystkie cztery lane’y, każda potrzebuje dowodu; sukces CPU lub frontend smoke nie zastępuje GPU/FEM. Zamknięcie planu nie następuje przez przemianowanie brakującego lane’u na „poza zakresem”.
+
+Doprecyzowanie operatora 02.10.2026: niezależność Windows obejmuje także
+magazyn sesji, checkpointy i odtwarzanie. Kontenery użyte przez zespół do
+buildów i testów Linux nie są zależnością instalacji Windows ani dowodem
+kwalifikacji Windows. Obecny `scripts/windows/run_fullmag.ps1` wspiera FDM;
+`run_fullmag_fem.ps1` nadal korzysta z Linux/Docker. Pełne natywne FEM oraz
+trwały zapis Windows pozostają NOT VERIFIED i wymagają implementacji oraz
+własnych bramek. Propozycja wolumenu Docker w P1/11 nie realizuje tego celu.
 
 ## 14. Rejestr decyzji empirycznych i reguły awarii
 
