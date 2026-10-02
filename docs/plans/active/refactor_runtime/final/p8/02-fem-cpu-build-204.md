@@ -40,3 +40,14 @@ Następny krok: obserwować ten sam Job ID, odczytać terminalny receipt i logi,
 sprawdzić tożsamość źródeł oraz kompletność artefaktów. Awaria ma zostać
 rozpoznana przed ponowieniem. Po buildzie pozostają odrębne bramki runtime,
 Windows dependency bundle/launcher/storage, instalacja i kwalifikacja lane'ów.
+
+## Checkpoint — rozpoczęta praca
+
+02.10.2026: ten sam job przeszedł do RUNNING, coordinator local-host,
+exit_code=null. Source digest i commit pozostają zgodne z tabelą.
+Potwierdzono żywy worker `aec2d9b7ff91` /
+`fullmag-worker-c13c7fd4a12c40ca82690cbeba13ec27`. Proces entrypoint zawiera
+właściwy job ID, source digest i profil fem-cpu-release. Log klienta oraz
+stdout workera były jeszcze puste; nie dowodzą wykonania konkretnych etapów
+kompilacji. Nie restartowano ani nie ponowiono próby. Wynik, receipt końcowy
+i wymagane artefakty pozostają NOT VERIFIED.

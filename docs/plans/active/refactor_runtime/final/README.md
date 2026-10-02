@@ -289,3 +289,7 @@ copy z jawnych MSVC/CUDA/operator SDK roots; plan i source hashes zapisuje
 w manifestach. 24 planner/PowerShell oraz 23 PE i 15 storage regresji
 PASS (62). Real MSVC redist plan/copy/audit PASS, bez Fullmag build/runtime.
 Pełny natywny FEM, Windows receipt i install/recovery pozostają otwarte.
+
+Build FEM CPU 204 przeszedł z QUEUED do RUNNING. Potwierdzono żywy worker
+i poprawne job/source/profile argumenty entrypoint. Logi jeszcze puste;
+terminalny receipt i artefakty nadal NOT VERIFIED. Obserwować ten sam job.
