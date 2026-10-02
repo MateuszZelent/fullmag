@@ -773,7 +773,7 @@ SLEPcTinyGyrotropicModalEigenResult solve_sparse_modal_spectrum_for_request(
         }
         if (spectral_request.floquet_shared_domain_operator != nullptr &&
             reuse_context != nullptr) {
-            return solve_floquet_shared_domain_sparse_modal_spectrum(
+            return solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
                 *spectral_request.floquet_shared_domain_operator,
                 spectral_request,
                 reuse_context);

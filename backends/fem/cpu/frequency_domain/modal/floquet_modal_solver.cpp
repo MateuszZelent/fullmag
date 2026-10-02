@@ -2661,14 +2661,14 @@ solve_floquet_shared_domain_sparse_modal_spectrum(
     const FloquetSharedDomainSparseModalOperator &operator_view,
     const SLEPcSparseGyrotropicModalEigenRequest &spectral_request) noexcept
 {
-    return solve_floquet_shared_domain_sparse_modal_spectrum(
+    return solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
         operator_view,
         spectral_request,
         nullptr);
 }
 
 SLEPcTinyGyrotropicModalEigenResult
-solve_floquet_shared_domain_sparse_modal_spectrum(
+solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
     const FloquetSharedDomainSparseModalOperator &operator_view,
     const SLEPcSparseGyrotropicModalEigenRequest &spectral_request,
     FloquetSharedDomainSparseModalSolveContext *reuse_context) noexcept

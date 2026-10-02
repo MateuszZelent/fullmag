@@ -100,7 +100,7 @@ solve_floquet_shared_domain_sparse_modal_spectrum(
     const SLEPcSparseGyrotropicModalEigenRequest &spectral_request) noexcept;
 
 SLEPcTinyGyrotropicModalEigenResult
-solve_floquet_shared_domain_sparse_modal_spectrum(
+solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
     const FloquetSharedDomainSparseModalOperator &operator_view,
     const SLEPcSparseGyrotropicModalEigenRequest &spectral_request,
     FloquetSharedDomainSparseModalSolveContext *reuse_context) noexcept;
