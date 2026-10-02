@@ -970,6 +970,27 @@ class ScientificGateTests(unittest.TestCase):
                     self.assertEqual(report["checks"]["tracking_assignment_replay"]["status"],"missing")
                     self.assertEqual(report["qualification"],"NOT VERIFIED")
 
+    def test_sparse_history_requires_executed_lifecycle_certificate(self):
+        # Injected component results test this consumer, not FEM execution.
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = _make_case(Path(directory), "c1")
+            result = dict(status="pass", reasons=[], assignment_replay="pass",
+                replayed_branch_scope="all_candidates", branch_lifecycle_scope="complete_history",
+                branch_lifecycle_replay=dict(status="pass", verified_sample_count=61),
+                candidate_field_coverage=dict(status="pass", exported_candidate_count=61 * 8),
+                global_assignment_verification=[dict(sample_index=index,status="pass") for index in range(1,61)])
+            for defect in (None, "missing", "failed", "count", "boolean"):
+                changed = copy.deepcopy(result)
+                if defect == "missing": changed.pop("branch_lifecycle_replay")
+                elif defect == "failed": changed["branch_lifecycle_replay"]["status"] = "NOT VERIFIED"
+                elif defect == "count": changed["branch_lifecycle_replay"]["verified_sample_count"] = 60
+                elif defect == "boolean": changed["branch_lifecycle_replay"]["verified_sample_count"] = True
+                with self.subTest(defect=defect), patch.object(gate,"replay_tracking_fields",return_value=changed):
+                    report = gate.validate_case(case_dir,"c1",parameters_path=PARAMETERS,kpath_path=KPATH)
+                    self.assertEqual(report["checks"]["tracking_assignment_replay"]["status"],
+                                     "pass" if defect is None else "missing")
+
     def test_resolved_spatial_material_override_cannot_claim_homogeneous_ks(self):
         metadata = _native_metadata("c1", "mesh-L1", 2e-6, 24)
         metadata["execution_plan"]["backend_plan"]["material"]["ms_field"] = [800000.0, 1600000.0]

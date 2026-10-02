@@ -83,13 +83,13 @@ def bind_candidate_fields(samples, modes):
                        f"candidate field {name}", relative=True)
 
 
-def verify_global_prediction(metric, prediction, points, current, frames, method):
+def verify_global_prediction(metric, prediction, points, current, frames, method, *, birth_raw_ids=()):
     """Compare a complete recorded edge set with reconstructed policy choices."""
     expected = prediction["matches"]
     if set(expected) != set(points):
         raise ValueError("global assignment branch coverage differs")
     recorded_raw = [point["raw_mode_index"] for point in points.values()]
-    if len(set(recorded_raw)) != len(recorded_raw) or set(recorded_raw) != {mode["raw_mode_index"] for mode in current}:
+    if len(set(recorded_raw)) != len(recorded_raw) or set(recorded_raw) != {mode["raw_mode_index"] for mode in current} - set(birth_raw_ids):
         raise ValueError("global assignment does not cover all spectrum candidates")
     equivalent = False
     for identity, point in points.items():
@@ -112,9 +112,10 @@ def verify_global_prediction(metric, prediction, points, current, frames, method
             equivalent = True
     measured = sum(_number(point["tracking_confidence"], "assignment score") for point in points.values())
     optimum = sum(edge["score"] for edge in expected.values())
-    _close(measured / len(points), optimum / len(points), "global assignment mean score")
+    count = len(points)
+    _close(measured / max(1, count), optimum / max(1, count), "global assignment mean score")
     return dict(status="pass", equivalent_optimum=equivalent, branch_count=len(points),
-                recorded_mean_score=measured / len(points), predicted_mean_score=optimum / len(points))
+                recorded_mean_score=measured / max(1, count), predicted_mean_score=optimum / max(1, count))
 
 
 def verify_initial_assignment(by_branch, sample):
@@ -131,7 +132,7 @@ def verify_initial_assignment(by_branch, sample):
 def replay_recorded_frames(metric, modes, branches, samples, *, candidate_branch_ids=None):
     """Reconstruct every chosen frame/metric; inputs already bound by caller.
 
-    All dependent cluster branches must be present over the full path. Raw
+    All branch histories must be present, including births and gaps. Raw
     assignments are retained as recorded, never inferred from frequency sort.
     """
     order = [sample["sample_index"] for sample in samples]
@@ -149,8 +150,8 @@ def replay_recorded_frames(metric, modes, branches, samples, *, candidate_branch
         if identity in by_branch:
             raise ValueError("duplicate branch ID")
         points = {point["sample_index"]: point for point in branch["points"]}
-        if set(points) != set(order):
-            raise ValueError("dependent tracking branch is incomplete")
+        if not points or not set(points).issubset(order):
+            raise ValueError("dependent tracking branch has invalid sample coverage")
         by_branch[identity] = points
     if not by_branch:
         raise ValueError("no tracked branches to replay")
@@ -172,6 +173,8 @@ def replay_recorded_frames(metric, modes, branches, samples, *, candidate_branch
             raise ValueError("duplicate spectrum raw mode")
         used = set()
         for identity, points in by_branch.items():
+            if sample["sample_index"] not in points:
+                continue
             point = points[sample["sample_index"]]
             raw = point["raw_mode_index"]
             key = (sample["sample_index"], raw)
@@ -190,6 +193,10 @@ def replay_recorded_frames(metric, modes, branches, samples, *, candidate_branch
                 _close(frequency, point[name], f"branch {name}", relative=True)
             frequencies[(identity, sample["sample_index"])] = real
     frames = {}
+    last_samples = {}
+    positions = {sample: position for position, sample in enumerate(order)}
+    first_points = next(iter(by_branch.values()))
+    policy = next(iter(first_points.values()))["tracking_edge"]["policy"]
     records = []
     global_predictions = []
     assignment_checks = []
@@ -199,19 +206,20 @@ def replay_recorded_frames(metric, modes, branches, samples, *, candidate_branch
                                 for branch_id, points in by_branch.items() for sample_id, point in points.items()}
     for position, sample in enumerate(order):
         prediction = None
-        next_frames = {}
+        next_frames = frames.copy()
         processed = set()
+        eligible = {identity: previous for identity, previous in last_samples.items()
+                    if position - positions[previous] - 1 <= policy["max_branch_gap"]}
+        previous_entries = [(identity, by_branch[identity][previous]["frequency_real_hz"],
+                            by_branch[identity][previous]["frequency_imag_hz"])
+                            for identity, previous in sorted(eligible.items())]
+        allow_subspaces = len(set(eligible.values())) <= 1
         if position:
-            previous = order[position - 1]
             try:
-                previous_entries = [(candidate_branch_ids[(previous, mode["raw_mode_index"])],
-                    mode["frequency_real_hz"], mode["frequency_imag_hz"])
-                    for mode in sample_by_id[previous]["modes"]]
                 current = [{**mode, "envelope": modes[(sample, mode["raw_mode_index"])]["envelope"]}
                            for mode in sample_by_id[sample]["modes"]]
-                policy = next(iter(by_branch.values()))[sample]["tracking_edge"]["policy"]
                 prediction = reconstruct_global_assignment(metric, frames, previous_entries,
-                                                            current, policy, _frequency_score)
+                    current, policy, _frequency_score, allow_subspaces=allow_subspaces)
                 # Compare predictions after reconstructing every chosen frame.
                 global_predictions.append(dict(sample_index=sample, status="pass",
                     candidate_count=prediction["candidate_count"],
@@ -226,22 +234,22 @@ def replay_recorded_frames(metric, modes, branches, samples, *, candidate_branch
             except (KeyError, ValueError) as error:
                 global_predictions.append(dict(sample_index=sample, status="missing", reason=str(error)))
         for identity, points in by_branch.items():
-            if identity in processed:
+            if identity in processed or sample not in points:
                 continue
             point = points[sample]
             edge = point["tracking_edge"]
             field = modes[(sample, point["raw_mode_index"])]["envelope"]
-            if position == 0:
-                if edge["transition"] != "seed":
+            if edge["transition"] in {"seed", "new_branch"}:
+                if position == 0 and edge["transition"] != "seed":
                     raise ValueError("initial frame requires a seed")
                 metric.normalized(field)
-                _close(1., point["tracking_confidence"], "seed confidence")
+                _close(1. if position == 0 else 0., point["tracking_confidence"], "seed/restart confidence")
                 next_frames[identity] = field
                 processed.add(identity)
                 continue
-            previous = order[position - 1]
-            if edge["previous_sample_index"] != previous or edge["skipped_sample_count"] != 0:
-                raise ValueError("replay requires adjacent path edges")
+            previous = last_samples.get(identity)
+            if identity not in eligible or edge["previous_sample_index"] != previous:
+                raise ValueError("replay requires an eligible retained predecessor")
             if edge["metric"] != "consistent_p1_tet4_cartesian_nodal_envelope":
                 raise ValueError("replay requires consistent P1 mass")
             floor = edge["policy"]["overlap_floor"]
@@ -274,16 +282,10 @@ def replay_recorded_frames(metric, modes, branches, samples, *, candidate_branch
                     raise ValueError("subspace previous raw ID differs from branch")
             if set(current_raw) != {by_branch[branch][sample]["raw_mode_index"] for branch in ids}:
                 raise ValueError("subspace current raw IDs differ from assigned branches")
-            previous_entries = []
-            for mode in sample_by_id[previous]["modes"]:
-                key = (previous, mode["raw_mode_index"])
-                if key not in candidate_branch_ids:
-                    raise ValueError("missing candidate branch provenance")
-                previous_entries.append((candidate_branch_ids[key], mode["frequency_real_hz"], mode["frequency_imag_hz"]))
             current_modes = sample_by_id[sample]["modes"]
             current_entries = [(slot, mode["frequency_real_hz"], mode["frequency_imag_hz"])
                                for slot, mode in enumerate(current_modes)]
-            candidates = frequency_group_candidates(previous_entries, current_entries, window)
+            candidates = frequency_group_candidates(previous_entries, current_entries, window) if allow_subspaces else []
             if not any(candidate["previous_cluster"] == subspace["previous_cluster"]
                        and candidate["current_cluster"] == subspace["current_cluster"]
                        and candidate["transition"] == edge["transition"]
@@ -326,19 +328,37 @@ def replay_recorded_frames(metric, modes, branches, samples, *, candidate_branch
             else:
                 try:
                     check = verify_global_prediction(metric, prediction,
-                        {identity: points[sample] for identity, points in by_branch.items()}, current, frames, policy["method"])
+                        {identity: points[sample] for identity, points in by_branch.items()
+                         if sample in points and points[sample]["tracking_edge"]["transition"] != "new_branch"},
+                        current, frames, policy["method"],
+                        birth_raw_ids=[points[sample]["raw_mode_index"] for points in by_branch.values()
+                                       if sample in points and points[sample]["tracking_edge"]["transition"] == "new_branch"])
+                    matched_raw = {edge["raw_mode_index"] for edge in prediction["matches"].values()}
+                    expected_births = {len(last_samples) + offset: mode["raw_mode_index"]
+                        for offset, mode in enumerate(mode for mode in current if mode["raw_mode_index"] not in matched_raw)}
+                    actual_births = {identity: points[sample]["raw_mode_index"]
+                        for identity, points in by_branch.items() if sample in points
+                        and points[sample]["tracking_edge"]["transition"] == "new_branch"}
+                    if actual_births != expected_births:
+                        raise ValueError("birth allocation differs from unmatched native solver slots")
+                    check.update(birth_count=len(expected_births), eligible_branch_count=len(eligible))
                     assignment_checks.append(dict(sample_index=sample, **check))
                 except ValueError as error:
                     assignment_checks.append(dict(sample_index=sample, status="fail", reason=str(error)))
+        last_samples.update({identity: sample for identity, points in by_branch.items() if sample in points})
+    assignment_pass = initial_assignment["status"] == "pass" and bool(assignment_checks) and all(
+        check["status"] == "pass" for check in assignment_checks)
     return {"status": "pass", "sample_count": len(order), "branch_count": len(by_branch),
-            "branch_lifecycle_scope": "complete_continuous",
+            "branch_lifecycle_scope": "complete_continuous" if all(set(points) == set(order) for points in by_branch.values()) else "complete_history",
             "replayed_edges": records,
             "global_policy_predictions": global_predictions,
             "global_assignment_verification": assignment_checks,
             "initial_assignment_verification": initial_assignment,
+            "branch_lifecycle_replay": dict(status="pass" if assignment_pass else "NOT VERIFIED",
+                verified_sample_count=len(order) if assignment_pass else 0),
             "frequency_group_candidates_replay": "pass" if any("frequency_group_candidate" in record for record in records) else "not_applicable",
             "subspace_raw_assignment_replay": "pass" if any("subspace_raw_assignment" in record for record in records) else "not_applicable",
-            "assignment_replay": "pass" if initial_assignment["status"] == "pass" and assignment_checks and all(check["status"] == "pass" for check in assignment_checks) else "NOT VERIFIED",
+            "assignment_replay": "pass" if assignment_pass else "NOT VERIFIED",
             "qualification": "NOT VERIFIED"}
 
 

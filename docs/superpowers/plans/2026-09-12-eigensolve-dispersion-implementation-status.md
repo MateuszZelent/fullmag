@@ -5763,3 +5763,22 @@ gałęzi nadal wymagają pełnego odtworzenia historii.
 Job #196 (febe368724ec4e76a1da88ad24878a9b) odczytany jako queued.
 Aktualny pomiar hosta: około 4 MB wolnego na C:, później około 2,6 MB.
 Brak nowych punktów dyspersji. Nie uruchomiono nowych buildów ani czyszczenia.
+
+## S05 — replay pełnej historii gałęzi, 2026-10-02
+
+Replay zachowuje ostatnią ramę i częstotliwość każdej gałęzi, odtwarza
+dopuszczalność według max_branch_gap oraz kolejne ID narodzin w kolejności
+nieprzypisanych slotów solvera. Obsługuje puste próbki, zmienną liczbę modów,
+zaniki i restart po wygaśnięciu. Zgodnie z native tracking mieszane próbki
+poprzedników wyłączają transport podprzestrzeni, pozostawiając dopasowanie par.
+Globalny certyfikat nadal sprawdza wszystkie kandydaty i całe historie.
+Bramka complete_history wymaga wykonanego branch_lifecycle_replay z dokładną
+liczbą próbek; nie zmienia wymagań kompletności wybranych pasm benchmarku.
+
+Pięć poprawnych scenariuszy historycznych odrzuconych przez bazę 855671777
+przechodzi nową ścieżkę. 78 testów metryk/pól/przydziału/klastrów/replay PASS;
+trzy kontrole konsumenta bramki PASS, w tym pięć wariantów certyfikatu historii.
+Pełny zestaw bramki naukowej: 56 testów PASS. Niezależne review nie wykazało
+P1/P2 w dopuszczalności, przydziale narodzin, przerwach ani pokryciu kandydatów.
+Równoważny alternatywny zestaw grup lub narodzin przy remisie pozostaje
+fail-closed, a wykonanie rzeczywistego FEM i walidacja naukowa nadal OPEN.

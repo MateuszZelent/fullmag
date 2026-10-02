@@ -2574,7 +2574,9 @@ Frequency score odtwarza zapisane frequency_window_hz lub względną
 zmianę częstotliwości, zgodnie z finite_frequency_score_values.
 Zgodność algebraiczna wykorzystuje tolerancję bezwymiarową 1e-9;
 nie jest tolerancją residualu eigenproblem ani zgodności z analityką.
-Brak zależnej gałęzi, restart/gap lub brak pola oznacza brak pełnego replay.
+Brak zależnej historii gałęzi lub pola oznacza brak pełnego replay.
+Restart i gap wymagają odtworzenia ostatniej ramy, dopuszczalności poprzednika
+oraz przydziału nowego branch_id; nie zastępują dowodu kompletności widma.
 Odczyt z dysku wymaga pól każdego raw modu zapisanego w widmie, także
 kandydatów nieprzypisanych do wybranych gałęzi. Każde pole jest wiązane
 z sample/raw ID, podpisanym wektorem k i zespoloną częstotliwością widma.
@@ -2667,13 +2669,22 @@ używa już sprawdzonej ramy zapisanej ścieżki. Pełny replay nie może
 pomijać gałęzi będących alternatywnymi kandydatami. Brak lub rozbieżność
 pozostają osobnym wynikiem assignment replay, a nie zmianą residualu.
 
-Aktualny certyfikat obejmuje ścieżkę o stałym, kompletnym zbiorze gałęzi,
-z punktem każdej gałęzi w każdej próbce. Raport jawnie podaje
+Aktualny certyfikat obejmuje kompletne historie wszystkich gałęzi, również
+przy zmiennej liczbie modów, narodzinach, zanikach i dopuszczonych przerwach.
+Raport jawnie podaje
 replayed_branch_scope=all_candidates; selected_branch_ids nie ogranicza
-kandydatów globalnego przydziału. Narodziny, zaniki i luki gałęzi nie są
-jeszcze obsługiwane przez ten certyfikat. Równoważne optimum pair Hungarian
+kandydatów globalnego przydziału. complete_history wymaga wykonanego
+branch_lifecycle_replay dla każdej próbki. Ostatnia rama i częstotliwość są
+zachowane w przerwie; gap jest liczbą pominiętych pozycji ścieżki, nie różnicą
+sample_index. Po przekroczeniu max_branch_gap stara gałąź nie uczestniczy
+w dopasowaniu. Niezajęte sloty modów otrzymują kolejne branch_id w kolejności
+solvera i confidence równe zeru. Gdy dopuszczone ramy pochodzą z różnych
+próbek, podprzestrzenie są wyłączone, lecz dopasowanie par nadal działa
+(`scripts/comsol_tracking_replay.py::replay_recorded_frames`,
+`scripts/comsol_tracking_global.py::reconstruct_global_assignment`).
+Równoważne optimum pair Hungarian
 i raw assignment wewnątrz tej samej grupy jest akceptowane. Alternatywny
-zestaw grup przy remisie wyboru klastrów pozostaje odrzucany; nie wolno
+zestaw grup lub zestaw narodzin przy remisie pozostaje odrzucany; nie wolno
 interpretować takiego odrzucenia jako dowodu błędu fizycznego solvera.
 
 assignment_replay=pass wymaga również zgodności początkowych branch_id z

@@ -154,6 +154,19 @@ class TrackingReplayTests(unittest.TestCase):
         self.assertEqual(result["assignment_replay"], "pass", result["global_assignment_verification"])
         self.assertEqual(result["qualification"], "NOT VERIFIED")
 
+    def test_degenerate_transport_after_common_gap(self):
+        self.subspace_path()
+        self.samples = self.samples[:2]
+        self.samples.insert(1, dict(sample_index=17, k_vector=[0.,0.,0.], modes=[]))
+        for branch in self.branches["branches"]:
+            branch["points"] = branch["points"][:2]
+            for point in branch["points"]:
+                point["tracking_edge"]["policy"]["max_branch_gap"] = 1
+            branch["points"][1]["tracking_edge"]["skipped_sample_count"] = 1
+        result = self.replay()
+        self.assertEqual(result["assignment_replay"], "pass", result)
+        self.assertEqual(result["branch_lifecycle_replay"]["verified_sample_count"], 3)
+
     def test_equivalent_hungarian_pair_optimum_is_reported(self):
         policy = dict(method="overlap_hungarian", overlap_floor=.5, frequency_window_hz=1e8)
         current = [dict(raw_mode_index=2,frequency_real_hz=1e11,frequency_imag_hz=0.,envelope=(self.x+self.y)/np.sqrt(2)),
@@ -255,6 +268,101 @@ class TrackingReplayTests(unittest.TestCase):
         result = self.replay()
         self.assertEqual(result["status"], "pass")
         self.assertEqual(result["assignment_replay"], "NOT VERIFIED")
+
+
+class TrackingLifecycleReplayTests(unittest.TestCase):
+    """Actual P1 metric with sparse histories; no native solver execution."""
+
+    def setUp(self):
+        self.metric = Tet4TrackingMetric([[0.,0,0],[1.,0,0],[0.,1.,0],[0.,0,1.]], [[0,1,2,3]], [0])
+        self.x = np.tile([1.,0,0], (4,1)).astype(complex)
+        self.y = np.tile([0.,1,0], (4,1)).astype(complex)
+
+    def build(self, path, max_gap):
+        # Entries explicitly prescribe branch ID, raw ID and field, while
+        # policy replay independently decides whether that assignment is legal.
+        samples, modes, histories, previous_fields = [], {}, {}, {}
+        policy = dict(method="overlap_hungarian", overlap_floor=.5,
+                      frequency_window_hz=None, max_branch_gap=max_gap)
+        for position, entries in enumerate(path):
+            sample_id = 10 + position * 7  # Gap is path distance, not ID delta.
+            spectrum = []
+            for identity, raw, field in entries:
+                spectrum.append(dict(raw_mode_index=raw, frequency_real_hz=1e10, frequency_imag_hz=0.))
+                modes[(sample_id, raw)] = dict(envelope=field, k_vector_rad_per_m=[position,0,0],
+                    frequency_real_hz=1e10, frequency_imag_hz=0.)
+                points = histories.setdefault(identity, [])
+                previous = points[-1] if points else None
+                seed = previous is None
+                transition = ("seed" if position == 0 else "new_branch") if seed else "pair"
+                source = ("seed" if position == 0 else "modal_overlap_unavailable") if seed else "modal_overlap_weighted_score"
+                overlap = None if seed else self.metric.overlap(previous_fields[identity], field)
+                confidence = (1. if position == 0 else 0.) if seed else .85 * overlap + .15
+                points.append(dict(sample_index=sample_id, raw_mode_index=raw,
+                    frequency_real_hz=1e10, frequency_imag_hz=0., tracking_confidence=confidence,
+                    tracking_score_source=source, overlap_prev=overlap,
+                    tracking_edge=dict(policy=policy.copy(), score_source=source,
+                        metric="unavailable" if seed else "consistent_p1_tet4_cartesian_nodal_envelope",
+                        transition=transition, previous_sample_index=None if seed else previous["sample_index"],
+                        previous_raw_mode_index=None if seed else previous["raw_mode_index"],
+                        skipped_sample_count=0 if seed else (sample_id-previous["sample_index"])//7-1,
+                        subspace=None)))
+                previous_fields[identity] = field
+            samples.append(dict(sample_index=sample_id, k_vector=[position,0,0], modes=spectrum))
+        branches = dict(tracking_policy_availability="complete", tracking_method=policy["method"],
+            overlap_floor=policy["overlap_floor"], frequency_window_hz=None,
+            branches=[dict(branch_id=identity, points=points) for identity,points in histories.items()])
+        return modes, branches, samples
+
+    def replay(self, path, max_gap):
+        return replay_recorded_frames(self.metric, *self.build(path, max_gap))
+
+    def test_gap_retains_last_frame_and_frequency(self):
+        result = self.replay([[(0,9,self.x)], [], [(0,7,self.x)]], 1)
+        self.assertEqual(result["assignment_replay"], "pass", result)
+        self.assertEqual(result["branch_lifecycle_scope"], "complete_history")
+        self.assertEqual(result["global_assignment_verification"][0]["branch_count"], 0)
+
+    def test_gap_frequency_score_uses_retained_endpoint(self):
+        modes, branches, samples = self.build([[(0,9,self.x)], [], [(0,7,self.x)]], 1)
+        point = branches["branches"][0]["points"][-1]
+        frequency = 1e10 + 1e6
+        point.update(frequency_real_hz=frequency,
+            tracking_confidence=.85 + .15 * _frequency_score(1e10, frequency, None))
+        samples[-1]["modes"][0]["frequency_real_hz"] = frequency
+        modes[(24,7)]["frequency_real_hz"] = frequency
+        result = replay_recorded_frames(self.metric, modes, branches, samples)
+        self.assertEqual(result["assignment_replay"], "pass", result)
+
+    def test_expired_branch_restarts_with_new_id(self):
+        result = self.replay([[(0,9,self.x)], [], [(1,7,self.x)]], 0)
+        self.assertEqual(result["assignment_replay"], "pass", result)
+        self.assertEqual(result["global_assignment_verification"][1]["birth_count"], 1)
+
+    def test_birth_and_disappearance_with_changing_mode_count(self):
+        result = self.replay([[(0,9,self.x)], [(0,2,self.x),(1,6,self.y)], [(0,7,self.x)]], 0)
+        self.assertEqual(result["assignment_replay"], "pass", result)
+        self.assertEqual(result["global_assignment_verification"][0]["birth_count"], 1)
+
+    def test_empty_initial_sample_then_birth(self):
+        result = self.replay([[], [(0,7,self.x)]], 0)
+        self.assertEqual(result["assignment_replay"], "pass", result)
+
+    def test_unnecessary_birth_cannot_replace_eligible_match(self):
+        result = self.replay([[(0,9,self.x)], [(1,7,self.x)]], 0)
+        self.assertEqual(result["assignment_replay"], "NOT VERIFIED")
+        self.assertEqual(result["global_assignment_verification"][0]["status"], "fail")
+
+    def test_noncanonical_birth_id_rejected(self):
+        result = self.replay([[(0,9,self.x)], [(0,2,self.x),(8,6,self.y)]], 0)
+        self.assertEqual(result["assignment_replay"], "NOT VERIFIED")
+        self.assertIn("birth allocation", result["global_assignment_verification"][0]["reason"])
+
+    def test_mixed_retained_samples_disable_subspaces(self):
+        result = self.replay([[(0,9,self.x),(1,8,self.y)], [(0,2,self.x)],
+            [(0,7,(self.x+self.y)/np.sqrt(2)), (1,6,(self.x-self.y)/np.sqrt(2))]], 1)
+        self.assertEqual(result["assignment_replay"], "pass", result)
+        self.assertEqual(result["global_policy_predictions"][1]["selected_groups"], [])
 
 
 class TrackingReplayDiskTests(unittest.TestCase):

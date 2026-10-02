@@ -2752,9 +2752,15 @@ def validate_case(
         steps = tracking_replay.get("global_assignment_verification", [])
         expected_steps = sorted(sample_map)[1:]
         coverage = tracking_replay.get("candidate_field_coverage", {})
+        lifecycle = tracking_replay.get("branch_lifecycle_replay", {})
+        lifecycle_pass = tracking_replay.get("branch_lifecycle_scope") == "complete_continuous" or (
+            tracking_replay.get("branch_lifecycle_scope") == "complete_history" and
+            isinstance(lifecycle, dict) and lifecycle.get("status") == "pass" and
+            type(lifecycle.get("verified_sample_count")) is int and
+            lifecycle["verified_sample_count"] == len(sample_map))
         assignment_pass = tracking_replay.get("assignment_replay") == "pass" and \
             tracking_replay.get("replayed_branch_scope") == "all_candidates" and \
-            tracking_replay.get("branch_lifecycle_scope") == "complete_continuous" and \
+            lifecycle_pass and \
             isinstance(coverage, dict) and coverage.get("status") == "pass" and \
             type(coverage.get("exported_candidate_count")) is int and coverage["exported_candidate_count"] == len(mode_map) and \
             isinstance(steps, list) and len(steps) == len(expected_steps) and bool(steps) and \

@@ -35,7 +35,7 @@ def _select_edges(edges, mode_count, method):
             if assignment[row] < mode_count and (identity, assignment[row]) in by_pair]
 
 
-def reconstruct_global_assignment(metric, frames, previous, current, policy, frequency_score):
+def reconstruct_global_assignment(metric, frames, previous, current, policy, frequency_score, *, allow_subspaces=True):
     """Compute producer-policy predictions, without qualifying recorded artifacts.
 
     Previous records are(branch ID,real Hz,imag Hz); current records retain
@@ -52,7 +52,9 @@ def reconstruct_global_assignment(metric, frames, previous, current, policy, fre
         raise ValueError("invalid or duplicate global candidate raw ID")
     current_entries = [(slot, mode["frequency_real_hz"], mode["frequency_imag_hz"])
                        for slot, mode in enumerate(current)]
-    groups = frequency_group_candidates(previous, current_entries, window)
+    # Native tracking disables all subspace transport when eligible branches
+    # retain frames from different physical samples; pair matching still runs.
+    groups = frequency_group_candidates(previous, current_entries, window) if allow_subspaces else []
     if any(identity not in frames for identity, _, _ in previous):
         raise ValueError("missing previous candidate frame")
     for identity, _, _ in previous:
