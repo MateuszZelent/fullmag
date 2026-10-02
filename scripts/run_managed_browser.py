@@ -22,6 +22,11 @@ from local_runner.build_executor import validate_build_receipt
 from local_runner.worker_entrypoint import verify_source
 from verify_saved_fem_archive_roundtrip import check_stamp
 
+try:
+    from .control_room_port import first_bindable_port
+except ImportError:  # direct script execution from scripts/
+    from control_room_port import first_bindable_port
+
 PROFILE = "managed-browser-cpu"
 SYSTEM_MOUNT_TARGETS = {"/etc/hosts", "/etc/hostname", "/etc/resolv.conf"}
 
@@ -133,9 +138,33 @@ def docker(*args):
     return result.stdout.strip()
 
 
+def resolve_browser_port(requested: int) -> int:
+    """Resolve the host port without sharing another browser instance.
+
+    A caller supplied nonzero port remains an explicit preference and fails if
+    it is occupied.  Zero selects a fresh loopback port from the managed
+    browser range.  The final Compose bind is still authoritative, so a race
+    between this probe and ``docker compose up`` is retained as a launch
+    failure with its resources available for reconciliation.
+    """
+
+    if requested < 0 or requested > 65535:
+        raise ValueError("Invalid loopback browser port")
+    if requested:
+        with socket.socket() as probe:
+            try:
+                probe.bind(("127.0.0.1", requested))
+                probe.listen(1)
+            except OSError as error:
+                raise ValueError(f"Requested loopback browser port {requested} is occupied") from error
+        return requested
+    return first_bindable_port("127.0.0.1", range(3104, 3200))
+
+
 def run(repo, job_id, commit, port):
     if not re.fullmatch(r"[0-9a-f]{32}", job_id):
         raise ValueError("Full managed job ID required")
+    port = resolve_browser_port(port)
     layout = storage.resolve_layout(repo, PROFILE)
     base = Path(layout["storage_root"])
     build = storage.validate_path(Path(layout["runs_root"]) / job_id, base)
@@ -155,8 +184,6 @@ def run(repo, job_id, commit, port):
     image = json.loads(docker("image", "inspect", context["image_digest"]))[0]
     if image.get("Id") != context["image_digest"] or image.get("Config", {}).get("Volumes"):
         raise ValueError("Image identity or anonymous volumes invalid")
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", port))
     storage.initialize(layout)
     root = storage.validate_path(Path(layout["build_root"]) / "runs" / uuid.uuid4().hex,
                                  Path(layout["build_storage_root"]))
@@ -249,6 +276,6 @@ if __name__ == "__main__":
     parser.add_argument("--repo-root", type=Path, required=True)
     parser.add_argument("--job-id", required=True)
     parser.add_argument("--commit", required=True)
-    parser.add_argument("--port", type=int, default=3104)
+    parser.add_argument("--port", type=int, default=0)
     args = parser.parse_args()
     raise SystemExit(run(args.repo_root, args.job_id, args.commit, args.port))

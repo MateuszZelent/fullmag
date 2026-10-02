@@ -64,7 +64,7 @@ if (staticRoot) {
 
 function startDevServer() {
   process.stderr.write(`[control-room dev-server] starting on :${port}\n`);
-  pruneIsolatedNextCaches();
+  // Cache retirement belongs to the storage inventory, not another instance startup.
   removeStaleNextDevLock(devDistDir);
 
   let pnpm;
@@ -98,6 +98,14 @@ function startDevServer() {
   // runtime manifest.
   const restoreGeneratedTypeConfig = snapshotGeneratedTypeConfig();
   process.once("exit", restoreGeneratedTypeConfig);
+
+  if (process.env.FULLMAG_WEB_LISTENER_FD !== undefined) {
+    startInheritedDevServer().catch((error) => {
+      process.stderr.write(`[control-room dev-server] ${error.stack ?? error}\n`);
+      process.exit(1);
+    });
+    return;
+  }
 
   const child = spawn(
     pnpm.command,
@@ -185,6 +193,62 @@ function startDevServer() {
     );
     process.exit(1);
   });
+}
+
+async function startInheritedDevServer() {
+  // Next's programmatic Webpack server lets the launcher keep ownership of
+  // the exact listening socket. It needs no close-and-rebind port probe.
+  Object.assign(process.env, {
+    FULLMAG_API_PROXY_TARGET: apiTarget,
+    FULLMAG_API_URL: apiTarget,
+    FULLMAG_NEXT_DIST_DIR: devDistDir,
+    FULLMAG_WEB_PUBLIC_HOST: browserHost,
+    NEXT_PUBLIC_API_URL: browserOrigin,
+    NEXT_PUBLIC_CONTROL_ROOM_API_BASE_URL: browserOrigin,
+    NEXT_PUBLIC_FULLMAG_API_URL: browserOrigin,
+    NEXT_PUBLIC_RUNTIME_HTTP_BASE: browserOrigin,
+  });
+  process.chdir(appDir);
+  const { default: next } = await import("next");
+  const app = next({ dev: true, dir: appDir, hostname, port: Number(port), webpack: true });
+  await app.prepare();
+  const handler = app.getRequestHandler();
+  const server = createServer((req, res) => {
+    res.setHeader("x-fullmag-instance-id", process.env.FULLMAG_INSTANCE_ID ?? "");
+    handler(req, res).catch((error) => {
+      if (!res.headersSent) res.writeHead(500);
+      res.end("Control Room request failed");
+      process.stderr.write(`${error.stack ?? error}\n`);
+    });
+  });
+  server.on("upgrade", app.getUpgradeHandler());
+  const fd = Number(process.env.FULLMAG_WEB_LISTENER_FD);
+  if (!Number.isInteger(fd) || fd < 3 || process.platform === "win32") {
+    throw new Error("Invalid inherited frontend listener");
+  }
+  try {
+    await new Promise((resolve, reject) => {
+      server.once("error", reject);
+      server.listen({ fd }, () => {
+        server.removeListener("error", reject);
+        resolve();
+      });
+    });
+  } catch (error) {
+    await app.close();
+    throw error;
+  }
+  let closing = false;
+  const close = async (code) => {
+    if (closing) return;
+    closing = true;
+    setTimeout(() => process.exit(code), 2000).unref();
+    server.close();
+    await app.close();
+    process.exit(code);
+  };
+  process.on("SIGINT", () => void close(130));
+  process.on("SIGTERM", () => void close(143));
 }
 
 function snapshotGeneratedTypeConfig() {
@@ -323,6 +387,9 @@ function startStaticServer(root) {
     `[control-room static-server] serving ${resolvedRoot} on :${port}\n`,
   );
   const server = createServer((req, res) => {
+    if (process.env.FULLMAG_INSTANCE_ID) {
+      res.setHeader("x-fullmag-instance-id", process.env.FULLMAG_INSTANCE_ID);
+    }
     const requestUrl = new URL(
       req.url ?? "/",
       `http://${req.headers.host ?? "localhost"}`,
@@ -334,7 +401,16 @@ function startStaticServer(root) {
     serveStaticFile(resolvedRoot, requestUrl.pathname, res);
   });
   server.on("upgrade", proxyWebSocketUpgrade);
-  server.listen(Number(port), hostname);
+  const inherited = process.env.FULLMAG_WEB_LISTENER_FD;
+  if (inherited !== undefined) {
+    const fd = Number(inherited);
+    if (!Number.isInteger(fd) || fd < 3 || process.platform === "win32") {
+      throw new Error("Invalid inherited frontend listener");
+    }
+    server.listen({ fd });
+  } else {
+    server.listen(Number(port), hostname);
+  }
   process.on("SIGINT", () => server.close(() => process.exit(130)));
   process.on("SIGTERM", () => server.close(() => process.exit(143)));
 }

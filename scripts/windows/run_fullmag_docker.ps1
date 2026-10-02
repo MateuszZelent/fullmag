@@ -30,8 +30,8 @@ param(
   [Alias("skip_local_changes")]
   [switch]$SkipLocalChanges,
 
-  [ValidateRange(1, 65535)]
-  [int]$WebPort = 3100
+  [ValidateRange(0, 65535)]
+  [int]$WebPort = 0
 )
 
 $ErrorActionPreference = "Stop"
@@ -103,6 +103,45 @@ $CudaCacheKey = (($CudaBaseImage -replace "[^A-Za-z0-9]+", "-").Trim("-")).ToLow
 function Resolve-AbsolutePath {
   param([Parameter(Mandatory = $true)][string]$Path)
   return [System.IO.Path]::GetFullPath($Path)
+}
+
+function Resolve-HostWebPort {
+  param([Parameter(Mandatory = $true)][int]$RequestedPort)
+
+  $python = Get-Command "python" -ErrorAction SilentlyContinue
+  if (-not $python) {
+    throw "Python is required to select an available Windows FEM web port"
+  }
+  $portHelper = Join-Path $RepoRoot "scripts\control_room_port.py"
+  if (-not (Test-Path -LiteralPath $portHelper -PathType Leaf)) {
+    throw "Control Room port helper is missing: $portHelper"
+  }
+
+  # Docker keeps 3100 as the private listener inside the container.  Only the
+  # host-side published port needs to move.  An explicit port is a preference:
+  # if another instance owns it, choose a fresh host port instead of sharing it.
+  $candidatePorts = if ($RequestedPort -gt 0) {
+    @($RequestedPort) + @(3100..3199 | Where-Object { $_ -ne $RequestedPort })
+  } else {
+    @(3100..3199)
+  }
+  $helperArguments = @($portHelper, "pick", "0.0.0.0") + [string[]]($candidatePorts | ForEach-Object { $_.ToString() })
+  $portOutput = @(& $python.Source @helperArguments 2>&1)
+  $portExitCode = $LASTEXITCODE
+  $selectedPort = ($portOutput -join [Environment]::NewLine).Trim()
+  if ($portExitCode -ne 0 -or $selectedPort -notmatch '^\d+$') {
+    throw "Could not select an available Windows FEM web port from 3100-3199: $selectedPort"
+  }
+  $resolvedPort = [int]$selectedPort
+  if ($resolvedPort -ne $RequestedPort -and ($resolvedPort -lt 3100 -or $resolvedPort -gt 3199)) {
+    throw "Control Room port helper returned an unsafe Windows FEM web port: $resolvedPort"
+  }
+  if ($RequestedPort -gt 0 -and $resolvedPort -ne $RequestedPort) {
+    Write-Warning "Requested host web port $RequestedPort is occupied; selected $resolvedPort for this Fullmag instance"
+  } else {
+    Write-Host "Selected available Windows FEM host web port: $resolvedPort" -ForegroundColor DarkCyan
+  }
+  return $resolvedPort
 }
 
 $DefaultFemCpuImage = "fullmag/fem-cpu:windows-local-$WorkspaceNamespace"
@@ -350,6 +389,17 @@ $StateRoot = if ($env:FULLMAG_WINDOWS_STATE_ROOT) {
 } else {
   Join-Path ([string]$StorageLayout.runtime_root) $RuntimeKey
 }
+$InstanceId = if ($env:FULLMAG_INSTANCE_ID -and $env:FULLMAG_INSTANCE_ID.Trim()) {
+  $env:FULLMAG_INSTANCE_ID.Trim()
+} else {
+  [Guid]::NewGuid().ToString("N")
+}
+if ($InstanceId -notmatch '^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$') {
+  throw "FULLMAG_INSTANCE_ID contains unsafe characters: $InstanceId"
+}
+$InstanceStateRoot = Join-Path $StateRoot "instances\$InstanceId"
+$env:FULLMAG_INSTANCE_ID = $InstanceId
+$ComposeInstanceId = $InstanceId.ToLowerInvariant()
 $LinuxCacheRoot = Join-Path $CacheRoot "fem-$Device"
 $CargoHome = Join-Path $LinuxCacheRoot "cargo"
 $RustupHome = Join-Path $LinuxCacheRoot "rustup"
@@ -373,7 +423,7 @@ $TargetKey = if ($Device -eq "gpu") { $CudaCacheKey } else { "fem-cpu" }
 $TargetRoot = Join-Path $BuildRoot "cargo-targets\$TargetKey"
 $ComposeFile = Join-Path $RepoRoot "compose.windows.yaml"
 $ServiceName = "fullmag-windows-fem-$Device"
-$ComposeProjectName = "fullmag-windows-fem-$WorkspaceNamespace-$Device"
+$ComposeProjectName = "fullmag-windows-fem-$WorkspaceNamespace-$Device-$ComposeInstanceId"
 $RuntimeImage = if ($Device -eq "gpu") {
   if ($env:FULLMAG_WINDOWS_FEM_GPU_IMAGE) {
     $env:FULLMAG_WINDOWS_FEM_GPU_IMAGE
@@ -393,6 +443,7 @@ foreach ($item in @(
     @{ Path = $CacheRoot; Label = "FULLMAG_WINDOWS_CACHE_ROOT" },
     @{ Path = $TempRoot; Label = "FULLMAG_WINDOWS_TEMP_ROOT" },
     @{ Path = $StateRoot; Label = "FULLMAG_WINDOWS_STATE_ROOT" },
+    @{ Path = $InstanceStateRoot; Label = "Fullmag instance state root" },
     @{ Path = $LinuxCacheRoot; Label = "FEM Linux cache root" },
     @{ Path = $CargoHome; Label = "FEM Cargo home" },
     @{ Path = $RustupHome; Label = "FEM Rustup home" },
@@ -413,6 +464,7 @@ if (-not (Test-Path -LiteralPath $ComposeFile -PathType Leaf)) {
 
 $env:FULLMAG_WINDOWS_REPO = To-ComposePath $RepoRoot
 $env:FULLMAG_WINDOWS_STATE_ROOT = To-ComposePath $StateRoot
+$WebPort = Resolve-HostWebPort -RequestedPort $WebPort
 $env:FULLMAG_WINDOWS_BUILD_ROOT = To-ComposePath $BuildRoot
 $env:FULLMAG_WINDOWS_CACHE_ROOT = To-ComposePath $LinuxCacheRoot
 $env:FULLMAG_WINDOWS_TEMP_ROOT = To-ComposePath $TempRoot
@@ -658,6 +710,8 @@ grep -Fxq fem-cpu /workspace/.fullmag/local/launcher-build-mode
       workspace_namespace = $WorkspaceNamespace
       repository = $RepoRoot
       state_root = $StateRoot
+      instance_id = $InstanceId
+      instance_state_root = $InstanceStateRoot
       build_root = $BuildRoot
       cache_root = $CacheRoot
       cargo_target_root = $TargetRoot
@@ -728,6 +782,8 @@ grep -Fxq fem-cpu /workspace/.fullmag/local/launcher-build-mode
   )
   foreach ($entry in @(
     "FULLMAG_WEB_PUBLIC_PORT=$WebPort",
+    "FULLMAG_INSTANCE_ID=$InstanceId",
+    "FULLMAG_STATE_ROOT=/workspace/.fullmag/instances/$InstanceId",
     "FULLMAG_FEM_EXECUTION=$Device",
     "FULLMAG_K0_PRODUCTION_DEVICE=$Device",
     "FULLMAG_RELAX_DEVICE=$Device",

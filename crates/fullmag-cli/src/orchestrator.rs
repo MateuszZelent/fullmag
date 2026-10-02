@@ -6637,11 +6637,12 @@ fn resolve_rayon_cpu_threads(
 
 pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
     let args = ScriptCli::parse_from(raw_args);
-    if args.headless {
+    let _port_reservations = if args.headless {
         init_headless_api_port()?;
+        None
     } else {
-        init_api_port()?;
-    }
+        Some(crate::control_room::init_api_port_with_web(args.web_port)?)
+    };
 
     // Eagerly configure the global Rayon pool used by Rust-side control-plane
     // work. Native FEM CPU OpenMP thread selection is resolved separately and

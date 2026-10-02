@@ -1,5 +1,6 @@
 """Isolation and fail-closed checks for the managed browser launcher."""
 import json
+import socket
 import pytest
 from scripts import run_managed_browser as launcher
 
@@ -35,6 +36,20 @@ def test_cpu_package_has_only_private_writable_state(tmp_path):
     assert service["environment"]["FULLMAG_STATE_ROOT"] == "/state/workspace/.fullmag"
     assert service["environment"]["FULLMAG_REPO_ROOT"] == "/state/workspace"
     assert service["environment"]["FULLMAG_FEM_EXECUTION"] == "cpu"
+
+
+def test_browser_auto_port_chooses_a_free_loopback_port(monkeypatch):
+    monkeypatch.setattr(launcher, "first_bindable_port", lambda host, ports: 3199)
+    assert launcher.resolve_browser_port(0) == 3199
+
+
+def test_browser_explicit_port_is_fail_closed_when_occupied():
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as occupied:
+        occupied.bind(("127.0.0.1", 0))
+        occupied.listen(1)
+        port = occupied.getsockname()[1]
+        with pytest.raises(ValueError, match="occupied"):
+            launcher.resolve_browser_port(port)
 
 
 @pytest.mark.parametrize("image,port", [("mutable:latest", 3104),

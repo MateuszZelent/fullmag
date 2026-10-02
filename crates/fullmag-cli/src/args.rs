@@ -51,7 +51,7 @@ pub(crate) struct ScriptCli {
     pub json: bool,
     #[arg(
         long,
-        help = "Port for the dev control room frontend (auto-selects 3000-3010 if omitted)"
+        help = "Preferred frontend port (0 or omitted: auto; a collision moves both API and UI ports)"
     )]
     pub web_port: Option<u16>,
 }
@@ -224,7 +224,7 @@ pub(crate) struct UiCli {
     pub dev: bool,
     #[arg(
         long,
-        help = "Port for the dev control room frontend (auto-selects 3000-3010 if omitted)"
+        help = "Preferred frontend port (0 or omitted: auto; a collision moves both API and UI ports)"
     )]
     pub web_port: Option<u16>,
 }

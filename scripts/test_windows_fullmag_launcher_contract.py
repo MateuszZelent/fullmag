@@ -330,7 +330,7 @@ def test_windows_fem_launcher_is_container_backed_without_direct_wsl_dependency(
         "nvidia-smi",
         "compose.windows.yaml",
         "$WorkspaceNamespace = [string]$StorageLayout.worktree_id",
-        "$ComposeProjectName = \"fullmag-windows-fem-$WorkspaceNamespace-$Device\"",
+        '$ComposeProjectName = "fullmag-windows-fem-$WorkspaceNamespace-$Device-$ComposeInstanceId"',
         '$env:COMPOSE_PROJECT_NAME = $ComposeProjectName',
         '$DefaultFemCpuImage = "fullmag/fem-cpu:windows-local-$WorkspaceNamespace"',
         '$DefaultFemGpuImage = "fullmag/fem-gpu:windows-local-$WorkspaceNamespace"',
@@ -523,7 +523,7 @@ def test_windows_fem_default_web_port_is_selected_from_a_bindable_host_range() -
 
 @pytest.mark.parametrize(
     "backend,explicit_port,expected",
-    [("fdm", None, "3100"), ("fem", None, "0"),
+    [("fdm", None, "0"), ("fem", None, "0"),
      ("fdm", "3197", "3197"), ("fem", "3197", "3197")],
 )
 def test_fullmag_windows_dispatch_preserves_port_defaults(backend, explicit_port, expected):
@@ -722,6 +722,7 @@ def public_url_probe(tmp_path_factory):
         '''use std::{fs, path::Path};
         type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
         macro_rules! bail { ($($arg:tt)*) => { return Err(format!($($arg)*).into()) }; }
+        mod control_room_ports { pub fn public_mapping_matches(_: u16) -> bool { true } }
         fn web_public_host() -> String { "localhost".into() }
         fn port_is_listening(_: u16) -> bool { false }
         fn port_is_bindable(_: u16) -> bool { true }
@@ -774,14 +775,14 @@ def test_api_fallback_keeps_its_own_port(public_url_probe):
 def test_listener_state_is_separate_from_public_url(public_url_probe, tmp_path):
     (tmp_path / "control-room-url.txt").write_text("http://localhost:3101")
     listen_file = tmp_path / "control-room-listen-port.txt"
-    listen_file.write_text("3100")
+    listen_file.write_text("3104")
     result = public_url_probe("listen", "3101", listen_file)
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "3100"
     source = CONTROL_ROOM.read_text(encoding="utf-8")
     assert 'state_root.join("control-room-listen-port.txt")' in source
-    assert 'resolve_web_port(requested_port, &listen_port_file)?' in source
-    assert 'fs::write(&listen_port_file, web_port.to_string())' in source
+    assert 'crate::control_room_ports::web_port()' in source
+    assert 'fs::write(&listen_port_file, web_port.to_string())?' in source
 
 
 @pytest.mark.parametrize("test_filter", ["", "orchestrator::tests::fdm_grid"])

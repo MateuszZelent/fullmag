@@ -252,7 +252,12 @@ const nextConfig: NextConfig = {
           return [
             {
               source: "/:path*",
-              headers: securityHeaders(),
+              headers: [
+                ...securityHeaders(),
+                ...(process.env.FULLMAG_INSTANCE_ID
+                  ? [{ key: "x-fullmag-instance-id", value: process.env.FULLMAG_INSTANCE_ID }]
+                  : []),
+              ],
             },
           ];
         },

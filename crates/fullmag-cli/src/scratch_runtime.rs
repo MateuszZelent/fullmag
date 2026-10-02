@@ -452,6 +452,12 @@ fn spawn_attached_runtime(
         .arg("double")
         .env("FULLMAG_API_PORT", api_port.to_string())
         .env("FULLMAG_ATTACHED_SESSION_ID", session_id)
+        .env("FULLMAG_INSTANCE_ID", crate::control_room::control_plane_instance_id())
+        .env("FULLMAG_INSTANCE_ID", crate::control_room::control_plane_instance_id())
+        .env(
+            "FULLMAG_STATE_ROOT",
+            crate::control_room::control_plane_state_root(&crate::control_room::repo_root()),
+        )
         .env("FULLMAG_ATTACHED_WAIT_FOR_SOLVE", "1")
         .env("FULLMAG_SKIP_CONTROL_ROOM", "1")
         .stdin(Stdio::null())
