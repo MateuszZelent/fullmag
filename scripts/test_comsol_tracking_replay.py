@@ -55,7 +55,7 @@ class TrackingReplayTests(unittest.TestCase):
             with self.subTest(defect=defect), self.assertRaises(ValueError):
                 self.replay()
 
-    def subspace_path(self):
+    def subspace_path(self, angle=None):
         branch = copy.deepcopy(self.branches["branches"][0])
         branch["branch_id"] = 4
         for index, point in enumerate(branch["points"]):
@@ -68,6 +68,9 @@ class TrackingReplayTests(unittest.TestCase):
         # At the middle sample the solver rotates the raw degenerate basis.
         self.modes[(1, 2)]["envelope"] = (self.x + 1j * self.y) / np.sqrt(2)
         self.modes[(1, 6)]["envelope"] = (1j * self.x + self.y) / np.sqrt(2)
+        if angle is not None:
+            self.modes[(1, 2)]["envelope"] = np.cos(angle) * self.x + np.sin(angle) * self.y
+            self.modes[(1, 6)]["envelope"] = -np.sin(angle) * self.x + np.cos(angle) * self.y
         subspace = dict(rank=2, previous_cluster=0, current_cluster=0,
                         branch_ids=[3, 4], previous_raw_mode_indices=[9, 8],
                         current_raw_mode_indices=[2, 6], principal_cosines=[1., 1.], principal_minimum=1.)
@@ -119,6 +122,25 @@ class TrackingReplayTests(unittest.TestCase):
         self.assertEqual(result["status"], "pass")
         self.assertEqual(result["assignment_replay"], "NOT VERIFIED")
         self.assertEqual(result["qualification"], "NOT VERIFIED")
+
+    def test_unique_wrong_subspace_assignment_is_rejected(self):
+        self.subspace_path(angle=.25)
+        first, second = self.branches["branches"]
+        first["points"][1]["raw_mode_index"], second["points"][1]["raw_mode_index"] = 6, 2
+        for branch in (first, second):
+            branch["points"][2]["tracking_edge"]["previous_raw_mode_index"] = branch["points"][1]["raw_mode_index"]
+        with self.assertRaisesRegex(ValueError, "subspace raw assignment"):
+            self.replay()
+
+    def test_unique_correct_assignment_and_reported_raw_ids(self):
+        self.subspace_path(angle=.25)
+        result = self.replay()
+        assignment = result["replayed_edges"][0]["subspace_raw_assignment"]
+        self.assertEqual(assignment["recorded_raw_mode_indices"], [2, 6])
+        self.assertEqual(assignment["optimal_raw_mode_indices"], [2, 6])
+        self.assertAlmostEqual(assignment["optimal_mean_weight"], np.cos(.25))
+        self.assertEqual(result["subspace_raw_assignment_replay"], "pass")
+        self.assertEqual(result["assignment_replay"], "NOT VERIFIED")
 
 
 class TrackingReplayDiskTests(unittest.TestCase):

@@ -1,5 +1,34 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
+## S06/S12 — optimum raw assignment wewnątrz grupy, 2026-10-02
+
+Domknięto lokalną część P2 z checkpointu
+`fe28cb31d6ca9edc0158d73488861bf4845a1ae8`: replay sprawdza zapisane raw IDs
+względem optimum modułów rotacji Procrustesa. Niezależny Hungarian zwraca
+optymalne kolumny i sumę wag; raport zawiera raw IDs, średnie wagi oraz
+informację o równoważnym optimum. Gorsza jednoznaczna permutacja jest błędem.
+Przy remisach nie wymagamy identycznego tie-breaku SVD/Hungarian.
+
+Regresja RED: przed zmianą celowa zamiana raw IDs w grupie z unikalnym
+optimum nie powodowała błędu. Po zmianie jest GREEN. 45 testów trackingu
+PASS, w tym 80 małych kwadratowych/prostokątnych macierzy porównanych
+z niezależną enumeracją, duże znane optimum, bardzo małe wagi oraz
+zespolona rotacja 3×3 z niesymetrycznymi modułami wykrywająca transpozycję.
+2 regresje agregacji gate PASS, mapa noty 0831 PASS. Scoped review nie
+znalazł blokera algebry; wskazane P2 testu orientacji i statusów poprawiono.
+
+To nadal tylko przypisanie wewnątrz już wybranej grupy. Wybór grup,
+pełny zbiór kandydatów i globalne pair assignment pozostają do odtworzenia.
+`subspace_raw_assignment_replay` może mieć pass, ale pełne
+`tracking_assignment_replay` nadal blokuje QUALIFIED C1/A1. Wszystkie
+fixture'y są syntetyczne; nowych punktów FEM i kwalifikacji runtime brak.
+Kolejny krok: replay wyboru kandydatów/grup i globalnej polityki przydziału,
+z wymaganiem rzeczywistych pól wszystkich uczestniczących kandydatów.
+
+Runner nadal waiting_for_disk; 720 535 552 B wolnego, brak active_jobs,
+worker_alive=true, accepting_jobs=true. Session 7375 nadal aktywny.
+Nie restartowano procesu i nie usunięto danych.
+
 ## S06/S12 — wykonywany replay metryk całej ścieżki, 2026-10-02
 
 `replay_tracking_fields` czyta rzeczywiste widmo, gałęzie i wszystkie pola
@@ -16,9 +45,10 @@ mapa noty 0831 PASS. Źródła/testy są interpretowane; pola testowe syntetyczn
 bez nowych częstotliwości FEM. Scoped review nie znalazł P1 w metryce,
 endpointach ani transporcie. Dodatnią częstotliwość wymuszono też w helperze.
 
-Pozostaje P2: nie odtworzono Hungarian assignment wewnątrz podprzestrzeni
-ani wyboru grup i globalnego przydziału pair edges. Test zamiany raw IDs
-potwierdza granicę: metryka nie rozstrzyga przydziału. Osobna bramka
+P2 tego checkpointu obejmował Hungarian assignment wewnątrz podprzestrzeni
+oraz wybór grup i globalny przydział pair edges. Część lokalna została
+naprawiona w przyroście opisanym powyżej; globalna nadal pozostaje otwarta.
+Test symetrycznego remisu zachowuje równoważne optima. Osobna bramka
 `tracking_assignment_replay` pozostaje `missing`; nawet metric `pass`
 nie może zakwalifikować C1/A1. Następny etap musi odtworzyć przydziały
 z rzeczywistych kandydatów i dodać kontrolę niewłaściwej permutacji.

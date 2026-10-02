@@ -28,6 +28,11 @@
   ],
   "equations": [
     {
+      "id": "eq-tracking-subspace-raw-assignment",
+      "symbols": ["tracking_assignment_rotation", "tracking_assignment_weight", "tracking_assignment_indices", "tracking_assignment_permutations", "tracking_assignment_permutation", "tracking_assignment_tolerance"],
+      "sources": ["source-tracking-subspace-assignment-weights", "source-tracking-assignment-optimum", "source-tracking-assignment-replay", "source-tracking-assignment-enumeration"]
+    },
+    {
       "id": "eq-periodic-mode-seam-relative",
       "symbols": [
         "mode_seam_field",
@@ -559,6 +564,42 @@
     }
   ],
   "symbols": [
+    {
+      "id": "tracking_assignment_rotation",
+      "latex": "$Q_{\\mathrm{rot}}$",
+      "meaning": "Unitarna rotacja bieżącej bazy do poprzedniej ramy w metryce masy",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "tracking_assignment_weight",
+      "latex": "$w_{ij}$",
+      "meaning": "Moduł współczynnika rotacji, wiersz poprzedniej gałęzi i kolumna bieżącego raw modu",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "tracking_assignment_indices",
+      "latex": "$d$, $i$, $j$",
+      "meaning": "Rząd grupy i indeksy elementów poprzedniej/bieżącej bazy",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "tracking_assignment_permutations",
+      "latex": "$\\Pi_d$",
+      "meaning": "Zbiór permutacji dla grupy rzędu d",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "tracking_assignment_permutation",
+      "latex": "$\\pi$, $\\pi_\\star$",
+      "meaning": "Przypisanie gałęzi do raw modów i przypisanie optymalne",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "tracking_assignment_tolerance",
+      "latex": "$\\epsilon_{\\mathrm{assign}}$",
+      "meaning": "Tolerancja średniej wagi optimum, równa 1e-9",
+      "si_unit": "$1$"
+    },
     {
       "id": "mode_seam_field",
       "latex": "$\\mathbf v_j$",
@@ -2074,6 +2115,30 @@
       "symbol": "test_native_solver_keeps_residual_and_selected_only_policies",
       "evidence_status": "interpreted source checks PASS; native compilation, managed runtime and physics qualification pending",
       "responsibility": "Freeze public target transfer, unchanged residual policies, selected-only output and the prepared Rust single/path regressions."
+    },
+    {
+      "id": "source-tracking-subspace-assignment-weights",
+      "path": "scripts/comsol_tracking_metric.py",
+      "symbol": "transport_with_assignment_weights",
+      "responsibility": "Procrustes rotation magnitudes indexed by previous branch and current raw slot"
+    },
+    {
+      "id": "source-tracking-assignment-optimum",
+      "path": "scripts/comsol_tracking_assignment.py",
+      "symbol": "maximum_weight_assignment",
+      "responsibility": "Independent finite rectangular Hungarian optimum without factorial enumeration or extra dependencies"
+    },
+    {
+      "id": "source-tracking-assignment-replay",
+      "path": "scripts/comsol_tracking_replay.py",
+      "symbol": "replay_recorded_frames",
+      "responsibility": "Reject non-optimal subspace raw assignment while retaining equivalent numerical optima and unqualified global assignment"
+    },
+    {
+      "id": "source-tracking-assignment-enumeration",
+      "path": "scripts/test_comsol_tracking_assignment.py",
+      "symbol": "test_small_square_and_rectangular_against_enumeration",
+      "responsibility": "Independent exhaustive small-matrix optimum oracle, not solver evidence"
     },
     {
       "id": "source-comsol-tracking-path-replay",

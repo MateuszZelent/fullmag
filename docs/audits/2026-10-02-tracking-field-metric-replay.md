@@ -18,7 +18,7 @@ próbce, więc kolejność uczestników nie powoduje wykorzystania bieżącej
 ramy zamiast poprzedniej. Score odtwarza heurystykę producenta; nie jest
 to miara residualu eigenproblem ani budżet zgodności z analityką.
 
-## Dowody
+## Dowody checkpointu fe28cb31d
 
 - 36 interpretowanych testów trackingu PASS: algebra, odczyt, provenance
   i replay; 12 kontroli replayu obejmuje rzeczywistą syntetyczną ścieżkę
@@ -34,18 +34,32 @@ poprawności widma COMSOL, fizycznego crossing ani zbieżności kroku k.
 
 ## Pozostałe korekty
 
-P2: replay metryki jest niezmienniczy względem części permutacji raw IDs
-wewnątrz grupy. Nie odtwarza jeszcze Hungarian branch→raw ani wyboru
-kandydatów cluster/pair. Test z zamianą raw IDs przechodzi metrykę,
-ale zachowuje `assignment_replay=NOT VERIFIED`. Bramka główna wymaga
-osobnego assignment replay; jego brak zawsze blokuje `QUALIFIED` C1/A1.
+Lokalna część P2 jest naprawiona: replay odtwarza wagi przypisania
+z rotacji Procrustesa i niezależny Hungarian sprawdza optimum branch→raw
+wewnątrz wybranej grupy. Jednoznacznie gorsza permutacja jest odrzucana.
+Równoważne optima są dopuszczalne w tolerancji średniej wagi 1e-9
+i jawnie raportowane wraz z odczytanymi/optymalnymi raw IDs.
 
-Kolejny etap: odtworzyć rotację i optimum przypisań z pełnego zbioru
-kandydatów, sprawdzić permutacje i grupowanie oraz pokrycie kandydatów
+Regresja unikalnej złej permutacji była RED na źródłach
+`fe28cb31d6ca9edc0158d73488861bf4845a1ae8`; po poprawce jest GREEN.
+Aktualnie 45 interpretowanych testów trackingu PASS. Optymalizator sprawdzono
+na 80 macierzach względem niezależnej enumeracji permutacji, znanym dużym
+optimum i wagach 1e-300. Zespolona rotacja 3×3 o niesymetrycznych modułach
+chroni orientację previous-row/current-column. 2 regresje agregacji gate
+oraz focused source-map PASS. Review nie znalazł blokera implementacji;
+wskazany brak testu transpozycji i nieaktualny status zostały poprawione.
+
+Pozostaje wybór kandydatów cluster/pair i globalne przypisanie krawędzi.
+`subspace_raw_assignment_replay=pass` nie zastępuje pełnego
+`assignment_replay`, który nadal pozostaje NOT VERIFIED. Bramka główna
+utrzymuje osobny brak assignment replay i blokuje `QUALIFIED` C1/A1.
+
+Kolejny etap: odtworzyć globalny wybór/przydział z pełnego zbioru
+kandydatów, sprawdzić grupowanie oraz pokrycie kandydatów
 rzeczywistymi polami. Nie zastępować tego sortowaniem częstotliwości.
 Replay obecnie dotyczy pełnej ciągłej ścieżki C1/A1: brak/gap/restart
 jest błędem, a nie zgodą na pominięcie krawędzi.
 
 Runtime pozostaje zablokowany przez storage. #196 jest queued; ostatni
-pomiar 729 821 184 B jest poniżej progu 8 GiB. Source capsule #196 pozostaje
+pomiar 720 535 552 B jest poniżej progu 8 GiB. Source capsule #196 pozostaje
 niezmienna i nie zawiera tych późniejszych poprawek replayu.

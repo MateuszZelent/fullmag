@@ -11,6 +11,7 @@ from pathlib import Path
 import numpy as np
 
 from comsol_tracking_fields import load_tracking_fields
+from comsol_tracking_assignment import maximum_weight_assignment
 from verify_fem_frequency_domain_eigen_artifacts import validate_tracking_edge_provenance
 
 
@@ -154,8 +155,13 @@ def replay_recorded_frames(metric, modes, branches, samples):
                     raise ValueError("subspace previous raw ID differs from branch")
             if set(current_raw) != {by_branch[branch][sample]["raw_mode_index"] for branch in ids}:
                 raise ValueError("subspace current raw IDs differ from assigned branches")
-            cosines, transported = metric.transport([frames[branch] for branch in ids],
+            cosines, transported, weights = metric.transport_with_assignment_weights([frames[branch] for branch in ids],
                 [modes[(sample, raw)]["envelope"] for raw in current_raw])
+            optimal_assignment, optimal_weight = maximum_weight_assignment(weights)
+            recorded_assignment = [current_raw.index(by_branch[branch][sample]["raw_mode_index"]) for branch in ids]
+            recorded_weight = float(weights[np.arange(len(ids)), recorded_assignment].sum())
+            if (optimal_weight - recorded_weight) / len(ids) > METRIC_TOLERANCE:
+                raise ValueError("subspace raw assignment is not an optimum of the replayed rotation")
             stored_cosines = sorted(subspace["principal_cosines"])
             for measured, stored in zip(cosines, stored_cosines, strict=True):
                 _close(float(measured), stored, "principal cosine")
@@ -169,10 +175,18 @@ def replay_recorded_frames(metric, modes, branches, samples):
                 _close(score, by_branch[branch][sample]["tracking_confidence"], "subspace confidence")
                 next_frames[branch] = frame
                 processed.add(branch)
-            records.append(dict(sample_index=sample, branch_ids=ids, principal_cosines=cosines.tolist(), score=score))
+            records.append(dict(sample_index=sample, branch_ids=ids, principal_cosines=cosines.tolist(), score=score,
+                subspace_raw_assignment=dict(status="pass", recorded_columns=recorded_assignment,
+                    optimal_columns=optimal_assignment, current_raw_mode_indices=current_raw,
+                    recorded_raw_mode_indices=[current_raw[column] for column in recorded_assignment],
+                    optimal_raw_mode_indices=[current_raw[column] for column in optimal_assignment],
+                    recorded_mean_weight=recorded_weight / len(ids),
+                    optimal_mean_weight=optimal_weight / len(ids), equivalent_optimum=recorded_assignment != optimal_assignment)))
         frames = next_frames
     return {"status": "pass", "sample_count": len(order), "branch_count": len(by_branch),
-            "replayed_edges": records, "assignment_replay": "NOT VERIFIED", "qualification": "NOT VERIFIED"}
+            "replayed_edges": records,
+            "subspace_raw_assignment_replay": "pass" if any("subspace_raw_assignment" in record for record in records) else "not_applicable",
+            "assignment_replay": "NOT VERIFIED", "qualification": "NOT VERIFIED"}
 
 
 def replay_tracking_fields(case_dir, *, selected_branch_ids=None, expected_hashes=None):

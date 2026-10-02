@@ -100,6 +100,11 @@ class Tet4TrackingMetric:
         No raw-mode assignment is inferred. Output frame order follows the
         input previous branch order and is retained for subsequent edges.
         """
+        cosines, frames, _ = self.transport_with_assignment_weights(previous, current)
+        return cosines, frames
+
+    def transport_with_assignment_weights(self, previous, current):
+        """Also return weights indexed by previous branch and current raw slot."""
         left, right = self.basis(previous), self.basis(current)
         if len(left) != len(right) or len(left) < 2:
             raise ValueError("transport requires equal subspace ranks >= 2")
@@ -108,7 +113,7 @@ class Tet4TrackingMetric:
         rotation = vh.conj().T @ u.conj().T
         frames = [sum((rotation[j, i] * right[j] for j in range(len(right))),
                       np.zeros_like(right[0])) for i in range(len(left))]
-        return np.sort(np.clip(singular, 0, 1)), frames
+        return np.sort(np.clip(singular, 0, 1)), frames, np.clip(np.abs(rotation.T), 0, 1)
 
     def validate_persisted_metric(self, record, source_mesh_topology_sha256):
         """Bind the producer's compact mass record to reconstructed geometry."""

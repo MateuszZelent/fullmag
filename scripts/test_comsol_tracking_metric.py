@@ -65,6 +65,23 @@ class TrackingMetricTests(unittest.TestCase):
         self.assertAlmostEqual(self.metric.overlap(frames[1], self.y), 1)
         self.assertAlmostEqual(self.metric.overlap(rotated[0], self.x), 2 ** -.5)
 
+    def test_complex_three_cycle_distinguishes_assignment_transpose(self):
+        from comsol_tracking_assignment import maximum_weight_assignment
+        z = np.tile([0., 0, 1.], (4, 1)).astype(complex)
+        previous = [self.x, self.y, z]
+        current = [1j * self.y, np.exp(.4j) * z, self.x]
+        cosines, frames, weights = self.metric.transport_with_assignment_weights(previous, current)
+        # Previous rows x,y,z map to current columns 2,0,1. Transposing
+        # these nonsymmetric moduli would incorrectly select 1,2,0.
+        expected = np.array([[0., 0, 1], [1., 0, 0], [0., 1, 0]])
+        np.testing.assert_allclose(weights, expected, atol=1e-14)
+        np.testing.assert_allclose(cosines, [1., 1, 1])
+        assignment, weight = maximum_weight_assignment(weights)
+        self.assertEqual(assignment, [2, 0, 1])
+        self.assertAlmostEqual(weight, 3.)
+        for frame, target in zip(frames, previous, strict=True):
+            self.assertAlmostEqual(self.metric.overlap(frame, target), 1.)
+
     def test_persisted_metric_matches_geometry(self):
         record = {"schema": "fullmag.tracking_consistent_p1_metric.v1",
                   "definition_id": "consistent_p1_tet4_cartesian_nodal_envelope.v1",

@@ -2578,6 +2578,43 @@ Brak zależnej gałęzi, restart/gap lub brak pola oznacza brak pełnego replay.
 Sukces ma osobny status metryki; brak replay przydziału/cluster selection
 nadal blokuje naukową kwalifikację C1/A1. Mechanizm nie zmienia solvera,
 publicznego Python/IR ani metod fizycznych i nie dowodzi zbieżności.
+### Przypisanie raw modów wewnątrz wybranej podprzestrzeni
+
+Po transporcie Procrustesa odtwarzana jest macierz wag używana przez
+producenta do przypisania raw ID do poprzednich gałęzi:
+
+```{math}
+:label: eq-tracking-subspace-raw-assignment
+w_{ij}=\left|\left(Q_{\mathrm{rot}}\right)_{ji}\right|,
+\qquad
+\pi_\star\in\operatorname*{arg\,max}_{\pi\in\Pi_d}
+\frac{1}{d}\sum_{i=1}^{d}w_{i,\pi(i)}.
+```
+
+| Symbol | Znaczenie | Jednostka SI |
+|---|---|---|
+| $Q_{\mathrm{rot}}$ | Unitarna rotacja bieżącej bazy do poprzedniej ramy w metryce masy | $1$ |
+| $w_{ij}$ | Moduł współczynnika rotacji, wiersz poprzedniej gałęzi i kolumna bieżącego raw modu | $1$ |
+| $d$, $i$, $j$ | Rząd grupy i indeksy elementów poprzedniej/bieżącej bazy | $1$ |
+| $\Pi_d$ | Zbiór permutacji dla grupy rzędu d | $1$ |
+| $\pi$, $\pi_\star$ | Przypisanie gałęzi do raw modów i przypisanie optymalne | $1$ |
+| $\epsilon_{\mathrm{assign}}$ | Tolerancja średniej wagi optimum, równa 1e-9 | $1$ |
+
+Niezależny algorytm Hungarian wyznacza maksimum sumy wag bez enumerowania
+wszystkich permutacji. Odczytane przypisanie jest sprawdzane względem optimum
+po podzieleniu sumy przez rząd grupy. Przy równoważnych optimach różne
+permutacje są dopuszczalne w tej tolerancji i jawnie raportowane; nie wolno
+odrzucać poprawnej degeneracji wyłącznie przez inny tie-break SVD/Hungarian.
+Nieoptymalna permutacja jest błędem, nawet gdy principal cosines i score
+są identyczne. Tolerancja dotyczy roundtripu algebry, nie błędu fizycznego.
+
+Zakres: grupa o równym rzędzie co najmniej dwa, poprawne niezależne bazy,
+ta sama metryka P1 i niezmienne hash-bound pola. Testy maksimum porównują
+małe macierze z niezależną enumeracją permutacji. Całość jest postprocessingiem
+CPU; publiczny Python/IR i solver nie zmieniają się. Replay wewnętrznego
+przypisania nie dowodzi poprawności wyboru grup ani globalnego przydziału
+pair edges z pełnego zbioru kandydatów; te bramki pozostają NOT VERIFIED.
+
 Po degeneracji konieczny jest dodatkowo replay przetransportowanej ramy;
 raw-to-raw overlap nie zastępuje tego replay. Do jego wykonania C1/A1
 pozostają NOT VERIFIED. Jest to diagnostyka CPU, bez zmiany Python/IR,
@@ -2616,6 +2653,10 @@ selekcja węzłów Gamma, następnie kompilacja/runtime i walidacja naukowa.
 | source-comsol-tracking-path-replay | `scripts/comsol_tracking_replay.py` | `replay_recorded_frames` |
 | source-comsol-tracking-disk-replay | `scripts/comsol_tracking_replay.py` | `replay_tracking_fields` |
 | source-comsol-tracking-replay-tests | `scripts/test_comsol_tracking_replay.py` | `test_disk_signed_path_replays_actual_edges` |
+| source-tracking-subspace-assignment-weights | `scripts/comsol_tracking_metric.py` | `transport_with_assignment_weights` |
+| source-tracking-assignment-optimum | `scripts/comsol_tracking_assignment.py` | `maximum_weight_assignment` |
+| source-tracking-assignment-replay | `scripts/comsol_tracking_replay.py` | `replay_recorded_frames` |
+| source-tracking-assignment-enumeration | `scripts/test_comsol_tracking_assignment.py` | `test_small_square_and_rectangular_against_enumeration` |
 
 
 ### Integralność legacy odczytu pól i wag
