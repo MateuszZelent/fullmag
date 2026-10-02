@@ -1,6 +1,16 @@
 # Status realizacji całego planu refaktoryzacji
 
-Data ostatniego przyrostu: 01.10.2026. Przyrost P6-49:
+Checkpoint 02.10.2026, P8-C: managed Linux FEM CPU build 204 zakończony
+SUCCEEDED/exit 0, zweryfikowano 119 artifact hashes i 291 618 738 B na
+dokładnym SHA `a55fa13d76052cdc5e3f96d8369127752061237d`.
+[Receipt i zakres](p8/02-fem-cpu-build-204.md). Dodano także
+[natywne assembly FEM do MSI](p8/03-native-fem-package-assembly.md):
+CPU/GPU profiles, DLL/import pair, strict diagnostic JSON i SDK closure.
+153 lekkich regresji PASS. Real Windows executor/prefix/build/install/recovery
+nadal OPEN; GitHub API wskazuje 0 zarejestrowanych self-hosted runners.
+Procenty poniżej pozostają bez awansu; cały cel P0–P8 jest aktywny.
+
+Checkpoint P6 z 01.10.2026. Przyrost P6-49:
 `master@9555a55388980a439363979d2269899c5e716fae`, opublikowany na remote.
 Przypięty manifest datasetu jest dostępny przez project-owned API,
 wygenerowany transport, centralny facade i resource hook. Exact owner

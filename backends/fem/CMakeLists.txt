@@ -232,11 +232,21 @@ set(FEM_SOURCES
 )
 
 if(FULLMAG_USE_MFEM_STACK)
+    if(WIN32 AND FULLMAG_FEM_WITH_SLEPC)
+        include("${CMAKE_SOURCE_DIR}/cmake/FindFullmagWindowsModal.cmake")
+        # Pin MPI before MFEM so MFEMConfig.cmake's find_dependency(MPI)
+        # cannot silently replace the selected Windows provider.
+        fullmag_find_windows_modal()
+    endif()
     include("${CMAKE_SOURCE_DIR}/cmake/FindFullmagMfem.cmake")
     fullmag_find_mfem()
     if(FULLMAG_FEM_WITH_SLEPC)
-        find_package(PETSc REQUIRED)
-        find_package(SLEPc REQUIRED)
+        if(WIN32)
+            fullmag_validate_windows_modal()
+        else()
+            find_package(PETSc REQUIRED)
+            find_package(SLEPc REQUIRED)
+        endif()
     endif()
 
     list(APPEND FEM_SOURCES
@@ -943,7 +953,11 @@ add_fem_source_facade_contract(
     tests/frequency_domain/poisson_airbox_schur_matshell_test.cpp
 )
 if(FULLMAG_USE_MFEM_STACK AND FULLMAG_ENABLE_CUDA AND FULLMAG_FEM_WITH_SLEPC)
-    find_package(MPI REQUIRED COMPONENTS CXX)
+    if(WIN32)
+        fullmag_validate_windows_modal()
+    else()
+        find_package(MPI REQUIRED COMPONENTS CXX)
+    endif()
     add_executable(
         fem_gpu_petsc_slepc_runtime_contract
         tests/frequency_domain/gpu_petsc_slepc_runtime_test.cpp

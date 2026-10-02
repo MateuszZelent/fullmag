@@ -2,11 +2,23 @@ name: windows-msi-native
 
 on:
   workflow_dispatch:
+    inputs:
+      fem_mode:
+        description: Native FEM assembly scope; none is diagnostic FDM-only
+        type: choice
+        default: cpu
+        options: [cpu, gpu, none]
+      cuda:
+        description: Include CUDA FDM; required for FEM gpu
+        type: boolean
+        default: false
   push:
     branches: [master, main]
     paths:
       - "apps/desktop/**"
       - "crates/**"
+      - "native/**"
+      - "backends/**"
       - "packages/**"
       - "scripts/windows/**"
       - "docker/windows-msi/**"
@@ -23,6 +35,10 @@ jobs:
       cancel-in-progress: false
     env:
       FULLMAG_PROJECT_STORAGE_ROOT: ${{ vars.FULLMAG_WINDOWS_CI_STORAGE_ROOT }}
+      FULLMAG_WINDOWS_MSI_FEM: ${{ inputs.fem_mode || 'cpu' }}
+      FULLMAG_WINDOWS_MSI_CUDA: ${{ inputs.cuda && '1' || '0' }}
+      FULLMAG_FEM_DEPENDENCY_PREFIX: ${{ vars.FULLMAG_WINDOWS_FEM_CPU_PREFIX }}
+      FULLMAG_WINDOWS_FEM_GPU_PREFIX: ${{ vars.FULLMAG_WINDOWS_FEM_GPU_PREFIX }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -37,7 +53,11 @@ jobs:
       - name: Build native Windows MSI
         id: package
         shell: powershell
-        run: .\scripts\windows\build_windows_msi.ps1
+        run: |
+          if ($env:FULLMAG_WINDOWS_MSI_FEM -eq "gpu") {
+            $env:FULLMAG_FEM_DEPENDENCY_PREFIX = $env:FULLMAG_WINDOWS_FEM_GPU_PREFIX
+          }
+          .\scripts\windows\build_windows_msi.ps1
 
       - name: Upload MSI artifact
         uses: actions/upload-artifact@v7

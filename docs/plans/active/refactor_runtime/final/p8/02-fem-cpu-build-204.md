@@ -1,6 +1,7 @@
 # P8-C — managed regresja FEM CPU, build 204
 
-Data: 02.10.2026. Status w chwili zlecenia: QUEUED. Wynik: NOT VERIFIED.
+Data: 02.10.2026. Build: SUCCEEDED, exit 0. Artefakty: zweryfikowane.
+Runtime, fizyka i kwalifikacja Windows: NOT VERIFIED.
 
 Cel: sprawdzić produkcyjną kompilację oraz pakowanie istniejącego profilu
 Linux FEM CPU po poprawkach konfiguracji CPU/GPU i eksportów/linkowania.
@@ -59,3 +60,38 @@ install Control Room. Job nadal RUNNING. To dowód ukończenia jednej fazy
 kompilacji, nie terminalnego pakietu. Zachowano worker i job ID.
 Źródła są nadal dokładnie wcześniejszym commitem z tabeli; późniejsze poprawki
 packagera MSI i discovery MFEM Windows nie są objęte tym buildem.
+
+## Wynik końcowy
+
+Ten sam job zakończył się SUCCEEDED, exit_code=0. Worker ma terminalny
+receipt i zakończył proces; nie ponowiono buildu. Trzy fazy mają exit 0:
+
+| Faza | Czas | Zakres |
+|---|---|---|
+| native-build | 804,3 s | `make install-cli-dev`, produkcyjne CLI/API/Python/native |
+| frontend-dependencies | 470,9 s | frozen-lockfile install Control Room |
+| frontend-build | 475,3 s | `make web-build-static` |
+
+Image: `sha256:e9b8ec88b9a9ea09a6cd5e3ad3945fcabd269541f1cdd24ffafd3dff3925399d`.
+Build receipt SHA-256:
+`cc1d103a59e36a250b0a2e7cadf5270ed6682589263da7e6465c060a906aa685`.
+Coordinator receipt SHA-256:
+`2038f21d699d1592ef0abdf5275b02ce7046bbd2a8b4283402dedcbffa3681dc`.
+
+Receipt znajduje się w kanonicznym storage, pod
+`runs/fullmag-0950f4dca4ffe38f/c13c7fd4a12c40ca82690cbeba13ec27/artifacts/build-receipt.json`.
+Sprawdzono source commit, capsule digest, clean source snapshot i snapshot
+SHA-256 zgodne z tabelą. Osobne `native_source_identity_sha256` w receipcie
+wynosi `144fa6d843b9d2ab0bae9884bc6b5834cb88cd8cd0c24bb2eab4b480b320f73f`;
+to hash serializacji rekordu identity, nie pole source_snapshot_sha256.
+
+Niezależna kontrola na hoście zweryfikowała wszystkie **119** ścieżek,
+rozmiarów i hashów SHA-256, łącznie **291 618 738 B**. Wymagane niepuste
+artefakty CLI, API, Python core, `libfullmag_fem.so` i static UI istnieją.
+Puste stderr logi są dozwolone i nie zostały zaliczone jako payload produktu.
+
+Wynik potwierdza managed produkcyjny build/pakowanie profilu Linux FEM CPU
+na dokładnym starszym SHA. Receipt zachowuje `qualification=NOT VERIFIED`;
+nie zawiera runtime contracts ani naukowych scenariuszy. Nie dowodzi native
+Windows, actual solver execution, FEM GPU, instalacji, recovery ani późniejszych
+zmian MSI/discovery. Nie kompilowano testów jednostkowych. Sesja 3104 zachowana.

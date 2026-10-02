@@ -33,6 +33,35 @@ def test_transitive_closure_and_no_copy(tmp_path, monkeypatch):
     assert all(s['sha256'] == planner.file_sha256(Path(s['source'])) for s in plan['sources'])
 
 
+def test_nested_sdk_layout_is_bundled_without_prefix_at_runtime(tmp_path, monkeypatch):
+    stage,sdk=setup(tmp_path)
+    for sub,name in [('lib/Release','mfem.dll'),('hypre/bin/Release','hypre.dll')]:
+        directory=sdk/sub; directory.mkdir(parents=True)
+        image(directory/name)
+    imports(monkeypatch, {'app.exe':['mfem.dll'], 'mfem.dll':['hypre.dll'], 'hypre.dll':[]})
+    plan=planner.plan_dependencies(stage,Path('unused'),[sdk])
+    assert [s['name'] for s in plan['sources']] == ['hypre.dll','mfem.dll']
+    assert {Path(s['source']).parent for s in plan['sources']} == {sdk/'lib/Release',sdk/'hypre/bin/Release'}
+
+
+def test_conflicting_nested_sdk_versions_are_rejected(tmp_path, monkeypatch):
+    stage,sdk=setup(tmp_path)
+    for sub in ('bin/Release','bin/Debug'):
+        directory=sdk/sub; directory.mkdir(parents=True); image(directory/'mfem.dll')
+    other=sdk/'bin/Debug/mfem.dll'; other.write_bytes(other.read_bytes()+b'other version')
+    imports(monkeypatch, {'app.exe':['mfem.dll'], 'mfem.dll':[]})
+    with pytest.raises(ValueError,match='Conflicting SDK dependency basename'):
+        planner.plan_dependencies(stage,Path('unused'),[sdk])
+
+
+def test_nested_driver_cannot_be_sourced(tmp_path, monkeypatch):
+    stage,sdk=setup(tmp_path)
+    directory=sdk/'nested'; directory.mkdir(); image(directory/'nvcuda.dll')
+    imports(monkeypatch, {'app.exe':[]})
+    with pytest.raises(ValueError,match='NVIDIA driver'):
+        planner.plan_dependencies(stage,Path('unused'),[sdk],True)
+
+
 def test_cycle_is_bounded(tmp_path, monkeypatch):
     stage, sdk = setup(tmp_path)
     image(sdk / 'a.dll'); image(sdk / 'b.dll')

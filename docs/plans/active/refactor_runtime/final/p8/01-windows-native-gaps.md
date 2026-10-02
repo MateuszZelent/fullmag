@@ -6,11 +6,11 @@ Status całej bramki: NOT VERIFIED. Audyt źródeł nie jest kwalifikacją runti
 | Kolejność | Luka i źródła | Wymagana zmiana | Dowód zamknięcia |
 |---|---|---|---|
 | 1 | Launcher budował CLI/API bez UI: `scripts/windows/run_fullmag.ps1`; `control_room.rs::open_in_tauri` wymaga `fullmag-ui.exe`. | Wykonano source increment: osobny build `fullmag-desktop` bez solver CUDA feature, hash/UI manifest i fail-closed przed launch. | 16 regresji PS/Python i 6 kontroli źródeł PASS; aktualny build oraz rzeczywiste okno nadal NOT VERIFIED. |
-| 2 | Unix rpath, konfiguracja CMake i brak eksportu publicznego C ABI na MSVC. | Wykonano fragment źródłowy: rpath według targetu Cargo, jawny `--config`, MSVC import library w wybranym config lub płaskim Ninja; jawny eksport 86 funkcji i symbolu danych ABI. Runtime DLL staging pozostaje otwarty. | Preprocessing MSVC C/C++: 6 PASS; 2 istniejące source contracts PASS. Pełny Windows link/DLL launch oraz Linux regression build: NOT VERIFIED. |
+| 2 | Unix rpath, konfiguracja CMake i brak eksportu publicznego C ABI na MSVC. | Wykonano fragment źródłowy: rpath według targetu Cargo, jawny `--config`, MSVC import library w wybranym config lub płaskim Ninja; jawny eksport 86 funkcji i symbolu danych ABI. Source staging DLL dodany, actual Windows odbiór pozostaje otwarty. | Preprocessing MSVC C/C++: 6 PASS; 2 istniejące source contracts PASS. Linux build 204 i 119 artifact hashes PASS na przypiętym SHA; pełny Windows link/DLL launch NOT VERIFIED. |
 | 3 | External FDM był rozpoznawany tylko jako Linux `.so`. | Wykonano target-aware imported target: MSVC DLL + `.lib`, MinGW DLL + `.dll.a`, Linux `.so`/`.so.0`; Cargo śledzi moduł CMake. | 12 configure-only cases PASS; actual Windows/Linux link i runtime NOT VERIFIED. |
 | 4 | Natywny launcher odrzuca FEM; `run_fullmag_fem.ps1` uruchamia Linux container. | Natywny dependency bundle MFEM/hypre/libCEED i odpowiednie adaptery Windows dla CPU, następnie CUDA GPU; osobno potrzebne workflow dependencies. | Native FEM CPU i FEM GPU receipts, requested/resolved execution oraz wymagane bramki fizyki. GPU bez cichego CPU fallbacku. |
-| 5 | MSI ma manifesty tylko FDM i brak FEM dependency bundle. DLL trafiały do `lib`, poza katalogiem startującego EXE. | Wykonano fragment stagingu DLL obok EXE, z inventory/hashami i kontrolą konfliktów. Nadal wymagane transitive dependency closure FEM/CUDA, pełne native binaries/UI/Python oraz staging przez resolver. | 8 regresji PS stagingu PASS; actual MSI/clean install/dependency closure NOT VERIFIED. |
-| 6 | Lokalny katalog `local_runner/build_executor.py` obsługuje Linux/container profile; release Windows CI jest inną trasą. | Ustalić zarządzany Windows/MSVC executor albo odrębną kwalifikowaną trasę CI bez publikacji wydania. Nie nazywać profilu Linux dowodem Windows. | Windows target receipt, source snapshot, niepuste artefakty i terminalny exit 0. Zachować zakaz kompilacji unit tests do odwołania. |
+| 5 | MSI wymaga actual FEM dependency bundle i instalacji. Historycznie miało tylko FDM i DLL poza bin. | Dodano native FEM assembly CPU/GPU, parę DLL/import library z bieżącego profilu, SDK closure również w podfolderach, diagnostykę staged CLI i eksperymentalne manifesty. | 153 lekkie regresje assembly/modal/PE/storage PASS; actual Windows build/MSI/clean install i zależności runtime NOT VERIFIED. |
+| 6 | Lokalny katalog `local_runner/build_executor.py` obsługuje Linux/container profile; API GitHub: 0 self-hosted runners podczas kontroli. | Natywne testowe CI ma właściwe labels, storage/prefix operatora i osobne FEM/CUDA inputs; executor wymaga enrollment i qualification. | Windows target receipt, source snapshot, niepuste artefakty i terminalny exit 0 nadal NOT VERIFIED. Zachować zakaz kompilacji unit tests do odwołania. |
 | 7 | Windows writer jest zaimplementowany; directory-sync/power-loss nie są kwalifikowane. Scratch session jest również stanem w pamięci. | Zweryfikować lokalny storage, atomowy zapis, lock/recovery, jawne odtworzenie sesji i eksporty. Nie przenosić wymagań Linux 9p na natywny Windows. | New/Open/Save, checkpoint, restart/restore na Windows; ten sam dokument/IDs i zgodne dane, bez synthetic PASS. Power-loss osobny dowód. |
 | 8 | Brak dowodu całego produktu bez developer checkout/toolchain. | Clean install/open/upgrade/rollback; wspólne Python/IR/API/UI i cztery lane'y. | Macierz P8-D i pełne bramki z planu głównego; żadna brakująca realizacja nie zostaje ukryta przez zmianę zakresu. |
 
@@ -26,6 +26,15 @@ produktu. Historyczne native API replay receipts pozostają ważne w swoim
 zakresie; nie dowodzą pełnego aktualnego pakietu.
 
 Ochrona pracy: zachowano cudze dirty backendy i aktywną sesję 3104.
+
+Kontrola 02.10.2026: port 3104 nadal należy do starszego kontenera
+`06c37c71c83f`, ze stagingiem wcześniejszego buildu. Sesja
+`Startup smoke FEM CPU` pozostaje aktywna, solver `idle`, `run=null`.
+To zachowana instancja testowa, nie potwierdzenie aktualnego kodu ani
+zależność natywnego produktu Windows. Odczyt checkpointów nadal zwraca
+500: `repository symlink/reparse point is not permitted:
+/state/workspace/.fullmag`. Nie zatrzymano procesu i nie potwierdzono
+odtworzenia jego sesji po restarcie.
 Nie provisionowano wolumenu, nie skasowano cache, nie uruchomiono solvera.
 
 ## Fragment: linkowanie i publiczne eksporty FEM
@@ -317,3 +326,18 @@ tranzytywnych native dependencies ani prebuilt FULLMAG_FEM_LIB_DIR. Actual
 Windows MFEM/HYPRE/libCEED/modal prefix, build queue/profile/receipt, native
 compile/link/runtime i install/recovery pozostają otwarte. P8-C niezamknięty.
 Build Linux 204 korzysta z wcześniejszego commita; nie sprawdza tego fragmentu.
+
+## Fragment: natywne składanie FEM w MSI
+
+[Raport assembly](03-native-fem-package-assembly.md) opisuje produkcyjny
+target CMake, osobne profile CPU/GPU, DLL/import pair, strict diagnostic JSON,
+rekurencyjny SDK closure oraz identyfikację części wejść linkowania.
+153 lekkie regresje PASS, z jawnymi fixtures. Actual Windows build,
+qualified dependency prefix, lane execution i clean install/recovery nadal
+otwarte. GitHub API potwierdziło brak zarejestrowanego executora; nie
+zlecono ciężkiego hostowego fallbacku. Domyślny pakiet dodaje FEM CPU,
+a diagnostyczny none nie zamyka wymagania pełnego produktu.
+
+Managed Linux [build 204](02-fem-cpu-build-204.md) zakończony exit 0;
+sprawdzono 119 artifact hashes i komplet wymaganych payloadów na starszym SHA.
+Jest dowodem produkcyjnego buildu tego profilu, bez runtime/nauki/Windows.

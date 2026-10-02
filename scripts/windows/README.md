@@ -10,12 +10,16 @@ potwierdzeniem kwalifikacji pełnego produktu ani czterech lane'ów.
 statyczny Control Room i wheel Python, następnie przygotowuje MSI przez
 WiX. Wymaga narzędzi MSVC x64, Rust, Node, pnpm, Python i WiX na executorze.
 Nie uruchamia Linuxa ani WSL. Domyślnie pakuje FDM CPU; jawne
-`FULLMAG_WINDOWS_MSI_CUDA=1` wymaga nvcc i dodaje FDM CUDA. Natywnego FEM
-CPU/GPU oraz pełnego bundle zależności jeszcze nie dodano.
+`FULLMAG_WINDOWS_MSI_CUDA=1` wymaga nvcc i dodaje FDM CUDA.
+Domyślne `FULLMAG_WINDOWS_MSI_FEM=cpu` dodaje budowę natywnego FEM CPU;
+`gpu` wymaga również CUDA=1 i providera MFEM CUDA. Jawne `none` tworzy
+diagnostyczny pakiet FDM-only. Brak wymaganego prefixu zatrzymuje assembly.
 
 Storage ustala [wspólny resolver](fullmag_storage.ps1), korzystający z
 lokalnej konfiguracji głównego checkoutu albo jawnego ustawienia procesu.
-Profile `windows-msi-cpu` i `windows-msi-gpu` mają oddzielne katalogi buildu.
+Profile `windows-msi-fem-cpu`, `windows-msi-fem-cpu-cuda` i
+`windows-msi-fem-gpu` mają oddzielne katalogi buildu; diagnostyczny tryb
+none zachowuje `windows-msi-cpu` / `windows-msi-gpu`.
 Cały skrypt przechodzi przez managed storage wrapper z blokadą i końcowym
 stanem wykonania; to nie zastępuje zarządzanej kolejki pełnych buildów.
 
@@ -38,7 +42,8 @@ katalog nvcc i jego `x64` tylko dla CUDA, oraz opcjonalne katalogi operatora
 w `FULLMAG_WINDOWS_MSI_DLL_ROOTS` (lista oddzielona średnikami). Ostatnia
 zmienna wskazuje istniejące wejścia SDK/dependency prefix, nie nowy storage
 ani alternatywny katalog wyników. Nie ma automatycznego przeszukiwania PATH,
-System32 ani innych wersji SDK. Brak zależności, konflikt nazwy z różnymi
+System32 ani innych wersji SDK. Jawne roots są skanowane rekurencyjnie,
+z kontrolą pozostania resolved DLL pod root. Brak zależności, konflikt nazwy z różnymi
 hashami, zły target lub zmiana pliku zatrzymują plan przed dodatkowym copy.
 Kopiowane są tylko potrzebne DLL; manifesty zapisują ich źródła i hashe.
 Nvcuda.dll nie może być w bin ani w SDK root; sterownik jest wyłącznie
@@ -75,6 +80,33 @@ To kontrola konfiguracji i ścieżek. Nie dowodzi architektury COFF, ABI/CRT,
 kompletności HYPRE/libCEED/PETSc/SLEPc ani działania natywnego FEM. Nie
 dostarczono jeszcze kwalifikowanego prefixu Windows ani jego receipts.
 
+SLEPc ON wymaga w tym samym prefixie named config adapters MPI/PETSc/SLEPc
+i imported targets `MPI::MPI_CXX`, `PETSC::petsc`, `SLEPC::slepc`. MPI jest
+wybierany przed MFEM; stale cache/default discovery nie zastępuje wyboru.
+Configi i konkretne biblioteki wybrane przez modal resolver trafiają do
+inventory z hashami po configure, po buildzie i przed stagingiem. OFF nie
+publikuje starego ON inventory. Pełny SDK, ABI i modal execution wymagają
+własnego receiptu. CPU domyślnie ma SLEPc OFF, GPU ON; jawny
+`FULLMAG_FEM_WITH_SLEPC` pozostaje dostępny.
+
+MSI buduje wyłącznie produkcyjny target `fullmag_fem` w walidowanym
+`native-fem` root, z Release i jawnymi flagami CPU/GPU. Wymaga jednej pary
+DLL/import `.lib`, przekazuje ją do Cargo CLI/API przez prebuilt adapter
+i kopiuje DLL obok EXE. Zewnętrzny `FULLMAG_FEM_LIB_DIR` jest odrzucany dla
+FEM. Hash DLL, import library, głównego provider configu oraz argumenty
+CMake są zapisane w manifestach; to częściowy inventory wejść, nie pełny
+SDK receipt.
+
+Po PE audit staged CLI musi zwrócić poprawny JSON object z CPU available.
+Nie kompiluje się ani nie uruchamia solvera w tej diagnostyce. Status GPU
+jest zapisany bez uznania go za device execution. Runtime manifests FEM
+są experimental/public=false do osobnej kwalifikacji lane/release.
+
+Wszystkie JSON manifests są zapisywane jako UTF-8 bez BOM, również
+w Windows PowerShell 5. Dla rodziny `fem-cpu-native` rejestr wymaga
+dostępnego natywnego FEM CPU; sama obecność EXE nie wystarcza. Nie
+zmienia to dostępności referencyjnego `fem-eigen-cpu-baseline`.
+
 ## CI bez publikacji wydania
 
 [Workflow](../../.github/workflows/windows-msi-container.yml) zachowuje nazwę
@@ -90,6 +122,11 @@ hosta. Upload otrzymuje ścieżki z `steps.package.outputs`, emitowane dopiero
 po potwierdzeniu niepustych plików MSI i manifestu. Brak artefaktów kończy
 upload błędem. Workflow dopuszcza ręczne pakowanie testowe przez `workflow_dispatch`;
 nie tworzy taga ani GitHub Release.
+
+Dispatch wybiera FEM cpu/gpu/none oraz CUDA. Natywny FEM wymaga operatorowych
+vars `FULLMAG_WINDOWS_FEM_CPU_PREFIX` albo `FULLMAG_WINDOWS_FEM_GPU_PREFIX`,
+z istniejącymi bibliotekami Windows/MSVC. GPU nie dziedziczy CPU prefixu,
+gdy jego własna konfiguracja jest pusta. Automatyczny push używa FEM CPU.
 
 Enrolment i wykonanie tego natywnego executora pozostają NOT VERIFIED.
 Nie uruchomiono workflow w ramach tego fragmentu. Na lokalnym hoście z
@@ -109,7 +146,7 @@ buildu ani zależności produktu Windows.
 ## Pozostałe bramki
 
 Aktualny payload wymaga Windows Python 3.12+ i Node 24.18+ na PATH.
-Pełne zależności natywne, FEM CPU/GPU, runtime provenance, aktualny build,
+Rzeczywisty bundle zależności natywnych, FEM CPU/GPU, runtime provenance, aktualny build,
 clean install/open/upgrade/rollback oraz trwały storage/recovery nadal
 wymagają implementacji i osobnego dowodu. Stan i regresje źródłowe są w
 [raporcie P8-C](../../docs/plans/active/refactor_runtime/final/p8/01-windows-native-gaps.md).

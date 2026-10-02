@@ -13,8 +13,13 @@ if ($ProductVersion -notmatch '^[0-9]+\.[0-9]+\.[0-9]+$') {
   throw "MSI version must be a numeric x.y.z value, got $ProductVersion"
 }
 $BuildCuda = $env:FULLMAG_WINDOWS_MSI_CUDA -eq "1"
+. (Join-Path $PSScriptRoot "native_fem_package.ps1")
+$femMode = if ($env:FULLMAG_WINDOWS_MSI_FEM) { $env:FULLMAG_WINDOWS_MSI_FEM } else { "cpu" }
+$BuildPlan = Get-FullmagMsiBuildPlan -FemMode $femMode -Cuda:$BuildCuda `
+  -DependencyPrefix $env:FULLMAG_FEM_DEPENDENCY_PREFIX -PrebuiltFemDirectory $env:FULLMAG_FEM_LIB_DIR
+$BuildFeatures = @($BuildPlan.features)
 . (Join-Path $PSScriptRoot "fullmag_storage.ps1")
-$StorageProfile = if ($BuildCuda) { "windows-msi-gpu" } else { "windows-msi-cpu" }
+$StorageProfile = $BuildPlan.storage_profile
 if ($env:FULLMAG_STORAGE_MANAGED_ENTRY -ne "1") {
   $managedArguments = if ($Version) { @("-Version", $Version) } else { @() }
   $managedExitCode = Invoke-FullmagStorageManagedScript -RepoRoot $RepoRoot `
@@ -37,6 +42,8 @@ $nativeFdmBuildRoot = if ($env:FULLMAG_FDM_NATIVE_BUILD_ROOT) {
 $null = Assert-FullmagStoragePath -Layout $StorageLayout -Path $TargetRoot -Label "MSI Cargo target" -Parent $BuildRoot
 $null = Assert-FullmagStoragePath -Layout $StorageLayout -Path $nativeFdmBuildRoot -Label "MSI native FDM build" -Parent $BuildRoot
 $null = Assert-FullmagStoragePath -Layout $StorageLayout -Path $DistRoot -Label "MSI run" -Parent ([string]$StorageLayout.runs_root)
+$nativeFemBuildRoot = Join-Path $BuildRoot "native-fem"
+$null = Assert-FullmagStoragePath -Layout $StorageLayout -Path $nativeFemBuildRoot -Label "MSI native FEM build" -Parent $BuildRoot
 $env:FULLMAG_FDM_NATIVE_BUILD_ROOT = $nativeFdmBuildRoot
 $null = Prepare-FullmagStorageLinks -RepoRoot $RepoRoot -Profile $StorageProfile -Frontend
 
@@ -234,7 +241,8 @@ function Write-VersionMetadata {
     git_sha = $gitSha
     git_short = $gitShort
     source_identity = $sourceIdentity
-    build_features = if ($BuildCuda) { @("cuda") } else { @() }
+    build_features = $BuildFeatures
+    native_fem = $nativeFemAssembly
     runtime_dlls = @($runtimeDllInventory)
     pe_dependency_audit = $peDependencyAudit
     pe_dependency_plan = $peDependencyPlan
@@ -242,7 +250,7 @@ function Write-VersionMetadata {
     node_runtime = "external-node-24.18-or-newer"
     built_at_utc = $builtAt
   } | ConvertTo-Json -Depth 10
-  Set-Content -Path $Path -Value $payload -Encoding UTF8
+  [System.IO.File]::WriteAllText($Path, $payload, [System.Text.UTF8Encoding]::new($false))
 }
 
 function Write-RuntimeManifests {
@@ -252,7 +260,7 @@ function Write-RuntimeManifests {
   Ensure-Dir $cpuDir
   if ($BuildCuda) { Ensure-Dir $fdmCudaDir }
 
-  @"
+  $cpuManifest = @"
 {
   "family": "cpu-reference",
   "version": "$ProductVersion",
@@ -261,10 +269,11 @@ function Write-RuntimeManifests {
     { "backend": "fdm", "device": "cpu", "mode": "strict", "precision": "double", "public": true }
   ]
 }
-"@ | Set-Content -Path (Join-Path $cpuDir "manifest.json") -Encoding UTF8
+"@
+  [System.IO.File]::WriteAllText((Join-Path $cpuDir "manifest.json"), $cpuManifest, [System.Text.UTF8Encoding]::new($false))
 
   if ($BuildCuda) {
-  @"
+  $cudaManifest = @"
 {
   "family": "fdm-cuda",
   "version": "$ProductVersion",
@@ -274,21 +283,26 @@ function Write-RuntimeManifests {
     { "backend": "fdm", "device": "gpu", "mode": "strict", "precision": "single", "public": false }
   ]
 }
-"@ | Set-Content -Path (Join-Path $fdmCudaDir "manifest.json") -Encoding UTF8
+"@
+  [System.IO.File]::WriteAllText((Join-Path $fdmCudaDir "manifest.json"), $cudaManifest, [System.Text.UTF8Encoding]::new($false))
   }
+  Write-FullmagMsiFemRuntimeManifests -Plan $BuildPlan -RuntimesRoot $RuntimesRoot -Version $ProductVersion
 }
 
 function Write-StageManifest {
   param([string]$Path)
   $runtimePaths = @("runtimes/cpu-reference/manifest.json")
   if ($BuildCuda) { $runtimePaths += "runtimes/fdm-cuda/manifest.json" }
+  if ($BuildPlan.fem_enabled) { $runtimePaths += "runtimes/fem-cpu-native/manifest.json" }
+  if ($BuildPlan.fem_cuda) { $runtimePaths += "runtimes/fem-gpu/manifest.json" }
   $manifest = [ordered]@{
     schema_version = 2
     stage_root = $StageRoot
     generated_at_utc = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
     product_version = $ProductVersion
     source_identity = $sourceIdentity
-    build_features = if ($BuildCuda) { @("cuda") } else { @() }
+    build_features = $BuildFeatures
+    native_fem = $nativeFemAssembly
     bin = @(
       "bin/fullmag.exe",
       "bin/fullmag-api.exe",
@@ -312,7 +326,7 @@ function Write-StageManifest {
       "share/version.json"
     )
   }
-  $manifest | ConvertTo-Json -Depth 10 | Set-Content -Path $Path -Encoding UTF8
+  [System.IO.File]::WriteAllText($Path, ($manifest | ConvertTo-Json -Depth 10), [System.Text.UTF8Encoding]::new($false))
 }
 
 function Test-StagedLayout {
@@ -335,6 +349,10 @@ function Test-StagedLayout {
     (Join-Path $StageRoot "runtimes\cpu-reference\manifest.json")
   )
   if ($BuildCuda) { $required += (Join-Path $StageRoot "runtimes\fdm-cuda\manifest.json") }
+  if ($BuildPlan.fem_enabled) {
+    $required += (Join-Path $StageRoot "bin\fullmag_fem.dll"), (Join-Path $StageRoot "runtimes\fem-cpu-native\manifest.json")
+  }
+  if ($BuildPlan.fem_cuda) { $required += (Join-Path $StageRoot "runtimes\fem-gpu\manifest.json") }
   foreach ($path in $required) {
     Require-File $path
   }
@@ -403,6 +421,7 @@ Require-Command heat.exe
 Require-Command candle.exe
 Require-Command light.exe
 Require-Command git
+if ($BuildPlan.fem_enabled) { Require-Command $(if ($env:FULLMAG_CMAKE) { $env:FULLMAG_CMAKE } else { "cmake" }) }
 
 $PinnedPnpmVersion = "10.8.1"
 $resolvedPnpmVersion = (& pnpm --version 2>&1 | Out-String).Trim()
@@ -441,9 +460,11 @@ if ($BuildCuda) {
 
 Import-VsEnvironment
 Require-Command "dumpbin.exe"
-$extraDllRoots = if ($env:FULLMAG_WINDOWS_MSI_DLL_ROOTS) { $env:FULLMAG_WINDOWS_MSI_DLL_ROOTS.Split(';') } else { @() }
+$extraDllRoots = @(if ($env:FULLMAG_WINDOWS_MSI_DLL_ROOTS) { $env:FULLMAG_WINDOWS_MSI_DLL_ROOTS.Split(';') })
+$extraDllRoots += @(Get-FullmagMsiFemDependencyRoots -Plan $BuildPlan)
 $dependencyRoots = @(Get-MsiDependencyRoots -RedistRoot $env:VCToolsRedistDir -CudaCompiler $env:CUDACXX `
   -ExtraRoots $extraDllRoots -Cuda:$BuildCuda)
+$nativeFemAssembly = $null
 
 Push-Location $RepoRoot
 try {
@@ -462,14 +483,18 @@ try {
     throw "rustup target add failed with exit code $LASTEXITCODE"
   }
 
+  $nativeFemOutput = Invoke-FullmagMsiFemBuild -Plan $BuildPlan -RepoRoot $RepoRoot -BuildRoot $nativeFemBuildRoot
+  if ($BuildPlan.fem_enabled) {
+    $env:FULLMAG_FEM_LIB_DIR = $nativeFemOutput.directory
+  }
   $launcherBuildArgs = @("build", "--locked", "--release", "--target", $TargetTriple, "-p", "fullmag-cli")
-  if ($BuildCuda) { $launcherBuildArgs += @("--features", "cuda") }
+  if ($BuildFeatures.Count) { $launcherBuildArgs += @("--features", ($BuildFeatures -join ",")) }
   & cargo @launcherBuildArgs
   if ($LASTEXITCODE -ne 0) {
     throw "fullmag-cli build failed with exit code $LASTEXITCODE"
   }
   $apiBuildArgs = @("build", "--locked", "--release", "--target", $TargetTriple, "-p", "fullmag-api")
-  if ($BuildCuda) { $apiBuildArgs += @("--features", "cuda") }
+  if ($BuildFeatures.Count) { $apiBuildArgs += @("--features", ($BuildFeatures -join ",")) }
   & cargo @apiBuildArgs
   if ($LASTEXITCODE -ne 0) {
     throw "fullmag-api build failed with exit code $LASTEXITCODE"
@@ -531,6 +556,17 @@ try {
     $nativeFdmDll = Find-NativeFdmDll
     $runtimeDllSources += $nativeFdmDll.FullName
   }
+  if ($BuildPlan.fem_enabled) { $runtimeDllSources += $nativeFemOutput.dll }
+  if ($BuildPlan.fem_enabled) {
+    Assert-FullmagMsiModalProviderInventory -Inventory $nativeFemOutput.modal_provider
+    foreach ($femArtifact in @(@{path=$nativeFemOutput.dll; hash=$nativeFemOutput.dll_sha256},
+        @{path=$nativeFemOutput.import_library; hash=$nativeFemOutput.import_library_sha256},
+        @{path=$nativeFemOutput.provider_config; hash=$nativeFemOutput.provider_config_sha256})) {
+      if ((Get-FileHash -LiteralPath $femArtifact.path -Algorithm SHA256).Hash.ToLowerInvariant() -ne $femArtifact.hash) {
+        throw "Native FEM build input/output changed before staging: $($femArtifact.path)"
+      }
+    }
+  }
   $runtimeDllInventory = @(Copy-RuntimeDllSet -SourcePaths $runtimeDllSources -BinDirectory $binDir)
   $pePlanPath = Join-Path $DistRoot "windows-pe-dependency-plan.json"
   $pePlanArgs = @((Join-Path $PSScriptRoot "plan_pe_dependencies.py"), "--bin", $binDir,
@@ -563,6 +599,18 @@ try {
   & python @peAuditArgs
   if ($LASTEXITCODE -ne 0) { throw "Staged PE dependency audit failed with exit code $LASTEXITCODE" }
   $peDependencyAudit = Get-Content -LiteralPath $peAuditPath -Raw | ConvertFrom-Json
+  if ($BuildPlan.fem_enabled) {
+    $availabilityOutput = (& (Join-Path $binDir "fullmag.exe") runtime fem-availability --json | Out-String)
+    if ($LASTEXITCODE -ne 0) { throw "Staged FEM availability probe failed with exit code $LASTEXITCODE" }
+    $nativeFemAvailability = Convert-FullmagMsiFemAvailability -Plan $BuildPlan -JsonOutput $availabilityOutput
+    $nativeFemAssembly = @{ mode=$BuildPlan.fem_mode; dependency_prefix=$BuildPlan.dependency_prefix;
+      runtime_dll="bin/fullmag_fem.dll"; availability=$nativeFemAvailability;
+      runtime_dll_sha256=$nativeFemOutput.dll_sha256; import_library_sha256=$nativeFemOutput.import_library_sha256;
+      provider_config=$nativeFemOutput.provider_config; provider_config_sha256=$nativeFemOutput.provider_config_sha256;
+      modal_provider=$nativeFemOutput.modal_provider;
+      configure_arguments=@($nativeFemOutput.configure_arguments);
+      qualification="not_verified" }
+  }
 
   Require-File (Join-Path $RepoRoot "apps\control-room\out\index.html")
   Copy-Tree (Join-Path $RepoRoot "apps\control-room\out") $webDir
@@ -605,11 +653,17 @@ redistribution outside the internal release channel.
   } else { "" }
   $fdmCudaFeatureXml = if ($BuildCuda) {
     @"
-    <Feature Id="FdmCuda" Title="FDM CUDA Runtime" Level="1000">
+    <Feature Id="FdmCuda" Title="FDM CUDA Runtime" Level="1">
       <ComponentGroupRef Id="RuntimeFdmCudaFiles" />
     </Feature>
 "@
   } else { "" }
+  $femDirectoryXml = if ($BuildPlan.fem_enabled) { '            <Directory Id="RuntimeFemCpuDir" Name="fem-cpu-native" />' } else { "" }
+  $femFeatureXml = if ($BuildPlan.fem_enabled) { '<Feature Id="FemCpu" Title="Native FEM CPU Runtime" Level="1"><ComponentGroupRef Id="RuntimeFemCpuFiles" /></Feature>' } else { "" }
+  if ($BuildPlan.fem_cuda) {
+    $femDirectoryXml += "`n" + '            <Directory Id="RuntimeFemGpuDir" Name="fem-gpu" />'
+    $femFeatureXml += "`n" + '<Feature Id="FemGpu" Title="Native FEM GPU Runtime" Level="1"><ComponentGroupRef Id="RuntimeFemGpuFiles" /></Feature>'
+  }
   $productWxs = Join-Path $WixRoot "Product.wxs"
   @"
 <?xml version="1.0" encoding="UTF-8"?>
@@ -632,6 +686,7 @@ redistribution outside the internal release channel.
           <Directory Id="RuntimesDir" Name="runtimes">
             <Directory Id="RuntimeCpuReferenceDir" Name="cpu-reference" />
 $fdmCudaDirectoryXml
+$femDirectoryXml
           </Directory>
           <Directory Id="ExamplesDir" Name="examples" />
           <Directory Id="ShareDir" Name="share" />
@@ -672,6 +727,7 @@ $fdmCudaDirectoryXml
       <ComponentGroupRef Id="RuntimeCpuReferenceFiles" />
     </Feature>
 $fdmCudaFeatureXml
+$femFeatureXml
     <Feature Id="Examples" Title="Examples" Level="1000">
       <ComponentGroupRef Id="ExampleFiles" />
     </Feature>
@@ -686,6 +742,12 @@ $fdmCudaFeatureXml
   Harvest-Directory (Join-Path $StageRoot "python") "PythonFiles" "PythonDir" (Join-Path $WixRoot "PythonFiles.wxs")
   Harvest-Directory (Join-Path $StageRoot "runtimes\cpu-reference") "RuntimeCpuReferenceFiles" "RuntimeCpuReferenceDir" (Join-Path $WixRoot "RuntimeCpuReferenceFiles.wxs")
   Harvest-Directory (Join-Path $StageRoot "runtimes\fdm-cuda") "RuntimeFdmCudaFiles" "RuntimeFdmCudaDir" (Join-Path $WixRoot "RuntimeFdmCudaFiles.wxs")
+  if ($BuildPlan.fem_enabled) {
+    Harvest-Directory (Join-Path $StageRoot "runtimes\fem-cpu-native") "RuntimeFemCpuFiles" "RuntimeFemCpuDir" (Join-Path $WixRoot "RuntimeFemCpuFiles.wxs")
+  }
+  if ($BuildPlan.fem_cuda) {
+    Harvest-Directory (Join-Path $StageRoot "runtimes\fem-gpu") "RuntimeFemGpuFiles" "RuntimeFemGpuDir" (Join-Path $WixRoot "RuntimeFemGpuFiles.wxs")
+  }
   Harvest-Directory (Join-Path $StageRoot "examples") "ExampleFiles" "ExamplesDir" (Join-Path $WixRoot "ExampleFiles.wxs")
 
   $wixSources = Get-ChildItem -Path $WixRoot -Filter "*.wxs" | Select-Object -ExpandProperty FullName
@@ -706,5 +768,6 @@ $fdmCudaFeatureXml
   Write-MsiArtifactLocations -MsiPath $msiPath -StageManifestPath $ManifestPath
 }
 finally {
+  if ($BuildPlan.fem_enabled) { Remove-Item Env:FULLMAG_FEM_LIB_DIR -ErrorAction SilentlyContinue }
   Pop-Location
 }

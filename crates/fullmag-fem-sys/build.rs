@@ -92,6 +92,7 @@ fn main() {
     println!("cargo:rerun-if-changed=../../native/cmake/ImportFullmagFdm.cmake");
     println!("cargo:rerun-if-changed=../../native/cmake/RequireFemGpu.cmake");
     println!("cargo:rerun-if-changed=../../native/cmake/FindFullmagMfem.cmake");
+    println!("cargo:rerun-if-changed=../../native/cmake/FindFullmagWindowsModal.cmake");
     println!("cargo:rerun-if-changed=../../backends/fem/CMakeLists.txt");
     rerun_if_changed_tree("../../backends/fem/core");
     rerun_if_changed_tree("../../backends/fem/cpu");

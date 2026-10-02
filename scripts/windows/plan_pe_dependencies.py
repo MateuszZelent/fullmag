@@ -32,8 +32,10 @@ def plan_dependencies(directory, dumpbin, dependency_roots, allow_cuda_driver=Fa
     for root in roots:
         if not root.is_dir():
             raise ValueError(f'Dependency root is not a directory: {root}')
-        for path in root.iterdir():
+        for path in root.rglob('*'):
             if path.suffix.lower() == '.dll':
+                if not path.resolve(strict=True).is_relative_to(root):
+                    raise ValueError(f'Dependency escapes declared SDK root: {path}')
                 require_not_driver(path)
                 candidates.setdefault(path.name.lower(), []).append(path)
     queue = deque(images.values())

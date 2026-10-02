@@ -305,3 +305,15 @@ Kolejna obserwacja tego samego workera 204: native-build zakończony exit 0
 (około 804 s), rozpoczęto frontend-dependencies. Cały job wciąż RUNNING;
 terminalny receipt i wymagane artefakty pozostają NOT VERIFIED. Jego starsza
 tożsamość źródeł nie obejmuje nowego discovery MFEM Windows.
+
+Build 204 zakończony SUCCEEDED/exit 0: niezależnie sprawdzono wszystkie
+119 artifact hashes, 291 618 738 B i wymagane niepuste CLI/API/Python/native/UI.
+[Końcowy receipt](p8/02-fem-cpu-build-204.md) pozostawia runtime/naukę/Windows
+NOT VERIFIED; źródła to wcześniejszy przypięty SHA.
+
+[Nowe assembly natywnego FEM Windows](p8/03-native-fem-package-assembly.md)
+podłącza CMake DLL/import pair do CLI/API/MSI, dodaje CPU/GPU profiles,
+strict availability JSON i manifesty eksperymentalne. 153 lekkich regresji
+PASS. API GitHub: 0 zarejestrowanych self-hosted runners; real Windows build,
+qualified prefix oraz install/recovery pozostają otwarte. Procenty całego
+planu nie są awansowane przez ten dowód źródłowy.

@@ -163,7 +163,8 @@ def test_native_workflow_consumes_validated_artifact_outputs():
     assert job["runs-on"] == ["self-hosted", "windows", "x64", "fullmag-native-msvc-wix"]
     assert job["concurrency"]["cancel-in-progress"] == "false"
     package = next(step for step in job["steps"] if step.get("id") == "package")
-    assert package["run"] == ".\\scripts\\windows\\build_windows_msi.ps1"
+    assert package["run"].strip().endswith(".\\scripts\\windows\\build_windows_msi.ps1")
+    assert '$env:FULLMAG_FEM_DEPENDENCY_PREFIX = $env:FULLMAG_WINDOWS_FEM_GPU_PREFIX' in package["run"]
     uploads = [step for step in job["steps"] if "upload-artifact" in step.get("uses", "")]
     assert [step["with"]["path"] for step in uploads] == [
         "${{ steps.package.outputs.msi_path }}", "${{ steps.package.outputs.manifest_path }}"
