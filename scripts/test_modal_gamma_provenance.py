@@ -77,6 +77,18 @@ class ModalGammaProvenanceTests(unittest.TestCase):
                 reference = 2.211e5 * math.sqrt(h * (h + normal_factor * ms)) / math.tau
                 self.assertAlmostEqual(f_h / reference, gamma0 / 2.211e5, places=14)
 
+    def test_single_k_execution_and_native_publisher_share_guard(self):
+        execution = code("crates/fullmag-runner/src/fem/eigen_execution.rs")
+        execution = execution[execution.index("fn execute_fem_eigen_inner("):]
+        native = code("crates/fullmag-runner/src/fem/eigen_native_artifacts.rs")
+        native = native[native.index("fn native_modal_artifacts("):]
+        for source in (execution, native):
+            self.assertIn("validated_modal_gamma0(plan.gyromagnetic_ratio)", source)
+            self.assertIn("let gamma_rad_s_t = gamma0_rad_s_per_a_m / MU0", source)
+            self.assertLess(source.index("validated_modal_gamma0(plan.gyromagnetic_ratio)"),
+                            source.index("let gamma_rad_s_t ="))
+            self.assertNotIn("let gamma_rad_s_t = plan.gyromagnetic_ratio / MU0", source)
+
     def test_reader_rejects_coherent_but_wrong_material_gamma(self):
         constants = dict(gamma0_rad_s_per_A_m=1.7e5, gamma_rad_s_T=1.7e5/MU0, mu0_T_m_per_A=MU0)
         validate_mode_gamma_matches_constants(constants.copy(), constants, "mode")

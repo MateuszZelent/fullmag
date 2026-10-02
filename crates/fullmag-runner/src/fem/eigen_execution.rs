@@ -1547,6 +1547,8 @@ pub(super) fn execute_fem_eigen_inner(
     planned_execution: Option<PlannedFemEigenExecution<'_>>,
 ) -> Result<ExecutedRun, RunError> {
     validate_eigen_equilibrium_certificate(plan, expected_handoff, source_relax_handoff)?;
+    let gamma0_rad_s_per_a_m = crate::eigen::artifacts::validated_modal_gamma0(plan.gyromagnetic_ratio)
+        .map_err(|error| RunError { message: error.to_string() })?;
     if plan.precision != fullmag_ir::ExecutionPrecision::Double {
         return Err(RunError {
             message: if try_gpu {
@@ -2019,8 +2021,7 @@ pub(super) fn execute_fem_eigen_inner(
         .collect::<Vec<_>>();
     let participation_solver_device = if try_gpu { "gpu" } else { "cpu" };
     let damping_factor = damping_imaginary_factor(plan.material.damping, plan.damping_policy);
-    let gamma_rad_s_t = plan.gyromagnetic_ratio / MU0;
-    let gamma0_rad_s_per_a_m = plan.gyromagnetic_ratio;
+    let gamma_rad_s_t = gamma0_rad_s_per_a_m / MU0;
     let mu0_t_m_per_a = MU0;
     emit_fem_eigen_progress(
         &mut progress,

@@ -63,6 +63,8 @@
         "source-modal-gamma-fields",
         "source-modal-gamma-kittel",
         "source-modal-gamma-fem-publication",
+        "source-modal-gamma-single-k",
+        "source-modal-gamma-native",
         "source-modal-gamma-reader",
         "source-modal-gamma-regression"
       ]
@@ -2141,6 +2143,18 @@
       "path": "crates/fullmag-runner/src/fem/eigen_path_artifacts.rs",
       "symbol": "eigen_path_publication_gamma0",
       "responsibility": "Validate result and plan before direct FEM JSON publication"
+    },
+    {
+      "id": "source-modal-gamma-single-k",
+      "path": "crates/fullmag-runner/src/fem/eigen_execution.rs",
+      "symbol": "execute_fem_eigen_inner",
+      "responsibility": "Validate gamma before single-k execution and metadata publication"
+    },
+    {
+      "id": "source-modal-gamma-native",
+      "path": "crates/fullmag-runner/src/fem/eigen_native_artifacts.rs",
+      "symbol": "native_modal_artifacts",
+      "responsibility": "Independently validate gamma before native modal metadata publication"
     },
     {
       "id": "source-modal-gamma-reader",

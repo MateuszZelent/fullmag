@@ -2,6 +2,11 @@
 
 ## S07/S10 — rzeczywiste gamma w wynikach i oracle, 2026-10-02
 
+Checkpoint źródłowy: `91473c678aeb8806aaaf423239ae80654dc1b4be`.
+Follow-up review: domknięto guardy także w bezpośrednich producentach
+single-k `execute_fem_eigen_inner` i `native_modal_artifacts`; nowa kontrola
+routingu rozszerza suite gamma z 6 do 7 testów. Brak nowych punktów FEM.
+
 Usunięto referencyjne gamma z ogólnych writerów widma, pól modów i oracle
 Kittela. `PathSolveResult` przenosi obowiązkowy parametr z planu, także przez
 adapter fizycznego sweepu pola. Publisher FEM waliduje gamma przed obliczeniem

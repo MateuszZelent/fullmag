@@ -315,8 +315,9 @@ pub(super) fn native_modal_artifacts(
     let wants_dispersion = outputs
         .iter()
         .any(|output| matches!(output, OutputIR::DispersionCurve { .. }));
-    let gamma_rad_s_t = plan.gyromagnetic_ratio / MU0;
-    let gamma0_rad_s_per_a_m = plan.gyromagnetic_ratio;
+    let gamma0_rad_s_per_a_m = crate::eigen::artifacts::validated_modal_gamma0(plan.gyromagnetic_ratio)
+        .map_err(|error| RunError { message: error.to_string() })?;
+    let gamma_rad_s_t = gamma0_rad_s_per_a_m / MU0;
     let mu0_t_m_per_a = MU0;
     let mut auxiliary_artifacts = Vec::new();
     let mut solver_diagnostics = solver_diagnostics;

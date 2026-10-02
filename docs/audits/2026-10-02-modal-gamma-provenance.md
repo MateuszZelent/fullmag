@@ -51,3 +51,14 @@ pozostaje aktywny. Brak nowych punktów FEM i kwalifikacji COMSOL.
 
 S07/S10 pozostają otwarte: aktualny runtime, provenance/replay, interakcje,
 pełne widmo, zbieżność i scientific gates wymagają odrębnych dowodów.
+
+## Follow-up single-k po checkpointcie 91473c678
+
+Checkpoint bazowy: `91473c678aeb8806aaaf423239ae80654dc1b4be`.
+Końcowy review potwierdził naprawę P2 ścieżki i oracle, lecz wskazał pozostałe
+miejsca publikacji wyników single-k. `execute_fem_eigen_inner` sprawdza teraz
+gamma przed wykonaniem, a `native_modal_artifacts` niezależnie waliduje je
+przed budową artefaktów. Oba obliczają gamma0/mu0 z walidowanej wartości.
+Suite gamma: 7 PASS; parser obu zmienionych modułów Rust, mapa źródeł
+i diff-check PASS. Nie uruchomiono
+natywnego solvera, nie zmieniono częstotliwości istniejących wyników.

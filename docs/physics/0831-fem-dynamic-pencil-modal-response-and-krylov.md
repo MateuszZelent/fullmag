@@ -2458,8 +2458,15 @@ częstotliwość obliczoną ze skończonych wejść. Czytnik wiąże gamma każd
 modu ze stałymi wykonania; sama zgodność gamma0=mu0*gamma jest za słaba.
 To kontrola kontraktu, a nie odtworzenie operatora.
 
+Ta sama walidacja obowiązuje na wejściu `eigen_execution.rs::execute_fem_eigen_inner`
+oraz w niezależnym producerze `eigen_native_artifacts.rs::native_modal_artifacts`.
+Single-k CPU/GPU i reference zachowują gamma planu; obliczenie gamma0/mu0
+w metadanych następuje dopiero po przejściu wspólnej bramki.
+
 | Source ID | Plik | Symbol | Zakres dowodu |
 | --- | --- | --- | --- |
+| `source-modal-gamma-single-k` | `crates/fullmag-runner/src/fem/eigen_execution.rs` | `execute_fem_eigen_inner` | Guard przed wykonaniem single-k i metadanymi |
+| `source-modal-gamma-native` | `crates/fullmag-runner/src/fem/eigen_native_artifacts.rs` | `native_modal_artifacts` | Niezależny guard przed publikacją native |
 | `source-modal-gamma-result` | `crates/fullmag-runner/src/eigen/types.rs` | `PathSolveResult` | Required actual plan gamma0 on solved results |
 | `source-modal-gamma-owner` | `crates/fullmag-runner/src/eigen/orchestrator.rs` | `run_path_or_single` | Carry actual plan gamma0 without material fallback |
 | `source-modal-gamma-guard` | `crates/fullmag-runner/src/eigen/artifacts/common.rs` | `validated_modal_gamma0` | Reject invalid gamma0 and unrepresentable SI conversion |
