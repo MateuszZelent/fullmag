@@ -863,7 +863,7 @@ def compose_command(context, output, timeout_seconds=managed.DEFAULT_TIMEOUT_SEC
         ])
     solver_command = (
         '"$runtime_bin" "$source_script" --backend fem --mode strict --precision double '
-        + ("--headless " if not live_api_enabled else "")
+        + ("--headless " if not ui_enabled else "")
         + '--json --output-dir "$case_dir" >"$case_dir/runtime.log" 2>&1'
     )
     shell.append(solver_command)

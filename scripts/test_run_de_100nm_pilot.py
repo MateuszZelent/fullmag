@@ -611,7 +611,7 @@ class PilotTests(unittest.TestCase):
             self.assertNotIn("--tmpfs", command_text)
             self.assertNotIn("--publish 127.0.0.1", command_text)
             self.assertNotIn("FULLMAG_WEB_STATIC_DIR", shell)
-            self.assertNotIn("--headless", shell)
+            self.assertIn("--headless --json --output-dir", shell)
             self.assertIn("manifest/session.json", shell)
             self.assertIn('"/workspace/benchmark-output/fullmag-api.log"', shell)
             self.assertNotIn('"$case_dir/fullmag-api.log"', shell)
