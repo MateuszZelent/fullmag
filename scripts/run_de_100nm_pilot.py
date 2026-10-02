@@ -849,7 +849,7 @@ def compose_command(context, output, timeout_seconds=managed.DEFAULT_TIMEOUT_SEC
             "for _ in range(90):",
             "    try:",
             "        os.kill(pid, 0)",
-            "        for endpoint in ('healthz', 'v1/openapi.json'):",
+            "        for endpoint in ('healthz', 'v2/platform/openapi.json'):",
             "            with urllib.request.urlopen(f'http://127.0.0.1:8081/{endpoint}', timeout=2) as response:",
             "                if response.status != 200:",
             "                    raise RuntimeError(f'{endpoint} returned {response.status}')",

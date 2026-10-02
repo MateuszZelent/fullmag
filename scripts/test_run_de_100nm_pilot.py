@@ -450,6 +450,8 @@ class PilotTests(unittest.TestCase):
             self.assertIn("FULLMAG_DISABLE_PREVIEW_3D=0", shell)
             self.assertIn("FULLMAG_DISABLE_CHARTS=0", shell)
             self.assertIn("v2/sessions/current/status", shell)
+            self.assertIn("v2/platform/openapi.json", shell)
+            self.assertNotIn("v1/openapi.json", shell)
             self.assertIn("x-fullmag-session-scope", shell)
             self.assertIn("resources.get('field_catalog_revision')", shell)
             self.assertIn("type(field_catalog_revision) is not int", shell)
