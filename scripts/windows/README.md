@@ -13,6 +13,9 @@ WiX. Wymaga narzędzi MSVC x64, Rust, Node, pnpm, Python i WiX na executorze.
 dystrybucji x64 Node 24.18–24.99 z `node.exe` oraz `LICENSE`. MSI kopiuje
 runtime i licencję, zamraża hashe i obejmuje Node wspólnym audytem PE/DLL.
 Statyczny launcher wybiera dołączoną kopię bezpośrednio.
+Przed buildem packager sprawdza zgodność deklaracji `pyproject.toml` i
+`packages/fullmag-py/uv.lock`. Obecny lock wymaga odświeżenia; kontrola nie
+zastępuje pełnego uv export ani weryfikacji wheeli i CPython bundle.
 Nie uruchamia Linuxa ani WSL. Domyślnie pakuje FDM CPU; jawne
 `FULLMAG_WINDOWS_MSI_CUDA=1` wymaga nvcc i dodaje FDM CUDA.
 Domyślne `FULLMAG_WINDOWS_MSI_FEM=cpu` dodaje budowę natywnego FEM CPU;

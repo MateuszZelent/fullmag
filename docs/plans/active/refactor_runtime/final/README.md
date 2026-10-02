@@ -327,3 +327,8 @@ instalacja Windows oraz kwalifikacja wydania pozostają NOT VERIFIED.
 z PATH dla nowego MSI: jawne wejście z licencją, SHA-256 i wspólny audyt PE.
 Actual copied Node z pustym PATH oraz produkcyjny source check CLI: PASS.
 Dołączenie Pythona i pełna instalacja Windows pozostają otwarte.
+
+[Preflight locka Python](p8/06-python-lock-preflight.md) wykrywa niespójność
+obecnego `uv.lock` z pyproject i zatrzymuje MSI przed buildem. 13 lekkich
+regresji PASS; rzeczywisty lock pozostaje niezsynchronizowany. Bootstrap uv
+zatrzymany przez regułę kolejki storage; CPython bundle nadal otwarty.

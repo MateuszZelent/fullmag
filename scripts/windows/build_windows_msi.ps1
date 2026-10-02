@@ -425,6 +425,8 @@ Require-Command rustup
 Require-Command node
 Require-Command pnpm
 Require-Command python
+& python (Join-Path $RepoRoot "scripts\check_python_dependency_lock.py") --project (Join-Path $RepoRoot "packages\fullmag-py\pyproject.toml") --lock (Join-Path $RepoRoot "packages\fullmag-py\uv.lock")
+if ($LASTEXITCODE -ne 0) { throw "Python dependency lock validation failed before build" }
 Require-Command heat.exe
 Require-Command candle.exe
 Require-Command light.exe
