@@ -150,3 +150,33 @@ ani kwalifikacji Windows. Prebuilt `FULLMAG_FEM_LIB_DIR` nadal wymaga osobnej
 walidacji rzeczywistych capabilities; ta bramka sprawdza konfigurację buildu.
 Wersjonowany MSVC MFEM/HYPRE/libCEED prefix, zależności modalne, manifesty
 ABI/CRT, staging DLL, natywny launcher FEM i actual execution pozostają otwarte.
+
+## Fragment: storage installera i natywny odbiór artefaktów CI
+
+Packager MSI korzysta ze wspólnego resolvera i managed wrappera, z profilami
+`windows-msi-cpu` / `windows-msi-gpu`. Target Cargo i native FDM muszą mieścić
+się w build root. Każda próba dostaje osobny katalog runu ze stagingiem,
+WiX, wheelami, MSI i manifestem. Usunięto drive-root fallback oraz rekursywne
+kasowanie wspólnego stagingu. Wyszukiwanie FDM DLL akceptuje dokładnie jeden
+plik z bieżącego native profilu, zamiast przeszukiwania starych Cargo outputów.
+
+Oficjalny workflow MSI uruchamia natywny packager na dedykowanym executorze
+MSVC/WiX, wymaga operatorowej zmiennej `FULLMAG_WINDOWS_CI_STORAGE_ROOT`
+i serializuje jobs. MSI i manifest trafiają do uploadu przez outputy kroku,
+emitowane po sprawdzeniu niepustych plików. Managed wrapper dziedziczy
+środowisko, w tym GITHUB_OUTPUT i konfigurację storage. Brak artefaktu
+jest błędem. Ręczne testowe pakowanie pozostaje dostępne; brak publikacji wydania.
+
+Weryfikacja: 15 regresji `scripts/test_windows_msi_storage.py` PASS.
+Sprawdzono rzeczywiste funkcje PowerShell na fiksturach: preflight przed
+linkami, odmowę wyjścia poza root, osobne run IDs, discovery DLL, walidację
+wersji i eksport outputów; resolver/link preparation są kontrolowanymi
+fiksturami. Sprawdzono również YAML i jego konsumentów outputów. Wcześniejsze
+8 testów DLL staging pozostaje dowodem niezmienionej funkcji. Scoped review
+nie wykazał nowego P0/P1. Nie kompilowano unit tests, MSI ani native runtime.
+
+Enrolment executora, profil Windows w kolejce, real wheel build, kompletność
+zależności FEM oraz install/open/upgrade/rollback nadal NOT VERIFIED.
+Historyczny wrapper Docker ma unikalną nazwę i nie kasuje wspólnego kontenera,
+ale jego mapowanie storage nie jest kwalifikowane; nie jest wejściem CI.
+Zmiana źródeł nie zamyka pełnego P8-C. Build Linux 204 pozostaje QUEUED.

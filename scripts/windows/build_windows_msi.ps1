@@ -7,23 +7,38 @@ $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
-$DistRoot = Join-Path $RepoRoot ".fullmag\dist"
-$StageRoot = Join-Path $DistRoot "windows-msi-root"
-$WixRoot = Join-Path $DistRoot "windows-msi-wix"
-$ManifestPath = Join-Path $DistRoot "windows-msi-manifest.json"
 $TargetTriple = "x86_64-pc-windows-msvc"
-$RepoDriveRoot = [System.IO.Path]::GetPathRoot($RepoRoot)
-$TargetRoot = if ($env:CARGO_TARGET_DIR) {
-  [System.IO.Path]::GetFullPath($env:CARGO_TARGET_DIR)
-} else {
-  Join-Path $RepoDriveRoot "fullmag-build\cargo-targets\fullmag-windows-msi"
-}
-$ReleaseDir = Join-Path $TargetRoot "$TargetTriple\release"
 $ProductVersion = if ($Version) { $Version } elseif ($env:FULLMAG_WINDOWS_MSI_VERSION) { $env:FULLMAG_WINDOWS_MSI_VERSION } else { "0.1.0" }
 if ($ProductVersion -notmatch '^[0-9]+\.[0-9]+\.[0-9]+$') {
   throw "MSI version must be a numeric x.y.z value, got $ProductVersion"
 }
 $BuildCuda = $env:FULLMAG_WINDOWS_MSI_CUDA -eq "1"
+. (Join-Path $PSScriptRoot "fullmag_storage.ps1")
+$StorageProfile = if ($BuildCuda) { "windows-msi-gpu" } else { "windows-msi-cpu" }
+if ($env:FULLMAG_STORAGE_MANAGED_ENTRY -ne "1") {
+  $managedArguments = if ($Version) { @("-Version", $Version) } else { @() }
+  $managedExitCode = Invoke-FullmagStorageManagedScript -RepoRoot $RepoRoot `
+    -Profile $StorageProfile -ScriptPath $PSCommandPath -Arguments $managedArguments
+  exit $managedExitCode
+}
+$StorageLayout = Resolve-FullmagStorageLayout -RepoRoot $RepoRoot -Profile $StorageProfile
+Set-FullmagStorageEnvironment -Layout $StorageLayout
+$BuildRoot = [string]$StorageLayout.build_root
+$TargetRoot = [string]$StorageLayout.env.CARGO_TARGET_DIR
+$ReleaseDir = Join-Path $TargetRoot "$TargetTriple\release"
+$DistRoot = Join-Path ([string]$StorageLayout.runs_root) ("windows-msi-" + [Guid]::NewGuid().ToString("N"))
+$StageRoot = Join-Path $DistRoot "stage"
+$WixRoot = Join-Path $DistRoot "wix"
+$ManifestPath = Join-Path $DistRoot "windows-msi-manifest.json"
+$WheelRoot = Join-Path $DistRoot "python-wheels"
+$nativeFdmBuildRoot = if ($env:FULLMAG_FDM_NATIVE_BUILD_ROOT) {
+  [System.IO.Path]::GetFullPath($env:FULLMAG_FDM_NATIVE_BUILD_ROOT)
+} else { Join-Path $BuildRoot "native" }
+$null = Assert-FullmagStoragePath -Layout $StorageLayout -Path $TargetRoot -Label "MSI Cargo target" -Parent $BuildRoot
+$null = Assert-FullmagStoragePath -Layout $StorageLayout -Path $nativeFdmBuildRoot -Label "MSI native FDM build" -Parent $BuildRoot
+$null = Assert-FullmagStoragePath -Layout $StorageLayout -Path $DistRoot -Label "MSI run" -Parent ([string]$StorageLayout.runs_root)
+$env:FULLMAG_FDM_NATIVE_BUILD_ROOT = $nativeFdmBuildRoot
+$null = Prepare-FullmagStorageLinks -RepoRoot $RepoRoot -Profile $StorageProfile -Frontend
 
 function Require-Command {
   param([string]$Name)
@@ -103,14 +118,13 @@ function Copy-OrAliasLauncher {
 }
 
 function Find-NativeFdmDll {
-  $searchRoot = Join-Path $TargetRoot "$TargetTriple\release\build"
-  $candidates = @(Get-ChildItem -LiteralPath $searchRoot -Directory -Filter "fullmag-fdm-sys-*" -ErrorAction SilentlyContinue |
+  $candidates = @(@("Release\fullmag_fdm.dll", "fullmag_fdm.dll") |
     ForEach-Object {
-      $candidate = Join-Path $_.FullName "out\native-build\backends\fdm\fullmag_fdm.dll"
+      $candidate = Join-Path (Join-Path $nativeFdmBuildRoot "backends\fdm") $_
       if (Test-Path -LiteralPath $candidate -PathType Leaf) { Get-Item -LiteralPath $candidate }
     })
   if ($candidates.Count -ne 1) {
-    throw "CUDA MSI build must produce exactly one canonical fullmag_fdm.dll below $searchRoot; found $($candidates.Count)"
+    throw "CUDA MSI build must produce exactly one canonical fullmag_fdm.dll below $nativeFdmBuildRoot; found $($candidates.Count)"
   }
   return $candidates[0]
 }
@@ -158,6 +172,22 @@ function Copy-RuntimeDllSet {
     }
     [ordered]@{ path = "bin/$name"; sha256 = $sources[$name].sha256 }
   }
+}
+
+function Write-MsiArtifactLocations {
+  param([string]$MsiPath, [string]$StageManifestPath)
+  foreach ($path in @($MsiPath, $StageManifestPath)) {
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf) -or (Get-Item -LiteralPath $path).Length -eq 0) {
+      throw "MSI output must be a nonempty file: $path"
+    }
+  }
+  if ($env:GITHUB_OUTPUT) {
+    Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding UTF8 -Value @(
+      "msi_path=$MsiPath", "manifest_path=$StageManifestPath"
+    )
+  }
+  Write-Host "Created Windows MSI: $MsiPath"
+  Write-Host "Stage manifest: $StageManifestPath"
 }
 
 function Write-VersionMetadata {
@@ -411,10 +441,9 @@ try {
   }
   & python -m pip install --disable-pip-version-check --quiet build
   if ($LASTEXITCODE -ne 0) { throw "Python build frontend installation failed with exit code $LASTEXITCODE" }
-  & python -m build packages/fullmag-py
+  & python -m build --outdir $WheelRoot packages/fullmag-py
   if ($LASTEXITCODE -ne 0) { throw "Python wheel build failed with exit code $LASTEXITCODE" }
 
-  Remove-Item -Recurse -Force $StageRoot, $WixRoot -ErrorAction SilentlyContinue
   Ensure-Dir $StageRoot
   Ensure-Dir $WixRoot
 
@@ -471,9 +500,9 @@ try {
   Ensure-Dir (Join-Path $webDir "scripts")
   Copy-Item -Force (Join-Path $RepoRoot "apps\control-room\scripts\resolve-pnpm-invocation.mjs") (Join-Path $webDir "scripts\resolve-pnpm-invocation.mjs")
   Copy-Tree (Join-Path $RepoRoot "examples") $examplesDir
-  $wheel = Get-ChildItem -LiteralPath (Join-Path $RepoRoot "packages\fullmag-py\dist") -Filter "*.whl" -File |
+  $wheel = Get-ChildItem -LiteralPath $WheelRoot -Filter "*.whl" -File |
     Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
-  if (-not $wheel) { throw "Python wheel was not produced under packages\fullmag-py\dist" }
+  if (-not $wheel) { throw "Python wheel was not produced under $WheelRoot" }
   Ensure-Dir $pythonSiteDir
   Copy-Item -Force $wheel.FullName (Join-Path $pythonDir $wheel.Name)
   & python -m pip install --disable-pip-version-check --target $pythonSiteDir $wheel.FullName
@@ -604,10 +633,7 @@ $fdmCudaFeatureXml
     throw "light.exe failed with exit code $LASTEXITCODE"
   }
 
-  Write-Host "Created Windows MSI:"
-  Write-Host "  $msiPath"
-  Write-Host "Stage manifest:"
-  Write-Host "  $ManifestPath"
+  Write-MsiArtifactLocations -MsiPath $msiPath -StageManifestPath $ManifestPath
 }
 finally {
   Pop-Location

@@ -270,3 +270,10 @@ Zlecono [managed build FEM CPU 204](p8/02-fem-cpu-build-204.md) dokładnego
 commita `a55fa13d76052cdc5e3f96d8369127752061237d`. QUEUED za cudzym aktywnym
 buildem; terminalny receipt i artefakty NOT VERIFIED. Próba jest regresją
 Linux, nie kwalifikacją natywnego Windows. Sesja 3104 zachowana.
+
+Packager Windows MSI korzysta teraz z resolvera/preflight storage oraz
+osobnego stagingu każdej próby; natywne CI odbiera zwalidowane outputy
+artefaktów. 15 lekkich regresji PowerShell/YAML PASS, scoped review bez
+nowego P0/P1. Enrolment Windows executora, native FEM i pełny install/recovery
+pozostają NOT VERIFIED; procenty nie są awansowane do kwalifikacji produktu.
+Szczegóły w [P8-C](p8/01-windows-native-gaps.md).

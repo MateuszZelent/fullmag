@@ -4,7 +4,7 @@ $ProgressPreference = "SilentlyContinue"
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $DockerContext = (Join-Path $RepoRoot "docker\windows-msi")
 $ImageName = if ($env:FULLMAG_WINDOWS_MSI_IMAGE) { $env:FULLMAG_WINDOWS_MSI_IMAGE } else { "fullmag/windows-msi-build:ltsc2022" }
-$ContainerName = "fullmag-windows-msi-build"
+$ContainerName = "fullmag-windows-msi-build-" + [Guid]::NewGuid().ToString("N")
 $WorkspacePath = "C:\workspace\fullmag"
 $SkipImageBuild = $env:FULLMAG_WINDOWS_MSI_SKIP_IMAGE_BUILD -eq "1"
 
@@ -27,8 +27,6 @@ if ($SkipImageBuild) {
   }
 }
 
-docker rm -f $ContainerName 2>$null | Out-Null
-
 Write-Host "Running Windows MSI build inside container"
 docker run --name $ContainerName --rm `
   -v "${RepoRoot}:${WorkspacePath}" `
@@ -39,6 +37,4 @@ if ($LASTEXITCODE -ne 0) {
   throw "docker run failed with exit code $LASTEXITCODE"
 }
 
-Write-Host "Expected artifacts:"
-Write-Host "  $RepoRoot\.fullmag\dist\fullmag.msi"
-Write-Host "  $RepoRoot\.fullmag\dist\windows-msi-manifest.json"
+Write-Host "Artifact paths are printed by the storage-validated MSI packager."
