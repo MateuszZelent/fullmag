@@ -830,9 +830,161 @@ def _render_scene_document_bootstrap(builder: Mapping[str, object]) -> str:
         if universe_mesh_kwargs:
             lines.append(f"study.universe.mesh({_python_keyword_args(universe_mesh_kwargs)})")
 
-    for stage in builder.get("stages") or []:
-        if not isinstance(stage, Mapping) or str(stage.get("kind") or "relax") != "relax":
+    stages = builder.get("stages") or []
+    if not isinstance(stages, (list, tuple)):
+        raise ValueError("SceneDocument stages must be a list.")
+    for stage_index, stage in enumerate(stages):
+        if not isinstance(stage, Mapping):
+            raise ValueError(f"SceneDocument stage {stage_index} must be an object.")
+        kind = str(stage.get("kind") or "relax").strip().lower()
+        if kind == "run":
+            until = _finite_number(stage.get("until_seconds"))
+            if until is None or until <= 0.0:
+                raise ValueError(
+                    f"SceneDocument run stage {stage_index} requires a positive until_seconds."
+                )
+            run_kwargs: dict[str, object] = {"until": until}
+            stage_id = stage.get("stage_id")
+            if isinstance(stage_id, str) and stage_id.strip():
+                run_kwargs["stage_id"] = stage_id.strip()
+            lines.append(f"study.stages.add_run({_python_keyword_args(run_kwargs)})")
             continue
+        if kind == "eigenmodes":
+            eigen_kwargs: dict[str, object] = {}
+            raw_count = stage.get("eigen_count")
+            if raw_count not in (None, ""):
+                count = _positive_int(raw_count)
+                if count is None:
+                    raise ValueError(
+                        f"SceneDocument eigenmodes stage {stage_index} has invalid eigen_count."
+                    )
+                eigen_kwargs["count"] = count
+            stage_id = stage.get("stage_id")
+            if isinstance(stage_id, str) and stage_id.strip():
+                eigen_kwargs["stage_id"] = stage_id.strip()
+            for field, key in (
+                ("target", "eigen_target"),
+                ("operator", "eigen_operator"),
+                ("equilibrium_source", "eigen_equilibrium_source"),
+                ("normalization", "eigen_normalization"),
+                ("damping_policy", "eigen_damping_policy"),
+            ):
+                value = stage.get(key)
+                if isinstance(value, str) and value.strip():
+                    eigen_kwargs[field] = value.strip()
+            equilibrium_artifact = stage.get("eigen_equilibrium_artifact")
+            if isinstance(equilibrium_artifact, str) and equilibrium_artifact.strip():
+                eigen_kwargs["equilibrium_artifact"] = equilibrium_artifact.strip()
+            include_demag = stage.get("eigen_include_demag")
+            if isinstance(include_demag, bool):
+                eigen_kwargs["include_demag"] = include_demag
+            for field, key in (
+                ("target_frequency", "eigen_target_frequency"),
+                ("frequency_min", "eigen_frequency_min"),
+                ("frequency_max", "eigen_frequency_max"),
+            ):
+                raw_value = stage.get(key)
+                if raw_value not in (None, ""):
+                    value = _finite_number(raw_value)
+                    if value is None:
+                        raise ValueError(
+                            f"SceneDocument eigenmodes stage {stage_index} has invalid {key}."
+                        )
+                    eigen_kwargs[field] = value
+
+            solver_fields = (
+                ("solver_rtol", "eigen_solver_rtol", ("eigen_solver_residual_tolerance",)),
+                (
+                    "solver_max_outer_iterations",
+                    "eigen_solver_max_outer_iterations",
+                    ("max_outer_iterations",),
+                ),
+                (
+                    "solver_max_linear_iterations",
+                    "eigen_solver_max_linear_iterations",
+                    ("max_linear_iterations",),
+                ),
+            )
+            for field, key, aliases in solver_fields:
+                raw_value = stage.get(key)
+                if raw_value in (None, ""):
+                    for alias in aliases:
+                        raw_value = stage.get(alias)
+                        if raw_value not in (None, ""):
+                            break
+                if raw_value in (None, ""):
+                    continue
+                value = (
+                    _finite_number(raw_value)
+                    if field == "solver_rtol"
+                    else _positive_int(raw_value)
+                )
+                if value is None:
+                    raise ValueError(
+                        f"SceneDocument eigenmodes stage {stage_index} has invalid {key}."
+                    )
+                eigen_kwargs[field] = value
+
+            spin_wave_bc_config = stage.get("eigen_spin_wave_bc_config")
+            if isinstance(spin_wave_bc_config, Mapping):
+                spin_wave_bc: object = dict(spin_wave_bc_config)
+                spin_wave_bc_kind = stage.get("eigen_spin_wave_bc")
+                if isinstance(spin_wave_bc_kind, str) and spin_wave_bc_kind.strip():
+                    spin_wave_bc["kind"] = spin_wave_bc_kind.strip()
+            else:
+                spin_wave_bc = stage.get("eigen_spin_wave_bc")
+            if spin_wave_bc not in (None, "", "free"):
+                eigen_kwargs["bc"] = _render_spin_wave_bc_expr(spin_wave_bc)
+
+            k_path = stage.get("eigen_k_path")
+            k_path_expr = _render_stage_k_path_expr(k_path if isinstance(k_path, str) else None)
+            if k_path not in (None, "") and k_path_expr is None:
+                raise ValueError(
+                    f"SceneDocument eigenmodes stage {stage_index} has invalid eigen_k_path."
+                )
+            raw_k_vector = stage.get("eigen_k_vector")
+            if k_path_expr is not None and raw_k_vector not in (None, ""):
+                raise ValueError(
+                    f"SceneDocument eigenmodes stage {stage_index} cannot set both eigen_k_path and eigen_k_vector."
+                )
+            if k_path_expr is not None:
+                eigen_kwargs["k_sampling"] = k_path_expr
+            else:
+                if isinstance(raw_k_vector, str):
+                    components = [part.strip() for part in raw_k_vector.split(",")]
+                    if raw_k_vector.strip() and len(components) != 3:
+                        raise ValueError(
+                            f"SceneDocument eigenmodes stage {stage_index} has invalid eigen_k_vector."
+                        )
+                    raw_k_vector = components if raw_k_vector.strip() else None
+                if raw_k_vector not in (None, ""):
+                    if not _is_vector3(raw_k_vector):
+                        raise ValueError(
+                            f"SceneDocument eigenmodes stage {stage_index} has invalid eigen_k_vector."
+                        )
+                    eigen_kwargs["k_vector"] = tuple(
+                        float(_finite_number(component)) for component in raw_k_vector
+                    )
+
+            magnetostatic_bc = stage.get("eigen_magnetostatic_bc")
+            if isinstance(magnetostatic_bc, str) and magnetostatic_bc.strip():
+                if magnetostatic_bc.strip() != "open":
+                    eigen_kwargs["magnetostatic_bc"] = magnetostatic_bc.strip()
+
+            rendered_kwargs = []
+            for key, value in eigen_kwargs.items():
+                if key in {"bc", "k_sampling"} and isinstance(value, str):
+                    rendered_kwargs.append(f"{key}={value}")
+                else:
+                    rendered_kwargs.append(f"{key}={_python_literal(value)}")
+            lines.append(
+                "study.stages.add_eigenmodes(" + ", ".join(rendered_kwargs) + ")"
+            )
+            continue
+        if kind != "relax":
+            raise ValueError(
+                f"SceneDocument export does not support stage kind '{kind}'."
+            )
         kwargs: dict[str, object] = {"stage_id": str(stage.get("stage_id") or "relax")}
         algorithm = stage.get("algorithm")
         if isinstance(algorithm, str) and algorithm.strip():
@@ -1345,6 +1497,7 @@ def _export_stage_draft(stage: LoadedStage) -> dict[str, object]:
         return payload
     dynamics = study.dynamics
     if isinstance(study, Eigenmodes):
+        solver_policy = study.solver_policy
         return {
             "kind": "eigenmodes",
             "entrypoint_kind": stage.entrypoint_kind,
@@ -1363,6 +1516,7 @@ def _export_stage_draft(stage: LoadedStage) -> dict[str, object]:
             "eigen_operator": study.operator,
             "eigen_include_demag": study.include_demag,
             "eigen_equilibrium_source": study.equilibrium_source,
+            "eigen_equilibrium_artifact": _text_value(study.equilibrium_artifact),
             "eigen_normalization": study.normalization,
             "eigen_damping_policy": study.damping_policy,
             "eigen_k_vector": ",".join(str(component) for component in study.k_vector) if study.k_vector is not None else "",
@@ -1370,6 +1524,21 @@ def _export_stage_draft(stage: LoadedStage) -> dict[str, object]:
             "eigen_spin_wave_bc": _spin_wave_bc_kind(study.spin_wave_bc),
             "eigen_spin_wave_bc_config": _spin_wave_bc_config(study.spin_wave_bc),
             "eigen_magnetostatic_bc": study.magnetostatic_bc,
+            "eigen_solver_rtol": _text_number(
+                solver_policy.residual_tolerance if solver_policy is not None else None
+            ),
+            "eigen_solver_max_outer_iterations": (
+                str(solver_policy.max_outer_iterations)
+                if solver_policy is not None
+                and solver_policy.max_outer_iterations is not None
+                else ""
+            ),
+            "eigen_solver_max_linear_iterations": (
+                str(solver_policy.max_linear_iterations)
+                if solver_policy is not None
+                and solver_policy.max_linear_iterations is not None
+                else ""
+            ),
         }
     if isinstance(study, FrequencyResponse):
         return {
@@ -5921,7 +6090,13 @@ def _render_stages(
         previous_dynamics_signature = dynamics_signature
 
         if isinstance(study, Eigenmodes):
-            count = _override_int(stage_override, "eigen_count", study.count) or study.count
+            raw_count = stage_override.get("eigen_count")
+            if raw_count in (None, ""):
+                count = study.count
+            else:
+                count = _positive_int(raw_count)
+                if count is None:
+                    raise ValueError("canonical rewrite received an invalid eigen_count")
             target = _override_string(stage_override, "eigen_target", study.target) or study.target
             operator = _override_string(stage_override, "eigen_operator", study.operator) or study.operator
             include_demag_ov = stage_override.get("eigen_include_demag")
@@ -5933,6 +6108,8 @@ def _render_stages(
                 f"count={count}",
                 f"target={_py_repr(target)}",
             ]
+            if stage.stage_id is not None:
+                call_parts.insert(0, f"stage_id={_py_repr(stage.stage_id)}")
             target_frequency = _override_number(stage_override, "eigen_target_frequency", study.target_frequency)
             if target_frequency is not None:
                 call_parts.append(f"target_frequency={_py_number(target_frequency)}")
@@ -5988,19 +6165,32 @@ def _render_stages(
                         "solver_max_linear_iterations="
                         f"{study.solver_policy.max_linear_iterations}"
                     )
-            k_vector_raw = _override_string(stage_override, "eigen_k_vector", None)
+            k_path_raw = _override_string(stage_override, "eigen_k_path", None)
             k_path_expr = _render_stage_k_path_expr(
-                _override_string(stage_override, "eigen_k_path", None)
+                k_path_raw
             )
+            if k_path_raw is not None and k_path_raw.strip() and k_path_expr is None:
+                raise ValueError("canonical rewrite received an invalid eigen_k_path")
+            k_vector_raw = _override_string(stage_override, "eigen_k_vector", None)
+            if k_path_expr is not None and k_vector_raw is not None and k_vector_raw.strip():
+                raise ValueError(
+                    "canonical rewrite cannot set both eigen_k_path and eigen_k_vector"
+                )
             if k_path_expr is not None:
                 call_parts.append(f"k_sampling={k_path_expr}")
             elif k_vector_raw is not None and k_vector_raw.strip():
+                components = [component.strip() for component in k_vector_raw.split(",")]
+                if len(components) != 3:
+                    raise ValueError("canonical rewrite received an invalid eigen_k_vector")
                 try:
-                    parsed = tuple(float(component.strip()) for component in k_vector_raw.split(","))
-                    if len(parsed) == 3:
-                        call_parts.append(f"k_vector={parsed!r}")
-                except ValueError:
-                    pass
+                    parsed = tuple(float(component) for component in components)
+                except ValueError as exc:
+                    raise ValueError(
+                        "canonical rewrite received an invalid eigen_k_vector"
+                    ) from exc
+                if not all(math.isfinite(component) for component in parsed):
+                    raise ValueError("canonical rewrite received an invalid eigen_k_vector")
+                call_parts.append(f"k_vector={parsed!r}")
             elif study.k_vector is not None:
                 call_parts.append(f"k_vector={study.k_vector!r}")
             elif study.k_sampling is not None:

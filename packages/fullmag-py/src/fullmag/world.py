@@ -4542,6 +4542,7 @@ class StudyStagesBuilder:
     def add_eigenmodes(
         self,
         *,
+        stage_id: str | None = None,
         count: int = 10,
         target: str = "lowest",
         target_frequency: float | None = None,
@@ -4583,7 +4584,9 @@ class StudyStagesBuilder:
                 solver_rtol=solver_rtol,
                 solver_max_outer_iterations=solver_max_outer_iterations,
                 solver_max_linear_iterations=solver_max_linear_iterations,
-            )
+            ),
+            stage_id=stage_id,
+            id_kind="eigenmodes",
         )
 
     def add_frequency_response(

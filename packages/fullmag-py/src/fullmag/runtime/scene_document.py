@@ -1648,7 +1648,7 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
                 "torque_tolerance": _number_or_none(stage.get("torque_tolerance")),
                 "energy_tolerance": _number_or_none(stage.get("energy_tolerance")),
                 "max_steps": _int_or_none(stage.get("max_steps")),
-                "eigen_count": _int_or_none(stage.get("eigen_count")),
+                "eigen_count": _eigen_count_override(stage),
                 "eigen_target": stage.get("eigen_target") or None,
                 "eigen_operator": stage.get("eigen_operator") or None,
                 "eigen_include_demag": (
@@ -1657,6 +1657,7 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
                     else None
                 ),
                 "eigen_equilibrium_source": stage.get("eigen_equilibrium_source") or None,
+                "eigen_equilibrium_artifact": stage.get("eigen_equilibrium_artifact") or None,
                 "eigen_normalization": stage.get("eigen_normalization") or None,
                 "eigen_target_frequency": _number_or_none(stage.get("eigen_target_frequency")),
                 "eigen_frequency_min": _number_or_none(stage.get("eigen_frequency_min")),
@@ -1671,6 +1672,17 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
                     else None
                 ),
                 "eigen_magnetostatic_bc": stage.get("eigen_magnetostatic_bc") or None,
+                "eigen_solver_rtol": _number_or_none(
+                    stage.get("eigen_solver_rtol")
+                    if stage.get("eigen_solver_rtol") not in (None, "")
+                    else stage.get("eigen_solver_residual_tolerance")
+                ),
+                "eigen_solver_max_outer_iterations": _int_or_none(
+                    stage.get("eigen_solver_max_outer_iterations")
+                ),
+                "eigen_solver_max_linear_iterations": _int_or_none(
+                    stage.get("eigen_solver_max_linear_iterations")
+                ),
             }
             for stage in (builder.get("stages") or [])
         ],
@@ -1774,3 +1786,18 @@ def _int_or_none(value: Any) -> int | None:
     if isinstance(value, (int, float)):
         return int(value)
     return None
+
+
+def _eigen_count_override(stage: Mapping[str, Any]) -> int | None:
+    value = stage.get("eigen_count")
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    if isinstance(value, bool):
+        raise ValueError("eigen_count must be a positive integer")
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("eigen_count must be a positive integer") from exc
+    if not math.isfinite(numeric) or numeric < 1 or int(numeric) != numeric:
+        raise ValueError("eigen_count must be a positive integer")
+    return int(numeric)
