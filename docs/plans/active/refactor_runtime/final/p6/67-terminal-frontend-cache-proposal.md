@@ -1,6 +1,7 @@
 # P6-67 — propozycja zwolnienia miejsca na runnerze
 
-Status: **propozycja; nic nie usunięto; zgoda na dokładny manifest oczekuje**.
+Status historycznej propozycji: manifest zatwierdzony przez użytkownika 02.10.2026;
+wszystkie 44 cele usunięte po ponownej kontroli. [Wynik wykonania](72-approved-cache-cleanup.md).
 
 Proponowane cele to fizyczne katalogi `frontend/next/dev-3250` w zakończonych próbach fixture przeglądarkowego. Linki `.next-control-room-3250` pozostają w snapshotach źródeł; po usunięciu cache mogą być dangling do czasu odbudowy. Snapshoty, receipts, logi i zrzuty ekranu pozostają. Zakres nie obejmuje Cargo target, runtime, wyników naukowych ani worktree.
 

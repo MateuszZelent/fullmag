@@ -19,8 +19,11 @@ Checkpoint 02.10.2026: [P6-71 — kod wdrożonego runnera](p6/71-deployed-runner
 potwierdza, że źródłowe kontrole pakietu z P6-68–70 nie są jeszcze wdrożone.
 Aktualizacja musi zachować siedem operatorowo dopuszczonych profili; nie wolno
 zastąpić rozszerzonego entrypointu wariantem trzech profili. Bieżący odczyt
-runnera: 88 084 480 B wolnego, brak aktywnych jobs, `waiting_for_disk`.
-Zgoda na dokładny manifest cache P6-67 oczekuje; niczego nie usunięto.
+runnera z tamtego checkpointu: 88 084 480 B wolnego, brak aktywnych jobs,
+`waiting_for_disk`. Późniejsze [P6-72 — zatwierdzone usunięcie cache](p6/72-approved-cache-cleanup.md)
+potwierdza usunięcie wszystkich 44 celów i zachowanie 349 plików dowodowych.
+Odczyt po operacji: 17 839 595 520 B wolnego (16,61 GiB), aktywny wcześniejszy
+build 196; źródłowy kontrakt P6-68–70 nadal wymaga integracji z runnerem.
 Natywny build, runtime i pełny plan pozostają otwarte; procenty bez zmian.
 
 Checkpoint 02.10.2026: [P6-65a — bezpośredni powrót do current view](p6/65a-direct-current-viewport.md)

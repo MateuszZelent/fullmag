@@ -276,7 +276,7 @@ pamięci i wszystkich lane'ów pozostają otwarte. P6 wynosi **52%**.
 
 67. [Propozycja zwolnienia miejsca na runnerze](67-terminal-frontend-cache-proposal.md)
     — 44 dokładne fizyczne katalogi cache zakończonych prób, 10,66 GiB;
-    raporty i źródła pozostają, nic nie usunięto, zgoda na manifest oczekuje.
+    historyczna propozycja; zatwierdzone wykonanie i zachowanie dowodów w P6-72.
 
 68. [Obowiązkowy kompletny pakiet accepted runtime](68-required-accepted-runtime-package.md)
     — build nie akceptuje brakujących lub pustych binariów accepted flow;
@@ -293,4 +293,8 @@ pamięci i wszystkich lane'ów pozostają otwarte. P6 wynosi **52%**.
 71. [Różnica kodu wdrożonego runnera](71-deployed-runner-contract-gap.md)
     — aktywny entrypoint wymaga nadal 5 outputów i ma rozszerzone profile;
     ustalone hashe, zachowanie 7 dopuszczonych profili konieczne przy integracji,
-    pojemność około 84 MiB i brak wykonania nowego buildu.
+    historyczna blokada pojemności usunięta w P6-72; wdrożenie kontraktu otwarte.
+
+72. [Zatwierdzone usunięcie cache](72-approved-cache-cleanup.md)
+    — usunięto 44 dokładne katalogi, zachowano 349 plików dowodowych;
+    runner raportuje 16,61 GiB wolnego i aktywny wcześniejszy build 196.
