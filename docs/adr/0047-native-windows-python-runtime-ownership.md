@@ -30,7 +30,11 @@ Staging jest świeży, nie nadpisuje obcej zawartości, hashuje kopie i odrzuca
 zmianę wejść. Wspólny planner/audyt rozszerza płaską kontrolę interpretera
 o `.pyd`; closure używa tylko własnej jawnej dystrybucji, bez przeszukiwania
 SDK FEM lub PATH. Brak wymaganej biblioteki zatrzymuje pakowanie.
-To nie obejmuje jeszcze rekurencyjnego graphu rozszerzeń scientific wheels.
+Dodatkowy rekurencyjny audyt obejmuje scientific wheel EXE/DLL/PYD oraz bin.
+Odrzuca brakujące importy i konfliktujące DLL; po import smoke porównuje
+cały zestaw ścieżek i hashów z zamrożonym raportem. Dostępność biblioteki
+nie dowodzi kolejności loadera ani rejestracji katalogów wheel: te zależności
+są jawnie opisane, a runtime_qualified pozostaje false.
 
 Smoke producenta używa dołączonego interpretera, sprawdza izolację przy
 pustym PATH i zatrutym środowisku oraz importuje deklarowane runtime extras.

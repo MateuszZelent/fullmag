@@ -16,7 +16,9 @@ Publiczne minimum DSL >=3.10 pozostaje bez zmian. Python EXE/DLL i standard
 library PYD podlegają osobnemu płaskiemu plannerowi/audytowi zależności,
 bez poszukiwania DLL w PATH lub SDK FEM. Jawna kompletna dystrybucja CPython
 jest jedynym źródłem closure, a brak biblioteki zatrzymuje pakowanie.
-Rekurencyjny graph scientific wheels jeszcze wymaga osobnego audytu.
+Rekurencyjny graph scientific wheels ma teraz osobną implementację
+[audytu dostępności PE](10-recursive-python-native-audit.md); rzeczywiste
+wejścia, loader Windows, ABI i wykonanie pozostają NOT VERIFIED.
 
 Producent sprawdza SHA staged runtime, uruchamia go z pustym PATH,
 zatrutym PYTHONHOME/PYTHONPATH, wymaga isolated/no_user_site i lokalnych

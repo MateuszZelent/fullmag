@@ -351,3 +351,8 @@ wspólna dla CLI/API wybiera bundled interpreter i odrzuca zewnętrzny
 fallback w pakiecie Windows. Produkcyjne source checks CLI/API PASS;
 Rust regresje niewykonane z powodu zakazu kompilacji unit tests.
 Gotowy MSI i runtime bez hostowego Python nadal NOT VERIFIED.
+
+[Rekurencyjny audyt Python PE](p8/10-recursive-python-native-audit.md)
+obejmuje także scientific wheel PYD/DLL i odróżnia dostępność bibliotek
+od kwalifikacji loadera/runtime. Nowe regresje interpretowane PASS;
+realny pakiet Windows i kwalifikacja nadal NOT VERIFIED.

@@ -23,8 +23,10 @@ pozostają otwarte. uv jest narzędziem buildu, nie wymaganiem użytkownika.
 MSI wymaga jawnego `FULLMAG_WINDOWS_PYTHON_RUNTIME_ROOT` z zatwierdzoną
 dystrybucją embeddable CPython 3.12 x64 i licencją. Kopiuje runtime,
 standard library i generuje izolowane ścieżki lokalnych pakietów. Native
-EXE/DLL/PYD interpretera mają płaski audyt PE; graph scientific wheels,
-realny bundled import i pełny MSI pozostają NOT VERIFIED. Build Python
+EXE/DLL/PYD interpretera mają płaski audyt PE. Dodatkowy rekurencyjny audyt
+obejmuje scientific wheels i bin; potwierdza dostępność importów, bez kwalifikacji
+loadera/ABI. Po import smoke porównuje pełną listę i hashe obrazów. Realny
+bundled import i pełny MSI pozostają NOT VERIFIED. Build Python
 instalujący wheels musi używać CPython 3.12; minimum publicznego DSL nie zmienia się.
 Nie uruchamia Linuxa ani WSL. Domyślnie pakuje FDM CPU; jawne
 `FULLMAG_WINDOWS_MSI_CUDA=1` wymaga nvcc i dodaje FDM CUDA.

@@ -134,6 +134,7 @@ $ErrorActionPreference='Stop'
 $StageRoot='fixture-stage'; $ProductVersion='0.1.0'; $BuildCuda=$false
 $sourceIdentity=@{fixture=$true}; $runtimeDllInventory=@()
 $peDependencyAudit=@{images=@(@{path='bin/app.exe';imports=@(@{name='solver.dll';resolution='bundled'})})}
+$pythonNativeDependencyAudit=@{runtime_qualified=$false;images=@(@{path='python/site-packages/example/core.pyd';imports=@(@{name='vendor.dll';resolution='bundled_package_loader_required';candidates=@('python/site-packages/example.libs/vendor.dll')})})}
 $tokens=$null; $errors=$null
 $ast=[System.Management.Automation.Language.Parser]::ParseFile($Installer,[ref]$tokens,[ref]$errors)
 if ($errors.Count) { throw ($errors | Out-String) }
@@ -146,6 +147,9 @@ Write-StageManifest $Output
     import json
     report=json.loads(output.read_text(encoding='utf-8-sig'))
     assert report['pe_dependency_audit']['images'][0]['imports'][0]['resolution'] == 'bundled'
+    native = report['python_native_dependency_audit']
+    assert native['runtime_qualified'] is False
+    assert native['images'][0]['imports'][0]['candidates'] == ['python/site-packages/example.libs/vendor.dll']
 
 
 def test_cli_failure_emits_no_report(tmp_path):

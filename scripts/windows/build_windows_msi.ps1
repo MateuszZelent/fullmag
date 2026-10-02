@@ -250,6 +250,7 @@ function Write-VersionMetadata {
     python_runtime = $pythonRuntimeInventory
     python_pe_dependency_audit = $pythonPeDependencyAudit
     python_pe_dependency_plan = $pythonPePlan
+    python_native_dependency_audit = $pythonNativeDependencyAudit
     python_packages = $pythonPackageInventory
     node_runtime = $nodeRuntimeInventory
     built_at_utc = $builtAt
@@ -331,6 +332,7 @@ function Write-StageManifest {
     python_runtime = $pythonRuntimeInventory
     python_pe_dependency_audit = $pythonPeDependencyAudit
     python_pe_dependency_plan = $pythonPePlan
+    python_native_dependency_audit = $pythonNativeDependencyAudit
     python_packages = $pythonPackageInventory
     share = @(
       "share/version.json",
@@ -723,6 +725,14 @@ try {
   }
   & python (Join-Path $PSScriptRoot "stage_python_runtime.py") verify --inventory $pythonRuntimeStagedPath --destination $StageRoot --output (Join-Path $DistRoot "python-runtime-smoke.json")
   if ($LASTEXITCODE -ne 0) { throw "Bundled Python isolation smoke failed" }
+  $pythonNativeAuditPath = Join-Path $DistRoot "python-native-dependencies.json"
+  $pythonNativeAuditArgs = @((Join-Path $PSScriptRoot "verify_python_native_dependencies.py"),
+    "--stage", $StageRoot, "--dumpbin", (Get-Command dumpbin.exe).Source, "--output", $pythonNativeAuditPath)
+  if ($BuildCuda) { $pythonNativeAuditArgs += "--allow-cuda-driver" }
+  & python @pythonNativeAuditArgs
+  if ($LASTEXITCODE -ne 0) { throw "Recursive Python native dependency audit failed" }
+  $pythonNativeAuditHash = (Get-FileHash -LiteralPath $pythonNativeAuditPath -Algorithm SHA256).Hash
+  $pythonNativeDependencyAudit = Get-Content -LiteralPath $pythonNativeAuditPath -Raw | ConvertFrom-Json
   & (Join-Path $pythonDir "python.exe") -c "import fullmag, numpy, h5py, zarr, scipy, gmsh, manifold3d, meshio, trimesh; from PIL import Image"
   if ($LASTEXITCODE -ne 0) { throw "staged Python package import smoke failed with exit code $LASTEXITCODE" }
   foreach ($pythonInput in $pythonPackageInventory.inputs) {
@@ -730,7 +740,14 @@ try {
       throw "Python package input changed after wheel staging: $($pythonInput.path)"
     }
   }
-  foreach ($pythonImage in $pythonPeDependencyAudit.images) {
+  if ((Get-FileHash -LiteralPath $pythonNativeAuditPath -Algorithm SHA256).Hash -ne $pythonNativeAuditHash) {
+    throw "Python native audit inventory changed after import smoke"
+  }
+  & python (Join-Path $PSScriptRoot "verify_python_native_dependencies.py") --stage $StageRoot `
+    --dumpbin (Get-Command dumpbin.exe).Source --verify-inventory $pythonNativeAuditPath `
+    --output (Join-Path $DistRoot "python-native-post-smoke.json")
+  if ($LASTEXITCODE -ne 0) { throw "Python native image set changed after import smoke" }
+  foreach ($pythonImage in $pythonNativeDependencyAudit.images) {
     if ((Get-FileHash -LiteralPath (Join-Path $StageRoot $pythonImage.path) -Algorithm SHA256).Hash.ToLowerInvariant() -ne $pythonImage.sha256) {
       throw "Python native image changed after audit: $($pythonImage.path)"
     }
