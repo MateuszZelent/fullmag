@@ -317,3 +317,8 @@ strict availability JSON i manifesty eksperymentalne. 153 lekkich regresji
 PASS. API GitHub: 0 zarejestrowanych self-hosted runners; real Windows build,
 qualified prefix oraz install/recovery pozostają otwarte. Procenty całego
 planu nie są awansowane przez ten dowód źródłowy.
+
+[Poprawka bootstrapu spakowanego UI](p8/04-static-ui-package-bootstrap.md)
+uzupełnia wspólny zestaw plików Node dla MSI, eksportu lokalnego i portable.
+Rzeczywisty start HTTP z katalogu pakietu i staging MSI: PASS. Pełna
+instalacja Windows oraz kwalifikacja wydania pozostają NOT VERIFIED.

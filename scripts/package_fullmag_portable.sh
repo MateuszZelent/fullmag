@@ -303,6 +303,8 @@ cp -a "${REPO_ROOT}/.fullmag/local/bin/fullmag-api-preparation-retry" "${BUNDLE_
 cp -a "${REPO_ROOT}/.fullmag/local/lib/." "${BUNDLE_ROOT}/lib/"
 copy_cuda_runtime_libs "${BUNDLE_ROOT}/lib" libcudart.so* libcufft.so*
 cp -a "${REPO_ROOT}/.fullmag/local/web" "${BUNDLE_ROOT}/web"
+"${REPO_ROOT}/.fullmag/local/python/bin/python" "${REPO_ROOT}/scripts/stage_control_room_static_runtime.py" \
+  --source "${REPO_ROOT}/apps/control-room" --destination "${BUNDLE_ROOT}/web"
 assemble_python_runtime "${BUNDLE_ROOT}/python"
 mkdir -p "${BUNDLE_ROOT}/packages/fullmag-py/src"
 tar --exclude='__pycache__' -C "${REPO_ROOT}/packages/fullmag-py" -cf - src \

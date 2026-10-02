@@ -68,6 +68,7 @@ web-build-static:
 	fi; \
 	mkdir -p .fullmag/local; \
 	cp -a "$$WEB_APP_DIR/out" .fullmag/local/web.new; \
+	python3 scripts/stage_control_room_static_runtime.py --source "$$WEB_APP_DIR" --destination .fullmag/local/web.new; \
 	touch .fullmag/local/web.new/.build-stamp; \
 	rm -rf .fullmag/local/web; \
 	mv .fullmag/local/web.new .fullmag/local/web; \
@@ -89,6 +90,7 @@ web-build-static-if-needed:
 			echo "Static control room is stale; rebuilding..."; \
 			$(MAKE) web-build-static; \
 		else \
+			python3 scripts/stage_control_room_static_runtime.py --source "$$WEB_APP_DIR" --destination .fullmag/local/web; \
 			echo "Reusing static control room:"; \
 			echo "  $(PWD)/.fullmag/local/web"; \
 		fi; \

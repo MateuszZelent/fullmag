@@ -344,6 +344,9 @@ function Test-StagedLayout {
     (Join-Path $StageRoot "bin\fullmag-api-preparation-retry.exe"),
     (Join-Path $StageRoot "bin\fullmag-ui.exe"),
     (Join-Path $StageRoot "web\index.html"),
+    (Join-Path $StageRoot "web\dev-server.mjs"),
+    (Join-Path $StageRoot "web\scripts\dev-server-public-origin.mjs"),
+    (Join-Path $StageRoot "web\scripts\resolve-pnpm-invocation.mjs"),
     (Join-Path $StageRoot "python\site-packages\fullmag\__init__.py"),
     (Join-Path $StageRoot "share\version.json"),
     (Join-Path $StageRoot "runtimes\cpu-reference\manifest.json")
@@ -614,9 +617,8 @@ try {
 
   Require-File (Join-Path $RepoRoot "apps\control-room\out\index.html")
   Copy-Tree (Join-Path $RepoRoot "apps\control-room\out") $webDir
-  Copy-Item -Force (Join-Path $RepoRoot "apps\control-room\dev-server.mjs") (Join-Path $webDir "dev-server.mjs")
-  Ensure-Dir (Join-Path $webDir "scripts")
-  Copy-Item -Force (Join-Path $RepoRoot "apps\control-room\scripts\resolve-pnpm-invocation.mjs") (Join-Path $webDir "scripts\resolve-pnpm-invocation.mjs")
+  & python (Join-Path $RepoRoot "scripts\stage_control_room_static_runtime.py") --source (Join-Path $RepoRoot "apps\control-room") --destination $webDir
+  if ($LASTEXITCODE -ne 0) { throw "Static UI runtime staging failed with exit code $LASTEXITCODE" }
   Copy-Tree (Join-Path $RepoRoot "examples") $examplesDir
   $wheel = Get-ChildItem -LiteralPath $WheelRoot -Filter "*.whl" -File |
     Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
