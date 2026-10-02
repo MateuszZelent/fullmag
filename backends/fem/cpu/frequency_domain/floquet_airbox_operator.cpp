@@ -864,6 +864,13 @@ FrequencyDomainStatus assemble_floquet_airbox_dynamic_demag_k(
         problem.tangent_source == nullptr) {
         return fail(out_result, "Floquet airbox dynamic demag-k blocks are missing");
     }
+    if (problem.tangent_source_convention != FloquetAirboxTangentSourceConvention::descriptor_block &&
+        problem.tangent_source_convention != FloquetAirboxTangentSourceConvention::weak_poisson_rhs) {
+        return fail(out_result, "Floquet airbox tangent source convention is invalid");
+    }
+    const double source_to_descriptor_sign =
+        problem.tangent_source_convention == FloquetAirboxTangentSourceConvention::weak_poisson_rhs
+            ? -1.0 : 1.0;
 
     std::uint64_t full_phi_from_operator = 0;
     std::uint64_t full_phi_columns = 0;
@@ -996,6 +1003,9 @@ FrequencyDomainStatus assemble_floquet_airbox_dynamic_demag_k(
                 if (!finite_complex(value)) {
                     return fail(out_result, "Floquet airbox reduced magnetic-potential coupling is non-finite");
                 }
+                // Keep the raw physical source intact for full-field residuals.
+                // All downstream blocks and reconstruction use descriptor -S.
+                value *= source_to_descriptor_sign;
                 a_phiq[static_cast<std::size_t>(reduced_row * q + column)] = value;
             }
         }

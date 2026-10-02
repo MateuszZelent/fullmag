@@ -104,6 +104,53 @@ void reduces_phase_constrained_airbox_blocks_before_schur_elimination()
                 "airbox diagnostics preserve the nonzero wavevector");
 }
 
+void raw_rhs_and_descriptor_reconstruct_the_same_physical_potential()
+{
+    auto p = make_complex_matrix(2, 2, {{0, 0, 1.0}, {1, 1, 1.0}}, {});
+    auto c = make_complex_matrix(2, 1, {{0, 0, 1.0}}, {{1, 0, -1.0}});
+    auto raw = make_complex_matrix(2, 2, {{0, 0, 1.0}, {1, 1, 3.0}},
+                                   {{0, 0, 2.0}, {1, 1, -1.0}});
+    auto descriptor = make_complex_matrix(2, 2, {{0, 0, -1.0}, {1, 1, -3.0}},
+                                          {{0, 0, -2.0}, {1, 1, 1.0}});
+    fd::FloquetAirboxDynamicDemagKProblem request{};
+    request.scalar_operator = p.get();
+    request.scalar_constraint = c.get();
+    request.tangent_constraint = c.get();
+    request.tangent_source = raw.get();
+    request.tangent_source_convention = fd::FloquetAirboxTangentSourceConvention::weak_poisson_rhs;
+    request.qphi_feedback_scale = -1.25663706212e-6;
+    request.k_rad_per_m[0] = 1.0;
+    fd::FloquetAirboxDynamicDemagKResult from_rhs{}, from_descriptor{};
+    check(fd::assemble_floquet_airbox_dynamic_demag_k(request, &from_rhs) == fd::FrequencyDomainStatus::ok,
+          "raw physical RHS is converted to descriptor");
+    request.tangent_source = descriptor.get();
+    request.tangent_source_convention = fd::FloquetAirboxTangentSourceConvention::descriptor_block;
+    check(fd::assemble_floquet_airbox_dynamic_demag_k(request, &from_descriptor) == fd::FrequencyDomainStatus::ok,
+          "explicit descriptor is accepted without another sign change");
+    check(from_rhs.reconstruction.p == from_descriptor.reconstruction.p &&
+          from_rhs.reconstruction.a_phiq == from_descriptor.reconstruction.a_phiq &&
+          from_rhs.reconstruction.a_qphi == from_descriptor.reconstruction.a_qphi &&
+          from_rhs.real_split_row_major == from_descriptor.real_split_row_major,
+          "both conventions yield identical descriptor, feedback and Schur");
+    const std::vector<std::complex<double>> q{{.7, -.3}};
+    fd::FloquetReconstructedPotential rhs_phi{}, descriptor_phi{};
+    check(fd::reconstruct_floquet_potential(from_rhs.reconstruction, q, &rhs_phi) == fd::FrequencyDomainStatus::ok &&
+          fd::reconstruct_floquet_potential(from_descriptor.reconstruction, q, &descriptor_phi) == fd::FrequencyDomainStatus::ok,
+          "both conventions reconstruct certified potential");
+    check(rhs_phi.certified && descriptor_phi.certified &&
+          rhs_phi.phi == descriptor_phi.phi && rhs_phi.phi.size() == 1u,
+          "both conventions reconstruct the same potential");
+    // Independent physical equation: P_red=2, S_red=4+i, phi=S_red*q/2.
+    check_close(std::abs(2.0 * rhs_phi.phi[0] - std::complex<double>(4.0, 1.0) * q[0]), 0.0,
+                "reconstructed phi satisfies physical P phi-S q=0");
+    check_close(raw->real()(0, 0), 1.0, "raw real source owner is unchanged");
+    check_close(raw->imag()(0, 0), 2.0, "raw imaginary source owner is unchanged");
+    request.tangent_source_convention = static_cast<fd::FloquetAirboxTangentSourceConvention>(99);
+    fd::FloquetAirboxDynamicDemagKResult rejected{};
+    check(fd::assemble_floquet_airbox_dynamic_demag_k(request, &rejected) == fd::FrequencyDomainStatus::validation_error &&
+          rejected.real_split_row_major.empty(), "unknown source convention fails closed");
+}
+
 void rejects_missing_floquet_airbox_blocks_without_fallback()
 {
     fd::FloquetAirboxDynamicDemagKProblem problem{};
@@ -310,6 +357,7 @@ void assembles_shared_domain_floquet_blocks_with_one_phase_graph()
     schur_request.scalar_operator = blocks.scalar_operator.get();
     schur_request.scalar_constraint = blocks.scalar_constraint.get();
     schur_request.tangent_source = blocks.tangent_source.get();
+    schur_request.tangent_source_convention = fd::FloquetAirboxTangentSourceConvention::weak_poisson_rhs;
     schur_request.tangent_constraint = blocks.tangent_constraint.get();
     schur_request.k_rad_per_m[0] = 0.5;
     schur_request.pivot_tolerance = 1e-17;
@@ -541,6 +589,7 @@ int main()
 #if FULLMAG_HAS_MFEM_STACK
     reduces_phase_constrained_airbox_blocks_before_schur_elimination();
     applies_the_magnetic_floquet_constraint_before_schur_elimination();
+    raw_rhs_and_descriptor_reconstruct_the_same_physical_potential();
     assembles_shared_domain_floquet_blocks_with_one_phase_graph();
     assembles_dirichlet_floquet_blocks_with_periodic_class_elimination();
     rejects_missing_floquet_airbox_blocks_without_fallback();

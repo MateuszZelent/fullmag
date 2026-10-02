@@ -15,10 +15,19 @@ namespace fullmag::fem::frequency_domain {
 // Bounded bridge from the MFEM Bloch scalar blocks to the dynamic magnetic
 // Schur provider.  The bridge owns only dense materialization for validation
 // sized problems; production runs must replace it with a matrix-free owner.
+enum class FloquetAirboxTangentSourceConvention : std::uint32_t {
+    descriptor_block = 0,
+    weak_poisson_rhs = 1,
+};
+
 struct FloquetAirboxDynamicDemagKProblem {
     const mfem::ComplexSparseMatrix *scalar_operator = nullptr;
     const mfem::ComplexSparseMatrix *scalar_constraint = nullptr;
     const mfem::ComplexSparseMatrix *tangent_source = nullptr;
+    // Descriptor block A_phiq=-S, or physical weak RHS S in P phi=S q.
+    // Conversion to the descriptor happens once without mutating the owner.
+    FloquetAirboxTangentSourceConvention tangent_source_convention =
+        FloquetAirboxTangentSourceConvention::descriptor_block;
     // Optional full-q -> reduced-q Floquet constraint.  When present the
     // bridge materializes A_phiq = C_phi^H A_phiq,full C_q; when absent the
     // tangent source is already in reduced q coordinates for compatibility
@@ -102,6 +111,8 @@ struct FloquetAirboxSharedDomainBlockResult {
     std::unique_ptr<mfem::SesquilinearForm> scalar_form{};
     std::unique_ptr<mfem::ComplexSparseMatrix> scalar_operator{};
     std::unique_ptr<mfem::ComplexSparseMatrix> scalar_constraint{};
+    // Physical weak RHS S, retained for independent full-field P phi-S q.
+    // The dense bridge must explicitly select weak_poisson_rhs for this owner.
     std::unique_ptr<mfem::ComplexSparseMatrix> tangent_source{};
     std::unique_ptr<mfem::ComplexSparseMatrix> tangent_constraint{};
     // Unit-amplitude global-y/global-z perturbations projected into the

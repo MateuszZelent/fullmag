@@ -133,7 +133,10 @@
         "source-gpu-petsc",
         "source-modal-payload-ownership",
         "source-floquet-dynamic-demag-k",
-        "source-native-floquet-modal"
+        "source-native-floquet-modal",
+        "source-airbox-source-convention",
+        "source-airbox-dense-source-conversion",
+        "source-airbox-source-convention-regression"
       ]
     },
     {
@@ -1534,6 +1537,34 @@
       "path": "backends/fem/tests/frequency_domain/floquet_waveguide_cross_section_test.cpp",
       "symbol": "main",
       "responsibility": "Check section measure and mixed complex P1 weak-source signs for signed k; native tests prepared without compilation during the current restriction.",
+      "evidence_status": "source_visible / native execution pending"
+    },
+    {
+      "id": "source-airbox-source-convention",
+      "path": "docs/physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md",
+      "symbol": "DOC-ANCHOR:floquet-airbox-source-convention",
+      "responsibility": "Distinguish physical weak RHS S from descriptor -S without mutating full-field residual owners.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "source-airbox-dense-source-conversion",
+      "path": "backends/fem/cpu/frequency_domain/floquet_airbox_operator.cpp",
+      "symbol": "assemble_floquet_airbox_dynamic_demag_k",
+      "responsibility": "Convert declared weak RHS once to the reduced descriptor before feedback and physical-potential reconstruction.",
+      "evidence_status": "source_visible / native execution pending"
+    },
+    {
+      "id": "source-airbox-source-convention-regression",
+      "path": "backends/fem/tests/frequency_domain/floquet_airbox_operator_test.cpp",
+      "symbol": "main",
+      "responsibility": "Compare raw and descriptor inputs, physical potential, Schur, non-mutated owner and invalid convention; prepared without native compilation.",
+      "evidence_status": "source_visible / native execution pending"
+    },
+    {
+      "id": "source-airbox-sign-source-check",
+      "path": "scripts/test_floquet_airbox_source_convention.py",
+      "symbol": "test_physical_potential_requires_conversion_while_schur_is_invariant",
+      "responsibility": "Check independent physical-potential algebra and explicit shared-domain routing; interpreted source evidence only.",
       "evidence_status": "source_visible / native execution pending"
     },
     {

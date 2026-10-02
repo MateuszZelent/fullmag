@@ -823,6 +823,33 @@ no nonzero-$\mathbf k$ result is certified by it yet. Even after runtime
 verification, geometric outer-boundary and flux certification remains a
 separate gate.
 
+(floquet-airbox-source-convention)=
+#### Konwencja źródła przy bounded dense bridge
+
+MFEM producer przekazuje fizyczną prawą stronę słabą $S$, dla której
+$P\phi=S q$. Pełny residual celowo zachowuje ten blok i sprawdza
+$P\phi-Sq$; nie wolno negować go w miejscu. Sparse owner tworzy odrębny
+blok descriptora $A_{\phi q}=-C_\phi^H S C_q$.
+Bounded dense bridge musi użyć identycznego znaku, zanim utworzy
+$A_{q\phi}=-\mu_0A_{\phi q}^H$ i zrekonstruuje
+$\phi=-P^{-1}A_{\phi q}q$. Sam Schur nie wykrywa globalnej zmiany
+znaku źródła, ponieważ obie jego strony zmieniają znak jednocześnie.
+
+Wewnętrzny enum `FloquetAirboxTangentSourceConvention` rozróżnia
+`descriptor_block` (default dotychczasowych algebraicznych fixtures) i
+`weak_poisson_rhs` (jawnie wybierane przez shared-domain owner).
+Pierwszy wariant nie zmienia znaku; drugi neguje zredukowane źródło raz,
+przed sprzężeniem zwrotnym i rekonstrukcją. Nieznany wariant jest odrzucany.
+Nie jest to publiczny parametr Python, ProblemIR ani zmiana artefaktu.
+FDM i GPU nie otrzymują nowej trasy. Produkcyjny sparse pilot nie korzysta
+z materializacji dense; #196 zachowuje niezmienne źródła.
+
+Regresja wymaga zgodności fizycznego potencjału, reduced residualu i Schura
+dla obu konwencji, zespolonego źródła i obu ograniczeń Floqueta. Raw MFEM
+blok $S$ musi pozostać niezmieniony. Fixture natywny jest przygotowany,
+ale niekompilowany; kontrola interpretowana sprawdza algebrę i podłączenie
+źródłowe. Managed wykonanie pozostaje NOT VERIFIED.
+
 (waveguide-envelope-operator-contract)=
 #### 3.5.2 Transverse waveguide envelope
 
@@ -3169,5 +3196,9 @@ benchmarku z niezerową wymianą. Status pozostaje diagnostic_oracle_only_not_FE
 | docs/physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md | DOC-ANCHOR:waveguide-section-measure | Tożsamość miary 2D i całki 3D podzielonej przez długość; kontrakt planowany, runtime niezweryfikowany |
 | docs/physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md | DOC-ANCHOR:waveguide-weak-source-sign | Rozróżnienie dodatniego źródła słabego i ujemnego bloku descriptora |
 | scripts/test_waveguide_axial_sign_source.py | extruded_weak_source | Niezależna kwadratura mieszanego źródła zespolonego; kontrola interpretowana, bez wykonania native |
+| docs/physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md | DOC-ANCHOR:floquet-airbox-source-convention | Konwencja raw RHS i descriptora dense bridge |
+| backends/fem/cpu/frequency_domain/floquet_airbox_operator.cpp | assemble_floquet_airbox_dynamic_demag_k | Jawna jednorazowa konwersja źródła przed rekonstrukcją |
+| backends/fem/tests/frequency_domain/floquet_airbox_operator_test.cpp | main | Regresja obu konwencji i fizycznego potencjału; przygotowana, niekompilowana |
+| scripts/test_floquet_airbox_source_convention.py | test_physical_potential_requires_conversion_while_schur_is_invariant | Niezależna algebra potencjału i podłączenie źródłowe; bez native |
 | backends/fem/cpu/frequency_domain/floquet_waveguide_cross_section.cpp | assemble_floquet_waveguide_cross_section_blocks | Bloki i geometria przekroju niezależne od metadanej długości; źródła, bez nowego managed wykonania |
 | backends/fem/tests/frequency_domain/floquet_waveguide_cross_section_test.cpp | main | Wywołuje regresje miary oraz mixed_source_matches_independent_weak_quadrature; przygotowane, niekompilowane |

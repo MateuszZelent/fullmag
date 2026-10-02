@@ -3730,6 +3730,8 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain_payload(
         floquet_problem.scalar_operator = floquet_blocks.scalar_operator.get();
         floquet_problem.scalar_constraint = floquet_blocks.scalar_constraint.get();
         floquet_problem.tangent_source = floquet_blocks.tangent_source.get();
+        floquet_problem.tangent_source_convention =
+            FloquetAirboxTangentSourceConvention::weak_poisson_rhs;
         floquet_problem.tangent_constraint = floquet_blocks.tangent_constraint.get();
         floquet_problem.k_rad_per_m = *floquet_k_rad_per_m;
         floquet_problem.qphi_feedback_scale = -request.mu0_T_m_A;

@@ -130,6 +130,40 @@ poniżej progu 8 GiB. Sterownik session 7375 potwierdzono nadal żywy.
 Walidacja dokumentacji poprzedniego commita
 6d31b787f8fbd774446c1e7a380d7418084f744f zakończyła się exit=0.
 
+### Dense airbox — jawna konwencja prawej strony i descriptora
+
+Weryfikacja konsumentów potwierdziła, że raw `tangent_source` w pełnych
+blokach jest celowo dodatnią prawą stroną S: pełny residual sprawdza
+P phi-S q oraz sprzężenie +mu0 S^H phi. Nie należy negować tego ownera.
+Błąd dotyczył przekazania raw S do dense bridge, który traktował wejście
+jako A_phiq i rekonstruował phi=-P^-1 A_phiq q. Sparse reduced owner
+już wcześniej poprawnie tworzył odrębny A_phiq=-S.
+
+Dodano wewnętrzny enum `FloquetAirboxTangentSourceConvention`:
+descriptor_block zachowuje dotychczasowe algebraiczne fixtures;
+weak_poisson_rhs wymusza jednorazową negację po projekcji źródła.
+Shared-domain caller oraz fixture z raw MFEM blocks jawnie wybierają
+weak_poisson_rhs. Nieznany wariant jest odrzucany. Raw źródło,
+full-field residual i sparse adapter zachowują swoją fizyczną konwencję.
+Sprawdzono wszystkie bezpośrednie wywołania bridge'a w backends/crates.
+
+Interpreted regression: 3 testy PASS, w tym fizyczny potencjał zespolony
+P_red=2, S_red=4+i i wykazanie, że sam Schur nie wykrywa błędnego znaku.
+Przygotowana regresja MFEM porównuje raw RHS i jawny descriptor:
+A_phiq, A_qphi, P, Schur, certyfikowany potencjał, brak mutacji ownera
+oraz fail-closed nieznanego wariantu. Nie kompilowano jej.
+Nota/mapa 0831 PASS. To naprawa źródłowa P1, native runtime pozostaje
+NOT VERIFIED; nie kwalifikuje fizyki ani pełnej dyspersji.
+Niezależny review bieżącego patcha: zaakceptowany, 0 P1/P2 dla zakresu;
+potwierdzono raw owner, pełny residual, jednorazową konwersję,
+wszystkich bezpośrednich callerów i fixture obu konwencji.
+Regresja nearest Floquet dynamic-demag routing również PASS.
+
+#196 zachowuje kapsułę 71ec3f159; nie zlecono drugiego buildu.
+Sterownik 7375 nadal żywy. Health runnera: worker_alive/accepting_jobs true,
+brak aktywnych jobów, waiting_for_disk. Najnowszy pomiar wolnego storage:
+1 878 401 024 B (około 1,75 GiB), poniżej 8 GiB. Brak nowych punktów FEM.
+
 ### Najnowszy wynik #195 i naprawa granicy build identity
 
 Koordynator zakończył #195 statusem `succeeded`; worker exit=0,
