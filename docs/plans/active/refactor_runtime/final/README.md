@@ -250,3 +250,7 @@ CMake/import library oraz eksport 86 funkcji i publicznego symbolu danych FEM.
 źródeł buildu PASS. Bez kompilacji unit tests. Szczegóły i granice dowodu w
 [P8-C](p8/01-windows-native-gaps.md). Runtime DLL staging, linkowanie,
 native FEM launch i regresja Linux pozostają otwarte; procenty bez awansu.
+
+Zewnętrzny FDM w CMake rozpoznaje teraz osobno runtime DLL i import library
+Windows; Linux `.so`/`.so.0` zachowano. 12 configure-only cases PASS, bez
+kompilacji/linkowania, na jawnych fiksturach. Runtime i pełny P8-C niezaliczone.

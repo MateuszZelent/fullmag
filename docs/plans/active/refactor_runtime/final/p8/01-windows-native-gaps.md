@@ -7,7 +7,7 @@ Status całej bramki: NOT VERIFIED. Audyt źródeł nie jest kwalifikacją runti
 |---|---|---|---|
 | 1 | Launcher budował CLI/API bez UI: `scripts/windows/run_fullmag.ps1`; `control_room.rs::open_in_tauri` wymaga `fullmag-ui.exe`. | Wykonano source increment: osobny build `fullmag-desktop` bez solver CUDA feature, hash/UI manifest i fail-closed przed launch. | 16 regresji PS/Python i 6 kontroli źródeł PASS; aktualny build oraz rzeczywiste okno nadal NOT VERIFIED. |
 | 2 | Unix rpath, konfiguracja CMake i brak eksportu publicznego C ABI na MSVC. | Wykonano fragment źródłowy: rpath według targetu Cargo, jawny `--config`, MSVC import library w wybranym config lub płaskim Ninja; jawny eksport 86 funkcji i symbolu danych ABI. Runtime DLL staging pozostaje otwarty. | Preprocessing MSVC C/C++: 6 PASS; 2 istniejące source contracts PASS. Pełny Windows link/DLL launch oraz Linux regression build: NOT VERIFIED. |
-| 3 | `native/CMakeLists.txt` rozpoznaje external FDM jako `.so`; launcher Windows używa DLL. | Imported target z target-aware library/runtime paths; nie uznawać DLL za import library MSVC. | Configure/link z Windows `.lib` i DLL, istniejący Linux `.so`; brak fałszywego discovery. |
+| 3 | External FDM był rozpoznawany tylko jako Linux `.so`. | Wykonano target-aware imported target: MSVC DLL + `.lib`, MinGW DLL + `.dll.a`, Linux `.so`/`.so.0`; Cargo śledzi moduł CMake. | 12 configure-only cases PASS; actual Windows/Linux link i runtime NOT VERIFIED. |
 | 4 | Natywny launcher odrzuca FEM; `run_fullmag_fem.ps1` uruchamia Linux container. | Natywny dependency bundle MFEM/hypre/libCEED i odpowiednie adaptery Windows dla CPU, następnie CUDA GPU; osobno potrzebne workflow dependencies. | Native FEM CPU i FEM GPU receipts, requested/resolved execution oraz wymagane bramki fizyki. GPU bez cichego CPU fallbacku. |
 | 5 | `build_windows_msi.ps1` publikuje tylko manifesty FDM; brak FEM dependency bundle. | Pakować zweryfikowane native binaries, import/runtime dependencies, statyczne UI i Python; nie kopiować Linux libraries. Usunąć niekontrolowane fallbacki i uporządkować staging przez resolver. | Instalacja na czystym Windows i dependency inventory/hashes; brak Docker/WSL/Linux w ścieżce wykonania. |
 | 6 | Lokalny katalog `local_runner/build_executor.py` obsługuje Linux/container profile; release Windows CI jest inną trasą. | Ustalić zarządzany Windows/MSVC executor albo odrębną kwalifikowaną trasę CI bez publikacji wydania. Nie nazywać profilu Linux dowodem Windows. | Windows target receipt, source snapshot, niepuste artefakty i terminalny exit 0. Zachować zakaz kompilacji unit tests do odwołania. |
@@ -59,3 +59,24 @@ Pozostała bramka: zbudowany i uruchomiony Windows FEM z dependency inventory,
 DLL staging i provenance oraz regresja Linux z kolejki. Launcher nadal nie
 udostępnia natywnego FEM; znalezienie `.lib` nie dowodzi dostępności DLL
 przy uruchomieniu. P8-C pozostaje NOT VERIFIED.
+
+## Fragment: rozpoznawanie zewnętrznego FDM
+
+`native/cmake/ImportFullmagFdm.cmake` jest rzeczywistym modułem używanym
+przez `native/CMakeLists.txt`. Windows ustawia `IMPORTED_LOCATION` na
+`fullmag_fdm.dll`, a `IMPORTED_IMPLIB` oddzielnie na MSVC `fullmag_fdm.lib`
+lub MinGW `libfullmag_fdm.dll.a`. Brak któregokolwiek pliku kończy konfigurację
+błędem. Katalog nazwany jak biblioteka nie jest akceptowany. Linux zachowuje
+preferencję `.so`, następnie `.so.0`. Oba build scripts Cargo śledzą zmianę
+modułu przez `rerun-if-changed`.
+
+`scripts/test_native_external_fdm_import.py`: 12 PASS. CMake wykonuje
+konfigurację `LANGUAGES NONE`, bez kompilacji/linkowania i bez wykrywania
+kompilatora. Pliki bibliotek są jawnie fiksturami: dowód obejmuje rozdzielenie
+właściwości imported target i odrzucenie niekompletnych/niewłaściwych ścieżek,
+nie zgodność binarną. Poprzedni rzeczywisty blok CMake odrzuca obie poprawne
+pary fikstur Windows. Ścieżki ze spacjami są objęte kontrolą.
+
+Runtime staging, dependency inventory, actual link i natywny launch pozostają
+NOT VERIFIED. Ten moduł nie przełącza CPU/GPU, nie uruchamia solvera ani nie
+wprowadza fallbacku. P8-C nadal otwarte.

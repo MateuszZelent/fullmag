@@ -39,20 +39,8 @@ if(NOT EXISTS "${FULLMAG_BACKENDS_ROOT}/fem/CMakeLists.txt")
 endif()
 
 if(FULLMAG_EXTERNAL_FDM_LIB_DIR)
-    if(EXISTS "${FULLMAG_EXTERNAL_FDM_LIB_DIR}/libfullmag_fdm.so")
-        set(FULLMAG_EXTERNAL_FDM_LIB "${FULLMAG_EXTERNAL_FDM_LIB_DIR}/libfullmag_fdm.so")
-    elseif(EXISTS "${FULLMAG_EXTERNAL_FDM_LIB_DIR}/libfullmag_fdm.so.0")
-        set(FULLMAG_EXTERNAL_FDM_LIB "${FULLMAG_EXTERNAL_FDM_LIB_DIR}/libfullmag_fdm.so.0")
-    else()
-        message(FATAL_ERROR "FULLMAG_EXTERNAL_FDM_LIB_DIR does not contain libfullmag_fdm.so or libfullmag_fdm.so.0")
-    endif()
-
-    add_library(fullmag_fdm SHARED IMPORTED GLOBAL)
-    set_target_properties(fullmag_fdm PROPERTIES
-        IMPORTED_LOCATION "${FULLMAG_EXTERNAL_FDM_LIB}"
-        IMPORTED_NO_SONAME FALSE
-        INTERFACE_INCLUDE_DIRECTORIES "${CMAKE_SOURCE_DIR}/include"
-    )
+    include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/ImportFullmagFdm.cmake")
+    fullmag_import_external_fdm("${FULLMAG_EXTERNAL_FDM_LIB_DIR}" "${CMAKE_SOURCE_DIR}/include")
 else()
     add_subdirectory("${FULLMAG_BACKENDS_ROOT}/fdm" "${CMAKE_BINARY_DIR}/backends/fdm")
 endif()
