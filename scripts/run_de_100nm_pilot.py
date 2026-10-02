@@ -544,6 +544,8 @@ def _enable_ui_compose(command, output, web_root=None, host_port=UI_API_PORT, *,
         "services:\n"
         "  fem-modal-cpu:\n"
         f"    network_mode: {network_mode}\n"
+        "    tmpfs:\n"
+        f"      - {UI_WORKSPACE_ROOT}:rw,nosuid,nodev,size=1g\n"
         "    volumes: !reset []\n",
         encoding="utf-8",
         newline="\n",
@@ -557,9 +559,7 @@ def _enable_ui_compose(command, output, web_root=None, host_port=UI_API_PORT, *,
     service_index = timeout_index - 1
     if command[service_index] != "fem-modal-cpu":
         raise managed.BenchmarkError("managed Compose command service boundary changed")
-    extras = [
-        "--tmpfs", f"{UI_WORKSPACE_ROOT}:rw,nosuid,nodev,size=1g",
-    ]
+    extras = []
     if web_root is not None:
         extras.extend([
             "--publish", f"127.0.0.1:{host_port}:{UI_API_PORT}",

@@ -7,7 +7,17 @@ import unittest
 from unittest.mock import patch
 import json
 import zipfile
+import yaml
 import run_de_100nm_pilot as pilot
+
+
+class _ComposeOverrideLoader(yaml.SafeLoader):
+    pass
+
+
+_ComposeOverrideLoader.add_constructor(
+    "!reset", lambda loader, node: loader.construct_sequence(node, deep=True)
+)
 
 
 def _write_fms_fixture(
@@ -420,11 +430,20 @@ class PilotTests(unittest.TestCase):
                 ui_host_port=18181,
             )
             shell = command[-1]
+            override = (output / "compose.benchmark.override.yaml").read_text()
+            document = yaml.load(override, Loader=_ComposeOverrideLoader)
+            service = document["services"]["fem-modal-cpu"]
             self.assertIn("--publish 127.0.0.1:18181:8081", " ".join(command))
             self.assertIn(
-                "--tmpfs /workspace/fullmag-ui-workspace:rw,nosuid,nodev,size=1g",
-                " ".join(command),
+                "      - /workspace/fullmag-ui-workspace:rw,nosuid,nodev,size=1g",
+                override,
             )
+            self.assertEqual(
+                service["tmpfs"],
+                ["/workspace/fullmag-ui-workspace:rw,nosuid,nodev,size=1g"],
+            )
+            self.assertEqual(service["volumes"], [])
+            self.assertNotIn("--tmpfs", " ".join(command))
             self.assertIn("FULLMAG_REPO_ROOT=/workspace/fullmag-ui-workspace", " ".join(command))
             self.assertIn("FULLMAG_STATE_ROOT=/workspace/fullmag-ui-workspace/.fullmag", " ".join(command))
             self.assertIn("FULLMAG_SKIP_CONTROL_ROOM=1", shell)
@@ -574,7 +593,20 @@ class PilotTests(unittest.TestCase):
             )
             shell = command[-1]
             command_text = " ".join(command)
-            self.assertIn("network_mode: none", (output / "compose.benchmark.override.yaml").read_text())
+            override = (output / "compose.benchmark.override.yaml").read_text()
+            document = yaml.load(override, Loader=_ComposeOverrideLoader)
+            service = document["services"]["fem-modal-cpu"]
+            self.assertIn("network_mode: none", override)
+            self.assertIn("tmpfs:", override)
+            self.assertIn(
+                f"      - {pilot.UI_WORKSPACE_ROOT}:rw,nosuid,nodev,size=1g",
+                override,
+            )
+            self.assertEqual(
+                service["tmpfs"],
+                ["/workspace/fullmag-ui-workspace:rw,nosuid,nodev,size=1g"],
+            )
+            self.assertNotIn("--tmpfs", command_text)
             self.assertNotIn("--publish 127.0.0.1", command_text)
             self.assertNotIn("FULLMAG_WEB_STATIC_DIR", shell)
             self.assertNotIn("--headless", shell)
