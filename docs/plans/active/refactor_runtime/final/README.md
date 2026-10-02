@@ -277,3 +277,9 @@ artefaktów. 15 lekkich regresji PowerShell/YAML PASS, scoped review bez
 nowego P0/P1. Enrolment Windows executora, native FEM i pełny install/recovery
 pozostają NOT VERIFIED; procenty nie są awansowane do kwalifikacji produktu.
 Szczegóły w [P8-C](p8/01-windows-native-gaps.md).
+
+Dodano bramkę x64 PE/importów przed MSI: brak CRT/solver/CUDA runtime
+w bundle zatrzymuje pakowanie, graph zależności trafia do manifestów.
+21 regresji PE i 15 storage PASS; real MSVC dumpbin sprawdzono na istniejącym
+Windows notepad.exe (56 importów), nie na buildzie Fullmaga. Runtime ABI,
+native FEM i clean install pozostają NOT VERIFIED; pełny P8-C otwarty.

@@ -29,7 +29,16 @@ DLL runtime trafiają do `bin` obok EXE; packager sprawdza konflikty nazw,
 niepuste pliki i hashe. Native FDM pochodzi z bieżącego profilu, z katalogu
 `Release` lub płaskiego katalogu Ninja. Dwa kandydaty są błędem; nie wybiera
 się najnowszego pliku ze starych Cargo build directories. Inventory/hash nie
-jest dowodem kompletności zależności tranzytywnych ani zgodności PE/ABI.
+zastępuje audytu importów ani testu zgodności ABI.
+
+Przed tworzeniem MSI `verify_pe_dependencies.py` sprawdza AMD64/PE32+ oraz
+zwykłe i opóźnione importy każdej EXE/DLL w `bin`, przez MSVC dumpbin.
+Biblioteki aplikacji, CRT i CUDA runtime muszą być w bundle; dopuszczone są
+jawne komponenty Windows/API sets oraz NVIDIA driver dla wariantu CUDA.
+Graph i hashe trafiają do manifestów. Brakujący import kończy pakowanie
+błędem. Bramka nie wykonuje obrazów, nie sprawdza symboli/ABI ani dynamicznych
+LoadLibrary, Python extensions, zewnętrznego Node/Python czy dostępności
+komponentów na minimalnej wersji Windows; te punkty wymagają runtime smoke.
 
 ## CI bez publikacji wydania
 

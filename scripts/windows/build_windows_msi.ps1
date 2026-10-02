@@ -53,7 +53,7 @@ function Import-VsEnvironment {
     Write-Warning "vswhere.exe not found - assuming MSVC tools are already on PATH (e.g. inside container)."
     return
   }
-  $vsPath = & $vswhere -products '*' -latest -property installationPath 2>$null
+  $vsPath = & $vswhere -products '*' -latest -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath 2>$null
   if (-not $vsPath) {
     throw "Visual Studio / Build Tools installation not found. Install VS Build Tools with the C++ workload."
   }
@@ -205,10 +205,11 @@ function Write-VersionMetadata {
     source_identity = $sourceIdentity
     build_features = if ($BuildCuda) { @("cuda") } else { @() }
     runtime_dlls = @($runtimeDllInventory)
+    pe_dependency_audit = $peDependencyAudit
     python_runtime = "external-python-3.12-or-newer"
     node_runtime = "external-node-24.18-or-newer"
     built_at_utc = $builtAt
-  } | ConvertTo-Json -Depth 4
+  } | ConvertTo-Json -Depth 10
   Set-Content -Path $Path -Value $payload -Encoding UTF8
 }
 
@@ -272,12 +273,13 @@ function Write-StageManifest {
       "bin/fullmag-bin.exe"
     )
     runtime_dlls = @($runtimeDllInventory)
+    pe_dependency_audit = $peDependencyAudit
     runtimes = $runtimePaths
     share = @(
       "share/version.json"
     )
   }
-  $manifest | ConvertTo-Json -Depth 5 | Set-Content -Path $Path -Encoding UTF8
+  $manifest | ConvertTo-Json -Depth 10 | Set-Content -Path $Path -Encoding UTF8
 }
 
 function Test-StagedLayout {
@@ -405,6 +407,7 @@ if ($BuildCuda) {
 }
 
 Import-VsEnvironment
+Require-Command "dumpbin.exe"
 
 Push-Location $RepoRoot
 try {
@@ -493,6 +496,13 @@ try {
     $runtimeDllSources += $nativeFdmDll.FullName
   }
   $runtimeDllInventory = @(Copy-RuntimeDllSet -SourcePaths $runtimeDllSources -BinDirectory $binDir)
+  $peAuditPath = Join-Path $DistRoot "windows-pe-dependencies.json"
+  $peAuditArgs = @((Join-Path $PSScriptRoot "verify_pe_dependencies.py"), "--bin", $binDir,
+    "--dumpbin", (Get-Command dumpbin.exe).Source, "--output", $peAuditPath)
+  if ($BuildCuda) { $peAuditArgs += "--allow-cuda-driver" }
+  & python @peAuditArgs
+  if ($LASTEXITCODE -ne 0) { throw "Staged PE dependency audit failed with exit code $LASTEXITCODE" }
+  $peDependencyAudit = Get-Content -LiteralPath $peAuditPath -Raw | ConvertFrom-Json
 
   Require-File (Join-Path $RepoRoot "apps\control-room\out\index.html")
   Copy-Tree (Join-Path $RepoRoot "apps\control-room\out") $webDir

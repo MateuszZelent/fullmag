@@ -180,3 +180,45 @@ zależności FEM oraz install/open/upgrade/rollback nadal NOT VERIFIED.
 Historyczny wrapper Docker ma unikalną nazwę i nie kasuje wspólnego kontenera,
 ale jego mapowanie storage nie jest kwalifikowane; nie jest wejściem CI.
 Zmiana źródeł nie zamyka pełnego P8-C. Build Linux 204 pozostaje QUEUED.
+
+## Fragment: bramka importów PE przed MSI
+
+Dotychczasowy hash inventory nie wykrywał brakującej DLL importowanej przez
+EXE lub przez inną bibliotekę. `verify_pe_dependencies.py` sprawdza AMD64 i
+PE32+ oraz wykonuje MSVC `dumpbin /dependents` dla każdej EXE/DLL w `bin`.
+Analizuje zwykłe i delay-load imports; Microsoft opisuje te zależności w
+[dokumentacji importów](https://learn.microsoft.com/en-us/cpp/build/reference/imports-dumpbin?view=msvc-170)
+i [DEPENDENTS](https://learn.microsoft.com/en-us/cpp/build/reference/dependents?view=msvc-170).
+
+Każda zależność musi być w bundle lub należeć do jawnej listy komponentów
+Windows/API sets. Nie akceptujemy CRT, MFEM/hypre ani cudart tylko dlatego,
+że istnieją na maszynie budującej. Nvcuda jest jawną zależnością od sterownika
+wyłącznie wariantu CUDA. Każda staged DLL podlega tej samej analizie, więc
+brak importu tranzytywnego zatrzymuje packaging. Manifesty zachowują graph,
+hashe i ograniczenia dowodu; zwiększono głębokość serializacji JSON.
+
+VS discovery wymaga teraz komponentu C++ x64. Bieżący host bez tego filtra
+wybierał najnowsze VS 18 bez VC Tools, mimo dostępnego MSVC 14.44.35207 w
+VS 2022. To naprawa wyboru narzędzia, nie enrollment kwalifikowanego executora.
+
+Weryfikacja: 21 regresji PE i 15 regresji storage PASS (łącznie 36).
+Regresje obejmują regular/delay imports, odmowę błędnego targetu i dumpbin
+output, brakujące CRT/solver/CUDA runtime, zależność tranzytywną, jawny wyjątek
+sterownika i zachowanie nested graph przez rzeczywistą funkcję PowerShell
+manifestu. Dodatkowa diagnostyka użyła real MSVC dumpbin i istniejącego
+Windows notepad.exe: AMD64 i 56 importów przeanalizowano bez wykonania ani
+kompilacji obrazu. Dodatkowo izolowana kopia istniejącego dumpbin.exe
+została odrzucona z brakującym vcruntime140.dll, mimo CRT obecnego na hoście.
+Nie jest to dowód na artefakcie Fullmaga.
+
+Bramka obejmuje statyczne/delay importy katalogu bin. Dynamiczne LoadLibrary,
+forwarded exports/symbole, ABI/CRT compatibility, Python native extensions,
+zewnętrzny Python/Node i dostępność API sets na minimalnym Windows nadal
+wymagają odpowiednich dowodów. Nie zbudowano MSI, nie kompilowano unit tests,
+nie uruchomiono instalacji ani native FEM. Pełny P8-C pozostaje otwarty.
+
+Scoped review: brak P0/P1. Uwagę P2 o `hashlib.file_digest` wymagającym
+Python 3.11 usunięto przez strumieniowy SHA-256 w blokach 1 MiB, kompatybilny
+z Python 3.10. Test porównuje hash obrazu z niezależnie obliczoną wartością.
+Automatyczne zbieranie całego bundle CRT/CUDA/FEM nadal pozostaje do realizacji;
+bramka wykrywa ten brak zamiast przepuszczać niekompletny pakiet.
