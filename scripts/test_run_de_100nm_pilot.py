@@ -10,6 +10,98 @@ import zipfile
 import run_de_100nm_pilot as pilot
 
 
+def _write_fms_fixture(
+    root, *, session_id="session-1", snapshot_session_id=None,
+    snapshot_run_id="run-1", manifest_run_id=None,
+    archive_dispersion=b"dispersion", local_dispersion=b"dispersion",
+):
+    root = Path(root)
+    case = root / "case"
+    (case / "eigen").mkdir(parents=True, exist_ok=True)
+    (case / "metadata.json").write_bytes(b"metadata")
+    (case / "eigen/dispersion.csv").write_bytes(local_dispersion)
+    archive_path = root / "pilot.fms"
+    manifest_run_id = manifest_run_id or snapshot_run_id
+    snapshot_session_id = snapshot_session_id or session_id
+    run_ref = f"runs/{snapshot_run_id}/run_manifest.json"
+    main_script = b"print('ok')\n"
+    session_manifest = {
+        "format": "fullmag.session.v1",
+        "session_id": session_id,
+        "name": "DE smoke",
+        "profile": "archive",
+        "created_by_version": "0.0.0-test",
+        "created_at": "2026-10-02T00:00:00Z",
+        "saved_at": "2026-10-02T00:00:00Z",
+        "run_refs": [run_ref],
+        "workspace_ref": "manifest/workspace.json",
+        "export_profile_ref": "manifest/export_profile.json",
+    }
+    workspace_manifest = {
+        "workspace_id": "local-live",
+        "problem_name": "DE smoke",
+        "project_ref": "project/",
+        "script_ref": "project/main.py",
+        "script_sha256": hashlib.sha256(main_script).hexdigest(),
+        "ui_state_ref": "project/ui_state.json",
+        "scene_document_ref": "project/scene_document.json",
+        "script_builder_ref": "project/script_builder.json",
+    }
+    export_profile = {
+        "profile": "archive",
+        "include_fields": "all_registered",
+        "include_artifacts": "all",
+        "include_meshes": True,
+        "include_logs": True,
+        "include_source_files": True,
+        "compression": "balanced",
+    }
+    snapshot = {
+        "session": {
+            "session_id": snapshot_session_id,
+            "run_id": snapshot_run_id,
+            "requested_backend": "fem",
+            "precision": "double",
+        },
+        "run": {"run_id": snapshot_run_id},
+    }
+    run_manifest = {
+        "run_id": manifest_run_id,
+        "status": "completed",
+        "backend": "fem",
+        "precision": "double",
+    }
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr("manifest/session.json", json.dumps(session_manifest))
+        archive.writestr("manifest/workspace.json", json.dumps(workspace_manifest))
+        archive.writestr("manifest/export_profile.json", json.dumps(export_profile))
+        archive.writestr("project/main.py", main_script)
+        archive.writestr("project/ui_state.json", b"{}")
+        archive.writestr(
+            "project/current_live_snapshot.json", json.dumps(snapshot)
+        )
+        archive.writestr(run_ref, json.dumps(run_manifest))
+        archive.writestr(
+            f"runs/{snapshot_run_id}/artifacts/metadata.json", b"metadata"
+        )
+        archive.writestr(
+            f"runs/{snapshot_run_id}/artifacts/eigen/dispersion.csv",
+            archive_dispersion,
+        )
+    status = {
+        "session": {"session_id": session_id, "session_epoch": "epoch-1"},
+        "run": {"run_id": snapshot_run_id},
+        "domain": {"cell_count": 12},
+        "resources": {"field_catalog_revision": 3},
+    }
+    return archive_path, case, {
+        "schema": "fullmag.live-export-receipt.v1",
+        "solver_exit_code": 0,
+        "before_status": status,
+        "after_status": json.loads(json.dumps(status)),
+    }
+
+
 class PilotTests(unittest.TestCase):
     def test_requires_pilot_from_build_capsule(self):
         with TemporaryDirectory() as tmp:
@@ -341,7 +433,7 @@ class PilotTests(unittest.TestCase):
             self.assertIn("v2/sessions/current/status", shell)
             self.assertIn("x-fullmag-session-scope", shell)
             self.assertIn("resources.get('field_catalog_revision')", shell)
-            self.assertIn("not isinstance(field_catalog_revision, int)", shell)
+            self.assertIn("type(field_catalog_revision) is not int", shell)
             self.assertIn("if error.code != 404:", shell)
             self.assertNotIn("error.code not in (404, 409)", shell)
             self.assertNotIn("--headless", shell)
@@ -396,21 +488,125 @@ class PilotTests(unittest.TestCase):
                 {"files": manifest["files"][1:]}, "frontend"
             )
 
-    def test_fms_archive_requires_live_project_and_run_artifacts(self):
+    def test_fms_archive_binds_session_run_and_local_artifact_hashes(self):
+        with TemporaryDirectory() as tmp:
+            archive_path, case, receipt = _write_fms_fixture(Path(tmp))
+            report = pilot.validate_fms_archive(
+                archive_path, status_receipt=receipt, case_dir=case,
+                solver_exit_code=0,
+            )
+            self.assertEqual(report["artifact_entry_count"], 2)
+            self.assertEqual(report["session_id"], "session-1")
+            self.assertEqual(report["run_id"], "run-1")
+            self.assertTrue(report["status_scope_stable"])
+
+    def test_fms_archive_requires_the_complete_api_export_layout(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
-            archive_path = root / "pilot.fms"
-            with zipfile.ZipFile(archive_path, "w") as archive:
-                archive.writestr("project/main.py", "print('ok')\n")
-                archive.writestr("project/current_live_snapshot.json", "{}")
-                archive.writestr("runs/run-1/artifacts/eigen/spectrum.v2.json", "{}")
-            report = pilot.validate_fms_archive(archive_path)
-            self.assertEqual(report["artifact_entry_count"], 1)
-            with zipfile.ZipFile(archive_path, "w") as archive:
-                archive.writestr("project/main.py", "print('ok')\n")
-                archive.writestr("project/current_live_snapshot.json", "{}")
-            with self.assertRaisesRegex(pilot.managed.BenchmarkError, "no captured run"):
-                pilot.validate_fms_archive(archive_path)
+            archive_path, case, receipt = _write_fms_fixture(root)
+            stripped = root / "stripped.fms"
+            with zipfile.ZipFile(archive_path) as source, zipfile.ZipFile(stripped, "w") as target:
+                for info in source.infolist():
+                    if info.filename == "manifest/export_profile.json":
+                        continue
+                    target.writestr(info, source.read(info))
+            with self.assertRaisesRegex(pilot.managed.BenchmarkError, "API export manifest"):
+                pilot.validate_fms_archive(
+                    stripped, status_receipt=receipt, case_dir=case,
+                    solver_exit_code=0,
+                )
+
+    def test_fms_archive_rejects_wrong_run_snapshot_and_stale_artifacts(self):
+        cases = (
+            ("wrong run manifest", {"manifest_run_id": "run-2"}, "run manifest"),
+            ("wrong snapshot", {"snapshot_session_id": "old-session"}, "snapshot session_id"),
+            ("stale archive", {"archive_dispersion": b"old", "local_dispersion": b"new"}, "artifact hash"),
+        )
+        for label, options, message in cases:
+            with self.subTest(label=label), TemporaryDirectory() as tmp:
+                archive_path, case, receipt = _write_fms_fixture(Path(tmp), **options)
+                with self.assertRaisesRegex(pilot.managed.BenchmarkError, message):
+                    pilot.validate_fms_archive(
+                        archive_path, status_receipt=receipt, case_dir=case,
+                        solver_exit_code=0,
+                    )
+
+    def test_fms_archive_rejects_scope_change_and_nonzero_solver(self):
+        with TemporaryDirectory() as tmp:
+            archive_path, case, receipt = _write_fms_fixture(Path(tmp))
+            receipt["after_status"]["session"]["session_epoch"] = "epoch-2"
+            with self.assertRaisesRegex(pilot.managed.BenchmarkError, "scope identity"):
+                pilot.validate_fms_archive(
+                    archive_path, status_receipt=receipt, case_dir=case,
+                    solver_exit_code=0,
+                )
+            archive_path, case, receipt = _write_fms_fixture(Path(tmp), session_id="session-2")
+            with self.assertRaisesRegex(pilot.managed.BenchmarkError, "zero solver"):
+                pilot.validate_fms_archive(
+                    archive_path, status_receipt=receipt, case_dir=case,
+                    solver_exit_code=7,
+                )
+
+    def test_status_identity_accepts_serialized_scope_envelope(self):
+        status = {
+            "data": {
+                "session": {
+                    "session_id": "session-1",
+                    "request_scope_epoch": {"value": "scope-1"},
+                },
+                "domain": {"cell_count": 2},
+                "resources": {"field_catalog_revision": 4},
+            }
+        }
+        identity = pilot._status_identity(status)
+        self.assertEqual(identity["scope_field"], "request_scope_epoch")
+        self.assertEqual(identity["scope"], "scope-1")
+
+    def test_capture_session_is_api_only_and_allows_missing_managed_run(self):
+        context = SimpleNamespace(source_tree=Path("/capsule"), runtime_root=Path("/runtime"),
+                                  image_digest="sha256:test",
+                                  job={"job_id": "a" * 32, "profile": "fem-cpu-slepc-runtime-v1"})
+        with TemporaryDirectory() as tmp:
+            output = Path(tmp) / "output"
+            output.mkdir()
+            command = pilot.compose_command(
+                context, output, pilot="de-smoke-two", capture_session=True,
+            )
+            shell = command[-1]
+            command_text = " ".join(command)
+            self.assertIn("network_mode: none", (output / "compose.benchmark.override.yaml").read_text())
+            self.assertNotIn("--publish 127.0.0.1", command_text)
+            self.assertNotIn("FULLMAG_WEB_STATIC_DIR", shell)
+            self.assertNotIn("--headless", shell)
+            self.assertIn("manifest/session.json", shell)
+            self.assertIn('"/workspace/benchmark-output/fullmag-api.log"', shell)
+            self.assertNotIn('"$case_dir/fullmag-api.log"', shell)
+            status = {
+                "session": {"session_id": "session-1", "session_epoch": "epoch-1"},
+                "domain": {"cell_count": 1},
+                "resources": {"field_catalog_revision": 1},
+            }
+            receipt = {
+                "schema": "fullmag.live-export-receipt.v1",
+                "solver_exit_code": 0,
+                "before_status": status,
+                "after_status": json.loads(json.dumps(status)),
+            }
+            receipt["before_status"]["run"] = None
+            receipt["after_status"]["run"] = None
+            archive_path, case, _ = _write_fms_fixture(output)
+            self.assertEqual(
+                pilot.validate_fms_archive(
+                    archive_path, status_receipt=receipt, case_dir=case,
+                    solver_exit_code=0,
+                )["run_id"],
+                "run-1",
+            )
+            with self.assertRaises(pilot.managed.BenchmarkError):
+                pilot.compose_command(
+                    context, output, pilot="de-smoke-two",
+                    ui_web_root=output, capture_session=True,
+                )
 
 
     def test_signed_path_prefilter_diagnostic_keeps_physical_tolerance_unchanged(self):

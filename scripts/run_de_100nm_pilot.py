@@ -7,6 +7,7 @@ airbox convergence are separate scientific gates. No analytic solver is invoked.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import re
@@ -67,32 +68,324 @@ OPENAPI_CONTRACT_PATHS = (
 )
 
 
-def validate_fms_archive(path):
-    """Validate the durable archive emitted by the live API export route."""
+def _unwrap_live_status(value, label="status"):
+    """Return a LiveStatus object from direct or serialized-envelope JSON."""
+
+    candidate = value
+    for _ in range(4):
+        if not isinstance(candidate, dict):
+            break
+        if isinstance(candidate.get("session"), dict):
+            return candidate
+        nested = None
+        for key in ("data", "payload", "result", "status"):
+            possible = candidate.get(key)
+            if isinstance(possible, dict):
+                nested = possible
+                break
+        if nested is None:
+            break
+        candidate = nested
+    raise managed.BenchmarkError(f"{label} did not contain a LiveStatus session")
+
+
+def _identity_string(value, label):
+    if isinstance(value, str) and value:
+        return value
+    if isinstance(value, dict):
+        for key in ("value", "id", "epoch", "token"):
+            if key in value:
+                return _identity_string(value[key], label)
+    raise managed.BenchmarkError(f"{label} is missing a non-empty identity")
+
+
+def _status_identity(value, label="status"):
+    """Extract scope/session/run identity and realized resource proof."""
+
+    status = _unwrap_live_status(value, label)
+    session = status.get("session")
+    session_id = _identity_string(session.get("session_id"), f"{label} session_id")
+    if "request_scope_epoch" in session:
+        scope_field = "request_scope_epoch"
+        scope = _identity_string(session.get(scope_field), f"{label} {scope_field}")
+    else:
+        scope_field = "session_epoch"
+        scope = _identity_string(session.get(scope_field), f"{label} {scope_field}")
+    run = status.get("run")
+    run_id = None
+    if run is not None:
+        if not isinstance(run, dict):
+            raise managed.BenchmarkError(f"{label} run summary is malformed")
+        run_id = _identity_string(run.get("run_id"), f"{label} run_id")
+    domain = status.get("domain")
+    cell_count = domain.get("cell_count") if isinstance(domain, dict) else None
+    if type(cell_count) is not int or cell_count <= 0:
+        raise managed.BenchmarkError(f"{label} has no realized domain cells")
+    resources = status.get("resources")
+    field_catalog_revision = (
+        resources.get("field_catalog_revision") if isinstance(resources, dict) else None
+    )
+    if type(field_catalog_revision) is not int or field_catalog_revision <= 0:
+        raise managed.BenchmarkError(
+            f"{label} has no published field catalog revision"
+        )
+    return {
+        "session_id": session_id,
+        "scope_field": scope_field,
+        "scope": scope,
+        "run_id": run_id,
+        "cell_count": cell_count,
+        "field_catalog_revision": field_catalog_revision,
+    }
+
+
+def _validate_export_status_receipt(receipt, solver_exit_code, label="UI archive"):
+    if not isinstance(receipt, dict):
+        raise managed.BenchmarkError(f"{label} export status receipt is missing")
+    if receipt.get("schema") != "fullmag.live-export-receipt.v1":
+        raise managed.BenchmarkError(f"{label} export status receipt schema is invalid")
+    if receipt.get("solver_exit_code") != 0 or solver_exit_code != 0:
+        raise managed.BenchmarkError(
+            f"{label} requires a zero solver exit code before export"
+        )
+    before = _status_identity(receipt.get("before_status"), f"{label} pre-export status")
+    after = _status_identity(receipt.get("after_status"), f"{label} post-export status")
+    for key in ("session_id", "scope_field", "scope"):
+        if before[key] != after[key]:
+            raise managed.BenchmarkError(
+                f"{label} session scope identity changed across export ({key})"
+            )
+    before_run = before.get("run_id")
+    after_run = after.get("run_id")
+    if before_run is not None and after_run is not None and before_run != after_run:
+        raise managed.BenchmarkError(
+            f"{label} run identity changed across export"
+        )
+    return {"before": before, "after": after,
+            "run_identity_partial": (before_run is None) != (after_run is None)}
+
+
+def _zip_json(archive, name, label):
+    try:
+        value = json.loads(archive.read(name).decode("utf-8"))
+    except (KeyError, UnicodeDecodeError, ValueError, TypeError) as error:
+        raise managed.BenchmarkError(f"{label} is missing or invalid JSON") from error
+    if not isinstance(value, dict):
+        raise managed.BenchmarkError(f"{label} must be a JSON object")
+    return value
+
+
+def _local_artifact_hashes(case_dir, artifact_prefix):
+    case_dir = Path(case_dir)
+    if not case_dir.is_dir():
+        raise managed.BenchmarkError("UI archive artifact source directory is missing")
+    expected = {}
+    for candidate in case_dir.rglob("*"):
+        if candidate.is_symlink():
+            raise managed.BenchmarkError(
+                f"UI archive artifact source contains a symbolic link: {candidate}"
+            )
+        if not candidate.is_file():
+            continue
+        relative = candidate.relative_to(case_dir).as_posix()
+        expected[artifact_prefix + relative] = hashlib.sha256(candidate.read_bytes()).hexdigest()
+    if not expected:
+        raise managed.BenchmarkError("UI archive artifact source is empty")
+    for required in ("metadata.json", "eigen/dispersion.csv"):
+        if artifact_prefix + required not in expected:
+            raise managed.BenchmarkError(
+                f"UI archive artifact source is missing {required}"
+            )
+    return expected
+
+
+def validate_fms_archive(path, *, status_receipt=None, case_dir=None, solver_exit_code=0):
+    """Validate an API-exported FMS archive and bind it to this pilot output."""
 
     path = Path(path)
     if not path.is_file() or path.stat().st_size == 0:
         raise managed.BenchmarkError("UI archive is missing or empty")
     try:
         with zipfile.ZipFile(path) as archive:
+            infos = archive.infolist()
+            names = [info.filename for info in infos]
+            if len(names) != len(set(names)):
+                raise managed.BenchmarkError("UI archive contains duplicate members")
             if archive.testzip() is not None:
                 raise managed.BenchmarkError("UI archive contains a corrupt member")
-            names = set(archive.namelist())
+            required = {
+                "manifest/session.json",
+                "manifest/workspace.json",
+                "manifest/export_profile.json",
+                "project/main.py",
+                "project/ui_state.json",
+                "project/current_live_snapshot.json",
+            }
+            if not required.issubset(names):
+                raise managed.BenchmarkError(
+                    "UI archive is missing an API export manifest or live project document"
+                )
+            session_manifest = _zip_json(
+                archive, "manifest/session.json", "manifest/session.json"
+            )
+            workspace_manifest = _zip_json(
+                archive, "manifest/workspace.json", "manifest/workspace.json"
+            )
+            export_profile = _zip_json(
+                archive, "manifest/export_profile.json", "manifest/export_profile.json"
+            )
+            snapshot = _zip_json(
+                archive, "project/current_live_snapshot.json",
+                "project/current_live_snapshot.json",
+            )
+            if session_manifest.get("format") != "fullmag.session.v1":
+                raise managed.BenchmarkError("UI archive session manifest format is invalid")
+            if session_manifest.get("profile") != "archive":
+                raise managed.BenchmarkError("UI archive was not exported with archive profile")
+            if session_manifest.get("workspace_ref") != "manifest/workspace.json":
+                raise managed.BenchmarkError(
+                    "UI archive session manifest has the wrong workspace reference"
+                )
+            if session_manifest.get("export_profile_ref") != "manifest/export_profile.json":
+                raise managed.BenchmarkError(
+                    "UI archive session manifest has the wrong export profile reference"
+                )
+            main_script = archive.read("project/main.py")
+            if workspace_manifest.get("script_ref") != "project/main.py":
+                raise managed.BenchmarkError(
+                    "UI archive workspace manifest has the wrong script reference"
+                )
+            if workspace_manifest.get("script_sha256") != hashlib.sha256(main_script).hexdigest():
+                raise managed.BenchmarkError(
+                    "UI archive workspace manifest script hash does not match project/main.py"
+                )
+            if workspace_manifest.get("ui_state_ref") != "project/ui_state.json":
+                raise managed.BenchmarkError(
+                    "UI archive workspace manifest has the wrong UI state reference"
+                )
+            if export_profile.get("profile") != "archive":
+                raise managed.BenchmarkError(
+                    "UI archive export profile does not declare archive"
+                )
+            if export_profile.get("include_artifacts") != "all":
+                raise managed.BenchmarkError(
+                    "UI archive export profile does not include all artifacts"
+                )
+            session_id = _identity_string(
+                session_manifest.get("session_id"), "archive session_id"
+            )
+            snapshot_session = snapshot.get("session")
+            if not isinstance(snapshot_session, dict):
+                raise managed.BenchmarkError("UI archive snapshot has no session manifest")
+            snapshot_session_id = _identity_string(
+                snapshot_session.get("session_id"), "snapshot session_id"
+            )
+            if snapshot_session_id != session_id:
+                raise managed.BenchmarkError(
+                    "UI archive snapshot session_id does not match manifest/session.json"
+                )
+            snapshot_run_id = _identity_string(
+                snapshot_session.get("run_id"), "snapshot run_id"
+            )
+            snapshot_run = snapshot.get("run")
+            if isinstance(snapshot_run, dict) and snapshot_run.get("run_id") != snapshot_run_id:
+                raise managed.BenchmarkError(
+                    "UI archive snapshot run_id does not match its run summary"
+                )
+            run_ref = f"runs/{snapshot_run_id}/run_manifest.json"
+            run_refs = session_manifest.get("run_refs")
+            if not isinstance(run_refs, list) or run_ref not in run_refs:
+                raise managed.BenchmarkError(
+                    "UI archive session manifest does not declare the live run"
+                )
+            if run_ref not in names:
+                raise managed.BenchmarkError("UI archive is missing the live run manifest")
+            run_manifest = _zip_json(archive, run_ref, run_ref)
+            if run_manifest.get("run_id") != snapshot_run_id:
+                raise managed.BenchmarkError(
+                    "UI archive run manifest does not match the live run"
+                )
+            if run_manifest.get("status") != "completed":
+                raise managed.BenchmarkError("UI archive run manifest is not completed")
+            for snapshot_key, manifest_key in (
+                ("requested_backend", "backend"), ("precision", "precision")
+            ):
+                expected = snapshot_session.get(snapshot_key)
+                actual = run_manifest.get(manifest_key)
+                if isinstance(expected, str) and expected and actual != expected:
+                    raise managed.BenchmarkError(
+                        f"UI archive run manifest {manifest_key} does not match the snapshot"
+                    )
+            artifact_prefix = f"runs/{snapshot_run_id}/artifacts/"
+            artifact_infos = [
+                info for info in infos
+                if info.filename.startswith(artifact_prefix) and not info.is_dir()
+            ]
+            if not artifact_infos:
+                raise managed.BenchmarkError("UI archive contains no captured run artifacts")
+            other_artifacts = [
+                info.filename for info in infos
+                if info.filename.startswith("runs/")
+                and "/artifacts/" in info.filename
+                and not info.filename.startswith(artifact_prefix)
+            ]
+            if other_artifacts:
+                raise managed.BenchmarkError(
+                    "UI archive contains artifacts from an unrelated run"
+                )
+            local_hashes = (
+                _local_artifact_hashes(case_dir, artifact_prefix)
+                if case_dir is not None else None
+            )
+            archive_hashes = {
+                info.filename: hashlib.sha256(archive.read(info)).hexdigest()
+                for info in artifact_infos
+            }
+            if local_hashes is not None:
+                if set(archive_hashes) != set(local_hashes):
+                    missing = sorted(set(local_hashes) - set(archive_hashes))
+                    extra = sorted(set(archive_hashes) - set(local_hashes))
+                    detail = missing[0] if missing else extra[0]
+                    raise managed.BenchmarkError(
+                        f"UI archive artifacts do not exactly match local case: {detail}"
+                    )
+                for name, expected_hash in local_hashes.items():
+                    if archive_hashes[name] != expected_hash:
+                        raise managed.BenchmarkError(
+                            f"UI archive artifact hash does not match local case: {name}"
+                        )
+            status_report = None
+            if status_receipt is not None:
+                status_report = _validate_export_status_receipt(
+                    status_receipt, solver_exit_code
+                )
+                for identity in (status_report["before"], status_report["after"]):
+                    if identity["session_id"] != session_id:
+                        raise managed.BenchmarkError(
+                            "UI archive session_id does not match the API status identity"
+                        )
+                    if identity.get("run_id") is not None and identity["run_id"] != snapshot_run_id:
+                        raise managed.BenchmarkError(
+                            "UI archive run_id does not match the API status identity"
+                        )
+            elif solver_exit_code != 0:
+                raise managed.BenchmarkError(
+                    "UI archive requires a zero solver exit code before export"
+                )
+    except managed.BenchmarkError:
+        raise
     except (OSError, zipfile.BadZipFile) as error:
         raise managed.BenchmarkError("UI archive is not a valid .fms archive") from error
-    required = {"project/main.py", "project/current_live_snapshot.json"}
-    if not required.issubset(names):
-        raise managed.BenchmarkError("UI archive is missing the live project snapshot")
-    artifact_entries = sorted(
-        name for name in names if name.startswith("runs/") and "/artifacts/" in name
-    )
-    if not artifact_entries:
-        raise managed.BenchmarkError("UI archive contains no captured run artifacts")
     return {
         "path": path.name,
         "size_bytes": path.stat().st_size,
         "entry_count": len(names),
-        "artifact_entry_count": len(artifact_entries),
+        "artifact_entry_count": len(artifact_infos),
+        "session_id": session_id,
+        "run_id": snapshot_run_id,
+        "artifact_sha256": archive_hashes,
+        "status_scope_stable": bool(status_report is not None),
+        "solver_exit_code": solver_exit_code,
     }
 
 
@@ -228,24 +521,29 @@ def _replace_compose_env(command, key, value):
     raise managed.BenchmarkError(f"managed Compose command is missing {key}")
 
 
-def _enable_ui_compose(command, output, web_root, host_port):
+def _enable_ui_compose(command, output, web_root=None, host_port=UI_API_PORT, *, capture_session=False):
     output = Path(output)
-    web_root = Path(web_root)
-    if not web_root.is_dir() or not (web_root / "index.html").is_file():
-        raise managed.BenchmarkError("--with-ui requires an attested web root containing index.html")
-    if isinstance(host_port, bool) or not isinstance(host_port, int) or not 1 <= host_port <= 65535:
-        raise managed.BenchmarkError("UI host port must be an integer in the range 1-65535")
+    if web_root is not None:
+        web_root = Path(web_root)
+        if not web_root.is_dir() or not (web_root / "index.html").is_file():
+            raise managed.BenchmarkError(
+                "--with-ui requires an attested web root containing index.html"
+            )
+        if isinstance(host_port, bool) or not isinstance(host_port, int) or not 1 <= host_port <= 65535:
+            raise managed.BenchmarkError("UI host port must be an integer in the range 1-65535")
+    elif not capture_session:
+        raise managed.BenchmarkError("live API Compose mode requires --with-ui or --capture-session")
     if not output.is_dir():
-        raise managed.BenchmarkError("UI Compose command requires an existing output directory")
+        raise managed.BenchmarkError("live API Compose command requires an existing output directory")
 
-    # The numerical route is intentionally isolated from Docker's default
-    # bridge.  UI mode opts into a loopback-only publish so the API and the
-    # browser can share one attested container without exposing it externally.
+    # UI mode uses a loopback-only bridge publish. API-only capture has no
+    # network peer and keeps the API on the container loopback interface.
+    network_mode = "bridge" if web_root is not None else "none"
     override_path = output / "compose.benchmark.override.yaml"
     override_path.write_text(
         "services:\n"
         "  fem-modal-cpu:\n"
-        "    network_mode: bridge\n"
+        f"    network_mode: {network_mode}\n"
         "    volumes: !reset []\n",
         encoding="utf-8",
         newline="\n",
@@ -259,16 +557,21 @@ def _enable_ui_compose(command, output, web_root, host_port):
     service_index = timeout_index - 1
     if command[service_index] != "fem-modal-cpu":
         raise managed.BenchmarkError("managed Compose command service boundary changed")
-    command[service_index:service_index] = [
-        "--publish", f"127.0.0.1:{host_port}:{UI_API_PORT}",
+    extras = [
         "--tmpfs", f"{UI_WORKSPACE_ROOT}:rw,nosuid,nodev,size=1g",
-        "-v", f"{web_root.resolve()}:{UI_WEB_ROOT}:ro",
-        "-e", f"FULLMAG_WEB_STATIC_DIR={UI_WEB_ROOT}",
     ]
+    if web_root is not None:
+        extras.extend([
+            "--publish", f"127.0.0.1:{host_port}:{UI_API_PORT}",
+            "-v", f"{web_root.resolve()}:{UI_WEB_ROOT}:ro",
+            "-e", f"FULLMAG_WEB_STATIC_DIR={UI_WEB_ROOT}",
+        ])
+    command[service_index:service_index] = extras
 
 
 def _ui_archive_shell(pilot):
     target = f"/workspace/benchmark-output/{pilot}.fms"
+    receipt_target = f"/workspace/benchmark-output/{pilot}.fms.status.json"
     return [
         "python3 - <<'PY'",
         "import base64",
@@ -286,30 +589,64 @@ def _ui_archive_shell(pilot):
         "    request = urllib.request.Request(url, headers=headers or {})",
         "    with urllib.request.urlopen(request, timeout=60) as response:",
         "        return json.load(response)",
+        "def unwrap_status(value, label):",
+        "    candidate = value",
+        "    for _ in range(4):",
+        "        if not isinstance(candidate, dict):",
+        "            break",
+        "        if isinstance(candidate.get('session'), dict):",
+        "            return candidate",
+        "        nested = None",
+        "        for key in ('data', 'payload', 'result', 'status'):",
+        "            possible = candidate.get(key)",
+        "            if isinstance(possible, dict):",
+        "                nested = possible",
+        "                break",
+        "        if nested is None:",
+        "            break",
+        "        candidate = nested",
+        "    raise RuntimeError(f'{label} did not contain a LiveStatus session')",
+        "def identity(value, label):",
+        "    if isinstance(value, str) and value:",
+        "        return value",
+        "    if isinstance(value, dict):",
+        "        for key in ('value', 'id', 'epoch', 'token'):",
+        "            if key in value:",
+        "                return identity(value[key], label)",
+        "    raise RuntimeError(f'{label} is missing a non-empty identity')",
+        "def inspect_status(value, label):",
+        "    status = unwrap_status(value, label)",
+        "    session = status['session']",
+        "    session_id = identity(session.get('session_id'), f'{label} session_id')",
+        "    scope_field = ('request_scope_epoch' if 'request_scope_epoch' in session",
+        "                   else 'session_epoch')",
+        "    scope = identity(session.get(scope_field), f'{label} {scope_field}')",
+        "    run = status.get('run')",
+        "    run_id = None",
+        "    if run is not None:",
+        "        if not isinstance(run, dict):",
+        "            raise RuntimeError(f'{label} run summary is malformed')",
+        "        run_id = identity(run.get('run_id'), f'{label} run_id')",
+        "    domain = status.get('domain')",
+        "    cell_count = domain.get('cell_count') if isinstance(domain, dict) else None",
+        "    if type(cell_count) is not int or cell_count <= 0:",
+        "        raise RuntimeError(f'{label} has no realized domain cells')",
+        "    resources = status.get('resources')",
+        "    field_catalog_revision = (resources.get('field_catalog_revision')",
+        "                             if isinstance(resources, dict) else None)",
+        "    if type(field_catalog_revision) is not int or field_catalog_revision <= 0:",
+        "        raise RuntimeError(f'{label} has no published field catalog revision')",
+        "    return {'session_id': session_id, 'scope_field': scope_field,",
+        "            'scope': scope, 'run_id': run_id,",
+        "            'cell_count': cell_count,",
+        "            'field_catalog_revision': field_catalog_revision}",
         "last_error = None",
-        "scope = None",
         "status = None",
+        "before_identity = None",
         "for _ in range(60):",
         "    try:",
         "        status = get_json(status_url)",
-        "        session = status.get('session') if isinstance(status, dict) else None",
-        "        if not isinstance(session, dict):",
-        "            raise RuntimeError('status did not return a session summary')",
-        "        scope = session.get('request_scope_epoch') or session.get('session_epoch')",
-        "        if not isinstance(scope, str) or not scope:",
-        "            raise RuntimeError('status did not return request_scope_epoch/session_epoch')",
-        "        run = status.get('run')",
-        "        domain = status.get('domain')",
-        "        resources = status.get('resources')",
-        "        if not isinstance(run, dict):",
-        "            raise RuntimeError('status has no active completed run summary')",
-        "        cell_count = domain.get('cell_count') if isinstance(domain, dict) else None",
-        "        if isinstance(cell_count, bool) or not isinstance(cell_count, int) or cell_count <= 0:",
-        "            raise RuntimeError('status has no realized domain cells')",
-        "        field_catalog_revision = resources.get('field_catalog_revision') if isinstance(resources, dict) else None",
-        "        if (isinstance(field_catalog_revision, bool) or",
-        "                not isinstance(field_catalog_revision, int) or field_catalog_revision <= 0):",
-        "            raise RuntimeError('status has no published field catalog revision')",
+        "        before_identity = inspect_status(status, 'pre-export status')",
         "        break",
         "    except urllib.error.HTTPError as error:",
         "        detail = error.read().decode('utf-8', 'replace')[-1000:]",
@@ -322,6 +659,7 @@ def _ui_archive_shell(pilot):
         "        time.sleep(1)",
         "else:",
         "    raise RuntimeError(f'session status did not publish a usable run: {last_error}')",
+        "scope = before_identity['scope']",
         "body = json.dumps({'profile': 'archive'}).encode('utf-8')",
         "headers = {'Content-Type': 'application/json', 'x-fullmag-session-scope': scope}",
         "request = urllib.request.Request(export_url, data=body, method='POST', headers=headers)",
@@ -339,6 +677,19 @@ def _ui_archive_shell(pilot):
         "        time.sleep(1)",
         "else:",
         "    raise RuntimeError(f'archive export did not observe a live session: {last_error}')",
+        "try:",
+        "    after_status = get_json(status_url)",
+        "    after_identity = inspect_status(after_status, 'post-export status')",
+        "except urllib.error.HTTPError as error:",
+        "    detail = error.read().decode('utf-8', 'replace')[-1000:]",
+        "    raise RuntimeError(f'post-export session status failed ({error.code}): {detail}')",
+        "for key in ('session_id', 'scope_field', 'scope'):",
+        "    if before_identity[key] != after_identity[key]:",
+        "        raise RuntimeError(f'session scope identity changed across export ({key})')",
+        "if (before_identity.get('run_id') is not None and",
+        "        after_identity.get('run_id') is not None and",
+        "        before_identity['run_id'] != after_identity['run_id']):",
+        "    raise RuntimeError('run identity changed across export')",
         "encoded = payload.get('fms_base64') if isinstance(payload, dict) else None",
         "if not isinstance(encoded, str) or not encoded:",
         "    raise RuntimeError('archive export did not return fms_base64')",
@@ -350,31 +701,42 @@ def _ui_archive_shell(pilot):
         "        names = set(archive.namelist())",
         "except (ValueError, zipfile.BadZipFile) as error:",
         "    raise RuntimeError(f'archive export is not a valid .fms archive: {error}')",
-        "required = {'project/main.py', 'project/current_live_snapshot.json'}",
+        "required = {'manifest/session.json', 'manifest/workspace.json',",
+        "            'manifest/export_profile.json', 'project/main.py',",
+        "            'project/ui_state.json', 'project/current_live_snapshot.json'}",
         "if not required.issubset(names):",
-        "    raise RuntimeError('archive export is missing the live project snapshot')",
+        "    raise RuntimeError('archive export is missing an API export manifest or live project document')",
         "if not any(name.startswith('runs/') and '/artifacts/' in name for name in names):",
         "    raise RuntimeError('archive export contains no captured run artifacts')",
         f"target = {target!r}",
-        "fd, temporary = tempfile.mkstemp(prefix='.fms-export-', dir=os.path.dirname(target))",
-        "try:",
-        "    with os.fdopen(fd, 'wb') as handle:",
-        "        handle.write(raw)",
-        "        handle.flush()",
-        "        os.fsync(handle.fileno())",
-        "    os.replace(temporary, target)",
-        "except BaseException:",
+        "def atomic_write(path, data, prefix):",
+        "    fd, temporary = tempfile.mkstemp(prefix=prefix, dir=os.path.dirname(path))",
         "    try:",
-        "        os.unlink(temporary)",
-        "    except FileNotFoundError:",
-        "        pass",
-        "    raise",
+        "        with os.fdopen(fd, 'wb') as handle:",
+        "            handle.write(data)",
+        "            handle.flush()",
+        "            os.fsync(handle.fileno())",
+        "        os.replace(temporary, path)",
+        "    except BaseException:",
+        "        try:",
+        "            os.unlink(temporary)",
+        "        except FileNotFoundError:",
+        "            pass",
+        "        raise",
+        "atomic_write(target, raw, '.fms-export-')",
+        f"receipt_target = {receipt_target!r}",
+        "receipt = json.dumps({'schema': 'fullmag.live-export-receipt.v1',",
+        "                     'solver_exit_code': 0,",
+        "                     'before_status': status,",
+        "                     'after_status': after_status},",
+        "                    separators=(',', ':')).encode('utf-8')",
+        "atomic_write(receipt_target, receipt, '.fms-status-')",
         "print(json.dumps({'archive_path': target, 'size_bytes': len(raw), 'entry_count': len(names)}))",
         "PY",
     ]
 
 
-def compose_command(context, output, timeout_seconds=managed.DEFAULT_TIMEOUT_SECONDS, *, pilot="de100", external_model=False, dense_oracle=False, solver_rtol=None, eps_prefilter=None, shifted_ksp_rtol=None, gmres_restart=None, mesh_level=None, thickness_layers=None, nearest_target_frequency_ghz=None, spectral_target=None, frequency_min_ghz=None, frequency_max_ghz=None, ui_web_root=None, ui_host_port=UI_API_PORT):
+def compose_command(context, output, timeout_seconds=managed.DEFAULT_TIMEOUT_SECONDS, *, pilot="de100", external_model=False, dense_oracle=False, solver_rtol=None, eps_prefilter=None, shifted_ksp_rtol=None, gmres_restart=None, mesh_level=None, thickness_layers=None, nearest_target_frequency_ghz=None, spectral_target=None, frequency_min_ghz=None, frequency_max_ghz=None, ui_web_root=None, ui_host_port=UI_API_PORT, capture_session=False):
     model = pilot_model(pilot)
     modal_target, target_frequency_hz = _modal_selection(
         pilot, nearest_target_frequency_ghz, spectral_target)
@@ -409,8 +771,14 @@ def compose_command(context, output, timeout_seconds=managed.DEFAULT_TIMEOUT_SEC
         command[command.index("run")+1:command.index("run")+1] = [
             "-v", f"{output / 'model-input.py'}:/workspace/benchmark-model.py:ro"]
     ui_enabled = ui_web_root is not None
-    if ui_enabled:
-        _enable_ui_compose(command, output, ui_web_root, ui_host_port)
+    if ui_enabled and capture_session:
+        raise managed.BenchmarkError("--with-ui and --capture-session are mutually exclusive")
+    live_api_enabled = ui_enabled or capture_session
+    if live_api_enabled:
+        _enable_ui_compose(
+            command, output, ui_web_root, ui_host_port,
+            capture_session=capture_session,
+        )
     shell = [
         "set -euo pipefail",
         "cd /workspace/capsule",
@@ -441,7 +809,7 @@ def compose_command(context, output, timeout_seconds=managed.DEFAULT_TIMEOUT_SEC
         "case_dir=/workspace/benchmark-output/" + pilot,
         'mkdir "$case_dir"',
     ]
-    if ui_enabled:
+    if live_api_enabled:
         shell.extend([
             f"workspace_root={UI_WORKSPACE_ROOT}",
             'test ! -L "$workspace_root"',
@@ -461,13 +829,13 @@ def compose_command(context, output, timeout_seconds=managed.DEFAULT_TIMEOUT_SEC
             'unset FULLMAG_FEATURE_FLAGS_FILE || true',
             'export FULLMAG_SKIP_CONTROL_ROOM=1',
             f"export FULLMAG_API_PORT={UI_API_PORT}",
-            f"export FULLMAG_WEB_STATIC_DIR={UI_WEB_ROOT}",
+            *( [f"export FULLMAG_WEB_STATIC_DIR={UI_WEB_ROOT}"] if ui_enabled else [] ),
             "export FULLMAG_DISABLE_PREVIEW_3D=0",
             "export FULLMAG_DISABLE_CHARTS=0",
             "api_bin=/workspace/.fullmag/local/bin/fullmag-api",
             'test -x "$api_bin"',
             'mkdir -p "$FULLMAG_STATE_ROOT"',
-            '"$api_bin" >"$case_dir/fullmag-api.log" 2>&1 &',
+            '"$api_bin" >"/workspace/benchmark-output/fullmag-api.log" 2>&1 &',
             "api_pid=$!",
             "cleanup_api() { kill \"$api_pid\" 2>/dev/null || true; wait \"$api_pid\" 2>/dev/null || true; }",
             "trap cleanup_api EXIT",
@@ -495,11 +863,11 @@ def compose_command(context, output, timeout_seconds=managed.DEFAULT_TIMEOUT_SEC
         ])
     solver_command = (
         '"$runtime_bin" "$source_script" --backend fem --mode strict --precision double '
-        + ("--headless " if not ui_enabled else "")
+        + ("--headless " if not live_api_enabled else "")
         + '--json --output-dir "$case_dir" >"$case_dir/runtime.log" 2>&1'
     )
     shell.append(solver_command)
-    if ui_enabled:
+    if live_api_enabled:
         shell.extend(_ui_archive_shell(pilot))
     command[-1] = "\n".join(shell)
     return command
@@ -684,7 +1052,7 @@ def validate_thickness_layers_metadata(case, requested):
             "qualification": "NOT VERIFIED"}
 
 
-def execute(context, output, command, model_sha, timeout_seconds=managed.DEFAULT_TIMEOUT_SECONDS, *, pilot="de100", model_identity=None, dense_oracle=False, solver_rtol=None, eps_prefilter=None, shifted_ksp_rtol=None, gmres_restart=None, mesh_level=None, thickness_layers=None, nearest_target_frequency_ghz=None, spectral_target=None, frequency_min_ghz=None, frequency_max_ghz=None, ui_enabled=False, ui_frontend=None, ui_host_port=UI_API_PORT):
+def execute(context, output, command, model_sha, timeout_seconds=managed.DEFAULT_TIMEOUT_SECONDS, *, pilot="de100", model_identity=None, dense_oracle=False, solver_rtol=None, eps_prefilter=None, shifted_ksp_rtol=None, gmres_restart=None, mesh_level=None, thickness_layers=None, nearest_target_frequency_ghz=None, spectral_target=None, frequency_min_ghz=None, frequency_max_ghz=None, ui_enabled=False, capture_session=False, ui_frontend=None, ui_host_port=UI_API_PORT):
     model = pilot_model(pilot)
     modal_target, target_frequency_hz = _modal_selection(
         pilot, nearest_target_frequency_ghz, spectral_target)
@@ -713,14 +1081,20 @@ def execute(context, output, command, model_sha, timeout_seconds=managed.DEFAULT
         if frequency_window is not None else None
     )
     request["source"]["public_model_files"] = [*managed.PUBLIC_MODEL_FILES] if model_identity else [model, *managed.PUBLIC_MODEL_FILES]
-    ui_metadata = {"enabled": bool(ui_enabled)}
-    if ui_enabled:
+    if ui_enabled and capture_session:
+        raise managed.BenchmarkError("--with-ui and --capture-session are mutually exclusive")
+    live_api_enabled = bool(ui_enabled or capture_session)
+    ui_metadata = {
+        "enabled": bool(ui_enabled),
+        "session_capture": bool(capture_session),
+    }
+    if live_api_enabled:
         ui_metadata.update({
-            "host_port": ui_host_port,
             "archive_path": f"{pilot}.fms",
             "archive_profile": "archive",
-            "frontend": ui_frontend,
         })
+    if ui_enabled:
+        ui_metadata.update({"host_port": ui_host_port, "frontend": ui_frontend})
     request["ui"] = ui_metadata
     if model_identity:
         request["model_source"] = model_identity
@@ -769,8 +1143,20 @@ def execute(context, output, command, model_sha, timeout_seconds=managed.DEFAULT
                 artifacts["mesh_level_resolution"] = validate_mesh_level_metadata(output / pilot, mesh_level)
             if thickness_layers is not None:
                 artifacts["thickness_layers_resolution"] = validate_thickness_layers_metadata(output / pilot, thickness_layers)
-            if ui_enabled:
-                result["ui"]["archive"] = validate_fms_archive(output / f"{pilot}.fms")
+            if live_api_enabled:
+                receipt_path = output / f"{pilot}.fms.status.json"
+                try:
+                    status_receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+                except (OSError, ValueError) as error:
+                    raise managed.BenchmarkError(
+                        "live API export status receipt is missing or invalid"
+                    ) from error
+                result["ui"]["archive"] = validate_fms_archive(
+                    output / f"{pilot}.fms",
+                    status_receipt=status_receipt,
+                    case_dir=output / pilot,
+                    solver_exit_code=completed.returncode,
+                )
             result.update(status="completed_unqualified", artifacts=artifacts)
     except subprocess.TimeoutExpired:
         result["error"] = "host Compose watchdog expired after the container deadline and grace period"
@@ -995,6 +1381,10 @@ def main(argv=None):
         help="start the matched API/web bundle and export a durable .fms archive",
     )
     parser.add_argument(
+        "--capture-session", action="store_true",
+        help="publish the live API in an isolated container and export .fms without a web bundle",
+    )
+    parser.add_argument(
         "--web-build-root",
         help="attested managed web build root required by --with-ui",
     )
@@ -1036,12 +1426,14 @@ def main(argv=None):
     )
     args = parser.parse_args(argv)
     try:
+        if args.with_ui and args.capture_session:
+            raise ValueError("--with-ui and --capture-session are mutually exclusive")
         if args.with_ui and not args.web_build_root:
             raise ValueError("--with-ui requires --web-build-root")
         if args.web_build_root and not args.with_ui:
             raise ValueError("--web-build-root requires --with-ui")
-        if args.with_ui and args.dry_run:
-            raise ValueError("--with-ui cannot be combined with --dry-run")
+        if (args.with_ui or args.capture_session) and args.dry_run:
+            raise ValueError("live API capture cannot be combined with --dry-run")
         if args.with_ui:
             if isinstance(args.ui_port, bool) or not 1 <= args.ui_port <= 65535:
                 raise ValueError("--ui-port must be in the range 1-65535")
@@ -1099,6 +1491,7 @@ def main(argv=None):
                 frequency_min_ghz=args.frequency_min_ghz,
                 frequency_max_ghz=args.frequency_max_ghz,
                 ui_web_root=ui_web_root, ui_host_port=args.ui_port,
+                capture_session=args.capture_session,
             )
             return execute(
                 context, output, command, model_sha, pilot=args.pilot,
@@ -1111,7 +1504,8 @@ def main(argv=None):
                 spectral_target=args.spectral_target,
                 frequency_min_ghz=args.frequency_min_ghz,
                 frequency_max_ghz=args.frequency_max_ghz,
-                ui_enabled=args.with_ui, ui_frontend=ui_frontend,
+                ui_enabled=args.with_ui, capture_session=args.capture_session,
+                ui_frontend=ui_frontend,
                 ui_host_port=args.ui_port,
             )
     except (managed.BenchmarkError, managed.fullmag_storage.StorageError, OSError, ValueError, sqlite3.Error, subprocess.SubprocessError, SyntaxError) as error:
