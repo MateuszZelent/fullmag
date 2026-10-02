@@ -53,7 +53,10 @@ export function NewProblemDialog({
         precision: "double",
         replace_current: hasActiveSession,
       });
-      const revision = response.revisions.state_version;
+      // state_version is scoped to the created session and resets when a
+      // current session is replaced. Use the new identity for the cross-
+      // session invalidation so a reset to zero cannot be treated as stale.
+      const revision = `session:${response.session_id}`;
       kernel.resources.invalidate(SESSIONS_PATH, revision);
       kernel.resources.invalidate(SESSION_STATUS_RESOURCE_KEY, revision);
       kernel.resources.invalidatePrefix(SESSION_CURRENT_PATH, revision);
