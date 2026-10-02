@@ -110,3 +110,7 @@ Minimum expected structure:
   - plan for the field-complete resource-first endpoint reference, legacy-to-resource mapping, and final control-room cutover backlog
 - `active/v2-api-cutover-and-v1-removal-plan-2026-04-25.mdx`
   - plan for generated v2 frontend transport, v2-native backend handlers, and public v1 API removal
+- `active/fem-fredkin-koehler-cpu-gpu-general-plan-2026-09-01.md`
+  - high-level correctness, validation, CPU scaling, and strict-GPU rollout plan for body-only Fredkin-Koehler demagnetization
+- `active/fem-fredkin-koehler-cpu-gpu-implementation-playbook-2026-09-01.md`
+  - test-first implementation and refactoring playbook subordinate to the Fredkin-Koehler general plan
