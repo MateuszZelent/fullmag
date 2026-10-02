@@ -278,3 +278,42 @@ kandydatami jawnego SDK; nie wygrywa przez samą obecność w bin.
 Ponowne scoped review potwierdziło zamknięcie wskazanych P1/P2 bez nowych
 P0/P1. Po poprawkach 62 regresje PASS; ponowna diagnostyka MSVC SDK
 plan/copy/audit również PASS (jedna CRT DLL, dwa obrazy, bez wykonania).
+
+## Fragment: jawny provider MFEM Windows
+
+`native/cmake/FindFullmagMfem.cmake` zastępuje ambient discovery wyłącznie
+na Windows. Wymaga targetu x64 MSVC, jawnego `CMAKE_BUILD_TYPE` i istniejącego
+`FULLMAG_FEM_DEPENDENCY_PREFIX`. Cargo przekazuje prefix również jako pusty
+argument po usunięciu zmiennej, aby nie odziedziczyć poprzedniego SDK z cache.
+Prefix jest wejściem bibliotek, nie alternatywnym output/storage root.
+
+W nazwanych lokalizacjach prefixu musi istnieć dokładnie jeden config MFEM.
+Porównanie rozwiązuje ścieżki i aliasy wielkości liter Windows. Stary MFEM_DIR
+jest zastępowany wyborem prefixu. Wcześniej zdefiniowany target lub config
+przekierowany poza wskazany plik kończą konfigurację błędem. Wymagane są jawne boolean exports
+`MFEM_USE_DOUBLE`, `MFEM_USE_SINGLE` i `MFEM_USE_CUDA`, pochodzące z providera,
+bez dziedziczenia claims z caller/cache. Flagę double i CUDA eksportuje
+[upstream config MFEM](https://github.com/mfem/mfem/blob/master/config/cmake/MFEMConfig.cmake.in).
+Double jest wymagane, a wariant CUDA musi odpowiadać build request.
+
+Sprawdzana jest biblioteka dla wybranego profilu, z dopuszczonym NOCONFIG
+lub generic fallback; Debug-only nie spełnia Release. Statyczna `.lib` lub
+para shared `.dll` + import `.lib` musi być niepusta i fizycznie w prefixie.
+Linux zachowuje dotychczasowe find_package. Śledzenie źródeł Cargo i manifest
+managed source identity obejmują nowy moduł CMake.
+
+Weryfikacja: 30 regresji `scripts/test_windows_mfem_provider.py` PASS.
+Rzeczywiste CMake wykonuje tylko LANGUAGES NONE na jawnych fixtures; nie
+kompiluje bibliotek ani unit tests. Pokryto static/shared CPU/GPU, brak
+ambient fallbacku, konflikty configs, stary cache, package redirects,
+brak lub błędne flags, niewłaściwe ścieżki i profile oraz odmowę empty prefix
+po usunięciu konfiguracji. 11 istniejących build policy checks PASS;
+rustfmt i scoped diff check PASS.
+
+Review wykryło i poprawiono P1: stary prefix w CMake cache po usunięciu env,
+oraz P2: brak jawnego build type w direct multi-config invocation. Ponowne
+review nie znalazło nowego P0/P1. Bramka nie dowodzi COFF targetu, ABI/CRT,
+tranzytywnych native dependencies ani prebuilt FULLMAG_FEM_LIB_DIR. Actual
+Windows MFEM/HYPRE/libCEED/modal prefix, build queue/profile/receipt, native
+compile/link/runtime i install/recovery pozostają otwarte. P8-C niezamknięty.
+Build Linux 204 korzysta z wcześniejszego commita; nie sprawdza tego fragmentu.

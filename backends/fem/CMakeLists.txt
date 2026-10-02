@@ -232,7 +232,8 @@ set(FEM_SOURCES
 )
 
 if(FULLMAG_USE_MFEM_STACK)
-    find_package(MFEM CONFIG REQUIRED)
+    include("${CMAKE_SOURCE_DIR}/cmake/FindFullmagMfem.cmake")
+    fullmag_find_mfem()
     if(FULLMAG_FEM_WITH_SLEPC)
         find_package(PETSc REQUIRED)
         find_package(SLEPc REQUIRED)

@@ -51,3 +51,11 @@ właściwy job ID, source digest i profil fem-cpu-release. Log klienta oraz
 stdout workera były jeszcze puste; nie dowodzą wykonania konkretnych etapów
 kompilacji. Nie restartowano ani nie ponowiono próby. Wynik, receipt końcowy
 i wymagane artefakty pozostają NOT VERIFIED.
+
+Kolejna obserwacja tego samego kontenera: log workera potwierdził
+`native-build` / `make install-cli-dev` zakończony exit_code=0,
+duration_ms=804315.857. Rozpoczęto `frontend-dependencies` przez frozen-lockfile
+install Control Room. Job nadal RUNNING. To dowód ukończenia jednej fazy
+kompilacji, nie terminalnego pakietu. Zachowano worker i job ID.
+Źródła są nadal dokładnie wcześniejszym commitem z tabeli; późniejsze poprawki
+packagera MSI i discovery MFEM Windows nie są objęte tym buildem.

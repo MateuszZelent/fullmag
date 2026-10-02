@@ -293,3 +293,15 @@ Pełny natywny FEM, Windows receipt i install/recovery pozostają otwarte.
 Build FEM CPU 204 przeszedł z QUEUED do RUNNING. Potwierdzono żywy worker
 i poprawne job/source/profile argumenty entrypoint. Logi jeszcze puste;
 terminalny receipt i artefakty nadal NOT VERIFIED. Obserwować ten sam job.
+
+Nowy fragment P8-C przypina discovery Windows MFEM do jawnego prefixu x64
+MSVC, konfiguracji i zgodnych double/CUDA exports; Linux discovery zachowano.
+30 configure-only regresji i 11 build policy checks PASS, rustfmt PASS;
+review zamknęło stale-cache i empty-profile defects. Actual Windows ABI,
+native dependencies, kompilacja, runtime i install/recovery nadal otwarte.
+[Raport P8-C](p8/01-windows-native-gaps.md) określa granice dowodu.
+
+Kolejna obserwacja tego samego workera 204: native-build zakończony exit 0
+(około 804 s), rozpoczęto frontend-dependencies. Cały job wciąż RUNNING;
+terminalny receipt i wymagane artefakty pozostają NOT VERIFIED. Jego starsza
+tożsamość źródeł nie obejmuje nowego discovery MFEM Windows.

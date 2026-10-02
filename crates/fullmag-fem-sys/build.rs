@@ -91,6 +91,7 @@ fn main() {
     println!("cargo:rerun-if-changed=../../native/CMakeLists.txt");
     println!("cargo:rerun-if-changed=../../native/cmake/ImportFullmagFdm.cmake");
     println!("cargo:rerun-if-changed=../../native/cmake/RequireFemGpu.cmake");
+    println!("cargo:rerun-if-changed=../../native/cmake/FindFullmagMfem.cmake");
     println!("cargo:rerun-if-changed=../../backends/fem/CMakeLists.txt");
     rerun_if_changed_tree("../../backends/fem/core");
     rerun_if_changed_tree("../../backends/fem/cpu");
@@ -100,6 +101,7 @@ fn main() {
     rerun_if_changed_tree("../../backends/fem/include");
     println!("cargo:rerun-if-env-changed=FULLMAG_FEM_LIB_DIR");
     println!("cargo:rerun-if-env-changed=FULLMAG_USE_MFEM_STACK");
+    println!("cargo:rerun-if-env-changed=FULLMAG_FEM_DEPENDENCY_PREFIX");
     println!("cargo:rerun-if-env-changed=FULLMAG_FEM_REQUIRE_GPU");
     println!("cargo:rerun-if-env-changed=FULLMAG_FEM_ENABLE_CUDA");
     println!("cargo:rerun-if-env-changed=FULLMAG_FEM_WITH_SLEPC");
@@ -178,6 +180,9 @@ fn main() {
             if enable_nvtx { "ON" } else { "OFF" }
         ))
         .arg(format!("-DFULLMAG_FEM_WITH_SLEPC={}", with_slepc));
+    // Clear a previous CMake cache entry when the operator removes the prefix.
+    let prefix = std::env::var("FULLMAG_FEM_DEPENDENCY_PREFIX").unwrap_or_default();
+    configure.arg(format!("-DFULLMAG_FEM_DEPENDENCY_PREFIX={prefix}"));
     if let Ok(value) = std::env::var("FULLMAG_CUDA_ARCHITECTURES") {
         let value = value.trim();
         if !value.is_empty() {

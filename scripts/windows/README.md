@@ -56,6 +56,25 @@ błędem. Bramka nie wykonuje obrazów, nie sprawdza symboli/ABI ani dynamicznyc
 LoadLibrary, Python extensions, zewnętrznego Node/Python czy dostępności
 komponentów na minimalnej wersji Windows; te punkty wymagają runtime smoke.
 
+## Wybór natywnego MFEM
+
+Konfiguracja FEM na Windows wymaga `FULLMAG_FEM_DEPENDENCY_PREFIX` wskazującego
+istniejący prefix wejściowych bibliotek x64 MSVC. Nie jest to nowy katalog
+wyników. Prefix musi zawierać dokładnie jeden `MFEMConfig.cmake` w root,
+`lib/cmake/mfem`, `lib/cmake/MFEM`, `share/mfem` albo `share/cmake/mfem`.
+Konfiguracja z PATH, starego `MFEM_DIR` lub przekierowania CMake nie zastępuje
+tego wyboru. Usunięcie zmiennej w Cargo czyści poprzednią wartość cache.
+
+Provider eksportuje jawne flagi double/single/CUDA; wymagane jest double,
+a CUDA musi odpowiadać żądanemu wariantowi buildu. `CMAKE_BUILD_TYPE` musi być
+jawny. Wybrana niepusta biblioteka `.lib`, albo `.dll` z import library `.lib`,
+musi znajdować się w tym prefixie i mieć konfigurację zgodną z profilem.
+Linux zachowuje istniejące `find_package(MFEM CONFIG REQUIRED)`.
+
+To kontrola konfiguracji i ścieżek. Nie dowodzi architektury COFF, ABI/CRT,
+kompletności HYPRE/libCEED/PETSc/SLEPc ani działania natywnego FEM. Nie
+dostarczono jeszcze kwalifikowanego prefixu Windows ani jego receipts.
+
 ## CI bez publikacji wydania
 
 [Workflow](../../.github/workflows/windows-msi-container.yml) zachowuje nazwę
