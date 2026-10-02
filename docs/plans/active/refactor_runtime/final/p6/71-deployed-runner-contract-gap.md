@@ -38,6 +38,30 @@ Obecność runtime v1 w kodzie entrypointu nie oznacza dopuszczenia go przez
 bieżącą politykę operatora. Nie należy zmieniać allow-listy na podstawie tej
 inwentaryzacji.
 
+## Pochodzenie kodu — dalszy odczyt
+
+Checkout używanego klienta `eigensolve-dispersion-plan-20260912` wskazuje
+`8bb6cb7fc64e481ffd7d8daee9462796edf6a395`. Odczyt statusu nie wykazał
+lokalnych zmian w dwóch porównywanych skryptach. SHA-256 jego executora
+jest identyczny z wdrożonym: `21d82abefe736f3e90829e9f831343c904d8c3650683538c9c7508bd5df2d91c`.
+EntryPoint klienta ma jednak SHA-256
+`ebafba6a095e9523797eef378e6dae8360858fbe7de19ceb671081922d5ff0c6`,
+różny od obrazu. Nie można utożsamiać całego checkoutu klienta z wdrożeniem.
+
+Najnowsza zmiana tego pliku jest w
+`a4a0f6d02640f8f55741cebe1607032b248eecc2` i dotyczy attestation wersji
+zainstalowanego oraz załadowanego MFEM. Żaden z sześciu sprawdzonych blobów
+historii pliku nie odpowiadał byte-for-byte wdrożonemu entrypointowi.
+To ograniczony odczyt historii, a nie dowód braku takiego commita w całym Git.
+Aktywny plik ma 1605 linii i dodatkowe ścieżki kontraktowe/headless/SLEPc.
+Integracja nie może sprowadzać się do podmiany tego pliku wariantem `mastera`
+ani do cofnięcia nowszej kontroli MFEM w checkoutcie klienta.
+
+Ponowny health: `storage_free_bytes=92 803 072` (około 88,5 MiB),
+`waiting_for_disk`, brak aktywnych jobs; obraz i instance ID nie zmieniły się.
+Nie wykonywano zapisów w checkoutcie klienta, zmian globalnego `safe.directory`
+ani aktualizacji runnera.
+
 ## Konsekwencja dla następnego kroku
 
 1. Zwolnienie miejsca wymaga oczekującej zgody na dokładny manifest P6-67
