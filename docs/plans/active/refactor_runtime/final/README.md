@@ -332,3 +332,10 @@ Dołączenie Pythona i pełna instalacja Windows pozostają otwarte.
 obecnego `uv.lock` z pyproject i zatrzymuje MSI przed buildem. 13 lekkich
 regresji PASS; rzeczywisty lock pozostaje niezsynchronizowany. Bootstrap uv
 zatrzymany przez regułę kolejki storage; CPython bundle nadal otwarty.
+
+[Przypięty wheelhouse Windows](p8/07-locked-windows-python-wheelhouse.md)
+zastępuje zwykły staging pip eksportem z locka, hash enforcement i offline
+instalacją. 8 regresji z prawdziwym pip, 7 kontroli kopii wheela oraz
+2 testy metadanych PASS.
+UV export był atrapą w testach; rzeczywisty lock/export i CPython bundle
+pozostają NOT VERIFIED.

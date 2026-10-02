@@ -8,7 +8,7 @@ potwierdzeniem kwalifikacji pełnego produktu ani czterech lane'ów.
 
 [build_windows_msi.ps1](build_windows_msi.ps1) buduje Windows CLI/API/UI,
 statyczny Control Room i wheel Python, następnie przygotowuje MSI przez
-WiX. Wymaga narzędzi MSVC x64, Rust, Node, pnpm, Python i WiX na executorze.
+WiX. Wymaga narzędzi MSVC x64, Rust, Node, pnpm, Python, uv i WiX na executorze.
 `FULLMAG_WINDOWS_NODE_RUNTIME_ROOT` wskazuje jawny absolute katalog natywnej
 dystrybucji x64 Node 24.18–24.99 z `node.exe` oraz `LICENSE`. MSI kopiuje
 runtime i licencję, zamraża hashe i obejmuje Node wspólnym audytem PE/DLL.
@@ -16,6 +16,10 @@ Statyczny launcher wybiera dołączoną kopię bezpośrednio.
 Przed buildem packager sprawdza zgodność deklaracji `pyproject.toml` i
 `packages/fullmag-py/uv.lock`. Obecny lock wymaga odświeżenia; kontrola nie
 zastępuje pełnego uv export ani weryfikacji wheeli i CPython bundle.
+Runtime packages używają teraz locked export ze wszystkimi extras,
+osobnego wheelhouse, SHA-256 i offline instalacji wymagającej hashów.
+Bootstrap uv, synchronizacja locka i prawdziwy Windows graph/import/DLL/PYD
+pozostają otwarte. uv jest narzędziem buildu, nie wymaganiem użytkownika.
 Nie uruchamia Linuxa ani WSL. Domyślnie pakuje FDM CPU; jawne
 `FULLMAG_WINDOWS_MSI_CUDA=1` wymaga nvcc i dodaje FDM CUDA.
 Domyślne `FULLMAG_WINDOWS_MSI_FEM=cpu` dodaje budowę natywnego FEM CPU;

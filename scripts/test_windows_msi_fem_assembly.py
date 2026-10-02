@@ -278,6 +278,7 @@ $BuildFeatures=$BuildPlan.features; $ProductVersion='0.1.0'; $StageRoot='fixture
 $sourceIdentity=@{fixture=$true}; $runtimeDllInventory=@(); $nativeFemAssembly=$null
 $peDependencyAudit=@{images=@()}; $peDependencyPlan=@{sources=@()}
 $nodeRuntimeInventory=@{schema_version=1; kind='bundled-windows-x64-node'; version='v24.19.0'; files=@(@{path='bin/node.exe';sha256='fixture-node-hash'})}
+$pythonPackageInventory=@{schema_version=1;scope='locked-windows-python-packages';requirements_sha256='fixture-requirements-hash';qualification='not_verified'}
 Write-RuntimeManifests -RuntimesRoot (Join-Path $Fixture 'runtimes')
 Write-VersionMetadata -Path (Join-Path $Fixture 'version.json')
 Write-StageManifest -Path (Join-Path $Fixture 'stage.json')
@@ -293,6 +294,8 @@ Write-StageManifest -Path (Join-Path $Fixture 'stage.json')
         payload=json.loads((tmp_path/name).read_text(encoding='utf-8'))
         assert payload['node_runtime']['version']=='v24.19.0'
         assert payload['node_runtime']['files'][0]['sha256']=='fixture-node-hash'
+        assert payload['python_packages']['requirements_sha256']=='fixture-requirements-hash'
+        assert payload['python_packages']['qualification']=='not_verified'
     stage=json.loads((tmp_path/'stage.json').read_text(encoding='utf-8'))
     assert 'bin/node.exe' in stage['bin']
     assert 'share/licenses/node-LICENSE.txt' in stage['share']

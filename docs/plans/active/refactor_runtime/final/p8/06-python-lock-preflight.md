@@ -42,6 +42,11 @@ transitive dependencies z aktualnego indeksu. Po odświeżeniu locka należy
 zastąpić ten krok przypiętym Windows wheelhouse, instalacją `--require-hashes`
 i `--no-index`; sama kontrola metadanych tego nie rozwiązuje.
 
+Późniejszy [przyrost wheelhouse](07-locked-windows-python-wheelhouse.md)
+zastępuje ten zwykły krok pip na poziomie producenta i sprawdza realny pip
+na fixture wheelach. Prawdziwy export uv, lock i pełny Python bundle nadal
+pozostają NOT VERIFIED; ten zapis nie zalicza kwalifikacji produkcyjnej.
+
 ## Pozostała kolejność
 
 1. Dostarczyć uv przez zatwierdzoną trasę narzędzi buildu i odświeżyć
