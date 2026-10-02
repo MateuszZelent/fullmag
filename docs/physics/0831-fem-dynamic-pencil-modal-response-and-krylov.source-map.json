@@ -2141,6 +2141,18 @@
       "responsibility": "Independent exhaustive small-matrix optimum oracle, not solver evidence"
     },
     {
+      "id": "source-tracking-frequency-group-candidates",
+      "path": "scripts/comsol_tracking_clusters.py",
+      "symbol": "frequency_group_candidates",
+      "responsibility": "Replay anchored frequency clustering and split transition candidate groups from the full adjacent spectra"
+    },
+    {
+      "id": "source-tracking-frequency-cluster-tests",
+      "path": "scripts/test_comsol_tracking_clusters.py",
+      "symbol": "test_anchor_grouping_does_not_chain_neighbors",
+      "responsibility": "Synthetic threshold, complex distance, singleton boundary ties and transition fixtures; not FEM proof"
+    },
+    {
       "id": "source-comsol-tracking-path-replay",
       "path": "scripts/comsol_tracking_replay.py",
       "symbol": "replay_recorded_frames",

@@ -1,5 +1,29 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
+## S06/S12 — odtworzenie legalnych grup częstotliwości, 2026-10-02
+
+Po `6c5b9f10c7a95d267b6d6491ad4d179cd1da942b` replay odtwarza legalne
+kandydaty z całego widma sąsiednich próbek: grupowanie względem kotwicy,
+odległość zespolona, bieżące addytywne tolerancje producenta oraz grupy
+split→degenerate i degenerate→split z odrzuceniem remisu na granicy wyboru.
+Indeksy klastrów, typ przejścia i zbiory uczestników zapisanej podprzestrzeni
+muszą odpowiadać takiemu kandydatowi. Nie jest to jeszcze wybór globalnego
+optimum spośród kandydatów; assignment_replay nadal NOT VERIFIED.
+
+Naprawiono dwa rzeczywiste RED: sfałszowany indeks klastra i przejście
+split dla grupy zdegenerowanej wcześniej przechodziły replay metryk.
+Teraz są odrzucane. 60 interpretowanych testów trackingu PASS; nowe testy
+obejmują brak domknięcia przechodniego, urojoną część częstotliwości,
+addytywny próg, oba kierunki split, okno i remisy. Dodatkowa regresja
+chroni rzeczywisty tie-break: poprzednie branch IDs i bieżące mode slots,
+a nie raw IDs. Wrapper zachowuje pełną mapę gałęzi przed filtrowaniem
+wybranych gałęzi. Focused source-map PASS. Pola są syntetyczne.
+
+Następny etap pozostaje bez zmian: policzyć metryki wszystkich legalnych
+kandydatów z poprzednich transportowanych ram, odtworzyć wybór klastrów
+i globalny pair assignment oraz zintegrować oddzielną bramkę. Runtime,
+COMSOL, zbieżność, GPU, browser proof i końcowa integracja nadal otwarte.
+
 ## S06/S12 — pola wszystkich eksportowanych kandydatów, 2026-10-02
 
 Checkpoint `4abbc363a776c35ac9d823a7655a960d878a4bd3` jest na remote;

@@ -12,6 +12,7 @@ import numpy as np
 
 from comsol_tracking_fields import load_tracking_fields
 from comsol_tracking_assignment import maximum_weight_assignment
+from comsol_tracking_clusters import frequency_group_candidates
 from verify_fem_frequency_domain_eigen_artifacts import validate_tracking_edge_provenance
 
 
@@ -81,7 +82,7 @@ def bind_candidate_fields(samples, modes):
                        f"candidate field {name}", relative=True)
 
 
-def replay_recorded_frames(metric, modes, branches, samples):
+def replay_recorded_frames(metric, modes, branches, samples, *, candidate_branch_ids=None):
     """Reconstruct every chosen frame/metric; inputs already bound by caller.
 
     All dependent cluster branches must be present over the full path. Raw
@@ -143,6 +144,10 @@ def replay_recorded_frames(metric, modes, branches, samples):
             frequencies[(identity, sample["sample_index"])] = real
     frames = {}
     records = []
+    sample_by_id = {item["sample_index"]: item for item in samples}
+    if candidate_branch_ids is None:
+        candidate_branch_ids = {(sample_id, point["raw_mode_index"]): branch_id
+                                for branch_id, points in by_branch.items() for sample_id, point in points.items()}
     for position, sample in enumerate(order):
         next_frames = {}
         processed = set()
@@ -195,6 +200,23 @@ def replay_recorded_frames(metric, modes, branches, samples):
                     raise ValueError("subspace previous raw ID differs from branch")
             if set(current_raw) != {by_branch[branch][sample]["raw_mode_index"] for branch in ids}:
                 raise ValueError("subspace current raw IDs differ from assigned branches")
+            previous_entries = []
+            for mode in sample_by_id[previous]["modes"]:
+                key = (previous, mode["raw_mode_index"])
+                if key not in candidate_branch_ids:
+                    raise ValueError("missing candidate branch provenance")
+                previous_entries.append((candidate_branch_ids[key], mode["frequency_real_hz"], mode["frequency_imag_hz"]))
+            current_modes = sample_by_id[sample]["modes"]
+            current_entries = [(slot, mode["frequency_real_hz"], mode["frequency_imag_hz"])
+                               for slot, mode in enumerate(current_modes)]
+            candidates = frequency_group_candidates(previous_entries, current_entries, window)
+            if not any(candidate["previous_cluster"] == subspace["previous_cluster"]
+                       and candidate["current_cluster"] == subspace["current_cluster"]
+                       and candidate["transition"] == edge["transition"]
+                       and set(candidate["previous_ids"]) == set(ids)
+                       and {current_modes[slot]["raw_mode_index"] for slot in candidate["current_ids"]} == set(current_raw)
+                       for candidate in candidates):
+                raise ValueError("recorded subspace is not a frequency group candidate")
             cosines, transported, weights = metric.transport_with_assignment_weights([frames[branch] for branch in ids],
                 [modes[(sample, raw)]["envelope"] for raw in current_raw])
             optimal_assignment, optimal_weight = maximum_weight_assignment(weights)
@@ -216,6 +238,7 @@ def replay_recorded_frames(metric, modes, branches, samples):
                 next_frames[branch] = frame
                 processed.add(branch)
             records.append(dict(sample_index=sample, branch_ids=ids, principal_cosines=cosines.tolist(), score=score,
+                frequency_group_candidate=dict(status="pass", candidate_count=len(candidates)),
                 subspace_raw_assignment=dict(status="pass", recorded_columns=recorded_assignment,
                     optimal_columns=optimal_assignment, current_raw_mode_indices=current_raw,
                     recorded_raw_mode_indices=[current_raw[column] for column in recorded_assignment],
@@ -225,6 +248,7 @@ def replay_recorded_frames(metric, modes, branches, samples):
         frames = next_frames
     return {"status": "pass", "sample_count": len(order), "branch_count": len(by_branch),
             "replayed_edges": records,
+            "frequency_group_candidates_replay": "pass" if any("frequency_group_candidate" in record for record in records) else "not_applicable",
             "subspace_raw_assignment_replay": "pass" if any("subspace_raw_assignment" in record for record in records) else "not_applicable",
             "assignment_replay": "NOT VERIFIED", "qualification": "NOT VERIFIED"}
 
@@ -248,6 +272,13 @@ def replay_tracking_fields(case_dir, *, selected_branch_ids=None, expected_hashe
             hashes.append({"path": relative, "sha256": "sha256:" + hashlib.sha256(data).hexdigest()})
         spectrum = inputs["eigen/spectrum.v2.json"]
         branches = inputs["eigen/branches.v2.json"]
+        candidate_branch_ids = {}
+        for branch in branches["branches"]:
+            for point in branch["points"]:
+                key = (point["sample_index"], point["raw_mode_index"])
+                if key in candidate_branch_ids:
+                    raise ValueError("duplicate candidate branch provenance")
+                candidate_branch_ids[key] = branch["branch_id"]
         try:
             validate_tracking_edge_provenance(branches, [sample["sample_index"] for sample in spectrum["samples"]])
         except SystemExit as error:
@@ -282,7 +313,8 @@ def replay_tracking_fields(case_dir, *, selected_branch_ids=None, expected_hashe
             for relative, expected in expected_hashes.items():
                 if measured.get(relative) != expected:
                     raise ValueError(f"tracking replay input differs from gate-bound artifact: {relative}")
-        report = replay_recorded_frames(fields["metric"], fields["modes"], branches, spectrum["samples"])
+        report = replay_recorded_frames(fields["metric"], fields["modes"], branches, spectrum["samples"],
+                                        candidate_branch_ids=candidate_branch_ids)
         report.update(file_hashes=bound_hashes, reasons=[],
             candidate_field_coverage={"status": "pass", "exported_candidate_count": len(selections),
                                       "solver_spectral_completeness": "NOT VERIFIED"})

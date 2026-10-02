@@ -2625,6 +2625,21 @@ CPU; publiczny Python/IR i solver nie zmieniają się. Replay wewnętrznego
 przypisania nie dowodzi poprawności wyboru grup ani globalnego przydziału
 pair edges z pełnego zbioru kandydatów; te bramki pozostają NOT VERIFIED.
 
+Weryfikacja grupowania używa całego widma sąsiednich próbek. Odtwarza
+bieżącą prywatną politykę producenta: sortowanie części rzeczywistej,
+urojonej oraz ID gałęzi po poprzedniej stronie i pozycji modu w widmie
+po bieżącej stronie; odległość zespolona względem pierwszego elementu
+klastra nie przekracza sumy 1e-6 Hz i 1e-4 razy większy moduł
+częstotliwości (z dolną skalą 1 Hz). To heurystyka trackingu, nie kryterium
+fizycznej degeneracji. Grupowanie względem kotwicy nie jest domknięciem
+przechodnim bliskości sąsiednich częstotliwości.
+Dla split→degenerate i degenerate→split grupa singletów jest wybierana
+według odległości zespolonej od środka klastra; remis na granicy wyboru
+w tolerancji 1e-12 razy większa odległość (z dolną skalą 1 Hz) odrzuca
+kandydata. Zapisane grupy i indeksy klastrów muszą należeć do tego zbioru.
+Legalny kandydat nadal nie dowodzi wyboru globalnego optimum; takie
+przypisanie pozostaje osobną bramką, także po poprawnym grupowaniu.
+
 Po degeneracji konieczny jest dodatkowo replay przetransportowanej ramy;
 raw-to-raw overlap nie zastępuje tego replay. Do jego wykonania C1/A1
 pozostają NOT VERIFIED. Jest to diagnostyka CPU, bez zmiany Python/IR,
@@ -2667,6 +2682,8 @@ selekcja węzłów Gamma, następnie kompilacja/runtime i walidacja naukowa.
 | source-tracking-assignment-optimum | `scripts/comsol_tracking_assignment.py` | `maximum_weight_assignment` |
 | source-tracking-assignment-replay | `scripts/comsol_tracking_replay.py` | `replay_recorded_frames` |
 | source-tracking-assignment-enumeration | `scripts/test_comsol_tracking_assignment.py` | `test_small_square_and_rectangular_against_enumeration` |
+| source-tracking-frequency-group-candidates | `scripts/comsol_tracking_clusters.py` | `frequency_group_candidates` |
+| source-tracking-frequency-cluster-tests | `scripts/test_comsol_tracking_clusters.py` | `test_anchor_grouping_does_not_chain_neighbors` |
 
 
 ### Integralność legacy odczytu pól i wag

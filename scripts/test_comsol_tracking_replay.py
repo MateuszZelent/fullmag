@@ -142,6 +142,38 @@ class TrackingReplayTests(unittest.TestCase):
         self.assertEqual(result["subspace_raw_assignment_replay"], "pass")
         self.assertEqual(result["assignment_replay"], "NOT VERIFIED")
 
+    def test_forged_cluster_indices_are_rejected(self):
+        self.subspace_path()
+        for branch in self.branches["branches"]:
+            branch["points"][1]["tracking_edge"]["subspace"]["current_cluster"] = 7
+        with self.assertRaisesRegex(ValueError, "frequency group candidate"):
+            self.replay()
+
+    def test_degenerate_group_cannot_claim_split_transition(self):
+        self.subspace_path()
+        for branch in self.branches["branches"]:
+            branch["points"][1]["tracking_edge"]["transition"] = "split_to_degenerate"
+        with self.assertRaisesRegex(ValueError, "frequency group candidate"):
+            self.replay()
+
+    def test_split_candidate_tie_uses_branch_identity_not_raw_identity(self):
+        self.subspace_path()
+        center = self.samples[1]["modes"][0]["frequency_real_hz"]
+        for slot, branch in enumerate(self.branches["branches"]):
+            point = branch["points"][0]
+            frequency = center + (-1 if slot == 0 else 1) * 1e7
+            point["frequency_real_hz"] = frequency
+            raw = point["raw_mode_index"]
+            self.modes[(0, raw)]["frequency_real_hz"] = frequency
+            self.samples[0]["modes"][slot]["frequency_real_hz"] = frequency
+            branch["points"][1]["tracking_confidence"] = 1.
+            branch["points"][1]["tracking_edge"]["transition"] = "split_to_degenerate"
+        # Branch 3/raw9 wins the equal-distance tie over branch4/raw8,
+        # so previous_cluster=0 is the producer anchor. Raw sorting gives1.
+        result = self.replay()
+        self.assertEqual(result["status"], "pass")
+        self.assertEqual(result["assignment_replay"], "NOT VERIFIED")
+
 
 class TrackingReplayDiskTests(unittest.TestCase):
     def setUp(self):
