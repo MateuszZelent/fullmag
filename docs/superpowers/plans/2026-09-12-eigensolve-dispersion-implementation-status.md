@@ -1,5 +1,31 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
+## S06/S12 — obliczanie globalnej polityki z pól, 2026-10-02
+
+Po `0e3869a077742ac1cb0ad5719df3390be517515c` niezależny helper oblicza
+transport i score wszystkich legalnych grup, stosuje principal-angle floor,
+odtwarza wybór najlepszego kandydata dla każdej pary klastrów, Hungarian
+klastrów i usunięcie nakładających się grup. Dla pozostałych gałęzi oblicza
+wszystkie eligible pair edges z poprzednich ram, a następnie zapisany
+overlap_greedy lub overlap_hungarian z dummy/ineligible kosztami.
+Przewidywane next_frames zachowują kolejność poprzednich gałęzi.
+
+Mechanizm jest wykonywany przez replay na hash-bound polach każdej
+sąsiedniej próbki. Raport global_policy_predictions zawiera przewidywane
+raw IDs, score i grupy. Brak ramy/pola daje brak predykcji, bez fallbacku.
+To jeszcze nie certyfikat zgodności zapisanej tabeli z predykcjami;
+assignment_replay nadal NOT VERIFIED. Następny etap: porównać całą tabelę,
+obsłużyć równoważne optima i zweryfikować kolejne ramy po każdym przydziale.
+Wariant wyboru klastrów odtwarza bieżącą heurystykę producenta; nie jest
+globalnym optimum problemu grup z dodatkowym ograniczeniem rozłączności.
+
+67 interpretowanych testów trackingu PASS: pełne pole/policy fixtures,
+różnica greedy/Hungarian, dummy bez wymuszenia niedozwolonej pary,
+principal-angle floor i transportowane ramy. Dodano też automatyczną
+kontrolę zgodności trzech prywatnych progów Python/Rust wskazaną w review.
+Dotychczasowy P2 dodatniej częstotliwości był już naprawiony w6c5b9f10c.
+Nowe pola testowe są syntetyczne; runtime/COMSOL/nauka pozostają otwarte.
+
 ## S06/S12 — odtworzenie legalnych grup częstotliwości, 2026-10-02
 
 Po `6c5b9f10c7a95d267b6d6491ad4d179cd1da942b` replay odtwarza legalne

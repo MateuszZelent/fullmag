@@ -1,10 +1,26 @@
 """Frequency policy fixtures, independent of modal fields and FEM execution."""
 import unittest
+from pathlib import Path
+import re
 
-from comsol_tracking_clusters import frequency_clusters, frequency_group_candidates
+from comsol_tracking_clusters import (frequency_clusters, frequency_group_candidates,
+    DEGENERACY_ABSOLUTE_HZ, DEGENERACY_RELATIVE, SINGLETON_BOUNDARY_RELATIVE)
 
 
 class ClusterTests(unittest.TestCase):
+    def test_private_policy_constants_match_native_source(self):
+        root = Path(__file__).resolve().parents[1] / "crates/fullmag-runner/src/eigen"
+        source = (root / "tracking_subspace.rs").read_text(encoding="utf-8")
+        for name, expected in (("DEGENERACY_ABSOLUTE_FREQUENCY_TOLERANCE_HZ", DEGENERACY_ABSOLUTE_HZ),
+                               ("DEGENERACY_RELATIVE_FREQUENCY_TOLERANCE", DEGENERACY_RELATIVE)):
+            match = re.search(r"const " + name + r": f64\s*=\s*([0-9.eE+-]+);", source)
+            self.assertIsNotNone(match, name)
+            self.assertEqual(float(match.group(1)), expected, name)
+        source = (root / "tracking.rs").read_text(encoding="utf-8")
+        match = re.search(r"<=\s*([0-9.eE+-]+)\s*\* distance\.abs\(\)\.max\(boundary_distance\.abs\(\)\)", source)
+        self.assertIsNotNone(match)
+        self.assertEqual(float(match.group(1)), SINGLETON_BOUNDARY_RELATIVE)
+
     def test_anchor_grouping_does_not_chain_neighbors(self):
         entries = [(9, 1e10, 0.), (2, 1e10 + 9e5, 0.), (7, 1e10 + 18e5, 0.)]
         self.assertEqual(frequency_clusters(entries), [[0, 1], [2]])

@@ -13,6 +13,7 @@ import numpy as np
 from comsol_tracking_fields import load_tracking_fields
 from comsol_tracking_assignment import maximum_weight_assignment
 from comsol_tracking_clusters import frequency_group_candidates
+from comsol_tracking_global import reconstruct_global_assignment
 from verify_fem_frequency_domain_eigen_artifacts import validate_tracking_edge_provenance
 
 
@@ -144,6 +145,7 @@ def replay_recorded_frames(metric, modes, branches, samples, *, candidate_branch
             frequencies[(identity, sample["sample_index"])] = real
     frames = {}
     records = []
+    global_predictions = []
     sample_by_id = {item["sample_index"]: item for item in samples}
     if candidate_branch_ids is None:
         candidate_branch_ids = {(sample_id, point["raw_mode_index"]): branch_id
@@ -151,6 +153,31 @@ def replay_recorded_frames(metric, modes, branches, samples, *, candidate_branch
     for position, sample in enumerate(order):
         next_frames = {}
         processed = set()
+        if position:
+            previous = order[position - 1]
+            try:
+                previous_entries = [(candidate_branch_ids[(previous, mode["raw_mode_index"])],
+                    mode["frequency_real_hz"], mode["frequency_imag_hz"])
+                    for mode in sample_by_id[previous]["modes"]]
+                current = [{**mode, "envelope": modes[(sample, mode["raw_mode_index"])]["envelope"]}
+                           for mode in sample_by_id[sample]["modes"]]
+                policy = next(iter(by_branch.values()))[sample]["tracking_edge"]["policy"]
+                prediction = reconstruct_global_assignment(metric, frames, previous_entries,
+                                                            current, policy, _frequency_score)
+                # Predictions are generated from all candidates, but are not
+                # promoted into a table-assignment certificate here.
+                global_predictions.append(dict(sample_index=sample, status="pass",
+                    candidate_count=prediction["candidate_count"],
+                    selected_groups=[dict(previous_cluster=group["previous_cluster"],
+                        current_cluster=group["current_cluster"], transition=group["transition"],
+                        branch_ids=group["previous_ids"],
+                        current_raw_mode_indices=[current[slot]["raw_mode_index"] for slot in group["current_ids"]],
+                        score=group["score"]) for group in prediction["selected_groups"]],
+                    predicted_matches=[dict(branch_id=identity, raw_mode_index=edge["raw_mode_index"],
+                        score=edge["score"], transition=edge["group"]["transition"] if edge["group"] else "pair")
+                        for identity, edge in prediction["matches"].items()]))
+            except (KeyError, ValueError) as error:
+                global_predictions.append(dict(sample_index=sample, status="missing", reason=str(error)))
         for identity, points in by_branch.items():
             if identity in processed:
                 continue
@@ -248,6 +275,7 @@ def replay_recorded_frames(metric, modes, branches, samples, *, candidate_branch
         frames = next_frames
     return {"status": "pass", "sample_count": len(order), "branch_count": len(by_branch),
             "replayed_edges": records,
+            "global_policy_predictions": global_predictions,
             "frequency_group_candidates_replay": "pass" if any("frequency_group_candidate" in record for record in records) else "not_applicable",
             "subspace_raw_assignment_replay": "pass" if any("subspace_raw_assignment" in record for record in records) else "not_applicable",
             "assignment_replay": "NOT VERIFIED", "qualification": "NOT VERIFIED"}

@@ -2,6 +2,11 @@
 import math
 
 
+DEGENERACY_ABSOLUTE_HZ = 1e-6
+DEGENERACY_RELATIVE = 1e-4
+SINGLETON_BOUNDARY_RELATIVE = 1e-12
+
+
 def frequency_clusters(entries):
     """Return entry slots grouped against their first frequency anchor."""
     identities = set()
@@ -21,7 +26,7 @@ def frequency_clusters(entries):
             _, br, bi = entries[slot]
             distance = math.hypot(ar - br, ai - bi)
             scale = max(math.hypot(ar, ai), math.hypot(br, bi), 1.)
-            if math.isfinite(distance) and distance <= 1e-6 + 1e-4 * scale:
+            if math.isfinite(distance) and distance <= DEGENERACY_ABSOLUTE_HZ + DEGENERACY_RELATIVE * scale:
                 clusters[-1].append(slot)
                 continue
         clusters.append([slot])
@@ -50,7 +55,7 @@ def _nearest_singletons(entries, clusters, center, rank, window):
     boundary = eligible[rank - 1][0]
     if len(eligible) > rank:
         following = eligible[rank][0]
-        if abs(following - boundary) <= 1e-12 * max(abs(following), abs(boundary), 1.):
+        if abs(following - boundary) <= SINGLETON_BOUNDARY_RELATIVE * max(abs(following), abs(boundary), 1.):
             return None
     return [slot for _, slot in eligible[:rank]]
 

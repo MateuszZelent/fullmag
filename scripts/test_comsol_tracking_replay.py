@@ -44,6 +44,8 @@ class TrackingReplayTests(unittest.TestCase):
         self.assertEqual(len(result["replayed_edges"]), 2)
         self.assertEqual(result["qualification"], "NOT VERIFIED")
         self.assertEqual(result["assignment_replay"], "NOT VERIFIED")
+        self.assertEqual([record["status"] for record in result["global_policy_predictions"]], ["pass", "pass"])
+        self.assertEqual(result["global_policy_predictions"][0]["predicted_matches"][0]["raw_mode_index"], 2)
 
     def test_forged_overlap_score_frequency_and_signed_k(self):
         for defect in ("overlap", "score", "frequency", "k"):

@@ -2640,6 +2640,23 @@ kandydata. Zapisane grupy i indeksy klastrów muszą należeć do tego zbioru.
 Legalny kandydat nadal nie dowodzi wyboru globalnego optimum; takie
 przypisanie pozostaje osobną bramką, także po poprawnym grupowaniu.
 
+Niezależny replay wyboru oblicza principal angles i transport wszystkich
+legalnych kandydatów w tej samej metryce P1. Odrzuca zależne bazy i grupy
+poniżej principal-angle floor. Dla każdej pary klastrów zachowuje pierwszy
+kandydat o największym score, następnie dopasowuje klastry z jawnymi
+dummy rows/columns; po dopasowaniu usuwa grupy nakładające się na wcześniej
+wybraną grupę, zgodnie z bieżącą polityką producenta. To odtworzenie
+heurystyki producenta, nie twierdzenie o globalnym optimum problemu grup
+z ograniczeniem rozłączności.
+Gałęzie i mody zużyte przez wybrane grupy są wyłączone z generowania
+pojedynczych krawędzi. Pozostałe krawędzie używają poprzednich ram,
+overlap floor i zapisanego frequency window. Metoda overlap_greedy zachowuje
+sortowanie score/branch ID/mode slot; overlap_hungarian używa dummy oraz
+kary dla krawędzi niedozwolonych. Brak pola lub poprzedniej ramy nie
+uruchamia fallbacku częstotliwościowego. Samo obliczenie przewidywanego
+dopasowania nie zamyka bramki: potrzebne jest jeszcze związanie go
+z zapisaną tabelą i replay wszystkich kolejnych ram ścieżki.
+
 Po degeneracji konieczny jest dodatkowo replay przetransportowanej ramy;
 raw-to-raw overlap nie zastępuje tego replay. Do jego wykonania C1/A1
 pozostają NOT VERIFIED. Jest to diagnostyka CPU, bez zmiany Python/IR,
@@ -2684,6 +2701,8 @@ selekcja węzłów Gamma, następnie kompilacja/runtime i walidacja naukowa.
 | source-tracking-assignment-enumeration | `scripts/test_comsol_tracking_assignment.py` | `test_small_square_and_rectangular_against_enumeration` |
 | source-tracking-frequency-group-candidates | `scripts/comsol_tracking_clusters.py` | `frequency_group_candidates` |
 | source-tracking-frequency-cluster-tests | `scripts/test_comsol_tracking_clusters.py` | `test_anchor_grouping_does_not_chain_neighbors` |
+| source-tracking-global-policy-prediction | `scripts/comsol_tracking_global.py` | `reconstruct_global_assignment` |
+| source-tracking-global-policy-tests | `scripts/test_comsol_tracking_global.py` | `test_hungarian_and_greedy_policies_differ_on_counterexample` |
 
 
 ### Integralność legacy odczytu pól i wag

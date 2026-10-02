@@ -2153,6 +2153,18 @@
       "responsibility": "Synthetic threshold, complex distance, singleton boundary ties and transition fixtures; not FEM proof"
     },
     {
+      "id": "source-tracking-global-policy-prediction",
+      "path": "scripts/comsol_tracking_global.py",
+      "symbol": "reconstruct_global_assignment",
+      "responsibility": "Compute field-based cluster selection and greedy/Hungarian edge predictions without qualifying recorded assignments"
+    },
+    {
+      "id": "source-tracking-global-policy-tests",
+      "path": "scripts/test_comsol_tracking_global.py",
+      "symbol": "test_hungarian_and_greedy_policies_differ_on_counterexample",
+      "responsibility": "Independent policy, dummy, principal-angle-floor and transported-frame fixtures; no FEM runtime proof"
+    },
+    {
       "id": "source-comsol-tracking-path-replay",
       "path": "scripts/comsol_tracking_replay.py",
       "symbol": "replay_recorded_frames",
