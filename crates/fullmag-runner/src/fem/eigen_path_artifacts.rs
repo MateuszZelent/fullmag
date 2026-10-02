@@ -1499,6 +1499,9 @@ pub(super) fn eigen_path_branch_point_tracking_score_source(
     let Some(point) = branch.points.get(point_index) else {
         return "unknown";
     };
+    if let Some(edge) = &point.tracking_edge {
+        return edge.score_source.as_str();
+    }
     if point_index == 0 {
         return "seed";
     }

@@ -37,6 +37,36 @@ impl Drop for TempDirGuard {
     }
 }
 
+#[test]
+fn branch_writer_preserves_recorded_pair_policy_and_gap() {
+    let temp = TempDirGuard::new("tracking-edge");
+    let mut result = sample_result();
+    result.samples[0].modes[0].reduced_vector = Some(vec![Complex64::new(1.0, 0.0); 3]);
+    let mut empty = result.samples[0].clone();
+    empty.sample.sample_index = 1;
+    empty.modes.clear();
+    let mut next = result.samples[0].clone();
+    next.sample.sample_index = 2;
+    next.modes[0].raw_mode_index = 13;
+    next.modes[0].reduced_vector = Some(vec![Complex64::new(0.0, 1.0); 3]);
+    result.samples.extend([empty, next]);
+    let cfg = fullmag_ir::ModeTrackingIR { overlap_floor: 0.7, max_branch_gap: 1,
+                                         ..fullmag_ir::ModeTrackingIR::default() };
+    crate::eigen::tracking::track_branches(&mut result, Some(&cfg));
+    let edge = result.branches[0].points[1].tracking_edge.as_ref().unwrap();
+    assert_eq!(edge.previous_sample_index, Some(0));
+    assert_eq!(edge.skipped_sample_count, 1);
+    assert_eq!(edge.score_source.as_str(), "modal_overlap_unweighted_score");
+    write_branch_bundle(&temp.path, &result).unwrap();
+    let payload: Value = serde_json::from_slice(&std::fs::read(
+        temp.path.join("eigen/branches.v2.json")).unwrap()).unwrap();
+    assert_eq!(payload["tracking_method"], "overlap_hungarian");
+    assert_eq!(payload["overlap_floor"], 0.7);
+    assert_eq!(payload["branches"][0]["points"][1]["tracking_edge"],
+               serde_json::to_value(edge).unwrap());
+    assert_eq!(payload["branches"][0]["points"][1]["raw_mode_index"], 13);
+}
+
 fn sample_result() -> PathSolveResult {
     sample_result_with_solver_model(EigenSolverModel::ReferenceScalarTangent)
 }
@@ -100,6 +130,7 @@ fn sample_result_with_solver_model(solver_model: EigenSolverModel) -> PathSolveR
                 frequency_imag_hz: 0.0,
                 tracking_confidence: 1.0,
                 overlap_prev: None,
+                tracking_edge: None,
             }],
         }],
         solver_model,
@@ -242,6 +273,7 @@ fn sample_result_with_modal_overlap_tracking() -> PathSolveResult {
         frequency_imag_hz: 0.0,
         tracking_confidence: 0.8,
         overlap_prev: Some(0.8),
+        tracking_edge: None,
     });
     result.branches[0].points.push(TrackedBranchPoint {
         sample_index: 2,
@@ -250,6 +282,7 @@ fn sample_result_with_modal_overlap_tracking() -> PathSolveResult {
         frequency_imag_hz: 0.0,
         tracking_confidence: 0.6,
         overlap_prev: Some(0.6),
+        tracking_edge: None,
     });
     result.notes = vec!["modal overlap tracking".to_string()];
     result
@@ -289,6 +322,7 @@ fn sample_result_with_k0_kittel_sweep() -> PathSolveResult {
             frequency_imag_hz: 0.0,
             tracking_confidence: 1.0,
             overlap_prev: (sample_index > 0).then_some(1.0),
+            tracking_edge: None,
         });
     }
 
@@ -1435,6 +1469,7 @@ fn k0_kittel_selector_prefers_uniform_branch_over_frequency_only_match() {
             frequency_imag_hz: 0.0,
             tracking_confidence: 1.0,
             overlap_prev: (sample_index > 0).then_some(1.0),
+            tracking_edge: None,
         });
         result.branches[1].points.push(TrackedBranchPoint {
             sample_index,
@@ -1443,6 +1478,7 @@ fn k0_kittel_selector_prefers_uniform_branch_over_frequency_only_match() {
             frequency_imag_hz: 0.0,
             tracking_confidence: 1.0,
             overlap_prev: (sample_index > 0).then_some(1.0),
+            tracking_edge: None,
         });
     }
 
@@ -1534,6 +1570,7 @@ fn k0_kittel_selector_does_not_use_expected_frequency_as_a_tiebreaker() {
             frequency_imag_hz: 0.0,
             tracking_confidence: 1.0,
             overlap_prev: (sample_index > 0).then_some(1.0),
+            tracking_edge: None,
         });
         result.branches[1].points.push(TrackedBranchPoint {
             sample_index,
@@ -1542,6 +1579,7 @@ fn k0_kittel_selector_does_not_use_expected_frequency_as_a_tiebreaker() {
             frequency_imag_hz: 0.0,
             tracking_confidence: 1.0,
             overlap_prev: (sample_index > 0).then_some(1.0),
+            tracking_edge: None,
         });
     }
 
@@ -1625,6 +1663,7 @@ fn k0_kittel_selector_uses_mass_weighted_uniformity_when_weights_are_available()
             frequency_imag_hz: 0.0,
             tracking_confidence: 1.0,
             overlap_prev: (sample_index > 0).then_some(1.0),
+            tracking_edge: None,
         });
         result.branches[1].points.push(TrackedBranchPoint {
             sample_index,
@@ -1633,6 +1672,7 @@ fn k0_kittel_selector_uses_mass_weighted_uniformity_when_weights_are_available()
             frequency_imag_hz: 0.0,
             tracking_confidence: 1.0,
             overlap_prev: (sample_index > 0).then_some(1.0),
+            tracking_edge: None,
         });
     }
 

@@ -2428,6 +2428,48 @@ równowagi pozostają wymaganiami przed zaliczeniem S06/S07.
 | `source-tracking-consistent-basis-regression` | `crates/fullmag-runner/src/eigen/tracking.rs` | `exact_consistent_tracking_overlap_includes_offdiagonal_p1_mass` | Uncompiled analytic regression distinguishes consistent and diagonal mass |
 
 
+## Dowód wybranej krawędzi trackingu (S06/S07, źródła WIP)
+
+Każdy nowy punkt gałęzi przechowuje opcjonalny, typowany rekord
+`TrackingEdgeProvenance`, utworzony w chwili przyjęcia przypisania.
+Rekord zawiera rzeczywistą politykę `ModeTrackingIR` (metoda, próg,
+okno częstotliwości w Hz, dopuszczalna luka), źródło score, metrykę,
+poprzednią próbkę i liczbę pominiętych próbek. Seed oraz nowa gałąź
+mają jawny rodzaj zdarzenia, bez fikcyjnego overlapu.
+
+Dla transportu podprzestrzeni publikujemy rząd, identyfikatory gałęzi
+i surowych modów klastra, cosinusy kątów głównych i ich minimum
+(bezwymiarowe), a także przejście split→degenerate, degenerate→split
+lub degenerate→degenerate. `overlap_prev` pozostaje wtedy pusty:
+cosinus kąta głównego nie jest skalarnym overlapem pary modów.
+Oba writery serializują ten sam rekord; nie odtwarzają decyzji z braku
+overlapu. Historyczny punkt bez rekordu pozostaje bez dowodu krawędzi. Obecny,
+lecz uszkodzony rekord jest błędem importu. Nowa gałąź ma source
+`modal_overlap_unavailable`; nie jest początkowym seedem. Brak lub
+niezgodność polityki daje jawny `missing_or_mixed`, bez domyślnego progu.
+
+Rozszerzenie jest addytywne względem `eigen_branches.v2`; nie zmienia
+równań, jednostek, Python→ProblemIR ani dopuszczonych backendów.
+Dotyczy wspólnego postprocessingu wyników; nie dowodzi wykonania FEM
+CPU/GPU ani nie kwalifikuje FDM. Dotychczasowa skalarna bramka produkcyjna
+nie przyjmuje transportu podprzestrzeni jako weighted pair overlap.
+Weryfikacja wymaga zgodności obu writerów, zachowania raw mode ID,
+faz i signed k, prawdziwej metryki oraz jawnej obsługi luk. Test źródeł
+i niezależna algebra nie zastępują managed runtime ani zbieżności.
+
+Mapa implementacji: `crates/fullmag-runner/src/eigen/types.rs` +
+`TrackingEdgeProvenance`; `crates/fullmag-runner/src/eigen/tracking.rs` +
+`track_branches`; `crates/fullmag-runner/src/eigen/artifacts/modal_manifest.rs`
++ `write_branch_bundle_with_sample_namespace`; `crates/fullmag-runner/src/fem/eigen_path.rs` +
+`execute_fem_eigen_path_with_producer_identity` (właściciel publikacji ścieżki FEM).
+
+| Source anchor | Path | Symbol | Status |
+|---|---|---|---|
+| `source-tracking-edge-record` | `crates/fullmag-runner/src/eigen/types.rs` | `TrackingEdgeProvenance` | źródła WIP; bez managed runtime |
+| `source-tracking-edge-producer` | `crates/fullmag-runner/src/eigen/tracking.rs` | `track_branches` | źródła WIP; bez managed runtime |
+| `source-tracking-edge-writer` | `crates/fullmag-runner/src/eigen/artifacts/modal_manifest.rs` | `write_branch_bundle_with_sample_namespace` | źródła WIP; bez managed runtime |
+| `source-tracking-edge-signed-regression` | `crates/fullmag-runner/src/eigen/tracking.rs` | `signed_k_tracking_records_split_transport_without_mutating_raw_modes` | źródła WIP; bez managed runtime |
+
 ## Odtwarzanie metryki trackingu z artefaktów (S07, źródła WIP)
 
 Zapis pola Cartesian global_xyz i metryka trackingu są oddzielne. Pole

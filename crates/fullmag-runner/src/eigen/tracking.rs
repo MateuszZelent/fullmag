@@ -1,4 +1,5 @@
-use crate::eigen::types::{PathSolveResult, SingleKModeResult, TrackedBranch, TrackedBranchPoint};
+use crate::eigen::types::{PathSolveResult, SingleKModeResult, TrackedBranch, TrackedBranchPoint, TrackingEdgeProvenance, TrackingMetricDefinition, TrackingScoreSource,
+    TrackingSubspaceEvidence, TrackingTransition};
 use fullmag_ir::ModeTrackingIR;
 use num_complex::Complex64;
 use std::collections::BTreeSet;
@@ -369,7 +370,9 @@ pub(crate) fn tracking_score_source_summary(sources: &[&str]) -> (&'static str, 
         usize::from(saw_weighted) + usize::from(saw_unweighted) + usize::from(saw_subspace);
     let modal_available = modal_method_count > 0;
 
-    let summary = if modal_available && saw_fallback {
+    let summary = if sources.contains(&"modal_overlap_unavailable") {
+        "modal_overlap_unavailable"
+    } else if modal_available && saw_fallback {
         "mixed_modal_overlap_and_frequency_fallback"
     } else if modal_method_count > 1 {
         "mixed_modal_tracking_methods"
@@ -669,6 +672,7 @@ struct SubspaceClusterCandidate {
     branch_ids: Vec<usize>,
     mode_slots: Vec<usize>,
     transport: SubspaceTransport,
+    transition: TrackingTransition,
 }
 
 fn cluster_frequency_center(
@@ -940,6 +944,7 @@ fn find_subspace_matches(
             candidates.push(SubspaceClusterCandidate {
                 previous_cluster: previous_cluster_index,
                 current_cluster: current_cluster_index,
+                transition: TrackingTransition::DegenerateToDegenerate,
                 branch_ids,
                 mode_slots,
                 transport,
@@ -1030,6 +1035,7 @@ fn find_subspace_matches(
         candidates.push(SubspaceClusterCandidate {
             previous_cluster,
             current_cluster: current_cluster_index,
+            transition: TrackingTransition::SplitToDegenerate,
             branch_ids,
             mode_slots,
             transport,
@@ -1112,6 +1118,7 @@ fn find_subspace_matches(
         candidates.push(SubspaceClusterCandidate {
             previous_cluster: previous_cluster_index,
             current_cluster,
+            transition: TrackingTransition::DegenerateToSplit,
             branch_ids,
             mode_slots,
             transport,
@@ -1173,6 +1180,39 @@ fn branch_is_eligible(
     gap <= max_branch_gap
 }
 
+fn tracking_metric(view: TrackingModeView<'_>) -> TrackingMetricDefinition {
+    if view.consistent_p1_metric.is_some() {
+        TrackingMetricDefinition::ConsistentP1Tet4CartesianNodalEnvelope
+    } else if view.node_mass_weights.is_some() {
+        TrackingMetricDefinition::DiagonalNodalMass
+    } else {
+        TrackingMetricDefinition::Euclidean
+    }
+}
+
+fn seed_tracking_edge(cfg: &ModeTrackingIR, transition: TrackingTransition) -> TrackingEdgeProvenance {
+    TrackingEdgeProvenance {
+        policy: cfg.clone(),
+        score_source: match transition {
+            TrackingTransition::NewBranch => TrackingScoreSource::ModalOverlapUnavailable,
+            _ => TrackingScoreSource::Seed,
+        },
+        metric: TrackingMetricDefinition::Unavailable,
+        transition,
+        previous_sample_index: None,
+        skipped_sample_count: 0,
+        subspace: None,
+    }
+}
+
+/// Only publish a path policy when every retained point has the same recorded policy.
+pub(crate) fn recorded_tracking_policy(result: &PathSolveResult) -> Option<&ModeTrackingIR> {
+    let mut points = result.branches.iter().flat_map(|branch| &branch.points);
+    let policy = &points.next()?.tracking_edge.as_ref()?.policy;
+    points.all(|point| point.tracking_edge.as_ref().is_some_and(|edge| edge.policy == *policy))
+        .then_some(policy)
+}
+
 pub fn track_branches(result: &mut PathSolveResult, config: Option<&ModeTrackingIR>) {
     let default_cfg = ModeTrackingIR::default();
     let cfg = config.unwrap_or(&default_cfg);
@@ -1205,6 +1245,7 @@ pub fn track_branches(result: &mut PathSolveResult, config: Option<&ModeTracking
                     frequency_imag_hz: mode.frequency_imag_hz,
                     tracking_confidence: 1.0,
                     overlap_prev: None,
+                    tracking_edge: Some(seed_tracking_edge(cfg, TrackingTransition::Seed)),
                 }],
             }
         })
@@ -1320,6 +1361,17 @@ pub fn track_branches(result: &mut PathSolveResult, config: Option<&ModeTracking
             else {
                 continue;
             };
+            let previous_position = result.samples.iter().position(|sample|
+                sample.sample.sample_index == last_point.sample_index).expect("tracked sample exists");
+            let mut tracking_edge = TrackingEdgeProvenance {
+                policy: cfg.clone(),
+                score_source: TrackingScoreSource::ModalSubspaceTransportScore,
+                metric: tracking_metric(mode_view(current_mode)),
+                transition: TrackingTransition::Pair,
+                previous_sample_index: Some(last_point.sample_index),
+                skipped_sample_count: sample_position - previous_position - 1,
+                subspace: None,
+            };
             let (next_frame, edge_used_frequency_fallback, overlap_prev) = if edge
                 .subspace_transport
             {
@@ -1331,6 +1383,19 @@ pub fn track_branches(result: &mut PathSolveResult, config: Option<&ModeTracking
                             if branch_id != edge.branch_id || mode_slot != edge.mode_slot {
                                 return None;
                             }
+                            tracking_edge.transition = cluster.transition;
+                            tracking_edge.subspace = Some(TrackingSubspaceEvidence {
+                                rank: cluster.branch_ids.len(),
+                                previous_cluster: cluster.previous_cluster,
+                                current_cluster: cluster.current_cluster,
+                                branch_ids: cluster.branch_ids.clone(),
+                                previous_raw_mode_indices: cluster.branch_ids.iter().map(|id|
+                                    branches[*id].points.last().expect("cluster branch exists").raw_mode_index).collect(),
+                                current_raw_mode_indices: cluster.mode_slots.iter().map(|slot|
+                                    result.samples[sample_position].modes[*slot].raw_mode_index).collect(),
+                                principal_cosines: cluster.transport.principal_cosines.clone(),
+                                principal_minimum: cluster.transport.principal_minimum,
+                            });
                             cluster
                                 .transport
                                 .transported_frames
@@ -1351,6 +1416,13 @@ pub fn track_branches(result: &mut PathSolveResult, config: Option<&ModeTracking
                 };
                 let previous_view = previous_frame.view(last_point.frequency_real_hz);
                 let current_view = mode_view(current_mode);
+                let fallback = tracking_uses_frequency_fallback_views(previous_view, current_view);
+                tracking_edge.metric = if fallback { TrackingMetricDefinition::Unavailable }
+                    else { tracking_metric(current_view) };
+                tracking_edge.score_source = if fallback { TrackingScoreSource::FrequencyScoreFallback }
+                    else if current_view.consistent_p1_metric.is_some() || current_view.node_mass_weights.is_some() {
+                        TrackingScoreSource::ModalOverlapWeightedScore
+                    } else { TrackingScoreSource::ModalOverlapUnweightedScore };
                 (
                     Some(BranchTrackingFrame::from_mode(current_mode)),
                     tracking_uses_frequency_fallback_views(previous_view, current_view),
@@ -1387,6 +1459,7 @@ pub fn track_branches(result: &mut PathSolveResult, config: Option<&ModeTracking
                     frequency_imag_hz,
                     tracking_confidence: edge.score,
                     overlap_prev,
+                    tracking_edge: Some(tracking_edge),
                 });
             }
         }
@@ -1427,6 +1500,7 @@ pub fn track_branches(result: &mut PathSolveResult, config: Option<&ModeTracking
                     frequency_imag_hz,
                     tracking_confidence: 0.0,
                     overlap_prev: None,
+                    tracking_edge: Some(seed_tracking_edge(cfg, TrackingTransition::NewBranch)),
                 }],
             });
             tracking_frames.push(next_frame.unwrap_or_default());
@@ -1809,6 +1883,13 @@ mod tests {
         assert_eq!(result.branches.len(), 2);
         assert_eq!(result.branches[0].points.len(), 1);
         assert_eq!(result.branches[1].points[0].sample_index, 2);
+        let restart = result.branches[1].points[0].tracking_edge.as_ref().unwrap();
+        assert!(matches!(restart.transition, TrackingTransition::NewBranch));
+        assert_eq!(restart.score_source.as_str(), "modal_overlap_unavailable");
+        assert!(restart.previous_sample_index.is_none());
+        assert!(restart.subspace.is_none());
+        assert_eq!(tracking_score_source_summary(&["seed", restart.score_source.as_str()]),
+                   ("modal_overlap_unavailable", false));
     }
 
     #[test]
@@ -2122,6 +2203,61 @@ mod tests {
         assert_eq!(result.samples[1].modes[1].branch_id, Some(0));
         assert_eq!(result.samples[1].modes[0].branch_id, Some(1));
         assert_eq!(result.branches.len(), 2);
+    }
+
+    #[test]
+    fn signed_k_tracking_records_split_transport_without_mutating_raw_modes() {
+        let x = std::array::from_fn::<_, 12, _>(|i| Complex64::new((i % 3 == 0) as u8 as f64, 0.0));
+        let y = std::array::from_fn::<_, 12, _>(|i| Complex64::new((i % 3 == 1) as u8 as f64, 0.0));
+        let phase = Complex64::from_polar(1.0, 0.7);
+        let theta = 0.3_f64;
+        let rotated_x: [Complex64; 12] = std::array::from_fn(|i| (x[i]*theta.cos() + y[i]*theta.sin())*phase);
+        let rotated_y: [Complex64; 12] = std::array::from_fn(|i| (-x[i]*theta.sin() + y[i]*theta.cos())*phase.conj());
+        let metric = std::sync::Arc::new(ConsistentP1TrackingMetric::new(
+            "signed-k-test".into(), vec![0, 1, 2, 3], vec![[0, 1, 2, 3]], &[1.0],
+        ).unwrap());
+        let mut samples = vec![
+            sample(10, vec![mode(19, 9.0e9, x), mode(42, 9.002e9, y)]),
+            sample(20, vec![mode(17, 9.001e9, rotated_y), mode(23, 9.001e9, rotated_x)]),
+            sample(30, vec![mode(7, 9.0035e9, y.map(|v| v*phase)),
+                            mode(5, 9.0005e9, x.map(|v| v*phase.conj()))]),
+        ];
+        for (sample, k) in samples.iter_mut().zip([-25e6, 0.0, 25e6]) {
+            sample.sample.k_vector = [k, 0.0, 0.0];
+            for mode in &mut sample.modes { mode.consistent_p1_metric = Some(metric.clone()); }
+        }
+        let raw_vectors = samples.iter().flat_map(|sample| &sample.modes)
+            .map(|mode| mode.reduced_vector.clone()).collect::<Vec<_>>();
+        let mut result = PathSolveResult {
+            samples, branches: Vec::new(), solver_model: EigenSolverModel::ReferenceScalarTangent,
+            notes: Vec::new(), include_demag: false, dispersion_validation: None,
+            k0_kittel_validation: None, solver_policy: None, dispersion_analytic_reference: None,
+            k0_kittel_periodic_airbox_demag: None,
+        };
+        let cfg = ModeTrackingIR { overlap_floor: 0.9, ..ModeTrackingIR::default() };
+        track_branches(&mut result, Some(&cfg));
+        assert_eq!(result.branches.len(), 2);
+        for branch in &result.branches {
+            assert_eq!(branch.points.len(), 3);
+            for (point, transition) in branch.points.iter().skip(1).zip([
+                TrackingTransition::SplitToDegenerate, TrackingTransition::DegenerateToSplit,
+            ]) {
+                let edge = point.tracking_edge.as_ref().unwrap();
+                assert_eq!(std::mem::discriminant(&edge.transition), std::mem::discriminant(&transition));
+                assert_eq!(edge.skipped_sample_count, 0); // sample IDs are not ordinal positions
+                assert_eq!(edge.policy, cfg);
+                let subspace = edge.subspace.as_ref().unwrap();
+                assert_eq!(subspace.rank, 2);
+                assert!(subspace.principal_cosines.iter().all(|value| (*value - 1.0).abs() < 1e-12));
+                assert!(point.overlap_prev.is_none());
+            }
+        }
+        assert_eq!(result.branches[0].points[2].raw_mode_index, 5);
+        assert_eq!(result.branches[0].points[2].frequency_real_hz, 9.0005e9);
+        assert_ne!(result.branches[0].points[0].frequency_real_hz,
+                   result.branches[0].points[2].frequency_real_hz); // preserve nonreciprocity
+        assert_eq!(raw_vectors, result.samples.iter().flat_map(|sample| &sample.modes)
+            .map(|mode| mode.reduced_vector.clone()).collect::<Vec<_>>());
     }
 
     #[test]

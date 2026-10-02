@@ -85,3 +85,19 @@ został naprawiony w tym przeglądzie.
    zmniejszyć krok k i sprawdzić stabilność oraz przypadki luk/degeneracji.
 5. Zweryfikować manifest/CSV i render w UI. Sam scatterplot nie dowodzi
    fizycznej tożsamości gałęzi ani kompletności widma.
+# Checkpoint naprawy provenance — 2026-10-02
+
+P1 utraty krawędzi naprawiono w kodzie trackera i obu writerach. Rekord
+zawiera rzeczywistą politykę, metrykę, transition, predecessor/gap oraz
+principal cosines/rank i raw ID obu próbek. Historyczne punkty nie dostają
+wymyślonego dowodu, a uszkodzony obecny rekord daje błąd importu.
+Review dodatkowo wykryło restart publikowany jako seed: naprawiono go na
+new_branch/modal_overlap_unavailable i zablokowano weighted summary przy
+brakującej ciągłości. Indeksy klastrów są lokalnymi danymi diagnostycznymi;
+tożsamość wyznaczają predecessor, bieżąca próbka i raw mode ID.
+
+Kontrole: 6 interpretowanych testów źródeł/algebry consistent mass PASS,
+parser Rust PASS, walidator mapy 0831 PASS. Przygotowane testy native dla
+signed k/faz/reorder/split, restartu i writer pair/gap nie były kompilowane
+ani uruchamiane. Naprawa źródeł nie zamyka managed runtime, convergence,
+replay, fizycznych crossing/split/merge ani authored degeneracy policy.

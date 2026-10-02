@@ -2824,3 +2824,20 @@ oraz orchestrator etapów. Jawne null w opcjonalnym widoku jest odrzucane;
 brak klucza v1 zachowuje None. Zakres źródła sprawdzany jest przed capture
 certyfikatu. Digest accepted-fields jest ścisłym opaque dowodem producenta;
 nie zastępuje niezależnego sprawdzenia dostarczonego payloadu recomputed.
+
+
+### Dowód przypisania krawędzi trackingu (addytywne rozszerzenie v2)
+
+`branches.v2.json` i zgodny alias `branches.json` mogą zawierać w punkcie
+`tracking_edge`: politykę `ModeTrackingIR`, rzeczywiste `score_source`,
+metrykę, transition, previous_sample_index, skipped_sample_count i subspace.
+Rekord subspace zawiera rank, principal_cosines/minimum, branch_ids i raw
+mode indices obu próbek. Lokalne previous/current_cluster są indeksami
+pomocniczymi; tożsamość wyznaczają próbki i jawne ID modów, nie te indeksy.
+Null oznacza brak historycznego dowodu, a nie udany transport.
+Nowy punkt `new_branch` ma `modal_overlap_unavailable` i nie spełnia
+produkcyjnej bramki ciągłości. Minimum kątów głównych nie zastępuje
+`overlap_prev`. Polityka ogólnego writera pochodzi wyłącznie z zgodnych
+rekordów; `tracking_policy_availability` wynosi complete albo missing_or_mixed.
+Pola method/floor są null w drugim przypadku. Uszkodzone obecne provenance
+jest błędem importu. Dotychczasowa skalarna bramka produkcyjna pozostaje bez zmian.

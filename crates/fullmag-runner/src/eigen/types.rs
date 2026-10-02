@@ -443,6 +443,74 @@ pub struct SingleKSolveResult {
     pub solver_diagnostics: Option<serde_json::Value>,
 }
 
+/// Evidence recorded at assignment time, rather than inferred by artifact writers.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct TrackingEdgeProvenance {
+    pub policy: fullmag_ir::ModeTrackingIR,
+    pub score_source: TrackingScoreSource,
+    pub metric: TrackingMetricDefinition,
+    pub transition: TrackingTransition,
+    pub previous_sample_index: Option<usize>,
+    pub skipped_sample_count: usize,
+    pub subspace: Option<TrackingSubspaceEvidence>,
+}
+
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TrackingScoreSource {
+    Seed,
+    ModalOverlapWeightedScore,
+    ModalOverlapUnweightedScore,
+    ModalSubspaceTransportScore,
+    FrequencyScoreFallback,
+    ModalOverlapUnavailable,
+}
+
+impl TrackingScoreSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Seed => "seed",
+            Self::ModalOverlapWeightedScore => "modal_overlap_weighted_score",
+            Self::ModalOverlapUnweightedScore => "modal_overlap_unweighted_score",
+            Self::ModalSubspaceTransportScore => "modal_subspace_transport_score",
+            Self::FrequencyScoreFallback => "frequency_score_fallback",
+            Self::ModalOverlapUnavailable => "modal_overlap_unavailable",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TrackingMetricDefinition {
+    ConsistentP1Tet4CartesianNodalEnvelope,
+    DiagonalNodalMass,
+    Euclidean,
+    Unavailable,
+}
+
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TrackingTransition {
+    Seed,
+    NewBranch,
+    Pair,
+    DegenerateToDegenerate,
+    SplitToDegenerate,
+    DegenerateToSplit,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct TrackingSubspaceEvidence {
+    pub rank: usize,
+    pub previous_cluster: usize,
+    pub current_cluster: usize,
+    pub branch_ids: Vec<usize>,
+    pub previous_raw_mode_indices: Vec<usize>,
+    pub current_raw_mode_indices: Vec<usize>,
+    pub principal_cosines: Vec<f64>,
+    pub principal_minimum: f64,
+}
+
 #[derive(Debug, Clone)]
 pub struct TrackedBranchPoint {
     pub sample_index: usize,
@@ -451,6 +519,7 @@ pub struct TrackedBranchPoint {
     pub frequency_imag_hz: f64,
     pub tracking_confidence: f64,
     pub overlap_prev: Option<f64>,
+    pub tracking_edge: Option<TrackingEdgeProvenance>,
 }
 
 #[derive(Debug, Clone)]

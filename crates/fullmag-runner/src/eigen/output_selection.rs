@@ -708,6 +708,7 @@ mod tests {
                 frequency_imag_hz: 0.0,
                 tracking_confidence: 1.0,
                 overlap_prev: None,
+                tracking_edge: None,
             }],
         }
     }

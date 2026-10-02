@@ -100,6 +100,7 @@ struct BranchPointArtifact {
     mode_field_id: String,
     mode_field_resource_key: String,
     overlap_prev: Option<f64>,
+    tracking_edge: Option<crate::eigen::types::TrackingEdgeProvenance>,
     #[serde(skip_serializing_if = "Option::is_none")]
     modal_overlap_unavailable_reason: Option<&'static str>,
 }
@@ -114,6 +115,10 @@ struct BranchArtifact {
 
 #[derive(Debug, Clone, Serialize)]
 struct BranchesArtifact {
+    tracking_policy_availability: &'static str,
+    tracking_method: Option<fullmag_ir::ModeTrackingMethodIR>,
+    overlap_floor: Option<f64>,
+    frequency_window_hz: Option<f64>,
     schema_version: &'static str,
     solver_model: String,
     tracking_score_source: &'static str,
@@ -217,6 +222,9 @@ fn branch_point_tracking_score_source(
     let Some(point) = branch.points.get(point_index) else {
         return "modal_overlap_unavailable";
     };
+    if let Some(edge) = &point.tracking_edge {
+        return edge.score_source.as_str();
+    }
     if point_index == 0 {
         return "seed";
     }
@@ -840,6 +848,7 @@ pub fn write_branch_bundle_with_sample_namespace(
                         mode_field_id,
                         mode_field_resource_key,
                         overlap_prev: point.overlap_prev,
+                        tracking_edge: point.tracking_edge.clone(),
                         modal_overlap_unavailable_reason: branch_point_tracking_unavailable_reason(
                             result,
                             branch,
@@ -851,7 +860,12 @@ pub fn write_branch_bundle_with_sample_namespace(
         })
         .collect();
     let tracking = tracking_summary_from_branch_artifacts(&branches);
+    let policy = crate::eigen::tracking::recorded_tracking_policy(result);
     let branches_v2 = BranchesArtifact {
+        tracking_policy_availability: if policy.is_some() { "complete" } else { "missing_or_mixed" },
+        tracking_method: policy.map(|p| p.method),
+        overlap_floor: policy.map(|p| p.overlap_floor),
+        frequency_window_hz: policy.and_then(|p| p.frequency_window_hz),
         schema_version: "eigen_branches.v2",
         solver_model: result.solver_model.as_str().to_string(),
         tracking_score_source: tracking.tracking_score_source,
@@ -865,6 +879,10 @@ pub fn write_branch_bundle_with_sample_namespace(
         serde_json::to_vec_pretty(&branches_v2).unwrap(),
     )?;
     let payload = BranchesArtifact {
+        tracking_policy_availability: if policy.is_some() { "complete" } else { "missing_or_mixed" },
+        tracking_method: policy.map(|p| p.method),
+        overlap_floor: policy.map(|p| p.overlap_floor),
+        frequency_window_hz: policy.and_then(|p| p.frequency_window_hz),
         schema_version: "2",
         solver_model: result.solver_model.as_str().to_string(),
         tracking_score_source: tracking.tracking_score_source,

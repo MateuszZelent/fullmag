@@ -1202,6 +1202,7 @@ pub(crate) fn execute_fem_eigen_path_with_producer_identity(
                             .unwrap_or(p.frequency_real_hz * std::f64::consts::TAU),
                         "tracking_confidence": p.tracking_confidence,
                         "overlap_prev": p.overlap_prev,
+                        "tracking_edge": p.tracking_edge,
                         "tracking_score_source": eigen_path_branch_point_tracking_score_source(
                             &path_result,
                             b,
@@ -1233,8 +1234,14 @@ pub(crate) fn execute_fem_eigen_path_with_producer_identity(
             }))
         })
         .collect();
+    let tracking_policy_availability = if crate::eigen::tracking::recorded_tracking_policy(&path_result).is_some() {
+        "complete"
+    } else {
+        "missing_or_mixed"
+    };
     let branches_v2 = serde_json::json!({
         "schema_version": "eigen_branches.v2",
+        "tracking_policy_availability": tracking_policy_availability,
         "tracking_method": tracking_method,
         "tracking_score_source": tracking_score_source,
         "modal_overlap_available": modal_overlap_available,
@@ -1269,7 +1276,11 @@ pub(crate) fn execute_fem_eigen_path_with_producer_identity(
             relative_path: "eigen/branches.json".to_string(),
             bytes: serde_json::to_vec_pretty(&serde_json::json!({
                 "schema_version": "2",
+                "tracking_policy_availability": tracking_policy_availability,
                 "solver_model": path_result.solver_model.as_str(),
+                "tracking_method": tracking_method,
+                "overlap_floor": tracking_cfg.overlap_floor,
+                "frequency_window_hz": tracking_cfg.frequency_window_hz,
                 "branches": v2_branches,
             }))
             .unwrap_or_default(),

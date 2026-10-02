@@ -534,7 +534,7 @@ pub(crate) fn k0_kittel_validation_auxiliary_artifacts_from_bias_field_sweep(
         });
     }
 
-    let tracked_branches = branches_from_bias_field_sweep(branches);
+    let tracked_branches = branches_from_bias_field_sweep(branches)?;
     if tracked_branches.is_empty() {
         return Err(invalid_k0_kittel_artifact(
             "physical Kittel adapter requires tracked branches",
@@ -737,8 +737,16 @@ fn bias_field_branch_map(branches: &Value) -> std::collections::BTreeMap<(usize,
     map
 }
 
-fn branches_from_bias_field_sweep(branches: &Value) -> Vec<TrackedBranch> {
-    branches
+fn branches_from_bias_field_sweep(branches: &Value) -> std::io::Result<Vec<TrackedBranch>> {
+    // Missing/null evidence is a historical artifact; malformed present evidence is an error.
+    for point in branches.get("branches").and_then(Value::as_array).into_iter().flatten()
+        .flat_map(|branch| branch.get("points").and_then(Value::as_array).into_iter().flatten()) {
+        if let Some(edge) = point.get("tracking_edge").filter(|v| !v.is_null()) {
+            serde_json::from_value::<crate::eigen::types::TrackingEdgeProvenance>(edge.clone())
+                .map_err(|error| invalid_k0_kittel_artifact(&format!("invalid tracking_edge: {error}")))?;
+        }
+    }
+    Ok(branches
         .get("branches")
         .and_then(Value::as_array)
         .into_iter()
@@ -764,6 +772,8 @@ fn branches_from_bias_field_sweep(branches: &Value) -> Vec<TrackedBranch> {
                         tracking_confidence: finite_json_f64(point, &["tracking_confidence"])
                             .unwrap_or(1.0),
                         overlap_prev: finite_json_f64(point, &["overlap_prev"]),
+                        tracking_edge: point.get("tracking_edge").filter(|v| !v.is_null())
+                            .and_then(|v| serde_json::from_value(v.clone()).ok()),
                     })
                 })
                 .collect::<Vec<_>>();
@@ -776,7 +786,7 @@ fn branches_from_bias_field_sweep(branches: &Value) -> Vec<TrackedBranch> {
                 points,
             })
         })
-        .collect()
+        .collect())
 }
 
 fn find_bias_field_mode_metadata(

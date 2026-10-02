@@ -7774,6 +7774,7 @@ mod tests {
                 frequency_imag_hz: 0.0,
                 tracking_confidence: 1.0,
                 overlap_prev: (sample_index > 0).then_some(1.0),
+                tracking_edge: None,
             });
         }
 

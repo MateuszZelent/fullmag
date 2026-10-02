@@ -320,17 +320,41 @@
     },
     {
       "id": "eq-fem-waveguide-weak-source-sign",
-      "symbols": ["section_domain", "test_function", "potential", "gradient", "wave_number", "dynamic_magnetization_transverse", "area_measure"],
-      "sources": ["source-waveguide-weak-sign", "source-waveguide-cross-section", "source-waveguide-sign-oracle", "source-waveguide-section-regression"]
+      "symbols": [
+        "section_domain",
+        "test_function",
+        "potential",
+        "gradient",
+        "wave_number",
+        "dynamic_magnetization_transverse",
+        "area_measure"
+      ],
+      "sources": [
+        "source-waveguide-weak-sign",
+        "source-waveguide-cross-section",
+        "source-waveguide-sign-oracle",
+        "source-waveguide-section-regression"
+      ]
     },
     {
       "id": "eq-fem-waveguide-section-measure",
       "symbols": [
-        "section_domain", "extrusion_length", "extruded_domain", "section_basis",
-        "section_indices", "area_measure", "section_mass", "section_stiffness",
-        "gradient", "volume_measure"
+        "section_domain",
+        "extrusion_length",
+        "extruded_domain",
+        "section_basis",
+        "section_indices",
+        "area_measure",
+        "section_mass",
+        "section_stiffness",
+        "gradient",
+        "volume_measure"
       ],
-      "sources": ["source-waveguide-section-measure", "source-waveguide-cross-section", "source-waveguide-section-regression"]
+      "sources": [
+        "source-waveguide-section-measure",
+        "source-waveguide-cross-section",
+        "source-waveguide-section-regression"
+      ]
     },
     {
       "id": "eq-fem-k0-probe-componentwise-residual",
@@ -370,7 +394,11 @@
         "source-profile-packing",
         "source-profile-mass",
         "source-profile-overlap",
-        "source-profile-mass-regression"
+        "source-profile-mass-regression",
+        "source-tracking-edge-record",
+        "source-tracking-edge-producer",
+        "source-tracking-edge-writer",
+        "source-tracking-edge-signed-regression"
       ]
     },
     {
@@ -2031,6 +2059,30 @@
       "symbol": "test_native_solver_keeps_residual_and_selected_only_policies",
       "evidence_status": "interpreted source checks PASS; native compilation, managed runtime and physics qualification pending",
       "responsibility": "Freeze public target transfer, unchanged residual policies, selected-only output and the prepared Rust single/path regressions."
+    },
+    {
+      "id": "source-tracking-edge-record",
+      "path": "crates/fullmag-runner/src/eigen/types.rs",
+      "symbol": "TrackingEdgeProvenance",
+      "responsibility": "Assignment-time policy, gap and subspace evidence"
+    },
+    {
+      "id": "source-tracking-edge-producer",
+      "path": "crates/fullmag-runner/src/eigen/tracking.rs",
+      "symbol": "track_branches",
+      "responsibility": "Record accepted edge before updating transported frames"
+    },
+    {
+      "id": "source-tracking-edge-writer",
+      "path": "crates/fullmag-runner/src/eigen/artifacts/modal_manifest.rs",
+      "symbol": "write_branch_bundle_with_sample_namespace",
+      "responsibility": "Serialize recorded edge and actual consensus policy"
+    },
+    {
+      "id": "source-tracking-edge-signed-regression",
+      "path": "crates/fullmag-runner/src/eigen/tracking.rs",
+      "symbol": "signed_k_tracking_records_split_transport_without_mutating_raw_modes",
+      "responsibility": "Prepared uncompiled signed-k split/degenerate regression"
     }
   ],
   "public_api": {

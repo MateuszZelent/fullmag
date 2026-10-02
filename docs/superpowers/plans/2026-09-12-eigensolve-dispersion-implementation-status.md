@@ -164,6 +164,36 @@ Sterownik 7375 nadal żywy. Health runnera: worker_alive/accepting_jobs true,
 brak aktywnych jobów, waiting_for_disk. Najnowszy pomiar wolnego storage:
 1 878 401 024 B (około 1,75 GiB), poniżej 8 GiB. Brak nowych punktów FEM.
 
+### S06/S07 — zapis rzeczywistej krawędzi trackingu, 2026-10-02
+
+Naprawiono w źródłach P1 utraty provenance przypisania: `TrackedBranchPoint`
+przechowuje `TrackingEdgeProvenance` utworzone przy przyjęciu edge. Oba
+writery przenoszą ten rekord, wraz z polityką, metryką, poprzednią próbką,
+luką, rodzajem przejścia i danymi principal angles/rank/ID obu klastrów.
+Ogólny writer publikuje metodę/próg wyłącznie z zgodnej zapisanej polityki;
+brak lub mixed provenance ma jawny status. Alias legacy FEM dostał również
+metodę/próg. Uszkodzony obecny rekord jest błędem importu.
+
+Review ujawniło dodatkowo restart oznaczany jako seed: poprawiono go na
+`new_branch` + `modal_overlap_unavailable`; summary nie promuje brakującej
+ciągłości do weighted overlap. Zachowano skalarne bramki akceptacji.
+Przygotowano native regresje signed [-K,0,+K], faz/reorder/split, restartu
+oraz serializacji pary z luką. Nie kompilowano ani nie wykonano tych testów
+zgodnie z zakazem użytkownika. Sześć interpretowanych kontroli źródeł i
+niezależnej algebry consistent mass PASS; parser Rust PASS; mapa 0831 PASS.
+Nie jest to dowód wykonania trackera w runtime. S06/S07 pozostają otwarte.
+
+Job #196 potwierdzono przez klienta zachowanej kapsuły: queued; kontroler
+7375 nadal działa. Runner worker_alive/accepting_jobs true, bez aktywnych
+jobów, waiting_for_disk; najnowszy pomiar 643 960 832 B (~0,60 GiB).
+Klient głównego checkoutu odrzucił odczyt z powodu allow-list mismatch;
+odczyt zatwierdzonym klientem kapsuły działa, bez zmiany profili/restartu.
+Nie usunięto danych, nie zlecono drugiego buildu i nie ma nowych punktów FEM.
+
+Następny krok źródłowy: rzeczywiste gamma planu w ogólnych metadanych modów
+(S07/S10). Po odblokowaniu storage: wynik #196 i pilot signed k, następnie
+pełne okno, zbieżność, COMSOL A1, tracking runtime, UI/GPU i integracja S12.
+
 ### S06 — weryfikacja istniejącego podłączenia, 2026-10-02
 
 Przegląd aktualnego kodu potwierdził, że starszy opis tabeli S06 był
