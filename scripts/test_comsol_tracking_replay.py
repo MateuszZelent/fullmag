@@ -9,7 +9,8 @@ import unittest
 import numpy as np
 
 from comsol_tracking_metric import Tet4TrackingMetric
-from comsol_tracking_replay import replay_recorded_frames, replay_tracking_fields, _frequency_score
+from comsol_tracking_replay import replay_recorded_frames, replay_tracking_fields, _frequency_score, verify_global_prediction
+from comsol_tracking_global import reconstruct_global_assignment
 from test_validate_comsol_dispersion_scientific_gate import _tracking_fixture_payload
 from test_comsol_tracking_fields import write_tracking_fixture
 
@@ -43,7 +44,7 @@ class TrackingReplayTests(unittest.TestCase):
         self.assertEqual(result["status"], "pass")
         self.assertEqual(len(result["replayed_edges"]), 2)
         self.assertEqual(result["qualification"], "NOT VERIFIED")
-        self.assertEqual(result["assignment_replay"], "NOT VERIFIED")
+        self.assertEqual(result["assignment_replay"], "pass")
         self.assertEqual([record["status"] for record in result["global_policy_predictions"]], ["pass", "pass"])
         self.assertEqual(result["global_policy_predictions"][0]["predicted_matches"][0]["raw_mode_index"], 2)
 
@@ -56,6 +57,33 @@ class TrackingReplayTests(unittest.TestCase):
             if defect == "k": self.modes[(2, 7)]["k_vector_rad_per_m"] = [-2., 0, 0]
             with self.subTest(defect=defect), self.assertRaises(ValueError):
                 self.replay()
+
+    def test_locally_valid_but_globally_inferior_pair_assignment_is_rejected(self):
+        branch = copy.deepcopy(self.branches["branches"][0])
+        branch["branch_id"] = 4
+        for index, point in enumerate(branch["points"]):
+            raw = (8, 6, 5)[index]
+            frequency = 2e10 + index * 1e6
+            point.update(raw_mode_index=raw, frequency_real_hz=frequency)
+            self.samples[index]["modes"].append(dict(raw_mode_index=raw,
+                frequency_real_hz=frequency, frequency_imag_hz=0.))
+            self.modes[(index, raw)] = {**self.modes[(index, (9, 2, 7)[index])],
+                "frequency_real_hz": frequency, "envelope": self.y}
+        self.modes[(1, 2)]["envelope"] = .6 * self.x + .8 * self.y
+        self.modes[(1, 6)]["envelope"] = .8 * self.x + .6 * self.y
+        self.branches = _tracking_fixture_payload([self.branches["branches"][0], branch])
+        for record in self.branches["branches"]:
+            for index in (1, 2):
+                point = record["points"][index]
+                previous = record["points"][index - 1]
+                point["overlap_prev"] = .6
+                point["tracking_confidence"] = .85 * .6 + .15 * _frequency_score(
+                    previous["frequency_real_hz"], point["frequency_real_hz"], None)
+        result = self.replay()
+        self.assertEqual(result["status"], "pass")  # The chosen metrics are truthful.
+        self.assertEqual(result["assignment_replay"], "NOT VERIFIED")
+        self.assertEqual(result["global_assignment_verification"][0]["status"], "fail")
+        self.assertIn("mean score", result["global_assignment_verification"][0]["reason"])
 
     def subspace_path(self, angle=None):
         branch = copy.deepcopy(self.branches["branches"][0])
@@ -90,6 +118,31 @@ class TrackingReplayTests(unittest.TestCase):
         self.assertAlmostEqual(result["replayed_edges"][1]["overlap"], 1.)
         self.assertAlmostEqual(self.metric.overlap(self.modes[(1, 2)]["envelope"], self.x), 2 ** -.5)
 
+    def test_complete_degenerate_edge_can_close_assignment_certificate(self):
+        self.subspace_path()
+        self.samples = self.samples[:2]
+        for branch in self.branches["branches"]:
+            branch["points"] = branch["points"][:2]
+        result = self.replay()
+        self.assertEqual(result["assignment_replay"], "pass", result["global_assignment_verification"])
+        self.assertEqual(result["qualification"], "NOT VERIFIED")
+
+    def test_equivalent_hungarian_pair_optimum_is_reported(self):
+        policy = dict(method="overlap_hungarian", overlap_floor=.5, frequency_window_hz=1e8)
+        current = [dict(raw_mode_index=2,frequency_real_hz=1e11,frequency_imag_hz=0.,envelope=(self.x+self.y)/np.sqrt(2)),
+                   dict(raw_mode_index=6,frequency_real_hz=2e11,frequency_imag_hz=0.,envelope=(self.x-self.y)/np.sqrt(2))]
+        prediction = reconstruct_global_assignment(self.metric,{3:self.x,4:self.y},
+            [(3,1e10,0.),(4,2e10,0.)],current,policy,_frequency_score)
+        expected = {identity:edge["raw_mode_index"] for identity,edge in prediction["matches"].items()}
+        recorded = {3:expected[4],4:expected[3]}
+        points = {identity:dict(raw_mode_index=raw,tracking_confidence=float(.85/np.sqrt(2)),
+                              tracking_edge=dict(transition="pair")) for identity,raw in recorded.items()}
+        check = verify_global_prediction(self.metric,prediction,points,current,
+            {identity:next(mode["envelope"] for mode in current if mode["raw_mode_index"]==raw)
+             for identity,raw in recorded.items()},"overlap_hungarian")
+        self.assertEqual(check["status"],"pass")
+        self.assertTrue(check["equivalent_optimum"])
+
     def test_forged_principal_cosines_rejected(self):
         self.subspace_path()
         for branch in self.branches["branches"]:
@@ -113,8 +166,8 @@ class TrackingReplayTests(unittest.TestCase):
                 self.replay()
 
     def test_swapped_raw_assignment_remains_explicitly_unverified(self):
-        # The metric is subspace-invariant; Hungarian raw assignment is a
-        # separate, still missing gate. Never promote this to QUALIFIED.
+        # The local raw tie is valid; the next recorded pair contradicts the
+        # reconstructed group policy, so the entire path remains unverified.
         self.subspace_path()
         first, second = self.branches["branches"]
         first["points"][1]["raw_mode_index"], second["points"][1]["raw_mode_index"] = 6, 2
@@ -233,6 +286,7 @@ class TrackingReplayDiskTests(unittest.TestCase):
         self.assertEqual(result["status"], "pass", result)
         self.assertEqual(len(result["replayed_edges"]), 2)
         self.assertEqual(result["qualification"], "NOT VERIFIED")
+        self.assertEqual(result["assignment_replay"], "pass")
 
     def test_unselected_candidate_without_field_blocks_replay(self):
         self.write_pair_path()
@@ -329,6 +383,61 @@ class TrackingReplayDiskTests(unittest.TestCase):
         report = replay_tracking_fields(self.root, expected_hashes=hashes)
         self.assertEqual(report["status"], "fail")
         self.assertTrue(any("gate-bound" in reason for reason in report["reasons"]))
+
+    def test_replay_must_match_initial_gate_bound_header_bytes(self):
+        self.write_pair_path()
+        initial = replay_tracking_fields(self.root)
+        self.assertEqual(initial["status"], "pass", initial)
+        hashes = {item["path"]: item["sha256"] for item in initial["file_hashes"]}
+        path = self.root / "eigen/modes/sample_0001/mode_0002.json"
+        path.write_text(path.read_text() + " ")
+        report = replay_tracking_fields(self.root, expected_hashes=hashes)
+        self.assertEqual(report["status"], "fail", report)
+        self.assertTrue(any("gate-bound" in reason for reason in report["reasons"]))
+
+    def test_selected_branch_ids_do_not_filter_global_candidate_scope(self):
+        branches = self.write_pair_path()
+        spectrum_path = self.root / "eigen/spectrum.v2.json"
+        spectrum = json.loads(spectrum_path.read_text())
+        nodes = np.array(json.loads((self.root / "metadata.json").read_text())[
+            "execution_plan"]["backend_plan"]["mesh"]["nodes"])
+        points = []
+        for sample in spectrum["samples"]:
+            index = sample["sample_index"]
+            raw = 64 + index
+            source = sample["modes"][0]["raw_mode_index"]
+            mode = json.loads((self.root / f"eigen/modes/sample_{index:04d}/mode_{source:04d}.json").read_text())
+            field = self.envelope.conjugate() * np.exp(-1j * (nodes @ sample["k_vector"]))[:, None]
+            data = np.stack([field.real, field.imag], axis=-1).astype("<f8").tobytes()
+            relative = f"eigen/mode_fields/sample_{index:04d}/mode_{raw:04d}/vector.bin"
+            vector = self.root / relative
+            vector.parent.mkdir(parents=True)
+            vector.write_bytes(data)
+            mode.update(raw_mode_index=raw, frequency_real_hz=2e10,
+                        compatibility_binary_payload_path=relative,
+                        payload_sha256="sha256:" + hashlib.sha256(data).hexdigest())
+            (self.root / f"eigen/modes/sample_{index:04d}/mode_{raw:04d}.json").write_text(json.dumps(mode))
+            sample["modes"].append({key: mode[key] for key in
+                ("raw_mode_index", "frequency_real_hz", "frequency_imag_hz")})
+            points.append(dict(sample_index=index, raw_mode_index=raw, frequency_real_hz=2e10,
+                               frequency_imag_hz=0., tracking_confidence=1.))
+        extra = _tracking_fixture_payload([dict(branch_id=8, points=points)])["branches"][0]
+        branches["branches"].append(extra)
+        spectrum_path.write_text(json.dumps(spectrum))
+        (self.root / "eigen/branches.v2.json").write_text(json.dumps(branches))
+        result = replay_tracking_fields(self.root, selected_branch_ids=[3])
+        self.assertEqual(result["status"], "pass", result)
+        self.assertEqual(result["replayed_branch_scope"], "all_candidates")
+        self.assertEqual(result["selected_branch_ids"], [3])
+        self.assertEqual(result["branch_count"], 2)
+        self.assertEqual(result["assignment_replay"], "pass")
+        self.assertEqual(result["candidate_field_coverage"]["exported_candidate_count"], 6)
+
+    def test_invalid_selected_branch_ids_fail_closed(self):
+        self.write_pair_path()
+        for ids in ([], [False], [-1], [3.0], [999]):
+            with self.subTest(ids=ids):
+                self.assertEqual(replay_tracking_fields(self.root, selected_branch_ids=ids)["status"], "fail")
 
     def test_missing_payload_reports_missing_and_corrupt_phase_reports_fail(self):
         self.write_pair_path()

@@ -1,7 +1,7 @@
 """Replay recorded modal metrics from actual hash-bound native fields.
 
-This checks the chosen edges, not candidate-cluster selection or the global
-assignment optimum. A metric pass therefore retains NOT VERIFIED overall.
+Metric and full-path assignment certificates are separate. Even a complete
+assignment replay retains NOT VERIFIED for overall scientific qualification.
 """
 import hashlib
 import json
@@ -83,6 +83,40 @@ def bind_candidate_fields(samples, modes):
                        f"candidate field {name}", relative=True)
 
 
+def verify_global_prediction(metric, prediction, points, current, frames, method):
+    """Compare a complete recorded edge set with reconstructed policy choices."""
+    expected = prediction["matches"]
+    if set(expected) != set(points):
+        raise ValueError("global assignment branch coverage differs")
+    recorded_raw = [point["raw_mode_index"] for point in points.values()]
+    if len(set(recorded_raw)) != len(recorded_raw) or set(recorded_raw) != {mode["raw_mode_index"] for mode in current}:
+        raise ValueError("global assignment does not cover all spectrum candidates")
+    equivalent = False
+    for identity, point in points.items():
+        edge = expected[identity]
+        group = edge["group"]
+        transition = group["transition"] if group else "pair"
+        if point["tracking_edge"]["transition"] != transition:
+            raise ValueError("global assignment transition differs")
+        if group is not None:
+            stored = point["tracking_edge"]["subspace"]
+            if set(stored["branch_ids"]) != set(group["previous_ids"]) or \
+                    set(stored["current_raw_mode_indices"]) != {current[slot]["raw_mode_index"] for slot in group["current_ids"]} or \
+                    stored["previous_cluster"] != group["previous_cluster"] or stored["current_cluster"] != group["current_cluster"]:
+                raise ValueError("global assignment selected group differs")
+            if metric.overlap(frames[identity], prediction["next_frames"][identity]) < 1. - METRIC_TOLERANCE:
+                raise ValueError("global assignment transported frame differs")
+        if point["raw_mode_index"] != edge["raw_mode_index"]:
+            if group is None and method == "overlap_greedy":
+                raise ValueError("global greedy assignment differs")
+            equivalent = True
+    measured = sum(_number(point["tracking_confidence"], "assignment score") for point in points.values())
+    optimum = sum(edge["score"] for edge in expected.values())
+    _close(measured / len(points), optimum / len(points), "global assignment mean score")
+    return dict(status="pass", equivalent_optimum=equivalent, branch_count=len(points),
+                recorded_mean_score=measured / len(points), predicted_mean_score=optimum / len(points))
+
+
 def replay_recorded_frames(metric, modes, branches, samples, *, candidate_branch_ids=None):
     """Reconstruct every chosen frame/metric; inputs already bound by caller.
 
@@ -146,11 +180,13 @@ def replay_recorded_frames(metric, modes, branches, samples, *, candidate_branch
     frames = {}
     records = []
     global_predictions = []
+    assignment_checks = []
     sample_by_id = {item["sample_index"]: item for item in samples}
     if candidate_branch_ids is None:
         candidate_branch_ids = {(sample_id, point["raw_mode_index"]): branch_id
                                 for branch_id, points in by_branch.items() for sample_id, point in points.items()}
     for position, sample in enumerate(order):
+        prediction = None
         next_frames = {}
         processed = set()
         if position:
@@ -164,8 +200,7 @@ def replay_recorded_frames(metric, modes, branches, samples, *, candidate_branch
                 policy = next(iter(by_branch.values()))[sample]["tracking_edge"]["policy"]
                 prediction = reconstruct_global_assignment(metric, frames, previous_entries,
                                                             current, policy, _frequency_score)
-                # Predictions are generated from all candidates, but are not
-                # promoted into a table-assignment certificate here.
+                # Compare predictions after reconstructing every chosen frame.
                 global_predictions.append(dict(sample_index=sample, status="pass",
                     candidate_count=prediction["candidate_count"],
                     selected_groups=[dict(previous_cluster=group["previous_cluster"],
@@ -273,16 +308,29 @@ def replay_recorded_frames(metric, modes, branches, samples, *, candidate_branch
                     recorded_mean_weight=recorded_weight / len(ids),
                     optimal_mean_weight=optimal_weight / len(ids), equivalent_optimum=recorded_assignment != optimal_assignment)))
         frames = next_frames
+        if position:
+            if prediction is None:
+                assignment_checks.append(dict(sample_index=sample, status="missing", reason=global_predictions[-1].get("reason")))
+            else:
+                try:
+                    check = verify_global_prediction(metric, prediction,
+                        {identity: points[sample] for identity, points in by_branch.items()}, current, frames, policy["method"])
+                    assignment_checks.append(dict(sample_index=sample, **check))
+                except ValueError as error:
+                    assignment_checks.append(dict(sample_index=sample, status="fail", reason=str(error)))
     return {"status": "pass", "sample_count": len(order), "branch_count": len(by_branch),
+            "branch_lifecycle_scope": "complete_continuous",
             "replayed_edges": records,
             "global_policy_predictions": global_predictions,
+            "global_assignment_verification": assignment_checks,
             "frequency_group_candidates_replay": "pass" if any("frequency_group_candidate" in record for record in records) else "not_applicable",
             "subspace_raw_assignment_replay": "pass" if any("subspace_raw_assignment" in record for record in records) else "not_applicable",
-            "assignment_replay": "NOT VERIFIED", "qualification": "NOT VERIFIED"}
+            "assignment_replay": "pass" if assignment_checks and all(check["status"] == "pass" for check in assignment_checks) else "NOT VERIFIED",
+            "qualification": "NOT VERIFIED"}
 
 
 def replay_tracking_fields(case_dir, *, selected_branch_ids=None, expected_hashes=None):
-    """Execute metric replay from disk; never trust a precomputed JSON verdict."""
+    """Replay all candidates; selected IDs identify the comparison, not a filter."""
     root = Path(case_dir)
     report = {"status": "missing", "qualification": "NOT VERIFIED", "reasons": []}
     try:
@@ -312,21 +360,13 @@ def replay_tracking_fields(case_dir, *, selected_branch_ids=None, expected_hashe
         except SystemExit as error:
             raise ValueError(f"invalid tracking provenance: {error}") from error
         if selected_branch_ids is not None:
+            if not selected_branch_ids or any(type(identity) is not int or identity < 0 for identity in selected_branch_ids):
+                raise ValueError("selected branch IDs must be nonempty nonnegative integers")
             all_branches = {branch["branch_id"]: branch for branch in branches["branches"]}
-            selected = set(selected_branch_ids)
-            pending = list(selected)
-            while pending:
-                branch = all_branches[pending.pop()]
-                for point in branch["points"]:
-                    edge = point.get("tracking_edge")
-                    if not isinstance(edge, dict):
-                        raise ValueError("missing tracking edge")
-                    subspace = edge.get("subspace")
-                    for dependency in subspace["branch_ids"] if subspace else []:
-                        if dependency not in selected:
-                            selected.add(dependency)
-                            pending.append(dependency)
-            branches = {**branches, "branches": [branch for branch in branches["branches"] if branch["branch_id"] in selected]}
+            if not set(selected_branch_ids).issubset(all_branches):
+                raise ValueError("selected branch ID is absent from the candidate table")
+            # Full candidate assignment requires every branch frame, even when
+            # callers select a subset for their scientific comparison.
         selections = spectrum_candidate_selections(spectrum["samples"])
         for sample, raw in selections:
             for relative in (f"eigen/modes/sample_{sample:04d}/mode_{raw:04d}.json",
@@ -343,7 +383,8 @@ def replay_tracking_fields(case_dir, *, selected_branch_ids=None, expected_hashe
                     raise ValueError(f"tracking replay input differs from gate-bound artifact: {relative}")
         report = replay_recorded_frames(fields["metric"], fields["modes"], branches, spectrum["samples"],
                                         candidate_branch_ids=candidate_branch_ids)
-        report.update(file_hashes=bound_hashes, reasons=[],
+        report.update(file_hashes=bound_hashes, reasons=[], replayed_branch_scope="all_candidates",
+            selected_branch_ids=sorted(selected_branch_ids) if selected_branch_ids is not None else None,
             candidate_field_coverage={"status": "pass", "exported_candidate_count": len(selections),
                                       "solver_spectral_completeness": "NOT VERIFIED"})
     except (OSError, ValueError, TypeError, KeyError, IndexError, OverflowError, AttributeError) as error:

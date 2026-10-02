@@ -918,6 +918,58 @@ class ScientificGateTests(unittest.TestCase):
             self.assertEqual(report["scientific_qualification"], "not_verified")
             self.assertEqual(report["qualification"], "NOT VERIFIED")
 
+    def test_assignment_flag_without_full_step_certificate_cannot_qualify(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = _make_case(Path(directory), "c1")
+            for steps in ([], [dict(sample_index=1, status="pass")],
+                          [dict(sample_index=index, status="pass") for index in reversed(range(1,61))]):
+                with self.subTest(steps=len(steps)), patch.object(gate, "replay_tracking_fields", return_value={
+                    "status":"pass", "reasons":[], "assignment_replay":"pass",
+                    "global_assignment_verification":steps,
+                }):
+                    report = gate.validate_case(case_dir,"c1",parameters_path=PARAMETERS,kpath_path=KPATH)
+                    self.assertEqual(report["checks"]["tracking_assignment_replay"]["status"],"missing")
+                    self.assertEqual(report["qualification"],"NOT VERIFIED")
+
+    def test_full_executed_assignment_certificate_closes_only_its_gate(self):
+        # Consumer logic with an injected component result, not runtime proof.
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = _make_case(Path(directory), "c1")
+            with patch.object(gate,"replay_tracking_fields",return_value={
+                "status":"pass", "reasons":[], "assignment_replay":"pass",
+                "replayed_branch_scope":"all_candidates", "branch_lifecycle_scope":"complete_continuous",
+                "candidate_field_coverage":{"status":"pass", "exported_candidate_count":61 * 8},
+                "global_assignment_verification":[dict(sample_index=index,status="pass") for index in range(1,61)],
+            }):
+                report = gate.validate_case(case_dir,"c1",parameters_path=PARAMETERS,kpath_path=KPATH)
+            self.assertEqual(report["checks"]["tracking_assignment_replay"]["status"],"pass")
+            self.assertEqual(report["status"],"qualified",report["reasons"])
+
+    def test_complete_steps_without_full_candidate_scope_cannot_qualify(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = _make_case(Path(directory), "c1")
+            result = dict(status="pass", reasons=[], assignment_replay="pass",
+                replayed_branch_scope="all_candidates", branch_lifecycle_scope="complete_continuous",
+                candidate_field_coverage=dict(status="pass", exported_candidate_count=61 * 8),
+                global_assignment_verification=[dict(sample_index=index,status="pass") for index in range(1,61)])
+            for defect in ("scope", "lifecycle", "coverage", "count"):
+                changed = copy.deepcopy(result)
+                if defect == "scope":
+                    changed.pop("replayed_branch_scope")
+                elif defect == "lifecycle":
+                    changed.pop("branch_lifecycle_scope")
+                elif defect == "coverage":
+                    changed["candidate_field_coverage"]["status"] = "missing"
+                else:
+                    changed["candidate_field_coverage"]["exported_candidate_count"] -= 1
+                with self.subTest(defect=defect), patch.object(gate,"replay_tracking_fields",return_value=changed):
+                    report = gate.validate_case(case_dir,"c1",parameters_path=PARAMETERS,kpath_path=KPATH)
+                    self.assertEqual(report["checks"]["tracking_assignment_replay"]["status"],"missing")
+                    self.assertEqual(report["qualification"],"NOT VERIFIED")
+
     def test_resolved_spatial_material_override_cannot_claim_homogeneous_ks(self):
         metadata = _native_metadata("c1", "mesh-L1", 2e-6, 24)
         metadata["execution_plan"]["backend_plan"]["material"]["ms_field"] = [800000.0, 1600000.0]
@@ -1123,6 +1175,34 @@ class ScientificGateTests(unittest.TestCase):
                     artifacts, reasons = gate._artifact_map(root)
         self.assertNotIn(Path("metadata.json"), artifacts)
         self.assertTrue(any("symlink or junction" in reason for reason in reasons))
+
+    def test_tracking_snapshot_covers_sparse_unselected_candidates_and_missing_bytes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            header = root / "eigen/modes/sample_0001/mode_0064.json"
+            vector = root / "eigen/mode_fields/sample_0001/mode_0064/vector.bin"
+            header.parent.mkdir(parents=True)
+            vector.parent.mkdir(parents=True)
+            header.write_text("{}")
+            vector.write_bytes(b"candidate")
+            snapshot = gate._tracking_input_hashes(root, {}, {(1, 64): 1e9, (1, 91): 2e9})
+            self.assertEqual(snapshot[header.relative_to(root).as_posix()], "sha256:" + _sha256(header))
+            self.assertEqual(snapshot[vector.relative_to(root).as_posix()], "sha256:" + _sha256(vector))
+            self.assertIsNone(snapshot["eigen/modes/sample_0001/mode_0091.json"])
+            self.assertIsNone(snapshot["eigen/mode_fields/sample_0001/mode_0091/vector.bin"])
+
+    def test_tracking_snapshot_rejects_linked_field_before_hashing(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "eigen/modes/sample_0000/mode_0064.json"
+            path.parent.mkdir(parents=True)
+            path.write_text("{}")
+            original = Path.is_symlink
+            with patch.object(Path, "is_symlink", lambda value: value == path or original(value)):
+                with patch.object(gate, "_sha256", side_effect=AssertionError("linked field was read")):
+                    snapshot = gate._tracking_input_hashes(root, {}, {(0, 64): 1e9})
+            self.assertIsNone(snapshot[path.relative_to(root).as_posix()])
 
     def test_internal_linked_parent_is_rejected(self):
         from unittest.mock import patch

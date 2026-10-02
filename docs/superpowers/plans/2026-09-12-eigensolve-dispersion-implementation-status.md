@@ -1,6 +1,53 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
+## S06/S12 — certyfikat tabeli i początkowe wiązanie wszystkich pól, 2026-10-02
+
+Po bazie 62320ee8f2fd9fbe1562ff0d84c7fadf8ddc1e0a porównanie obejmuje
+całą tabelę z niezależną predykcją: pokrycie raw IDs, przejścia i grupy,
+score Hungarian oraz transportowane ramy. Równoważne optimum pojedynczych
+par jest dopuszczane; greedy wymaga zgodnej deterministycznej pary.
+Oddzielny assignment_replay może mieć pass dopiero po wszystkich krokach.
+Gate dodatkowo sprawdza ich liczbę i kolejność. Nie jest to kwalifikacja
+rzeczywistego runtime ani ukończenie S06/S12.
+
+Poprawiono lukę początkowego snapshotu: poza control JSON wiąże on teraz
+nagłówek i vector.bin każdego kandydata widma, także nieprzypisanego do
+wybranych gałęzi. Brak pliku podczas snapshotu nie pozwala zaakceptować
+późniejszych bajtów. replayed_branch_scope jawnie wynosi all_candidates.
+
+Pozostałe korekty wskazane przez review i odczyt producenta:
+- Certyfikat nie obsługuje jeszcze narodzin, zaników i luk gałęzi.
+- Równoważny wybór alternatywnego zestawu grup przy remisie klastrów
+  pozostaje odrzucany; wymaga odrębnej obsługi i regresji.
+- FULLMAG_COMSOL_DISPERSION_ALL_FIELDS=1 używa range(requested_mode_count)
+  jako raw IDs. To nie zapewnia eksportu wszystkich modów, gdy solver
+  zwraca nieciągłe identyfikatory, np. 64. Należy poprawić selektor producenta
+  i jego konsumentów przed uznaniem pełnej kampanii za uruchamialną.
+
+#196 ponownie odczytany: queued, exit_code=null. Runner worker_alive=true,
+accepting_jobs=true, active_jobs=[], waiting_for_disk. Odczyt wolnego miejsca:
+623 894 528 B, poniżej 8 GiB. Nie restartowano ani nie zlecono duplikatu.
+Nowych punktów solvera i numerycznego wykresu nie uzyskano.
+
+Dowody bieżącego fragmentu: 73 interpretowane testy trackingu PASS,
+54 testy bramki naukowej PASS (145,678 s), focused source-map PASS
+i git diff --check PASS. Regresje obejmują gorsze globalne dopasowanie
+przy prawdziwych lokalnych score, równoważne optimum, dwie gałęzie przy
+wybraniu jednej do porównania, nieciągłe raw IDs w snapshotcie i zmianę
+semantycznie identycznego nagłówka po początkowym odczycie. Wszystkie
+pola są syntetyczne; test agregacji kwalifikacji korzysta z mocka komponentu
+replay i nie stanowi dowodu kwalifikacji rzeczywistej kampanii.
+
+Po review gate wymaga jawnie all_candidates, complete_continuous oraz
+pokrycia pól o liczbie równej liczbie kandydatów widma. Trzy testy konsumenta
+gate PASS (24,169 s), w tym cztery defekty zakresu/lifecycle/coverage/count.
+73 testy trackingu i focused source-map ponownie PASS po tej korekcie;
+35 testów kontraktu dokumentacji PASS. Pełny zestaw 54 testów gate był
+zielony przed dodaniem tej ostatniej regresji; nie nazywamy go 55 PASS.
+
 ## S06/S12 — obliczanie globalnej polityki z pól, 2026-10-02
+
+Checkpoint historyczny — stan przed certyfikatem tabeli opisanym powyżej.
 
 Po `0e3869a077742ac1cb0ad5719df3390be517515c` niezależny helper oblicza
 transport i score wszystkich legalnych grup, stosuje principal-angle floor,
@@ -27,6 +74,8 @@ Dotychczasowy P2 dodatniej częstotliwości był już naprawiony w6c5b9f10c.
 Nowe pola testowe są syntetyczne; runtime/COMSOL/nauka pozostają otwarte.
 
 ## S06/S12 — odtworzenie legalnych grup częstotliwości, 2026-10-02
+
+Checkpoint historyczny — globalna predykcja i certyfikat zostały dodane później.
 
 Po `6c5b9f10c7a95d267b6d6491ad4d179cd1da942b` replay odtwarza legalne
 kandydaty z całego widma sąsiednich próbek: grupowanie względem kotwicy,

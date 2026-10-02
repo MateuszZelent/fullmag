@@ -2132,7 +2132,7 @@
       "id": "source-tracking-assignment-replay",
       "path": "scripts/comsol_tracking_replay.py",
       "symbol": "replay_recorded_frames",
-      "responsibility": "Reject non-optimal subspace raw assignment while retaining equivalent numerical optima and unqualified global assignment"
+      "responsibility": "Reject non-optimal subspace raw assignment while retaining equivalent numerical optima; separate from full-path assignment certificate"
     },
     {
       "id": "source-tracking-assignment-enumeration",
@@ -2165,10 +2165,28 @@
       "responsibility": "Independent policy, dummy, principal-angle-floor and transported-frame fixtures; no FEM runtime proof"
     },
     {
+      "id": "source-tracking-global-table-certificate",
+      "path": "scripts/comsol_tracking_replay.py",
+      "symbol": "verify_global_prediction",
+      "responsibility": "Bind complete recorded assignments and group frames to independent global policy predictions; accept equivalent Hungarian optima"
+    },
+    {
+      "id": "source-tracking-global-table-regression",
+      "path": "scripts/test_comsol_tracking_replay.py",
+      "symbol": "test_locally_valid_but_globally_inferior_pair_assignment_is_rejected",
+      "responsibility": "Reject truthful local edges whose full recorded matching is inferior; synthetic algebra only"
+    },
+    {
+      "id": "source-tracking-initial-field-snapshot",
+      "path": "scripts/validate_comsol_dispersion_scientific_gate.py",
+      "symbol": "_tracking_input_hashes",
+      "responsibility": "Bind every candidate header and vector to initial gate bytes; unavailable snapshots fail replay"
+    },
+    {
       "id": "source-comsol-tracking-path-replay",
       "path": "scripts/comsol_tracking_replay.py",
       "symbol": "replay_recorded_frames",
-      "responsibility": "Bind spectrum endpoints and reconstruct chosen pair/subspace metrics and subsequent frames; global assignment remains unverified"
+      "responsibility": "Replay local metrics and full-step assignments for complete continuous branch sets; scientific qualification remains separate"
     },
     {
       "id": "source-comsol-tracking-disk-replay",

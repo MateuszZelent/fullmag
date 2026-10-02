@@ -788,6 +788,26 @@ def _artifact_map(case_dir: Path) -> tuple[dict[Path, dict[str, Any]], list[str]
     return artifacts, reasons
 
 
+def _tracking_input_hashes(case_dir, artifacts, mode_ids):
+    """Capture every candidate before long-running scientific checks.
+
+    None is an unavailable snapshot, never permission to accept later bytes.
+    The disk replay still performs the field/phase and path certificates.
+    """
+    hashes = {path.as_posix(): "sha256:" + record["sha256"]
+              for path, record in artifacts.items()
+              if path.as_posix() in {"metadata.json", "eigen/spectrum.v2.json", "eigen/branches.v2.json"}}
+    for sample, raw in sorted(mode_ids):
+        for relative in (f"eigen/modes/sample_{sample:04d}/mode_{raw:04d}.json",
+                         f"eigen/mode_fields/sample_{sample:04d}/mode_{raw:04d}/vector.bin"):
+            path = _safe_relative_path(case_dir, relative, "tracking snapshot", [])
+            try:
+                hashes[relative] = "sha256:" + _sha256(path) if path is not None else None
+            except OSError:
+                hashes[relative] = None
+    return hashes
+
+
 def _sample_frequency(sample: Mapping[str, Any], raw_mode_index: int | None = None) -> float | None:
     modes = sample.get("modes")
     if not isinstance(modes, list):
@@ -2641,6 +2661,7 @@ def validate_case(
     mode_map: dict[tuple[int, int], float] = {}
     if spectrum:
         sample_map, mode_map = _validate_spectrum(spectrum, case, expected_path, reasons)
+    tracking_input_hashes = _tracking_input_hashes(case_dir, artifacts, mode_map) if case in PATH_CASES else {}
     selected_branches: list[dict[str, Any]] = []
     branch_check = _new_check("missing")
     if branches:
@@ -2716,22 +2737,33 @@ def validate_case(
     )
     campaign_contract_status = "pass" if not reasons else "fail"
     # Execute from actual disk inputs; never trust a supplied replay verdict.
-    # Metric replay does not yet verify candidate selection/global assignment.
+    # Assignment has its own executed, full-path certificate.
     tracking_replay = _new_check("not_applicable")
     assignment_replay = _new_check("not_applicable")
     if case in PATH_CASES:
         tracking_replay = replay_tracking_fields(case_dir,
             selected_branch_ids=[branch["branch_id"] for branch in selected_branches],
-            expected_hashes={path.as_posix(): "sha256:" + record["sha256"]
-                for path, record in artifacts.items()
-                if path.as_posix() in {"metadata.json", "eigen/spectrum.v2.json", "eigen/branches.v2.json"}})
+            expected_hashes=tracking_input_hashes)
         if tracking_replay["status"] != "pass":
             reasons.append(
                 "scientific tracking qualification requires executed hash-bound field-metric replay; "
                 + "; ".join(tracking_replay.get("reasons", []))
             )
-        assignment_replay = _new_check("missing", qualification="NOT VERIFIED")
-        reasons.append("scientific tracking assignment/cluster-selection replay remains NOT VERIFIED")
+        steps = tracking_replay.get("global_assignment_verification", [])
+        expected_steps = sorted(sample_map)[1:]
+        coverage = tracking_replay.get("candidate_field_coverage", {})
+        assignment_pass = tracking_replay.get("assignment_replay") == "pass" and \
+            tracking_replay.get("replayed_branch_scope") == "all_candidates" and \
+            tracking_replay.get("branch_lifecycle_scope") == "complete_continuous" and \
+            isinstance(coverage, dict) and coverage.get("status") == "pass" and \
+            type(coverage.get("exported_candidate_count")) is int and coverage["exported_candidate_count"] == len(mode_map) and \
+            isinstance(steps, list) and len(steps) == len(expected_steps) and bool(steps) and \
+            all(isinstance(step, dict) and step.get("status") == "pass" and step.get("sample_index") == sample
+                for step, sample in zip(steps, expected_steps))
+        assignment_replay = _new_check("pass" if assignment_pass else "missing",
+                                      qualification="NOT VERIFIED", verified_step_count=len(steps) if isinstance(steps, list) else 0)
+        if not assignment_pass:
+            reasons.append("scientific tracking assignment/cluster-selection replay remains NOT VERIFIED")
     status = "qualified" if not reasons else "not_qualified"
     return {
         "schema_version": GATE_SCHEMA,

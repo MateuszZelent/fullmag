@@ -2657,9 +2657,37 @@ uruchamia fallbacku częstotliwościowego. Samo obliczenie przewidywanego
 dopasowania nie zamyka bramki: potrzebne jest jeszcze związanie go
 z zapisaną tabelą i replay wszystkich kolejnych ram ścieżki.
 
+Porównanie tabeli wymaga pełnego pokrycia bieżącego widma gałęziami oraz
+tego samego zestawu wybranych grup, ich przejść i indeksów. Równoważne
+przypisania Hungarian dopuszcza zgodna średnia suma score w tolerancji
+algebry 1e-9, po niezależnym sprawdzeniu każdej zapisanej krawędzi.
+Greedy musi odtworzyć wybraną parę zgodnie z deterministyczną polityką.
+Ramy grup sprawdzane są w metryce masy do nieistotnej fazy; kolejny krok
+używa już sprawdzonej ramy zapisanej ścieżki. Pełny replay nie może
+pomijać gałęzi będących alternatywnymi kandydatami. Brak lub rozbieżność
+pozostają osobnym wynikiem assignment replay, a nie zmianą residualu.
+
+Aktualny certyfikat obejmuje ścieżkę o stałym, kompletnym zbiorze gałęzi,
+z punktem każdej gałęzi w każdej próbce. Raport jawnie podaje
+replayed_branch_scope=all_candidates; selected_branch_ids nie ogranicza
+kandydatów globalnego przydziału. Narodziny, zaniki i luki gałęzi nie są
+jeszcze obsługiwane przez ten certyfikat. Równoważne optimum pair Hungarian
+i raw assignment wewnątrz tej samej grupy jest akceptowane. Alternatywny
+zestaw grup przy remisie wyboru klastrów pozostaje odrzucany; nie wolno
+interpretować takiego odrzucenia jako dowodu błędu fizycznego solvera.
+
+assignment_replay=pass wymaga zgodności wszystkich kroków, ich grup i ram,
+nie tylko lokalnych score. Główna bramka sprawdza liczbę i kolejność kroków
+względem widma, a początkowy snapshot hashy obejmuje metadane, widmo,
+tabelę gałęzi oraz nagłówek i vector.bin każdego kandydata. Brak początkowych
+bajtów nie pozwala zaakceptować później utworzonego pola. Certyfikat
+przypisania zamyka wyłącznie tę kontrolę: residual, faza, kompletność widma,
+analityka i zbieżność pozostają odrębnymi wymaganiami. Syntetyczne testy
+nie kwalifikują rzeczywistej kampanii FEM ani danych COMSOL.
+
 Po degeneracji konieczny jest dodatkowo replay przetransportowanej ramy;
-raw-to-raw overlap nie zastępuje tego replay. Do jego wykonania C1/A1
-pozostają NOT VERIFIED. Jest to diagnostyka CPU, bez zmiany Python/IR,
+raw-to-raw overlap nie zastępuje tego replay. Ogólna kwalifikacja naukowa
+rzeczywistych kampanii C1/A1 pozostaje NOT VERIFIED. Jest to diagnostyka CPU, bez zmiany Python/IR,
 solverów i kwalifikacji urządzeń.
 
 Zapis pola Cartesian global_xyz i metryka trackingu są oddzielne. Pole
@@ -2703,6 +2731,9 @@ selekcja węzłów Gamma, następnie kompilacja/runtime i walidacja naukowa.
 | source-tracking-frequency-cluster-tests | `scripts/test_comsol_tracking_clusters.py` | `test_anchor_grouping_does_not_chain_neighbors` |
 | source-tracking-global-policy-prediction | `scripts/comsol_tracking_global.py` | `reconstruct_global_assignment` |
 | source-tracking-global-policy-tests | `scripts/test_comsol_tracking_global.py` | `test_hungarian_and_greedy_policies_differ_on_counterexample` |
+| source-tracking-global-table-certificate | `scripts/comsol_tracking_replay.py` | `verify_global_prediction` |
+| source-tracking-global-table-regression | `scripts/test_comsol_tracking_replay.py` | `test_locally_valid_but_globally_inferior_pair_assignment_is_rejected` |
+| source-tracking-initial-field-snapshot | `scripts/validate_comsol_dispersion_scientific_gate.py` | `_tracking_input_hashes` |
 
 
 ### Integralność legacy odczytu pól i wag
