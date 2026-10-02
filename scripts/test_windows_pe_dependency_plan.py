@@ -23,6 +23,18 @@ def imports(monkeypatch, dependencies):
     monkeypatch.setattr(planner, 'dump_imports', lambda path, tool: dependencies[path.name.lower()])
 
 
+def test_python_pyd_imports_participate_in_closure(tmp_path, monkeypatch):
+    stage, sdk = setup(tmp_path)
+    image(stage / '_socket.pyd')
+    image(sdk / 'python312.dll')
+    imports(monkeypatch, {'app.exe': ['kernel32.dll'], '_socket.pyd': ['python312.dll'],
+                         'python312.dll': ['kernel32.dll']})
+    plan = planner.plan_dependencies(stage, Path('unused'), [sdk], include_pyd=True)
+    assert plan['scope'] == 'python_flat_pe_static_and_delay_imports'
+    assert [entry['name'] for entry in plan['sources']] == ['python312.dll']
+    assert '_socket.pyd' in plan['staged_images']
+
+
 def test_transitive_closure_and_no_copy(tmp_path, monkeypatch):
     stage, sdk = setup(tmp_path)
     image(sdk / 'solver.dll'); image(sdk / 'runtime.dll'); image(sdk / 'unused.dll')

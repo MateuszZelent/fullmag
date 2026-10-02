@@ -66,7 +66,7 @@ def wheel(directory, name, version):
     return target
 
 
-@pytest.mark.parametrize("case", ["valid", "export_fail", "download_fail", "lock_changed", "requirements_changed", "wheel_tampered", "project_install_fail", "dirty_site"])
+@pytest.mark.parametrize("case", ["valid", "export_fail", "download_fail", "lock_changed", "requirements_changed", "wheel_tampered", "project_install_fail", "dirty_site", "host_mismatch"])
 def test_locked_staging_runs_offline_and_stops_on_errors(tmp_path, case):
     shell = shutil.which("pwsh") or shutil.which("powershell")
     if os.name != "nt" or not shell:
@@ -117,7 +117,8 @@ function fixture-python {
   $global:LASTEXITCODE=$code
 }
 try {
-  $result=Stage-FullmagLockedPythonPackages -RepoRoot $RepoRoot -WheelPath $Wheel -SiteDirectory $Site -ProofDirectory $Proof -PythonCommand 'fixture-python' -UvCommand 'fixture-uv'
+  $minor=if ($Case -eq 'host_mismatch') { 99 } else { 12 }
+  $result=Stage-FullmagLockedPythonPackages -RepoRoot $RepoRoot -WheelPath $Wheel -SiteDirectory $Site -ProofDirectory $Proof -PythonCommand 'fixture-python' -UvCommand 'fixture-uv' -ExpectedPythonMinor $minor
   [System.IO.File]::WriteAllText($Output,($result | ConvertTo-Json -Depth 10),[System.Text.UTF8Encoding]::new($false))
 } finally {
   [System.IO.File]::WriteAllText(($Output+'.calls'),(ConvertTo-Json -InputObject @($script:calls)),[System.Text.UTF8Encoding]::new($false))
@@ -149,11 +150,13 @@ try {
             "wheel_tampered": ["inspect", "export", "download", "dependencies"],
             "project_install_fail": ["inspect", "export", "download", "dependencies", "project"],
             "dirty_site": [],
+            "host_mismatch": ["inspect"],
         }
         assert calls == expected[case], result.stdout + result.stderr
         messages = {"export_fail": "requirements export failed", "download_fail": "wheel download failed",
                     "lock_changed": "input changed", "requirements_changed": "requirements changed",
-                    "project_install_fail": "Fullmag wheel installation failed", "dirty_site": "site directory must be empty"}
+                    "project_install_fail": "Fullmag wheel installation failed", "dirty_site": "site directory must be empty",
+                    "host_mismatch": "host ABI does not match"}
         if case in messages:
             assert messages[case] in result.stdout + result.stderr
         if case in {"export_fail", "download_fail", "lock_changed", "requirements_changed", "dirty_site"}:

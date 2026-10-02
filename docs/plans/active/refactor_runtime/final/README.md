@@ -339,3 +339,9 @@ instalacją. 8 regresji z prawdziwym pip, 7 kontroli kopii wheela oraz
 2 testy metadanych PASS.
 UV export był atrapą w testach; rzeczywisty lock/export i CPython bundle
 pozostają NOT VERIFIED.
+
+[Dołączony CPython Windows](p8/08-bundled-windows-python-runtime.md)
+ma źródłowy staging x64 embeddable, izolowane ścieżki, minor ABI 3.12,
+licencję/hash inventory i płaski audyt standard-library PYD. 149 różnych
+lekkich regresji PASS; executable probe jest atrapą, realny runtime/MSI
+i scientific wheel graph pozostają NOT VERIFIED.

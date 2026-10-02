@@ -91,9 +91,10 @@ def external_resolution(name, allow_cuda_driver=False):
     return None
 
 
-def audit_bin(directory, dumpbin, allow_cuda_driver=False):
+def audit_bin(directory, dumpbin, allow_cuda_driver=False, include_pyd=False):
     directory = directory.resolve(strict=True)
-    images = sorted((p for p in directory.iterdir() if p.suffix.lower() in ('.exe', '.dll')), key=lambda p: p.name.lower())
+    extensions = ('.exe', '.dll', '.pyd') if include_pyd else ('.exe', '.dll')
+    images = sorted((p for p in directory.iterdir() if p.suffix.lower() in extensions), key=lambda p: p.name.lower())
     if not images or not any(p.suffix.lower() == '.exe' for p in images):
         raise ValueError('Staged bin contains no EXE')
     names = {}
@@ -117,12 +118,13 @@ def audit_bin(directory, dumpbin, allow_cuda_driver=False):
                 raise ValueError(f'Missing staged dependency: {path.name} -> {name}')
             dependencies.append({'name': name, 'resolution': kind})
         digest = file_sha256(path)
-        records.append({'path': 'bin/' + path.name,
+        records.append({'path': ('python/' if include_pyd else 'bin/') + path.name,
                         'sha256': digest,
                         'imports': dependencies})
     return {'schema_version': 1, 'target': 'x86_64-pc-windows-msvc',
-            'scope': 'bin_pe_static_and_delay_imports', 'images': records,
+            'scope': 'python_flat_pe_static_and_delay_imports' if include_pyd else 'bin_pe_static_and_delay_imports', 'images': records,
             'limitations': ['dynamic LoadLibrary imports, symbol/ABI compatibility and OS availability require runtime qualification',
+                            'Nested Python package native extensions are outside this flat directory audit' if include_pyd else
                             'Python native extensions and external Python/Node are outside this bin audit']}
 
 
@@ -132,9 +134,10 @@ def main():
     parser.add_argument('--dumpbin', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--allow-cuda-driver', action='store_true')
+    parser.add_argument('--include-pyd', action='store_true')
     args = parser.parse_args()
     try:
-        report = audit_bin(args.bin, args.dumpbin, args.allow_cuda_driver)
+        report = audit_bin(args.bin, args.dumpbin, args.allow_cuda_driver, args.include_pyd)
     except (ValueError, OSError, subprocess.TimeoutExpired) as exc:
         parser.exit(1, f'PE dependency audit failed: {exc}\n')
     args.output.write_text(json.dumps(report, indent=2) + '\n', encoding='utf-8')

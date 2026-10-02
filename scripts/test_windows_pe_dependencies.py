@@ -37,6 +37,23 @@ def test_parse_regular_delay_and_driver():
     assert pe.parse_dependents(output) == ['kernel32.dll', 'solver.dll', 'winspool.drv']
 
 
+@pytest.mark.parametrize('case', ['valid', 'missing', 'wrong_architecture'])
+def test_python_flat_audit_includes_native_extensions(tmp_path, monkeypatch, case):
+    image(tmp_path / 'python.exe')
+    image(tmp_path / 'python312.dll')
+    image(tmp_path / '_socket.pyd', machine=0x14c if case == 'wrong_architecture' else 0x8664)
+    deps = {'python.exe': ['python312.dll'], 'python312.dll': ['kernel32.dll'],
+            '_socket.pyd': ['missing.dll'] if case == 'missing' else ['python312.dll']}
+    monkeypatch.setattr(pe, 'dump_imports', lambda path, tool: deps[path.name])
+    if case != 'valid':
+        with pytest.raises(ValueError):
+            pe.audit_bin(tmp_path, Path('unused'), include_pyd=True)
+    else:
+        report = pe.audit_bin(tmp_path, Path('unused'), include_pyd=True)
+        assert report['scope'] == 'python_flat_pe_static_and_delay_imports'
+        assert {entry['path'] for entry in report['images']} == {'python/python.exe', 'python/python312.dll', 'python/_socket.pyd'}
+
+
 @pytest.mark.parametrize('output', ['garbage', 'File Type: EXECUTABLE IMAGE',
     'File Type: DLL\nImage has the following dependencies:\n../solver.dll\nSummary'])
 def test_reject_unrecognized_or_incomplete_dump(output):

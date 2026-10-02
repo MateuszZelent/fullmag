@@ -279,6 +279,8 @@ $sourceIdentity=@{fixture=$true}; $runtimeDllInventory=@(); $nativeFemAssembly=$
 $peDependencyAudit=@{images=@()}; $peDependencyPlan=@{sources=@()}
 $nodeRuntimeInventory=@{schema_version=1; kind='bundled-windows-x64-node'; version='v24.19.0'; files=@(@{path='bin/node.exe';sha256='fixture-node-hash'})}
 $pythonPackageInventory=@{schema_version=1;scope='locked-windows-python-packages';requirements_sha256='fixture-requirements-hash';qualification='not_verified'}
+$pythonRuntimeInventory=@{kind='bundled-windows-x64-cpython-embed';host=@{version=@(3,12,10)};qualification='not_verified'}
+$pythonPeDependencyAudit=@{scope='python_flat_pe_static_and_delay_imports';images=@()}
 Write-RuntimeManifests -RuntimesRoot (Join-Path $Fixture 'runtimes')
 Write-VersionMetadata -Path (Join-Path $Fixture 'version.json')
 Write-StageManifest -Path (Join-Path $Fixture 'stage.json')
@@ -296,6 +298,9 @@ Write-StageManifest -Path (Join-Path $Fixture 'stage.json')
         assert payload['node_runtime']['files'][0]['sha256']=='fixture-node-hash'
         assert payload['python_packages']['requirements_sha256']=='fixture-requirements-hash'
         assert payload['python_packages']['qualification']=='not_verified'
+        assert payload['python_runtime']['host']['version']==[3,12,10]
+        assert payload['python_pe_dependency_audit']['scope']=='python_flat_pe_static_and_delay_imports'
     stage=json.loads((tmp_path/'stage.json').read_text(encoding='utf-8'))
     assert 'bin/node.exe' in stage['bin']
     assert 'share/licenses/node-LICENSE.txt' in stage['share']
+    assert 'share/licenses/python-LICENSE.txt' in stage['share']

@@ -14,11 +14,11 @@ def regular_image(path, parent):
     require_x64_pe(path)
 
 
-def plan_dependencies(directory, dumpbin, dependency_roots, allow_cuda_driver=False):
+def plan_dependencies(directory, dumpbin, dependency_roots, allow_cuda_driver=False, include_pyd=False):
     directory = directory.resolve(strict=True)
     images = {}
     for path in sorted(directory.iterdir(), key=lambda p: p.name.lower()):
-        if path.suffix.lower() not in ('.exe', '.dll'):
+        if path.suffix.lower() not in (('.exe', '.dll', '.pyd') if include_pyd else ('.exe', '.dll')):
             continue
         regular_image(path, directory)
         name = path.name.lower()
@@ -75,7 +75,7 @@ def plan_dependencies(directory, dumpbin, dependency_roots, allow_cuda_driver=Fa
             raise ValueError(f'Image changed after dependency planning: {path}')
         if name in sources and sources[name]['sha256'] != analyzed[name]:
             raise ValueError(f'SDK dependency changed after selection: {path}')
-    return {'schema_version': 1, 'scope': 'bin_pe_static_and_delay_imports',
+    return {'schema_version': 1, 'scope': 'python_flat_pe_static_and_delay_imports' if include_pyd else 'bin_pe_static_and_delay_imports',
             'dependency_roots': [str(root) for root in roots],
             'sources': [sources[name] for name in sorted(sources)],
             'staged_images': {name: analyzed[name] for name in sorted(analyzed) if name not in sources}}
@@ -87,10 +87,11 @@ def main():
     parser.add_argument('--dumpbin', type=Path, required=True)
     parser.add_argument('--dependency-root', type=Path, action='append', default=[])
     parser.add_argument('--allow-cuda-driver', action='store_true')
+    parser.add_argument('--include-pyd', action='store_true')
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
     try:
-        plan = plan_dependencies(args.bin, args.dumpbin, args.dependency_root, args.allow_cuda_driver)
+        plan = plan_dependencies(args.bin, args.dumpbin, args.dependency_root, args.allow_cuda_driver, args.include_pyd)
     except (ValueError, OSError, subprocess.TimeoutExpired) as exc:
         parser.exit(1, f'DLL closure planning failed: {exc}\n')
     args.output.write_text(json.dumps(plan, indent=2) + '\n', encoding='utf-8')

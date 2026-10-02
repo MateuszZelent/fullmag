@@ -247,7 +247,9 @@ function Write-VersionMetadata {
     runtime_dlls = @($runtimeDllInventory)
     pe_dependency_audit = $peDependencyAudit
     pe_dependency_plan = $peDependencyPlan
-    python_runtime = "external-python-3.12-or-newer"
+    python_runtime = $pythonRuntimeInventory
+    python_pe_dependency_audit = $pythonPeDependencyAudit
+    python_pe_dependency_plan = $pythonPePlan
     python_packages = $pythonPackageInventory
     node_runtime = $nodeRuntimeInventory
     built_at_utc = $builtAt
@@ -326,10 +328,14 @@ function Write-StageManifest {
     pe_dependency_plan = $peDependencyPlan
     node_runtime = $nodeRuntimeInventory
     runtimes = $runtimePaths
+    python_runtime = $pythonRuntimeInventory
+    python_pe_dependency_audit = $pythonPeDependencyAudit
+    python_pe_dependency_plan = $pythonPePlan
     python_packages = $pythonPackageInventory
     share = @(
       "share/version.json",
       "share/licenses/node-LICENSE.txt"
+      "share/licenses/python-LICENSE.txt"
     )
   }
   [System.IO.File]::WriteAllText($Path, ($manifest | ConvertTo-Json -Depth 10), [System.Text.UTF8Encoding]::new($false))
@@ -356,6 +362,10 @@ function Test-StagedLayout {
     (Join-Path $StageRoot "web\scripts\dev-server-public-origin.mjs"),
     (Join-Path $StageRoot "web\scripts\resolve-pnpm-invocation.mjs"),
     (Join-Path $StageRoot "python\site-packages\fullmag\__init__.py"),
+    (Join-Path $StageRoot "python\python.exe"),
+    (Join-Path $StageRoot "python\python312._pth"),
+    (Join-Path $StageRoot "python\sitecustomize.py"),
+    (Join-Path $StageRoot "share\licenses\python-LICENSE.txt"),
     (Join-Path $StageRoot "share\version.json"),
     (Join-Path $StageRoot "runtimes\cpu-reference\manifest.json")
   )
@@ -491,6 +501,15 @@ $nodeRuntimeInventory = Get-Content -LiteralPath $nodeRuntimeInventoryPath -Raw 
 $nodeRuntimeInventorySha256 = (Get-FileHash -LiteralPath $nodeRuntimeInventoryPath -Algorithm SHA256).Hash
 $dependencyRoots += [string]$nodeRuntimeInventory.source_root
 
+if ([string]::IsNullOrWhiteSpace($env:FULLMAG_WINDOWS_PYTHON_RUNTIME_ROOT)) {
+  throw "Configure FULLMAG_WINDOWS_PYTHON_RUNTIME_ROOT with a native x64 CPython 3.12 embeddable distribution"
+}
+$pythonRuntimeInventoryPath = Join-Path $DistRoot "python-runtime-inputs.json"
+& python (Join-Path $PSScriptRoot "stage_python_runtime.py") inspect --root $env:FULLMAG_WINDOWS_PYTHON_RUNTIME_ROOT --output $pythonRuntimeInventoryPath
+if ($LASTEXITCODE -ne 0) { throw "Native Python runtime inspection failed" }
+$pythonRuntimeInputHash = (Get-FileHash -LiteralPath $pythonRuntimeInventoryPath -Algorithm SHA256).Hash
+$pythonRuntimeInput = Get-Content -LiteralPath $pythonRuntimeInventoryPath -Raw | ConvertFrom-Json
+
 Push-Location $RepoRoot
 try {
   pnpm install --frozen-lockfile
@@ -579,6 +598,14 @@ try {
   }
   & python (Join-Path $PSScriptRoot "stage_node_runtime.py") stage --inventory $nodeRuntimeInventoryPath --destination $StageRoot
   if ($LASTEXITCODE -ne 0) { throw "Native Node runtime staging failed with exit code $LASTEXITCODE" }
+  if ((Get-FileHash -LiteralPath $pythonRuntimeInventoryPath -Algorithm SHA256).Hash -ne $pythonRuntimeInputHash) {
+    throw "Python runtime inventory changed before staging"
+  }
+  $pythonRuntimeStagedPath = Join-Path $DistRoot "python-runtime-staged.json"
+  & python (Join-Path $PSScriptRoot "stage_python_runtime.py") stage --inventory $pythonRuntimeInventoryPath --destination $StageRoot --output $pythonRuntimeStagedPath
+  if ($LASTEXITCODE -ne 0) { throw "Native Python runtime staging failed" }
+  $pythonRuntimeStagedHash = (Get-FileHash -LiteralPath $pythonRuntimeStagedPath -Algorithm SHA256).Hash
+  $pythonRuntimeInventory = Get-Content -LiteralPath $pythonRuntimeStagedPath -Raw | ConvertFrom-Json
 
   $runtimeDllSources = @(Get-ChildItem -LiteralPath $ReleaseDir -Filter "*.dll" -File -ErrorAction SilentlyContinue |
     Select-Object -ExpandProperty FullName)
@@ -629,6 +656,29 @@ try {
   & python @peAuditArgs
   if ($LASTEXITCODE -ne 0) { throw "Staged PE dependency audit failed with exit code $LASTEXITCODE" }
   $peDependencyAudit = Get-Content -LiteralPath $peAuditPath -Raw | ConvertFrom-Json
+  $pythonPePlanPath = Join-Path $DistRoot "python-pe-dependency-plan.json"
+  $pythonPePlanArgs = @((Join-Path $PSScriptRoot "plan_pe_dependencies.py"), "--bin", $pythonDir,
+    "--include-pyd", "--dumpbin", (Get-Command dumpbin.exe).Source, "--output", $pythonPePlanPath)
+  $pythonPePlanArgs += @("--dependency-root", [string]$pythonRuntimeInput.source_root)
+  & python @pythonPePlanArgs
+  if ($LASTEXITCODE -ne 0) { throw "Python runtime DLL closure planning failed" }
+  $pythonPePlan = Get-Content -LiteralPath $pythonPePlanPath -Raw | ConvertFrom-Json
+  foreach ($source in $pythonPePlan.sources) {
+    if ((Get-FileHash -LiteralPath $source.source -Algorithm SHA256).Hash.ToLowerInvariant() -ne $source.sha256) {
+      throw "Python runtime dependency changed before copying: $($source.name)"
+    }
+  }
+  Copy-RuntimeDllSet -SourcePaths @($pythonPePlan.sources | ForEach-Object { $_.source }) -BinDirectory $pythonDir | Out-Null
+  foreach ($source in $pythonPePlan.sources) {
+    if ((Get-FileHash -LiteralPath (Join-Path $pythonDir $source.name) -Algorithm SHA256).Hash.ToLowerInvariant() -ne $source.sha256) {
+      throw "Python runtime dependency changed during copying: $($source.name)"
+    }
+  }
+  $pythonPeAuditPath = Join-Path $DistRoot "python-pe-dependencies.json"
+  & python (Join-Path $PSScriptRoot "verify_pe_dependencies.py") --bin $pythonDir --include-pyd `
+    --dumpbin (Get-Command dumpbin.exe).Source --output $pythonPeAuditPath
+  if ($LASTEXITCODE -ne 0) { throw "Python runtime PE dependency audit failed" }
+  $pythonPeDependencyAudit = Get-Content -LiteralPath $pythonPeAuditPath -Raw | ConvertFrom-Json
   $stagedNodeVersion = (& (Join-Path $binDir "node.exe") --version 2>&1 | Out-String).Trim()
   if ($LASTEXITCODE -ne 0 -or $stagedNodeVersion -ne [string]$nodeRuntimeInventory.version) {
     throw "Staged Node runtime failed its version smoke check: $stagedNodeVersion"
@@ -660,16 +710,34 @@ try {
   if ($wheels.Count -ne 1) { throw "Exactly one Fullmag Python wheel must be produced under $WheelRoot" }
   $wheel = $wheels[0]
   $pythonPackageInventory = Stage-FullmagLockedPythonPackages -RepoRoot $RepoRoot -WheelPath $wheel.FullName `
-    -SiteDirectory $pythonSiteDir -ProofDirectory (Join-Path $DistRoot "python-packages")
+    -SiteDirectory $pythonSiteDir -ProofDirectory (Join-Path $DistRoot "python-packages") -ExpectedPythonMinor 12
   Copy-Item -Force $wheel.FullName (Join-Path $pythonDir $wheel.Name)
   & python (Join-Path $RepoRoot "scripts\check_staged_python_wheel.py") --wheel (Join-Path $pythonDir $wheel.Name) `
     --project (Join-Path $RepoRoot "packages\fullmag-py\pyproject.toml") --sha256 $pythonPackageInventory.inputs[2].sha256
   if ($LASTEXITCODE -ne 0) { throw "Staged Fullmag wheel integrity validation failed" }
-  & python -c "import sys; sys.path.insert(0, r'$pythonSiteDir'); import fullmag"
+  if (@($pythonPackageInventory.host.version)[0] -ne 3 -or @($pythonPackageInventory.host.version)[1] -ne 12) {
+    throw "Python package wheels must be staged using the bundled CPython 3.12 ABI"
+  }
+  if ((Get-FileHash -LiteralPath $pythonRuntimeStagedPath -Algorithm SHA256).Hash -ne $pythonRuntimeStagedHash) {
+    throw "Staged Python runtime inventory changed"
+  }
+  & python (Join-Path $PSScriptRoot "stage_python_runtime.py") verify --inventory $pythonRuntimeStagedPath --destination $StageRoot --output (Join-Path $DistRoot "python-runtime-smoke.json")
+  if ($LASTEXITCODE -ne 0) { throw "Bundled Python isolation smoke failed" }
+  & (Join-Path $pythonDir "python.exe") -c "import fullmag, numpy, h5py, zarr, scipy, gmsh, manifold3d, meshio, trimesh; from PIL import Image"
   if ($LASTEXITCODE -ne 0) { throw "staged Python package import smoke failed with exit code $LASTEXITCODE" }
   foreach ($pythonInput in $pythonPackageInventory.inputs) {
     if ((Get-FileHash -LiteralPath $pythonInput.path -Algorithm SHA256).Hash.ToLowerInvariant() -ne $pythonInput.sha256) {
       throw "Python package input changed after wheel staging: $($pythonInput.path)"
+    }
+  }
+  foreach ($pythonImage in $pythonPeDependencyAudit.images) {
+    if ((Get-FileHash -LiteralPath (Join-Path $StageRoot $pythonImage.path) -Algorithm SHA256).Hash.ToLowerInvariant() -ne $pythonImage.sha256) {
+      throw "Python native image changed after audit: $($pythonImage.path)"
+    }
+  }
+  foreach ($pythonFile in $pythonRuntimeInventory.staged_files) {
+    if ((Get-FileHash -LiteralPath (Join-Path $StageRoot $pythonFile.path) -Algorithm SHA256).Hash.ToLowerInvariant() -ne $pythonFile.sha256) {
+      throw "Python runtime changed after import smoke: $($pythonFile.path)"
     }
   }
 

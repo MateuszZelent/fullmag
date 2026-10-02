@@ -5,7 +5,8 @@ function Stage-FullmagLockedPythonPackages {
     [Parameter(Mandatory = $true)][string]$SiteDirectory,
     [Parameter(Mandatory = $true)][string]$ProofDirectory,
     [string]$PythonCommand = "python",
-    [string]$UvCommand = "uv"
+    [string]$UvCommand = "uv",
+    [int]$ExpectedPythonMinor = 0
   )
   $ErrorActionPreference = "Stop"
   $project = Join-Path $RepoRoot "packages\fullmag-py\pyproject.toml"
@@ -38,6 +39,9 @@ function Stage-FullmagLockedPythonPackages {
   if ($hostInfo.platform -ne "win32" -or $hostInfo.bits -ne 64 -or $hostInfo.implementation -ne "cpython" -or
       $hostInfo.version[0] -ne 3 -or $hostInfo.version[1] -lt 12) {
     throw "Python package staging requires native Windows x64 CPython 3.12 or newer"
+  }
+  if ($ExpectedPythonMinor -ne 0 -and $hostInfo.version[1] -ne $ExpectedPythonMinor) {
+    throw "Python package host ABI does not match bundled CPython 3.$ExpectedPythonMinor"
   }
   New-Item -ItemType Directory -Path $ProofDirectory | Out-Null
   $requirements = Join-Path $ProofDirectory "requirements.txt"
