@@ -18,8 +18,7 @@ use std::{
 
 const MAX_RESPONSE: usize = 256 * 1024;
 
-/// Bind a newly spawned API to the launcher's exact source before service attach.
-pub fn verify_api_build(port: u16) -> Result<()> {
+fn read_api_document(port: u16) -> Result<serde_json::Value> {
     let deadline = Instant::now() + Duration::from_secs(5);
     let address = SocketAddr::from(([127, 0, 0, 1], port));
     let mut stream = TcpStream::connect_timeout(&address, remaining(deadline)?)?;
@@ -53,8 +52,27 @@ pub fn verify_api_build(port: u16) -> Result<()> {
         bail!("API contract version mismatch before service attach");
     }
     let document: serde_json::Value = serde_json::from_str(body)?;
+    Ok(document)
+}
+
+fn verify_api_store(port: u16, expected: &Path) -> Result<()> {
+    let document = read_api_document(port)?;
     let local = fullmag_build_info::identity();
-    require_api_identity(&document, local.git_commit, local.source_snapshot_sha256)
+    require_api_identity(&document, local.git_commit, local.source_snapshot_sha256)?;
+    require_api_store_binding(&document, expected)
+}
+
+fn require_api_store_binding(document: &serde_json::Value, expected: &Path) -> Result<()> {
+    let binding = crate::accepted_store::store_binding(expected)
+        .context("cannot resolve canonical accepted-store binding")?;
+    let remote = &document["x-fullmag-runtime-store-binding"];
+    if remote["schema_version"].as_str() != Some("runtime_store_binding.v1")
+        || remote["kind"].as_str() != Some("accepted_runs")
+        || remote["binding"].as_str() != Some(binding.as_str())
+    {
+        bail!("API accepted-store binding mismatch; native service attach refused");
+    }
+    Ok(())
 }
 
 fn require_api_identity(document: &serde_json::Value, commit: &str, snapshot: &str) -> Result<()> {
@@ -78,6 +96,7 @@ fn require_api_identity(document: &serde_json::Value, commit: &str, snapshot: &s
 pub fn ensure_for_application(
     repo_root: &Path,
     state_root: &Path,
+    api_port: u16,
 ) -> Result<Option<RuntimeServiceOwnerDescriptor>> {
     let Some(config_path) = std::env::var_os("FULLMAG_RUNTIME_SERVICE_CONFIG") else {
         return Ok(None);
@@ -87,8 +106,12 @@ pub fn ensure_for_application(
     let expected = crate::accepted_store::configured_submit_store_root(repo_root, state_root)
         .context("canonical accepted run storage is not configured; service start refused")?;
     require_application_store(&config.store_root, &expected)?;
+    verify_api_store(api_port, &expected)?;
     crate::retry_store_writer_busy(|| fullmag_session::SessionStore::open(expected.clone()))?;
-    ensure_config(config).map(Some)
+    let owner = ensure_config(config)?;
+    // Service startup may be long; recheck the API immediately before returning.
+    verify_api_store(api_port, &expected)?;
+    Ok(Some(owner))
 }
 
 fn require_application_store(configured_root: &Path, expected: &Path) -> Result<()> {
@@ -444,6 +467,25 @@ fn ensure_config(config: RuntimeServiceConfig) -> Result<RuntimeServiceOwnerDesc
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn same_build_api_with_another_store_is_not_attachable() {
+        let directory = tempfile::tempdir().unwrap();
+        let expected = directory.path().join("accepted-store");
+        let foreign = directory.path().join("other-store");
+        let document = |root: &Path| {
+            serde_json::json!({"x-fullmag-runtime-store-binding": {
+                "schema_version":"runtime_store_binding.v1","kind":"accepted_runs",
+                "binding":crate::accepted_store::store_binding(root),
+            }})
+        };
+        assert!(require_api_store_binding(&document(&expected), &expected).is_ok());
+        assert!(require_api_store_binding(&document(&foreign), &expected).is_err());
+        assert!(require_api_store_binding(&serde_json::json!({}), &expected).is_err());
+        let before = crate::accepted_store::store_binding(&expected);
+        std::fs::create_dir(&expected).unwrap();
+        assert_eq!(before, crate::accepted_store::store_binding(&expected));
+    }
 
     #[test]
     fn api_health_or_same_commit_without_snapshot_cannot_bind_service() {

@@ -1161,8 +1161,38 @@ async fn get_v2_index() -> Json<Value> {
     }))
 }
 
-async fn get_openapi_json() -> Json<Value> {
-    Json(crate::openapi_v2::openapi_json())
+async fn get_openapi_json(State(state): State<Arc<AppState>>) -> Json<Value> {
+    let mut document = crate::openapi_v2::openapi_json();
+    document["x-fullmag-runtime-store-binding"] = json!({
+        "schema_version":"runtime_store_binding.v1",
+        "kind":"accepted_runs",
+        "binding":state.submit_store_root.as_deref().and_then(
+            fullmag_runtime_control::accepted_store::store_binding),
+    });
+    Json(document)
+}
+
+#[cfg(test)]
+mod runtime_binding_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn platform_document_binds_actual_accepted_store_without_initializing_it() {
+        let directory = std::env::temp_dir().join(format!("runtime-binding-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&directory).unwrap();
+        let root = directory.join("accepted-store");
+        let mut state = crate::router_v2::tests::test_app_state();
+        Arc::get_mut(&mut state).unwrap().submit_store_root = Some(root.clone());
+        let Json(document) = get_openapi_json(State(state)).await;
+        let binding = &document["x-fullmag-runtime-store-binding"];
+        assert_eq!(binding["schema_version"], "runtime_store_binding.v1");
+        assert_eq!(binding["binding"].as_str(), fullmag_runtime_control::accepted_store::store_binding(&root).as_deref());
+        assert!(!root.exists());
+        assert!(!binding.to_string().contains(root.to_str().unwrap()));
+        let Json(document) = get_openapi_json(State(crate::router_v2::tests::test_app_state())).await;
+        assert!(document["x-fullmag-runtime-store-binding"]["binding"].is_null());
+        std::fs::remove_dir(directory).unwrap();
+    }
 }
 
 async fn list_sessions(

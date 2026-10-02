@@ -109,6 +109,15 @@ przy tej konfiguracji do czasu implementacji handshake tożsamości jego store.
 Brak konfiguracji pozostawia authoring dostępny; domyślne zasoby produktu
 i całościowy cutover execution nadal wymagają implementacji i kwalifikacji.
 
+HTTP platform OpenAPI zwraca runtime-only x-fullmag-runtime-store-binding:
+schema_version=runtime_store_binding.v1, kind=accepted_runs i binding SHA-256
+kanonicznej lokalizacji accepted store albo null. Static generator nie emituje
+runtime state. Binding nie zawiera ścieżki i nie jest portable scientific ID.
+Klient aplikacji sprawdza go wraz z build identity przed inicjalizacją i ensure.
+Brak/mismatch/null odmawia attach. Kontrolę powtarza się po starcie usługi.
+Binding jest obserwacją, nie lease instancji; CLI nadal odmawia reuse API,
+dopóki instancja nie zostanie przypięta również w kolejnych żądaniach klienta.
+
 Oba admissions zamyka się przed oczekiwaniem na procesy. Aktywne workery kończą
 się według supervisor/lease/receipt. Błąd jednego schedulera drenuje drugi,
 lecz owner kończy jako failed/unknown, nigdy jako poprawny drained.

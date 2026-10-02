@@ -1,6 +1,6 @@
 # ADR 0049 — właściciel lokalnego runtime i kanał drain schedulerów
 
-Status: accepted; kanał i niezależny proces usługi zaimplementowane w źródłach; UI attach/detach i recovery planned, runtime NOT VERIFIED.
+Status: accepted; usługa i jawne podłączenie launchera/desktopu zaimplementowane w źródłach; domyślny produkt, instance lease, cutover i recovery planned, runtime NOT VERIFIED.
 Data: 03.10.2026.
 
 ## Kontekst i decyzja

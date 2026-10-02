@@ -1,6 +1,31 @@
 //! Canonical accepted-run storage shared by API and native launchers.
 use std::path::{Path, PathBuf};
 
+/// Opaque local binding for discovery; never a portable scientific identity.
+pub fn store_binding(root: &Path) -> Option<String> {
+    use sha2::{Digest, Sha256};
+    let path = writable_product_state_path(root)?;
+    let mut hash = Sha256::new();
+    hash.update(b"fullmag.accepted-store-binding.v1\0");
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        for code in path.as_os_str().encode_wide() {
+            hash.update(code.to_le_bytes());
+        }
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        hash.update(path.as_os_str().as_bytes());
+    }
+    #[cfg(not(any(windows, unix)))]
+    {
+        return None;
+    }
+    Some(format!("{:x}", hash.finalize()))
+}
+
 /// Developer launches require the managed resolver. An installed Windows
 /// executable owns a separate user-data store, without a source checkout.
 pub fn configured_submit_store_root(

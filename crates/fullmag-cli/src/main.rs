@@ -634,12 +634,10 @@ fn launch_ui(ui: UiCli) -> Result<()> {
     let root = crate::control_room::repo_root();
     let state_root = crate::control_room::runtime_state_root(&root);
     if std::env::var_os("FULLMAG_RUNTIME_SERVICE_CONFIG").is_some() && !owns_api {
-        bail!("native service attach requires an API started by this launcher; reused API store identity is not verified");
+        bail!("native service attach requires an API owned by this launcher; reused API instance lease is not verified");
     }
-    if std::env::var_os("FULLMAG_RUNTIME_SERVICE_CONFIG").is_some() {
-        fullmag_runtime_control::runtime_service_client::verify_api_build(crate::control_room::api_port())?;
-    }
-    fullmag_runtime_control::runtime_service_client::ensure_for_application(&root, &state_root)?;
+    fullmag_runtime_control::runtime_service_client::ensure_for_application(
+        &root, &state_root, crate::control_room::api_port())?;
     let mut ui_child = crate::control_room::open_in_tauri(&ready, intent)?;
     let scratch_runtime = if live_workspace.is_none() {
         let executable = std::env::current_exe().context("failed to resolve fullmag executable")?;
