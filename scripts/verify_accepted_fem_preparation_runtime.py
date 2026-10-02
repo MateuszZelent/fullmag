@@ -261,8 +261,15 @@ def validate_durable_evidence(
 
 def run(repo_root: Path, build_root: Path | None, output_root: Path, *,
         managed_build_run_root: Path | None = None, storage_root: Path | None = None,
-        expected_commit: str | None = None, expected_snapshot: str | None = None) -> tuple[int, dict[str, object]]:
+        expected_commit: str | None = None, expected_snapshot: str | None = None,
+        execute_solver: bool = False) -> tuple[int, dict[str, object]]:
     managed = None
+    if execute_solver and managed_build_run_root is None:
+        raise AcceptedFemPreparationRuntimeError('Full FEM CPU verification requires an existing managed package')
+    required_binaries = BINARIES
+    if execute_solver:
+        from accepted_fem_cpu_runtime import BINARIES as SOLVER_BINARIES
+        required_binaries = (*BINARIES, *SOLVER_BINARIES)
     if managed_build_run_root is not None:
         if os.name == "nt":
             raise AcceptedFemPreparationRuntimeError("Managed Linux package requires the managed Linux runtime route")
@@ -274,7 +281,7 @@ def run(repo_root: Path, build_root: Path | None, output_root: Path, *,
         package_root = storage.validate_path(managed_build_run_root, storage_root, "managed package root")
         if output_root == package_root or output_root in package_root.parents or package_root in output_root.parents:
             raise AcceptedFemPreparationRuntimeError("Runtime output must not overlap the managed package")
-        managed = load_package(package_root, storage_root, expected_commit, expected_snapshot, BINARIES)
+        managed = load_package(package_root, storage_root, expected_commit, expected_snapshot, required_binaries)
     elif build_root is None:
         raise AcceptedFemPreparationRuntimeError("A managed package or build root is required")
     invocation_id = uuid.uuid4().hex
@@ -292,7 +299,7 @@ def run(repo_root: Path, build_root: Path | None, output_root: Path, *,
     receipt_path = run_root / "receipt.json"
     receipt: dict[str, object] = {
         "schema": RECEIPT_SCHEMA,
-        "route": "api-accepted-fem-preparation-runtime",
+        "route": "api-accepted-fem-cpu-runtime" if execute_solver else "api-accepted-fem-preparation-runtime",
         "invocation_id": invocation_id,
         "repo_root": str(repo_root),
         "started_at": utc_now(),
@@ -306,6 +313,10 @@ def run(repo_root: Path, build_root: Path | None, output_root: Path, *,
         ],
         "excluded_scope": ["solver execution", "scientific validation", "release qualification"],
     }
+    if execute_solver:
+        receipt['scope'].extend(['native FEM CPU solver execution and exact lease release',
+                                'public SolutionSet, typed CAS outputs and pinned native snapshot integrity'])
+        receipt['excluded_scope'] = ['archive roundtrip', 'scientific validation', 'release qualification']
     write_atomic_json(receipt_path, receipt)
     api_process = None
     api_log = None
@@ -490,6 +501,14 @@ def run(repo_root: Path, build_root: Path | None, output_root: Path, *,
         api_log.close()
         api_log = None
 
+        if execute_solver:
+            from accepted_fem_cpu_runtime import execute
+            receipt['state'] = 'executing_solver'
+            receipt['solver'] = {}
+            write_atomic_json(receipt_path, receipt)
+            execute(binaries, repo_root, env, run_root, store_root, fixture, request, task_id, receipt['solver'],
+                    lambda: write_atomic_json(receipt_path, receipt))
+
         after_identity = source_identity.capture(repo_root, ignore_non_runtime_dirty=True)
         receipt["source_identity_after"] = after_identity
         receipt["source_changed_during_run"] = (
@@ -499,7 +518,7 @@ def run(repo_root: Path, build_root: Path | None, output_root: Path, *,
             raise AcceptedFemPreparationRuntimeError("source identity changed during runtime verification")
         if managed is not None:
             from managed_fem_runtime_package import load_package
-            refreshed = load_package(managed_build_run_root, storage_root, expected_commit, expected_snapshot, BINARIES)
+            refreshed = load_package(managed_build_run_root, storage_root, expected_commit, expected_snapshot, required_binaries)
             if refreshed[1] != binary_evidence:
                 raise AcceptedFemPreparationRuntimeError("Managed package changed during runtime verification")
             receipt["managed_package_unchanged"] = True
@@ -530,13 +549,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--storage-root", type=Path)
     parser.add_argument("--expected-commit")
     parser.add_argument("--expected-snapshot")
+    parser.add_argument("--execute-solver", action="store_true",
+                        help="Verify native FEM CPU completion, public results and pinned snapshot; managed package only")
     parser.add_argument("--output-root", type=Path, required=True)
     args = parser.parse_args(argv)
     try:
         return run(args.repo_root.resolve(), args.build_root.resolve() if args.build_root else None,
                    args.output_root.resolve(), managed_build_run_root=args.managed_build_run_root,
                    storage_root=args.storage_root, expected_commit=args.expected_commit,
-                   expected_snapshot=args.expected_snapshot)[0]
+                   expected_snapshot=args.expected_snapshot, execute_solver=args.execute_solver)[0]
     except Exception as error:
         print(f"accepted FEM preparation runtime failed before receipt: {type(error).__name__}: {error}", file=sys.stderr)
         return 2

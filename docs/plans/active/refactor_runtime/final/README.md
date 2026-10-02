@@ -365,3 +365,8 @@ accepted FEM producer, realne HTTP/CAS i archive roundtrip pozostają otwarte.
 dodaje zweryfikowany konsument receiptu i tryb bez kompilacji. 55 lekkich
 regresji PASS; managed runtime wrapper, pełny accepted solver i pin/archive
 nadal pozostają otwarte.
+
+[Driver accepted FEM CPU](p6/74-accepted-fem-cpu-runtime-driver.md) dodaje
+kontynuację przygotowania przez solver, trwały wynik, publiczny SolutionSet
+i pin z produkcyjną kontrolą native snapshot. 85 regresji PASS; rzeczywiste
+wykonanie w zweryfikowanym obrazie, archive i nauka nadal NOT VERIFIED.

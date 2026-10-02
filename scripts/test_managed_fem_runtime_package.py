@@ -149,14 +149,20 @@ def test_reject_document_changed_during_artifact_validation(tmp_path, monkeypatc
         package.load_package(run, tmp_path, COMMIT, SNAPSHOT, ['fullmag'])
 
 
-def test_managed_preparation_path_never_builds(tmp_path, monkeypatch):
+@pytest.mark.parametrize('execute_solver', [False, True])
+def test_managed_preparation_path_never_builds(tmp_path, monkeypatch, execute_solver):
     import verify_accepted_fem_preparation_runtime as preparation
     repo_root = Path(__file__).resolve().parents[1]
     write_json(tmp_path / '.fullmag-storage.json',
                {'schema': 'fullmag_storage_v1', 'project_root': str(repo_root.parent)})
     identity = {'head_commit_full': COMMIT, 'source_snapshot_sha256': SNAPSHOT, 'source_snapshot_dirty': False}
-    binaries = {name: tmp_path / name for name in preparation.BINARIES}
-    monkeypatch.setattr(package, 'load_package', lambda *args: (binaries, {}, identity, tmp_path / 'lib'))
+    from accepted_fem_cpu_runtime import BINARIES as SOLVER_BINARIES
+    names = (*preparation.BINARIES, *SOLVER_BINARIES) if execute_solver else preparation.BINARIES
+    binaries = {name: tmp_path / name for name in names}
+    def select_package(*args):
+        assert tuple(args[-1]) == names
+        return binaries, {}, identity, tmp_path / 'lib'
+    monkeypatch.setattr(package, 'load_package', select_package)
     monkeypatch.setattr(preparation, 'os', SimpleNamespace(name='posix', environ=os.environ, pathsep=os.pathsep))
     monkeypatch.setattr(preparation.source_identity, 'capture', lambda *args, **kwargs: identity)
     monkeypatch.setenv('LD_LIBRARY_PATH', '/foreign/lib')
@@ -180,7 +186,17 @@ def test_managed_preparation_path_never_builds(tmp_path, monkeypatch):
     monkeypatch.setattr(preparation, 'start_api', stop_before_process)
     code, receipt = preparation.run(repo_root, None, tmp_path / 'evidence',
                                    managed_build_run_root=tmp_path / 'package', storage_root=tmp_path,
-                                   expected_commit=COMMIT, expected_snapshot=SNAPSHOT)
+                                   expected_commit=COMMIT, expected_snapshot=SNAPSHOT,
+                                   execute_solver=execute_solver)
     assert code == 1
     assert receipt['build_commands'] == []
     assert 'intentional boundary before process' in receipt['error']
+
+
+def test_full_cpu_verifier_rejects_legacy_build_before_any_write(tmp_path):
+    import verify_accepted_fem_preparation_runtime as preparation
+    with pytest.raises(preparation.AcceptedFemPreparationRuntimeError, match='existing managed package'):
+        preparation.run(Path(__file__).resolve().parents[1], tmp_path / 'build', tmp_path / 'evidence',
+                        execute_solver=True)
+    assert not (tmp_path / 'build').exists()
+    assert not (tmp_path / 'evidence').exists()
