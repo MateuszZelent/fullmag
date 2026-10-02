@@ -5782,3 +5782,24 @@ Pełny zestaw bramki naukowej: 56 testów PASS. Niezależne review nie wykazało
 P1/P2 w dopuszczalności, przydziale narodzin, przerwach ani pokryciu kandydatów.
 Równoważny alternatywny zestaw grup lub narodzin przy remisie pozostaje
 fail-closed, a wykonanie rzeczywistego FEM i walidacja naukowa nadal OPEN.
+
+## Priorytet użytkownika — DE k=±10 rad/µm, 2026-10-02
+
+Po zwolnieniu miejsca runner widzi 17 845 354 496 B wolnego i #196 ma
+stan running. Nie zlecono drugiego buildu. Zatrzymano wyłącznie własnego
+obserwatora sześciu pilotów (PID 178268, poprzedni handle 7375); sam job,
+kapsuła źródeł i dane pozostają zachowane.
+
+Nowy obserwator handle 95490 wykona w pierwszej kolejności dwa rzeczywiste
+piloty DE k_y=+1e7 oraz -1e7 rad/m, L2, trzy warstwy, z dotychczasową fizyką
+demag i airboxu. Źródła runtime/modelu pozostają przypięte do 71ec3f159b47ee7a56e471020923248c2cac283f.
+Nearest shift 11 GHz jest jawnym parametrem wyszukiwania, nie wynikiem.
+Przed obliczeniami istniejący wrapper zweryfikuje receipt i źródła buildu.
+
+Lekki obserwator wykresu handle 6342 sprawdzi rzeczywiste run-request/result,
+signed k, pełny residual, pola i model; po każdym zakończonym punkcie użyje
+istniejących collector/plotter do narysowania scatter i analityki. Wyniki i
+sterowniki są w kanonicznym scientific-batches/nonzero-k-validation/
+febe368724ec4e76a1da88ad24878a9b, pliki priority-k10-*. Symetria nie jest
+używana do tworzenia punktów. W chwili checkpointu nadal 0 nowych punktów;
+build i oba obserwatory są aktywne, kwalifikacja całego celu pozostaje OPEN.
