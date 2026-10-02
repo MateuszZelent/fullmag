@@ -243,3 +243,10 @@ source increment uzupełniono o `fullmag-desktop`, niepusty plik i hash manifest
 16 regresji PS/Python i 6 kontroli źródeł PASS. [P8-C — luki Windows](p8/01-windows-native-gaps.md)
 określa dalsze zadania ABI, dependency bundle, pakowania, executora i recovery.
 Build/runtime Windows i pełne FEM nadal NOT VERIFIED; P8 nie został zamknięty.
+
+Kolejny fragment P8-C: poprawiono target-aware rpath, wybór konfiguracji
+CMake/import library oraz eksport 86 funkcji i publicznego symbolu danych FEM.
+6 sprawdzeń rzeczywistym preprocesorem MSVC C/C++ PASS; 2 istniejące kontrole
+źródeł buildu PASS. Bez kompilacji unit tests. Szczegóły i granice dowodu w
+[P8-C](p8/01-windows-native-gaps.md). Runtime DLL staging, linkowanie,
+native FEM launch i regresja Linux pozostają otwarte; procenty bez awansu.

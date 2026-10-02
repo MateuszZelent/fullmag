@@ -68,6 +68,13 @@ fn generate_gpu_execution_receipt_abi_assertions(out_dir: &std::path::Path) {
     .expect("writing GPU execution receipt ABI assertions should succeed");
 }
 
+fn emit_unix_runtime_rpath(path: &str) {
+    // Cargo's target may differ from the host running this build script.
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
+        println!("cargo:rustc-link-arg=-Wl,-rpath,{path}");
+    }
+}
+
 fn main() {
     let out_dir = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());
     generate_gpu_execution_receipt_abi_assertions(&out_dir);
@@ -75,7 +82,7 @@ fn main() {
     if let Ok(lib_dir) = std::env::var("FULLMAG_FEM_LIB_DIR") {
         println!("cargo:rustc-link-search=native={}", lib_dir);
         println!("cargo:rustc-link-lib=dylib=fullmag_fem");
-        println!("cargo:rustc-link-arg=-Wl,-rpath,{}", lib_dir);
+        emit_unix_runtime_rpath(&lib_dir);
         println!("cargo:rerun-if-env-changed=FULLMAG_FEM_LIB_DIR");
         return;
     }
@@ -175,6 +182,8 @@ fn main() {
     build
         .arg("--build")
         .arg(&build_dir)
+        .arg("--config")
+        .arg(cmake_build_type)
         .arg("--target")
         .arg("fullmag_fem");
     if let Ok(jobs) = std::env::var("NUM_JOBS") {
@@ -189,14 +198,27 @@ fn main() {
         panic!("cmake build for fullmag_fem failed");
     }
 
+    let native_lib_root = build_dir.join("backends/fem");
+    let native_lib_dir = if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows")
+        && std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc")
+    {
+        let configured = native_lib_root.join(cmake_build_type);
+        if configured.join("fullmag_fem.lib").is_file() {
+            configured
+        } else if native_lib_root.join("fullmag_fem.lib").is_file() {
+            // Single-configuration generators such as Ninja use the flat path.
+            native_lib_root
+        } else {
+            panic!("native FEM build did not produce the MSVC fullmag_fem.lib import library");
+        }
+    } else {
+        native_lib_root
+    };
     println!(
         "cargo:rustc-link-search=native={}",
-        build_dir.join("backends/fem").display()
+        native_lib_dir.display()
     );
     println!("cargo:rustc-link-lib=dylib=fullmag_fem");
-    println!("cargo:rustc-link-arg=-Wl,-rpath,$ORIGIN/../lib");
-    println!(
-        "cargo:rustc-link-arg=-Wl,-rpath,{}",
-        build_dir.join("backends/fem").display()
-    );
+    emit_unix_runtime_rpath("$ORIGIN/../lib");
+    emit_unix_runtime_rpath(&native_lib_dir.to_string_lossy());
 }

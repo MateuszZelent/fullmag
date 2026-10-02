@@ -6,7 +6,7 @@ Status całej bramki: NOT VERIFIED. Audyt źródeł nie jest kwalifikacją runti
 | Kolejność | Luka i źródła | Wymagana zmiana | Dowód zamknięcia |
 |---|---|---|---|
 | 1 | Launcher budował CLI/API bez UI: `scripts/windows/run_fullmag.ps1`; `control_room.rs::open_in_tauri` wymaga `fullmag-ui.exe`. | Wykonano source increment: osobny build `fullmag-desktop` bez solver CUDA feature, hash/UI manifest i fail-closed przed launch. | 16 regresji PS/Python i 6 kontroli źródeł PASS; aktualny build oraz rzeczywiste okno nadal NOT VERIFIED. |
-| 2 | `crates/fullmag-fem-sys/build.rs` emituje Unix rpath także dla targetu MSVC. Wielokonfiguracyjny CMake nie otrzymuje jawnego `--config`. | Linkowanie według targetu Cargo, Windows import library i ścieżka wybranego config; osobne runtime DLL staging. Zachować Linux rpath i ABI. | Build Windows CPU z właściwą `.lib`/DLL; brak Unix linker flags. Osobny Linux regression build. |
+| 2 | Unix rpath, konfiguracja CMake i brak eksportu publicznego C ABI na MSVC. | Wykonano fragment źródłowy: rpath według targetu Cargo, jawny `--config`, MSVC import library w wybranym config lub płaskim Ninja; jawny eksport 86 funkcji i symbolu danych ABI. Runtime DLL staging pozostaje otwarty. | Preprocessing MSVC C/C++: 6 PASS; 2 istniejące source contracts PASS. Pełny Windows link/DLL launch oraz Linux regression build: NOT VERIFIED. |
 | 3 | `native/CMakeLists.txt` rozpoznaje external FDM jako `.so`; launcher Windows używa DLL. | Imported target z target-aware library/runtime paths; nie uznawać DLL za import library MSVC. | Configure/link z Windows `.lib` i DLL, istniejący Linux `.so`; brak fałszywego discovery. |
 | 4 | Natywny launcher odrzuca FEM; `run_fullmag_fem.ps1` uruchamia Linux container. | Natywny dependency bundle MFEM/hypre/libCEED i odpowiednie adaptery Windows dla CPU, następnie CUDA GPU; osobno potrzebne workflow dependencies. | Native FEM CPU i FEM GPU receipts, requested/resolved execution oraz wymagane bramki fizyki. GPU bez cichego CPU fallbacku. |
 | 5 | `build_windows_msi.ps1` publikuje tylko manifesty FDM; brak FEM dependency bundle. | Pakować zweryfikowane native binaries, import/runtime dependencies, statyczne UI i Python; nie kopiować Linux libraries. Usunąć niekontrolowane fallbacki i uporządkować staging przez resolver. | Instalacja na czystym Windows i dependency inventory/hashes; brak Docker/WSL/Linux w ścieżce wykonania. |
@@ -27,3 +27,35 @@ zakresie; nie dowodzą pełnego aktualnego pakietu.
 
 Ochrona pracy: zachowano cudze dirty backendy i aktywną sesję 3104.
 Nie provisionowano wolumenu, nie skasowano cache, nie uruchomiono solvera.
+
+## Fragment: linkowanie i publiczne eksporty FEM
+
+02.10.2026: `fullmag-fem-sys/build.rs` pomija Unix rpath dla targetu
+Windows, również przy prebuilt `FULLMAG_FEM_LIB_DIR`. CMake otrzymuje
+`--config Release/Debug`; dla MSVC sprawdzana jest obecność `fullmag_fem.lib`
+w katalogu konfiguracji, następnie w płaskim katalogu generatora Ninja.
+Brak import library po buildzie kończy się jawnym błędem.
+
+Nagłówek `native/include/fullmag_fem.h` oznacza wszystkie 86 funkcji oraz
+`fullmag_fem_mesh_abi_record_v1` makrem `FULLMAG_FEM_API`. Prywatna definicja
+targetu CMake `FULLMAG_FEM_BUILD_SHARED=1` wybiera `dllexport`; konsument
+Windows otrzymuje `dllimport`. Poza Windows makro jest puste. Nie zmieniono
+sygnatur funkcji, struktur, konwencji wywołania ani semantyki fizyki.
+Nie użyto zbiorczego eksportu wewnętrznych symboli bibliotek zależnych.
+
+Weryfikacja: `scripts/test_windows_fem_header_exports.py` uruchamia wyłącznie
+preprocesor MSVC `/EP`, dla C i C++, w trzech trybach. Wszystkie 6 przypadków
+PASS (MSVC 14.44.35207). Kontrola obejmuje funkcje i publiczny symbol danych.
+Poprzedni nagłówek z HEAD nie przechodzi czterech przypadków Windows;
+inventory 86 sygnatur pozostaje zgodne. Tryb bez `_WIN32` sprawdza gałąź
+makra, nie jest dowodem kompilacji ani runtime Linux.
+
+Dwie istniejące kontrole Python dla propagacji CUDA architectures oraz
+release/parallelism do CMake: PASS. `rustfmt --check` i scoped
+`git diff --check`: PASS. Te kontrole źródeł nie wykonują skryptu Cargo ani
+linkera. Nie kompilowano testów jednostkowych, DLL ani solvera.
+
+Pozostała bramka: zbudowany i uruchomiony Windows FEM z dependency inventory,
+DLL staging i provenance oraz regresja Linux z kolejki. Launcher nadal nie
+udostępnia natywnego FEM; znalezienie `.lib` nie dowodzi dostępności DLL
+przy uruchomieniu. P8-C pozostaje NOT VERIFIED.

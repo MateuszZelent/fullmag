@@ -331,6 +331,7 @@ if(FULLMAG_USE_MFEM_STACK)
 endif()
 
 add_library(fullmag_fem SHARED ${FEM_SOURCES})
+target_compile_definitions(fullmag_fem PRIVATE FULLMAG_FEM_BUILD_SHARED=1)
 
 if(FULLMAG_ENABLE_NVTX)
     target_compile_definitions(fullmag_fem PRIVATE FULLMAG_ENABLE_NVTX=1)
