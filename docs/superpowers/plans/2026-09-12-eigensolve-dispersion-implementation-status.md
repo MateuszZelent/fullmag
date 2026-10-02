@@ -164,6 +164,39 @@ Sterownik 7375 nadal żywy. Health runnera: worker_alive/accepting_jobs true,
 brak aktywnych jobów, waiting_for_disk. Najnowszy pomiar wolnego storage:
 1 878 401 024 B (około 1,75 GiB), poniżej 8 GiB. Brak nowych punktów FEM.
 
+### S06 — weryfikacja istniejącego podłączenia, 2026-10-02
+
+Przegląd aktualnego kodu potwierdził, że starszy opis tabeli S06 był
+nieaktualny: istnieją już consistent P1 embedding, kąty główne,
+transport Procrustesa i podłączenie do path. Zaktualizowano tabelę;
+nie oznaczono S06 jako ukończonego. Dowody źródłowe i konkretne brakujące
+bramki opisuje [audyt S06](../../audits/2026-10-02-s06-tracking-source-state.md).
+Niezależny przegląd integracji zakończono. Potwierdził podłączenie algorytmu,
+ale ujawnił P1 utraty provenance krawędzi: principal cosines/rank/cluster
+i transition/gap nie trafiają do TrackedBranchPoint ani do obu writerów.
+Ogólny writer dodatkowo nie publikuje tracking_method/overlap_floor,
+wymaganych przez produkcyjną bramkę k-path. Następny przyrost ma zapisać
+typed edge provenance przy rzeczywistym przypisaniu i użyć tego samego
+obiektu w obu writerach; bez rekonstruowania dowodu z samego confidence.
+Potrzebna jest regresja [-K,0,+K] z reorder/fazą/degeneracją. Prywatna
+heurystyka degeneracji wymaga jawnej polityki i walidacji; nie zmieniono
+jej arbitralnie. Pozostają managed multi-k,
+fizyczny crossing/split/merge, replay pól/metryki i kontrola kroku k.
+
+Nowy potwierdzony punkt S07/S10: `modal_manifest.rs::summarize_mode`
+publikuje stałe referencyjne gamma, zamiast aktualnego gamma planu.
+Naprawa ma przenieść rzeczywisty parametr przez wspólny wynik path
+do writerów i sprawdzić niereferencyjną wartość bez zmiany jednostek.
+Nie jest to przyczyna różnic częstotliwości dla obecnego materiału
+z gamma referencyjnym; to błąd metadanych dla ogólnej konfiguracji.
+
+Sprawdzono zakończony job #195 (succeeded, exit=0) oraz rozmiar wyłącznie
+jego katalogu execution: 443 802 041 B, 7592 pliki. Odzysk około 423 MiB
+sam nie przekroczyłby progu 8 GiB przy ostatnim odczycie miejsca.
+Nic nie usunięto i nie uznano tego katalogu za dopuszczony do kasowania
+bez kontroli mountów/aktywnych użytkowników i autoryzacji.
+#196 nadal queued, a sterownik 7375 potwierdzono żywy.
+
 ### Najnowszy wynik #195 i naprawa granicy build identity
 
 Koordynator zakończył #195 statusem `succeeded`; worker exit=0,
@@ -2668,7 +2701,7 @@ Realizacja [planu S00–S12](2026-09-12-eigensolve-dispersion-nonzero-k-plan.md)
 | S03 — natywny operator magnetyczny Blocha | W TRAKCIE | Prolongacja i bounded sparse operator są w źródłach; geometry-aware tet/prism oraz ich rzeczywista kwadratura mają review. Wymagane są bieżący managed assembly/runtime i pełne certyfikaty deskryptora. |
 | S04 — dynamiczny demag-k CPU | W TRAKCIE | Sparse Schur/SLEPc i MFEM blocks są źródłowo zaimplementowane. Pozostają residual pełnego deskryptora/gauge/szwów, zbieżność airboxu i siatki oraz kwalifikacja nowego źródła; archiwalne punkty nie zastępują tych bramek. |
 | S05 — natywny solver spektralny | W TRAKCIE | #193: 14/50 podokien rozbieżnych, niekompletne okno; pojedynczy mod Γ zaakceptowany. #195 build succeeded, pilot Γ failed przed eigensolve na granicy build identity; poprawka raw64 jest na origin. Przyrost reuse/lifetime ma review i kontrole źródeł; #196 queued, sterownik sześciu punktów żywy. Nadal wymagane świeży runtime nearest, naprawa pełnego okna, certyfikat pokrycia/residuali i wznowienia; nearest nie zastępuje tej bramki. |
-| S06 — śledzenie gałęzi | W TRAKCIE | Hungarian/gaps i metryka masy FE są gotowe; pozostają fizyczne podprzestrzenie zdegenerowane |
+| S06 — śledzenie gałęzi | W TRAKCIE | Źródła mają Hungarian/gaps, spójną masę P1, kąty główne i transport Procrustesa podprzestrzeni; pozostają wykonanie/regresje runtime, fizyczny crossing/split/merge, stabilność kroku k i zgodność publikacji |
 | S07 — artefakty i API | W TRAKCIE | Exact producer/consumer/mesh/native input replay zapisano i zreviewowano. Nowe refs diagnostyki mają odrębny writer/consumer i coverage, 44 regresje przyrostu oraz 213 głównego verifiera PASS; historyczne 56 regresji nonshared pozostają osobnym dowodem. P1 oznaczania nonzero-k jako K0 naprawiony w źródłach bf25. Nadal potrzebne pełne native matrix/physical replay, managed publikacja nowych refs, aktualne binary fields/selektory i managed evidence. |
 | S08 — Control Room | W TRAKCIE | Źródła authoring/scatterplot, selekcji k/pola i linewidth zostały poprawione. Wymagane są bieżący managed frontend/runtime, browser/WebGL, FMS round-trip, dostępność pól i stabilność Inspectora. Historyczny #119 nie jest aktualnym buildem. |
 | S09 — falowód 2.5D | W TRAKCIE | Bounded provider i deterministyczny P1 assembler przekroju są zapisane; pozostają typed realization/routing, managed/MFEM owner, open-boundary convergence i porównania TetraX/3D |
