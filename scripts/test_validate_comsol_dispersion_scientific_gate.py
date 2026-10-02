@@ -902,6 +902,22 @@ class ScientificGateTests(unittest.TestCase):
                         self.assertEqual(results[case]["checks"]["tracking_field_metric_replay"]["status"], "missing")
             self.assertEqual(gate.validate_requested_cases(results, ("c0", "c1", "a1"))["status"], "not_qualified")
 
+    def test_metric_replay_pass_cannot_qualify_unreplayed_assignment(self):
+        # Unit coverage of the aggregate verdict only, not a field/solver proof.
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = _make_case(Path(directory), "c1")
+            with patch.object(gate, "replay_tracking_fields", return_value={
+                "status": "pass", "qualification": "NOT VERIFIED", "reasons": [],
+                "assignment_replay": "NOT VERIFIED",
+            }) as replay:
+                report = gate.validate_case(case_dir, "c1", parameters_path=PARAMETERS, kpath_path=KPATH)
+            replay.assert_called_once()
+            self.assertEqual(report["checks"]["tracking_field_metric_replay"]["status"], "pass")
+            self.assertEqual(report["checks"]["tracking_assignment_replay"]["status"], "missing")
+            self.assertEqual(report["scientific_qualification"], "not_verified")
+            self.assertEqual(report["qualification"], "NOT VERIFIED")
+
     def test_resolved_spatial_material_override_cannot_claim_homogeneous_ks(self):
         metadata = _native_metadata("c1", "mesh-L1", 2e-6, 24)
         metadata["execution_plan"]["backend_plan"]["material"]["ms_field"] = [800000.0, 1600000.0]

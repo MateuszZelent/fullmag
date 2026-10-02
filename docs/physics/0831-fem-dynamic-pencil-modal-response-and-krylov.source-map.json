@@ -2076,6 +2076,24 @@
       "responsibility": "Freeze public target transfer, unchanged residual policies, selected-only output and the prepared Rust single/path regressions."
     },
     {
+      "id": "source-comsol-tracking-path-replay",
+      "path": "scripts/comsol_tracking_replay.py",
+      "symbol": "replay_recorded_frames",
+      "responsibility": "Bind spectrum endpoints and reconstruct chosen pair/subspace metrics and subsequent frames; global assignment remains unverified"
+    },
+    {
+      "id": "source-comsol-tracking-disk-replay",
+      "path": "scripts/comsol_tracking_replay.py",
+      "symbol": "replay_tracking_fields",
+      "responsibility": "Execute replay from real spectrum, branches and phase-certified field bytes, including dependent cluster branches"
+    },
+    {
+      "id": "source-comsol-tracking-replay-tests",
+      "path": "scripts/test_comsol_tracking_replay.py",
+      "symbol": "test_disk_signed_path_replays_actual_edges",
+      "responsibility": "Synthetic signed disk-path replay; forged scores/verdicts cannot substitute for executed metric replay"
+    },
+    {
       "id": "source-comsol-tracking-field-reader",
       "path": "scripts/comsol_tracking_fields.py",
       "symbol": "load_tracking_fields",
@@ -2109,7 +2127,7 @@
       "id": "source-comsol-tracking-qualification",
       "path": "scripts/validate_comsol_dispersion_scientific_gate.py",
       "symbol": "validate_case",
-      "responsibility": "Separate campaign contract pass from scientific qualification; missing field replay blocks C1/A1 QUALIFIED"
+      "responsibility": "Execute independent field-metric replay; missing assignment/cluster-selection replay still blocks C1/A1 QUALIFIED"
     },
     {
       "id": "source-comsol-tracking-record-gate",

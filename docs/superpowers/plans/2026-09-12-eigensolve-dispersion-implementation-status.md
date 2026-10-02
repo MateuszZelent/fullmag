@@ -1,5 +1,36 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
+## S06/S12 — wykonywany replay metryk całej ścieżki, 2026-10-02
+
+`replay_tracking_fields` czyta rzeczywiste widmo, gałęzie i wszystkie pola
+wybranych gałęzi wraz z zależnościami grup. Kontroluje SHA tych samych
+metadanych/widma/gałęzi co bramka główna. `replay_recorded_frames` wiąże
+sample/raw ID, signed k i częstotliwość zespoloną; odtwarza kolejne ramy,
+overlapy, principal cosines i score. Grupa korzysta wyłącznie z ramek
+poprzedniej próbki. Brak pól jest `missing`, niespójne/zmienione dane `fail`.
+Główna bramka C1/A1 wykonuje ten kod; nie przyjmuje gotowego werdyktu JSON.
+
+Kontrole: 36 testów trackingu PASS, 50 testów scientific gate PASS,
+2 skupione kontrole agregacji na końcowym wariancie hash binding PASS,
+mapa noty 0831 PASS. Źródła/testy są interpretowane; pola testowe syntetyczne,
+bez nowych częstotliwości FEM. Scoped review nie znalazł P1 w metryce,
+endpointach ani transporcie. Dodatnią częstotliwość wymuszono też w helperze.
+
+Pozostaje P2: nie odtworzono Hungarian assignment wewnątrz podprzestrzeni
+ani wyboru grup i globalnego przydziału pair edges. Test zamiany raw IDs
+potwierdza granicę: metryka nie rozstrzyga przydziału. Osobna bramka
+`tracking_assignment_replay` pozostaje `missing`; nawet metric `pass`
+nie może zakwalifikować C1/A1. Następny etap musi odtworzyć przydziały
+z rzeczywistych kandydatów i dodać kontrolę niewłaściwej permutacji.
+Pełny zakres S00–S12, runtime, COMSOL i zbieżności nadal pozostają otwarte.
+
+Aktualny runner: #196 queued, session 7375 potwierdzony aktywny,
+worker_alive=true, accepting_jobs=true, active_jobs=[], waiting_for_disk,
+storage_free_bytes=729 821 184 B, poniżej 8 GiB. Nie restartowano joba,
+nie usunięto danych; nowych punktów FEM: 0.
+
+Szczegóły: [audyt replayu metryk](../../audits/2026-10-02-tracking-field-metric-replay.md).
+
 ## S06/S12 — odczyt pól i transport ram replay, 2026-10-02
 
 Dodano `load_tracking_fields`: wykonuje rzeczywisty certyfikat fazy,

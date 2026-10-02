@@ -22,6 +22,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Mapping, Sequence
 
 from comsol_n0_field_certificate import measure_n0_field
+from comsol_tracking_replay import replay_tracking_fields
 from verify_fem_frequency_domain_eigen_artifacts import (
     p00_demag_factor,
     require_kalinikos_slab_n0_material_and_bias,
@@ -2714,15 +2715,23 @@ def validate_case(
         mode_count=len(mode_map),
     )
     campaign_contract_status = "pass" if not reasons else "fail"
-    # Recorded scores are necessary, but they are not an independent replay of
-    # hash-bound mode fields and mass operators. Never promote that missing gate.
+    # Execute from actual disk inputs; never trust a supplied replay verdict.
+    # Metric replay does not yet verify candidate selection/global assignment.
     tracking_replay = _new_check("not_applicable")
+    assignment_replay = _new_check("not_applicable")
     if case in PATH_CASES:
-        tracking_replay = _new_check("missing", qualification="NOT VERIFIED")
-        reasons.append(
-            "scientific tracking qualification requires executed hash-bound field-metric replay; "
-            "recorded provenance alone is insufficient"
-        )
+        tracking_replay = replay_tracking_fields(case_dir,
+            selected_branch_ids=[branch["branch_id"] for branch in selected_branches],
+            expected_hashes={path.as_posix(): "sha256:" + record["sha256"]
+                for path, record in artifacts.items()
+                if path.as_posix() in {"metadata.json", "eigen/spectrum.v2.json", "eigen/branches.v2.json"}})
+        if tracking_replay["status"] != "pass":
+            reasons.append(
+                "scientific tracking qualification requires executed hash-bound field-metric replay; "
+                + "; ".join(tracking_replay.get("reasons", []))
+            )
+        assignment_replay = _new_check("missing", qualification="NOT VERIFIED")
+        reasons.append("scientific tracking assignment/cluster-selection replay remains NOT VERIFIED")
     status = "qualified" if not reasons else "not_qualified"
     return {
         "schema_version": GATE_SCHEMA,
@@ -2740,6 +2749,7 @@ def validate_case(
             "spectrum_samples": _new_check("pass" if len(sample_map) == (1 if case == "c0" else EXPECTED_PATH_SAMPLE_COUNT) else "fail", sample_count=len(sample_map)),
             "tracked_branches": branch_check,
             "tracking_field_metric_replay": tracking_replay,
+            "tracking_assignment_replay": assignment_replay,
             "dispersion_csv": csv_check,
             "postsolve_analytic_columns": analytic_columns_check,
             "kittel": kittel_check,

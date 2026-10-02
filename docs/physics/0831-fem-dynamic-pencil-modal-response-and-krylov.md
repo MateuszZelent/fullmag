@@ -2564,6 +2564,20 @@ Transport ram wyznacza bieżącą bazę przemnożoną przez polarną rotację
 Procrustesa cross-Gram. Kolejne overlapy używają tej ramy.
 Adapter i algebra nadal nie dowodzą globalnie optymalnego przydziału
 branch IDs ani kompletności pasm, więc nie otwierają bramki QUALIFIED.
+Replay ścieżki odczytuje także rzeczywiste branches.v2 i spectrum.v2,
+wiąże każdy sample/raw ID, częstotliwość zespoloną i signed k z polem.
+Przetwarza próbki w kolejności widma; każda grupa degeneracji odczytuje
+ramy poprzedniej próbki przed aktualizacją któregokolwiek uczestnika.
+Porównuje amplitudowe overlapy, cosinusy kątów głównych i heuristic score
+producenta (85% overlap/minimum principal cosine i 15% frequency score).
+Frequency score odtwarza zapisane frequency_window_hz lub względną
+zmianę częstotliwości, zgodnie z finite_frequency_score_values.
+Zgodność algebraiczna wykorzystuje tolerancję bezwymiarową 1e-9;
+nie jest tolerancją residualu eigenproblem ani zgodności z analityką.
+Brak zależnej gałęzi, restart/gap lub brak pola oznacza brak pełnego replay.
+Sukces ma osobny status metryki; brak replay przydziału/cluster selection
+nadal blokuje naukową kwalifikację C1/A1. Mechanizm nie zmienia solvera,
+publicznego Python/IR ani metod fizycznych i nie dowodzi zbieżności.
 Po degeneracji konieczny jest dodatkowo replay przetransportowanej ramy;
 raw-to-raw overlap nie zastępuje tego replay. Do jego wykonania C1/A1
 pozostają NOT VERIFIED. Jest to diagnostyka CPU, bez zmiany Python/IR,
@@ -2599,6 +2613,9 @@ selekcja węzłów Gamma, następnie kompilacja/runtime i walidacja naukowa.
 | source-comsol-tracking-frame-transport | `scripts/comsol_tracking_metric.py` | `transport` |
 | source-comsol-tracking-field-reader | `scripts/comsol_tracking_fields.py` | `load_tracking_fields` |
 | source-comsol-tracking-field-tests | `scripts/test_comsol_tracking_fields.py` | `test_actual_certificate_and_geometry` |
+| source-comsol-tracking-path-replay | `scripts/comsol_tracking_replay.py` | `replay_recorded_frames` |
+| source-comsol-tracking-disk-replay | `scripts/comsol_tracking_replay.py` | `replay_tracking_fields` |
+| source-comsol-tracking-replay-tests | `scripts/test_comsol_tracking_replay.py` | `test_disk_signed_path_replays_actual_edges` |
 
 
 ### Integralność legacy odczytu pól i wag
