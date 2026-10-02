@@ -32,9 +32,10 @@ pub(crate) fn repo_root() -> PathBuf {
 /// packaged install may live below Program Files, so generated live-workspace
 /// files and mesh caches must not be placed next to the read-only binaries.
 pub(crate) fn state_root(repo_root: &Path) -> Result<PathBuf, ApiError> {
-    if let Some(configured) = std::env::var_os("FULLMAG_STATE_ROOT")
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
+    if let Some(configured) = fullmag_runtime_control::python_runtime::validated_state_override(
+        std::env::var_os("FULLMAG_STATE_ROOT").map(PathBuf::from),
+    )
+    .map_err(|error| ApiError::internal(error.to_string()))?
     {
         return Ok(configured);
     }

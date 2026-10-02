@@ -379,11 +379,12 @@ fn packaged_install_root(self_exe: &Path) -> Option<PathBuf> {
 /// `Program Files` (or another read-only prefix).  `FULLMAG_STATE_ROOT` is an
 /// explicit escape hatch for managed deployments and tests.
 pub(crate) fn runtime_state_root(root: &Path) -> PathBuf {
-    if let Some(configured) = std::env::var_os("FULLMAG_STATE_ROOT") {
-        let configured = PathBuf::from(configured);
-        if !configured.as_os_str().is_empty() {
-            return configured;
-        }
+    if let Some(configured) = fullmag_runtime_control::python_runtime::validated_state_override(
+        std::env::var_os("FULLMAG_STATE_ROOT").map(PathBuf::from),
+    )
+    .expect("Fullmag state configuration is invalid")
+    {
+        return configured;
     }
     if let Some(state) = fullmag_runtime_control::python_runtime::packaged_windows_state_root(root)
         .expect("Windows package requires a configured per-user state directory")

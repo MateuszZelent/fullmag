@@ -189,10 +189,10 @@ fn sidecar_state_root(
     repo_root: &std::path::Path,
     configured: Option<PathBuf>,
 ) -> Result<PathBuf, String> {
-    if let Some(root) = configured.filter(|path| !path.as_os_str().is_empty()) {
-        if !root.is_absolute() {
-            return Err("FULLMAG_STATE_ROOT must be an absolute path".to_string());
-        }
+    if let Some(root) =
+        fullmag_runtime_control::python_runtime::validated_state_override(configured)
+            .map_err(|error| error.to_string())?
+    {
         return Ok(root);
     }
     fullmag_runtime_control::python_runtime::packaged_windows_state_root(repo_root)

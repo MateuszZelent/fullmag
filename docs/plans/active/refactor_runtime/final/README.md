@@ -375,3 +375,8 @@ wykonanie w zweryfikowanym obrazie, archive i nauka nadal NOT VERIFIED.
 usuwa zapis logów obok instalacji i wiąże checkpointy z rootem stanu API.
 Kontrole źródłowe PASS; natywny pakiet, rzeczywisty zapis/restart/restore
 i wydanie pozostają NOT VERIFIED. Docker nie jest wymaganiem produktu Windows.
+
+[Wspólna walidacja katalogu danych](p8/13-shared-state-root-validation.md)
+odrzuca względny FULLMAG_STATE_ROOT w CLI, API i desktopie przed zapisem.
+Parser/review PASS; regresje Rust NOT RUN, Windows MSI PENDING bez wykonanego
+kroku. Pakiet i trwałość nadal wymagają rzeczywistego odbioru.

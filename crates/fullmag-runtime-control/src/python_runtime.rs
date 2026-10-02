@@ -3,6 +3,18 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+/// Validate an explicit writable-state override before any caller creates files.
+pub fn validated_state_override(value: Option<PathBuf>) -> io::Result<Option<PathBuf>> {
+    let value = value.filter(|path| !path.as_os_str().is_empty());
+    if value.as_ref().is_some_and(|path| !path.is_absolute()) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "FULLMAG_STATE_ROOT must be an absolute path",
+        ));
+    }
+    Ok(value)
+}
+
 pub fn packaged_windows_python(root: &Path) -> Option<PathBuf> {
     packaged_python_for_platform(root, cfg!(windows))
 }
@@ -123,6 +135,33 @@ pub fn configure_packaged_python(command: &mut Command, root: &Path) -> io::Resu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn state_override_rejects_relative_paths_without_creating_files() {
+        for path in ["state", "../state", "."] {
+            assert_eq!(
+                validated_state_override(Some(path.into()))
+                    .unwrap_err()
+                    .kind(),
+                io::ErrorKind::InvalidInput
+            );
+        }
+    }
+
+    #[test]
+    fn state_override_preserves_absolute_paths_and_empty_default() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = directory.path().join("state");
+        assert_eq!(
+            validated_state_override(Some(state.clone())).unwrap(),
+            Some(state)
+        );
+        assert_eq!(
+            validated_state_override(Some(PathBuf::new())).unwrap(),
+            None
+        );
+        assert_eq!(validated_state_override(None).unwrap(), None);
+    }
 
     #[test]
     fn legacy_bundle_is_owned_but_source_checkout_keeps_development_selection() {
