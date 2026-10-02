@@ -2076,6 +2076,18 @@
       "responsibility": "Freeze public target transfer, unchanged residual policies, selected-only output and the prepared Rust single/path regressions."
     },
     {
+      "id": "source-comsol-tracking-metric-algebra",
+      "path": "scripts/comsol_tracking_metric.py",
+      "symbol": "principal_cosines",
+      "responsibility": "Independent element mass forms, signed Bloch demodulation and principal cosines; no artifact integrity or transport qualification"
+    },
+    {
+      "id": "source-comsol-tracking-metric-tests",
+      "path": "scripts/test_comsol_tracking_metric.py",
+      "symbol": "test_rotated_degenerate_basis",
+      "responsibility": "Analytic consistent-mass, phase, rank and subspace fixtures; no FEM runtime proof"
+    },
+    {
       "id": "source-comsol-tracking-qualification",
       "path": "scripts/validate_comsol_dispersion_scientific_gate.py",
       "symbol": "validate_case",

@@ -2548,6 +2548,18 @@ operatora ani numeryczny dowód ciągłości podprzestrzeni.
 
 ## Odtwarzanie metryki trackingu z artefaktów (S07, źródła WIP)
 
+Niezależny postprocessor oblicza iloczyn masowy bez embeddingu producenta:
+sumuje lokalne formy Tet4 z eq-de-bv-profile-consistent-mass. Pola fizyczne
+demoduluje przez exp(+i k·r), a następnie wyznacza amplitudowy overlap
+z eq-de-bv-profile-overlap (nie jego kwadrat). Dla podprzestrzeni stosuje
+dwukrotną ortogonalizację w tej samej metryce i SVD macierzy cross-Gram.
+Liniowo zależna baza jest błędem; nie wolno zmniejszyć rzędu po cichu.
+Helper algebraiczny nie sprawdza hashów artefaktów ani decyzji przydziału.
+Po degeneracji konieczny jest dodatkowo replay przetransportowanej ramy;
+raw-to-raw overlap nie zastępuje tego replay. Do jego wykonania C1/A1
+pozostają NOT VERIFIED. Jest to diagnostyka CPU, bez zmiany Python/IR,
+solverów i kwalifikacji urządzeń.
+
 Zapis pola Cartesian global_xyz i metryka trackingu są oddzielne. Pole
 obejmuje pełną siatkę; metryka identyfikuje uporządkowane fizyczne węzły
 magnetyczne, tetrahedry w ich indeksacji kompaktowej i objętości w m³.
@@ -2573,6 +2585,8 @@ selekcja węzłów Gamma, następnie kompilacja/runtime i walidacja naukowa.
 | source-tracking-consistent-persist | `crates/fullmag-runner/src/eigen/tracking_mass.rs` | `from_artifact_json` |
 | source-tracking-consistent-reload | `crates/fullmag-runner/src/eigen/artifacts/kittel.rs` | `parse_bias_field_mode_vectors` |
 | source-tracking-consistent-publication | `crates/fullmag-runner/src/eigen/artifacts/mode_bundle.rs` | `ModeArtifact` |
+| source-comsol-tracking-metric-algebra | `scripts/comsol_tracking_metric.py` | `principal_cosines` |
+| source-comsol-tracking-metric-tests | `scripts/test_comsol_tracking_metric.py` | `test_rotated_degenerate_basis` |
 
 
 ### Integralność legacy odczytu pól i wag

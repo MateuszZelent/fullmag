@@ -1,5 +1,25 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
+## S06/S12 — niezależna algebra replay, 2026-10-02
+
+Dodano `scripts/comsol_tracking_metric.py`: lokalna forma masy Tet4 zamiast
+embeddingu producenta, demodulacja signed Blocha, amplitudowy overlap oraz
+kąty główne podprzestrzeni. 9 interpretowanych testów analitycznych PASS;
+mapa noty 0831 PASS. To pomocnicza algebra, nie replay artefaktów ani
+wynik FEM. Nie zmienia statusu bramki C1/A1: nadal NOT VERIFIED.
+
+Inspekcja `mass_weighted_subspace_transport` wykazała, że po degeneracji
+kolejna krawędź używa przetransportowanej ramy. Następne kroki: odczyt
+hash-bound pól i siatki, niezależne sprawdzenie metryki/supportu, odtworzenie
+ramek Procrustesa i porównanie zapisanych krawędzi/score. Nie zastępować
+ramy poprzednim surowym modem. Testy syntetyczne nie dowodzą fizycznego
+crossing/split/merge ani zbieżności kroku k.
+
+Aktualna kontrola #196: queued; sterownik session 7375 żyje;
+worker_alive=true, accepting_jobs=true, active_jobs=[], waiting_for_disk.
+Wolne storage: 163 201 024 B, poniżej 8 GiB. Nie restartowano joba,
+nie zmieniono runnera i nie usunięto danych. Nowe punkty FEM: 0.
+
 ## S06/S12 — provenance wymagane w bramce COMSOL, 2026-10-02
 
 Bieżące źródła po checkpointcie `9d036af61c49cca7b3a5b0519405d85691d3b91a`
