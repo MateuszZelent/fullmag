@@ -87,6 +87,14 @@ esac
 # paths/lock inside the dedicated helper. Do not run the generic compatibility-
 # link or heavy-build wrapper for them.
 case "${recipe}" in
+  *"scripts/run_managed_browser.py"*)
+    managed_browser_pattern='^[^[:space:]]+ "[^"]+/scripts/run_managed_browser.py" --repo-root "[^"]+" --job-id ([0-9a-f]{32}) --commit ([0-9a-f]{40}) --port ([0-9]{4,5})$'
+    if [[ ! "${recipe}" =~ ${managed_browser_pattern} ]]; then
+      echo "[fullmag just] invalid managed browser recipe" >&2
+      exit 2
+    fi
+    exec "${python_cmd}" "${script_dir}/run_managed_browser.py" --repo-root "${repo_root}" --job-id "${BASH_REMATCH[1]}" --commit "${BASH_REMATCH[2]}" --port "${BASH_REMATCH[3]}"
+    ;;
   *"scripts/verify_saved_fem_archive_roundtrip.py"*)
     roundtrip_recipe_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_saved_fem_archive_roundtrip.py" --repo-root "[^"]+"$'
     if [[ ! "${recipe}" =~ ${roundtrip_recipe_pattern} ]]; then

@@ -17,8 +17,10 @@ dlatego nie podnosi procentów P3/P5.
 
 Checkpoint domknięcia 02.10.2026: [warunki odbioru P1/P3/P3a/P5](07-domkniecie-etapow.md).
 Dodano bramkę stale scope ośmiu operacji workspace; 11 regresji skryptu PASS,
-managed runtime otwarty. Build 197 z przypiętego mastera pracuje. Audyt startupu
-potwierdza, że zachowanie workspace nie usuwa jeszcze blokującego modalu.
+managed runtime otwarty. [Build 197 i browser startup](p1/10-browser-empty-startup.md)
+przeszły kompilację i uruchomienie na porcie 3104. Pusty FDM działa; FEM działa
+po reloadzie, lecz zastąpienie sesji bez reloadu ujawniło Checking for sessions.
+Brak jeszcze dowodu swobodnego używania edytora podczas długiego meshingu.
 Żaden z etapów nie otrzymuje 100% na podstawie tego checkpointu.
 
 Checkpoint 02.10.2026: [P6-71 — kod wdrożonego runnera](p6/71-deployed-runner-contract-gap.md)
@@ -221,3 +223,5 @@ runtime. Wykonanie zakończyło się `exit 0`.
 Po tej zmianie przeprowadzono końcową kontrolę spójności repozytorium, API/architektury Control Room oraz kompilację i testy desktopowego adaptera Tauri: wszystkie kontrole zakończyły się `PASS`. Fizyczny smoke w zbudowanym oknie Tauri pozostaje osobnym gate'em; testy Rust/TS potwierdzają kontrakt mostu, ale nie zastępują interakcji z hostem.
 
 Kontrola pakietu z 21.09.2026: parsery `inventory.json`, `02-baseline-manifest.json` i wygenerowanego OpenAPI przeszły; wszystkie względne linki Markdown w `final/` wskazują istniejące pliki; `python scripts/check_repo_consistency.py` i `git diff --check` zakończyły się powodzeniem. Ostrzeżenia `git diff --check` dotyczą wyłącznie normalizacji LF→CRLF na Windows.
+
+Aktualizacja startupu 02.10.2026: ACK scope i invalidacja replacement naprawione w źródłach; nowy build/browser NOT VERIFIED. Checkpointy BLOCKED: symlink w pierwotnym launcherze, a po jego naprawie nieobsługiwany filesystem Desktop 9p. Runner ma poniżej 8 GiB wolnego storage i wykrywa istniejący runtime. Sesja użytkownika na 3104 zachowana. Szczegóły: [raport startupu](p1/10-browser-empty-startup.md).

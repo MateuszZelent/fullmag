@@ -38,8 +38,9 @@ Build **197**, job `4275d899553b40ddb5b4fcf1a11caf2a`, profil
 `5d91ed2aa6337c2001abf2a208b0b6586125a3a7`, capture
 `d477870c825a487dbe4946ace286f15d`, source digest
 `1e05bb1ce17d4dbb9701267b410a0ee60e8918c394e09c89617d0d97970d0d50`.
-Ostatni odczyt: `running`. Nie jest to jeszcze terminalny sukces ani dowód
-runtime. Build nie zawiera późniejszej poprawki skryptu scope.
+Wynik końcowy: `succeeded`, exit 0, 119 zweryfikowanych artefaktów.
+Build nie zawiera późniejszej poprawki skryptu scope.
+Aktualny build/browser receipt: [P1 startup](p1/10-browser-empty-startup.md).
 
 Pierwsza próba profilu `fdm-cpu-release` zakończyła się przed zgłoszeniem
 jobu: brak definicji profilu w konfiguracji klienta (`KeyError`). Nazwa
@@ -56,6 +57,9 @@ workspace po pierwszym przygotowaniu, lecz `SimulationStartupOverlayView`
 nadal jest pełnoekranowym modalem, a `WorkspaceDockLayout` stosuje `inert`.
 Zachowanie mountu nie oznacza swobodnego używania edytora podczas przygotowania.
 
-Bieżąca próba wejścia na `http://localhost:3104/workspace` przez przeglądarkę
-zakończyła się `ERR_CONNECTION_REFUSED`; nie wykonano nowego live smoke.
-Nie zgłaszamy pełnej naprawy blokującego modalu ani fizycznego startupu Tauri.
+Po uruchomieniu gotowego pakietu UI działa na `http://localhost:3104/workspace`.
+Pusty start i FDM przeszły live smoke, FEM działa po reloadzie. Wykryto
+regresję zastąpienia sesji FDM przez FEM bez reloadu: Checking for sessions.
+Nie zgłaszamy pełnej naprawy modalu podczas długiego meshingu ani startupu Tauri.
+
+Aktualizacja startupu 02.10.2026: ACK scope i invalidacja replacement naprawione w źródłach; nowy build/browser NOT VERIFIED. Checkpointy BLOCKED: symlink w pierwotnym launcherze, a po jego naprawie nieobsługiwany filesystem Desktop 9p. Runner ma poniżej 8 GiB wolnego storage i wykrywa istniejący runtime. Sesja użytkownika na 3104 zachowana. Szczegóły: [raport startupu](p1/10-browser-empty-startup.md).

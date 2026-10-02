@@ -26,6 +26,10 @@ storage-info:
 storage-inventory:
     @{{storage_python}} "{{repo_root}}/scripts/fullmag_storage.py" inventory --repo-root "{{repo_root}}" --format json
 
+# Launch an already successful managed CPU release; never build or install.
+run-managed-browser job_id commit port="3104":
+    @{{storage_python}} "{{repo_root}}/scripts/run_managed_browser.py" --repo-root "{{repo_root}}" --job-id {{job_id}} --commit {{commit}} --port {{port}}
+
 storage-prepare:
     @{{storage_python}} "{{repo_root}}/scripts/fullmag_storage.py" prepare-links --repo-root "{{repo_root}}" --compat --frontend
 

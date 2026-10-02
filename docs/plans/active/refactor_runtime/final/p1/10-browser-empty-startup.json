@@ -1,0 +1,570 @@
+{
+  "schema": "fullmag.browser-empty-startup.v1",
+  "date": "2026-10-02",
+  "state": "completed_with_failure",
+  "url": "http://localhost:3104/workspace/",
+  "source_commit": "5d91ed2aa6337c2001abf2a208b0b6586125a3a7",
+  "native_source_snapshot_sha256": "7ade44be2c01b1d1f7611c70b06358028bc94b0ed60a526b57c2310f3f60d2a1",
+  "source_digest": "1e05bb1ce17d4dbb9701267b410a0ee60e8918c394e09c89617d0d97970d0d50",
+  "build": {
+    "job_id": "4275d899553b40ddb5b4fcf1a11caf2a",
+    "phase": "terminal",
+    "state": "succeeded",
+    "exit_code": 0,
+    "artifact_count": 119,
+    "build_receipt_sha256": "d36276ecc1b3b1b1bbe4e36cdd252260bc71b5d3a5708c3f71e30c05a222d2db",
+    "stages": [
+      {
+        "name": "native-build",
+        "exit_code": 0
+      },
+      {
+        "name": "frontend-dependencies",
+        "exit_code": 0
+      },
+      {
+        "name": "frontend-build",
+        "exit_code": 0
+      }
+    ]
+  },
+  "launch": {
+    "schema": "fullmag.managed-browser.v1",
+    "state": "running",
+    "qualification": "NOT VERIFIED",
+    "profile": "managed-browser-cpu",
+    "compose_project": "fullmag-browser-68f9526f82f34cf7808a04abd05da108",
+    "managed_job_id": "4275d899553b40ddb5b4fcf1a11caf2a",
+    "native_source_identity": {
+      "dirty_content_sha256": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570",
+      "dirty_path_content": [],
+      "git_status_porcelain_v1": [],
+      "head_commit_full": "5d91ed2aa6337c2001abf2a208b0b6586125a3a7",
+      "head_tree_sha256": "c76b8799e4184ae15b512335126d31f0dfb860c5cc7643161cf71b8ab4340b3c",
+      "ignored_non_runtime_dirty": true,
+      "schema": "fullmag.source-snapshot.v2",
+      "source_snapshot_dirty": false,
+      "source_snapshot_sha256": "7ade44be2c01b1d1f7611c70b06358028bc94b0ed60a526b57c2310f3f60d2a1"
+    },
+    "image_digest": "sha256:e9b8ec88b9a9ea09a6cd5e3ad3945fcabd269541f1cdd24ffafd3dff3925399d",
+    "url": "http://localhost:3104/workspace",
+    "run_root": "C:\\git\\fullmag\\storage\\builds\\fullmag-0950f4dca4ffe38f\\managed-browser-cpu\\runs\\68f9526f82f34cf7808a04abd05da108",
+    "build_receipt_sha256": "d36276ecc1b3b1b1bbe4e36cdd252260bc71b5d3a5708c3f71e30c05a222d2db",
+    "launcher_sha256": "bab05d93d792a5b9c5513dcdb6909c4904de11d8f2ca4b43e9a972724865430d",
+    "compose_sha256": "a837a567accc1c5684c1618b2362b25ec174d332ba6c0c197da9658cb1227f4d",
+    "solver_started": false,
+    "unit_tests_compiled": false,
+    "container_id": "06c37c71c83f8a910619c244b530b673e8f1a5ece971cb3ebee0d123b36c4a1a",
+    "attestation": {
+      "image_and_mounts": "PASS",
+      "loopback_binding": "PASS"
+    },
+    "startup_identity": "PASS",
+    "source_capsule_recheck": "PASS",
+    "launch_state": "succeeded",
+    "health": "PASS"
+  },
+  "browser": {
+    "cold_without_session": "PASS",
+    "fdm_empty_create": "PASS",
+    "fdm_webgl": {
+      "visible": true,
+      "contextLost": false,
+      "drawingBufferWidth": 526,
+      "drawingBufferHeight": 318
+    },
+    "fdm_universe_selection": "PASS",
+    "fdm_to_fem_without_reload": "FAIL_CHECKING_FOR_SESSIONS",
+    "session_create_http_status": 201,
+    "session_collection_http_status": 200,
+    "stale_old_scope_http_status": 409,
+    "fem_empty_after_reload": "PASS",
+    "fem_webgl": {
+      "visible": true,
+      "contextLost": false,
+      "drawingBufferWidth": 549,
+      "drawingBufferHeight": 318
+    },
+    "fem_universe_selection": "PASS",
+    "fem_apply_airbox_policy_enabled": true,
+    "blocked_preparation_overlays": 0,
+    "inert_panels": 0,
+    "mesh_built": false,
+    "objects": 0,
+    "solver_steps": 0,
+    "science_qualification": "NOT VERIFIED",
+    "long_mesh_build_interaction": "NOT VERIFIED",
+    "tauri": "NOT VERIFIED",
+    "screenshot": "10-browser-empty-fem.jpg"
+  },
+  "current_status": {
+    "api_contract_version": "1.0.0",
+    "runtime_bundle_version": "2026-10-02",
+    "session": {
+      "session_id": "session-18daa5f1283a94ec00000007",
+      "session_epoch": "session-18daa5f1283a94ec00000007@1790926257013",
+      "request_scope_epoch": "1b71bb42-5bdb-4e31-89ec-86e9e5c88c76:2",
+      "name": "Startup smoke FEM CPU",
+      "created_at": "1790926257013",
+      "workspace_root": "/state/local-live/current"
+    },
+    "run": null,
+    "solver": {
+      "state": "idle",
+      "algorithm": null,
+      "relaxation_algorithm": null,
+      "dt": null,
+      "max_torque_T": null,
+      "max_torque_Apm": null,
+      "max_rhs_norm_per_s": null,
+      "max_torque": null,
+      "converged": null
+    },
+    "lifecycle": {
+      "solver": "awaiting_command",
+      "session_resource": "active",
+      "connectivity": "connected",
+      "commandability": "allowed"
+    },
+    "display": {
+      "active_quantity_id": "m",
+      "view_mode": "3d",
+      "field_component": "magnitude",
+      "colormap": "viridis",
+      "auto_contrast": true,
+      "contrast_min": null,
+      "contrast_max": null,
+      "vector_glyphs": false,
+      "vector_density": 50,
+      "slice_mode": "single",
+      "slice_layer": 0,
+      "max_points": 16384,
+      "x_chosen_size": 0,
+      "y_chosen_size": 0
+    },
+    "domain": {
+      "generation_id": "0",
+      "discretization": "fdm",
+      "cell_count": 0
+    },
+    "resources": {
+      "topology_revision": 0,
+      "field_catalog_revision": 0,
+      "field_revision": 0,
+      "slice_revision": 0,
+      "artifact_revision": 0,
+      "command_completion_revision": 0,
+      "fields_revision": 0,
+      "scalars_revision": 0,
+      "domain_generation_id": "0",
+      "artifacts_revision": 0,
+      "engine_log_revision": 0,
+      "solver_profile_revision": 0,
+      "display_revision": 0,
+      "workspace_revision": 0,
+      "mesh_revision": 0,
+      "mesh_build_revision": 0,
+      "commands_revision": 0,
+      "stages_revision": 0,
+      "simulation_preparation_revision": 0,
+      "scene_revision": 0,
+      "visualization_state_revision": 0,
+      "mode_composition_revision": 1,
+      "region_topology_revision": 0,
+      "region_membership_revision": 0,
+      "region_coefficients_revision": 0,
+      "region_initial_state_revision": 0
+    },
+    "capabilities": {
+      "structured_grid": true,
+      "explicit_topology": false,
+      "binary_fields": true,
+      "cell_fields": true,
+      "node_fields": false,
+      "scalar_history": true,
+      "eigen_modes": false,
+      "gpu_telemetry": true,
+      "preview_2d": true,
+      "preview_3d": true,
+      "algorithms_available": [
+        "llg_overdamped",
+        "projected_gradient_bb",
+        "nonlinear_cg",
+        "tangent_plane_implicit"
+      ],
+      "active_lane": {
+        "schema_version": "active-lane-capabilities.v2",
+        "authored": {
+          "backend": "fem",
+          "discretization": "fem",
+          "device": "cpu",
+          "precision": "double",
+          "mode": "strict"
+        },
+        "requested": {
+          "backend": "fem",
+          "discretization": "fem",
+          "device": "cpu",
+          "precision": "double",
+          "mode": "strict"
+        },
+        "resolved": {
+          "backend": "fem",
+          "discretization": "fem",
+          "device": "cpu",
+          "precision": "double",
+          "mode": "strict"
+        },
+        "fallback": null,
+        "source": {
+          "kind": "planner",
+          "capability_profile_version": "2026-09-20",
+          "engine_id": "fem_cpu_native",
+          "authored_intent": "problem_ir.runtime_selection",
+          "effective_request": "session.runtime_resolution"
+        },
+        "qualification": {
+          "status": "not_asserted",
+          "reason": "Planner capability availability is separate from workload-scoped scientific qualification evidence."
+        },
+        "operations": {
+          "air_void_overlay": {
+            "state": "semantic_only",
+            "reason_code": "capability_semantic_only",
+            "reason": "Air/void presentation semantics exist, but the planner profile does not publish current domain-resource readiness.",
+            "requires": [
+              "domain_metadata:compatible"
+            ]
+          },
+          "constraint.frozen_spins": {
+            "state": "supported",
+            "reason_code": "capability_supported",
+            "reason": "Frozen Spins source execution is available for the resolved FEM CPU double-precision explicit and relaxation scope; production qualification remains gated.",
+            "requires": [
+              "planner_feature:constraint.frozen_spins"
+            ]
+          },
+          "field_quantity": {
+            "state": "supported",
+            "reason_code": "capability_supported",
+            "reason": "The planner advertises field quantities for the resolved lane.",
+            "requires": [
+              "planner:field_quantities"
+            ]
+          },
+          "grid_build": {
+            "state": "unsupported",
+            "reason_code": "capability_unsupported",
+            "reason": "Structured-grid refresh is not applicable to the resolved lane.",
+            "requires": [
+              "discretization:fdm"
+            ]
+          },
+          "hover_select_cell": {
+            "state": "unsupported",
+            "reason_code": "capability_unsupported",
+            "reason": "Cell hover and selection are specific to structured FDM domains.",
+            "requires": [
+              "discretization:fdm"
+            ]
+          },
+          "initial_magnetization.uniform": {
+            "state": "supported",
+            "reason_code": "capability_supported",
+            "reason": "Uniform initial magnetization is executable in the resolved FDM/FEM lane.",
+            "requires": [
+              "initial_magnetization:uniform",
+              "resolved_lane_identity"
+            ]
+          },
+          "initial_magnetization.vortex": {
+            "state": "supported",
+            "reason_code": "capability_supported",
+            "reason": "Vortex initial magnetization is executable in the resolved FDM/FEM lane.",
+            "requires": [
+              "initial_magnetization:vortex",
+              "resolved_lane_identity"
+            ]
+          },
+          "interaction.bulk_dmi": {
+            "state": "unsupported",
+            "reason_code": "capability_unsupported",
+            "reason": "The resolved planner lane does not advertise this interaction.",
+            "requires": [
+              "interaction:bulk_dmi"
+            ]
+          },
+          "interaction.cubic_anisotropy": {
+            "state": "supported",
+            "reason_code": "capability_supported",
+            "reason": "The resolved planner lane advertises this interaction as executable.",
+            "requires": [
+              "interaction:cubic_anisotropy"
+            ]
+          },
+          "interaction.current_transport": {
+            "state": "supported",
+            "reason_code": "capability_supported",
+            "reason": "The resolved planner lane advertises this interaction as executable.",
+            "requires": [
+              "interaction:current_transport"
+            ]
+          },
+          "interaction.demag": {
+            "state": "supported",
+            "reason_code": "capability_supported",
+            "reason": "The resolved planner lane advertises this interaction as executable.",
+            "requires": [
+              "interaction:demag"
+            ]
+          },
+          "interaction.dmi": {
+            "state": "supported",
+            "reason_code": "capability_supported",
+            "reason": "The resolved planner lane advertises this interaction as executable.",
+            "requires": [
+              "interaction:dmi"
+            ]
+          },
+          "interaction.exchange": {
+            "state": "supported",
+            "reason_code": "capability_supported",
+            "reason": "The resolved planner lane advertises this interaction as executable.",
+            "requires": [
+              "interaction:exchange"
+            ]
+          },
+          "interaction.frozen_spins": {
+            "state": "supported",
+            "reason_code": "capability_supported",
+            "reason": "Frozen Spins source execution is available for the resolved FEM CPU double-precision explicit and relaxation scope; production qualification remains gated.",
+            "requires": [
+              "planner_feature:constraint.frozen_spins"
+            ]
+          },
+          "interaction.interfacial_dmi": {
+            "state": "supported",
+            "reason_code": "capability_supported",
+            "reason": "The resolved planner lane advertises this interaction as executable.",
+            "requires": [
+              "interaction:interfacial_dmi"
+            ]
+          },
+          "interaction.magnetoelastic": {
+            "state": "supported",
+            "reason_code": "capability_supported",
+            "reason": "The resolved planner lane advertises this interaction as executable.",
+            "requires": [
+              "interaction:magnetoelastic"
+            ]
+          },
+          "interaction.oersted": {
+            "state": "supported",
+            "reason_code": "capability_supported",
+            "reason": "The resolved planner lane advertises this interaction as executable.",
+            "requires": [
+              "interaction:oersted"
+            ]
+          },
+          "interaction.oersted_field": {
+            "state": "supported",
+            "reason_code": "capability_supported",
+            "reason": "The resolved planner lane advertises this interaction as executable.",
+            "requires": [
+              "interaction:oersted_field"
+            ]
+          },
+          "interaction.rotated_interfacial_dmi": {
+            "state": "supported",
+            "reason_code": "capability_supported",
+            "reason": "The resolved planner lane advertises this interaction as executable.",
+            "requires": [
+              "interaction:rotated_interfacial_dmi"
+            ]
+          },
+          "interaction.sot": {
+            "state": "unsupported",
+            "reason_code": "capability_unsupported",
+            "reason": "The resolved planner lane does not advertise this interaction.",
+            "requires": [
+              "interaction:sot"
+            ]
+          },
+          "interaction.spin_torque": {
+            "state": "unsupported",
+            "reason_code": "capability_unsupported",
+            "reason": "The resolved planner lane does not advertise this interaction.",
+            "requires": [
+              "interaction:spin_torque"
+            ]
+          },
+          "interaction.stt": {
+            "state": "unsupported",
+            "reason_code": "capability_unsupported",
+            "reason": "The resolved planner lane does not advertise this interaction.",
+            "requires": [
+              "interaction:stt"
+            ]
+          },
+          "interaction.thermal": {
+            "state": "supported",
+            "reason_code": "capability_supported",
+            "reason": "The resolved planner lane advertises this interaction as executable.",
+            "requires": [
+              "interaction:thermal"
+            ]
+          },
+          "interaction.uniaxial_anisotropy": {
+            "state": "supported",
+            "reason_code": "capability_supported",
+            "reason": "The resolved planner lane advertises this interaction as executable.",
+            "requires": [
+              "interaction:uniaxial_anisotropy"
+            ]
+          },
+          "interaction.zeeman": {
+            "state": "supported",
+            "reason_code": "capability_supported",
+            "reason": "The resolved planner lane advertises this interaction as executable.",
+            "requires": [
+              "interaction:zeeman"
+            ]
+          },
+          "region_membership": {
+            "state": "semantic_only",
+            "reason_code": "capability_semantic_only",
+            "reason": "Region-membership semantics exist, but the planner profile does not publish current membership-resource readiness.",
+            "requires": [
+              "domain_metadata:compatible",
+              "region_membership_resource:compatible"
+            ]
+          },
+          "shared_mesh_build": {
+            "state": "supported",
+            "reason_code": "capability_supported",
+            "reason": "Shared-domain mesh build is owned by the resolved FEM lane.",
+            "requires": [
+              "discretization:fem"
+            ]
+          },
+          "study.eigenmodes": {
+            "state": "semantic_only",
+            "reason_code": "capability_semantic_only",
+            "reason": "Eigenmode authoring exists, but the resolved planner lane does not advertise executable support.",
+            "requires": [
+              "planner:eigenmodes"
+            ]
+          },
+          "study.fft": {
+            "state": "supported",
+            "reason_code": "capability_supported",
+            "reason": "FFT post-processing can consume planner-advertised field quantities.",
+            "requires": [
+              "field_quantity"
+            ]
+          },
+          "study.frequency_response": {
+            "state": "semantic_only",
+            "reason_code": "capability_semantic_only",
+            "reason": "Frequency-response authoring exists, but the resolved planner lane does not advertise executable support.",
+            "requires": [
+              "planner:frequency_response"
+            ]
+          },
+          "study.relaxation": {
+            "state": "supported",
+            "reason_code": "capability_supported",
+            "reason": "The resolved planner capability profile is a time-domain lane.",
+            "requires": [
+              "planner:time_domain_lane"
+            ]
+          },
+          "study.time_integration": {
+            "state": "supported",
+            "reason_code": "capability_supported",
+            "reason": "The resolved planner capability profile is a time-domain lane.",
+            "requires": [
+              "planner:time_domain_lane"
+            ]
+          },
+          "surface_coloring": {
+            "state": "supported",
+            "reason_code": "capability_supported",
+            "reason": "Surface coloring can consume planner-advertised field quantities.",
+            "requires": [
+              "field_quantity"
+            ]
+          },
+          "vectors": {
+            "state": "supported",
+            "reason_code": "capability_supported",
+            "reason": "Vector rendering can consume planner-advertised field quantities.",
+            "requires": [
+              "field_quantity"
+            ]
+          }
+        }
+      },
+      "transport_authoring": {
+        "contract_version": "transport-authoring-capabilities.v1",
+        "m1_one_way_steady": {
+          "status": "semantic_only",
+          "authoring_allowed": true,
+          "reason": "M1 steady one-way authoring is available; execution qualification remains workload-scoped."
+        },
+        "m2_reciprocal": {
+          "status": "semantic_only",
+          "authoring_allowed": true,
+          "reason": "M2 reciprocal authoring is available; executable qualification remains workload-scoped."
+        },
+        "m3_transient": {
+          "status": "unsupported",
+          "authoring_allowed": false,
+          "reason": "Transient transport remains an M3 authoring capability."
+        },
+        "gpu": {
+          "status": "unsupported",
+          "authoring_allowed": false,
+          "reason": "Transport GPU authoring is unavailable until lane qualification is published."
+        },
+        "single_precision": {
+          "status": "unsupported",
+          "authoring_allowed": false,
+          "reason": "Transport single precision is unavailable until precision qualification is published."
+        },
+        "hybrid": {
+          "status": "unsupported",
+          "authoring_allowed": false,
+          "reason": "Transport hybrid execution is not supported by the v1 authoring contract."
+        }
+      }
+    },
+    "energies": {
+      "total": null,
+      "exchange": null,
+      "demag": null,
+      "zeeman": null,
+      "anisotropy": null,
+      "dmi": null
+    },
+    "metrics": {
+      "uptime_seconds": 462,
+      "total_steps": 0,
+      "steps_per_second": null
+    }
+  },
+  "native_unit_tests_compiled": false,
+  "launcher_python_regressions": {
+    "passed": 9,
+    "exit_code": 0
+  },
+  "followup": {
+    "ack_400": "source_fixed_managed_browser_not_verified",
+    "session_replace": "source_fixed_managed_browser_not_verified",
+    "checkpoint_3104": "FAIL_repository_symlink",
+    "checkpoint_3114": "FAIL_unsupported_filesystem_0x1021997",
+    "user_session_preserved": true,
+    "launcher_pytest_passed": 11,
+    "next_build": "blocked_storage_below_8GiB_and_existing_container"
+  }
+}
