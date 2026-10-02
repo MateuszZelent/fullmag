@@ -131,8 +131,10 @@ class BuildEntryPointTests(unittest.TestCase):
             "fullmag-api-accepted-scheduler",
             "fullmag-api-resource-pool",
             "fullmag-api-accepted-fem-preparer",
+            "fullmag-api-accepted-fem-preparation-supervisor",
             "fullmag-api-accepted-fem-preparation-scheduler",
             "fullmag-api-preparation-resource-pool",
+            "fullmag-api-preparation-retry",
         ):
             (output / "bin" / name).write_bytes(b"accepted-runtime")
         (output / "_fullmag_core.so").write_bytes(b"core")
@@ -143,7 +145,7 @@ class BuildEntryPointTests(unittest.TestCase):
     def test_incomplete_accepted_runtime_package_is_rejected(self) -> None:
         output = self._write_outputs()
         binaries = sorted(output.joinpath("bin").glob("fullmag-api-*"))
-        self.assertEqual(len(binaries), 7)
+        self.assertEqual(len(binaries), 9)
         for binary in binaries:
             with self.subTest(binary=binary.name):
                 original = binary.read_bytes()

@@ -53,3 +53,8 @@ Review wskazał oddzielną rozbieżność portable/MSI: skrypty pakowania oczeku
 także `accepted-fem-preparation-supervisor` i `preparation-retry`, których
 bieżąca instalacja nie obejmuje. Ten przyrost nie dowodzi kompletności tych
 tras dystrybucji; ich lista programów wymaga osobnej kontroli konsumentów.
+
+Kontrolę konsumentów oraz uzupełnienie tych dwóch programów w instalacji i
+required outputs opisuje [P6-69](69-preparation-supervisor-retry-packaging.md).
+Historyczny wynik 18 testów dotyczy powyższego przyrostu P6-68; późniejszy
+wynik oraz nadal otwarte bramki dystrybucji pozostają w osobnym checkpointcie.

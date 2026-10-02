@@ -281,3 +281,7 @@ pamięci i wszystkich lane'ów pozostają otwarte. P6 wynosi **52%**.
 68. [Obowiązkowy kompletny pakiet accepted runtime](68-required-accepted-runtime-package.md)
     — build nie akceptuje brakujących lub pustych binariów accepted flow;
     18 lekkich testów Python PASS, wdrożony runner i native runtime otwarte.
+
+69. [Pakowanie supervision i retry przygotowania](69-preparation-supervisor-retry-packaging.md)
+    — uzupełnione dwa programy wymagane przez portable/MSI, instalacja/runpath
+    i required outputs; 31 testów Python PASS, pełne pakiety/runtime otwarte.
