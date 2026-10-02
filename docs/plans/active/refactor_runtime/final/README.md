@@ -381,3 +381,8 @@ i wydanie pozostają NOT VERIFIED. Docker nie jest wymaganiem produktu Windows.
 odrzuca względny FULLMAG_STATE_ROOT w CLI, API i desktopie przed zapisem.
 Parser/review PASS; regresje Rust NOT RUN, Windows MSI PENDING bez wykonanego
 kroku. Pakiet i trwałość nadal wymagają rzeczywistego odbioru.
+
+[Build aktualnego runtime, 212](p8/14-managed-build-current-runtime-212.md)
+jest w istniejącej kolejce z przypiętego commita zawierającego późniejsze
+poprawki state i driver. QUEUED nie oznacza PASS; build 210 zachowuje swój
+oddzielny terminalny dowód, a runtime/Windows pozostają otwarte.
