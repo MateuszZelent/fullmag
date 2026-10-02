@@ -186,6 +186,8 @@ def main() -> None:
         "one context per production window",
     )
     require(production, "reuse_context);", "context handoff to each subwindow")
+    require(production, "solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(",
+            "exact contextual entrypoint rather than the two-argument wrapper")
     require(production, "window_complete", "unchanged window qualification gate")
     require(
         production,

@@ -51,6 +51,46 @@ airboxu, poprawności operatora, pełnego widma ani kwalifikacji dyspersji.
 Sterownik #196 nadal potwierdzony żywy; job nadal `queued`.
 Ostatni health: 4 107 767 808 B wolnego (około 3,83 GiB), poniżej progu.
 
+### S09 — korekta miary przekroju przed typed routing
+
+Audyt aktualnego bounded assemblera ujawnił błąd jednostkowy: całki
+po trójkątnym przekroju 2D były drugi raz dzielone przez
+`normalization_length_m`. W rezultacie pole trójkąta 1 m² raportowano
+jako 0,5 przy metadanej długości 2 m; skalowane były również K, M,
+sprzężenia magnetyczno-skalarne i długość brzegu. Brak produkcyjnego
+konsumenta tego assemblera potwierdzono w bieżących źródłach.
+Niezależny review potwierdził błąd i zalecił korektę przed integracją S09.
+
+Nota 0831 dokumentuje tożsamość całki po przekroju z całką 3D podzieloną
+przez rzeczywistą długość ekstrudowania. Assembler używa teraz fizycznej
+miary 2D; dodatnia skończona długość pozostaje walidowaną i raportowaną
+metadaną porównania. Przygotowano natywną regresję niezmienności wszystkich
+sześciu bloków i geometrii dla różnych długości — nie kompilowano jej.
+Interpreted check: baseline RED na dodatkowym dzieleniu, po poprawce
+2 PASS; mapa naukowa 0831 PASS, 35 testów kontraktu dokumentacji PASS.
+To kontrola źródeł i miar, nie native ani scientific qualification.
+
+Przy walidacji mapy wykryto też ambiguity nowego przeciążenia S05.
+Nowa funkcja z kontekstem otrzymała odrębną nazwę
+`solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context`;
+dotychczasowy dwuargumentowy entrypoint i jego zachowanie pozostają.
+Header, implementacja i wywołanie production adaptera są zgodne;
+regresja S05 PASS. Nazwę zapisano osobno w
+`20c2fe6fd58a8504d6828871cd421de1d2b9f191`.
+Zmiany powstały po kapsule #196: nie dotyczą jego
+źródeł, nie zlecono drugiego buildu. Finalny niezależny re-review zakończono:
+0 nowych P1/P2 dla tego przyrostu. Wszystkie trzy źródłowe regresje PASS,
+cztery naukowe mapy źródeł PASS; wykonanie natywne nadal NOT VERIFIED.
+Review potwierdziło poprawność miary i fixture; jego P1 sprzecznego
+historycznego opisu został poprawiony przez jawne rozdzielenie dawnego
+wyniku i nowej korekty. P2 mapowania właściciela S05 i prefiksowego
+source check zamknięto przez dokładny symbol z kontekstem, wskazanie
+wrappera `nullptr` oraz regresję jego pełnej delegacji. H6 (znaki mieszane,
+k/−k) i B1 (wymuszenie fizycznego `−mu0` w przyszłym typed ownerze)
+pozostają osobnymi bramkami przed produkcyjną integracją S09.
+S09 nadal wymaga typed realization/routing, managed MFEM owner,
+zewnętrznej domeny i jej zbieżności oraz porównania TetraX/3D.
+
 ### Najnowszy wynik #195 i naprawa granicy build identity
 
 Koordynator zakończył #195 statusem `succeeded`; worker exit=0,
@@ -2796,8 +2836,11 @@ Dodano `floquet_waveguide_cross_section`: bounded element-level P1 assembler
 dla trójkątnego przekroju 2D. Assembler składa `K_perp`, `M`, jawny warunek
 Robin, sprzężenia `A_phiq_perp`/`A_phiq_axial` z maską domeny magnetycznej i
 lokalnym `M_s`, a następnie wyprowadza blok sprzężony przez hermitowskie
-sprzężenie zwrotne. Wszystkie macierze są skalowane przez odwrotność jawnego
-`normalization_length_m`, więc wynik ma normę na jednostkę długości. Jest to
+sprzężenie zwrotne. Historycznie macierze błędnie skalowano przez odwrotność
+`normalization_length_m`; korekta z 2026-10-02 usuwa drugie dzielenie miary 2D.
+Całki po przekroju są już na jednostkę długości, a pole pozostaje metadaną
+odcinka porównawczego. Poniższy historyczny test wykonywał dawny kod i nie
+potwierdza wykonania tej późniejszej poprawki. Jest to
 referencyjny właściciel elementowy, nie deklaracja managed MFEM assemblacji ani
 dowód zbieżności otwartej granicy.
 

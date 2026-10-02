@@ -650,7 +650,7 @@ visibility into runtime or physical qualification.
 | Spójna masa P1 wyników | FEM CPU postprocessing | crates/fullmag-runner/src/fem/eigen_mass_metric.rs + SharedDomainSparseMass | Norma z fazowymi wkładami elementowymi, bez gęstej macierzy | Test parytetu z referencją | source visible; runtime unvalidated |
 | Pełny potencjał i gradient | FEM CPU postprocessing | crates/fullmag-runner/src/fem/eigen_physical_potential.rs + physical_potential_artifacts | Rekonstrukcja fazowa oraz gradient elementowy z tą samą skalą co dm | Test rekonstrukcji; pełny benchmark pozostaje wymagany | source visible; runtime unvalidated |
 
-| Natywny modalny sparse Floquet | FEM CPU | backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp + solve_floquet_shared_domain_sparse_modal_spectrum | MatShell Schura, SLEPc i diagnostyka obu układów KSP | Test kontraktu źródłowego; kompilacja testów nieuruchomiona | implemented in source; managed execution and physics NOT VERIFIED |
+| Natywny modalny sparse Floquet | FEM CPU | backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp + solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context | MatShell Schura, SLEPc i diagnostyka obu układów KSP | Test kontraktu źródłowego; kompilacja testów nieuruchomiona | implemented in source; managed execution and physics NOT VERIFIED |
 
 
 | Kontrakt | Realizacja | Plik i symbol | Odpowiedzialność | Dowód | Status |

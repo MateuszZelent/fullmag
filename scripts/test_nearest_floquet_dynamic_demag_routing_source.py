@@ -11,6 +11,7 @@ Managed runtime, residual and dispersion evidence remain separate gates.
 from __future__ import annotations
 
 from pathlib import Path
+import re
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -215,9 +216,19 @@ def test_nonzero_k_nearest_uses_floquet_sparse_owner_not_k0_poisson_writer() -> 
         require(contract, needle, f"nonzero-k shared-domain route: {needle}")
     for needle in (
         "request.floquet_shared_domain_operator != nullptr",
-        "solve_floquet_shared_domain_sparse_modal_spectrum",
+        "solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(",
     ):
         require(floquet, needle, f"Floquet sparse owner: {needle}")
+    wrapper = re.search(
+        r"solve_floquet_shared_domain_sparse_modal_spectrum\(\s*"
+        r"const FloquetSharedDomainSparseModalOperator &operator_view,\s*"
+        r"const SLEPcSparseGyrotropicModalEigenRequest &spectral_request\) noexcept\s*"
+        r"\{(.*?)\n\}", floquet, re.S,
+    )
+    expected = ("return solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context("
+                "operator_view, spectral_request, nullptr);")
+    if wrapper is None or re.sub(r"\s+", "", wrapper.group(1)) != re.sub(r"\s+", "", expected):
+        raise AssertionError("two-argument Floquet wrapper must only delegate with nullptr")
     require(
         producer,
         "with_modal_request_diagnostics(result.diagnostics_json, request, result.status)",

@@ -618,7 +618,7 @@
     {
       "id": "source-native-sparse-floquet-modal",
       "path": "backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp",
-      "symbol": "solve_floquet_shared_domain_sparse_modal_spectrum",
+      "symbol": "solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context",
       "responsibility": "Own the native CPU Floquet sparse modal solve and resolved KSP diagnostics; runtime and physical qualification remain unverified."
     },
     {

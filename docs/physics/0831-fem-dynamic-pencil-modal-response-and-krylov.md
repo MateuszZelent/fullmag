@@ -844,11 +844,51 @@ D_{\mathbf k}=\nabla_\perp-\mathrm{i}k\hat{\mathbf z},
 h_{d,z}=\mathrm{i}k\phi.
 ```
 
-Here $k$ is the signed scalar component along $\hat{\mathbf z}$ and the
-potential/fields are normalized per unit waveguide length. The $k\to0$ limit
+Here $k$ is the signed scalar component along $\hat{\mathbf z}$. Weak-form
+integrals and energies are reported per unit waveguide length; potential
+and field amplitudes retain their physical SI units. The $k\to0$ limit
 must be compared against a separately assembled 2D magnetostatic operator;
 it is not evidence that a 3D full-cell seam constraint can be removed. The
 waveguide path is the planned S09 realization and remains unvalidated.
+
+(waveguide-section-measure)=
+Całka po przekroju 2D jest już całką na jednostkę długości osiowej.
+Dla osiowo niezmiennych funkcji P1 i ekstrudowanej domeny
+$\Omega_\ell=\Sigma\times[0,\ell]$ obowiązuje:
+
+```{math}
+:label: eq-fem-waveguide-section-measure
+M^\perp_{ij}=\int_\Sigma N_iN_j\,\mathrm dA
+=\frac{1}{\ell}\int_{\Omega_\ell}N_iN_j\,\mathrm dV,
+\qquad
+K^\perp_{ij}=\int_\Sigma\nabla_\perp N_i\cdot\nabla_\perp N_j\,\mathrm dA
+=\frac{1}{\ell}\int_{\Omega_\ell}\nabla_\perp N_i\cdot\nabla_\perp N_j\,\mathrm dV.
+```
+
+| Symbol | Znaczenie | Jednostka SI |
+|---|---|---|
+| $\Sigma$ | Przekrój poprzeczny | $\mathrm{m^2}$ |
+| $\ell$ | Długość ekstrudowanego odcinka porównawczego | $\mathrm m$ |
+| $\Omega_\ell$ | Domena ekstrudowana | $\mathrm{m^3}$ |
+| $N_i,N_j$ | Bezrozmiarowe funkcje bazowe P1 | $1$ |
+| $i,j$ | Indeksy funkcji testowej i próbnej | $1$ |
+| $\mathrm dA$ | Miara całki po przekroju | $\mathrm{m^2}$ |
+| $M^\perp_{ij}$ | Skalarna macierz masy przekroju | $\mathrm{m^2}$ |
+| $K^\perp_{ij}$ | Skalarna macierz sztywności przekroju | $1$ |
+
+Assembler `assemble_floquet_waveguide_cross_section_blocks` otrzymuje
+wyłącznie współrzędne 2D i trójkąty. Nie otrzymuje całek objętościowych
+z ekstrudowanego odcinka, więc nie może dzielić swoich bloków ponownie
+przez długość. Pole `normalization_length_m` pozostaje dodatnią, skończoną
+metadaną odcinka porównawczego (default 1 m); jest walidowane i raportowane,
+ale nie skaluje bloków, pola przekroju ani długości brzegu. Dzielenie przez
+$\ell$ należy do odbiornika rzeczywistych całek 3D przy porównaniu 3D/2.5D.
+Nie ma publicznego parametru Python ani mapowania ProblemIR dla tego
+wewnętrznego prototypu. Korekta dotyczy bounded FEM CPU; nie dodaje trasy
+produkcyjnej MFEM, GPU ani FDM. Regresja natywna sprawdza niezmienność
+wszystkich sześciu bloków i geometrii przy różnych długościach; jej wykonanie
+pozostaje NOT VERIFIED zgodnie z zakazem kompilacji testów jednostkowych.
+Interpreted check weryfikuje tożsamość miar i podłączenie źródłowe, nie runtime.
 
 Never apply $D_{\mathbf k}$ to the full 3D phase-constrained fields. Conversely,
 do not invent longitudinal seam constraints for a translationally invariant
@@ -909,7 +949,7 @@ The policy is exposed as
 `SLEPcTinyGyrotropicModalEigenResult::poisson_factorization_shift_policy` and
 serialized in modal diagnostics. The implementation owner is
 `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp` +
-`solve_floquet_shared_domain_sparse_modal_spectrum`; the regression assertion
+`solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context`; the regression assertion
 is in `backends/fem/tests/frequency_domain/floquet_modal_solver_test.cpp` +
 `executes_native_sparse_matshell_above_dense_bound`.
 
@@ -1280,7 +1320,10 @@ existing native MFEM/SLEPc shared-domain Floquet sparse route; they do not
 introduce a second operator or a CPU fallback. The public engine name retains
 the historical `FloquetAirboxCpuSchurSlepc` label, but its nonzero-$k$ call
 chain is `modal_eigen_solver.cpp` -> `production_cpu_modal_eigen.cpp` ->
-`floquet_modal_solver.cpp` and `solve_floquet_shared_domain_sparse_modal_spectrum`.
+`floquet_modal_solver.cpp` and `solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context`.
+The retained two-argument compatibility entrypoint
+`solve_floquet_shared_domain_sparse_modal_spectrum` only delegates to that
+owner with `nullptr`; one-window calls pass their explicit reusable context.
 The descriptor Poisson Schur writer in
 `poisson_airbox_schur_matshell.cpp` remains the separate $k=0$ branch.
 
@@ -1431,7 +1474,7 @@ managed physics evidence.
 | Canonical harmonic action | common native | `backends/fem/include/frequency_domain/linearized_dynamic_pencil.hpp` + `apply_Aomega` | Apply $A_\omega=\mathrm{i}\omega B_\alpha-L$ to a state. | source visible; managed physics unvalidated |
 | Real-frequency rotation | FEM CPU/GPU algebra | `backends/fem/src/frequency_domain/real_frequency_rotated_pencil.cpp` + `assemble_real_frequency_rotated_pencil` | Assemble the real-split target on the physical frequency axis. | source tested; managed physics unvalidated |
 | Real-frequency SLEPc adapter | FEM CPU modal adapter | `backends/fem/cpu/frequency_domain/slepc_modal_eigen.cpp` + `solve_slepc_gyrotropic_modal_eigen_with_matrices` | Lift the real stiffness/gyrotropic pencil to $R(A)y=\omega R(\mathrm{i}G)y$, apply the signed shift on the physical frequency axis, and map the split vector back to the complex tangent mode. | source contract tested; managed runtime unvalidated |
-| Native shared-domain Floquet selected spectrum | FEM CPU, nonzero-$k$ dynamic-demag modal route | `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp` + `solve_floquet_shared_domain_sparse_modal_spectrum` | Apply the reduced Schur action as a matrix-free SLEPc operator; the inner Poisson `KSPPREONLY`/LU uses `MAT_SHIFT_NONE`. Normalize the magnetic and gyrotropic pencil blocks by the same nonzero scalar. The separate shifted magnetic block is an LU preconditioner only. The EPS absolute prefilter currently uses an uncalibrated $10^{-3}$ multiplier; acceptance checks the original reduced magnetic and potential residuals and is not full descriptor certification. | Runtime-only builds #133–#136 succeeded. #133 produced a candidate with magnetic residual $2.17\times10^{-7}$, rejected at the requested $10^{-8}$. #134–#136 with EPS cutoff $10^{-11}$ produced no converged pair; the measured `ncv=32` experiment did not remove stagnation. KSP true-residual measurement and tolerance calibration remain pending. Physical qualification `NOT VERIFIED`. |
+| Native shared-domain Floquet selected spectrum | FEM CPU, nonzero-$k$ dynamic-demag modal route | `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp` + `solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context` | Apply the reduced Schur action as a matrix-free SLEPc operator; the inner Poisson `KSPPREONLY`/LU uses `MAT_SHIFT_NONE`. Normalize the magnetic and gyrotropic pencil blocks by the same nonzero scalar. The separate shifted magnetic block is an LU preconditioner only. The EPS absolute prefilter currently uses an uncalibrated $10^{-3}$ multiplier; acceptance checks the original reduced magnetic and potential residuals and is not full descriptor certification. | Runtime-only builds #133–#136 succeeded. #133 produced a candidate with magnetic residual $2.17\times10^{-7}$, rejected at the requested $10^{-8}$. #134–#136 with EPS cutoff $10^{-11}$ produced no converged pair; the measured `ncv=32` experiment did not remove stagnation. KSP true-residual measurement and tolerance calibration remain pending. Physical qualification `NOT VERIFIED`. |
 | Floquet tangent source assembly | FEM CPU Floquet source | `backends/fem/cpu/frequency_domain/floquet_bloch_scalar.cpp` + `assemble_floquet_bloch_scalar_tangent_source` | Assemble the magnetization-to-scalar-potential source element-locally, including the shifted-envelope $\mathrm{i}\mathbf{k}\cdot\mathbf{m}$ term and magnetic-element mask. This is a source assembly boundary, not a production nonzero-$k$ demag qualification. | source contract tested; managed assembly and physics unvalidated |
 | CPU Schur selected spectrum | FEM CPU | `backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.hpp` + `solve_poisson_airbox_modal_eigen_cpu_schur` | Solve and certify the source-visible descriptor reduction. | source tested; managed qualification absent |
 | GPU PETSc/SLEPc selected spectrum | FEM GPU | `backends/fem/include/frequency_domain/modal_gpu_krylov.hpp` + `solve_poisson_airbox_modal_eigen_gpu_petsc_slepc` | Declare the GPU modal adapter. | source tested; device qualification absent |
@@ -2039,7 +2082,7 @@ visibility into runtime qualification.
 | {eq}`eq-fem-modal-static-field-frame-transport` (source-static-field-frame-transport) | FEM CPU | `backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp` + `FrequencyDomainStatus assemble_native_magnetic_a_qq` | Cross-node static-field tangent projection | Native covariance regression prepared, not compiled | source-visible / runtime NOT VERIFIED | working tree |
 | {eq}`eq-fem-k0-probe-componentwise-residual` | FEM CPU | `backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.hpp` + `poisson_probe_componentwise_residual` | K0 probe cancellation-safe backward error | Native regression pending | source-visible / unvalidated | working tree |
 | K0 probe regression | FEM CPU | `backends/fem/tests/frequency_domain/poisson_airbox_modal_eigen_slepc_test.cpp` + `main` | Invokes CertifiesChargeFreeProbeWithoutDividingByCancelledSource | Managed modal contract pending | source-visible / unvalidated | working tree |
-| {eq}`eq-fem-floquet-block-residuals` | FEM CPU Floquet | `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp` + `solve_floquet_shared_domain_sparse_modal_spectrum` | Evaluate `floquet_magnetic_residual` and `floquet_potential_residual` from original block actions for acceptance. | #133 candidate residuals; #136 convergence diagnostics; threshold audit | current source inspected; optimal tolerance and physics unvalidated | working-tree source hashes in `docs/audits/2026-09-25-de-residual-threshold-evidence.json`; not a published immutable source link |
+| {eq}`eq-fem-floquet-block-residuals` | FEM CPU Floquet | `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp` + `solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context` | Evaluate `floquet_magnetic_residual` and `floquet_potential_residual` from original block actions for acceptance. | #133 candidate residuals; #136 convergence diagnostics; threshold audit | current source inspected; optimal tolerance and physics unvalidated | working-tree source hashes in `docs/audits/2026-09-25-de-residual-threshold-evidence.json`; not a published immutable source link |
 | {eq}`eq-fem-floquet-full-projected-residuals` | FEM CPU Floquet | `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp` + `certify_floquet_full_descriptor` | Reconstruct the full weak equations, project into admissible test spaces, and check periodic seams and boundary-matched gauge policy. | Source review; managed build and pilot pending | source-visible; runtime certification NOT VERIFIED | repository working tree |
 | {eq}`eq-fem-floquet-full-projected-residuals` | FEM CPU runner | `crates/fullmag-runner/src/fem/eigen_native_result.rs` + `native_floquet_physical_mode_certificate_from_json` | Validate physical complex-coefficient certificate flags, residuals, and boundary/gauge provenance; preserve the inapplicable gauge residual as null. | Source review; Rust compilation pending managed build | source-visible; runtime propagation NOT VERIFIED | repository working tree |
 | {eq}`eq-fem-floquet-full-projected-residuals` | FEM CPU runner | `crates/fullmag-runner/src/fem/eigen_native_artifacts.rs` + `floquet_certificate_summary` | Publish the physical Floquet certificate summary without promoting an uncertified mode; keep the legacy doubled-real payload contract separate. | Source review; artifact validation pending managed execution | source-visible; runtime artifacts NOT VERIFIED | repository working tree |
@@ -3084,3 +3127,9 @@ benchmarku z niezerową wymianą. Status pozostaje diagnostic_oracle_only_not_FE
 |---|---|---|
 | scripts/test_thin_film_thickness_oracle.py | test_exchange_free_surface_branch_converges_to_exact_damon_eshbach | Niezależny wzór DE dla A=0 i zbieżność N |
 | scripts/test_thin_film_thickness_oracle.py | test_exchange_free_gamma_limit_has_no_artificial_basis_splitting | Kittel w Γ, wszystkie mody bez wymiany |
+
+| Źródło miary przekroju S09 | Stabilny symbol | Kontrakt i dowód |
+|---|---|---|
+| docs/physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md | DOC-ANCHOR:waveguide-section-measure | Tożsamość miary 2D i całki 3D podzielonej przez długość; kontrakt planowany, runtime niezweryfikowany |
+| backends/fem/cpu/frequency_domain/floquet_waveguide_cross_section.cpp | assemble_floquet_waveguide_cross_section_blocks | Bloki i geometria przekroju niezależne od metadanej długości; źródła, bez nowego managed wykonania |
+| backends/fem/tests/frequency_domain/floquet_waveguide_cross_section_test.cpp | main | Wywołuje regresję cross_section_is_independent_of_axial_comparison_length; test przygotowany, niekompilowany |

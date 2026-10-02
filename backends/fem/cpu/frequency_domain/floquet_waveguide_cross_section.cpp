@@ -224,7 +224,9 @@ FrequencyDomainStatus assemble_floquet_waveguide_cross_section_blocks(
         out_result->a_qphi_perp_row_major.assign(static_cast<std::size_t>(coupling_values), 0.0);
         out_result->a_qphi_axial_row_major.assign(static_cast<std::size_t>(coupling_values), 0.0);
 
-        const double scale = 1.0 / problem.normalization_length_m;
+        // Integration over a 2D section already is the per-axial-length
+        // weak form. Only actual extruded 3D integrals require division by
+        // the extrusion length; doing so here changes the physical measure.
         for (std::uint64_t triangle = 0u; triangle < problem.triangle_count; ++triangle) {
             const std::uint32_t *nodes = problem.triangle_nodes + 3u * triangle;
             const double *p0 = problem.node_xy_m + 2u * nodes[0];
@@ -242,14 +244,14 @@ FrequencyDomainStatus assemble_floquet_waveguide_cross_section_blocks(
                 {(p2[1] - p0[1]) / det, (p0[0] - p2[0]) / det},
                 {(p0[1] - p1[1]) / det, (p1[0] - p0[0]) / det},
             };
-            out_result->cross_section_area_m2 += area * scale;
+            out_result->cross_section_area_m2 += area;
             for (int local_row = 0; local_row < 3; ++local_row) {
                 const std::uint64_t row = nodes[local_row];
                 for (int local_column = 0; local_column < 3; ++local_column) {
                     const std::uint64_t column = nodes[local_column];
                     add_entry(out_result->k_perp_row_major, scalar, row, column,
-                              area * scale * dot2(gradients[local_row], gradients[local_column]));
-                    const double mass = area * scale * (local_row == local_column ? 1.0 / 6.0 : 1.0 / 12.0);
+                              area * dot2(gradients[local_row], gradients[local_column]));
+                    const double mass = area * (local_row == local_column ? 1.0 / 6.0 : 1.0 / 12.0);
                     add_entry(out_result->mass_row_major, scalar, row, column, mass);
                 }
             }
@@ -269,13 +271,13 @@ FrequencyDomainStatus assemble_floquet_waveguide_cross_section_blocks(
                     // Transverse term integrates a constant gradient against
                     // int(N_source) dA = area/3, for any vertex (audit finding H5:
                     // this part was already correct).
-                    const double source_weight = area * scale * ms / 3.0;
+                    const double source_weight = area * ms / 3.0;
                     // Axial (M_z) term is int(N_test * N_source) dA: the consistent
                     // P1 triangle mass matrix, area/6 on the diagonal (local_test ==
                     // local_source) and area/12 off-diagonal -- not area/3 uniformly
                     // (audit finding H5,
                     // docs/audits/2026-09-15-eigensolve-dispersion-correctness-audit.md).
-                    const double axial_weight = area * scale * ms *
+                    const double axial_weight = area * ms *
                         (local_test == local_source ? (1.0 / 6.0) : (1.0 / 12.0));
                     for (int component = 0; component < 2; ++component) {
                         const double *frame = problem.tangent_frames_xyz +
@@ -308,8 +310,8 @@ FrequencyDomainStatus assemble_floquet_waveguide_cross_section_blocks(
                 copy_error(out_result, "waveguide cross-section Robin edge is degenerate");
                 return FrequencyDomainStatus::validation_error;
             }
-            out_result->robin_boundary_length_m += length * scale;
-            const double edge_scale = problem.robin_beta * length * scale / 6.0;
+            out_result->robin_boundary_length_m += length;
+            const double edge_scale = problem.robin_beta * length / 6.0;
             add_entry(out_result->k_perp_row_major, scalar, node_a, node_a, 2.0 * edge_scale);
             add_entry(out_result->k_perp_row_major, scalar, node_a, node_b, edge_scale);
             add_entry(out_result->k_perp_row_major, scalar, node_b, node_a, edge_scale);

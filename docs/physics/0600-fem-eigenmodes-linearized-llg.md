@@ -537,7 +537,7 @@ managed runtime dla benchmarku C0/C1/A1.
 Początkowy komunikat postępu ma `max_iterations=None`, dopóki callback
 natywnego solvera nie dostarczy rozwiązanego limitu. Nie publikuje stałej 300.
 Mapowanie: `slepc_modal_eigen.hpp::SLEPcTinyGyrotropicModalEigenResult`,
-`modal/floquet_modal_solver.cpp::solve_floquet_shared_domain_sparse_modal_spectrum`,
+`modal/floquet_modal_solver.cpp::solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context`,
 `production_cpu_modal_eigen.cpp::solve_sparse_production_modal_payload`
 w `backends/fem/cpu/frequency_domain/` oraz
 `crates/fullmag-runner/src/fem/eigen_native_window.rs::execute_native_modal_window`.

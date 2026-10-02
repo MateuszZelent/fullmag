@@ -332,11 +332,16 @@ otrzymuje wskaźnika do lokalnego obiektu stosowego.
 - `...::write_production_schur_diagnostics` — top-level JSON z `null` dla nieuruchomionych faz.
 - `backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp::with_operator_diagnostics` — zachowanie warstwy adaptera.
 - `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.hpp::FloquetSharedDomainSparseModalSolveContext` — jawna własność kontekstu reuse jednego okna.
-- `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp::solve_floquet_shared_domain_sparse_modal_spectrum` — inicjalizacja i reuse realnych macierzy split oraz faktoryzacji Poissona.
+- `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp::solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context` — inicjalizacja i reuse realnych macierzy split oraz faktoryzacji Poissona.
 - `backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp::solve_sparse_production_modal_window_payload` — granica życia kontekstu i przekazanie do podokien.
 - `backends/fem/tests/frequency_domain/poisson_airbox_modal_eigen_slepc_test.cpp::FrequencyWindowPublishesCompleteCertificateForSyntheticFixture` — przygotowana regresja natywna.
 - `scripts/test_poisson_airbox_schur_observability_source.py::main` — interpretowany source-level wiring check.
 - `scripts/test_floquet_window_context_reuse_source.py::main` — interpretowany check własności, zgodności operatora i braku globalnego cache.
+
+Dotychczasowy dwuargumentowy `solve_floquet_shared_domain_sparse_modal_spectrum`
+jest wrapperem delegującym wyłącznie do właściciela
+`solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context` z `nullptr`.
+Próby pełnego okna przekazują do tego właściciela jawny kontekst reuse.
 
 (validation)=
 ## 10. Walidacja

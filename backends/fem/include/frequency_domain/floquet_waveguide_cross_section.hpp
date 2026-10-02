@@ -11,9 +11,10 @@ namespace fullmag::fem::frequency_domain {
  * Bounded P1 reference assembler for the translationally invariant 2.5D
  * waveguide representation.  The mesh is a two-dimensional triangular
  * cross-section; all integrals are reported per unit length along the
- * propagation axis.  A finite `normalization_length_m` scales the supplied
- * cross-section integrals by its reciprocal, which makes an extrusion of
- * that length comparable with a per-length result without hiding the scale.
+ * propagation axis. These are 2D integrals, so no division by an axial
+ * length is applied. `normalization_length_m` records only the positive
+ * comparison extrusion length; a consumer of actual 3D integrals divides
+ * those integrals by that length before comparing with the section result.
  *
  * The returned real blocks are consumed by
  * `build_floquet_waveguide_demag_k_real_split`:
@@ -56,7 +57,8 @@ struct FloquetWaveguideCrossSectionProblem {
     std::uint64_t robin_edge_count = 0;
     double robin_beta = 0.0;
 
-    // Cross-section matrices are divided by this positive length.
+    // Legacy comparison-length metadata, validated and reported only.
+    // It does not scale section matrices, area, or boundary length.
     double normalization_length_m = 1.0;
 
     // See the A_qphi(k) contract above. Defaults to 1.0 for backward

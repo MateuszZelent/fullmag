@@ -59,22 +59,47 @@ void assembles_p1_blocks_and_per_length_diagnostics()
     assert(result.mass_row_major.size() == 9u);
     assert(result.a_phiq_perp_row_major.size() == 18u);
     assert(result.a_qphi_axial_row_major.size() == 18u);
-    // Triangle area is 1 m^2 and normalization length is 2 m.
-    assert(std::abs(result.cross_section_area_m2 - 0.5) < 1.0e-12);
+    // A 2D section integral already is the per-axial-length weak form.
+    // Changing the comparison extrusion length must not change its measure.
+    assert(std::abs(result.cross_section_area_m2 - 1.0) < 1.0e-12);
     assert(std::abs(result.robin_boundary_length_m -
-                    (2.0 + std::sqrt(5.0) + 1.0) / 2.0) < 1.0e-12);
-    assert(std::abs(result.mass_row_major[0] - 1.0 / 12.0) < 1.0e-12);
-    assert(std::abs(result.mass_row_major[1] - 1.0 / 24.0) < 1.0e-12);
-    // q=(node 0, e2) receives -Ms * mass_matrix(N_0,N_0) / length = -1/6
+                    (2.0 + std::sqrt(5.0) + 1.0)) < 1.0e-12);
+    assert(std::abs(result.mass_row_major[0] - 1.0 / 6.0) < 1.0e-12);
+    assert(std::abs(result.mass_row_major[1] - 1.0 / 12.0) < 1.0e-12);
+    // q=(node 0, e2) receives -Ms * mass_matrix(N_0,N_0) = -1/3
     // (consistent P1 mass matrix diagonal entry area/6, not area/3 -- audit
     // finding H5).
-    assert(std::abs(result.a_phiq_axial_row_major[1] + 1.0 / 6.0) < 1.0e-12);
+    assert(std::abs(result.a_phiq_axial_row_major[1] + 1.0 / 3.0) < 1.0e-12);
     // A_qphi axial is qphi_feedback_scale (default 1.0) times the negative
     // transpose because of Hermitian conjugation.
-    assert(std::abs(result.a_qphi_axial_row_major[3] - 1.0 / 6.0) < 1.0e-12);
+    assert(std::abs(result.a_qphi_axial_row_major[3] - 1.0 / 3.0) < 1.0e-12);
     for (std::size_t index = 0; index < result.k_perp_row_major.size(); ++index) {
         assert(std::isfinite(result.k_perp_row_major[index]));
         assert(std::isfinite(result.mass_row_major[index]));
+    }
+}
+
+void cross_section_is_independent_of_axial_comparison_length()
+{
+    auto problem = reference_problem();
+    problem.normalization_length_m = 1.0;
+    FloquetWaveguideCrossSectionBlockResult baseline{};
+    assert(assemble_floquet_waveguide_cross_section_blocks(problem, &baseline) ==
+           FrequencyDomainStatus::ok);
+    for (double length : {1.0e-9, 2.0, 1.0e6}) {
+        problem.normalization_length_m = length;
+        FloquetWaveguideCrossSectionBlockResult actual{};
+        assert(assemble_floquet_waveguide_cross_section_blocks(problem, &actual) ==
+               FrequencyDomainStatus::ok);
+        assert(actual.normalization_length_m == length);
+        assert(actual.cross_section_area_m2 == baseline.cross_section_area_m2);
+        assert(actual.robin_boundary_length_m == baseline.robin_boundary_length_m);
+        assert(actual.k_perp_row_major == baseline.k_perp_row_major);
+        assert(actual.mass_row_major == baseline.mass_row_major);
+        assert(actual.a_phiq_perp_row_major == baseline.a_phiq_perp_row_major);
+        assert(actual.a_phiq_axial_row_major == baseline.a_phiq_axial_row_major);
+        assert(actual.a_qphi_perp_row_major == baseline.a_qphi_perp_row_major);
+        assert(actual.a_qphi_axial_row_major == baseline.a_qphi_axial_row_major);
     }
 }
 
@@ -122,6 +147,7 @@ void malformed_cross_section_is_rejected()
 int main()
 {
     assembles_p1_blocks_and_per_length_diagnostics();
+    cross_section_is_independent_of_axial_comparison_length();
     assembled_blocks_feed_the_waveguide_schur_provider();
     malformed_cross_section_is_rejected();
     std::cout << "floquet waveguide cross-section contract tests passed\n";
