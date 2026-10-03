@@ -208,7 +208,8 @@ class BuildEntryPointTests(unittest.TestCase):
             entrypoint.subprocess,
             "run",
             return_value=entrypoint.subprocess.CompletedProcess(
-                ["rustup", "toolchain", "list"], 0, "stable-x86_64-unknown-linux-gnu\n", ""
+                ["rustup", "run", "nightly", "rustc", "--version"],
+                0, "rustc 1.99.0 (stable)\n", ""
             ),
         ):
             with self.assertRaisesRegex(entrypoint.BuildEntryPointError, "nightly"):
@@ -223,7 +224,8 @@ class BuildEntryPointTests(unittest.TestCase):
             entrypoint.subprocess,
             "run",
             return_value=entrypoint.subprocess.CompletedProcess(
-                ["rustup", "toolchain", "list"], 0, "stable-x86_64-unknown-linux-gnu\n", ""
+                ["rustup", "run", "nightly", "rustc", "--version"],
+                1, "toolchain nightly is not installed\n", ""
             ),
         ):
             with self.assertRaisesRegex(
@@ -231,6 +233,47 @@ class BuildEntryPointTests(unittest.TestCase):
                 r"rustup toolchain install nightly.*never downloads",
             ):
                 entrypoint.preflight(entrypoint.profile_for("fdm-cpu-release"), release=False)
+
+    def test_preflight_probes_the_exact_installed_channel_without_install(self) -> None:
+        with patch.object(entrypoint.shutil, "which", side_effect=lambda name: f"/usr/bin/{name}"), patch.object(
+            entrypoint.subprocess, "run",
+            return_value=entrypoint.subprocess.CompletedProcess(
+                [], 0, "rustc 1.101.0-nightly (0abfedbc7 2026-10-02)\n", ""
+            ),
+        ) as run:
+            entrypoint.preflight(entrypoint.profile_for("fdm-cpu-release"), release=False)
+        self.assertEqual(run.call_count, 1)
+        self.assertEqual(run.call_args.args[0], [
+            "/usr/bin/rustup", "run", "nightly", "rustc", "--version",
+        ])
+        self.assertEqual(run.call_args.kwargs["timeout"], 30)
+        self.assertEqual(run.call_args.kwargs["stdin"], entrypoint.subprocess.DEVNULL)
+
+    def test_receipt_observes_nightly_even_when_source_selects_stable(self) -> None:
+        # A source override must never be queried by the receipt probes.
+        (self.workspace / "rust-toolchain.toml").write_text(
+            '[toolchain]\nchannel = "stable"\n', encoding="utf-8"
+        )
+        tools = {name: f"/usr/bin/{name}" for name in ("rustup", "rustc", "cargo", "make")}
+        with patch.object(entrypoint, "_command_version", side_effect=lambda command: {
+            "command": command, "exit_code": 0, "output": "installed tool version",
+        }):
+            versions = entrypoint.toolchain_versions(tools)
+        for name in ("rustc", "cargo"):
+            self.assertEqual(versions[name]["command"], [
+                tools["rustup"], "run", "nightly", name, "--version",
+            ])
+
+    def test_failed_nightly_receipt_probe_is_not_accepted_as_build_evidence(self) -> None:
+        tools = {name: name for name in ("rustup", "rustc", "cargo", "make")}
+        for failed_tool in ("rustc", "cargo"):
+            with self.subTest(failed_tool=failed_tool):
+                def probe(command):
+                    failed = command[1:4] == ["run", "nightly", failed_tool]
+                    return {"command": command, "exit_code": 1 if failed else 0, "output": "probe"}
+                with patch.object(entrypoint, "_command_version", side_effect=probe):
+                    with self.assertRaisesRegex(entrypoint.BuildEntryPointError, failed_tool):
+                        entrypoint.toolchain_versions(tools)
 
     def test_context_keeps_capsule_digest_separate_from_native_v2_identity(self) -> None:
         context_path = self._write_context()

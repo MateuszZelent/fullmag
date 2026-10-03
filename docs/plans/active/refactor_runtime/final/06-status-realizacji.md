@@ -1,5 +1,12 @@
 # Status realizacji całego planu refaktoryzacji
 
+Checkpoint P8-38, 03.10.2026: sondy Rust/Cargo w entrypoint źródłowym
+przypinają nightly używany przez Make; 22 regresje interpretowane Python
+i bezpośrednie sondy workera PASS. Review bez P0/P1. Wdrożenie poprawki
+oraz nowy receipt NOT VERIFIED. Build 215 rozpoczął produkcyjny native-build,
+bez terminalnego wyniku. [Dowody i granice](p8/38-nightly-build-evidence.md).
+Procenty bez awansu; cały plan pozostaje aktywny.
+
 Checkpoint P8-37, 03.10.2026: startup source rozdziela read-only API pin
 od background native-service attach. Okno poprzedza dołączenie; observer
 ma cancel/join przed teardown API, bez kill/drain persistent ownera.

@@ -463,7 +463,7 @@ def preflight(profile: Profile, *, release: bool = True) -> dict[str, str]:
     }
     try:
         rustup_result = subprocess.run(
-            [tools["rustup"], "toolchain", "list"],
+            [tools["rustup"], "run", "nightly", "rustc", "--version"],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -473,14 +473,12 @@ def preflight(profile: Profile, *, release: bool = True) -> dict[str, str]:
         )
     except (OSError, subprocess.TimeoutExpired) as error:
         raise BuildEntryPointError(
-            f"cannot inspect installed Rust toolchains: {_error_text(error)}"
+            f"cannot inspect installed Rust nightly: {_error_text(error)}"
         ) from error
-    installed_toolchains = rustup_result.stdout or ""
-    if rustup_result.returncode != 0 or not any(
-        line.strip().split()[0].startswith("nightly")
-        for line in installed_toolchains.splitlines()
-        if line.strip()
-    ):
+    version_tokens = (rustup_result.stdout or "").strip().split()
+    if (rustup_result.returncode != 0 or len(version_tokens) < 2
+            or version_tokens[0] != "rustc"
+            or not version_tokens[1].endswith("-nightly")):
         raise BuildEntryPointError(
             "required Rust nightly toolchain is not installed; provision it in the "
             "pinned image or mounted RUSTUP_HOME (fresh host: `rustup toolchain "
@@ -523,12 +521,16 @@ def toolchain_versions(tools: Mapping[str, str]) -> dict[str, Any]:
     versions: dict[str, Any] = {}
     for name, command in (
         ("python", ["python3", "--version"]),
-        ("rustc", [tools["rustc"], "--version"]),
-        ("cargo", [tools["cargo"], "--version"]),
+        # Match Make's +nightly without allowing a source rust-toolchain.toml
+        # to select or implicitly install another channel during observation.
+        ("rustc", [tools["rustup"], "run", "nightly", "rustc", "--version"]),
+        ("cargo", [tools["rustup"], "run", "nightly", "cargo", "--version"]),
         ("rustup", [tools["rustup"], "--version"]),
         ("make", [tools["make"], "--version"]),
     ):
         versions[name] = _command_version(command)
+        if name in ("rustc", "cargo") and versions[name]["exit_code"] != 0:
+            raise BuildEntryPointError(f"cannot observe installed nightly {name} version")
     if "pnpm" in tools:
         versions["pnpm"] = _command_version([tools["pnpm"], "--version"])
     elif "corepack" in tools:
