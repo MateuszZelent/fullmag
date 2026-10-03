@@ -2461,21 +2461,6 @@ async function writeReport({
   );
 }
 
-async function firstVisible(page, locators) {
-  for (const locator of locators) {
-    if ((await locator.count()) > 0 && await locator.first().isVisible()) {
-      return locator.first();
-    }
-  }
-  throw new Error("None of the expected browser controls is visible.");
-}
-
-async function visibleLocator(locator) {
-  return (await locator.count()) > 0 && await locator.first().isVisible()
-    ? locator.first()
-    : null;
-}
-
 async function fulfillJson(route, body, status = 200) {
   if (status === 204) {
     await route.fulfill({

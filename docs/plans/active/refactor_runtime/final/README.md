@@ -417,3 +417,5 @@ Checkpoint P7-C: [23 — handshake store API](p8/23-api-accepted-store-handshake
 Checkpoint P7-C: [24 — tożsamość procesu i HTTP fence](p8/24-api-instance-fence.md).
 
 Checkpoint P7-C: [25 — przypięcie native UI do API](p8/25-native-ui-instance-pinning.md).
+
+Checkpoint P8: [26 — lint i retencja mapy pola](p8/26-frontend-lint-and-frame-retention.md).

@@ -1203,7 +1203,7 @@ export function ObjectMeshPolicyPanel({ selection }: InspectorPanelProps) {
       }),
     );
     setFeedback(null);
-  }, [baseDraft, draftIdentityKey, draftKey]);
+  }, [baseDraft, draftIdentityKey, draftKey, setFeedback]);
   useRegisterInspectorEditSession(
     "staged",
     pending,

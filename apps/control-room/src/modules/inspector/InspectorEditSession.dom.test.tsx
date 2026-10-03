@@ -42,8 +42,8 @@ describe("InspectorEditSession history ownership", () => {
     const root = createRoot(container as unknown as Element);
     const sceneRead = vi.fn();
     const record = vi.fn();
-    let sessionScopeKey: string | null = "session=A&epoch=4";
-    let generation = 7;
+    const sessionScopeKey: string | null = "session=A&epoch=4";
+    const generation = 7;
     let registered: InspectorEditSession | null = null;
     const kernel = {
       api: { model: { scene: sceneRead } },

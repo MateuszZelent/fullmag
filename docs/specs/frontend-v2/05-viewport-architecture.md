@@ -24,6 +24,18 @@ These modules share the same kernel slot and command model. They do not duplicat
 5. Every GPU resource has explicit ownership and disposal.
 6. Non-3D center surfaces do not keep `viewport-3d` mounted. Server-rendered cross-section images use no browser WebGL. Any future WebGL-backed 2D mode must follow the same active-only mounting and teardown rules as `viewport-3d`.
 7. Warm quantity switching reads published data resources; it does not enqueue preview-control commands unless the data truly does not exist.
+
+Field Map may retain one derived CPU render frame during resource refresh.
+The cache belongs to the mounted renderer controller, shares buffers without
+copying them, and is neither a canonical resource store nor persisted UI state.
+Render reads use an external-store snapshot instead of a mutable React ref.
+Retention requires the same session/request epoch, domain generation and
+semantic view identity, including the default slice definition, source revision
+and hash, and vector budget. Unknown or changed identity rejects the old frame
+synchronously. Publishing a fresh fallback must not cause another render.
+Temporary absence of metadata preserves the last source definition within the
+same canonical view. A newly loaded incompatible source revision/hash rejects
+that frame before rendering; metadata refresh alone does not unmount the surface.
 8. Viewport modules can be disabled without breaking explorer, inspector, charts, or runtime commands.
 
 ## 3. Data Flow

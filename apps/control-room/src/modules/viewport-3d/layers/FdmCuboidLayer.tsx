@@ -1204,7 +1204,13 @@ const FdmCuboidSurfacePass = memo(function FdmCuboidSurfacePass({
     if (!usesInstanceColors && surface.instanceColor !== null) {
       surface.instanceColor = null;
       colorRevisionRef.current = null;
-      surfaceMaterial.needsUpdate = true;
+      const mountedSurfaceMaterial = surface.material;
+      if (
+        mountedSurfaceMaterial === surfaceMaterial &&
+        mountedSurfaceMaterial instanceof MeshBasicMaterial
+      ) {
+        mountedSurfaceMaterial.needsUpdate = true;
+      }
       colorChanged = true;
     }
     if (usesInstanceColors && surfaceColors) {
