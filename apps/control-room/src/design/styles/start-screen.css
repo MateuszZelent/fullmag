@@ -601,6 +601,262 @@
   font-size: var(--fm-font-size-xs);
 }
 
+/* ── Recent projects ──────────────────────────────────────────────────── */
+
+.fm-start-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.fm-start-recent-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--fm-space-2);
+  margin-bottom: var(--fm-space-3);
+}
+
+.fm-start-search {
+  display: flex;
+  flex: 1 1 calc(var(--fm-space-12) * 4);
+  align-items: center;
+  gap: var(--fm-space-2);
+  height: var(--fm-control-height-regular);
+  border: 1px solid var(--fm-border-default);
+  border-radius: var(--fm-radius-input);
+  background: var(--fm-bg-surface);
+  color: var(--fm-start-meta);
+  padding: 0 var(--fm-space-3);
+}
+
+.fm-start-search:focus-within {
+  border-color: var(--fm-accent);
+  box-shadow: var(--fm-focus-ring);
+}
+
+.fm-start-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--fm-text-primary);
+  font: inherit;
+  font-size: var(--fm-font-size-sm);
+}
+
+.fm-start-search input:focus-visible {
+  box-shadow: none;
+}
+
+.fm-start-sort {
+  height: var(--fm-control-height-regular);
+  border: 1px solid var(--fm-border-default);
+  border-radius: var(--fm-radius-input);
+  background: var(--fm-bg-surface);
+  color: var(--fm-text-primary);
+  font: inherit;
+  font-size: var(--fm-font-size-sm);
+  padding: 0 var(--fm-space-2);
+}
+
+.fm-start-notice--warning {
+  border-left-color: var(--fm-warning);
+  background: color-mix(in srgb, var(--fm-warning) 13%, transparent);
+}
+
+.fm-start-list {
+  --fm-start-col-status: calc(var(--fm-space-12) * 2);
+  --fm-start-col-size: calc(var(--fm-space-12) * 1.5);
+  --fm-start-col-opened: calc(var(--fm-space-12) * 2.5);
+  --fm-start-col-pin: var(--fm-control-height-compact);
+  margin-bottom: var(--fm-space-3);
+  border-radius: var(--fm-radius-md);
+}
+
+.fm-start-list--virtual {
+  max-height: calc(var(--fm-start-row-height) * 9);
+  overflow-y: auto;
+}
+
+.fm-start-list__canvas {
+  position: relative;
+  width: 100%;
+}
+
+.fm-start-list__slot {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+}
+
+.fm-start-group {
+  display: flex;
+  align-items: center;
+  gap: var(--fm-space-2);
+  height: var(--fm-start-group-header-height);
+  color: var(--fm-start-meta);
+  font-size: var(--fm-start-section-size);
+  font-weight: var(--fm-font-weight-semibold);
+  letter-spacing: var(--fm-start-section-tracking);
+  text-transform: uppercase;
+}
+
+.fm-start-group__count {
+  font-family: var(--fm-font-mono);
+  font-weight: var(--fm-font-weight-normal);
+}
+
+.fm-start-row {
+  display: grid;
+  grid-template-columns:
+    minmax(0, 1fr) auto var(--fm-start-col-status) var(--fm-start-col-size)
+    var(--fm-start-col-opened) var(--fm-start-col-pin);
+  align-items: center;
+  gap: var(--fm-space-3);
+  min-height: var(--fm-start-row-height);
+  box-sizing: border-box;
+  border: 1px solid transparent;
+  border-radius: var(--fm-radius-md);
+  padding: var(--fm-space-1) var(--fm-space-2);
+  cursor: default;
+  transition:
+    background-color var(--fm-duration-fast),
+    border-color var(--fm-duration-fast);
+}
+
+.fm-start-row:hover {
+  background: var(--fm-bg-hover);
+}
+
+/* Selection is background plus border, never colour alone. */
+.fm-start-row--selected,
+.fm-start-row--selected:hover {
+  border-color: var(--fm-accent);
+  background: var(--fm-bg-selected);
+}
+
+.fm-start-row[data-status="missing"] .fm-start-row__main {
+  opacity: 0.6;
+}
+
+.fm-start-row__main {
+  display: grid;
+  min-width: 0;
+}
+
+.fm-start-row__name {
+  display: flex;
+  align-items: center;
+  gap: var(--fm-space-2);
+  min-width: 0;
+  font-size: var(--fm-font-size-md);
+  font-weight: var(--fm-font-weight-medium);
+}
+
+.fm-start-row__name-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fm-start-row__ro {
+  flex: none;
+  color: var(--fm-start-meta);
+}
+
+.fm-start-row__path {
+  overflow: hidden;
+  color: var(--fm-start-meta);
+  font-family: var(--fm-font-mono);
+  font-size: var(--fm-font-size-2xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fm-start-row__size,
+.fm-start-row__opened {
+  color: var(--fm-start-meta);
+  font-family: var(--fm-font-mono);
+  font-size: var(--fm-font-size-xs);
+  text-align: right;
+  white-space: nowrap;
+}
+
+.fm-start-row__pin {
+  display: grid;
+  width: var(--fm-control-height-compact);
+  height: var(--fm-control-height-compact);
+  place-items: center;
+  border: 0;
+  border-radius: var(--fm-radius-sm);
+  background: transparent;
+  color: var(--fm-start-meta);
+  opacity: 0;
+  cursor: pointer;
+}
+
+.fm-start-row:hover .fm-start-row__pin,
+.fm-start-row--selected .fm-start-row__pin,
+.fm-start-row__pin[data-pinned="true"],
+.fm-start-row__pin:focus-visible {
+  opacity: 1;
+}
+
+.fm-start-row__pin[data-pinned="true"] {
+  color: var(--fm-warning);
+}
+
+.fm-start-row__pin:hover {
+  background: var(--fm-bg-panel-raised);
+  color: var(--fm-text-primary);
+}
+
+/* The size column is the first thing to go when the centre column narrows. */
+@media (max-width: 1400px) {
+  .fm-start-row {
+    grid-template-columns:
+      minmax(0, 1fr) auto var(--fm-start-col-status) var(--fm-start-col-opened)
+      var(--fm-start-col-pin);
+  }
+
+  .fm-start-row__size {
+    display: none;
+  }
+}
+
+.fm-start-list-empty {
+  margin: 0 0 var(--fm-space-3);
+  color: var(--fm-start-meta);
+  font-size: var(--fm-font-size-sm);
+}
+
+.fm-start-link {
+  border: 0;
+  background: none;
+  color: var(--fm-start-nav-active);
+  cursor: pointer;
+  font: inherit;
+  text-decoration: underline;
+}
+
+.fm-start-skeleton {
+  display: grid;
+  gap: var(--fm-space-2);
+  margin-bottom: var(--fm-space-3);
+}
+
+.fm-start-skeleton__row {
+  height: var(--fm-start-row-height);
+  border-radius: var(--fm-radius-md);
+  background: var(--fm-bg-panel-raised);
+  animation: fm-pulse var(--fm-start-skeleton-period) ease-in-out infinite;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .fm-start *,
   .fm-start *::before,

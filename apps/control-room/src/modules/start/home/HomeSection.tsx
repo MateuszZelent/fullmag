@@ -1,13 +1,11 @@
 "use client";
 
-import { FolderOpen } from "lucide-react";
 import { useSyncExternalStore, type Ref } from "react";
 
-import { Button } from "@/shared/ui/Button";
-
-import { SectionHeader } from "../ui/SectionHeader";
+import type { RecentEntry } from "../model/types";
 
 import { LaunchTiles } from "./LaunchTiles";
+import { RecentProjects } from "./RecentProjects";
 
 const dateFormat = new Intl.DateTimeFormat(undefined, {
   day: "numeric",
@@ -31,6 +29,7 @@ export interface HomeSectionProps {
   readonly browseDisabledReason: string | null;
   readonly disabledReasons: Readonly<Record<string, string | null>>;
   readonly initialFocusRef?: Ref<HTMLButtonElement>;
+  readonly onOpenRecent: (entry: RecentEntry) => Promise<string | null>;
   readonly onRunCommand: (commandId: string) => void;
 }
 
@@ -38,6 +37,7 @@ export function HomeSection({
   browseDisabledReason,
   disabledReasons,
   initialFocusRef,
+  onOpenRecent,
   onRunCommand,
 }: HomeSectionProps) {
   const today = useToday();
@@ -56,27 +56,11 @@ export function HomeSection({
         initialFocusRef={initialFocusRef}
         onRunCommand={onRunCommand}
       />
-      <section aria-labelledby="fm-start-recent-title" className="fm-start-section">
-        <SectionHeader id="fm-start-recent-title" title="Recent projects" />
-        <div className="fm-start-list-foot">
-          <Button
-            aria-keyshortcuts="Control+O"
-            data-command-id="start.browse"
-            disabled={browseDisabledReason !== null}
-            onClick={() => onRunCommand("start.browse")}
-            size="sm"
-            title={browseDisabledReason ?? "Open a project archive (Ctrl+O)"}
-            type="button"
-            variant="secondary"
-          >
-            <FolderOpen aria-hidden="true" size={14} />
-            Browse…
-          </Button>
-          <span className="fm-start-list-foot__note">
-            {browseDisabledReason ?? "The recent-project index is not available in this build."}
-          </span>
-        </div>
-      </section>
+      <RecentProjects
+        browseDisabledReason={browseDisabledReason}
+        onBrowse={() => onRunCommand("start.browse")}
+        onOpen={onOpenRecent}
+      />
     </>
   );
 }
