@@ -319,8 +319,12 @@ use utoipa::OpenApi;
         crate::router_v2::handlers::persistence::session::clear_recovery,
         crate::router_v2::handlers::platform::system::get_capabilities,
         crate::router_v2::handlers::platform::system::get_health,
+        crate::router_v2::handlers::platform::runtime_service::get_runtime_service,
     ),
     components(schemas(
+        crate::schemas::runtime_service::RuntimeServiceStatusResource,
+        crate::schemas::runtime_service::RuntimeServiceStatusState,
+        crate::schemas::runtime_service::RuntimeServiceStatusReason,
         crate::schemas::sessions::CreateSessionRequest,
         crate::schemas::sessions::CreateSessionResponse,
         crate::schemas::sessions::SessionListResource,

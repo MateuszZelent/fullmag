@@ -201,8 +201,16 @@ Konfiguracja i owner używają shared bounded regular-file reader: lokalny FS,
 guarded path, metadata ścieżki i uchwytu, Unix nonblocking/no-follow,
 Windows final-reparse open/rejection i limit payloadu. Root/przodkowie muszą
 pozostać zaufane. RPC deadline nie jest deadline sterownika dysku.
-Przyszły zasób platform status oraz jego klient pozostają niepodłączone,
-dopóki canonical OpenAPI i generated transport nie zostaną zweryfikowane.
+Źródła API rejestrują `GET /v2/platform/runtime-service` jako niezależny od
+sesji zasób JSON `application_service_status.v1`: configured, state oraz reason
+(code/message). Brak konfiguracji nie tworzy store; orphan metadata wybiera
+odczyt z jawnym błędem zamiast udawać not_configured. Explicit config ma
+pierwszeństwo także przy błędzie. Publiczny message pochodzi wyłącznie ze
+stałej mapy reason code, bez host paths i surowych błędów operacyjnych.
+Strong ETag jest hashem serializowanego publicznego body; If-None-Match daje
+304 z no-cache. Status nie jest kwalifikacją solvera ani zgodą na wymuszone GPU.
+Kompilacja, canonical OpenAPI, generated transport i UI nadal wymagają
+weryfikacji; rejestracja źródeł nie dowodzi działającego endpointu.
 
 Operational lock/descriptor/logs nie zawierają korzeni naukowych CAS i nie są
 pakowane do FMS. Import nie przejmuje katalogu runtime-services i zachowuje

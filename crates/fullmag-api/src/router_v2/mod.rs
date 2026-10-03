@@ -25,6 +25,10 @@ use crate::types::{AppState, EigenModeQuery};
 pub fn build_v2_router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/v2/platform/health", get(handlers::platform::get_health))
+        .route(
+            "/v2/platform/runtime-service",
+            get(handlers::platform::runtime_service::get_runtime_service),
+        )
         .route("/v2", get(get_v2_index))
         .route("/v2/", get(get_v2_index))
         .route("/v2/platform/openapi.json", get(get_openapi_json))
