@@ -60,9 +60,9 @@ function ProjectRowImpl({
       <StatusPill status={entry.status} />
       <span className="fm-start-row__size">{formatBytes(entry.sizeBytes)}</span>
       <span className="fm-start-row__opened">{formatOpened(entry.lastOpenedAt)}</span>
-      {/* A pointer shortcut only: inside an option it must not be a second
-          focus stop, and the keyboard path is Ctrl+P on the list. */}
-      <button
+      {/* A pointer shortcut only: it is not a control inside the option, and
+          the keyboard path is Ctrl+P on the list. */}
+      <span
         aria-hidden="true"
         className="fm-start-row__pin"
         data-pinned={entry.pinned ? "true" : "false"}
@@ -70,12 +70,10 @@ function ProjectRowImpl({
           event.stopPropagation();
           onTogglePin(entry.projectId, !entry.pinned);
         }}
-        tabIndex={-1}
         title={entry.pinned ? "Unpin (Ctrl+P)" : "Pin (Ctrl+P)"}
-        type="button"
       >
         <Star aria-hidden="true" fill={entry.pinned ? "currentColor" : "none"} size={14} />
-      </button>
+      </span>
     </div>
   );
 }
