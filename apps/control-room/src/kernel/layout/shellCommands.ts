@@ -2,7 +2,6 @@ import { requestThemeToggle } from "@/design/theme/themeEvents";
 
 import type { CommandContribution } from "../commands/commandTypes";
 import { applyAuthoringHistoryWorkspaceTransition } from "../authoring/authoringHistoryWorkspaceRestore";
-import { START_COMMANDS } from "@/modules/start/model/startCommands";
 import { pickProjectArchive } from "../persistence/ProjectDocumentController";
 
 function disabledPlaceholder(
@@ -438,5 +437,4 @@ export const SHELL_COMMANDS: CommandContribution[] = [
   disabledPlaceholder("workspace.search-docs", "Search Docs", "Help"),
   disabledPlaceholder("workspace.reference", "Reference", "Help"),
   disabledPlaceholder("workspace.about-help", "About", "Help"),
-  ...START_COMMANDS,
 ];
