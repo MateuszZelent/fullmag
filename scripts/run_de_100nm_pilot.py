@@ -22,6 +22,7 @@ import zipfile
 from control_room_port import is_bindable
 import run_comsol_dispersion_benchmark as managed
 from runtime_source_change_policy import is_non_runtime_path
+from de_shifted_ksp_trial import validate_shifted_ksp_trial
 from validate_de_smoke_rows import (
     PARALLEL_PROBE_FREQUENCY_WINDOW_HZ,
     PARALLEL_PROBE_VECTORS_RAD_PER_M,
@@ -1030,6 +1031,19 @@ def _ui_archive_shell(pilot):
     ]
 
 
+def _validate_shifted_ksp_trial_request(pilot, requested_type, nearest_frequency, spectral_target, *, dense_oracle=False):
+    if requested_type is None:
+        return
+    if requested_type not in SHIFTED_KSP_TYPE_CHOICES or not pilot.startswith("de-smoke-"):
+        raise managed.BenchmarkError("shifted KSP type diagnostic requires DE-SMOKE and gmres/fgmres")
+    modal_target, _ = _modal_selection(pilot, nearest_frequency, spectral_target)
+    if modal_target != "frequency_window" or dense_oracle:
+        raise managed.BenchmarkError("shifted KSP type diagnostic requires a native frequency_window pilot")
+    values = SAMPLING.get(PILOTS[pilot][1], ())
+    if not any(value != 0.0 for value in values):
+        raise managed.BenchmarkError("shifted KSP type diagnostic requires nonzero-k Floquet samples")
+
+
 def compose_command(context, output, timeout_seconds=managed.DEFAULT_TIMEOUT_SECONDS, *, pilot="de100", external_model=False, dense_oracle=False, solver_rtol=None, eps_prefilter=None, shifted_ksp_rtol=None, gmres_restart=None, mesh_level=None, thickness_layers=None, nearest_target_frequency_ghz=None, spectral_target=None, frequency_min_ghz=None, frequency_max_ghz=None, ui_web_root=None, ui_host_port=UI_API_PORT, capture_session=False, probe_input_dir=None, probe_manifest_sha256=None, parallel_mode=None, schur_action_diagnostic=False, shifted_ksp_type=None):
     model = pilot_model(pilot)
     parallel_probe = _is_parallel_probe(pilot)
@@ -1039,8 +1053,9 @@ def compose_command(context, output, timeout_seconds=managed.DEFAULT_TIMEOUT_SEC
             raise managed.BenchmarkError("signed-fifteen requires a versioned model and explicit serial/adaptive policy")
         if probe_input_dir is not None or probe_manifest_sha256 is not None:
             raise managed.BenchmarkError("signed-fifteen cannot use probe input artifacts")
-    if shifted_ksp_type is not None and (pilot == "de100" or shifted_ksp_type not in SHIFTED_KSP_TYPE_CHOICES):
-        raise managed.BenchmarkError("shifted KSP type diagnostic requires DE-SMOKE and gmres/fgmres")
+    _validate_shifted_ksp_trial_request(pilot, shifted_ksp_type,
+                                      nearest_target_frequency_ghz, spectral_target,
+                                      dense_oracle=dense_oracle)
     if schur_action_diagnostic and (pilot == "de100" or parallel_probe):
         raise managed.BenchmarkError(
             "Schur action diagnostic is restricted to non-parallel DE-SMOKE pilots")
@@ -1600,8 +1615,9 @@ def validate_thickness_layers_metadata(case, requested):
 
 
 def execute(context, output, command, model_sha, timeout_seconds=managed.DEFAULT_TIMEOUT_SECONDS, *, pilot="de100", model_identity=None, dense_oracle=False, solver_rtol=None, eps_prefilter=None, shifted_ksp_rtol=None, gmres_restart=None, mesh_level=None, thickness_layers=None, nearest_target_frequency_ghz=None, spectral_target=None, frequency_min_ghz=None, frequency_max_ghz=None, ui_enabled=False, capture_session=False, ui_frontend=None, ui_web_root=None, ui_host_port=UI_API_PORT, parallel_mode=None, probe_input_dir=None, schur_action_diagnostic=False, shifted_ksp_type=None):
-    if shifted_ksp_type is not None and (pilot == "de100" or shifted_ksp_type not in SHIFTED_KSP_TYPE_CHOICES):
-        raise managed.BenchmarkError("shifted KSP type diagnostic requires DE-SMOKE and gmres/fgmres")
+    _validate_shifted_ksp_trial_request(pilot, shifted_ksp_type,
+                                      nearest_target_frequency_ghz, spectral_target,
+                                      dense_oracle=dense_oracle)
     if schur_action_diagnostic and (pilot == "de100" or _is_parallel_probe(pilot)):
         raise managed.BenchmarkError(
             "Schur action diagnostic is restricted to non-parallel DE-SMOKE pilots")
@@ -1715,6 +1731,9 @@ def execute(context, output, command, model_sha, timeout_seconds=managed.DEFAULT
                     validate_rows(*row_args, selection_scope="selected_only")
                     if modal_target == "nearest" else validate_rows(*row_args)
                 )
+                if shifted_ksp_type is not None:
+                    artifacts["shifted_ksp_trial"] = validate_shifted_ksp_trial(
+                        output / pilot, PILOTS[pilot][1], shifted_ksp_type, shifted_ksp_rtol)
                 artifacts["potential_reconstruction"] = validate_smoke_potential_fields(
                     output / pilot, artifacts["row_preflight"]["sample_count"])
                 if _is_parallel_probe(pilot):
@@ -2070,8 +2089,9 @@ def main(argv=None):
     )
     args = parser.parse_args(argv)
     try:
-        if args.shifted_ksp_type is not None and args.pilot == "de100":
-            raise ValueError("--shifted-ksp-type requires a DE-SMOKE pilot")
+        _validate_shifted_ksp_trial_request(args.pilot, args.shifted_ksp_type,
+                                          args.nearest_target_frequency_ghz, args.spectral_target,
+                                          dense_oracle=args.dense_oracle)
         if args.with_ui and args.capture_session:
             raise ValueError("--with-ui and --capture-session are mutually exclusive")
         if args.with_ui and not args.web_build_root:

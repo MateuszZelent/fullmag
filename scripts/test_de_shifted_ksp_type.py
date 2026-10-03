@@ -65,6 +65,44 @@ class ShiftedKspTypeTests(unittest.TestCase):
         inspect_image.assert_not_called()
         output.assert_not_called()
 
+    def test_unsupported_trial_scope_rejected_before_storage(self):
+        cases = [
+            ['--pilot','de-smoke-k0'],
+            ['--pilot','de-smoke-k2','--spectral-target','nearest'],
+            ['--pilot','de-smoke-nearest-k2'],
+            ['--pilot','de-smoke-k2','--dense-oracle'],
+        ]
+        for options in cases:
+            with self.subTest(options=options), \
+                 patch.object(pilot.managed.fullmag_storage, 'resolve_layout') as resolve, \
+                 patch.object(pilot.managed.fullmag_storage, 'initialize') as initialize:
+                code = pilot.main(['--job-id','a'*32,'--shifted-ksp-type','fgmres',*options])
+            self.assertEqual(code,2)
+            resolve.assert_not_called()
+            initialize.assert_not_called()
+
+    def test_successful_process_cannot_bypass_trial_validation(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            context = SimpleNamespace(layout={'repo_root':str(root)}, image_digest='sha256:test')
+            with patch.object(pilot.managed, '_run_request', return_value={'source':{},'job':{},'runtime':{}}), \
+                 patch.object(pilot.managed, '_compose_environment', return_value={}), \
+                 patch.object(pilot.subprocess, 'run', return_value=SimpleNamespace(returncode=0)), \
+                 patch.object(pilot.managed, '_validate_case_artifacts', return_value={}), \
+                 patch.object(pilot, 'validate_rows', return_value={'sample_count':1}), \
+                 patch.object(pilot, 'validate_shifted_ksp_trial', side_effect=ValueError('old runtime has no true criterion')) as trial, \
+                 patch.object(pilot.managed, '_cleanup_benchmark_container', return_value={'status':'absent'}), \
+                 patch('builtins.print'):
+                code = pilot.execute(context, root, ['docker'], 'abc', pilot='de-smoke-k2',
+                                     shifted_ksp_type='fgmres', shifted_ksp_rtol='1e-9')
+            result = json.loads((root/'run-result.json').read_text(encoding='utf-8'))
+            trial.assert_called_once_with(root/'de-smoke-k2','k2','fgmres','1e-9')
+            self.assertEqual(code,1)
+            self.assertEqual(result['return_code'],0)
+            self.assertEqual(result['status'],'failed')
+            self.assertIn('no true criterion',result['error'])
+
+
 
 if __name__ == '__main__':
     unittest.main()

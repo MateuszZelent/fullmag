@@ -29,3 +29,13 @@ Po poprawnym punkcie wymagane Γ/±10 i docelowe15 rzeczywistych punktów, walid
 - `scripts/run_de_100nm_pilot.py` + `compose_command`, `execute`, `main`: jawna opcja i provenance receiptu.
 - `scripts/test_de_shifted_ksp_type.py`: kontrola scope i provenance, bez native compilation.
 - [PETSc FGMRES](https://petsc.org/release/manualpages/KSP/KSPFGMRES/), [kod GMRES](https://petsc.org/release/src/ksp/ksp/impls/gmres/gmres.c.html). Dokumentacja online jest nowsza od runtime3.24.6; zgodność API wymaga managed builda.
+
+## Kontrola odbioru próby — przyrost źródłowy
+
+Jawny wariant wymaga natywnego frequency_window oraz co najmniej jednego k≠0. Nearest i dense oracle są odrzucane przed storage/Docker, ponieważ nie publikują kompletnego pomiaru tej próby. Γ w mieszanej ścieżce pozostaje w swoim właścicielu; nie reklamujemy dla niego FGMRES.
+
+Postsolve observer wylicza dla każdego shifted solve normę rzeczywistą z b−Ax. Przy potwierdzonym zerowym initial guess, PC_RIGHT i normie unpreconditioned porównuje ją z max(atol, rtol·norma RHS), z faktycznymi tolerancjami powiązanymi z konfiguracją przed EPS. Zerowy RHS jest oceniany absolutnie; zerowy próg wymaga dokładnie zerowego residualu. Każdy solve trafia do solve_count i dokładnie jednego measured/unavailable; violation_count obejmuje niespełniony próg albo niedodatni convergence reason. Maximum_tolerance_ratio obejmuje wszystkie pomiary i nie jest interpretowane przez normę ostatniego RHS.
+
+Agregat jest diagnostic-only: observer nadal zwraca zero i nie zmienia zbieżności KSP/EPS. Konsument jawnej próby wymaga pełnego pokrycia, zerowych violations/unavailable i zgodnego rzeczywistego typu w każdej próbce i podoknie. Stary runtime bez nowego agregatu nie jest akceptowany jako dowód FGMRES. Fizyczny residual1e-8 pozostaje odrębną bramką. Native compilation/runtime oraz 15 punktów nadal NOT VERIFIED.
+
+Źródła: floquet_modal_solver.cpp::capture_last_floquet_shifted_solve; slepc_modal_eigen.hpp::SLEPcTinyGyrotropicModalEigenResult; production_cpu_modal_eigen.cpp::production_window_diagnostics_json; scripts/de_shifted_ksp_trial.py::validate_shifted_ksp_trial; run_de_100nm_pilot.py::execute.

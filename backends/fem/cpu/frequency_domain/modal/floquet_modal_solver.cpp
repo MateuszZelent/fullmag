@@ -923,6 +923,13 @@ struct LastFloquetShiftedSolveSnapshot {
     int true_residual_sample_count = 0;
     int true_residual_measurement_failure_count = 0;
     double maximum_true_relative_residual = 0.0;
+    std::uint64_t criterion_solve_count = 0;
+    std::uint64_t criterion_measured_count = 0;
+    std::uint64_t criterion_violation_count = 0;
+    std::uint64_t criterion_unavailable_count = 0;
+    double criterion_maximum_tolerance_ratio = 0.0;
+    PetscReal expected_rtol = 0.0;
+    PetscReal expected_atol = 0.0;
 };
 
 PetscErrorCode capture_last_floquet_shifted_solve(
@@ -932,6 +939,7 @@ PetscErrorCode capture_last_floquet_shifted_solve(
     if (snapshot == nullptr) {
         return PETSC_ERR_ARG_NULL;
     }
+    ++snapshot->criterion_solve_count;
     snapshot->available = false;
     Mat shifted_operator = nullptr;
     if (rhs == nullptr || solution == nullptr ||
@@ -943,12 +951,14 @@ PetscErrorCode capture_last_floquet_shifted_solve(
         VecCopy(rhs, snapshot->rhs) != 0 ||
         VecCopy(solution, snapshot->solution) != 0) {
         ++snapshot->true_residual_measurement_failure_count;
+        ++snapshot->criterion_unavailable_count;
         return 0; // A diagnostic failure must not alter the eigensolve.
     }
     if (snapshot->shifted_operator != shifted_operator) {
         if (PetscObjectReference(
                 reinterpret_cast<PetscObject>(shifted_operator)) != 0) {
             ++snapshot->true_residual_measurement_failure_count;
+            ++snapshot->criterion_unavailable_count;
             return 0;
         }
         Mat previous = snapshot->shifted_operator;
@@ -980,6 +990,46 @@ PetscErrorCode capture_last_floquet_shifted_solve(
     } else {
         ++snapshot->true_residual_measurement_failure_count;
     }
+    // Observe the true criterion for EACH solve, not just the last RHS.
+    // This is diagnostic-only: it does not change KSP convergence or EPS.
+    PetscBool initial_guess_nonzero = PETSC_TRUE;
+    PetscReal actual_rtol = 0.0;
+    PetscReal actual_atol = 0.0;
+    PCSide actual_side = PC_SIDE_DEFAULT;
+    KSPNormType actual_norm = KSP_NORM_DEFAULT;
+    KSPConvergedReason reason = KSP_CONVERGED_ITERATING;
+    const bool criterion_available = measured &&
+        KSPGetInitialGuessNonzero(ksp, &initial_guess_nonzero) == 0 &&
+        initial_guess_nonzero == PETSC_FALSE &&
+        KSPGetTolerances(ksp, &actual_rtol, &actual_atol, nullptr, nullptr) == 0 &&
+        std::isfinite(static_cast<double>(actual_rtol)) && actual_rtol > 0.0 &&
+        std::isfinite(static_cast<double>(actual_atol)) && actual_atol >= 0.0 &&
+        actual_rtol == snapshot->expected_rtol &&
+        actual_atol == snapshot->expected_atol &&
+        KSPGetPCSide(ksp, &actual_side) == 0 && actual_side == PC_RIGHT &&
+        KSPGetNormType(ksp, &actual_norm) == 0 &&
+        actual_norm == KSP_NORM_UNPRECONDITIONED &&
+        KSPGetConvergedReason(ksp, &reason) == 0;
+    const double relative_threshold =
+        static_cast<double>(actual_rtol) * static_cast<double>(rhs_norm);
+    const double threshold = std::max(static_cast<double>(actual_atol),
+                                      relative_threshold);
+    if (!criterion_available || !std::isfinite(relative_threshold) ||
+        !std::isfinite(threshold)) {
+        ++snapshot->criterion_unavailable_count;
+        return 0;
+    }
+    ++snapshot->criterion_measured_count;
+    if (reason <= 0 || static_cast<double>(residual_norm) > threshold) {
+        ++snapshot->criterion_violation_count;
+    }
+    // A zero RHS/zero threshold requires an EXACT zero absolute residual.
+    const double ratio = threshold > 0.0
+        ? static_cast<double>(residual_norm) / threshold
+        : (residual_norm == 0.0 ? 0.0
+                               : std::numeric_limits<double>::infinity());
+    snapshot->criterion_maximum_tolerance_ratio = std::max(
+        snapshot->criterion_maximum_tolerance_ratio, ratio);
     return 0;
 }
 
@@ -3258,6 +3308,8 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
     result.ksp_rtol = static_cast<double>(shifted_actual_rtol);
     result.ksp_restart = static_cast<int>(shifted_actual_gmres_restart);
     result.ksp_atol = static_cast<double>(shifted_actual_atol);
+    last_shifted_solve.expected_rtol = shifted_actual_rtol;
+    last_shifted_solve.expected_atol = shifted_actual_atol;
     result.ksp_max_iterations = shifted_actual_max_iterations > 0
         ? static_cast<int>(shifted_actual_max_iterations)
         : 0;
@@ -3273,6 +3325,14 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
         last_shifted_solve.true_residual_sample_count;
     result.ksp_true_residual_measurement_failure_count =
         last_shifted_solve.true_residual_measurement_failure_count;
+    result.ksp_true_criterion_solve_count = last_shifted_solve.criterion_solve_count;
+    result.ksp_true_criterion_measured_count = last_shifted_solve.criterion_measured_count;
+    result.ksp_true_criterion_violation_count = last_shifted_solve.criterion_violation_count;
+    result.ksp_true_criterion_unavailable_count = last_shifted_solve.criterion_unavailable_count;
+    if (last_shifted_solve.criterion_measured_count > 0) {
+        result.ksp_true_criterion_maximum_tolerance_ratio =
+            last_shifted_solve.criterion_maximum_tolerance_ratio;
+    }
     if (last_shifted_solve.true_residual_sample_count > 0) {
         result.ksp_max_true_relative_residual =
             last_shifted_solve.maximum_true_relative_residual;

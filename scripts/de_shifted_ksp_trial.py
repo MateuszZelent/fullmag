@@ -1,0 +1,394 @@
+"""Fail-closed consumer for the explicit nonzero-k shifted-KSP trial."""
+from __future__ import annotations
+
+import math
+from pathlib import Path
+
+from validate_de_smoke_rows import (
+    SAMPLING,
+    diagnostics_by_sample,
+    load_solver_diagnostics,
+)
+
+
+_CRITERION_SCHEMA = "floquet_shifted_ksp_true_residual_criterion.v1"
+_CRITERION_REFERENCE = "rhs_norm_zero_initial_guess"
+_KSP_TYPES = frozenset(("gmres", "fgmres"))
+_SAMPLE_TOLERANCE_REL = 1e-12
+
+
+def _required_object(value, name):
+    if not isinstance(value, dict):
+        raise ValueError(f"{name} must be an object")
+    return value
+
+
+def _required_string(value, name):
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"{name} must be a non-empty string")
+    return value
+
+
+def _required_integer(value, name, *, minimum=None):
+    if type(value) is not int or (minimum is not None and value < minimum):
+        raise ValueError(f"{name} must be an integer")
+    return value
+
+
+def _required_number(value, name, *, positive=False, nonnegative=False):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{name} must be a finite number")
+    try:
+        number = float(value)
+    except (OverflowError, ValueError):
+        raise ValueError(f"{name} must be a finite number") from None
+    if not math.isfinite(number):
+        raise ValueError(f"{name} must be a finite number")
+    if positive and number <= 0.0:
+        raise ValueError(f"{name} must be positive")
+    if nonnegative and number < 0.0:
+        raise ValueError(f"{name} must be nonnegative")
+    return number
+
+
+def _matching_number(actual, expected):
+    return math.isclose(actual, expected, rel_tol=_SAMPLE_TOLERANCE_REL, abs_tol=0.0)
+
+
+def _configured_breakdown_tolerance(payload, name, requested_type):
+    if "ksp_breakdown_tolerance" not in payload:
+        raise ValueError(f"{name}.ksp_breakdown_tolerance is missing")
+    value = payload["ksp_breakdown_tolerance"]
+    if requested_type == "fgmres":
+        if value is not None:
+            raise ValueError(f"{name}.ksp_breakdown_tolerance must be null for FGMRES")
+        return None
+    if value is None:
+        raise ValueError(f"{name}.ksp_breakdown_tolerance is unavailable for GMRES")
+    return _required_number(value, f"{name}.ksp_breakdown_tolerance", positive=True)
+
+
+def _validate_ksp_configuration(payload, name, requested_type, rtol_limit,
+                                expected_rtol=None, expected_atol=None,
+                                expected_breakdown=None, check_breakdown=True):
+    native_type = _required_string(payload.get("ksp_type"), f"{name}.ksp_type")
+    if native_type != requested_type:
+        raise ValueError(f"{name}.ksp_type disagrees with the requested KSP type")
+
+    rtol = _required_number(payload.get("ksp_rtol"), f"{name}.ksp_rtol", positive=True)
+    if rtol > rtol_limit:
+        raise ValueError(f"{name}.ksp_rtol is looser than the requested/configured tolerance")
+    if expected_rtol is not None and not _matching_number(rtol, expected_rtol):
+        raise ValueError(f"{name}.ksp_rtol disagrees with the global native configuration")
+
+    atol = _required_number(payload.get("ksp_atol"), f"{name}.ksp_atol", nonnegative=True)
+    if expected_atol is not None and not _matching_number(atol, expected_atol):
+        raise ValueError(f"{name}.ksp_atol disagrees with the global native configuration")
+
+    breakdown = (
+        _configured_breakdown_tolerance(payload, name, requested_type)
+        if check_breakdown else None
+    )
+    if check_breakdown and expected_breakdown is not None:
+        if breakdown is None or not _matching_number(breakdown, expected_breakdown):
+            raise ValueError(
+                f"{name}.ksp_breakdown_tolerance disagrees with the global native configuration"
+            )
+    return {"ksp_type": native_type, "ksp_rtol": rtol,
+            "ksp_atol": atol, "ksp_breakdown_tolerance": breakdown}
+
+
+def _validate_sample_vector(sample_diagnostics, sample_index, expected_k, sampling):
+    context = f"sample {sample_index}"
+    vector_length = _required_integer(
+        sample_diagnostics.get("k_vector_len"), f"{context}.k_vector_len", minimum=0
+    )
+    vector = sample_diagnostics.get("k_vector_rad_m")
+    if vector_length != 3 or not isinstance(vector, list) or len(vector) != 3:
+        raise ValueError(f"{context} has an invalid native k vector")
+    actual = [
+        _required_number(component, f"{context}.k_vector_rad_m[{axis}]")
+        for axis, component in enumerate(vector)
+    ]
+    expected = (
+        (float(expected_k), 0.0, 0.0)
+        if sampling.startswith("bv-")
+        else (0.0, float(expected_k), 0.0)
+    )
+    if any(not _matching_number(got, want) for got, want in zip(actual, expected)):
+        raise ValueError(f"{context} native k vector disagrees with the requested sampling")
+    return actual
+
+
+def _validate_window(window, sample_index, window_position, requested_type,
+                     rtol_limit, global_rtol, global_atol):
+    name = f"sample {sample_index} subwindow {window_position}"
+    _required_object(window, name)
+    index = _required_integer(window.get("index"), f"{name}.index", minimum=0)
+    configuration = _validate_ksp_configuration(
+        window,
+        name,
+        requested_type,
+        rtol_limit,
+        expected_rtol=global_rtol,
+        expected_atol=global_atol,
+        check_breakdown=False,
+    )
+
+    unsupported = window.get("unsupported_reason")
+    if not isinstance(unsupported, str) or unsupported:
+        raise ValueError(f"{name} reports a native diagnostic failure")
+
+    before_eps = _required_object(
+        window.get("shifted_ksp_configuration_before_eps"),
+        f"{name}.shifted_ksp_configuration_before_eps",
+    )
+    if before_eps.get("phase") != "before_eps_solve":
+        raise ValueError(f"{name} is missing pre-EPS shifted-KSP configuration")
+    before_pc_side = _required_integer(before_eps.get("pc_side"), f"{name}.pre-EPS pc_side")
+    before_norm_type = _required_integer(before_eps.get("norm_type"), f"{name}.pre-EPS norm_type")
+    if before_pc_side != 1 or before_norm_type != 2:
+        raise ValueError(f"{name} does not use PC_RIGHT and KSP_NORM_UNPRECONDITIONED")
+
+    if window.get("ksp_diagnostics_available") is not True:
+        raise ValueError(f"{name} KSP diagnostics are unavailable")
+    if window.get("ksp_last_true_residual_available") is not True:
+        raise ValueError(f"{name} last true residual is unavailable")
+    converged_reason = _required_integer(
+        window.get("ksp_converged_reason"), f"{name}.ksp_converged_reason"
+    )
+    eps_reason = _required_integer(
+        window.get("eps_converged_reason"), f"{name}.eps_converged_reason"
+    )
+    if converged_reason <= 0 or eps_reason <= 0:
+        raise ValueError(f"{name} EPS/KSP did not report positive convergence")
+
+    pc_side = _required_integer(window.get("ksp_pc_side"), f"{name}.ksp_pc_side")
+    norm_type = _required_integer(window.get("ksp_norm_type"), f"{name}.ksp_norm_type")
+    if pc_side != 1 or norm_type != 2:
+        raise ValueError(f"{name} did not retain PC_RIGHT and KSP_NORM_UNPRECONDITIONED")
+
+    measurement_failures = _required_integer(
+        window.get("ksp_true_residual_measurement_failure_count"),
+        f"{name}.ksp_true_residual_measurement_failure_count",
+        minimum=0,
+    )
+    if measurement_failures != 0:
+        raise ValueError(f"{name} has shifted-solve true-residual diagnostic failures")
+
+    criterion = _required_object(
+        window.get("ksp_true_residual_criterion"),
+        f"{name}.ksp_true_residual_criterion",
+    )
+    if criterion.get("schema_version") != _CRITERION_SCHEMA:
+        raise ValueError(f"{name} has an unsupported true-residual criterion schema")
+    if criterion.get("reference_norm") != _CRITERION_REFERENCE:
+        raise ValueError(f"{name} true-residual criterion lacks the zero-initial-guess RHS reference")
+
+    solve_count = _required_integer(
+        criterion.get("solve_count"), f"{name}.criterion.solve_count", minimum=1
+    )
+    measured_count = _required_integer(
+        criterion.get("measured_count"), f"{name}.criterion.measured_count", minimum=0
+    )
+    violation_count = _required_integer(
+        criterion.get("violation_count"), f"{name}.criterion.violation_count", minimum=0
+    )
+    unavailable_count = _required_integer(
+        criterion.get("unavailable_count"), f"{name}.criterion.unavailable_count", minimum=0
+    )
+    maximum_ratio = _required_number(
+        criterion.get("maximum_tolerance_ratio"),
+        f"{name}.criterion.maximum_tolerance_ratio",
+        nonnegative=True,
+    )
+    if measured_count != solve_count:
+        raise ValueError(f"{name} true-residual criterion has inconsistent solve counts")
+    if violation_count != 0 or unavailable_count != 0:
+        raise ValueError(f"{name} true-residual criterion reports a violation or unavailable solve")
+    if maximum_ratio > 1.0:
+        raise ValueError(f"{name} true-residual criterion exceeds its requested tolerance")
+
+    sample_count = _required_integer(
+        window.get("ksp_true_residual_sample_count"),
+        f"{name}.ksp_true_residual_sample_count",
+        minimum=0,
+    )
+    if sample_count != measured_count:
+        raise ValueError(f"{name} true-residual criterion disagrees with its measured count")
+
+    true_residual_norm = _required_number(
+        window.get("ksp_last_true_residual_norm"),
+        f"{name}.ksp_last_true_residual_norm",
+        nonnegative=True,
+    )
+    rhs_norm = _required_number(
+        window.get("ksp_last_rhs_norm"), f"{name}.ksp_last_rhs_norm", nonnegative=True
+    )
+    relative_limit = configuration["ksp_rtol"] * rhs_norm
+    if not math.isfinite(relative_limit):
+        raise ValueError(f"{name} last shifted-solve tolerance is non-finite")
+    absolute_limit = max(configuration["ksp_atol"], relative_limit)
+    if true_residual_norm > absolute_limit:
+        raise ValueError(f"{name} last true residual exceeds its absolute/relative KSP criterion")
+    last_tolerance_ratio = (
+        true_residual_norm / absolute_limit if absolute_limit > 0.0
+        else (0.0 if true_residual_norm == 0.0 else math.inf)
+    )
+    if maximum_ratio + 1e-12 < last_tolerance_ratio:
+        raise ValueError(f"{name} aggregate criterion ratio is inconsistent with its last solve")
+
+    return {
+        "index": index,
+        "ksp_type": configuration["ksp_type"],
+        "ksp_rtol": configuration["ksp_rtol"],
+        "ksp_atol": configuration["ksp_atol"],
+        "pc_side": pc_side,
+        "norm_type": norm_type,
+        "eps_converged_reason": eps_reason,
+        "ksp_converged_reason": converged_reason,
+        "true_residual_criterion": {
+            "solve_count": solve_count,
+            "measured_count": measured_count,
+            "violation_count": violation_count,
+            "unavailable_count": unavailable_count,
+            "maximum_tolerance_ratio": maximum_ratio,
+        },
+        "last_tolerance_ratio": last_tolerance_ratio,
+    }
+
+
+def validate_shifted_ksp_trial(
+    case_dir: Path,
+    sampling: str,
+    requested_type: str,
+    requested_rtol: str | None,
+):
+    """Validate every native shifted-KSP window for required nonzero-k samples.
+
+    This is a solver-trial receipt check only.  It does not certify eigenmodes,
+    physical residuals, convergence of the dispersion, or scientific validity.
+    """
+    if not isinstance(sampling, str) or sampling not in SAMPLING:
+        raise ValueError("shifted KSP trial has an unknown sampling name")
+    if not isinstance(requested_type, str) or requested_type not in _KSP_TYPES:
+        raise ValueError("shifted KSP trial requested_type must be gmres or fgmres")
+    if requested_rtol is None:
+        requested_rtol_value = None
+    else:
+        if not isinstance(requested_rtol, str):
+            raise ValueError("shifted KSP trial requested_rtol must be a positive finite string")
+        try:
+            requested_rtol_value = float(requested_rtol)
+        except (OverflowError, ValueError):
+            raise ValueError("shifted KSP trial requested_rtol must be a positive finite string") from None
+        if not math.isfinite(requested_rtol_value) or requested_rtol_value <= 0.0:
+            raise ValueError("shifted KSP trial requested_rtol must be a positive finite string")
+
+    expected_wavevectors = SAMPLING[sampling]
+    required_indices = [
+        index for index, wavevector in enumerate(expected_wavevectors)
+        if wavevector != 0.0
+    ]
+    if not required_indices:
+        raise ValueError("shifted KSP trial requires at least one nonzero-k sample")
+
+    try:
+        case_path = Path(case_dir)
+    except TypeError:
+        raise ValueError("shifted KSP trial case_dir must be path-like") from None
+    diagnostics_path = case_path / "eigen" / "diagnostics" / "solver.v1.json"
+    diagnostics = load_solver_diagnostics(diagnostics_path)
+    if diagnostics.get("schema_version") != "solver.v1":
+        raise ValueError("shifted KSP trial requires solver.v1 native diagnostics")
+
+    global_type = _required_string(diagnostics.get("ksp_type"), "global.ksp_type")
+    if global_type != requested_type:
+        raise ValueError("global native ksp_type disagrees with the requested KSP type")
+    global_rtol = _required_number(
+        diagnostics.get("ksp_rtol"), "global.ksp_rtol", positive=True
+    )
+    global_atol = _required_number(
+        diagnostics.get("ksp_atol"), "global.ksp_atol", nonnegative=True
+    )
+    rtol_limit = requested_rtol_value if requested_rtol_value is not None else global_rtol
+    if global_rtol > rtol_limit:
+        raise ValueError("global native ksp_rtol is looser than the requested tolerance")
+    global_breakdown = _configured_breakdown_tolerance(
+        diagnostics, "global", requested_type
+    )
+
+    records = diagnostics.get("sample_solver_diagnostics")
+    if not isinstance(records, list):
+        raise ValueError("shifted KSP trial requires indexed per-sample diagnostics")
+    by_sample = diagnostics_by_sample(diagnostics, required_indices, "subwindows")
+    valid_indices = set(range(len(expected_wavevectors)))
+    invalid_indices = sorted(index for index in by_sample if index not in valid_indices)
+    if invalid_indices:
+        raise ValueError(f"native solver diagnostics contain invalid sample indices: {invalid_indices}")
+    missing_indices = [index for index in required_indices if index not in by_sample]
+    if missing_indices:
+        raise ValueError(f"missing native solver diagnostics for nonzero-k samples {missing_indices}")
+
+    accepted_by_sample = {}
+    for sample_index in required_indices:
+        sample_diagnostics = _required_object(
+            by_sample[sample_index], f"sample {sample_index}.diagnostics"
+        )
+        vector = _validate_sample_vector(
+            sample_diagnostics,
+            sample_index,
+            expected_wavevectors[sample_index],
+            sampling,
+        )
+        sample_config = _validate_ksp_configuration(
+            sample_diagnostics,
+            f"sample {sample_index}",
+            requested_type,
+            rtol_limit,
+            expected_rtol=global_rtol,
+            expected_atol=global_atol,
+            expected_breakdown=global_breakdown,
+        )
+        subwindows = sample_diagnostics.get("subwindows")
+        if not isinstance(subwindows, list) or not subwindows:
+            raise ValueError(f"sample {sample_index} has no executed shifted-KSP subwindows")
+
+        window_reports = []
+        seen_indices = set()
+        for position, window in enumerate(subwindows):
+            report = _validate_window(
+                window,
+                sample_index,
+                position,
+                requested_type,
+                rtol_limit,
+                global_rtol,
+                global_atol,
+            )
+            if report["index"] in seen_indices:
+                raise ValueError(f"sample {sample_index} has duplicate subwindow indices")
+            seen_indices.add(report["index"])
+            window_reports.append(report)
+        if seen_indices != set(range(len(subwindows))):
+            raise ValueError(f"sample {sample_index} has missing subwindow indices")
+
+        accepted_by_sample[sample_index] = {
+            "sample_index": sample_index,
+            "k_vector_rad_m": vector,
+            "breakdown_tolerance": sample_config["ksp_breakdown_tolerance"],
+            "subwindow_count": len(window_reports),
+            "subwindows": window_reports,
+        }
+
+    return {
+        "status": "pass",
+        "qualification": "NOT VERIFIED",
+        "sampling": sampling,
+        "requested_type": requested_type,
+        "requested_rtol": requested_rtol_value,
+        "configured_rtol": global_rtol,
+        "configured_atol": global_atol,
+        "sample_count": len(accepted_by_sample),
+        "by_sample": accepted_by_sample,
+    }

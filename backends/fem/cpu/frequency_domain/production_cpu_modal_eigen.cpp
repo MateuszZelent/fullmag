@@ -1421,7 +1421,18 @@ std::string production_window_diagnostics_json(
                     solve.result.residual_evaluation_candidate_count) +
                 ",\"ksp_diagnostics_available\":" +
                 std::string(solve.result.ksp_diagnostics_available ? "true" : "false") +
-                ",\"ksp_last_iterations\":" +
+                ",\"ksp_type\":\"" + std::string(solve.result.ksp_type) +
+                "\",\"ksp_rtol\":" + format_double(solve.result.ksp_rtol) +
+                ",\"ksp_atol\":" + format_double(solve.result.ksp_atol) +
+                ",\"ksp_true_residual_criterion\":{"
+                "\"schema_version\":\"floquet_shifted_ksp_true_residual_criterion.v1\","
+                "\"reference_norm\":\"rhs_norm_zero_initial_guess\","
+                "\"solve_count\":" + std::to_string(solve.result.ksp_true_criterion_solve_count) +
+                ",\"measured_count\":" + std::to_string(solve.result.ksp_true_criterion_measured_count) +
+                ",\"violation_count\":" + std::to_string(solve.result.ksp_true_criterion_violation_count) +
+                ",\"unavailable_count\":" + std::to_string(solve.result.ksp_true_criterion_unavailable_count) +
+                ",\"maximum_tolerance_ratio\":" + format_double(solve.result.ksp_true_criterion_maximum_tolerance_ratio) +
+                "},\"ksp_last_iterations\":" +
                 std::to_string(solve.result.ksp_last_iterations) +
                 ",\"ksp_final_residual\":" +
                 format_double(solve.result.ksp_final_residual) +

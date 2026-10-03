@@ -4,6 +4,7 @@
 
 #include <array>
 #include <complex>
+#include <cstdint>
 #include <limits>
 #include <vector>
 
@@ -211,6 +212,13 @@ struct SLEPcTinyGyrotropicModalEigenResult {
         std::numeric_limits<double>::quiet_NaN();
     double ksp_last_rhs_norm = std::numeric_limits<double>::quiet_NaN();
     double ksp_last_true_relative_residual =
+        std::numeric_limits<double>::quiet_NaN();
+    // Per-solve observation of the shifted true residual criterion.
+    std::uint64_t ksp_true_criterion_solve_count = 0;
+    std::uint64_t ksp_true_criterion_measured_count = 0;
+    std::uint64_t ksp_true_criterion_violation_count = 0;
+    std::uint64_t ksp_true_criterion_unavailable_count = 0;
+    double ksp_true_criterion_maximum_tolerance_ratio =
         std::numeric_limits<double>::quiet_NaN();
     int ksp_true_residual_sample_count = 0;
     int ksp_true_residual_measurement_failure_count = 0;
