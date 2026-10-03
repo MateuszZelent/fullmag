@@ -259,6 +259,7 @@ require_file "${REPO_ROOT}/.fullmag/local/bin/fullmag-api-preparation-resource-p
 require_file "${REPO_ROOT}/.fullmag/local/bin/fullmag-api-preparation-retry"
 require_file "${REPO_ROOT}/.fullmag/local/lib/libfullmag_fdm.so.0"
 require_file "${REPO_ROOT}/.fullmag/local/web/index.html"
+require_file "${REPO_ROOT}/.fullmag/local/web/workspace/index.html"
 require_file "${REPO_ROOT}/.fullmag/local/python/bin/python"
 require_file "${REPO_ROOT}/packages/fullmag-py/src/fullmag/__init__.py"
 require_file "${REPO_ROOT}/examples/exchange_relax.py"

@@ -12,6 +12,18 @@ RUNTIME_FILES = (
     "scripts/resolve-pnpm-invocation.mjs",
 )
 
+EXPORT_ENTRYPOINTS = ("index.html", "workspace/index.html")
+
+
+def validate_export(destination: Path):
+    """Require the actual native launch route before modifying the package."""
+    for name in EXPORT_ENTRYPOINTS:
+        path = destination / name
+        if path.resolve(strict=True) != path or not path.is_file():
+            raise ValueError(f"Static UI entrypoint must be a regular file: {name}")
+        if path.stat().st_size == 0:
+            raise ValueError(f"Static UI entrypoint is empty: {name}")
+
 
 def stage_runtime(source: Path, destination: Path):
     source = source.resolve(strict=True)
@@ -20,6 +32,7 @@ def stage_runtime(source: Path, destination: Path):
         raise ValueError("Runtime source and destination must be directories")
     if source == destination or source in destination.parents or destination in source.parents:
         raise ValueError("Runtime source and destination must be separate trees")
+    validate_export(destination)
     pending = []
     for name in RUNTIME_FILES:
         origin = source / name

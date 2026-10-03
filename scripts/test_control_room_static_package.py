@@ -12,7 +12,7 @@ from urllib.request import urlopen
 
 import pytest
 
-from stage_control_room_static_runtime import RUNTIME_FILES, stage_runtime
+from stage_control_room_static_runtime import EXPORT_ENTRYPOINTS, RUNTIME_FILES, stage_runtime
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -20,12 +20,19 @@ SOURCE = ROOT / "apps/control-room"
 NODE = shutil.which("node")
 
 
+def write_export(web):
+    for name in EXPORT_ENTRYPOINTS:
+        target = web / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(f"<html>packaged UI fixture: {name}</html>", encoding="utf-8")
+
+
 def test_staged_package_serves_index_and_assets_without_source_tree(tmp_path):
     if not NODE:
         pytest.skip("Node is required for packaged runtime startup")
     web = tmp_path / "package with spaces" / "web"
     web.mkdir(parents=True)
-    (web / "index.html").write_text("<html>packaged UI fixture</html>", encoding="utf-8")
+    write_export(web)
     (web / "asset.txt").write_text("packaged asset", encoding="utf-8")
     inventory = stage_runtime(SOURCE, web)
     assert inventory == [
@@ -58,6 +65,10 @@ def test_staged_package_serves_index_and_assets_without_source_tree(tmp_path):
                     time.sleep(0.05)
             with urlopen(f"http://127.0.0.1:{port}/asset.txt", timeout=2) as response:
                 assert response.read() == b"packaged asset"
+            with urlopen(f"http://127.0.0.1:{port}/workspace?fullmag_api_instance=00000000-0000-4000-8000-000000000001", timeout=2) as response:
+                assert response.status == 200
+                assert "fullmag_api_instance=00000000-0000-4000-8000-000000000001" in response.geturl()
+                assert b"workspace/index.html" in response.read()
         finally:
             process.terminate()
             try:
@@ -73,6 +84,7 @@ def test_invalid_closure_is_rejected_before_any_copy(tmp_path, case):
     web = tmp_path / "web"
     source.mkdir()
     web.mkdir()
+    write_export(web)
     for name in RUNTIME_FILES:
         path = source / name
         path.parent.mkdir(exist_ok=True)
@@ -100,6 +112,23 @@ def test_overlapping_trees_are_rejected(tmp_path):
         stage_runtime(tmp_path, tmp_path)
 
 
+@pytest.mark.parametrize("case", ["missing", "empty", "directory"])
+def test_incomplete_workspace_export_is_rejected_before_runtime_copy(tmp_path, case):
+    web = tmp_path / "web"
+    write_export(web)
+    target = web / "workspace/index.html"
+    if case == "missing":
+        target.unlink()
+    elif case == "empty":
+        target.write_bytes(b"")
+    else:
+        target.unlink()
+        target.mkdir()
+    with pytest.raises((ValueError, FileNotFoundError)):
+        stage_runtime(SOURCE, web)
+    assert not (web / "dev-server.mjs").exists()
+
+
 def test_msi_production_staging_block_copies_complete_runtime(tmp_path):
     powershell = shutil.which("pwsh") or shutil.which("powershell")
     if not powershell:
@@ -108,6 +137,8 @@ def test_msi_production_staging_block_copies_complete_runtime(tmp_path):
     source = repo / "apps/control-room"
     (source / "out").mkdir(parents=True)
     (source / "out/index.html").write_text("fixture", encoding="utf-8")
+    (source / "out/workspace").mkdir()
+    (source / "out/workspace/index.html").write_text("workspace fixture", encoding="utf-8")
     for name in RUNTIME_FILES:
         target = source / name
         target.parent.mkdir(exist_ok=True)
@@ -135,5 +166,6 @@ Invoke-Expression $source.Substring($start, $end - $start)
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert (web / "index.html").read_text() == "fixture"
+    assert (web / "workspace/index.html").read_text() == "workspace fixture"
     for name in RUNTIME_FILES:
         assert (web / name).read_bytes() == (SOURCE / name).read_bytes()

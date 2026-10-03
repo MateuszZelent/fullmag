@@ -362,6 +362,7 @@ function Test-StagedLayout {
     (Join-Path $StageRoot "bin\fullmag-api-preparation-retry.exe"),
     (Join-Path $StageRoot "bin\fullmag-ui.exe"),
     (Join-Path $StageRoot "web\index.html"),
+    (Join-Path $StageRoot "web\workspace\index.html"),
     (Join-Path $StageRoot "web\dev-server.mjs"),
     (Join-Path $StageRoot "web\scripts\dev-server-public-origin.mjs"),
     (Join-Path $StageRoot "web\scripts\resolve-pnpm-invocation.mjs"),
@@ -707,6 +708,7 @@ try {
   }
 
   Require-File (Join-Path $RepoRoot "apps\control-room\out\index.html")
+  Require-File (Join-Path $RepoRoot "apps\control-room\out\workspace\index.html")
   Copy-Tree (Join-Path $RepoRoot "apps\control-room\out") $webDir
   & python (Join-Path $RepoRoot "scripts\stage_control_room_static_runtime.py") --source (Join-Path $RepoRoot "apps\control-room") --destination $webDir
   if ($LASTEXITCODE -ne 0) { throw "Static UI runtime staging failed with exit code $LASTEXITCODE" }

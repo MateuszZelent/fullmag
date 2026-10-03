@@ -419,3 +419,5 @@ Checkpoint P7-C: [24 — tożsamość procesu i HTTP fence](p8/24-api-instance-f
 Checkpoint P7-C: [25 — przypięcie native UI do API](p8/25-native-ui-instance-pinning.md).
 
 Checkpoint P8: [26 — lint i retencja mapy pola](p8/26-frontend-lint-and-frame-retention.md).
+
+Checkpoint P8-C: [27 — trasa workspace w pakiecie](p8/27-native-workspace-package.md).
