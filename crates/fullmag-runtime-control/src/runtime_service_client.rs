@@ -118,6 +118,81 @@ pub struct ApplicationRuntimeBinding {
     pub owner: Option<RuntimeServiceOwnerDescriptor>,
 }
 
+/// Verified startup input. Preparation does not start or replace any process.
+pub struct PreparedApplicationService {
+    pub api_instance_id: String,
+    pub config: RuntimeServiceConfig,
+}
+
+/// Initialize persisted resource offers for an installed native Windows package.
+/// This boundary is separate from ensure so authoring launchers can report
+/// unavailable computation without treating it as an invalid API instance.
+pub fn prepare_packaged_application_service(
+    repo_root: &Path,
+    state_root: &Path,
+    api_port: u16,
+) -> Result<PreparedApplicationService> {
+    let executable = std::env::current_exe().context("resolve application executable")?;
+    require_packaged_installation(&executable, repo_root)?;
+    let expected = crate::accepted_store::configured_submit_store_root(repo_root, state_root)
+        .context("canonical accepted run storage is not configured; initialization refused")?;
+    let api_instance_id = verify_api_store(api_port, &expected)?;
+    let config = prepare_application_config(
+        &expected,
+        std::env::var_os("FULLMAG_RUNTIME_SERVICE_CONFIG"),
+    )?;
+    if verify_api_store(api_port, &expected)? != api_instance_id {
+        bail!("API instance changed during resource initialization; service start refused");
+    }
+    Ok(PreparedApplicationService {
+        api_instance_id,
+        config,
+    })
+}
+
+fn require_packaged_installation(executable: &Path, repo_root: &Path) -> Result<()> {
+    let package = crate::python_runtime::packaged_windows_root(executable)
+        .context("default resource initialization requires an installed native Windows package")?;
+    if std::fs::canonicalize(&package)? != std::fs::canonicalize(repo_root)? {
+        bail!("application package differs from API installation; initialization refused");
+    }
+    Ok(())
+}
+
+fn prepare_application_config(
+    expected: &Path,
+    explicit_path: Option<std::ffi::OsString>,
+) -> Result<RuntimeServiceConfig> {
+    // An explicit operator configuration always takes precedence over sampling.
+    let config = match explicit_path {
+        Some(path) => {
+            let config = RuntimeServiceConfig::read(&std::path::PathBuf::from(path))?;
+            require_application_store(&config.store_root, expected)?;
+            crate::retry_store_writer_busy(|| {
+                fullmag_session::SessionStore::open(expected.to_path_buf())
+            })?;
+            config
+        }
+        None => {
+            let store = crate::retry_store_writer_busy(|| {
+                fullmag_session::SessionStore::open(expected.to_path_buf())
+            })?;
+            crate::retry_store_writer_busy(|| {
+                RuntimeServiceConfig::for_application(
+                    &store,
+                    crate::local_resources::APPLICATION_TARGET_ID,
+                    || {
+                        let capacity =
+                            crate::local_resources::LocalCpuCapacity::observe(store.root())?;
+                        crate::local_resources::application_service_config(store.root(), capacity)
+                    },
+                )
+            })?
+        }
+    };
+    Ok(config)
+}
+
 /// Initialize the canonical accepted store and ensure its explicitly configured service.
 /// An absent configuration still verifies the API without inventing resource offers.
 pub fn ensure_for_application(
@@ -134,13 +209,10 @@ pub fn ensure_for_application(
             owner: None,
         });
     };
-    let config_path = std::path::PathBuf::from(config_path);
-    let config = RuntimeServiceConfig::read(&config_path)?;
     let expected = crate::accepted_store::configured_submit_store_root(repo_root, state_root)
         .context("canonical accepted run storage is not configured; service start refused")?;
-    require_application_store(&config.store_root, &expected)?;
     let api_instance = verify_api_store(api_port, &expected)?;
-    crate::retry_store_writer_busy(|| fullmag_session::SessionStore::open(expected.clone()))?;
+    let config = prepare_application_config(&expected, Some(config_path))?;
     let owner = ensure_config(config)?;
     // Service startup may be long; recheck the API immediately before returning.
     if verify_api_store(api_port, &expected)? != api_instance {
@@ -504,6 +576,48 @@ fn ensure_config(config: RuntimeServiceConfig) -> Result<RuntimeServiceOwnerDesc
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn default_preparation_reuses_the_persisted_resource_snapshot() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = fullmag_session::SessionStore::open(directory.path().join("accepted")).unwrap();
+        let capacity = crate::local_resources::LocalCpuCapacity {
+            cpu_millis: 8000,
+            memory_available_bytes: 1024 * 1024 * 1024,
+            storage_available_bytes: 4 * 1024 * 1024 * 1024,
+        };
+        let expected = RuntimeServiceConfig::for_application(
+            &store,
+            crate::local_resources::APPLICATION_TARGET_ID,
+            || crate::local_resources::application_service_config(store.root(), capacity),
+        )
+        .unwrap();
+        assert_eq!(
+            prepare_application_config(store.root(), None).unwrap(),
+            expected
+        );
+    }
+
+    #[test]
+    fn malformed_explicit_configuration_does_not_sample_or_create_store() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = directory.path().join("accepted");
+        let config = directory.path().join("invalid.json");
+        std::fs::write(&config, b"invalid").unwrap();
+        assert!(prepare_application_config(&store, Some(config.into_os_string())).is_err());
+        assert!(!store.exists());
+    }
+
+    #[test]
+    fn source_checkout_cannot_initialize_packaged_defaults() {
+        let directory = tempfile::tempdir().unwrap();
+        assert!(require_packaged_installation(
+            &directory.path().join("target/debug/fullmag.exe"),
+            directory.path(),
+        )
+        .is_err());
+        assert!(!directory.path().join("target").exists());
+    }
+
     #[test]
     fn api_instance_header_requires_one_canonical_nonzero_uuid() {
         let id = "12345678-1234-4234-8234-123456789abc";

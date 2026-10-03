@@ -181,6 +181,16 @@ pozostaje bez pasującej oferty. Konfiguracja wymaga canonical accepted store
 i stabilnej publikacji przez `for_application` przy przyszłej integracji startu.
 Sam generator nie uruchamia usługi ani nie kwalifikuje lane'u.
 
+`prepare_packaged_application_service` wymaga zgodności rozpoznanego native
+Windows installation root z rootem API. Przed otwarciem accepted store
+sprawdza build/kontrakt/binding i UUID API, następnie przygotowuje jawny config
+lub persisted domyślne oferty, a na końcu ponownie sprawdza UUID. Explicit
+config ma pierwszeństwo i nie pozwala na fallback do generatora przy błędzie.
+Wynik jest obserwacją z konfiguracją, nie ready ani lease API. Metoda nie
+startuje procesu; launcher musi sprawdzić API również po ensure. Domyślne
+uruchomienie UI pozostaje niepodłączone do tej metody do czasu jawnego
+resource statusu usługi i obsługi niedostępności bez blokowania authoringu.
+
 ### Artefakty i kwalifikacja
 
 Operational lock/descriptor/logs nie zawierają korzeni naukowych CAS i nie są
