@@ -1409,6 +1409,50 @@ def _attest_slepc_runtime(
     native_identity: Mapping[str, Any],
     runtime_contract: Mapping[str, Any],
 ) -> None:
+    if runtime_contract.get("schema") != "fullmag.fem.cpu.slepc_runtime_contract.v2":
+        return _attest_slepc_runtime_in_process(
+            workspace, artifacts, environment, native_identity, runtime_contract
+        )
+    # glibc captures LD_LIBRARY_PATH at process startup. A later os.environ
+    # assignment cannot make the image-owned CPU stack visible to ctypes.
+    child_environment = dict(environment)
+    library_paths = [str(workspace / ".fullmag" / "local" / "lib")]
+    if child_environment.get("LD_LIBRARY_PATH"):
+        library_paths.append(child_environment["LD_LIBRARY_PATH"])
+    child_environment["LD_LIBRARY_PATH"] = os.pathsep.join(library_paths)
+    payload = {
+        "workspace": str(workspace), "artifacts": str(artifacts),
+        "native_identity": native_identity, "runtime_contract": runtime_contract,
+    }
+    command = [sys.executable, str(Path(__file__).resolve()), "--attest-slepc-runtime"]
+    try:
+        result = subprocess.run(
+            command, cwd=str(workspace), env=child_environment, input=json.dumps(payload),
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False,
+            timeout=SLEPC_PROBE_TIMEOUT_SECONDS + 120,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        for name in ("stdout", "stderr"):
+            data, _, _ = _bounded_probe_output(getattr(error, name, None))
+            _write_probe_log(artifacts / "logs" / f"slepc-runtime-attestation.{name}.log", data)
+        raise BuildEntryPointError(f"SLEPc runtime attestation subprocess unavailable: {error}") from error
+    for name, output in (("stdout", result.stdout), ("stderr", result.stderr)):
+        data, _, _ = _bounded_probe_output(output)
+        _write_probe_log(artifacts / "logs" / f"slepc-runtime-attestation.{name}.log", data)
+    if result.returncode != 0:
+        details = (result.stderr or "").strip()[-MAX_ERROR_LENGTH:]
+        raise BuildEntryPointError(
+            f"SLEPc runtime attestation subprocess exited {result.returncode}: {details}"
+        )
+
+
+def _attest_slepc_runtime_in_process(
+    workspace: Path,
+    artifacts: Path,
+    environment: Mapping[str, str],
+    native_identity: Mapping[str, Any],
+    runtime_contract: Mapping[str, Any],
+) -> None:
     """Run production-only probes against the built CPU/SLEPc runtime.
 
     This is deliberately a post-build probe, not a CTest or contract-target
@@ -1866,7 +1910,31 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = _parse_args(argv)
+    arguments = sys.argv[1:] if argv is None else argv
+    if arguments == ["--attest-slepc-runtime"]:
+        # This internal command is selected only by the trusted entrypoint.
+        # It runs the unchanged attestation gates with the loader environment
+        # supplied at exec time, never a command supplied by a build request.
+        try:
+            payload = json.loads(sys.stdin.read(MAX_CONTEXT_BYTES + 1))
+            if (not isinstance(payload, dict)
+                    or set(payload) != {"workspace", "artifacts", "native_identity", "runtime_contract"}
+                    or not isinstance(payload["workspace"], str)
+                    or not isinstance(payload["artifacts"], str)
+                    or not isinstance(payload["native_identity"], dict)
+                    or not isinstance(payload["runtime_contract"], dict)
+                    or payload["runtime_contract"].get("schema")
+                    != "fullmag.fem.cpu.slepc_runtime_contract.v2"):
+                raise BuildEntryPointError("invalid CPU runtime attestation input")
+            _attest_slepc_runtime_in_process(
+                Path(payload["workspace"]), Path(payload["artifacts"]), dict(os.environ),
+                payload["native_identity"], payload["runtime_contract"],
+            )
+            return 0
+        except (BuildEntryPointError, OSError, ValueError, KeyError, TypeError, RuntimeError) as error:
+            print(f"build-entrypoint: {_error_text(error)}", file=sys.stderr)
+            return 2
+    args = _parse_args(arguments)
     profile = profile_for(args.profile)
     job_id = _validate_job_id(args.job_id)
     source_digest = _validate_digest(args.source_digest, "source_digest")

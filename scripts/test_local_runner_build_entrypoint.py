@@ -803,6 +803,70 @@ class BuildEntryPointTests(unittest.TestCase):
             "",
         )
 
+    def test_cpu_attestation_uses_library_path_at_process_start(self) -> None:
+        environment = {"LD_LIBRARY_PATH": "/opt/fullmag-mfem-cpu/lib"}
+        result = entrypoint.subprocess.CompletedProcess([], 0, "", "")
+        with patch.object(entrypoint.subprocess, "run", return_value=result) as run, \
+             patch.object(entrypoint.ctypes, "CDLL", side_effect=AssertionError("parent loader must not load FEM")):
+            entrypoint._attest_slepc_runtime(
+                self.workspace, self.artifacts, environment, self._identity(),
+                entrypoint._runtime_contract(entrypoint.profile_for("fem-cpu-slepc-runtime-v2")))
+        command = run.call_args.args[0]
+        self.assertEqual(command[-1], "--attest-slepc-runtime")
+        child_env = run.call_args.kwargs["env"]
+        self.assertEqual(child_env["LD_LIBRARY_PATH"].split(entrypoint.os.pathsep),
+                         [str(self.workspace / ".fullmag/local/lib"), "/opt/fullmag-mfem-cpu/lib"])
+        self.assertEqual(environment, {"LD_LIBRARY_PATH": "/opt/fullmag-mfem-cpu/lib"})
+        payload = json.loads(run.call_args.kwargs["input"])
+        self.assertEqual(payload["native_identity"], self._identity())
+        self.assertEqual(payload["runtime_contract"]["schema"], "fullmag.fem.cpu.slepc_runtime_contract.v2")
+
+    def test_cpu_attestation_propagates_child_linkage_failure(self) -> None:
+        result = entrypoint.subprocess.CompletedProcess([], 2, "", "libmfem.so.4.10.0 unavailable")
+        with patch.object(entrypoint.subprocess, "run", return_value=result):
+            with self.assertRaisesRegex(entrypoint.BuildEntryPointError, "libmfem.so.4.10.0"):
+                entrypoint._attest_slepc_runtime(
+                    self.workspace, self.artifacts, {"LD_LIBRARY_PATH": "/opt/fullmag-mfem-cpu/lib"},
+                    self._identity(), entrypoint._runtime_contract(entrypoint.profile_for("fem-cpu-slepc-runtime-v2")))
+
+    def test_cpu_attestation_child_runs_original_gates_with_startup_environment(self) -> None:
+        import io
+        payload = {"workspace": str(self.workspace), "artifacts": str(self.artifacts),
+                   "native_identity": self._identity(), "runtime_contract":
+                   entrypoint._runtime_contract(entrypoint.profile_for("fem-cpu-slepc-runtime-v2"))}
+        environment = {"LD_LIBRARY_PATH": "/opt/fullmag-mfem-cpu/lib"}
+        with patch.object(entrypoint.sys, "stdin", io.StringIO(json.dumps(payload))), \
+             patch.dict(entrypoint.os.environ, environment, clear=True), \
+             patch.object(entrypoint, "_attest_slepc_runtime_in_process") as query:
+            self.assertEqual(entrypoint.main(["--attest-slepc-runtime"]), 0)
+        query.assert_called_once_with(self.workspace, self.artifacts, environment,
+                                      self._identity(), payload["runtime_contract"])
+        with patch.object(entrypoint.sys, "stdin", io.StringIO(json.dumps(payload))), \
+             patch.object(entrypoint.sys, "stderr", io.StringIO()) as stderr, \
+             patch.object(entrypoint, "_attest_slepc_runtime_in_process",
+                          side_effect=entrypoint.BuildEntryPointError("MFEM version mismatch")):
+            self.assertEqual(entrypoint.main(["--attest-slepc-runtime"]), 2)
+            self.assertIn("MFEM version mismatch", stderr.getvalue())
+        payload["runtime_contract"]["schema"] = "legacy"
+        with patch.object(entrypoint.sys, "stdin", io.StringIO(json.dumps(payload))), \
+             patch.object(entrypoint.sys, "stderr", io.StringIO()), \
+             patch.object(entrypoint, "_attest_slepc_runtime_in_process") as query:
+            self.assertEqual(entrypoint.main(["--attest-slepc-runtime"]), 2)
+            query.assert_not_called()
+
+    def test_cpu_attestation_timeout_retains_partial_logs(self) -> None:
+        error = entrypoint.subprocess.TimeoutExpired("query", 240,
+                                                     output=b"partial output", stderr=b"partial error")
+        with patch.object(entrypoint.subprocess, "run", side_effect=error):
+            with self.assertRaisesRegex(entrypoint.BuildEntryPointError, "subprocess unavailable"):
+                entrypoint._attest_slepc_runtime(
+                    self.workspace, self.artifacts, {"LD_LIBRARY_PATH": "/opt/fullmag-mfem-cpu/lib"},
+                    self._identity(), entrypoint._runtime_contract(entrypoint.profile_for("fem-cpu-slepc-runtime-v2")))
+        self.assertEqual((self.artifacts / "logs/slepc-runtime-attestation.stdout.log").read_bytes(),
+                         b"partial output")
+        self.assertEqual((self.artifacts / "logs/slepc-runtime-attestation.stderr.log").read_bytes(),
+                         b"partial error")
+
     def test_cpu_modal_attestation_never_preloads_a_cuda_driver(self) -> None:
         with patch.object(entrypoint, "_cuda_driver_compatibility_paths") as paths, \
              patch.object(entrypoint, "_preload_cuda_driver_compatibility_libraries") as preload:
