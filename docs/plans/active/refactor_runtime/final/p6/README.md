@@ -298,3 +298,6 @@ pamięci i wszystkich lane'ów pozostają otwarte. P6 wynosi **52%**.
 72. [Zatwierdzone usunięcie cache](72-approved-cache-cleanup.md)
     — usunięto 44 dokładne katalogi, zachowano 349 plików dowodowych;
     runner raportuje 16,61 GiB wolnego i aktywny wcześniejszy build 196.
+
+75. [Trwały skalar przez API](75-durable-scalar-api.md) — przypięty odczyt CAS,
+    istniejący decoder i dokładne liczniki; build/transport/UI NOT VERIFIED.

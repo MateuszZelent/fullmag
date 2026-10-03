@@ -4,6 +4,46 @@ use utoipa::{IntoParams, ToSchema};
 
 pub const SOLUTION_RESOURCE_SCHEMA: &str = "fullmag.analysis.solution_revision.v1";
 
+/// One verified scalar payload, independent of the active session.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct SolutionScalarResource {
+    pub schema_version: String,
+    pub project_id: String,
+    pub run_id: String,
+    pub solution_set_id: String,
+    pub revision: String,
+    pub manifest_digest: String,
+    pub member_id: String,
+    pub task_id: String,
+    pub attempt_id: String,
+    pub ownership_epoch: String,
+    pub artifact_id: String,
+    pub object_ref: String,
+    pub byte_length: String,
+    pub quantity_id: String,
+    pub unit: String,
+    pub value_si: f64,
+    /// Canonical decimal u64, preserved without browser rounding.
+    pub step: String,
+    pub time_s: f64,
+    pub integrity: SolutionScalarIntegrityResource,
+    pub manifest_state: SolutionSetManifestStateResource,
+    pub execution_status: SolutionExecutionStatusResource,
+    pub member_execution_status: SolutionExecutionStatusResource,
+    pub scientific_assessment: SolutionScientificAssessmentResource,
+    pub member_scientific_assessment: SolutionScientificAssessmentResource,
+    pub provenance: SolutionProvenanceResource,
+    /// Preserved from the artifact; never inferred from scalar step/time.
+    pub accepted_state: Option<SolutionAcceptedStateIdResource>,
+}
+
+/// CAS verification does not certify the scientific result.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SolutionScalarIntegrityResource {
+    Verified,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SolutionSetManifestStateResource {

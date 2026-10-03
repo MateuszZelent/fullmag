@@ -1,5 +1,11 @@
 # Status realizacji całego planu refaktoryzacji
 
+Checkpoint P6-75, 03.10.2026: dodano backend przypiętego odczytu skalara
+SolutionSet przez CAS i kanoniczny dekoder aplikacji. Rejestracja OpenAPI
+obejmuje dokładne liczniki i niezależny status naukowy. Źródła nie są
+dowodem uruchomionej trasy: build, generated transport i UI NOT VERIFIED.
+[Zakres i dalsze bramki](p6/75-durable-scalar-api.md). Procenty bez awansu.
+
 Checkpoint 03.10.2026: build 212 succeeded/exit 0, 122 hashes i 291 673 111 B
 PASS na historycznym commicie 75ab6fe. Aktualny pakiet wymaga nowszego
 fullmag-runtime-service, którego 212 nie zawiera. Nowy API statusu zapisano

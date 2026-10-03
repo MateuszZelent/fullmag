@@ -1,6 +1,8 @@
 //! Read-only project-owned historical results, independent of active runtime.
 
 pub mod saved_geometry;
+pub mod scalar;
+pub use scalar::get_solution_scalar;
 pub use saved_geometry::{
     get_saved_field_geometry, get_saved_field_geometry_support,
     get_saved_field_geometry_topology,

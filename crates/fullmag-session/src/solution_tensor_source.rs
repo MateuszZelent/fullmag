@@ -9,7 +9,6 @@ use fullmag_quantities::{
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
-use std::io::Read;
 
 pub const SOLUTION_TENSOR_SCHEMA: &str = "fullmag.tensor.v1";
 pub const MAX_SOLUTION_TENSOR_METADATA_BYTES: u64 = 4 * 1024 * 1024;
@@ -129,25 +128,23 @@ pub(crate) fn verify_solution_tensor_run_owner(
     Ok(())
 }
 
-fn read_solution_run_owner(
+pub(crate) fn read_solution_run_owner(
     root: &std::path::Path,
     run_id: &str,
     run_spec_digest: &str,
 ) -> Result<FmsRunIntent> {
     crate::repository_path::validate_store_id(run_id)?;
     if !fullmag_quantities::is_canonical_sha256(run_spec_digest) {
-        bail!("solution tensor requires a canonical RunSpec owner digest");
+        bail!("solution artifact requires a canonical RunSpec owner digest");
     }
-    let path =
-        crate::repository_path::checked_path(root, &format!("runs/{run_id}/run_intent.json"))?;
-    let mut bytes = Vec::new();
-    std::fs::File::open(&path)
-        .context("solution tensor run intent is missing")?
-        .take(MAX_RUN_INTENT_BYTES + 1)
-        .read_to_end(&mut bytes)?;
-    if bytes.len() as u64 > MAX_RUN_INTENT_BYTES {
-        bail!("solution tensor run intent exceeds metadata budget");
-    }
+    let maximum = usize::try_from(MAX_RUN_INTENT_BYTES)
+        .context("solution tensor run-intent budget exceeds platform limits")?;
+    let bytes = crate::repository_path::read_bounded_regular_file(
+        root,
+        &format!("runs/{run_id}/run_intent.json"),
+        maximum,
+    )
+    .context("solution run intent is missing or exceeds metadata budget")?;
     let intent: FmsRunIntent = serde_json::from_slice(&bytes)?;
     intent.validate()?;
     if intent.run_id != run_id || format!("sha256:{}", intent.payload_sha256) != run_spec_digest {

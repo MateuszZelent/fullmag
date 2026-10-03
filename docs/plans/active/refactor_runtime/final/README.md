@@ -439,3 +439,5 @@ Checkpoint P8-C: [34 — import OpenAPI z przypiętego buildu](p8/34-managed-ope
 Checkpoint P8-C: [35 — regresja polecenia importu kontraktu](p8/35-managed-openapi-import-regression.md).
 
 Checkpoint P8-C: [36 — historyczny build i pauza runnera](p8/36-historical-build-and-runner-pause.md).
+
+Checkpoint P6-C/D: [75 — trwały skalar przez API](p6/75-durable-scalar-api.md).

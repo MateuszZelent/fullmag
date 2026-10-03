@@ -1192,3 +1192,24 @@ FMMT jest projekcją MeshIR, bez pełnej semantyki periodic pairs. Nie wolno
 oraz `representation_evidence=not_verified` pozostają jawne. Kontrakt,
 ograniczenia cold decode i wymagane dalsze bramki opisuje
 [ADR 0041](../adr/0041-saved-field-geometry-root.md#transport-przypiętej-geometrii).
+
+### Trwały skalar SolutionSet
+
+`GET /v2/persistence/projects/{project_id}/runs/{run_id}/solution-sets/{solution_set_id}/revisions/{revision}/members/{member_id}/artifacts/{artifact_id}/scalar`
+zwraca `SolutionScalarResource` (`fullmag.analysis.solution_scalar.v1`).
+Projekt jest sprawdzany przez niezmienny RunSpec; run, rewizja, member i
+artefakt przez zapisany SolutionSet. Odczyt akceptuje wyłącznie Table o
+schemacie artefaktu `fullmag.study.scalar_json@v1` (payload `study_scalar.v1`), kontroluje CAS SHA-256, dokładną długość i
+limit 64 KiB przed dekodowaniem. Kanoniczny dekoder aplikacji zachowuje
+quantity_id, unit, value_si, step i time_s; step oraz revision są decimal
+u64 strings. Aktywna sesja nie jest źródłem tego odczytu.
+
+Odpowiedź zachowuje osobno stany wykonania i oceny naukowe SolutionSet
+oraz member, provenance i oryginalny accepted_state. Poprawny hash nie
+ustanawia akceptowanego stanu ani kwalifikacji naukowej. Brak właściciela
+lub artefaktu daje 404, obcy projekt/run lub inny rodzaj/schema 409,
+uszkodzony CAS albo niepoprawny scalar 500.
+
+Status implementacji: backend source i rejestracja OpenAPI. Managed export,
+generated transport, facade/hook i UI pozostają NOT VERIFIED; nie edytujemy
+ręcznie wygenerowanego kontraktu przed odbiorem buildu.
