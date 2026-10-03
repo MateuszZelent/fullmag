@@ -979,6 +979,9 @@ export class ControlRoomApiError extends Error {
 }
 
 export class ControlRoomApi {
+  /** Unique cache namespace for this API client instance. */
+  readonly resourceCacheScope = createRequestId();
+
   private readonly expectedApiInstance: string | null;
   private apiInstanceMismatch = false;
   private readonly baseUrl: string;

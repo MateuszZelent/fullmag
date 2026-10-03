@@ -29,7 +29,7 @@ afterEach(() => {
 });
 
 describe("WorkspaceShellClient session collection gate", () => {
-  it("keeps the AppMenu slot and EmptyWorkspace after a confirmed empty response", async () => {
+  it("keeps the AppMenu slot and StartScreen after a confirmed empty response", async () => {
     const list = vi.fn(async () => ({ schema_version: "2.0.0", sessions: [] }));
     const currentStatus = vi.fn();
     const { container, dispose } = await mountWorkspace(makeKernel(list, currentStatus));
@@ -37,7 +37,7 @@ describe("WorkspaceShellClient session collection gate", () => {
     try {
       await settle();
       expect(findByAttribute(container, "data-slot-id", "app-menu")).toBeTruthy();
-      expect(container.textContent).toContain("Create a simulation");
+      expect(container.textContent).toContain("Create or open");
       expect(findByAttribute(container, "data-state", "no-session")).toBeTruthy();
       expect(currentStatus).not.toHaveBeenCalled();
     } finally {
@@ -55,7 +55,7 @@ describe("WorkspaceShellClient session collection gate", () => {
     try {
       expect(findByAttribute(container, "data-state", "session-loading")).toBeTruthy();
       expect(container.textContent).toContain("Checking for sessions");
-      expect(container.textContent).not.toContain("Create a simulation");
+      expect(container.textContent).not.toContain("Create or open");
       expect(currentStatus).not.toHaveBeenCalled();
     } finally {
       await dispose();
@@ -72,8 +72,8 @@ describe("WorkspaceShellClient session collection gate", () => {
       await settle();
       expect(findByAttribute(container, "data-state", "session-error")).toBeTruthy();
       expect(container.textContent).toContain("Session list unavailable");
-      expect(container.textContent).toContain("Create a simulation");
-      expect(container.textContent).toContain("New project");
+      expect(container.textContent).toContain("Create or open");
+      expect(container.textContent).toContain("New simulation");
       expect(container.textContent).toContain("Open project");
       expect(container.textContent).toContain("Project files remain available independently");
       expect(currentStatus).not.toHaveBeenCalled();

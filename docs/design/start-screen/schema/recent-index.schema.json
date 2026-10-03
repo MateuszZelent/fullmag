@@ -65,7 +65,11 @@
         "last_opened_at": { "type": "string", "format": "date-time" },
         "created_at": { "type": "string", "format": "date-time" },
         "modified_at": { "type": "string", "format": "date-time" },
-        "size_bytes": { "type": "integer", "minimum": 0 },
+        "size_bytes": {
+          "description": "Total on disk: the .fms archive plus its results directory. The archive alone is capped at 64 MB by the host (MAX_PROJECT_ARCHIVE_BYTES), so a multi-gigabyte figure here is almost entirely results. Computed by the scanner; summary.output_bytes carries the results directory on its own.",
+          "type": "integer",
+          "minimum": 0
+        },
         "revision": {
           "description": "Mirrors ProjectDocumentResource.revision at the time of the last close.",
           "type": "integer",

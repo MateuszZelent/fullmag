@@ -245,7 +245,7 @@ into a **Pinned** group above Today.
 | 2 | name + path | 13 px / 500, path 10 px mono, ellipsised **from the left** so the file name survives |
 | 3 | solver badge | FDM blue, FEM mauve, always with the letters |
 | 4 | status pill | dot + word; the dot pulses while running |
-| 5 | size | on disk, including results |
+| 5 | size | total on disk — archive **plus** results. The `.fms` itself is capped at 64 MB by the host, so a GB-scale figure is results. |
 | 6 | last opened | relative ("today 12:04", "2 Aug 2026") |
 | 7 | pin | appears on hover, persists when pinned |
 
@@ -286,6 +286,9 @@ Anatomy: `diagrams/05-inspector-anatomy.svg`.
 frame scrubber, so a 400-frame run can be skimmed without opening the project.
 Projects with no run show a generated geometry render; projects with neither
 show a muted placeholder, never a broken image.
+
+Thumbnails are stored inside the archive, which the host caps at 64 MB, so they
+carry a size budget: target ≤ 200 kB, hard-fail above 1 MB.
 
 The preview keeps `--fm-bg-viewport` as its background in **both** themes. A
 render is data; re-tinting it for the light theme would misrepresent it.

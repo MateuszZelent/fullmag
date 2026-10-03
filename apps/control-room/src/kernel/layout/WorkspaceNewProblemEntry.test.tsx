@@ -106,10 +106,14 @@ describe("confirmed-empty New Problem entry wiring", () => {
     const mounted = await mountConfirmedEmptyWorkspace();
     try {
       await settle();
-      expect(mounted.container.textContent).toContain("Create a simulation");
-      expect(findButton(mounted.body, "New project").disabled).toBe(true);
-      expect(findButton(mounted.body, "Open project").disabled).toBe(true);
-      expect(findButton(mounted.body, "Save project").disabled).toBe(true);
+      expect(mounted.container.textContent).toContain("Create or open");
+      expect(
+        findElement(
+          mounted.body,
+          (element) => element.tagName === "BUTTON" && element.textContent.includes("Open project"),
+          "Open project tile",
+        ).disabled,
+      ).toBe(true);
       expect(mounted.body.textContent).toContain("File");
       expect(findDialogs(mounted.body)).toHaveLength(0);
 

@@ -1,0 +1,9 @@
+/* Start screen — behaviour that cannot be expressed as utilities. */
+@keyframes fm-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-fm-pulse] { animation: none !important; }
+}

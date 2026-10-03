@@ -6,7 +6,7 @@ import {
 } from "./SimulationStartupOverlay";
 import { useSessionCollection } from "../resources/useSessionCollection";
 import { useSessionResourceIdentity } from "../resources/useSessionStatus";
-import { EmptyWorkspace } from "./EmptyWorkspace";
+import { StartScreen } from "@/modules/start/StartScreen";
 import { Button } from "@/shared/ui/Button";
 import { WorkspaceRenderProfiler } from "../performance/reactRenderProfiler";
 import { SlotHost } from "./SlotHost";
@@ -30,7 +30,7 @@ export function WorkspaceShellClient() {
     <>
       <SlotHost slotId="app-menu" />
       {sessionState === "no-session" ? (
-        <EmptyWorkspace />
+        <StartScreen />
       ) : sessionState === "error" ? (
         <SessionCollectionError onRetry={sessions.resource.refetch} />
       ) : (
@@ -114,7 +114,7 @@ function SessionCollectionError({ onRetry }: { readonly onRetry: () => void }) {
           <Button type="button" onClick={onRetry}>Retry</Button>
         </div>
       </section>
-      <EmptyWorkspace />
+      <StartScreen />
     </div>
   );
 }
