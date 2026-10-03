@@ -1182,10 +1182,14 @@ def compose_command(context, output, timeout_seconds=managed.DEFAULT_TIMEOUT_SEC
           if frequency_window is not None else []),
         *(["export FULLMAG_FLOQUET_DENSE_ORACLE=1"] if dense_oracle else []),
         *(["export FULLMAG_DE_SMOKE_SOLVER_RTOL=" + solver_rtol] if solver_rtol else []),
-        *(["export FULLMAG_FLOQUET_EPS_PREFILTER_ABS=" + eps_prefilter] if eps_prefilter else []),
-        *(["export FULLMAG_FLOQUET_SHIFTED_KSP_RTOL=" + shifted_ksp_rtol] if shifted_ksp_rtol else []),
-        *(["export FULLMAG_FLOQUET_SHIFTED_KSP_TYPE=" + shifted_ksp_type] if shifted_ksp_type else []),
-        *(["export FULLMAG_FLOQUET_GMRES_RESTART=" + gmres_restart] if gmres_restart else []),
+        *(["export FULLMAG_MODAL_EPS_PREFILTER_ABS=" + eps_prefilter,
+           "export FULLMAG_FLOQUET_EPS_PREFILTER_ABS=" + eps_prefilter] if eps_prefilter else []),
+        *(["export FULLMAG_MODAL_SHIFTED_KSP_RTOL=" + shifted_ksp_rtol,
+           "export FULLMAG_FLOQUET_SHIFTED_KSP_RTOL=" + shifted_ksp_rtol] if shifted_ksp_rtol else []),
+        *(["export FULLMAG_MODAL_SHIFTED_KSP_TYPE=" + shifted_ksp_type,
+           "export FULLMAG_FLOQUET_SHIFTED_KSP_TYPE=" + shifted_ksp_type] if shifted_ksp_type else []),
+        *(["export FULLMAG_MODAL_GMRES_RESTART=" + gmres_restart,
+           "export FULLMAG_FLOQUET_GMRES_RESTART=" + gmres_restart] if gmres_restart else []),
         *(["export FULLMAG_FLOQUET_SCHUR_ACTION_DIAGNOSTIC=1"]
            if schur_action_diagnostic else []),
         *(["export FULLMAG_DE_SMOKE_MESH_LEVEL=" + mesh_level] if mesh_level else []),
@@ -1687,6 +1691,26 @@ def validate_thickness_layers_metadata(case, requested):
             "qualification": "NOT VERIFIED"}
 
 
+def _modal_krylov_environment(command):
+    """Record requested exports; native queries independently prove resolution."""
+    allowed = {
+        "FULLMAG_MODAL_EPS_PREFILTER_ABS": EPS_PREFILTER_CHOICES,
+        "FULLMAG_MODAL_SHIFTED_KSP_RTOL": SHIFTED_KSP_RTOL_CHOICES,
+        "FULLMAG_MODAL_SHIFTED_KSP_TYPE": SHIFTED_KSP_TYPE_CHOICES,
+        "FULLMAG_MODAL_GMRES_RESTART": GMRES_RESTART_CHOICES,
+    }
+    values = {}
+    for line in command[-1].splitlines():
+        if not line.startswith("export FULLMAG_MODAL_"):
+            continue
+        name, separator, value = line[len("export "):].partition("=")
+        if (not separator or name not in allowed or value not in allowed[name]
+                or (name in values and values[name] != value)):
+            raise managed.BenchmarkError("invalid common modal tuning export")
+        values[name] = value
+    return values
+
+
 def execute(context, output, command, model_sha, timeout_seconds=managed.DEFAULT_TIMEOUT_SECONDS, *, pilot="de100", model_identity=None, dense_oracle=False, solver_rtol=None, eps_prefilter=None, shifted_ksp_rtol=None, gmres_restart=None, mesh_level=None, thickness_layers=None, nearest_target_frequency_ghz=None, spectral_target=None, frequency_min_ghz=None, frequency_max_ghz=None, ui_enabled=False, capture_session=False, ui_frontend=None, ui_web_root=None, ui_host_port=UI_API_PORT, parallel_mode=None, probe_input_dir=None, schur_action_diagnostic=False, shifted_ksp_type=None):
     _validate_shifted_ksp_trial_request(pilot, shifted_ksp_type,
                                       nearest_target_frequency_ghz, spectral_target,
@@ -1707,6 +1731,7 @@ def execute(context, output, command, model_sha, timeout_seconds=managed.DEFAULT
                    orchestrator_sha256=managed._sha256_file(Path(__file__).resolve()))
     request["dense_oracle_diagnostic_requested"] = dense_oracle
     request["solver_rtol_sweep_requested"] = solver_rtol
+    request["modal_krylov_tuning_environment_requested"] = _modal_krylov_environment(command)
     request["eps_prefilter_diagnostic_requested"] = eps_prefilter
     request["shifted_ksp_rtol_diagnostic_requested"] = shifted_ksp_rtol
     request["shifted_ksp_type_diagnostic_requested"] = shifted_ksp_type

@@ -446,7 +446,8 @@
       "symbol": "finite_air_extension_does_not_change_magnetic_comparison",
       "responsibility": "Six regression cases for support-only comparison and malformed data rejection; unit-test compilation currently prohibited."
     },
-    {"id": "source-static-demag-replay-preimage", "path": "crates/fullmag-runner/src/fem/eigen_shared_domain.rs", "symbol": "shared_domain_static_demag_signature", "responsibility": "Exact persisted static-field subdigest with requested realization; independent numerical replay comparisons remain mandatory."}
+    {"id": "source-static-demag-replay-preimage", "path": "crates/fullmag-runner/src/fem/eigen_shared_domain.rs", "symbol": "shared_domain_static_demag_signature", "responsibility": "Exact persisted static-field subdigest with requested realization; independent numerical replay comparisons remain mandatory."},
+    {"id": "source-modal-krylov-tuning", "path": "backends/fem/cpu/frequency_domain/modal_krylov_tuning.hpp", "symbol": "resolve_modal_krylov_tuning", "responsibility": "Validate common diagnostic EPS/ST tuning while preserving adapter defaults and full residual acceptance."}
   ],
   "public_api": {
     "parameters": [

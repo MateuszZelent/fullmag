@@ -519,6 +519,67 @@ model referencyjny, ale faktycznie wykonała produkcyjny adapter CPU/GPU. Dzięk
 temu raport nie może oznaczyć produkcyjnego GPU jako `reference` ani rozjechać
 `solver_algorithm` względem `frequency_domain/manifest.v1.json`.
 
+<!-- common-modal-krylov-tuning -->
+### 3.1.1 Strojenie EPS i shift-invert na ścieżce zawierającej Γ
+
+Punkt Γ zachowuje okresowy operator K0 z pełnym dynamicznym demagiem; nie
+wolno sztucznie zastępować go małym niezerowym k. Strojenie kryłowowskie
+kontroluje koszt i zbieżność podproblemów, ale nie zmienia operatora,
+certyfikatu równowagi, normalizacji, doboru 16+34 shiftów ani końcowej bramki
+oryginalnego residualu. Wewnętrzna tolerancja EPS/KSP nie jest tą bramką.
+
+FEM CPU udostępnia następujące jawne, diagnostyczne parametry runtime dla
+obu adapterów: okresowego Schura K0 i niezerowego Floqueta. Nie dodają pól
+Python ani ProblemIR; pochodzą z kontrolowanej konfiguracji uruchomienia.
+
+| Zmienna runtime | Typ / SI | Domyślna wartość przy braku override | Walidacja i znaczenie |
+| --- | --- | --- | --- |
+| `FULLMAG_MODAL_EPS_PREFILTER_ABS` | dodatni float / $1$ | dotychczasowy wzór właściwego adaptera; K0: budżet 1e-3 residual tolerance z clamp 1e-12–1e-8 | dokładny token od `1e-6` do `1e-13`; wewnętrzne kryterium EPS |
+| `FULLMAG_MODAL_SHIFTED_KSP_RTOL` | dodatni float / $1$ | dotychczasowy wzór właściwego adaptera; K0: clamp 1e-13–1e-10 z 1e-3 tolerancji EPS | dokładny token od `1e-6` do `1e-13`; relative stopping kryterium ST KSP |
+| `FULLMAG_MODAL_SHIFTED_KSP_TYPE` | enum / $1$ | `gmres` | wyłącznie `gmres` lub `fgmres`; algorytm ST shift-invert |
+| `FULLMAG_MODAL_GMRES_RESTART` | dodatni int / $1$ | dotychczasowy restart adaptera; K0: min(split DOF,256) | 8,10,12,16,30; liczba kierunków, dodatkowo ograniczona wymiarem operatora K0 |
+
+Niepoprawne, puste lub sprzeczne wartości kończą się validation error.
+Historyczne `FULLMAG_FLOQUET_*` pozostają aliasami tylko w adapterze Floqueta;
+gdy alias i wspólny parametr są zadane jednocześnie, wymagają tych samych
+tokenów. Sam historyczny alias nie zmienia zachowania samodzielnego K0.
+Managed pilot zapisuje wspólne parametry i zgodne aliasy, aby zachować
+odtwarzalność dla starych kapsuł; stary build nie otrzymuje przez to
+nieistniejącej obsługi strojenia Γ. Receipt wiąże wersję binarium i requested
+tuning, a diagnostyka native opisuje rzeczywiście skonfigurowane EPS/KSP.
+
+Jawny dodatni `max_linear_iterations` jest górnym limitem KSP, nie dolnym
+progiem 1000; pominięty limit zachowuje dotychczasowy default. Oba jawne limity iteracji
+muszą mieścić się w używanym typie `PetscInt`, przed konfiguracją native. Dotyczy ST i
+pomocniczego KSP korekcji Ritz w K0. Wspólne override typu/restartu/rtol
+dotyczą ST; korekcja Ritz zachowuje swój dotychczasowy algorytm i wzór
+tolerancji. Pełny, nieprzeskalowany residual deskryptora nadal musi spełnić
+`residual_tolerance` z ProblemIR, także przy luźniejszym prefilterze.
+
+Zakres: FEM CPU. FEM GPU oraz FDM CPU/GPU mają oddzielne realizacje i nie
+uzyskują obsługi tych opcji ani kwalifikacji na podstawie tej poprawki.
+Publiczny Python→ProblemIR, wybór backendu i requested/resolved intent
+pozostają takie same. Dane strojenia są diagnostyką wykonania, nie częścią
+podpisu operatora fizycznego ani zamiennikiem source/build identity.
+
+Mapowanie źródeł: `backends/fem/cpu/frequency_domain/modal_krylov_tuning.hpp`
++ `resolve_modal_krylov_tuning`, Schur K0 w
+`poisson_airbox_schur_matshell.cpp` + `solve_poisson_airbox_modal_eigen_cpu_schur`,
+Floquet w `modal/floquet_modal_solver.cpp` + `solve_floquet_modal_sparse_spectrum`,
+oraz `scripts/run_de_100nm_pilot.py` + `compose_command`. Testy przygotowane
+w `backends/fem/tests/frequency_domain/poisson_airbox_schur_matshell_test.cpp`;
+interpretowane regresje managed drivera sprawdzają requested konfigurację.
+Kompilacja testów native jest zabroniona. Source checks i fixture nie
+dowodzą jeszcze query rzeczywistych opcji PETSc, czasu, zbieżności Γ,
+serial/adaptive parity ani kwalifikacji naukowej: wymagany nowy managed
+runtime-v2 oraz ten sam model, siatka, airbox i progi akceptacji.
+
+Podstawy implementacji: [PETSc KSPSetTolerances](https://petsc.org/release/manualpages/KSP/KSPSetTolerances/)
+określa `maxits` jako maksimum iteracji;
+[PETSc KSPFGMRES](https://petsc.org/release/manualpages/KSP/KSPFGMRES/)
+opisuje elastyczny GMRES i jego restart. Nie wyprowadzamy z dokumentacji
+biblioteki dowodu poprawności fizycznej modelu Fullmag.
+
 ### 3.2 GPU
 
 A GPU result can become production-capable only when the assembled blocks,
@@ -1101,6 +1162,7 @@ managed manifest, not these links alone.
 
 | Equation/claim | Lane | Repository path + stable symbol | Responsibility | Tests | Evidence status | Immutable link |
 |---|---|---|---|---|---|---|
+| Common modal Krylov tuning | FEM CPU | `backends/fem/cpu/frequency_domain/modal_krylov_tuning.hpp` + `resolve_modal_krylov_tuning` | Validate common runtime controls and adapter-specific legacy aliases | prepared native parser cases; interpreted pilot tests | source reviewed; managed native runtime NOT VERIFIED | new source; immutable commit link pending |
 | Physical sweep API | common | `packages/fullmag-py/src/fullmag/model/eigen.py` + `class BiasFieldSweep` | Validate SI samples and lower declared ordering/policies | `test_eigenmodes_bias_field_sweep_serializes_declared_si_samples` | source tested | [blob](https://github.com/MateuszZelent/fullmag/blob/fe73ad661c55cc490faf076eb88f9ba387a9ac01/packages/fullmag-py/src/fullmag/model/eigen.py) |
 | Stage-first modal authoring | common | `packages/fullmag-py/src/fullmag/world.py` + `eigenmodes_stage` | Lower the stage builder to public `Eigenmodes` | `test_study_stage_builder_bias_field_sweep_roundtrips_cpu_and_gpu_intent` | source tested | [blob](https://github.com/MateuszZelent/fullmag/blob/fe73ad661c55cc490faf076eb88f9ba387a9ac01/packages/fullmag-py/src/fullmag/world.py) |
 | User-authored relaxation stop | common | `packages/fullmag-py/src/fullmag/world.py` + `_resolve_flat_relax_stop` | Normalize authored `tolA`, `tolT` and energy tolerance into the canonical relaxation stop contract | focused Python relaxation serialization tests | source tested | [blob](https://github.com/MateuszZelent/fullmag/blob/fe73ad661c55cc490faf076eb88f9ba387a9ac01/packages/fullmag-py/src/fullmag/world.py) |

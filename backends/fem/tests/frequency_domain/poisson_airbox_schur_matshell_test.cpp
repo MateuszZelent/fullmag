@@ -5,6 +5,7 @@
 
 #include "cpu/frequency_domain/poisson_airbox_modal_eigen.hpp"
 #include "cpu/frequency_domain/poisson_airbox_schur_matshell.hpp"
+#include "cpu/frequency_domain/modal_krylov_tuning.hpp"
 #include "frequency_domain/dense_poisson_airbox_eigen_oracle.hpp"
 #include "frequency_domain/planner/frequency_solve_planner.hpp"
 
@@ -12,6 +13,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <vector>
 
 namespace fd = fullmag::fem::frequency_domain;
@@ -251,10 +253,254 @@ void RejectsInvalidGaugeWeightsBeforeSchurCertification()
         "PA-E3 invalid gauge-weight rejection must report positive normalized weights");
 }
 
+fd::ModalKrylovTuning default_modal_krylov_tuning()
+{
+    return fd::ModalKrylovTuning{2.5e-9, 3.5e-10, 22, "fgmres"};
+}
+
+fd::ModalKrylovTuningValues empty_modal_krylov_tuning_values()
+{
+    return fd::ModalKrylovTuningValues{nullptr, nullptr, nullptr, nullptr};
+}
+
+void check_modal_krylov_tuning(
+    const fd::ModalKrylovTuning &actual,
+    const fd::ModalKrylovTuning &expected,
+    const char *message)
+{
+    check(
+        actual.eps_prefilter_abs == expected.eps_prefilter_abs &&
+            actual.shifted_ksp_rtol == expected.shifted_ksp_rtol &&
+            actual.gmres_restart == expected.gmres_restart &&
+            actual.shifted_ksp_type != nullptr &&
+            expected.shifted_ksp_type != nullptr &&
+            std::strcmp(actual.shifted_ksp_type, expected.shifted_ksp_type) == 0,
+        message);
+}
+
+void ModalKrylovTuningPreservesDefaultsAndK0IgnoresAliases()
+{
+    fd::ModalKrylovTuning defaults = default_modal_krylov_tuning();
+    char default_type[] = "fgmres";
+    defaults.shifted_ksp_type = default_type;
+    const fd::ModalKrylovTuningValues empty = empty_modal_krylov_tuning_values();
+    fd::ModalKrylovTuning resolved{};
+
+    check(
+        fd::resolve_modal_krylov_tuning_values(
+            defaults,
+            empty,
+            empty,
+            false,
+            &resolved),
+        "empty modal tuning overrides must preserve defaults");
+    check_modal_krylov_tuning(
+        resolved,
+        default_modal_krylov_tuning(),
+        "empty modal tuning overrides changed defaults");
+    check(
+        resolved.shifted_ksp_type != default_type,
+        "resolved KSP type must use stable storage, not the caller token");
+
+    const fd::ModalKrylovTuningValues invalid_legacy{
+        "unsupported", "", "9", "cg"};
+    check(
+        fd::resolve_modal_krylov_tuning_values(
+            defaults,
+            empty,
+            invalid_legacy,
+            false,
+            &resolved),
+        "K0 must ignore legacy Floquet aliases");
+    check_modal_krylov_tuning(
+        resolved,
+        default_modal_krylov_tuning(),
+        "ignored K0 aliases changed defaults");
+}
+
+void ModalKrylovTuningAcceptsLegacyAliasesOnlyWhenEnabled()
+{
+    const fd::ModalKrylovTuning defaults = default_modal_krylov_tuning();
+    const fd::ModalKrylovTuningValues common = empty_modal_krylov_tuning_values();
+    const fd::ModalKrylovTuningValues legacy{
+        "1e-8", "1e-9", "10", "fgmres"};
+    const fd::ModalKrylovTuning expected{1.0e-8, 1.0e-9, 10, "fgmres"};
+    fd::ModalKrylovTuning resolved{};
+
+    check(
+        fd::resolve_modal_krylov_tuning_values(
+            defaults,
+            common,
+            legacy,
+            true,
+            &resolved),
+        "legacy Floquet-only values must be accepted when enabled");
+    check_modal_krylov_tuning(
+        resolved,
+        expected,
+        "legacy Floquet values did not override defaults");
+}
+
+void ModalKrylovTuningAcceptsCommonOverridesAndMatchingAliases()
+{
+    const fd::ModalKrylovTuning defaults = default_modal_krylov_tuning();
+    char common_type[] = "gmres";
+    const fd::ModalKrylovTuningValues common{
+        "1e-6", "1e-7", "30", common_type};
+    const fd::ModalKrylovTuning expected{1.0e-6, 1.0e-7, 30, "gmres"};
+    fd::ModalKrylovTuning resolved{};
+
+    check(
+        fd::resolve_modal_krylov_tuning_values(
+            defaults,
+            common,
+            empty_modal_krylov_tuning_values(),
+            false,
+            &resolved),
+        "common values must override K0 defaults");
+    check_modal_krylov_tuning(
+        resolved,
+        expected,
+        "common values did not override K0 defaults");
+    check(
+        resolved.shifted_ksp_type != common_type,
+        "resolved KSP type must not point into the input token");
+
+    check(
+        fd::resolve_modal_krylov_tuning_values(
+            defaults,
+            common,
+            common,
+            true,
+            &resolved),
+        "matching common and legacy tokens must be accepted");
+    check_modal_krylov_tuning(
+        resolved,
+        expected,
+        "matching common and legacy tokens changed the tuning");
+}
+
+void ModalKrylovTuningRejectsConflictingAliases()
+{
+    const fd::ModalKrylovTuning defaults = default_modal_krylov_tuning();
+    const fd::ModalKrylovTuningValues common{
+        "1e-6", nullptr, nullptr, nullptr};
+    const fd::ModalKrylovTuningValues legacy{
+        "1e-7", nullptr, nullptr, nullptr};
+    const fd::ModalKrylovTuning sentinel{1.0e-8, 1.0e-9, 16, "gmres"};
+    fd::ModalKrylovTuning resolved = sentinel;
+
+    check(
+        !fd::resolve_modal_krylov_tuning_values(
+            defaults,
+            common,
+            legacy,
+            true,
+            &resolved),
+        "conflicting primary and legacy tokens must fail");
+    check_modal_krylov_tuning(
+        resolved,
+        sentinel,
+        "a failed tuning resolution must not partially update output");
+}
+
+void ModalKrylovTuningRejectsMalformedValuesAndInvalidDefaults()
+{
+    const fd::ModalKrylovTuning defaults = default_modal_krylov_tuning();
+    const fd::ModalKrylovTuningValues empty = empty_modal_krylov_tuning_values();
+    const fd::ModalKrylovTuningValues malformed[] = {
+        {"", nullptr, nullptr, nullptr},
+        {"1e-5", nullptr, nullptr, nullptr},
+        {nullptr, "1e-09", nullptr, nullptr},
+        {nullptr, nullptr, "14", nullptr},
+        {nullptr, nullptr, nullptr, "GMRES"},
+    };
+    fd::ModalKrylovTuning resolved{};
+
+    for (const fd::ModalKrylovTuningValues &values : malformed) {
+        check(
+            !fd::resolve_modal_krylov_tuning_values(
+                defaults,
+                values,
+                empty,
+                false,
+                &resolved),
+            "empty or unsupported common tuning token must fail");
+    }
+    const fd::ModalKrylovTuningValues empty_legacy{
+        "", nullptr, nullptr, nullptr};
+    check(
+        !fd::resolve_modal_krylov_tuning_values(
+            defaults,
+            empty,
+            empty_legacy,
+            true,
+            &resolved),
+        "empty enabled legacy tuning token must fail");
+    check(
+        !fd::resolve_modal_krylov_tuning_values(
+            defaults,
+            empty,
+            empty,
+            false,
+            nullptr),
+        "null tuning output must fail");
+
+    fd::ModalKrylovTuning invalid_defaults = defaults;
+    invalid_defaults.eps_prefilter_abs = 0.0;
+    check(
+        !fd::resolve_modal_krylov_tuning_values(
+            invalid_defaults,
+            empty,
+            empty,
+            false,
+            &resolved),
+        "non-positive default EPS tolerance must fail");
+
+    invalid_defaults = defaults;
+    invalid_defaults.shifted_ksp_rtol =
+        std::numeric_limits<double>::infinity();
+    check(
+        !fd::resolve_modal_krylov_tuning_values(
+            invalid_defaults,
+            empty,
+            empty,
+            false,
+            &resolved),
+        "non-finite default KSP tolerance must fail");
+
+    invalid_defaults = defaults;
+    invalid_defaults.gmres_restart = 0;
+    check(
+        !fd::resolve_modal_krylov_tuning_values(
+            invalid_defaults,
+            empty,
+            empty,
+            false,
+            &resolved),
+        "non-positive default GMRES restart must fail");
+
+    invalid_defaults = defaults;
+    invalid_defaults.shifted_ksp_type = "cg";
+    check(
+        !fd::resolve_modal_krylov_tuning_values(
+            invalid_defaults,
+            empty,
+            empty,
+            false,
+            &resolved),
+        "unsupported default KSP type must fail");
+}
+
 } // namespace
 
 int main()
 {
+    ModalKrylovTuningPreservesDefaultsAndK0IgnoresAliases();
+    ModalKrylovTuningAcceptsLegacyAliasesOnlyWhenEnabled();
+    ModalKrylovTuningAcceptsCommonOverridesAndMatchingAliases();
+    ModalKrylovTuningRejectsConflictingAliases();
+    ModalKrylovTuningRejectsMalformedValuesAndInvalidDefaults();
     CertifiesSchurMatShellAgainstFullCoupledSparseReference();
     PlannerRequiresExplicitCertifiedSchurSelection();
     RejectsInvalidGaugeWeightsBeforeSchurCertification();

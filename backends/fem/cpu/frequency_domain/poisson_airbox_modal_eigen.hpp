@@ -280,6 +280,10 @@ struct PoissonAirboxModalEigenResult {
     // The Schur operator remains a MatShell.  This records only the bounded
     // shifted-system preconditioner selected for the outer SLEPc transform.
     char shifted_preconditioner_kind[64]{};
+    // Query-derived CPU EPS/ST configuration, outside the public C ABI.
+    // Empty JSON means unavailable; per-window copies retain each snapshot.
+    char configured_shifted_ksp_type[16]{};
+    char modal_krylov_tuning_json[512]{};
     char operator_context_scope[32]{};
     // Execution-only observability for the bounded shifted preconditioner.
     // These fields are intentionally outside the request ABI and do not enter

@@ -1,4 +1,5 @@
 #include "cpu/frequency_domain/modal/floquet_modal_solver.hpp"
+#include "cpu/frequency_domain/modal_krylov_tuning.hpp"
 #include "cpu/frequency_domain/operators/poisson_airbox_shared_domain.hpp"
 
 #include <algorithm>
@@ -1823,73 +1824,6 @@ bool floquet_dense_oracle_requested() noexcept
     return value != nullptr && std::strcmp(value, "1") == 0;
 }
 
-bool floquet_diagnostic_tolerance(
-    const char *environment_name,
-    PetscReal default_value,
-    PetscReal *out_value) noexcept
-{
-    if (out_value == nullptr) {
-        return false;
-    }
-    const char *value = std::getenv(environment_name);
-    if (value == nullptr) {
-        *out_value = default_value;
-        return true;
-    }
-    constexpr const char *choices[] = {
-        "1e-6", "1e-7", "1e-8", "1e-9", "1e-10", "1e-11", "1e-12", "1e-13"};
-    constexpr PetscReal tolerances[] = {
-        1.0e-6, 1.0e-7, 1.0e-8, 1.0e-9,
-        1.0e-10, 1.0e-11, 1.0e-12, 1.0e-13};
-    for (std::size_t index = 0;
-         index < sizeof(choices) / sizeof(choices[0]); ++index) {
-        if (std::strcmp(value, choices[index]) == 0) {
-            *out_value = tolerances[index];
-            return true;
-        }
-    }
-    return false;
-}
-
-bool floquet_diagnostic_shifted_ksp_type(const char **out_value) noexcept
-{
-    if (out_value == nullptr) {
-        return false;
-    }
-    const char *value = std::getenv("FULLMAG_FLOQUET_SHIFTED_KSP_TYPE");
-    if (value == nullptr || std::strcmp(value, KSPGMRES) == 0) {
-        *out_value = KSPGMRES;
-        return true;
-    }
-    if (std::strcmp(value, KSPFGMRES) == 0) {
-        *out_value = KSPFGMRES;
-        return true;
-    }
-    return false;
-}
-
-bool floquet_diagnostic_gmres_restart(PetscInt *out_value) noexcept
-{
-    if (out_value == nullptr) {
-        return false;
-    }
-    const char *value = std::getenv("FULLMAG_FLOQUET_GMRES_RESTART");
-    if (value == nullptr) {
-        *out_value = kFloquetShiftedGmresDefaultRestart;
-        return true;
-    }
-    constexpr const char *choices[] = {"8", "10", "12", "16", "30"};
-    constexpr PetscInt restarts[] = {8, 10, 12, 16, 30};
-    for (std::size_t index = 0;
-         index < sizeof(choices) / sizeof(choices[0]); ++index) {
-        if (std::strcmp(value, choices[index]) == 0) {
-            *out_value = restarts[index];
-            return true;
-        }
-    }
-    return false;
-}
-
 bool copy_sparse_matrix_to_dense(
     Mat sparse,
     PetscInt dimension,
@@ -3128,25 +3062,25 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
         static_cast<PetscReal>(1.0e-13),
         std::min(static_cast<PetscReal>(1.0e-8),
                  static_cast<PetscReal>(1.0e-3 * eigen_tolerance)));
-    PetscReal eps_absolute_tolerance = default_eps_absolute_tolerance;
-    PetscReal shifted_ksp_tolerance = default_shifted_ksp_tolerance;
-    const char *requested_shifted_ksp_type = KSPGMRES;
-    PetscInt requested_gmres_restart = kFloquetShiftedGmresDefaultRestart;
-    if (!floquet_diagnostic_tolerance(
-            "FULLMAG_FLOQUET_EPS_PREFILTER_ABS",
-            default_eps_absolute_tolerance,
-            &eps_absolute_tolerance) ||
-        !floquet_diagnostic_tolerance(
-            "FULLMAG_FLOQUET_SHIFTED_KSP_RTOL",
-            default_shifted_ksp_tolerance,
-            &shifted_ksp_tolerance) ||
-        !floquet_diagnostic_gmres_restart(&requested_gmres_restart) ||
-        !floquet_diagnostic_shifted_ksp_type(&requested_shifted_ksp_type)) {
+    const ModalKrylovTuning default_tuning{
+        static_cast<double>(default_eps_absolute_tolerance),
+        static_cast<double>(default_shifted_ksp_tolerance),
+        static_cast<int>(kFloquetShiftedGmresDefaultRestart),
+        "gmres"};
+    ModalKrylovTuning resolved_tuning{};
+    if (!resolve_modal_krylov_tuning(default_tuning, true, &resolved_tuning)) {
         result.status = "validation_error";
         result.unsupported_reason = "floquet_diagnostic_ksp_option_invalid";
         destroy_all();
         return result;
     }
+    const PetscReal eps_absolute_tolerance =
+        static_cast<PetscReal>(resolved_tuning.eps_prefilter_abs);
+    const PetscReal shifted_ksp_tolerance =
+        static_cast<PetscReal>(resolved_tuning.shifted_ksp_rtol);
+    const char *requested_shifted_ksp_type = resolved_tuning.shifted_ksp_type;
+    const PetscInt requested_gmres_restart =
+        static_cast<PetscInt>(resolved_tuning.gmres_restart);
     result.ksp_type = requested_shifted_ksp_type;
     if (std::strcmp(requested_shifted_ksp_type, KSPFGMRES) == 0) {
         // FGMRES does not use the GMRES residual-gap breakdown control.

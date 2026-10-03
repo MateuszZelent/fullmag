@@ -1,5 +1,6 @@
 #include "cpu/frequency_domain/poisson_airbox_schur_matshell.hpp"
 #include "cpu/frequency_domain/mode_deduplication.hpp"
+#include "cpu/frequency_domain/modal_krylov_tuning.hpp"
 #include "cpu/frequency_domain/operators/poisson_airbox_shared_domain.hpp"
 #include "frequency_domain/mode_kinematics.hpp"
 #include "frequency_domain/real_frequency_rotated_pencil.hpp"
@@ -2956,9 +2957,8 @@ bool configure_production_refinement_ksp(
         std::min(
             static_cast<PetscReal>(1.0e-10),
             static_cast<PetscReal>(1.0e-2) * eigensolver_tolerance));
-    const PetscInt refinement_max_iterations = std::max<PetscInt>(
-        1000,
-        max_linear_iterations > 0 ? max_linear_iterations : 0);
+    const PetscInt refinement_max_iterations =
+        max_linear_iterations > 0 ? max_linear_iterations : 1000;
     bool configured =
         KSPCreate(PETSC_COMM_SELF, &refinement_ksp) == 0 &&
         KSPSetOperators(
@@ -3353,6 +3353,7 @@ void write_production_schur_diagnostics(
         "\"gauge_policy\":\"%s\","
         "\"gauge_reason\":\"%s\","
         "\"residual_tolerance\":%.17g,"
+        "\"modal_krylov_tuning\":%s,"
         "\"phasor_convention\":\"%s\","
         "\"eigenvalue_convention\":\"%s\","
         "\"algebraic_form\":\"schur_reduced_descriptor\","
@@ -3480,6 +3481,8 @@ void write_production_schur_diagnostics(
         problem.gauge_policy != nullptr ? problem.gauge_policy : "",
         problem.gauge_reason != nullptr ? problem.gauge_reason : "",
         problem.residual_tolerance,
+        result.modal_krylov_tuning_json[0] != '\0'
+            ? result.modal_krylov_tuning_json : "null",
         problem.phasor_convention != nullptr ? problem.phasor_convention : "",
         problem.eigenvalue_convention != nullptr ? problem.eigenvalue_convention : "",
         problem.target_kind != nullptr ? problem.target_kind : "",
@@ -3504,7 +3507,8 @@ void write_production_schur_diagnostics(
         result.raw_ritz_classification_json[0] != '\0'
             ? result.raw_ritz_classification_json
             : "{\"available\":false,\"samples\":[]}",
-        "gmres",
+        result.configured_shifted_ksp_type[0] != '\0'
+            ? result.configured_shifted_ksp_type : "not_configured",
         result.shifted_preconditioner_kind[0] != '\0'
             ? result.shifted_preconditioner_kind
             : "not_configured",
@@ -3691,6 +3695,30 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
         "production shared-domain K0 Schur lane requires a real PETSc scalar runtime",
         "complex_petsc_scalar_unsupported");
 #else
+    const auto petsc_integer_max = static_cast<std::uint64_t>(
+        std::numeric_limits<PetscInt>::max());
+    if (static_cast<std::uint64_t>(problem.max_linear_iterations) > petsc_integer_max ||
+        static_cast<std::uint64_t>(problem.max_outer_iterations) > petsc_integer_max) {
+        return fail_production_schur(problem, out_result,
+            FrequencyDomainStatus::validation_error,
+            "production K0 Schur iteration budget exceeds the PETSc integer range",
+            "k0_modal_iteration_budget_out_of_range");
+    }
+    const double default_eigensolver_tolerance =
+        production_modal_eigensolver_tolerance(problem.residual_tolerance);
+    const ModalKrylovTuning default_tuning{
+        default_eigensolver_tolerance,
+        std::max(1.0e-13, std::min(1.0e-10,
+            1.0e-3 * default_eigensolver_tolerance)),
+        256,
+        "gmres"};
+    ModalKrylovTuning resolved_tuning{};
+    if (!resolve_modal_krylov_tuning(default_tuning, false, &resolved_tuning)) {
+        return fail_production_schur(
+            problem, out_result, FrequencyDomainStatus::validation_error,
+            "production K0 Schur diagnostic Krylov options are invalid",
+            "k0_modal_krylov_option_invalid");
+    }
     if (problem.requested_mode_count == 0u) {
         return fail_production_schur(
             problem,
@@ -4339,6 +4367,7 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                     "%s{\"pass\":\"%s\",\"subwindow_index\":%u,"
                     "\"shift_frequency_hz\":%.17g,\"requested_nev\":%llu,"
                     "\"requested_ncv\":%llu,"
+                    "\"modal_krylov_tuning\":%s,"
                     "\"status\":\"%s\",\"converged_eigenpair_count\":%u,"
                     "\"candidate_mode_count\":%u,"
                     "\"candidate_mode_count_kind\":\"raw_ritz_in_window\","
@@ -4398,6 +4427,8 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                     shifted_problem.target_frequency_hz,
                     static_cast<unsigned long long>(resolved_subwindow_nev),
                     static_cast<unsigned long long>(resolved_subwindow_ncv),
+                    shifted_result.modal_krylov_tuning_json[0] != '\0'
+                        ? shifted_result.modal_krylov_tuning_json : "null",
                     shifted_status == FrequencyDomainStatus::ok &&
                             !subwindow_coverage_failed
                         ? "ok"
@@ -5558,8 +5589,14 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
     const PetscInt nev = static_cast<PetscInt>(dimensions.nev);
     const PetscInt ncv = static_cast<PetscInt>(dimensions.ncv);
     const PetscReal tolerance = static_cast<PetscReal>(problem.residual_tolerance);
-    const PetscReal eigensolver_tolerance = static_cast<PetscReal>(
-        production_modal_eigensolver_tolerance(problem.residual_tolerance));
+    const PetscReal eigensolver_tolerance =
+        static_cast<PetscReal>(resolved_tuning.eps_prefilter_abs);
+    const PetscReal shifted_ksp_tolerance =
+        static_cast<PetscReal>(resolved_tuning.shifted_ksp_rtol);
+    const PetscInt shifted_restart = std::min<PetscInt>(
+        split_count, static_cast<PetscInt>(resolved_tuning.gmres_restart));
+    const PetscInt shifted_max_iterations = problem.max_linear_iterations > 0
+        ? static_cast<PetscInt>(problem.max_linear_iterations) : 1000;
     const PetscInt max_outer = problem.max_outer_iterations > 0
         ? static_cast<PetscInt>(problem.max_outer_iterations)
         : PETSC_DEFAULT;
@@ -5746,15 +5783,14 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
         STSetPreconditionerMat(st, shifted_preconditioner) == 0 &&
         STGetKSP(st, &st_ksp) == 0;
     if (configured) {
-        // Shift-invert is one uniform GMRES contract for both the exact
-        // materialized preconditioner and the scalable magnetic fallback.
-        // The former converges in a short iteration sequence; retaining
-        // GMRES keeps its residual and restart semantics observable and
-        // avoids a separate PREONLY production lane.
-        configured = KSPSetType(st_ksp, KSPGMRES) == 0 &&
-            KSPGMRESSetRestart(
-                st_ksp,
-                std::min<PetscInt>(split_count, static_cast<PetscInt>(256))) == 0;
+        // Defaults preserve the existing GMRES path. An explicit common
+        // runtime override also applies to Gamma within a Floquet sweep.
+        configured = KSPSetType(st_ksp, resolved_tuning.shifted_ksp_type) == 0 &&
+            KSPGMRESSetRestart(st_ksp, shifted_restart) == 0;
+        if (configured && std::strcmp(resolved_tuning.shifted_ksp_type, "fgmres") == 0) {
+            configured = KSPSetPCSide(st_ksp, PC_RIGHT) == 0 &&
+                KSPSetNormType(st_ksp, KSP_NORM_UNPRECONDITIONED) == 0;
+        }
     }
     configured = configured &&
         KSPGetPC(st_ksp, &st_pc) == 0 &&
@@ -5769,18 +5805,10 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
         PCFactorSetShiftType(st_pc, MAT_SHIFT_NONE) == 0 &&
         KSPSetTolerances(
             st_ksp,
-            std::max(
-                1.0e-13,
-                std::min(
-                    1.0e-10,
-                    1.0e-3 * static_cast<double>(eigensolver_tolerance))),
+            shifted_ksp_tolerance,
             PETSC_DEFAULT,
             PETSC_DEFAULT,
-            std::max<PetscInt>(
-                1000,
-                problem.max_linear_iterations > 0
-                    ? static_cast<PetscInt>(problem.max_linear_iterations)
-                    : 0)) == 0 &&
+            shifted_max_iterations) == 0 &&
         KSPSetErrorIfNotConverged(st_ksp, PETSC_TRUE) == 0 &&
         install_production_modal_ksp_convergence_test(
             st_ksp,
@@ -5798,6 +5826,52 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
             "slepc_solver_configuration_failed");
     }
 
+    auto capture_krylov_configuration = [&](const char *phase) noexcept {
+        PetscReal eps_tol = 0.0, ksp_rtol = 0.0;
+        PetscInt eps_max = 0, ksp_max = 0, restart = 0;
+        const char *ksp_type = nullptr;
+        if (EPSGetTolerances(eps, &eps_tol, &eps_max) != 0 ||
+            KSPGetTolerances(st_ksp, &ksp_rtol, nullptr, nullptr, &ksp_max) != 0 ||
+            KSPGetType(st_ksp, &ksp_type) != 0 || ksp_type == nullptr ||
+            KSPGMRESGetRestart(st_ksp, &restart) != 0 ||
+            std::strcmp(ksp_type, resolved_tuning.shifted_ksp_type) != 0 ||
+            eps_tol != eigensolver_tolerance || ksp_rtol != shifted_ksp_tolerance ||
+            restart != shifted_restart || ksp_max != shifted_max_iterations ||
+            (problem.max_outer_iterations > 0 && eps_max != max_outer)) {
+            return false;
+        }
+        char eps_max_json[32]{};
+        format_nullable_u64_json(eps_max_json, sizeof(eps_max_json),
+            eps_max > 0, eps_max > 0 ? static_cast<std::uint64_t>(eps_max) : 0u);
+        const int written = std::snprintf(
+            out_result->modal_krylov_tuning_json,
+            sizeof(out_result->modal_krylov_tuning_json),
+            "{\"phase\":\"%s\",\"eps_tolerance\":%.17g,"
+            "\"eps_max_iterations\":%s,\"shifted_ksp_type\":\"%s\","
+            "\"shifted_ksp_rtol\":%.17g,\"shifted_ksp_max_iterations\":%lld,"
+            "\"shifted_ksp_restart\":%lld}",
+            phase, static_cast<double>(eps_tol), eps_max_json,
+            resolved_tuning.shifted_ksp_type, static_cast<double>(ksp_rtol),
+            static_cast<long long>(ksp_max), static_cast<long long>(restart));
+        if (written < 0 || static_cast<std::size_t>(written) >=
+                sizeof(out_result->modal_krylov_tuning_json)) {
+            out_result->modal_krylov_tuning_json[0] = '\0';
+            return false;
+        }
+        copy_message(out_result->configured_shifted_ksp_type,
+            sizeof(out_result->configured_shifted_ksp_type),
+            resolved_tuning.shifted_ksp_type);
+        return true;
+    };
+    if (!capture_krylov_configuration("configured_before_eps")) {
+        destroy_slepc_objects(&eps, &xr, &xi, nullptr, nullptr);
+        MatDestroy(&shifted_preconditioner);
+        return fail_production_schur(problem, out_result,
+            FrequencyDomainStatus::solve_error,
+            "production K0 Schur Krylov configuration query failed",
+            "k0_modal_krylov_configuration_mismatch");
+    }
+
     PetscInt outer_iterations = 0;
     PetscInt converged = 0;
     const auto eps_started_at = std::chrono::steady_clock::now();
@@ -5810,6 +5884,15 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
     bool solve_interrupted =
         operator_context->solve_control.cancellation_observed ||
         poisson_airbox_modal_cancel_requested(problem);
+    const bool tuning_snapshot_ok = capture_krylov_configuration("queried_after_eps");
+    if (!tuning_snapshot_ok && !solve_interrupted) {
+        destroy_slepc_objects(&eps, &xr, &xi, nullptr, nullptr);
+        MatDestroy(&shifted_preconditioner);
+        return fail_production_schur(problem, out_result,
+            FrequencyDomainStatus::solve_error,
+            "production K0 Schur Krylov configuration changed during EPS",
+            "k0_modal_krylov_configuration_mismatch");
+    }
     EPSConvergedReason eps_reason = EPS_CONVERGED_ITERATING;
     const PetscErrorCode iteration_status = EPSGetIterationNumber(eps, &outer_iterations);
     const PetscErrorCode converged_status = EPSGetConverged(eps, &converged);

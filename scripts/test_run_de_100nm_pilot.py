@@ -941,6 +941,45 @@ class PilotTests(unittest.TestCase):
                     "--pilot", pilot.SIGNED_FIFTEEN_PILOT, *options]), 2)
                 resolve.assert_not_called()
 
+    def test_signed_path_exports_common_tuning_for_gamma_and_matching_legacy_aliases(self):
+        context = SimpleNamespace(source_tree=Path("/capsule"), runtime_root=Path("/runtime"),
+                                  image_digest="sha256:test",
+                                  job={"job_id": "a" * 32, "profile": "fem-cpu-slepc-runtime-v2"})
+        command = pilot.compose_command(context, Path("/outputs"),
+            pilot="de-smoke-signed-eleven", eps_prefilter="1e-9",
+            shifted_ksp_rtol="1e-9", shifted_ksp_type="fgmres", gmres_restart="8")
+        values = pilot._modal_krylov_environment(command)
+        self.assertEqual(values, {
+            "FULLMAG_MODAL_EPS_PREFILTER_ABS": "1e-9",
+            "FULLMAG_MODAL_SHIFTED_KSP_RTOL": "1e-9",
+            "FULLMAG_MODAL_SHIFTED_KSP_TYPE": "fgmres",
+            "FULLMAG_MODAL_GMRES_RESTART": "8"})
+        for name, value in values.items():
+            self.assertIn("export " + name.replace("MODAL", "FLOQUET") + "=" + value,
+                          command[-1].splitlines())
+        self.assertNotIn("FULLMAG_DE_SMOKE_SOLVER_RTOL", command[-1])
+
+    def test_common_tuning_receipt_reads_actual_command_and_preserves_unset_defaults(self):
+        context = SimpleNamespace(source_tree=Path("/capsule"), runtime_root=Path("/runtime"),
+                                  image_digest="sha256:test",
+                                  job={"job_id": "a" * 32, "profile": "fem-cpu-slepc-runtime-v2"})
+        command = pilot.compose_command(context, Path("/outputs"), pilot="de-smoke-k25")
+        self.assertEqual(pilot._modal_krylov_environment(command), {})
+        self.assertEqual(pilot._modal_krylov_environment([
+            "bash", "-lc", "export FULLMAG_MODAL_EPS_PREFILTER_ABS=1e-9\n"
+            "export FULLMAG_MODAL_GMRES_RESTART=8\n"]), {
+                "FULLMAG_MODAL_EPS_PREFILTER_ABS": "1e-9",
+                "FULLMAG_MODAL_GMRES_RESTART": "8"})
+
+    def test_common_tuning_receipt_rejects_invalid_or_conflicting_exports(self):
+        for shell in ("export FULLMAG_MODAL_SHIFTED_KSP_TYPE=cg",
+                      "export FULLMAG_MODAL_GMRES_RESTART=",
+                      "export FULLMAG_MODAL_UNKNOWN=8",
+                      "export FULLMAG_MODAL_GMRES_RESTART=8\n"
+                      "export FULLMAG_MODAL_GMRES_RESTART=10"):
+            with self.subTest(shell=shell), self.assertRaises(pilot.managed.BenchmarkError):
+                pilot._modal_krylov_environment(["bash", "-lc", shell])
+
     def test_signed_path_prefilter_diagnostic_keeps_physical_tolerance_unchanged(self):
         context = SimpleNamespace(source_tree=Path("/capsule"), runtime_root=Path("/runtime"),
                                   image_digest="sha256:test",
