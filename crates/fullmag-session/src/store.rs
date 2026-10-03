@@ -33,6 +33,9 @@ use crate::solution_set_catalog::SolutionSetCatalog;
 use crate::types::*;
 use crate::writer::{WriteTransaction, Writer};
 
+mod development_fence;
+pub use development_fence::DevelopmentAdmissionFence;
+
 /// Admission was refused because the durable non-terminal run backlog reached
 /// its configured bound. The check and accepted-intent publication happen
 /// under the same native writer lease.
@@ -182,14 +185,24 @@ impl SessionStore {
         for geometry in crate::solution_field_geometry::verify_field_geometries_for_solution(
             &self.root, &self.cas, solution,
         )? {
-            register_solution_object(&mut referenced_objects, &geometry.object_ref, geometry.byte_length)?;
+            register_solution_object(
+                &mut referenced_objects,
+                &geometry.object_ref,
+                geometry.byte_length,
+            )?;
         }
         for member in &solution.members {
             for artifact in &member.artifacts {
                 if artifact.schema_id == crate::solution_tensor_source::SOLUTION_TENSOR_SCHEMA {
-                    let descriptor = crate::solution_tensor_source::verify_solution_tensor_payload(&self.cas, artifact)?;
+                    let descriptor = crate::solution_tensor_source::verify_solution_tensor_payload(
+                        &self.cas, artifact,
+                    )?;
                     for chunk in &descriptor.chunks {
-                        register_solution_object(&mut referenced_objects, &chunk.object_ref, chunk.length as u64)?;
+                        register_solution_object(
+                            &mut referenced_objects,
+                            &chunk.object_ref,
+                            chunk.length as u64,
+                        )?;
                     }
                 }
                 register_solution_object(
@@ -431,6 +444,7 @@ impl SessionStore {
             );
         }
 
+        self.ensure_development_admission_open_unlocked()?;
         let relative_path = format!("runs/{}/run_intent.json", intent.run_id);
         let path = checked_path(&self.root, &relative_path)?;
         if path.exists() {
@@ -814,6 +828,21 @@ impl SessionStore {
         catalog: &FmsRunCatalog,
         allow_genesis_publication: bool,
     ) -> Result<()> {
+        // Terminal projections and shutdown receipts remain writable while a
+        // development handoff fences every operation which creates work.
+        if catalog.tasks.is_empty()
+            || catalog.tasks.iter().any(|task| {
+                !matches!(
+                    task.lifecycle,
+                    FmsTaskLifecycle::Succeeded
+                        | FmsTaskLifecycle::Failed
+                        | FmsTaskLifecycle::Cancelled
+                        | FmsTaskLifecycle::Interrupted
+                )
+            })
+        {
+            self.ensure_development_admission_open_unlocked()?;
+        }
         let path = checked_path(
             &self.root,
             &format!("runs/{}/run_catalog.json", catalog.run_id),
@@ -1165,6 +1194,9 @@ impl SessionStore {
     ) -> Result<RetryDecisionCommitDisposition> {
         decision.validate()?;
         let _lease = self.write_transaction()?;
+        if decision.action == FmsRetryAction::Retry {
+            self.ensure_development_admission_open_unlocked()?;
+        }
         let mut catalog = self
             .read_run_catalog(&decision.run_id)?
             .context("retry decision requires a durable run catalog")?;
@@ -1224,6 +1256,9 @@ impl SessionStore {
     ) -> Result<RetryDecisionApplyDisposition> {
         decision.validate()?;
         let _lease = self.write_transaction()?;
+        if decision.action == FmsRetryAction::Retry {
+            self.ensure_development_admission_open_unlocked()?;
+        }
         let mut catalog = self
             .read_run_catalog(&decision.run_id)?
             .context("retry decision requires a durable run catalog")?;
@@ -1530,6 +1565,7 @@ impl SessionStore {
     ) -> Result<PreparationProcessLaunchCommitDisposition> {
         launch.validate()?;
         let _writer_lease = self.write_transaction()?;
+        self.ensure_development_admission_open_unlocked()?;
         let catalog = self
             .read_run_catalog(&launch.run_id)?
             .context("preparation process launch requires a durable run catalog")?;
@@ -1954,6 +1990,7 @@ impl SessionStore {
             );
         }
 
+        self.ensure_development_admission_open_unlocked()?;
         let catalog = self
             .read_run_catalog(&decision.run_id)?
             .context("preparation retry decision requires a durable run catalog")?;
@@ -2996,6 +3033,7 @@ impl SessionStore {
             anyhow::bail!("task admission requires a fresh active resource lease");
         }
         let _writer_lease = self.write_transaction()?;
+        self.ensure_development_admission_open_unlocked()?;
         let record_path =
             self.task_admission_path(&lease.run_id, &lease.task_id, &lease.attempt_id)?;
         if record_path.exists() {
@@ -3252,6 +3290,7 @@ impl SessionStore {
             anyhow::bail!("resource lease acquisition requires active state");
         }
         let _writer_lease = self.write_transaction()?;
+        self.ensure_development_admission_open_unlocked()?;
         self.validate_resource_lease_owner_unlocked(lease, false)?;
         if self
             .find_active_preparation_resource_lease_unlocked(&lease.resource_id)?
@@ -3427,6 +3466,7 @@ impl SessionStore {
         &self,
         lease: &FmsPreparationResourceLease,
     ) -> Result<PreparationResourceLeaseCommitDisposition> {
+        self.ensure_development_admission_open_unlocked()?;
         self.validate_preparation_resource_lease_owner_unlocked(lease)?;
         if let Some(existing) = self.find_active_preparation_resource_lease_for_task_unlocked(
             &lease.run_id,
@@ -4970,7 +5010,11 @@ mod tests {
         let error = store.commit_run_intent(&intent).unwrap_err();
         assert!(error.to_string().contains("metadata budget"));
         assert!(store.read_run_intent(run_id).unwrap().is_none());
-        assert!(!root.join("runs").join(run_id).join("run_intent.json").exists());
+        assert!(!root
+            .join("runs")
+            .join(run_id)
+            .join("run_intent.json")
+            .exists());
     }
 
     #[test]

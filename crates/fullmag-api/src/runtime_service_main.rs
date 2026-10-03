@@ -466,12 +466,14 @@ struct ControlRequest {
 enum ControlCommand {
     Drain,
     ConfirmedDrain { nonce: String },
+    IdleConfirmedDrain { nonce: String },
     Status { nonce: String },
 }
 
 struct DrainConfirmation {
     stream: tokio::net::TcpStream,
     nonce: String,
+    idle_fence: Option<fullmag_session::store::DevelopmentAdmissionFence>,
 }
 
 enum ControlObservation {
@@ -486,7 +488,7 @@ fn control_command(bytes: &[u8], owner: &str) -> Option<ControlCommand> {
     }
     match request.command.as_str() {
         "drain" if request.nonce.is_none() => Some(ControlCommand::Drain),
-        "status" | "drain_confirmed" => {
+        "status" | "drain_confirmed" | "drain_idle_confirmed" => {
             let nonce = request.nonce?;
             if nonce.is_empty()
                 || nonce.len() > 128
@@ -498,6 +500,8 @@ fn control_command(bytes: &[u8], owner: &str) -> Option<ControlCommand> {
             }
             Some(if request.command == "status" {
                 ControlCommand::Status { nonce }
+            } else if request.command == "drain_idle_confirmed" {
+                ControlCommand::IdleConfirmedDrain { nonce }
             } else {
                 ControlCommand::ConfirmedDrain { nonce }
             })
@@ -515,6 +519,7 @@ async fn drain_requested(
     listener: &TcpListener,
     owner: &RuntimeServiceOwner,
     config: &ServiceConfig,
+    store: &SessionStore,
 ) -> Result<ControlObservation> {
     let (mut stream, peer) =
         match tokio::time::timeout(Duration::from_millis(250), listener.accept()).await {
@@ -546,6 +551,26 @@ async fn drain_requested(
         Ok(Ok(bytes)) => control_command(&bytes, owner.owner_token()),
         _ => None,
     };
+    if let Some(ControlCommand::IdleConfirmedDrain { nonce }) = &command {
+        // Acquisition checks all accepted work and leases and publishes its
+        // durable admission fence under one writer transaction. The writer is
+        // released before waiting for scheduler exit/checkpoint publication.
+        match store.acquire_development_idle_fence(owner.owner_token(), nonce) {
+            Ok(fence) => {
+                return Ok(ControlObservation::Drain(Some(DrainConfirmation {
+                    stream,
+                    nonce: nonce.clone(),
+                    idle_fence: Some(fence),
+                })))
+            }
+            Err(_) => {
+                let response = b"{\"status\":\"rejected\",\"reason\":\"idle_not_proven\"}\n";
+                let _ =
+                    tokio::time::timeout(Duration::from_secs(1), stream.write_all(response)).await;
+                return Ok(ControlObservation::Continue);
+            }
+        }
+    }
     if let Some(ControlCommand::ConfirmedDrain { nonce }) = command {
         // Keep the authenticated connection until terminal child receipts and
         // pool observations have been durably published. Admission ACK alone
@@ -553,6 +578,7 @@ async fn drain_requested(
         return Ok(ControlObservation::Drain(Some(DrainConfirmation {
             stream,
             nonce,
+            idle_fence: None,
         })));
     }
     let drain = command == Some(ControlCommand::Drain);
@@ -565,6 +591,7 @@ async fn drain_requested(
             "configuration": config,
         }),
         Some(ControlCommand::ConfirmedDrain { .. }) => unreachable!(),
+        Some(ControlCommand::IdleConfirmedDrain { .. }) => unreachable!(),
         None => serde_json::json!({"status": "rejected"}),
     };
     let mut response = serde_json::to_vec(&response)?;
@@ -707,7 +734,7 @@ fn run() -> Result<()> {
             let mut heartbeat = Instant::now();
             loop {
                 children.poll()?;
-                match drain_requested(&listener, &owner, &config).await? {
+                match drain_requested(&listener, &owner, &config, &store).await? {
                     ControlObservation::Continue => {}
                     ControlObservation::Drain(confirmation) => {
                         drain_confirmation = confirmation;
@@ -825,12 +852,21 @@ fn run() -> Result<()> {
                 .collect(),
         )?;
         if let Some(mut confirmation) = drain_confirmation {
-            let mut response = serde_json::to_vec(&serde_json::json!({
-                "schema_version": "runtime_service_drain.v1",
+            let schema = if confirmation.idle_fence.is_some() {
+                "runtime_service_idle_drain.v1"
+            } else {
+                "runtime_service_drain.v1"
+            };
+            let mut value = serde_json::json!({
+                "schema_version": schema,
                 "nonce": confirmation.nonce,
                 "owner": owner.descriptor(),
                 "configuration": config,
-            }))?;
+            });
+            if let Some(fence) = confirmation.idle_fence {
+                value["admission_fence"] = serde_json::to_value(fence)?;
+            }
+            let mut response = serde_json::to_vec(&value)?;
             response.push(b'\n');
             // Disconnect cannot undo the already authenticated drain. The
             // caller must reconcile an unknown outcome; it cannot infer idle.

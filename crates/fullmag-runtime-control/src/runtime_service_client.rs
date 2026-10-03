@@ -441,6 +441,70 @@ pub fn drain_confirmed(
     config: &RuntimeServiceConfig,
     timeout_seconds: u64,
 ) -> Result<RuntimeServiceOwnerDescriptor> {
+    let (response, nonce) =
+        request_pinned_drain(expected, config, timeout_seconds, "drain_confirmed")?;
+    validate_drain_response(&response, &nonce, expected, config)
+}
+
+/// Terminal service proof together with the still-closed durable admission fence.
+/// This does not prove API shutdown, scene restoration, or completed restart.
+pub struct IdleDrainProof {
+    pub owner: RuntimeServiceOwnerDescriptor,
+    pub admission_fence: fullmag_session::store::DevelopmentAdmissionFence,
+}
+
+/// Fence new durable work only after a global idle check, then drain the pinned
+/// service. An uncertain outcome retains the marker and requires reconciliation.
+pub fn drain_idle_confirmed(
+    expected: &RuntimeServiceOwnerDescriptor,
+    config: &RuntimeServiceConfig,
+    timeout_seconds: u64,
+) -> Result<IdleDrainProof> {
+    let (bytes, nonce) =
+        request_pinned_drain(expected, config, timeout_seconds, "drain_idle_confirmed")?;
+    let response: IdleDrainResponse =
+        serde_json::from_slice(&bytes).context("decode idle terminal service drain")?;
+    if response.schema_version != "runtime_service_idle_drain.v1"
+        || response.admission_fence.owner_token != expected.owner_token
+        || response.admission_fence.nonce != nonce
+    {
+        bail!("idle service drain challenge/fence mismatch; restart refused");
+    }
+    // Reuse the complete terminal owner/configuration validation; only the
+    // private response schema differs from the ordinary drain protocol.
+    let terminal = serde_json::to_vec(&serde_json::json!({
+        "schema_version": "runtime_service_drain.v1",
+        "nonce": response.nonce,
+        "owner": response.owner,
+        "configuration": response.configuration,
+    }))?;
+    let owner = validate_drain_response(&terminal, &nonce, expected, config)?;
+    let store = fullmag_session::SessionStore::open_existing(config.store_root.clone())?;
+    if store.read_development_idle_fence()?.as_ref() != Some(&response.admission_fence) {
+        bail!("durable admission fence differs from terminal drain proof; restart refused");
+    }
+    Ok(IdleDrainProof {
+        owner,
+        admission_fence: response.admission_fence,
+    })
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct IdleDrainResponse {
+    schema_version: String,
+    nonce: String,
+    owner: RuntimeServiceOwnerDescriptor,
+    configuration: RuntimeServiceConfig,
+    admission_fence: fullmag_session::store::DevelopmentAdmissionFence,
+}
+
+fn request_pinned_drain(
+    expected: &RuntimeServiceOwnerDescriptor,
+    config: &RuntimeServiceConfig,
+    timeout_seconds: u64,
+    command: &str,
+) -> Result<(Vec<u8>, String)> {
     if !(1..=30).contains(&timeout_seconds) {
         bail!("native service drain timeout must be 1..30 seconds");
     }
@@ -472,8 +536,8 @@ pub fn drain_confirmed(
         bail!("native service owner changed before drain; no lifecycle request sent");
     }
     let nonce = uuid::Uuid::new_v4().to_string();
-    let response = exchange_control(expected, "drain_confirmed", &nonce, remaining(deadline)?)?;
-    validate_drain_response(&response, &nonce, expected, config)
+    let response = exchange_control(expected, command, &nonce, remaining(deadline)?)?;
+    Ok((response, nonce))
 }
 
 fn validate_drain_response(

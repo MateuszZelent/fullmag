@@ -244,10 +244,10 @@ def exercise_service(repo: Path, run_root: Path, manifest: dict, receipt: dict) 
             assert owner["build_snapshot"] == manifest["source_snapshot_sha256"]
             assert len(owner["children"]) == 2 and all(item["status"] == "running" for item in owner["children"])
             receipt["checks"].append("empty-service-ready-source-identity")
-            denied = control("drain_confirmed", str(uuid.uuid4()), "unauthorized")
+            denied = control("drain_idle_confirmed", str(uuid.uuid4()), "unauthorized")
             assert denied.get("status") == "rejected", denied
             receipt["checks"].append("wrong-owner-cannot-drain-empty-service")
-            denied = control("drain_confirmed", owner["owner_token"], "invalid challenge")
+            denied = control("drain_idle_confirmed", owner["owner_token"], "invalid challenge")
             assert denied.get("status") == "rejected", denied
             receipt["checks"].append("invalid-challenge-cannot-drain-empty-service")
             challenge = uuid.uuid4().hex
@@ -255,10 +255,38 @@ def exercise_service(repo: Path, run_root: Path, manifest: dict, receipt: dict) 
             assert observed["nonce"] == challenge and observed["configuration"] == config
             assert observed["owner"]["state"] == "ready"
             receipt["checks"].append("rejected-drain-leaves-service-ready")
+            # Valid empty catalog without an intent must remain conservative;
+            # neither scheduler has a task to dispatch from this fixture.
+            orphan_path = store / "runs/idle-fence-orphan/run_catalog.json"
+            orphan_path.parent.mkdir(parents=True)
+            storage.atomic_json(orphan_path, dict(schema_version="run_catalog.v1",
+                run_id="idle-fence-orphan", revision=1, updated_at="2026-10-03T00:00:00Z", tasks=[]))
+            denied = control("drain_idle_confirmed", owner["owner_token"], uuid.uuid4().hex)
+            assert denied == {"status": "rejected", "reason": "idle_not_proven"}, denied
+            assert control("status", owner["owner_token"], uuid.uuid4().hex)["owner"]["state"] == "ready"
+            assert not (store / "development/ADMISSION-FENCE.json").exists()
+            receipt["checks"].append("orphan-empty-catalog-refuses-idle-drain")
+            orphan_path.unlink()  # Only the disposable catalog created above.
+            fence_path = store / "development/ADMISSION-FENCE.json"
+            fence_path.parent.mkdir(exist_ok=True)
+            # Only this verifier's empty store is modified. Unknown persisted
+            # ownership must reject before either scheduler is drained.
+            fence_path.write_text('{"schema":"unknown"}', encoding="utf-8")
+            denied = control("drain_idle_confirmed", owner["owner_token"], uuid.uuid4().hex)
+            assert denied == {"status": "rejected", "reason": "idle_not_proven"}, denied
+            assert control("status", owner["owner_token"], uuid.uuid4().hex)["owner"]["state"] == "ready"
+            assert fence_path.read_text(encoding="utf-8") == '{"schema":"unknown"}'
+            receipt["checks"].append("unknown-fence-refuses-idle-drain-without-stopping-service")
+            fence_path.unlink()  # Remove only the disposable marker created above.
             challenge = uuid.uuid4().hex
-            terminal = control("drain_confirmed", owner["owner_token"], challenge)
-            assert terminal["schema_version"] == "runtime_service_drain.v1"
+            terminal = control("drain_idle_confirmed", owner["owner_token"], challenge)
+            assert terminal["schema_version"] == "runtime_service_idle_drain.v1"
             assert terminal["nonce"] == challenge and terminal["configuration"] == config
+            fence = terminal["admission_fence"]
+            assert fence["schema"] == "fullmag.development-admission-fence.v1"
+            assert fence["owner_token"] == owner["owner_token"] and fence["nonce"] == challenge
+            assert json.loads(fence_path.read_text(encoding="utf-8")) == fence
+            receipt["checks"].append("idle-drain-retains-exact-durable-admission-fence")
             drained = terminal["owner"]
             assert drained["state"] == "drained"
             for field in ("owner_token", "process_start_token", "pid", "host", "target_id", "control_address",
@@ -289,6 +317,8 @@ def exercise_service(repo: Path, run_root: Path, manifest: dict, receipt: dict) 
         if record["exit_code"] != 0:
             raise storage.StorageError("Empty resident service did not exit successfully")
         receipt["checks"].append("confirmed-drain-service-process-exited")
+        assert json.loads(fence_path.read_text(encoding="utf-8")) == fence
+        receipt["checks"].append("admission-fence-survives-service-process-exit")
 
 
 def exercise(api: Path, repo: Path, run_root: Path, receipt: dict) -> None:

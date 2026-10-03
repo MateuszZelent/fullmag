@@ -4,6 +4,10 @@ Stan: SOURCE AUDIT, implementacja pending. Ten dokument nie jest dowodem
 bezpiecznego restartu. Zakres obejmuje accepted compute/preparation, nie wszystkie
 historyczne/live-session ścieżki wykonania.
 
+Aktualizacja: poniżej zachowano inventory sprzed implementacji. Trwały fence
+i częściowe dowody procesu opisuje [P8-53O](53o-durable-admission-fence.md);
+pełne bramki restartu i wyścigów pozostają otwarte.
+
 ## Wspólna granica
 
 `SessionStore::write_transaction` (`crates/fullmag-session/src/store.rs`) używa
