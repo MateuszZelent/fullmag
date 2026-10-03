@@ -1,5 +1,11 @@
 # Status realizacji całego planu refaktoryzacji
 
+Checkpoint B-02, 03.10.2026: siedem metod pola demagnetyzacji Rust FDM CPU
+ma właściciela `fields/demag.rs`. Porównanie sygnatur i ciał z HEAD oraz
+Rustfmt PASS; kontrakt layoutu dodany, NOT COMPILED / NOT RUN. Build 217
+nadal QUEUED za aktywnym 216; nie obejmuje tego późniejszego przyrostu B.
+[Zakres i bramki](b/02-fdm-cpu-demag-owner.md). Procenty bez awansu.
+
 Checkpoint P8-39, 03.10.2026: build 215 FAILED/exit 2, dwa E0603 na prywatnym
 helperze ścieżek SessionStore. Poprawka źródłowa przenosi przygotowanie
 ścieżek do RuntimeServiceLaunchGuard; Rustfmt/diff PASS, trzy regresje

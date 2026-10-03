@@ -32,6 +32,9 @@ dlatego nie podnosi procentów P3/P5.
 
 ## Dokumenty finalne
 
+Checkpoint B-02, 03.10.2026: [właściciel pola demagnetyzacji FDM CPU](b/02-fdm-cpu-demag-owner.md).
+Siedem metod zachowuje sygnatury i ciała; weryfikacja produkcyjna pozostaje otwarta.
+
 Checkpoint domknięcia 02.10.2026: [warunki odbioru P1/P3/P3a/P5](07-domkniecie-etapow.md).
 Dodano bramkę stale scope ośmiu operacji workspace; 11 regresji skryptu PASS,
 managed runtime otwarty. [Build 197 i browser startup](p1/10-browser-empty-startup.md)

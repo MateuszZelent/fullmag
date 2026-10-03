@@ -89,6 +89,15 @@ Odpowiedzialności wyglądają tak:
 | Sys bindings | `crates/fullmag-fdm-sys/*`, `crates/fullmag-fem-sys/*` | bez zmiany | bindy do C ABI kompilowanych backendów |
 | Rust reference | `crates/fullmag-engine/*` i wybrane moduły runnera | bez zmiany | walidacja, debug, jawne ścieżki referencyjne |
 
+W aktualnej realizacji Rust FDM CPU/reference moduł
+`crates/fullmag-engine/src/fdm/cpu/fields/demag.rs` jest właścicielem
+obliczania pola demagnetyzacji: wariantów allocating, workspace, add-into
+AoS i add-into SoA przez `FdmFftBackend`. Rozróżnienie maskowanego pola
+solvera i niemaskowanego pola obserwacyjnego pozostaje w tym module.
+FFT/workspace zachowuje dotychczasowego właściciela; energie i obserwable
+pozostają konsumentami tej realizacji. Ta ekstrakcja nie zmienia dispatchu
+`CpuReference` i nie kwalifikuje natywnego backendu CPU/GPU.
+
 Profesjonalne kryteria organizacji:
 
 1. Top-level albo pseudo-top-level root backendów ma oznaczać kompilowany kod

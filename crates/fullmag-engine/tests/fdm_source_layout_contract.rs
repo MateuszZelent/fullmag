@@ -14,6 +14,36 @@ fn assert_exists(path: &Path) {
 }
 
 #[test]
+fn fdm_cpu_demagnetizing_field_has_one_realization_owner() {
+    let root = crate_root();
+    let owner = fs::read_to_string(root.join("src/fdm/cpu/fields/demag.rs"))
+        .expect("read FDM CPU demagnetizing-field owner");
+    let fields = fs::read_to_string(root.join("src/fdm/cpu/fields.rs"))
+        .expect("read FDM CPU field orchestration");
+    assert!(fields.contains("fields/demag.rs") && fields.contains("mod demag;"));
+    for name in [
+        "demag_field_from_vectors",
+        "observable_demag_field_from_vectors",
+        "demag_field_from_vectors_ws",
+        "observable_demag_field_from_vectors_ws",
+        "demag_field_from_vectors_ws_with_output_mask",
+        "demag_field_add_into",
+        "demag_field_add_into_soa_fft_backend",
+    ] {
+        let declaration = format!("fn {name}(");
+        assert_eq!(
+            owner.matches(&declaration).count(),
+            1,
+            "missing or duplicate {name}"
+        );
+        assert!(
+            !fields.contains(&declaration),
+            "field orchestration still owns {name}"
+        );
+    }
+}
+
+#[test]
 fn fdm_engine_shared_vector_field_has_fdm_owner() {
     let root = crate_root();
     for path in [
