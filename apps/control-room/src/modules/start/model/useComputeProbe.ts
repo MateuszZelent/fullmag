@@ -9,7 +9,7 @@ export const COMPUTE_POLL_MS = 5000;
 
 /**
  * Live GPU/VRAM state for the rail. `undefined` while the first probe is in
- * flight, `null` when this host cannot probe; the poll stops in that case and
+ * flight, `null` when this host cannot probe; the refresh loop stops in that case and
  * is always cleared on unmount so it never outlives the start screen.
  */
 export function useComputeProbe(): ComputeProbeState {

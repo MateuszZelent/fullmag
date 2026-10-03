@@ -48,7 +48,7 @@ export function parseComputeProbe(raw: unknown): ComputeEnvironment | null {
 
 /**
  * Ask the desktop host. `null` means this host cannot probe at all (the
- * browser build, or a host without the command), which stops the polling.
+ * browser build, or a host without the command), which stops the refresh loop.
  */
 export async function probeCompute(): Promise<ComputeProbeState> {
   const invoke = tauriInvoke();
