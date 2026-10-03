@@ -447,7 +447,12 @@
       "responsibility": "Six regression cases for support-only comparison and malformed data rejection; unit-test compilation currently prohibited."
     },
     {"id": "source-static-demag-replay-preimage", "path": "crates/fullmag-runner/src/fem/eigen_shared_domain.rs", "symbol": "shared_domain_static_demag_signature", "responsibility": "Exact persisted static-field subdigest with requested realization; independent numerical replay comparisons remain mandatory."},
-    {"id": "source-modal-krylov-tuning", "path": "backends/fem/cpu/frequency_domain/modal_krylov_tuning.hpp", "symbol": "resolve_modal_krylov_tuning", "responsibility": "Validate common diagnostic EPS/ST tuning while preserving adapter defaults and full residual acceptance."}
+    {"id": "source-modal-krylov-tuning", "path": "backends/fem/cpu/frequency_domain/modal_krylov_tuning.hpp", "symbol": "resolve_modal_krylov_tuning", "responsibility": "Validate common diagnostic EPS/ST tuning while preserving adapter defaults and full residual acceptance."},
+    {"id": "source-k0-linear-progress", "path": "backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.cpp", "symbol": "production_modal_ksp_convergence_test", "responsibility": "Emit actual KSP norm and explicit Poisson/ST role, independently of physical modal residual."},
+    {"id": "source-modal-progress-json", "path": "backends/fem/cpu/frequency_domain/poisson_airbox_modal_eigen.hpp", "symbol": "poisson_airbox_modal_emit_progress", "responsibility": "Publish nullable physical residual and distinct tagged linear-solver diagnostics without invalid nonfinite JSON."},
+    {"id": "source-modal-progress-decoder", "path": "crates/fullmag-runner/src/fem/eigen_progress.rs", "symbol": "native_modal_progress_event", "responsibility": "Keep outer iteration, subwindow index and tagged linear norm distinct."},
+    {"id": "source-modal-progress-runtime", "path": "crates/fullmag-runner/src/lib.rs", "symbol": "fem_eigen_progress_update", "responsibility": "Preserve typed solver diagnostics in the existing progress scalar envelope."},
+    {"id": "source-modal-progress-cli", "path": "crates/fullmag-cli/src/orchestrator.rs", "symbol": "append_fem_eigen_step_progress", "responsibility": "Label KSP norm/iteration independently of modal relative residual and window progress."}
   ],
   "public_api": {
     "parameters": [

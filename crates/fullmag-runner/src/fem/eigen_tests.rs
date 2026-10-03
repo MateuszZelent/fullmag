@@ -2231,8 +2231,10 @@ fn native_modal_window_progress_exposes_phase_and_global_subwindow_position() {
     .expect("valid native window progress should map");
 
     assert_eq!(event.phase, "solving_native_frequency_window_refinement");
-    assert_eq!(event.iteration, Some(23));
-    assert_eq!(event.max_iterations, Some(50));
+    assert_eq!(event.iteration, Some(17));
+    assert_eq!(event.max_iterations, Some(300));
+    assert_eq!(event.current_subwindow, Some(23));
+    assert_eq!(event.total_subwindows, Some(50));
     assert!((event.percent - 55.7).abs() < 1.0e-12);
     assert_eq!(event.candidate_modes, 8);
     assert_eq!(event.computed_modes, 4);

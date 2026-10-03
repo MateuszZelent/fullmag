@@ -2708,6 +2708,28 @@ fn fem_eigen_progress_update(
     if let Some(residual) = progress.residual {
         progress_scalars.insert("residual".to_string(), residual);
     }
+    if let Some(linear_solve) = progress.linear_solve.as_ref() {
+        progress_scalars.insert(
+            "linear_iteration".to_string(),
+            linear_solve.linear_iteration as f64,
+        );
+        if let Some(residual_norm) = linear_solve
+            .linear_residual_norm
+            .filter(|value| value.is_finite() && *value >= 0.0)
+        {
+            progress_scalars.insert("linear_residual_norm".to_string(), residual_norm);
+        }
+        if matches!(linear_solve.linear_solver_role, "poisson" | "shift_invert") {
+            progress_scalars.insert(
+                format!("linear_solver_role:{}", linear_solve.linear_solver_role),
+                1.0,
+            );
+        }
+        if let Some(ksp_type @ ("gmres" | "fgmres" | "preonly")) = linear_solve.linear_ksp_type {
+            progress_scalars.insert(format!("linear_ksp_type:{ksp_type}"), 1.0);
+        }
+        progress_scalars.insert("residual_source:ksp_norm".to_string(), 1.0);
+    }
     if let Some(current_subwindow) = progress.current_subwindow {
         progress_scalars.insert(
             "current_subwindow".to_string(),
@@ -5242,6 +5264,41 @@ mod tests {
             progress["phase_kind:solving_native_frequency_window_base"],
             1.0
         );
+        assert_eq!(update.stats.max_h_eff, 0.0);
+        assert!(!update.scalar_row_due);
+    }
+
+    #[test]
+    fn eigen_progress_keeps_ksp_norm_diagnostic_and_separate_from_eps_and_subwindow() {
+        let update = fem_eigen_progress_update(
+            fem_eigen::FemEigenProgress {
+                phase: "solving_native_frequency_window_base",
+                iteration: Some(17),
+                max_iterations: Some(300),
+                current_subwindow: Some(23),
+                total_subwindows: Some(50),
+                linear_solve: Some(crate::fem::eigen_progress::FemEigenLinearProgress {
+                    linear_iteration: 12,
+                    linear_residual_norm: Some(4.5e-8),
+                    linear_solver_role: "poisson",
+                    linear_ksp_type: Some("gmres"),
+                }),
+                ..Default::default()
+            },
+            None,
+        );
+        let progress = &update.stats.per_object_scalars["fem_eigen_progress"];
+
+        assert_eq!(progress["iteration"], 17.0);
+        assert_eq!(progress["max_iterations"], 300.0);
+        assert_eq!(progress["current_subwindow"], 23.0);
+        assert_eq!(progress["total_subwindows"], 50.0);
+        assert_eq!(progress["linear_iteration"], 12.0);
+        assert_eq!(progress["linear_residual_norm"], 4.5e-8);
+        assert_eq!(progress["linear_solver_role:poisson"], 1.0);
+        assert_eq!(progress["linear_ksp_type:gmres"], 1.0);
+        assert_eq!(progress["residual_source:ksp_norm"], 1.0);
+        assert!(!progress.contains_key("residual"));
         assert_eq!(update.stats.max_h_eff, 0.0);
         assert!(!update.scalar_row_due);
     }

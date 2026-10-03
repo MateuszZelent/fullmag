@@ -35,6 +35,203 @@ bool contains(const char *haystack, const char *needle)
     return haystack != nullptr && std::strstr(haystack, needle) != nullptr;
 }
 
+struct ProgressCapture {
+    char json[2048]{};
+    std::uint32_t count = 0;
+};
+
+void capture_progress_json(void *user_data, const char *progress_json)
+{
+    auto *capture = static_cast<ProgressCapture *>(user_data);
+    if (capture == nullptr || progress_json == nullptr) {
+        return;
+    }
+    std::snprintf(capture->json, sizeof(capture->json), "%s", progress_json);
+    ++capture->count;
+}
+
+void skip_json_whitespace(const char **cursor)
+{
+    while (**cursor == ' ' || **cursor == '\t' || **cursor == '\r' || **cursor == '\n') {
+        ++(*cursor);
+    }
+}
+
+bool parse_json_string(const char **cursor)
+{
+    if (**cursor != '"') {
+        return false;
+    }
+    ++(*cursor);
+    while (**cursor != '\0') {
+        const unsigned char character = static_cast<unsigned char>(**cursor);
+        ++(*cursor);
+        if (character == '"') {
+            return true;
+        }
+        if (character < 0x20u) {
+            return false;
+        }
+        if (character == '\\') {
+            const char escaped = **cursor;
+            if (escaped == '\0') {
+                return false;
+            }
+            ++(*cursor);
+            if (escaped == 'u') {
+                for (int digit = 0; digit < 4; ++digit) {
+                    const char hex = **cursor;
+                    if (!((hex >= '0' && hex <= '9') ||
+                          (hex >= 'a' && hex <= 'f') ||
+                          (hex >= 'A' && hex <= 'F'))) {
+                        return false;
+                    }
+                    ++(*cursor);
+                }
+            } else if (escaped != '"' && escaped != '\\' && escaped != '/' &&
+                       escaped != 'b' && escaped != 'f' && escaped != 'n' &&
+                       escaped != 'r' && escaped != 't') {
+                return false;
+            }
+        }
+    }
+    return false;
+}
+
+bool parse_json_number(const char **cursor)
+{
+    const char *start = *cursor;
+    if (**cursor == '-') {
+        ++(*cursor);
+    }
+    if (**cursor == '0') {
+        ++(*cursor);
+        if (**cursor >= '0' && **cursor <= '9') {
+            return false;
+        }
+    } else {
+        if (**cursor < '1' || **cursor > '9') {
+            return false;
+        }
+        while (**cursor >= '0' && **cursor <= '9') {
+            ++(*cursor);
+        }
+    }
+    if (**cursor == '.') {
+        ++(*cursor);
+        if (**cursor < '0' || **cursor > '9') {
+            return false;
+        }
+        while (**cursor >= '0' && **cursor <= '9') {
+            ++(*cursor);
+        }
+    }
+    if (**cursor == 'e' || **cursor == 'E') {
+        ++(*cursor);
+        if (**cursor == '+' || **cursor == '-') {
+            ++(*cursor);
+        }
+        if (**cursor < '0' || **cursor > '9') {
+            return false;
+        }
+        while (**cursor >= '0' && **cursor <= '9') {
+            ++(*cursor);
+        }
+    }
+    return *cursor != start;
+}
+
+bool parse_json_scalar(const char **cursor)
+{
+    if (**cursor == '"') {
+        return parse_json_string(cursor);
+    }
+    if (std::strncmp(*cursor, "null", 4) == 0) {
+        *cursor += 4;
+        return true;
+    }
+    if (std::strncmp(*cursor, "true", 4) == 0) {
+        *cursor += 4;
+        return true;
+    }
+    if (std::strncmp(*cursor, "false", 5) == 0) {
+        *cursor += 5;
+        return true;
+    }
+    return parse_json_number(cursor);
+}
+
+bool is_valid_flat_progress_json(const char *json)
+{
+    if (json == nullptr) {
+        return false;
+    }
+    const char *cursor = json;
+    skip_json_whitespace(&cursor);
+    if (*cursor++ != '{') {
+        return false;
+    }
+    skip_json_whitespace(&cursor);
+    if (*cursor == '}') {
+        ++cursor;
+        skip_json_whitespace(&cursor);
+        return *cursor == '\0';
+    }
+    for (;;) {
+        if (!parse_json_string(&cursor)) {
+            return false;
+        }
+        skip_json_whitespace(&cursor);
+        if (*cursor++ != ':') {
+            return false;
+        }
+        skip_json_whitespace(&cursor);
+        if (!parse_json_scalar(&cursor)) {
+            return false;
+        }
+        skip_json_whitespace(&cursor);
+        if (*cursor == '}') {
+            ++cursor;
+            skip_json_whitespace(&cursor);
+            return *cursor == '\0';
+        }
+        if (*cursor++ != ',') {
+            return false;
+        }
+        skip_json_whitespace(&cursor);
+    }
+}
+
+bool json_field_is_null(const char *json, const char *field)
+{
+    char key[96]{};
+    std::snprintf(key, sizeof(key), "\"%s\":null", field);
+    return contains(json, key);
+}
+
+bool json_field_is_finite_nonnegative_number(
+    const char *json,
+    const char *field,
+    double *out_value)
+{
+    char key[96]{};
+    std::snprintf(key, sizeof(key), "\"%s\":", field);
+    const char *value = json != nullptr ? std::strstr(json, key) : nullptr;
+    if (value == nullptr) {
+        return false;
+    }
+    value += std::strlen(key);
+    char *end = nullptr;
+    const double parsed = std::strtod(value, &end);
+    if (end == value || !std::isfinite(parsed) || parsed < 0.0) {
+        return false;
+    }
+    if (out_value != nullptr) {
+        *out_value = parsed;
+    }
+    return true;
+}
+
 struct CsrOwned {
     std::uint64_t rows = 0;
     std::uint64_t columns = 0;
@@ -158,6 +355,148 @@ fd::PoissonAirboxEigenBlockProblem sparse_problem_from_fixture(
     problem.magnetic_pair_count = 1;
     problem.airbox_pair_count = 1;
     return problem;
+}
+
+void ModalKspProgressUsesLinearResidualSemanticsAndValidJson()
+{
+    ProgressCapture capture{};
+    fd::PoissonAirboxEigenBlockProblem problem{};
+    problem.progress_callback = capture_progress_json;
+    problem.progress_user_data = &capture;
+    problem.max_outer_iterations = 12;
+    problem.max_linear_iterations = 64;
+    problem.residual_tolerance = 1.0e-10;
+    problem.progress_window_phase = "base";
+    problem.progress_current_subwindow = 2;
+    problem.progress_total_subwindows = 4;
+    problem.progress_subwindow_elapsed_seconds = 1.25;
+    problem.progress_window_elapsed_seconds = 2.5;
+
+    const fd::PoissonAirboxModalLinearProgress poisson_progress{
+        fd::PoissonAirboxModalLinearSolverRole::poisson,
+        "preonly",
+        3,
+        0.125};
+    fd::poisson_airbox_modal_emit_progress(
+        problem,
+        "solving_shift_invert",
+        "production_cpu",
+        8,
+        2,
+        1,
+        99,
+        std::numeric_limits<double>::quiet_NaN(),
+        nullptr,
+        &poisson_progress);
+
+    check(capture.count == 1, "KSP progress must call the registered JSON callback");
+    check(is_valid_flat_progress_json(capture.json), "KSP progress must be valid JSON");
+    check(contains(capture.json, "\"residual_source\":\"ksp_norm\""),
+        "KSP progress must identify the raw residual source");
+    check(json_field_is_null(capture.json, "current_residual_relative_l2"),
+        "KSP norm must not be labeled as relative outer residual");
+    check(json_field_is_null(capture.json, "outer_iteration"),
+        "KSP iteration must not be labeled as an EPS iteration");
+    check(contains(capture.json, "\"linear_solver_role\":\"poisson\""),
+        "Poisson KSP progress must expose its solver role");
+    check(contains(capture.json, "\"linear_ksp_type\":\"preonly\""),
+        "available KSP type must be emitted");
+    check(contains(capture.json, "\"linear_iteration\":3"),
+        "typed KSP iteration must override the legacy iteration argument");
+    double linear_norm = -1.0;
+    check(json_field_is_finite_nonnegative_number(
+              capture.json, "linear_residual_norm", &linear_norm) &&
+              linear_norm == 0.125,
+        "finite non-negative KSP norm must be preserved");
+
+    capture = ProgressCapture{};
+    fd::PoissonAirboxModalLinearProgress missing_type_bad_norm{};
+    missing_type_bad_norm.role =
+        fd::PoissonAirboxModalLinearSolverRole::shift_invert;
+    fd::poisson_airbox_modal_emit_progress(
+        problem,
+        "solving_shift_invert",
+        "production_cpu",
+        0,
+        0,
+        0,
+        0,
+        0.0,
+        nullptr,
+        &missing_type_bad_norm);
+    check(is_valid_flat_progress_json(capture.json),
+        "missing KSP type and non-finite norm must still produce valid JSON");
+    check(json_field_is_null(capture.json, "linear_ksp_type"),
+        "unavailable KSP type must be JSON null");
+    check(json_field_is_null(capture.json, "linear_residual_norm"),
+        "non-finite KSP norm must be JSON null");
+    check(contains(capture.json, "\"linear_solver_role\":\"shift_invert\""),
+        "shift-invert KSP progress must expose its solver role");
+
+    capture = ProgressCapture{};
+    const fd::PoissonAirboxModalLinearProgress unknown_progress{};
+    fd::poisson_airbox_modal_emit_progress(
+        problem,
+        "solving_shift_invert",
+        "production_cpu",
+        0,
+        0,
+        0,
+        0,
+        0.0,
+        nullptr,
+        &unknown_progress);
+    check(is_valid_flat_progress_json(capture.json),
+        "default linear-progress payload must produce valid JSON");
+    check(json_field_is_null(capture.json, "linear_solver_role") &&
+              json_field_is_null(capture.json, "linear_ksp_type") &&
+              json_field_is_null(capture.json, "linear_residual_norm"),
+        "unknown role and unmeasured type/norm defaults must remain JSON null");
+
+    capture = ProgressCapture{};
+    const fd::PoissonAirboxModalLinearProgress negative_norm{
+        fd::PoissonAirboxModalLinearSolverRole::poisson,
+        "preonly",
+        2,
+        -0.5};
+    fd::poisson_airbox_modal_emit_progress(
+        problem,
+        "solving_shift_invert",
+        "production_cpu",
+        0,
+        0,
+        0,
+        0,
+        0.0,
+        nullptr,
+        &negative_norm);
+    check(is_valid_flat_progress_json(capture.json),
+        "negative KSP norm must not make the progress event invalid JSON");
+    check(json_field_is_null(capture.json, "linear_residual_norm"),
+        "negative KSP norm must be JSON null");
+
+    capture = ProgressCapture{};
+    problem.progress_subwindow_elapsed_seconds =
+        std::numeric_limits<double>::infinity();
+    problem.progress_window_elapsed_seconds =
+        -std::numeric_limits<double>::infinity();
+    problem.residual_tolerance = std::numeric_limits<double>::quiet_NaN();
+    fd::poisson_airbox_modal_emit_progress(
+        problem,
+        "frequency_window_subwindow_complete",
+        "production_cpu",
+        1,
+        2,
+        1,
+        7,
+        std::numeric_limits<double>::infinity());
+    check(is_valid_flat_progress_json(capture.json),
+        "generic window progress with non-finite values must remain valid JSON");
+    check(json_field_is_null(capture.json, "current_residual_relative_l2") &&
+              json_field_is_null(capture.json, "target_residual_relative_l2") &&
+              json_field_is_null(capture.json, "subwindow_elapsed_seconds") &&
+              json_field_is_null(capture.json, "window_elapsed_seconds"),
+        "non-finite generic telemetry values must be JSON null, not zero or invalid tokens");
 }
 
 void CertifiesSchurMatShellAgainstFullCoupledSparseReference()
@@ -501,6 +840,7 @@ int main()
     ModalKrylovTuningAcceptsCommonOverridesAndMatchingAliases();
     ModalKrylovTuningRejectsConflictingAliases();
     ModalKrylovTuningRejectsMalformedValuesAndInvalidDefaults();
+    ModalKspProgressUsesLinearResidualSemanticsAndValidJson();
     CertifiesSchurMatShellAgainstFullCoupledSparseReference();
     PlannerRequiresExplicitCertifiedSchurSelection();
     RejectsInvalidGaugeWeightsBeforeSchurCertification();

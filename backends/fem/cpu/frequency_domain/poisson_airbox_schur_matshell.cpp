@@ -1282,6 +1282,8 @@ struct ProductionCpuSolveControl {
 
 struct ProductionKspConvergenceContext {
     ProductionCpuSolveControl *solve_control = nullptr;
+    PoissonAirboxModalLinearSolverRole linear_solver_role =
+        PoissonAirboxModalLinearSolverRole::unknown;
     void *default_context = nullptr;
 };
 
@@ -1333,24 +1335,42 @@ PetscErrorCode production_modal_ksp_convergence_test(
                "missing production modal callback problem");
     ProductionCpuSolveControl *solve_control = context->solve_control;
     const PoissonAirboxEigenBlockProblem &problem = solve_control->callback_problem;
-    if (solve_control->cancel_poll_enabled &&
-        poisson_airbox_modal_cancel_requested(problem)) {
-        solve_control->cancellation_observed = true;
-        if (reason != nullptr) {
-            *reason = KSP_DIVERGED_USER;
-        }
-        if (solve_control->progress_enabled) {
+    auto emit_linear_progress =
+        [&](const char *phase, const char *stop_reason) noexcept {
+            if (!solve_control->progress_enabled ||
+                problem.progress_callback == nullptr) {
+                return;
+            }
+            const char *ksp_type = nullptr;
+            const PetscErrorCode ksp_type_status =
+                ksp != nullptr ? KSPGetType(ksp, &ksp_type) : PETSC_ERR_ARG_NULL;
+            if (ksp_type_status != PETSC_SUCCESS) {
+                ksp_type = nullptr;
+            }
+            const PoissonAirboxModalLinearProgress linear_progress{
+                context->linear_solver_role,
+                ksp_type,
+                static_cast<std::uint32_t>(std::max<PetscInt>(0, iteration)),
+                static_cast<double>(residual_norm)};
             poisson_airbox_modal_emit_progress(
                 problem,
-                "cancelling_shift_invert",
+                phase,
                 "production_cpu",
                 static_cast<std::uint32_t>(std::max<PetscInt>(0, iteration)),
                 0,
                 0,
                 static_cast<std::uint32_t>(std::max<PetscInt>(0, iteration)),
                 static_cast<double>(residual_norm),
-                "cancel_requested");
+                stop_reason,
+                &linear_progress);
+        };
+    if (solve_control->cancel_poll_enabled &&
+        poisson_airbox_modal_cancel_requested(problem)) {
+        solve_control->cancellation_observed = true;
+        if (reason != nullptr) {
+            *reason = KSP_DIVERGED_USER;
         }
+        emit_linear_progress("cancelling_shift_invert", "cancel_requested");
         PetscFunctionReturn(PETSC_SUCCESS);
     }
     // The same ST KSP is reused for every shift solve and for post-EPS Ritz
@@ -1363,23 +1383,14 @@ PetscErrorCode production_modal_ksp_convergence_test(
     }
     PetscCall(KSPConvergedDefault(
         ksp, iteration, residual_norm, reason, context->default_context));
-    if (solve_control->progress_enabled) {
-        poisson_airbox_modal_emit_progress(
-            problem,
-            "solving_shift_invert",
-            "production_cpu",
-            static_cast<std::uint32_t>(std::max<PetscInt>(0, iteration)),
-            0,
-            0,
-            static_cast<std::uint32_t>(std::max<PetscInt>(0, iteration)),
-            static_cast<double>(residual_norm));
-    }
+    emit_linear_progress("solving_shift_invert", nullptr);
     PetscFunctionReturn(PETSC_SUCCESS);
 }
 
 PetscErrorCode install_production_modal_ksp_convergence_test(
     KSP ksp,
-    ProductionCpuSolveControl *solve_control)
+    ProductionCpuSolveControl *solve_control,
+    PoissonAirboxModalLinearSolverRole linear_solver_role)
 {
     PetscFunctionBeginUser;
     PetscCheck(ksp != nullptr && solve_control != nullptr,
@@ -1392,6 +1403,7 @@ PetscErrorCode install_production_modal_ksp_convergence_test(
                PETSC_ERR_MEM,
                "failed to allocate production modal KSP convergence context");
     context->solve_control = solve_control;
+    context->linear_solver_role = linear_solver_role;
     PetscErrorCode status = KSPConvergedDefaultCreate(&context->default_context);
     if (status == PETSC_SUCCESS) {
         status = KSPSetConvergenceTest(
@@ -1772,7 +1784,8 @@ bool configure_production_context(
         KSPSetErrorIfNotConverged(context->poisson_ksp, PETSC_TRUE) != 0 ||
         install_production_modal_ksp_convergence_test(
             context->poisson_ksp,
-            solve_control) != 0 ||
+            solve_control,
+            PoissonAirboxModalLinearSolverRole::poisson) != 0 ||
         KSPSetUp(context->poisson_ksp) != 0) {
         return false;
     }
@@ -4016,7 +4029,7 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                     0u,
                     0u,
                     0u,
-                    0.0);
+                    std::numeric_limits<double>::quiet_NaN());
                 auto shifted_result_storage =
                     std::make_unique<PoissonAirboxModalEigenResult>();
                 FrequencyDomainStatus shifted_status =
@@ -5812,7 +5825,8 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
         KSPSetErrorIfNotConverged(st_ksp, PETSC_TRUE) == 0 &&
         install_production_modal_ksp_convergence_test(
             st_ksp,
-            &operator_context->solve_control) == 0 &&
+            &operator_context->solve_control,
+            PoissonAirboxModalLinearSolverRole::shift_invert) == 0 &&
         VecCreateSeq(PETSC_COMM_SELF, split_count, &xr) == 0 &&
         VecCreateSeq(PETSC_COMM_SELF, split_count, &xi) == 0;
     if (!configured) {

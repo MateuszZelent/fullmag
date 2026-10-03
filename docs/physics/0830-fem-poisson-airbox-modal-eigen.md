@@ -580,6 +580,40 @@ określa `maxits` jako maksimum iteracji;
 opisuje elastyczny GMRES i jego restart. Nie wyprowadzamy z dokumentacji
 biblioteki dowodu poprawności fizycznej modelu Fullmag.
 
+<!-- k0-inner-residual-progress -->
+### 3.1.2 Telemetria KSP i postęp podokien K0
+
+Norma `rnorm` dostarczana przez PETSc do testu zbieżności KSP jest normą
+wewnętrznego problemu liniowego, zależną od jego skalowania i ustawionej
+normy/preconditioningu. Nie jest pełnym, względnym residualem deskryptora
+LLG. Nie należy porównywać jej w UI z `residual_tolerance` modu ani używać
+jako dowodu akceptacji częstotliwości.
+
+Callback JSON `fem_frequency_domain_progress.v1` zachowuje historyczne pola,
+ale dla jawnego źródła `residual_source=ksp_norm` publikuje
+`current_residual_relative_l2=null` i `outer_iteration=null`. Osobno podaje
+`linear_iteration`, `linear_residual_norm`, rolę `linear_solver_role`
+(`poisson` albo `shift_invert`) oraz odczytany `linear_ksp_type`, gdy query
+jest dostępne. Wartości niefinity i nieznane są null lub pomijane; nie stają
+się zerowym residualem. Brak pola w historycznej telemetrii nie stanowi
+certyfikatu nowej semantyki ani pełnego residualu.
+
+Indeks podokna (`current_subwindow/total_subwindows`) jest osobnym wymiarem
+postępu. Konsument nie zapisuje go jako liczby iteracji EPS; wyświetla go
+jako podokno. Iteracje KSP i ich normę podpisuje osobno, wraz z rolą solvera.
+Operatory, stop KSP, cancellation, harmonogram shiftów i pełna bramka
+residualu modu pozostają bez zmiany. Są to dane diagnostyczne FEM CPU K0;
+FDM i GPU nie uzyskują przez tę poprawkę kwalifikacji.
+
+Mapowanie wykonania: `poisson_airbox_schur_matshell.cpp` +
+`production_modal_ksp_convergence_test`, `poisson_airbox_modal_eigen.hpp` +
+`poisson_airbox_modal_emit_progress`, `eigen_progress.rs` +
+`native_modal_progress_event`, runner `lib.rs` + `fem_eigen_progress_update`
+oraz CLI `orchestrator.rs` + `append_fem_eigen_step_progress`.
+Źródłowe regresje producer/consumer są przygotowywane bez kompilacji
+C++/Rust zgodnie z zakazem. Managed query, publikacja API/UI i rzeczywisty
+log wymagają nowego runtime-v2: NOT VERIFIED.
+
 ### 3.2 GPU
 
 A GPU result can become production-capable only when the assembled blocks,
@@ -1162,6 +1196,11 @@ managed manifest, not these links alone.
 
 | Equation/claim | Lane | Repository path + stable symbol | Responsibility | Tests | Evidence status | Immutable link |
 |---|---|---|---|---|---|---|
+| source-k0-linear-progress | FEM CPU | `backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.cpp` + `production_modal_ksp_convergence_test` | Emit actual KSP norm and explicit Poisson/ST role, independently of physical modal residual. | prepared native/consumer regression | source WIP; managed runtime NOT VERIFIED | current source; immutable checkpoint pending |
+| source-modal-progress-json | FEM CPU | `backends/fem/cpu/frequency_domain/poisson_airbox_modal_eigen.hpp` + `poisson_airbox_modal_emit_progress` | Publish nullable physical residual and distinct tagged linear-solver diagnostics without invalid nonfinite JSON. | prepared native/consumer regression | source WIP; managed runtime NOT VERIFIED | current source; immutable checkpoint pending |
+| source-modal-progress-decoder | FEM CPU | `crates/fullmag-runner/src/fem/eigen_progress.rs` + `native_modal_progress_event` | Keep outer iteration, subwindow index and tagged linear norm distinct. | prepared native/consumer regression | source WIP; managed runtime NOT VERIFIED | current source; immutable checkpoint pending |
+| source-modal-progress-runtime | FEM CPU | `crates/fullmag-runner/src/lib.rs` + `fem_eigen_progress_update` | Preserve typed solver diagnostics in the existing progress scalar envelope. | prepared native/consumer regression | source WIP; managed runtime NOT VERIFIED | current source; immutable checkpoint pending |
+| source-modal-progress-cli | FEM CPU | `crates/fullmag-cli/src/orchestrator.rs` + `append_fem_eigen_step_progress` | Label KSP norm/iteration independently of modal relative residual and window progress. | prepared native/consumer regression | source WIP; managed runtime NOT VERIFIED | current source; immutable checkpoint pending |
 | Common modal Krylov tuning | FEM CPU | `backends/fem/cpu/frequency_domain/modal_krylov_tuning.hpp` + `resolve_modal_krylov_tuning` | Validate common runtime controls and adapter-specific legacy aliases | prepared native parser cases; interpreted pilot tests | source reviewed; managed native runtime NOT VERIFIED | new source; immutable commit link pending |
 | Physical sweep API | common | `packages/fullmag-py/src/fullmag/model/eigen.py` + `class BiasFieldSweep` | Validate SI samples and lower declared ordering/policies | `test_eigenmodes_bias_field_sweep_serializes_declared_si_samples` | source tested | [blob](https://github.com/MateuszZelent/fullmag/blob/fe73ad661c55cc490faf076eb88f9ba387a9ac01/packages/fullmag-py/src/fullmag/model/eigen.py) |
 | Stage-first modal authoring | common | `packages/fullmag-py/src/fullmag/world.py` + `eigenmodes_stage` | Lower the stage builder to public `Eigenmodes` | `test_study_stage_builder_bias_field_sweep_roundtrips_cpu_and_gpu_intent` | source tested | [blob](https://github.com/MateuszZelent/fullmag/blob/fe73ad661c55cc490faf076eb88f9ba387a9ac01/packages/fullmag-py/src/fullmag/world.py) |

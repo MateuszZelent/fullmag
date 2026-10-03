@@ -3,9 +3,12 @@
 #include "frequency_domain/modal_eigen_request.hpp"
 
 #include <complex>
+#include <cmath>
+#include <cstddef>
 #include <cstdio>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <vector>
 
 namespace fullmag::fem::frequency_domain {
@@ -126,6 +129,88 @@ struct PoissonAirboxEigenBlockProblem {
     double progress_window_elapsed_seconds = 0.0;
 };
 
+enum class PoissonAirboxModalLinearSolverRole : std::uint8_t {
+    unknown,
+    poisson,
+    shift_invert
+};
+
+struct PoissonAirboxModalLinearProgress {
+    PoissonAirboxModalLinearSolverRole role =
+        PoissonAirboxModalLinearSolverRole::unknown;
+    const char *ksp_type = nullptr;
+    std::uint32_t linear_iteration = 0;
+    double residual_norm = std::numeric_limits<double>::quiet_NaN();
+};
+
+inline void poisson_airbox_modal_format_json_number(
+    double value,
+    char *destination,
+    std::size_t destination_size,
+    bool require_nonnegative = false) noexcept
+{
+    if (destination == nullptr || destination_size == 0) {
+        return;
+    }
+    if (!std::isfinite(value) || (require_nonnegative && value < 0.0)) {
+        std::snprintf(destination, destination_size, "null");
+        return;
+    }
+    std::snprintf(destination, destination_size, "%.17g", value);
+}
+
+inline bool poisson_airbox_modal_format_json_string(
+    const char *value,
+    char *destination,
+    std::size_t destination_size) noexcept
+{
+    if (destination == nullptr || destination_size == 0) {
+        return false;
+    }
+    if (value == nullptr) {
+        std::snprintf(destination, destination_size, "null");
+        return false;
+    }
+
+    constexpr char hex[] = "0123456789abcdef";
+    std::size_t cursor = 0;
+    if (destination_size < 3) {
+        std::snprintf(destination, destination_size, "null");
+        return false;
+    }
+    destination[cursor++] = '"';
+    for (const unsigned char *source =
+             reinterpret_cast<const unsigned char *>(value);
+         *source != 0;
+         ++source) {
+        const unsigned char character = *source;
+        const std::size_t needed =
+            character == '"' || character == '\\' ? 2u
+            : character < 0x20u ? 6u
+                                : 1u;
+        if (cursor + needed + 2u > destination_size || character >= 0x7fu) {
+            std::snprintf(destination, destination_size, "null");
+            return false;
+        }
+        if (character == '"' || character == '\\') {
+            destination[cursor++] = '\\';
+            destination[cursor++] = static_cast<char>(character);
+        } else if (character < 0x20u) {
+            destination[cursor++] = '\\';
+            destination[cursor++] = 'u';
+            destination[cursor++] = '0';
+            destination[cursor++] = '0';
+            destination[cursor++] = hex[(character >> 4u) & 0x0fu];
+            destination[cursor++] = hex[character & 0x0fu];
+        } else {
+            destination[cursor++] = static_cast<char>(character);
+        }
+    }
+    destination[cursor++] = '"';
+    destination[cursor] = '\0';
+    return true;
+}
+
 inline bool poisson_airbox_modal_cancel_requested(
     const PoissonAirboxEigenBlockProblem &problem) noexcept
 {
@@ -142,12 +227,97 @@ inline void poisson_airbox_modal_emit_progress(
     std::uint32_t accepted_mode_count,
     std::uint32_t linear_iteration,
     double residual_relative,
-    const char *stop_reason = nullptr) noexcept
+    const char *stop_reason = nullptr,
+    const PoissonAirboxModalLinearProgress *linear_progress = nullptr) noexcept
 {
     if (problem.progress_callback == nullptr) {
         return;
     }
-    char progress_json[1024]{};
+    char outer_iteration_json[24]{};
+    if (linear_progress == nullptr) {
+        std::snprintf(
+            outer_iteration_json,
+            sizeof(outer_iteration_json),
+            "%u",
+            outer_iteration);
+    } else {
+        std::snprintf(outer_iteration_json, sizeof(outer_iteration_json), "null");
+    }
+
+    char residual_relative_json[32]{};
+    char target_residual_json[32]{};
+    char subwindow_elapsed_json[32]{};
+    char window_elapsed_json[32]{};
+    char linear_residual_json[32]{};
+    poisson_airbox_modal_format_json_number(
+        residual_relative,
+        residual_relative_json,
+        sizeof(residual_relative_json));
+    if (linear_progress != nullptr) {
+        std::snprintf(
+            residual_relative_json,
+            sizeof(residual_relative_json),
+            "null");
+        poisson_airbox_modal_format_json_number(
+            linear_progress->residual_norm,
+            linear_residual_json,
+            sizeof(linear_residual_json),
+            true);
+    }
+    poisson_airbox_modal_format_json_number(
+        problem.residual_tolerance,
+        target_residual_json,
+        sizeof(target_residual_json));
+    poisson_airbox_modal_format_json_number(
+        problem.progress_subwindow_elapsed_seconds,
+        subwindow_elapsed_json,
+        sizeof(subwindow_elapsed_json));
+    poisson_airbox_modal_format_json_number(
+        problem.progress_window_elapsed_seconds,
+        window_elapsed_json,
+        sizeof(window_elapsed_json));
+
+    char ksp_type_json[256]{};
+    char linear_fields[512]{};
+    const char *linear_role_json = "null";
+    if (linear_progress != nullptr) {
+        const char *linear_role = nullptr;
+        switch (linear_progress->role) {
+        case PoissonAirboxModalLinearSolverRole::unknown:
+            break;
+        case PoissonAirboxModalLinearSolverRole::poisson:
+            linear_role = "poisson";
+            break;
+        case PoissonAirboxModalLinearSolverRole::shift_invert:
+            linear_role = "shift_invert";
+            break;
+        }
+        if (linear_role != nullptr) {
+            linear_role_json = linear_role[0] == 'p'
+                ? "\"poisson\""
+                : "\"shift_invert\"";
+        }
+        poisson_airbox_modal_format_json_string(
+            linear_progress->ksp_type,
+            ksp_type_json,
+            sizeof(ksp_type_json));
+        const int linear_fields_written = std::snprintf(
+            linear_fields,
+            sizeof(linear_fields),
+            ",\"residual_source\":\"ksp_norm\","
+            "\"linear_solver_role\":%s,\"linear_ksp_type\":%s,"
+            "\"linear_residual_norm\":%s",
+            linear_role_json,
+            ksp_type_json,
+            linear_residual_json);
+        if (linear_fields_written < 0 ||
+            static_cast<std::size_t>(linear_fields_written) >=
+                sizeof(linear_fields)) {
+            return;
+        }
+    }
+
+    char progress_json[1536]{};
     const int written = std::snprintf(
         progress_json,
         sizeof(progress_json),
@@ -157,17 +327,17 @@ inline void poisson_airbox_modal_emit_progress(
         "\"execution_lane\":\"%s\","
         "\"candidate_mode_count\":%u,"
         "\"accepted_mode_count\":%u,"
-        "\"outer_iteration\":%u,"
+        "\"outer_iteration\":%s,"
         "\"max_outer_iterations\":%u,"
         "\"linear_iteration\":%u,"
         "\"max_linear_iterations\":%u,"
-        "\"current_residual_relative_l2\":%.17g,"
-        "\"target_residual_relative_l2\":%.17g,"
+        "\"current_residual_relative_l2\":%s,"
+        "\"target_residual_relative_l2\":%s,"
         "\"window_phase\":%s,"
         "\"current_subwindow\":%u,"
         "\"total_subwindows\":%u,"
-        "\"subwindow_elapsed_seconds\":%.17g,"
-        "\"window_elapsed_seconds\":%.17g,"
+        "\"subwindow_elapsed_seconds\":%s,"
+        "\"window_elapsed_seconds\":%s%s,"
         "\"partial_artifacts_available\":false,"
         "\"latest_artifact_manifest_path\":\"\","
         "\"stop_reason\":%s}",
@@ -175,12 +345,14 @@ inline void poisson_airbox_modal_emit_progress(
         execution_lane != nullptr ? execution_lane : "production_cpu",
         candidate_mode_count,
         accepted_mode_count,
-        outer_iteration,
+        outer_iteration_json,
         problem.max_outer_iterations,
-        linear_iteration,
+        linear_progress != nullptr
+            ? linear_progress->linear_iteration
+            : linear_iteration,
         problem.max_linear_iterations,
-        residual_relative,
-        problem.residual_tolerance,
+        residual_relative_json,
+        target_residual_json,
         problem.progress_window_phase != nullptr
             ? (std::strcmp(problem.progress_window_phase, "base") == 0
                    ? "\"base\""
@@ -188,8 +360,9 @@ inline void poisson_airbox_modal_emit_progress(
             : "null",
         problem.progress_current_subwindow,
         problem.progress_total_subwindows,
-        problem.progress_subwindow_elapsed_seconds,
-        problem.progress_window_elapsed_seconds,
+        subwindow_elapsed_json,
+        window_elapsed_json,
+        linear_fields,
         stop_reason != nullptr ? "\"cancel_requested\"" : "null");
     if (written > 0 && static_cast<std::size_t>(written) < sizeof(progress_json)) {
         problem.progress_callback(problem.progress_user_data, progress_json);

@@ -1989,6 +1989,73 @@ fn fem_eigen_progress_phase(progress: &std::collections::HashMap<String, f64>) -
     }
 }
 
+fn fem_eigen_progress_is_ksp_norm(
+    progress: &std::collections::HashMap<String, f64>,
+) -> bool {
+    progress.get("residual_source:ksp_norm") == Some(&1.0)
+}
+
+fn fem_eigen_progress_counter(
+    progress: &std::collections::HashMap<String, f64>,
+    key: &str,
+) -> Option<u64> {
+    let value = progress.get(key).copied()?;
+    (value.is_finite()
+        && value >= 0.0
+        && value.fract() == 0.0
+        && value < u64::MAX as f64)
+        .then_some(value as u64)
+}
+
+fn fem_eigen_progress_tagged_value<'a>(
+    progress: &std::collections::HashMap<String, f64>,
+    prefix: &str,
+    allowed: &'a [&'a str],
+) -> Option<&'a str> {
+    let mut matches = allowed.iter().copied().filter(|value| {
+        let key = format!("{prefix}{value}");
+        progress
+            .get(&key)
+            .is_some_and(|flag| flag.is_finite() && *flag == 1.0)
+    });
+    let value = matches.next()?;
+    matches.next().is_none().then_some(value)
+}
+
+fn fem_eigen_linear_progress_detail(
+    progress: &std::collections::HashMap<String, f64>,
+) -> Option<String> {
+    if !fem_eigen_progress_is_ksp_norm(progress) {
+        return None;
+    }
+
+    let mut fields = Vec::with_capacity(4);
+    if let Some(iteration) = fem_eigen_progress_counter(progress, "linear_iteration") {
+        fields.push(format!("linear_iteration={iteration}"));
+    }
+    if let Some(norm) = progress
+        .get("linear_residual_norm")
+        .copied()
+        .filter(|value| value.is_finite() && *value >= 0.0)
+    {
+        fields.push(format!("ksp_norm={norm:.3e}"));
+    }
+    if let Some(role) =
+        fem_eigen_progress_tagged_value(progress, "linear_solver_role:", &["poisson", "shift_invert"])
+    {
+        fields.push(format!("linear_solver_role={role}"));
+    }
+    if let Some(ksp_type) = fem_eigen_progress_tagged_value(
+        progress,
+        "linear_ksp_type:",
+        &["gmres", "fgmres", "preonly"],
+    ) {
+        fields.push(format!("linear_ksp_type={ksp_type}"));
+    }
+
+    (!fields.is_empty()).then(|| fields.join("; "))
+}
+
 fn fem_eigen_progress_detail(
     progress: &std::collections::HashMap<String, f64>,
     phase: &str,
@@ -2001,18 +2068,20 @@ fn fem_eigen_progress_detail(
     let mut detail = format!(
         "{phase}; solver={solver}; active_nodes={active_nodes}; effective_dof={effective_dof}; requested_modes={requested_modes}; computed_modes={computed_modes}"
     );
-    if let Some(iteration) = progress.get("iteration").copied() {
-        if let Some(max_iterations) = progress.get("max_iterations").copied() {
-            detail.push_str(&format!(
-                "; iteration={}/{}",
-                iteration as u64, max_iterations as u64
-            ));
+    if let Some(iteration) = fem_eigen_progress_counter(progress, "iteration") {
+        if let Some(max_iterations) = fem_eigen_progress_counter(progress, "max_iterations") {
+            detail.push_str(&format!("; iteration={iteration}/{max_iterations}"));
         } else {
-            detail.push_str(&format!("; iteration={}", iteration as u64));
+            detail.push_str(&format!("; iteration={iteration}"));
         }
     }
-    if let Some(residual) = progress.get("residual").copied() {
-        detail.push_str(&format!("; residual={residual:.3e}"));
+    if !fem_eigen_progress_is_ksp_norm(progress) {
+        if let Some(residual) = progress.get("residual").copied() {
+            detail.push_str(&format!("; residual={residual:.3e}"));
+        }
+    }
+    if let Some(linear_progress) = fem_eigen_linear_progress_detail(progress) {
+        detail.push_str(&format!("; {linear_progress}"));
     }
     let window_phase = if progress
         .get("window_phase_base")
@@ -2031,10 +2100,10 @@ fn fem_eigen_progress_detail(
         detail.push_str(&format!("; window_phase={window_phase}"));
     }
     if let (Some(current), Some(total)) = (
-        progress.get("current_subwindow").copied(),
-        progress.get("total_subwindows").copied(),
+        fem_eigen_progress_counter(progress, "current_subwindow"),
+        fem_eigen_progress_counter(progress, "total_subwindows"),
     ) {
-        detail.push_str(&format!("; subwindow={}/{}", current as u64, total as u64));
+        detail.push_str(&format!("; subwindow={current}/{total}"));
     }
     if let Some(seconds) = progress.get("subwindow_elapsed_seconds").copied() {
         if seconds.is_finite() {
@@ -2176,26 +2245,29 @@ fn append_fem_eigen_step_progress(line: &mut String, stats: &fullmag_runner::Ste
     };
     let window_phase = if progress
         .get("window_phase_base")
-        .is_some_and(|value| *value > 0.0)
+        .is_some_and(|value| *value == 1.0)
     {
         Some("base")
     } else if progress
         .get("window_phase_refinement")
-        .is_some_and(|value| *value > 0.0)
+        .is_some_and(|value| *value == 1.0)
     {
         Some("refinement")
     } else {
         None
     };
-    let Some(window_phase) = window_phase else {
+    let linear_progress = fem_eigen_linear_progress_detail(progress);
+    if window_phase.is_none() && linear_progress.is_none() {
         return;
-    };
-    let mut segment = format!("  modal window phase={window_phase}");
+    }
+    let mut segment = window_phase
+        .map(|phase| format!("  modal window phase={phase}"))
+        .unwrap_or_else(|| "  modal linear solve".to_string());
     if let (Some(current), Some(total)) = (
-        progress.get("current_subwindow").copied(),
-        progress.get("total_subwindows").copied(),
+        fem_eigen_progress_counter(progress, "current_subwindow"),
+        fem_eigen_progress_counter(progress, "total_subwindows"),
     ) {
-        segment.push_str(&format!(" subwindow={}/{}", current as u64, total as u64));
+        segment.push_str(&format!(" subwindow={current}/{total}"));
     }
     if let Some(seconds) = progress.get("subwindow_elapsed_seconds").copied() {
         if seconds.is_finite() {
@@ -2207,8 +2279,17 @@ fn append_fem_eigen_step_progress(line: &mut String, stats: &fullmag_runner::Ste
             segment.push_str(&format!(" window_s={seconds:.1}"));
         }
     }
-    if let Some(residual) = progress.get("residual").copied() {
-        if residual.is_finite() {
+    if let Some(linear_progress) = linear_progress {
+        if !line.contains(linear_progress.as_str()) {
+            segment.push_str(&format!(" {linear_progress}"));
+        }
+    }
+    if !fem_eigen_progress_is_ksp_norm(progress) {
+        if let Some(residual) = progress
+            .get("residual")
+            .copied()
+            .filter(|value| value.is_finite())
+        {
             segment.push_str(&format!(" relres={residual:.3e}"));
         }
     }
@@ -13545,6 +13626,82 @@ mod tests {
         assert!(line.contains("subwindow_s=4.2"), "{line}");
         assert!(line.contains("window_s=71.5"), "{line}");
         assert!(line.contains("relres=2.000e-9"), "{line}");
+    }
+
+    fn tagged_ksp_progress_for_cli() -> std::collections::HashMap<String, f64> {
+        let mut progress = std::collections::HashMap::new();
+        for (key, value) in [
+            ("window_phase_refinement", 1.0),
+            ("iteration", 17.0),
+            ("max_iterations", 300.0),
+            ("current_subwindow", 23.0),
+            ("total_subwindows", 50.0),
+            ("linear_iteration", 12.0),
+            ("linear_residual_norm", 4.5e-8),
+            ("linear_solver_role:poisson", 1.0),
+            ("linear_ksp_type:gmres", 1.0),
+            ("residual_source:ksp_norm", 1.0),
+            ("residual", 5.0e-2),
+        ] {
+            progress.insert(key.to_string(), value);
+        }
+        progress
+    }
+
+    #[test]
+    fn terminal_stage_line_formats_tagged_ksp_without_relative_residual() {
+        let mut per_object_scalars = std::collections::HashMap::new();
+        per_object_scalars.insert(
+            "fem_eigen_progress".to_string(),
+            tagged_ksp_progress_for_cli(),
+        );
+        let stats = fullmag_runner::StepStats {
+            step: 17,
+            per_object_scalars,
+            ..fullmag_runner::StepStats::default()
+        };
+
+        let line = format_stage_progress_line(
+            "stage 2/2 (flat_eigenmodes)",
+            &stats,
+            None,
+            Some(Duration::from_secs(5)),
+            None,
+        );
+
+        assert!(line.contains("iteration=17/300"), "{line}");
+        assert!(line.contains("subwindow=23/50"), "{line}");
+        assert!(line.contains("linear_iteration=12"), "{line}");
+        assert!(line.contains("ksp_norm=4.500e-8"), "{line}");
+        assert!(line.contains("linear_solver_role=poisson"), "{line}");
+        assert!(line.contains("linear_ksp_type=gmres"), "{line}");
+        assert_eq!(line.matches("ksp_norm=").count(), 1, "{line}");
+        assert!(!line.contains("relres="), "{line}");
+        assert!(!line.contains("residual=5.000e-2"), "{line}");
+    }
+
+    #[test]
+    fn appended_fem_eigen_progress_formats_tagged_ksp_diagnostics() {
+        let mut per_object_scalars = std::collections::HashMap::new();
+        per_object_scalars.insert(
+            "fem_eigen_progress".to_string(),
+            tagged_ksp_progress_for_cli(),
+        );
+        let stats = fullmag_runner::StepStats {
+            per_object_scalars,
+            ..fullmag_runner::StepStats::default()
+        };
+        let mut line = "stage".to_string();
+
+        super::append_fem_eigen_step_progress(&mut line, &stats);
+
+        assert!(line.contains("subwindow=23/50"), "{line}");
+        assert!(line.contains("linear_iteration=12"), "{line}");
+        assert!(line.contains("ksp_norm=4.500e-8"), "{line}");
+        assert!(line.contains("linear_solver_role=poisson"), "{line}");
+        assert!(line.contains("linear_ksp_type=gmres"), "{line}");
+        assert!(!line.contains("relres="), "{line}");
+        assert!(!line.contains("residual=5.000e-2"), "{line}");
     }
 
     #[test]
