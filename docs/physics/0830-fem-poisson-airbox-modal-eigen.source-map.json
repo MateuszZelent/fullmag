@@ -445,7 +445,8 @@
       "path": "crates/fullmag-runner/src/fem/eigen_equilibrium.rs",
       "symbol": "finite_air_extension_does_not_change_magnetic_comparison",
       "responsibility": "Six regression cases for support-only comparison and malformed data rejection; unit-test compilation currently prohibited."
-    }
+    },
+    {"id": "source-static-demag-replay-preimage", "path": "crates/fullmag-runner/src/fem/eigen_shared_domain.rs", "symbol": "shared_domain_static_demag_signature", "responsibility": "Exact persisted static-field subdigest with requested realization; independent numerical replay comparisons remain mandatory."}
   ],
   "public_api": {
     "parameters": [

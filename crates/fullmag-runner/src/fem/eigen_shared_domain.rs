@@ -209,7 +209,14 @@ pub(super) fn validation_oracle_full_interleaved_modal_a_qq_csr(
 }
 
 pub(super) fn max_vector_field_difference(left: &[Vector3], right: &[Vector3]) -> Option<f64> {
-    if left.len() != right.len() {
+    if left.is_empty()
+        || left.len() != right.len()
+        || left
+            .iter()
+            .chain(right.iter())
+            .flatten()
+            .any(|value| !value.is_finite())
+    {
         return None;
     }
     Some(
@@ -225,7 +232,13 @@ pub(super) fn max_vector_field_difference(left: &[Vector3], right: &[Vector3]) -
 }
 
 fn max_scalar_field_difference(left: &[f64], right: &[f64]) -> Option<f64> {
-    if left.len() != right.len() {
+    if left.is_empty()
+        || left.len() != right.len()
+        || left
+            .iter()
+            .chain(right.iter())
+            .any(|value| !value.is_finite())
+    {
         return None;
     }
     Some(
@@ -251,6 +264,33 @@ pub(super) fn extend_equilibrium_m0_to_air_nodes(
             }
         })
         .collect()
+}
+
+/// Hash the fields that are actually persisted, independently of replay roundoff.
+fn shared_domain_static_demag_signature(
+    realization: Option<&str>,
+    recomputed_h_demag0: &[Vector3],
+    recomputed_phi0: &[f64],
+    stored_fields: Option<(&[Vector3], &[f64])>,
+) -> Result<String, RunError> {
+    let (h_demag0, phi0) = stored_fields.unwrap_or((recomputed_h_demag0, recomputed_phi0));
+    if h_demag0.is_empty()
+        || h_demag0.len() != phi0.len()
+        || h_demag0.iter().flatten().any(|value| !value.is_finite())
+        || phi0.iter().any(|value| !value.is_finite())
+    {
+        return Err(RunError {
+            message: "equilibrium_static_demag_preimage_invalid".to_string(),
+        });
+    }
+    shared_domain_content_digest(
+        "static_demag_signature",
+        &serde_json::json!({
+            "realization": realization,
+            "h_demag0_a_per_m": h_demag0,
+            "phi0_a": phi0,
+        }),
+    )
 }
 
 pub(super) fn build_shared_domain_linearization_state(
@@ -346,14 +386,11 @@ pub(super) fn build_shared_domain_linearization_state(
             "periodic_boundary_pairs": plan.mesh.periodic_boundary_pairs,
         }),
     )?;
-    let static_demag_signature = shared_domain_content_digest(
-        "static_demag_signature",
-        &serde_json::json!({
-            "realization": resolved_demag_realization(plan)
-                .map(|value| value.provenance_name()),
-            "h_demag0_a_per_m": observables.demag_field,
-            "phi0_a": phi0,
-        }),
+    let static_demag_signature = shared_domain_static_demag_signature(
+        resolved_demag_realization(plan).map(|value| value.provenance_name()),
+        &observables.demag_field,
+        &phi0,
+        source_artifact.map(|source| (source.h_demag0.as_slice(), source.phi0.as_slice())),
     )?;
 
     if let Some(source_artifact) = source_artifact {
@@ -361,7 +398,7 @@ pub(super) fn build_shared_domain_linearization_state(
             let Some(difference) = difference else {
                 return Err(RunError {
                     message: format!(
-                        "equilibrium_{label}_comparison_failed: stored field shape does not match the requested mesh"
+                        "equilibrium_{label}_comparison_failed: stored/recomputed field is incomplete or non-finite"
                     ),
                 });
             };
@@ -1608,4 +1645,105 @@ pub(super) fn validation_only_raw_provided_fixture_handoff(
         sha256_text("validation-only raw provided equilibrium artifact"),
         sha256_text("validation-only raw provided linearization state"),
     )
+}
+
+
+#[cfg(test)]
+mod static_demag_preimage_tests {
+    use super::*;
+
+    #[test]
+    fn replay_roundoff_preserves_persisted_static_demag_digest() {
+        let stored_h = [[4.7458289441396646e-11, 0.0, 0.0]];
+        let stored_phi = [1.318713395737503e-18];
+        let replay_h = [[stored_h[0][0] + 1.40556e-24, 0.0, 0.0]];
+        let replay_phi = [stored_phi[0] + 6.20e-31];
+        assert!(max_vector_field_difference(&stored_h, &replay_h).unwrap() < 1e-8);
+        assert!(max_scalar_field_difference(&stored_phi, &replay_phi).unwrap() < 1e-10);
+        let original = shared_domain_static_demag_signature(
+            Some("fem_poisson_dirichlet"),
+            &stored_h,
+            &stored_phi,
+            None,
+        )
+        .unwrap();
+        let imported = shared_domain_static_demag_signature(
+            Some("fem_poisson_dirichlet"),
+            &replay_h,
+            &replay_phi,
+            Some((&stored_h, &stored_phi)),
+        )
+        .unwrap();
+        let numerical = shared_domain_static_demag_signature(
+            Some("fem_poisson_dirichlet"),
+            &replay_h,
+            &replay_phi,
+            None,
+        )
+        .unwrap();
+        assert_eq!(original, imported);
+        assert_ne!(original, numerical);
+    }
+
+    #[test]
+    fn fresh_producer_digest_binds_its_actual_fields() {
+        let h = [[1.0, 2.0, 3.0]];
+        let phi = [4.0];
+        let actual = shared_domain_static_demag_signature(None, &h, &phi, None).unwrap();
+        let expected = shared_domain_content_digest(
+            "static_demag_signature",
+            &serde_json::json!({"realization": null, "h_demag0_a_per_m": h, "phi0_a": phi}),
+        )
+        .unwrap();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn replay_digest_still_rejects_a_changed_realization() {
+        let h = [[0.0; 3]];
+        let phi = [0.0];
+        let dirichlet = shared_domain_static_demag_signature(
+            Some("fem_poisson_dirichlet"),
+            &h,
+            &phi,
+            Some((&h, &phi)),
+        )
+        .unwrap();
+        let robin = shared_domain_static_demag_signature(
+            Some("fem_poisson_robin"),
+            &h,
+            &phi,
+            Some((&h, &phi)),
+        )
+        .unwrap();
+        assert_ne!(dirichlet, robin);
+    }
+
+    #[test]
+    fn full_domain_replay_rejects_invalid_recomputed_or_stored_fields() {
+        let finite = [[0.0; 3]; 2];
+        let invalid = [[0.0; 3], [f64::NAN, 0.0, 0.0]];
+        assert!(max_vector_field_difference(&finite, &invalid).is_none());
+        assert!(max_vector_field_difference(&invalid, &finite).is_none());
+        assert!(max_vector_field_difference(&finite, &finite[..1]).is_none());
+        assert!(max_vector_field_difference(&[], &[]).is_none());
+        assert!(max_scalar_field_difference(&[0.0, 0.0], &[0.0, f64::NAN]).is_none());
+        assert!(max_scalar_field_difference(&[f64::INFINITY], &[0.0]).is_none());
+        assert!(max_scalar_field_difference(&[0.0], &[]).is_none());
+        assert!(max_scalar_field_difference(&[], &[]).is_none());
+    }
+
+    #[test]
+    fn static_demag_digest_rejects_malformed_persisted_fields() {
+        assert!(shared_domain_static_demag_signature(None, &[], &[], None).is_err());
+        assert!(shared_domain_static_demag_signature(None, &[[0.0; 3]], &[], None).is_err());
+        assert!(
+            shared_domain_static_demag_signature(None, &[[f64::NAN, 0.0, 0.0]], &[0.0], None)
+                .is_err()
+        );
+        assert!(
+            shared_domain_static_demag_signature(None, &[[0.0; 3]], &[f64::INFINITY], None)
+                .is_err()
+        );
+    }
 }

@@ -1340,3 +1340,24 @@ Przypadek diagnostyczny z #222: certyfikat po poprawnym seed -25rad/µm ma6138 w
 | source-modal-field-replay-regression | crates/fullmag-runner/src/fem/eigen_equilibrium.rs + finite_air_extension_does_not_change_magnetic_comparison | sześć przygotowanych regresji; kompilacja testów NOT VERIFIED |
 
 Podstawa: ten sam dyskretny nośnik masy magnetycznej i weak form opisany w rozdziale governing-equations oraz [0828](0828-fem-frequency-domain-floquet-demag.md); źródłem stanu implementacji są powyższe symbole i receipty, nie manual COMSOL. Ta sekcja nie promuje realizacji do validated.
+
+
+(modal-static-demag-replay-preimage)=
+## Replay podpisu statycznego demag: integralność i porównanie numeryczne
+
+`static_demag_signature` wiąże dokładną serializację `realization`, `h_demag0_a_per_m` i `phi0_a` opublikowanych w equilibrium artifact. Dla importowanego artefaktu weryfikujemy ten preimage z jego zapisanych pól oraz realizacji demag żądanej przez bieżący plan. Osobno porównujemy zapisane pola z przeliczeniem: H_demag na całej domenie z progiem 1e-8 A/m, phi0 na całej domenie z progiem 1e-10 A; kontrola H_eff na nośniku magnetycznym i m0 pozostaje wyżej opisana. Zgodność numeryczna nie wymaga identycznej serializacji dwóch wyników solvera.
+
+Nie zastępujemy SHA tolerancją, zaokrągleniem ani skopiowanym deklarowanym podpisem. SHA nadal musi dokładnie zgadzać się z przeliczonym preimage przechowywanych pól. Content digest całego artefaktu, mesh/material/physics/boundary signatures i ich porównanie z bieżącym planem pozostają obowiązkowe. W szczególności zmiana realization jest nadal odrzucana. Dla nowego artefaktu z accepted relax handoff używamy świeżych pól; import zachowuje dokładne pola źródła w LinearizationState, więc oba podpisy wiążą ten sam persisted field payload. Nie zmieniamy v7/v8 lub LinearizationState v6/v7 ani ich kluczy.
+
+Dowód #223: bootstrap ukończył pierwszy solve, worker sample1 dla ky=-20e6 rad/m odrzucono `equilibrium_static_demag_hash_mismatch`. Podpis zapisany 4baa61f6… został niezależnie odtworzony z dokładnych lexemes JSON oraz `fem_poisson_dirichlet`; wyniki przeliczenia tworzyły 3db7210e…. Wszystkie wcześniejsze kontrole pól i konfiguracji przeszły. Zapisany H_demag ma maksimum 4.745828944e-11 A/m, phi0 1.318713396e-18 A; bitowa równość wyników arytmetyki nie jest fizycznym kryterium replay. Nie jest to dowód poprawnego nowego runtime: nowy build i ponowienie sweepa nadal wymagane.
+
+Python `equilibrium_source="artifact"` / `equilibrium_artifact` oraz ProblemIR `study.equilibrium.kind/path` bez zmiany. Poprawka jest kontrolą integralności metadata, nie zmianą operatora, normalizacji, jednostek, boundary ani dynamicznego demag. FEM CPU: kod/regresje źródłowe, managed replay OPEN; FEM GPU: wspólny importer, GPU replay NOT VERIFIED; FDM CPU/GPU: importer nie dotyczy ich realizacji. Koszt pozostaje liniowy w liczbie węzłów, bez nowej macierzy i transferów hot-loop.
+
+Źródła: `crates/fullmag-runner/src/fem/eigen_shared_domain.rs` + `shared_domain_static_demag_signature` oraz `build_shared_domain_linearization_state`; `eigen_equilibrium.rs` + `load_equilibrium_artifact`; `eigen_digest.rs` + `shared_domain_content_digest`. Przygotowane regresje sprawdzają roundoff-compatible replay bez zmiany źródłowego digestu, nowy producent z fresh fields, zmianę realization i odrzucenie niefinity/niepełnych pól. Zakaz kompilacji unit tests zachowany; nauka, 15 punktów, Γ, parity i zbieżność pozostają OPEN.
+
+
+| Source ID | Path + symbol | Zakres |
+|---|---|---|
+| source-static-demag-replay-preimage | crates/fullmag-runner/src/fem/eigen_shared_domain.rs + shared_domain_static_demag_signature | dokładny persisted preimage; odrębna kontrola numeryczna w build_shared_domain_linearization_state |
+
+Dodatkowa kontrola fail-closed: `max_vector_field_difference` i `max_scalar_field_difference` odrzucają również puste, różnej długości oraz nieskończone/NaN tablice po obu stronach porównania, na całej domenie. Zapobiega to pominięciu NaN przez `f64::max` podczas replay demag/phi0. Piąta przygotowana regresja obejmuje NaN na drugim węźle, obie strony, puste/krótsze tablice i nieskończoność; niekompilowana zgodnie z zakazem.
