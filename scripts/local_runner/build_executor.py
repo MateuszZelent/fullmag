@@ -101,6 +101,49 @@ def valid_cpu_mfem_abi_attestation(cmake_attestation):
     ):
         return False
     return re.fullmatch(r'[a-f0-9]{64}', str(mfem_abi.get('sha256', ''))) is not None
+def valid_cpu_modal_driver_attestation(runtime):
+    return isinstance(runtime, dict) and all(
+        runtime.get(name) == [] for name in (
+            'cuda_driver_compatibility_paths',
+            'cuda_driver_compatibility_libraries_preloaded',
+        )
+    )
+
+
+def valid_cpu_modal_dependency_attestation(cmake, dependency):
+    if not isinstance(cmake, dict) or not isinstance(dependency, dict):
+        return False
+    libraries = cmake.get('cpu_dependency_abi')
+    expected = {'mfem', 'hypre', 'ceed', 'petsc', 'slepc'}
+    if not isinstance(libraries, dict) or set(libraries) != expected:
+        return False
+    for family, record in libraries.items():
+        if not isinstance(record, dict):
+            return False
+        path = record.get('path')
+        if (not isinstance(path, str) or not path.startswith('/opt/fullmag-mfem-cpu/lib/')
+                or '..' in path.split('/') or '\\' in path
+                or not re.fullmatch(r'[a-f0-9]{64}', str(record.get('sha256', '')))):
+            return False
+    mfem_abi = cmake.get('mfem_abi')
+    if not isinstance(mfem_abi, dict) or any(mfem_abi.get(key) != libraries['mfem'].get(key)
+                                           for key in ('path', 'sha256')):
+        return False
+    for family in ('petsc', 'slepc'):
+        if dependency.get(family + '_library_realpath') != libraries[family]['path']:
+            return False
+        path = dependency.get(family + '_library_path')
+        directory = dependency.get(family + '_pkgconfig_dir')
+        if (not isinstance(path, str) or not path.startswith('/opt/fullmag-mfem-cpu/lib/')
+                or '..' in path.split('/') or '\\' in path
+                or directory != '/opt/fullmag-mfem-cpu/lib/pkgconfig'):
+            return False
+        module_name = 'FindPETSc.cmake' if family == 'petsc' else 'FindSLEPc.cmake'
+        if dependency.get(family + '_find_module_file') != '/workspace/backends/fem/cmake/' + module_name:
+            return False
+    return True
+
+
 TARGETS = {'source': '/source', 'workspace': '/workspace',
            'build': '/workspace/.fullmag-build', 'artifacts': '/artifacts',
            'trusted': '/runner', 'cargo': '/workspace/.fullmag-cargo',
@@ -404,6 +447,8 @@ def validate_build_receipt(artifacts, job, journal):
             or not re.fullmatch(r'[a-f0-9]{64}', stamped_snapshot)
         ):
             raise ValueError('SLEPc runtime attestation does not prove native CPU availability')
+        if job['profile'] == 'fem-cpu-slepc-runtime-v2' and not valid_cpu_modal_driver_attestation(runtime_attestation):
+            raise ValueError('SLEPc runtime v2 must not preload CUDA compatibility libraries')
         dependency = (
             dependency_attestation.get('dependency')
             if isinstance(dependency_attestation, dict)
@@ -423,6 +468,8 @@ def validate_build_receipt(artifacts, job, journal):
             or not dependency.get('slepc_version')
         ):
             raise ValueError('SLEPc runtime dependency attestation is incomplete')
+        if job['profile'] == 'fem-cpu-slepc-runtime-v2' and not valid_cpu_modal_dependency_attestation(cmake_attestation, dependency):
+            raise ValueError('SLEPc runtime v2 lacks complete CPU dependency binding')
         try:
             validate_native_source_snapshot(
                 dependency.get('diagnostics_json'), expected_source['snapshot_sha256']

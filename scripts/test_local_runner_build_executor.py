@@ -29,6 +29,41 @@ class BuildExecutorTests(unittest.TestCase):
             'mfem_cmake_dir': '/opt/fullmag-mfem-cpu/../fullmag-deps/lib/cmake/mfem',
         }))
 
+    def test_cpu_modal_dependency_binding_rejects_mixed_or_incomplete_receipts(self):
+        libraries = {name: {'path': '/opt/fullmag-mfem-cpu/lib/lib' + name + '.so',
+                            'sha256': 'a' * 64}
+                     for name in ('mfem', 'hypre', 'ceed', 'petsc', 'slepc')}
+        cmake = {'cpu_dependency_abi': libraries, 'mfem_abi': libraries['mfem']}
+        dependency = {}
+        for name, module in (('petsc', 'FindPETSc.cmake'), ('slepc', 'FindSLEPc.cmake')):
+            dependency.update({name + '_library_path': libraries[name]['path'],
+                               name + '_library_realpath': libraries[name]['path'],
+                               name + '_pkgconfig_dir': '/opt/fullmag-mfem-cpu/lib/pkgconfig',
+                               name + '_find_module_file': '/workspace/backends/fem/cmake/' + module})
+        self.assertTrue(executor.valid_cpu_modal_dependency_attestation(cmake, dependency))
+        self.assertFalse(executor.valid_cpu_modal_dependency_attestation({}, dependency))
+        self.assertFalse(executor.valid_cpu_modal_dependency_attestation(
+            {**cmake, 'mfem_abi': None}, dependency))
+        self.assertFalse(executor.valid_cpu_modal_dependency_attestation(cmake, {
+            **dependency, 'petsc_library_realpath': '/opt/fullmag-deps/lib/libpetsc.so'}))
+        self.assertFalse(executor.valid_cpu_modal_dependency_attestation(cmake, {
+            **dependency, 'petsc_pkgconfig_dir': '/opt/fullmag-deps/lib/pkgconfig'}))
+        for bad_path in ('/opt/fullmag-deps/lib/libpetsc.so',
+                         '/opt/fullmag-mfem-cpu/lib/../foreign/libpetsc.so'):
+            bad = {**libraries, 'petsc': {**libraries['petsc'], 'path': bad_path}}
+            self.assertFalse(executor.valid_cpu_modal_dependency_attestation(
+                {**cmake, 'cpu_dependency_abi': bad}, dependency))
+
+    def test_cpu_modal_runtime_requires_explicit_empty_cuda_compatibility(self):
+        names = ('cuda_driver_compatibility_paths', 'cuda_driver_compatibility_libraries_preloaded')
+        valid = {name: [] for name in names}
+        self.assertTrue(executor.valid_cpu_modal_driver_attestation(valid))
+        self.assertFalse(executor.valid_cpu_modal_driver_attestation(None))
+        for name in names:
+            for bad in (None, '', ['/opt/cuda/compat/libcuda.so']):
+                self.assertFalse(executor.valid_cpu_modal_driver_attestation({**valid, name: bad}))
+            self.assertFalse(executor.valid_cpu_modal_driver_attestation({key: value for key, value in valid.items() if key != name}))
+
     def test_mutable_caches_do_not_reuse_legacy_root_owned_trees(self):
         root = Path('/storage')
         paths = executor.dependency_cache_paths(root, 'fem-cpu-release')

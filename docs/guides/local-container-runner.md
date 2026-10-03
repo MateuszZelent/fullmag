@@ -246,12 +246,23 @@ receipt do zaliczenia CI/kwalifikacji solvera.
 
 ### Toolchain CPU dla runtime-v2
 
-Jeśli istniejący obraz SLEPc nie ma `/opt/fullmag-mfem-cpu`, recepta
+Dla kompletnego runtime-v2 recepta
 `just runner-build-image <verified-local-toolchain-tag> <new-tag> 1 default`
-dodaje MFEM v4.10 z commita
+dodaje osobny CPU stos: MFEM v4.10 z commita
 `d964264cdb9a13e94a201b6c236c7721e0c8765f` i HYPRE v3.1.0
 z commita 9dc9e18aed6a945a95f966e57daacfb1c269f6ec,
 bez CUDA i bez testów, przykładów oraz miniapps. Zachowuje stary prefix.
+Dodaje też CPU libCEED v0.12.0 (`4018a20a98d451fac24765d3ddb936861647ce8d`),
+PETSc v3.24.6 (`1467453aedb62826efc970ceafc4bd6dab8229ab`) i SLEPc v3.24.3
+(`4c754d7d3ae067837670828a304512798334fb3a`). Dokładne commity sprawdzane są
+po shallow fetch; źródła CPU i ich wygenerowane konfiguracje są osobne.
+PETSc jest real/double z MPI, bez CUDA/HIP/SYCL/OpenCL, powiązany z tym samym
+CPU HYPRE co MFEM. CPU MFEM korzysta z CPU libCEED. Inherited GPU PETSC_DIR /
+SLEPC_DIR są zastąpione podczas configure. Przy CPU_MFEM_ONLY=0 bootstrap
+CPU jest pomijany; historyczny/GPU prefix pozostaje zachowany.
+Wariant CPU potrzebuje sieci dla jawnego pobrania źródeł i pakietów
+rozwojowych BLAS/LAPACK/Fortran. Domyślne network=none pozostaje bez zmiany;
+nie ma automatycznego przełączenia na online ani fallbacku GPU.
 To jawna budowa obrazu operatorowego, nie build ani kwalifikacja Fullmaga.
 Domyślne argumenty recepty pozostają bez dostępu sieci i bez tego kroku.
 Obraz wymaga kontroli CPU prefix, a następnie konfiguracji immutable ID

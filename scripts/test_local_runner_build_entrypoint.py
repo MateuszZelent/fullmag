@@ -248,10 +248,56 @@ class BuildEntryPointTests(unittest.TestCase):
                 with self.assertRaisesRegex(entrypoint.BuildEntryPointError,
                                             "accelerator support"):
                     entrypoint.require_cpu_modal_dependencies(prefix)
+        config.write_text("#define PETSC_USE_REAL_DOUBLE 1\n" + "".join(
+            f"#define PETSC_HAVE_{name} 0 /* disabled */\n"
+            for name in ("CUDA", "HIP", "SYCL", "OPENCL")
+        ), encoding="utf-8")
+        entrypoint.require_cpu_modal_dependencies(prefix)
         config.write_text("#define PETSC_USE_REAL_DOUBLE 1\n", encoding="utf-8")
         (prefix / "lib/libslepc.so").unlink()
         with self.assertRaisesRegex(entrypoint.BuildEntryPointError, "libslepc"):
             entrypoint.require_cpu_modal_dependencies(prefix)
+
+    def test_cpu_modal_linkage_rejects_gpu_duplicate_and_missing_dependencies(self) -> None:
+        prefix = self._cpu_modal_dependency_fixture()
+        linkage = "\n".join(f"{stem}.so => {prefix / 'lib' / (stem + '.so')} (0x1234)"
+                            for stem in entrypoint.CPU_MODAL_LIBRARY_STEMS.values())
+        observed = entrypoint.observe_cpu_modal_linkage(linkage, prefix)
+        self.assertEqual(set(observed), set(entrypoint.CPU_MODAL_LIBRARY_STEMS))
+        for bad in (
+            linkage + "\nlibcublasLt.so.12 => /usr/local/cuda/lib64/libcublasLt.so.12 (0x1)",
+            linkage + f"\nlibHYPRE-3.1.0.so => {prefix / 'lib/libHYPRE.so'} (0x2)",
+            linkage.replace("libpetsc.so =>", "libother.so =>"),
+            linkage + "\nlibother.so => not found",
+        ):
+            with self.subTest(linkage=bad):
+                with self.assertRaises(entrypoint.BuildEntryPointError):
+                    entrypoint.observe_cpu_modal_linkage(bad, prefix)
+        outside = self.root / "foreign-petsc.so"
+        outside.write_bytes(b"foreign")
+        with self.assertRaisesRegex(entrypoint.BuildEntryPointError, "escaped CPU prefix"):
+            entrypoint.observe_cpu_modal_linkage(
+                linkage.replace(str(prefix / 'lib/libpetsc.so'), str(outside)), prefix
+            )
+
+    def test_cpu_modal_resolution_binds_cmake_to_resolved_library(self) -> None:
+        prefix = self._cpu_modal_dependency_fixture()
+        modules = self.workspace / "backends/fem/cmake"
+        modules.mkdir(parents=True)
+        dependency = {}
+        libraries = {}
+        for family, module in (("petsc", "FindPETSc.cmake"), ("slepc", "FindSLEPc.cmake")):
+            (modules / module).write_text("", encoding="utf-8")
+            path = (prefix / "lib" / ("lib" + family + ".so")).resolve()
+            libraries[family] = {"path": str(path)}
+            dependency.update({family + "_library_path": str(path),
+                               family + "_pkgconfig_dir": str(prefix / "lib/pkgconfig"),
+                               family + "_find_module_file": str(modules / module)})
+        entrypoint.bind_cpu_modal_resolution(dependency, libraries, prefix, self.workspace)
+        self.assertEqual(dependency["petsc_library_realpath"], libraries["petsc"]["path"])
+        dependency["petsc_pkgconfig_dir"] = str(self.root)
+        with self.assertRaisesRegex(entrypoint.BuildEntryPointError, "pkg-config"):
+            entrypoint.bind_cpu_modal_resolution(dependency, libraries, prefix, self.workspace)
 
     def test_cpu_modal_preflight_rejects_wrong_precision(self) -> None:
         prefix = self._cpu_modal_dependency_fixture()

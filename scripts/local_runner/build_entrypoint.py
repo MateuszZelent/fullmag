@@ -629,6 +629,59 @@ def _require_tool(name: str) -> str:
     return path
 
 
+CPU_MODAL_LIBRARY_STEMS = {
+    "mfem": "libmfem", "hypre": "libHYPRE", "ceed": "libceed",
+    "petsc": "libpetsc", "slepc": "libslepc",
+}
+
+
+def observe_cpu_modal_linkage(output: str, prefix: Path) -> dict[str, dict[str, str]]:
+    """Bind the complete resolved CPU dependency closure before loading native code."""
+    libraries: dict[str, list[str]] = {name: [] for name in CPU_MODAL_LIBRARY_STEMS}
+    forbidden = ("libcuda", "libcudart", "libcublas", "libcusparse", "libcusolver",
+                 "libcurand", "libcufft", "libcupti", "libnccl", "libnvrtc", "libnvjitlink",
+                 "libnvidia", "libhip", "libamdhip", "libsycl", "librocblas", "librocsolver")
+    for line in output.splitlines():
+        if "not found" in line or any(token in line.lower() for token in forbidden):
+            raise BuildEntryPointError("CPU modal linkage contains missing or accelerator dependencies")
+        name, separator, resolved = line.strip().partition(" => ")
+        if not separator:
+            continue
+        for family, stem in CPU_MODAL_LIBRARY_STEMS.items():
+            if re.fullmatch(re.escape(stem) + r"(?:_real|-[0-9.]+)?\.so(?:\.[0-9.]+)?", name):
+                libraries[family].append(resolved.split(" (", 1)[0])
+    result: dict[str, dict[str, str]] = {}
+    for family, paths in libraries.items():
+        if len(paths) != 1:
+            raise BuildEntryPointError("CPU modal linkage is missing or ambiguous: " + family)
+        path = Path(paths[0]).resolve(strict=True)
+        if not path.is_relative_to(prefix.resolve(strict=True) / "lib"):
+            raise BuildEntryPointError("CPU modal linkage escaped CPU prefix: " + family)
+        _, digest = sha256_file(path)
+        result[family] = {"path": str(path), "sha256": digest}
+    return result
+
+
+def bind_cpu_modal_resolution(
+    dependency: dict[str, Any], libraries: Mapping[str, Mapping[str, str]],
+    prefix: Path, workspace: Path,
+) -> None:
+    for family in ("petsc", "slepc"):
+        path = Path(str(dependency.get(family + "_library_path", "")))
+        if not path.is_absolute() or str(path.resolve(strict=True)) != libraries[family]["path"]:
+            raise BuildEntryPointError("CPU modal configured/resolved library mismatch: " + family)
+        directory = Path(str(dependency.get(family + "_pkgconfig_dir", "")))
+        if not directory.is_absolute() or directory.resolve(strict=True) != (prefix / "lib/pkgconfig").resolve(strict=True):
+            raise BuildEntryPointError("CPU modal pkg-config resolution escaped CPU prefix: " + family)
+        module = Path(str(dependency.get(family + "_find_module_file", "")))
+        expected = workspace / "backends/fem/cmake" / ("Find" + ("PETSc" if family == "petsc" else "SLEPc") + ".cmake")
+        if not module.is_absolute() or module.resolve(strict=True) != expected.resolve(strict=True):
+            raise BuildEntryPointError("CPU modal CMake module is not the captured project module: " + family)
+        dependency[family + "_library_realpath"] = libraries[family]["path"]
+        dependency[family + "_pkgconfig_dir"] = str(directory.resolve(strict=True))
+        dependency[family + "_find_module_file"] = str(module.resolve(strict=True))
+
+
 def require_cpu_modal_dependencies(prefix: Path) -> None:
     """Reject an older/mixed image before a production build; never load libraries."""
     expected = (
@@ -647,8 +700,16 @@ def require_cpu_modal_dependencies(prefix: Path) -> None:
             )
     config = (prefix / "include/petscconf.h").read_text(encoding="utf-8")
     for accelerator in ("CUDA", "HIP", "SYCL", "OPENCL"):
-        if re.search(r"^\s*#\s*define\s+PETSC_HAVE_" + accelerator
-                     + r"\b(?:[^\S\n]+1)?(?:[^\S\n]|$)", config, re.MULTILINE):
+        matches = re.findall(
+            r"^[ \t]*#[ \t]*define[ \t]+PETSC_HAVE_" + accelerator
+            + r"\b([^\n]*)", config, re.MULTILINE
+        )
+        for raw in matches:
+            value = re.sub(r"/\*.*?\*/", "", raw.split("//", 1)[0]).strip()
+            if value == "0":
+                continue
+            if value not in ("", "1"):
+                raise BuildEntryPointError("invalid PETSc accelerator macro: " + accelerator)
             raise BuildEntryPointError(
                 "CPU modal PETSc advertises accelerator support: " + accelerator
             )
@@ -1480,6 +1541,7 @@ def _attest_slepc_runtime(
         library_paths.append(existing_library_path)
     probe_environment["LD_LIBRARY_PATH"] = os.pathsep.join(library_paths)
     mfem_abi: dict[str, Any] | None = None
+    cpu_dependency_abi: dict[str, dict[str, str]] | None = None
     if cpu_abi_profile:
         try:
             linkage = subprocess.run(
@@ -1496,21 +1558,10 @@ def _attest_slepc_runtime(
             raise BuildEntryPointError(f"MFEM CPU linkage probe failed: {error}") from error
         if linkage.returncode != 0:
             raise BuildEntryPointError("MFEM CPU linkage probe did not complete")
-        mfem_paths = []
-        for line in linkage.stdout.splitlines():
-            name, separator, resolved = line.strip().partition(" => ")
-            if separator and name.startswith("libmfem.so"):
-                mfem_paths.append(resolved.split(" (", 1)[0])
-        if len(mfem_paths) != 1:
-            raise BuildEntryPointError("MFEM CPU linkage is missing or ambiguous")
-        mfem_path = Path(mfem_paths[0]).resolve(strict=True)
-        cpu_prefix = Path("/opt/fullmag-mfem-cpu").resolve(strict=True)
-        if not mfem_path.is_relative_to(cpu_prefix / "lib"):
-            raise BuildEntryPointError(
-                f"MFEM CPU linkage resolved outside CPU prefix: {mfem_path}"
-            )
-        _, mfem_sha256 = sha256_file(mfem_path)
-        mfem_abi = {"path": str(mfem_path), "sha256": mfem_sha256}
+        cpu_dependency_abi = observe_cpu_modal_linkage(
+            linkage.stdout, Path("/opt/fullmag-mfem-cpu")
+        )
+        mfem_abi = cpu_dependency_abi["mfem"]
     probe_command = [str(runtime_bin), "runtime", "fem-availability", "--json"]
     probe_started_at = _utc_now()
     try:
@@ -1679,6 +1730,11 @@ def _attest_slepc_runtime(
         raise BuildEntryPointError(
             "runtime FEM dependency query did not attest PETSc/SLEPc CPU modal support"
         )
+    if cpu_abi_profile:
+        assert cpu_dependency_abi is not None
+        bind_cpu_modal_resolution(
+            dependency, cpu_dependency_abi, Path("/opt/fullmag-mfem-cpu"), workspace
+        )
     dependency["native_source_snapshot_sha256"] = validate_native_source_snapshot(
         dependency["diagnostics_json"], native_identity.get("source_snapshot_sha256")
     )
@@ -1698,6 +1754,7 @@ def _attest_slepc_runtime(
             "native_library_sha256": native_library_sha256,
             "options": observed_cmake_options,
             "mfem_abi": mfem_abi,
+            "cpu_dependency_abi": cpu_dependency_abi,
             "mfem_cmake_dir": mfem_cmake_dir,
             "source": source,
         },

@@ -224,12 +224,15 @@ RUN cmake -S /tmp/build/hypre/src -B /tmp/build/hypre/build-cpu -G Ninja \
 # A CUDA-free MFEM alone is insufficient when PETSc still links CUDA HYPRE.
 # Separate source trees avoid reusing GPU objects or generated configuration.
 RUN git clone --no-hardlinks /tmp/build/libCEED /tmp/build/libCEED-cpu && \
+    test "$(git -C /tmp/build/libCEED-cpu rev-parse HEAD)" = "4018a20a98d451fac24765d3ddb936861647ce8d" && \
     make -C /tmp/build/libCEED-cpu CUDA_DIR= ROCM_DIR= SYCL_DIR= MAGMA_DIR= -j2 && \
     make -C /tmp/build/libCEED-cpu CUDA_DIR= ROCM_DIR= SYCL_DIR= MAGMA_DIR= \
       install prefix=/opt/fullmag-mfem-cpu
 
 RUN git clone --no-hardlinks /tmp/build/petsc /tmp/build/petsc-cpu && \
+    test "$(git -C /tmp/build/petsc-cpu rev-parse HEAD)" = "1467453aedb62826efc970ceafc4bd6dab8229ab" && \
     cd /tmp/build/petsc-cpu && \
+    PETSC_DIR=/tmp/build/petsc-cpu PETSC_ARCH=arch-linux-cpu \
     python3 ./configure \
       PETSC_ARCH=arch-linux-cpu \
       --prefix=/opt/fullmag-mfem-cpu \
@@ -243,8 +246,9 @@ RUN git clone --no-hardlinks /tmp/build/petsc /tmp/build/petsc-cpu && \
     make PETSC_DIR=/tmp/build/petsc-cpu PETSC_ARCH=arch-linux-cpu install
 
 RUN git clone --no-hardlinks /tmp/build/slepc /tmp/build/slepc-cpu && \
+    test "$(git -C /tmp/build/slepc-cpu rev-parse HEAD)" = "4c754d7d3ae067837670828a304512798334fb3a" && \
     cd /tmp/build/slepc-cpu && \
-    PETSC_DIR=/opt/fullmag-mfem-cpu PETSC_ARCH= \
+    SLEPC_DIR=/tmp/build/slepc-cpu PETSC_DIR=/opt/fullmag-mfem-cpu PETSC_ARCH= \
       python3 ./configure --prefix=/opt/fullmag-mfem-cpu && \
     make SLEPC_DIR=/tmp/build/slepc-cpu PETSC_DIR=/opt/fullmag-mfem-cpu PETSC_ARCH= -j2 all && \
     make SLEPC_DIR=/tmp/build/slepc-cpu PETSC_DIR=/opt/fullmag-mfem-cpu PETSC_ARCH= install

@@ -84,6 +84,18 @@ fn main() {
         panic!("FULLMAG_SOURCE_SNAPSHOT_SHA256 must be a lowercase SHA-256 digest");
     }
     println!("cargo:rerun-if-env-changed=FULLMAG_CUDA_ARCHITECTURES");
+    for name in [
+        "CMAKE_PREFIX_PATH",
+        "PKG_CONFIG_PATH",
+        "PETSC_DIR",
+        "PETSC_ARCH",
+        "SLEPC_DIR",
+        "CPATH",
+        "LIBRARY_PATH",
+    ] {
+        println!("cargo:rerun-if-env-changed={name}");
+    }
+
     if let Ok(lib_dir) = std::env::var("FULLMAG_FEM_LIB_DIR") {
         println!("cargo:rustc-link-search=native={}", lib_dir);
         println!("cargo:rustc-link-lib=dylib=fullmag_fem");
@@ -161,6 +173,12 @@ fn main() {
         .arg(&native_root)
         .arg("-B")
         .arg(&build_dir)
+        // Re-resolve dependencies on every configure; a retained CMake cache
+        // must not pin a former CPU/GPU prefix after the execution policy changes.
+        .arg("-UPETSc_*")
+        .arg("-USLEPc_*")
+        .arg("-UMFEM_DIR")
+        .arg("-UCMAKE_PREFIX_PATH")
         .arg(format!("-DCMAKE_BUILD_TYPE={}", cmake_build_type))
         .arg(format!(
             "-DFULLMAG_FEM_SOURCE_SNAPSHOT_SHA256={}",
