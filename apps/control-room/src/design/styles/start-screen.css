@@ -1339,6 +1339,102 @@
   padding: 0 var(--fm-space-4) var(--fm-space-3);
 }
 
+/* ── Import, Learn, Settings, About ───────────────────────────────────── */
+
+.fm-start-drop {
+  display: grid;
+  justify-items: center;
+  gap: var(--fm-space-3);
+  margin-bottom: var(--fm-space-4);
+  border: 1px dashed var(--fm-border-default);
+  border-radius: var(--fm-radius-lg);
+  color: var(--fm-start-meta);
+  padding: var(--fm-space-8) var(--fm-space-4);
+}
+
+.fm-start-drop p {
+  margin: 0;
+  font-size: var(--fm-font-size-sm);
+}
+
+/* A dashed border alone would be colour-only; the tint and solid border add shape. */
+.fm-start-drop--active {
+  border-style: solid;
+  border-color: var(--fm-accent);
+  background: var(--fm-bg-selected);
+}
+
+.fm-start-formats {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fm-font-size-sm);
+}
+
+.fm-start-formats th,
+.fm-start-formats td {
+  border-bottom: 1px solid var(--fm-border-subtle);
+  padding: var(--fm-space-2) var(--fm-space-3) var(--fm-space-2) 0;
+  text-align: left;
+  vertical-align: top;
+}
+
+.fm-start-formats thead th {
+  color: var(--fm-start-meta);
+  font-size: var(--fm-start-section-size);
+  font-weight: var(--fm-font-weight-semibold);
+  letter-spacing: var(--fm-start-section-tracking);
+  text-transform: uppercase;
+}
+
+.fm-start-formats__ext {
+  font-family: var(--fm-font-mono);
+  white-space: nowrap;
+}
+
+.fm-start-keys {
+  margin-bottom: var(--fm-space-4);
+}
+
+/* Action names are longer than the inspector's field labels. */
+.fm-start-keys .fm-start-kv__row {
+  grid-template-columns: calc(var(--fm-start-meta-label-width) * 2) minmax(0, 1fr);
+}
+
+.fm-start-setting {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--fm-space-4);
+  font-size: var(--fm-font-size-sm);
+}
+
+.fm-start-locations {
+  display: grid;
+  gap: var(--fm-space-1);
+  margin: 0 0 var(--fm-space-3);
+  padding: 0;
+  list-style: none;
+}
+
+.fm-start-locations li {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--fm-space-3);
+}
+
+.fm-start-locations__path {
+  overflow: hidden;
+  font-family: var(--fm-font-mono);
+  font-size: var(--fm-font-size-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fm-start-locations__state {
+  color: var(--fm-start-meta);
+  font-size: var(--fm-font-size-xs);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .fm-start *,
   .fm-start *::before,

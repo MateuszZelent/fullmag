@@ -19,6 +19,7 @@ import { cn } from "@/shared/utils/className";
 
 import { filterEntries, sortEntries } from "../model/recentIndex";
 import { startScreenStore } from "../model/startScreenState";
+import { startSettings } from "../model/startSettings";
 import type { RecentEntry, RecentFilter, RecentSort } from "../model/types";
 import type { RecentIndexController } from "../model/useRecentIndex";
 import { SectionHeader } from "../ui/SectionHeader";
@@ -68,7 +69,14 @@ export function RecentProjects({
 
   const [filter, setFilter] = useState<RecentFilter>("all");
   const [sort, setSort] = useState<RecentSort>("lastOpened");
-  const [view, setView] = useState<"list" | "grid">("list");
+  // The settings default applies until the user picks a view in this session.
+  const settings = useSyncExternalStore(
+    startSettings.subscribe,
+    startSettings.getSnapshot,
+    startSettings.getServerSnapshot,
+  );
+  const [chosenView, setView] = useState<"list" | "grid" | null>(null);
+  const view = chosenView ?? settings.defaultView;
   const [query, setQuery] = useState("");
   const [openError, setOpenError] = useState<string | null>(null);
 
