@@ -123,6 +123,7 @@ BASE_REQUIRED_OUTPUTS = (
     "launcher-build-mode",
     "web/index.html",
 )
+RELEASE_PROFILE_NAMES = frozenset(("fdm-cpu-release", "fem-cpu-release", "fem-gpu-release"))
 REQUIRED_OUTPUTS = BASE_REQUIRED_OUTPUTS + (
     "bin/fullmag-api-accepted-worker",
     "bin/fullmag-api-accepted-supervisor",
@@ -641,16 +642,24 @@ def run_stage(
     }
 
 
-def _required_output_paths(output: Path) -> tuple[Path, ...]:
-    return tuple(output.joinpath(*relative.split("/")) for relative in REQUIRED_OUTPUTS)
+def required_outputs_for_profile(profile_name: str) -> tuple[str, ...]:
+    """Keep release qualification independent of specialized registry additions."""
+    return REQUIRED_OUTPUTS if profile_name in RELEASE_PROFILE_NAMES else BASE_REQUIRED_OUTPUTS
+
+
+def _required_output_paths(
+    output: Path, outputs: tuple[str, ...] = REQUIRED_OUTPUTS,
+) -> tuple[Path, ...]:
+    return tuple(output.joinpath(*relative.split("/")) for relative in outputs)
 
 
 def _validate_required_outputs(output: Path, profile: Profile) -> None:
+    outputs = required_outputs_for_profile(profile.name)
     if not output.exists():
-        raise BuildEntryPointError(f"required Fullmag output is missing: {REQUIRED_OUTPUTS[0]}")
+        raise BuildEntryPointError(f"required Fullmag output is missing: {outputs[0]}")
     if output.is_symlink() or not output.is_dir():
         raise BuildEntryPointError("Fullmag output directory is not a regular directory")
-    for relative, path in zip(REQUIRED_OUTPUTS, _required_output_paths(output)):
+    for relative, path in zip(outputs, _required_output_paths(output, outputs)):
         if path.is_symlink() or not path.is_file():
             raise BuildEntryPointError(f"required Fullmag output is missing: {relative}")
         if path.stat().st_size == 0:

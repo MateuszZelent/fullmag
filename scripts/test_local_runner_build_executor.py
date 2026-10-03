@@ -10,6 +10,15 @@ from local_runner import build_executor as executor
 
 
 class BuildExecutorTests(unittest.TestCase):
+    def test_extended_profile_registry_does_not_promote_specialized_receipts_to_release(self):
+        from local_runner import build_entrypoint as entrypoint
+        profile = 'fem-cpu-slepc-runtime-v2'
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            job, journal = self._write_release_receipt(root, profile=profile, accepted=False)
+            with patch.dict(entrypoint.PROFILES, {profile: object()}):
+                executor.validate_build_receipt(root, job, journal)
+
     def _write_release_receipt(self, root, *, profile='fem-cpu-release', empty=None, accepted=True):
         outputs = ['bin/fullmag-bin', 'bin/fullmag-api', '_fullmag_core.so',
                    'web/index.html', 'launcher-build-mode']
@@ -58,8 +67,10 @@ class BuildExecutorTests(unittest.TestCase):
                 job, journal = self._write_release_receipt(root, profile=profile)
                 path = root / 'build-receipt.json'
                 receipt = json.loads(path.read_text())
-                binaries = [entry for entry in receipt['artifacts'] if '/bin/fullmag-api-' in entry['path']]
-                self.assertEqual(len(binaries), 9)
+                binaries = [entry for entry in receipt['artifacts']
+                            if '/bin/fullmag-api-' in entry['path']
+                            or entry['path'].endswith('/bin/fullmag-runtime-service')]
+                self.assertEqual(len(binaries), 10)
                 for binary in binaries:
                     with self.subTest(profile=profile, binary=binary['path']):
                         missing = {**receipt, 'artifacts': [entry for entry in receipt['artifacts']

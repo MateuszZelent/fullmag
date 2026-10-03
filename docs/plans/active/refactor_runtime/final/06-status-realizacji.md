@@ -1,5 +1,11 @@
 # Status realizacji całego planu refaktoryzacji
 
+Checkpoint P8-42, 03.10.2026: wspólny selector wymaga 15 outputów dla
+trzech release profiles i zachowuje pięć dla legalnych profili specjalistycznych,
+niezależnie od rozszerzonego PROFILES. Dwie regresje RED przed poprawką,
+41 interpretowanych testów Python PASS po poprawce. [Zakres i wdrożenie](p8/42-profile-specific-package-contract.md).
+Overlay pełnego kontraktu OPEN; storage nadal blokuje build 218.
+
 Checkpoint P8-41, 03.10.2026: overlay sond nightly P8-38 wdrożony przez
 kontrolowaną pauzę pustej kolejki i managed replace. Hash rzeczywistego
 entrypointu zgodny, osiem profili obrazu i siedem operatorowych zachowane.

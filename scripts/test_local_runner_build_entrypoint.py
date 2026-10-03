@@ -14,6 +14,18 @@ from local_runner import build_entrypoint as entrypoint
 
 
 class BuildEntryPointTests(unittest.TestCase):
+    def test_specialized_profile_keeps_baseline_outputs_without_release_runtime(self) -> None:
+        output = self.root / "specialized-output"
+        output.mkdir()
+        for relative in entrypoint.BASE_REQUIRED_OUTPUTS:
+            path = output / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"artifact")
+        (output / "launcher-build-mode").write_text("fem-cpu", encoding="utf-8")
+        profile = entrypoint.Profile(name="fem-cpu-slepc-runtime-v2", lane="fem-cpu", environment={})
+        with patch.dict(entrypoint.EXPECTED_BUILD_MARKER, {profile.name: "fem-cpu"}):
+            entrypoint._validate_required_outputs(output, profile)
+
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory(prefix="fullmag-build-entrypoint-")
         self.addCleanup(self.temporary.cleanup)
