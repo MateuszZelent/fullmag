@@ -43,3 +43,24 @@ missing binary, slow startup, API replacement, zamknięcie okna podczas
 attach i dalsze działanie zaakceptowanego runu pozostają NOT VERIFIED.
 Generated runtime-service client oraz diagnostyka UI także czekają na
 managed export. P8 ani cały plan nie są zamknięte tym przyrostem.
+
+## Przypięty build 215
+
+Źródła przyrostu zapisano i wysłano jako
+`7b5248c515eeee788c62050073b05d3affe6ddcb`. Po zewnętrznym restarcie runnera
+odczyt potwierdził worker_alive=true, accepting_jobs=true, stop_requested=false
+oraz działający wcześniejszy build 214. Nie wykonywano restartu/resume.
+
+Zlecono centralny production build `fdm-cpu-release`, operation=build:
+
+- sequence: 215; job: `901bf4779f5848ebaf9900311dd4b9bd`; status odbioru: queued;
+- source mode: commit; request key: `p8-37-authoring-7b5248c515eeee78`;
+- capture: `eae1a1199aac4b1e823deb08f56d89ec`;
+- capsule digest: `9245d639bfff13bf511653fa59ce5bf61dba01164179e43a63001920726c50ae`;
+- native snapshot: `d612ebfff5e40a7e190874348ef9af934bde37d9d9c1946552a3b61cfdf2981c`;
+- source_snapshot_dirty=false; kapsuła nie przyjmuje obcych zmian checkoutu.
+
+Queued nie jest dowodem kompilacji, HTTP, solvera, Tauri ani Windows.
+Po terminalnym sukcesie trzeba odebrać aktualny required-output receipt,
+hashe i raw OpenAPI z właściwego API binary, potem dopiero generować klienta.
+Build 214 pozostaje osobnym wcześniejszym source pinem; nie zastępuje 215.
