@@ -22,7 +22,11 @@ import { startActionDisabledReason } from "./model/startCommands";
 import { startScreenStore, type StartScreenHost } from "./model/startScreenState";
 import type { ContinueSession, RecentEntry } from "./model/types";
 import { StartRail } from "./rail/StartRail";
-import { SectionPlaceholder } from "./sections/SectionPlaceholder";
+import { StartStatusBar } from "./ui/StartStatusBar";
+import { AboutSection } from "./sections/AboutSection";
+import { ImportSection } from "./sections/ImportSection";
+import { LearnSection } from "./sections/LearnSection";
+import { SettingsSection } from "./sections/SettingsSection";
 import { TemplatesSection } from "./sections/TemplatesSection";
 
 const SESSION_UNCONFIRMED =
@@ -99,6 +103,12 @@ export function StartScreen({ kernel }: ModuleProps) {
     return result.status === "failed" ? (result.message ?? `${failure}.`) : null;
   };
 
+  const openFile = async (file: File): Promise<string | null> =>
+    openArchive(
+      { ok: true, source: { bytes: new Uint8Array(await file.arrayBuffer()), fileName: file.name } },
+      `Could not open ${file.name}`,
+    );
+
   const openRecent = async (entry: RecentEntry): Promise<string | null> => {
     if (entry.status === "missing") {
       return `${entry.name} is no longer at ${entry.path}. Rebuild the index or remove it from the list.`;
@@ -159,8 +169,14 @@ export function StartScreen({ kernel }: ModuleProps) {
             />
           ) : section === "templates" ? (
             <TemplatesSection compute={compute} />
+          ) : section === "import" ? (
+            <ImportSection onOpenFile={openFile} openDisabledReason={browseDisabledReason} />
+          ) : section === "learn" ? (
+            <LearnSection />
+          ) : section === "settings" ? (
+            <SettingsSection recent={recent} />
           ) : (
-            <SectionPlaceholder section={section} />
+            <AboutSection compute={compute} index={recent.state} />
           )}
         </div>
       </main>
@@ -178,6 +194,7 @@ export function StartScreen({ kernel }: ModuleProps) {
         templateId={selectedTemplateId}
         session={recent.state.kind === "ready" ? recent.state.index.continue : undefined}
       />
+      <StartStatusBar compute={compute} index={recent.state} />
     </div>
   );
 }
