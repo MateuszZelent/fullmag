@@ -1572,8 +1572,7 @@ pub enum PreparationProcessLaunchCommitDisposition {
     Replayed,
 }
 
-pub const FMS_PREPARATION_PROCESS_EXIT_RECEIPT_SCHEMA: &str =
-    "preparation_process_exit_receipt.v1";
+pub const FMS_PREPARATION_PROCESS_EXIT_RECEIPT_SCHEMA: &str = "preparation_process_exit_receipt.v1";
 
 /// Immutable proof that the supervisor reaped one accepted-run preparation
 /// process while it still owned the exact durable meshing lease.
@@ -1732,9 +1731,7 @@ impl FmsPreparationRetryDecision {
             bail!("preparation retry decision retry_sequence must be positive");
         }
         if self.max_attempts < 2 || self.retry_sequence >= self.max_attempts {
-            bail!(
-                "preparation retry decision must authorize an attempt within max_attempts"
-            );
+            bail!("preparation retry decision must authorize an attempt within max_attempts");
         }
         if self.reason.trim().is_empty() || self.reason.len() > 4096 {
             bail!("preparation retry decision reason is invalid");
@@ -2502,7 +2499,10 @@ pub struct FmsTaskAdmissionRecord {
 impl FmsTaskAdmissionRecord {
     pub fn validate(&self) -> Result<()> {
         if self.schema_version != FMS_TASK_ADMISSION_SCHEMA {
-            bail!("unsupported task admission schema `{}`", self.schema_version);
+            bail!(
+                "unsupported task admission schema `{}`",
+                self.schema_version
+            );
         }
         if self.expected_catalog_revision == 0 {
             bail!("task admission expected catalog revision must be positive");
@@ -2549,9 +2549,7 @@ impl FmsTaskAdmissionRecord {
         if self.task != expected_task {
             bail!("task admission changed fields outside the claim projection");
         }
-        if self.lease.state != FmsResourceLeaseState::Active
-            || self.lease.heartbeat_sequence != 0
-        {
+        if self.lease.state != FmsResourceLeaseState::Active || self.lease.heartbeat_sequence != 0 {
             bail!("task admission requires a fresh active resource lease");
         }
         Ok(())

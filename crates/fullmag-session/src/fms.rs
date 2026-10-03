@@ -664,32 +664,12 @@ fn plan_run_entries(
             }
         }
         plan_resource_lease_entries(store_root, canonical_root, run_id, &mut entries)?;
-        plan_preparation_resource_lease_entries(
-            store_root,
-            canonical_root,
-            run_id,
-            &mut entries,
-        )?;
+        plan_preparation_resource_lease_entries(store_root, canonical_root, run_id, &mut entries)?;
         plan_task_admission_entries(store_root, canonical_root, run_id, &mut entries)?;
         plan_retry_decision_entries(store_root, canonical_root, run_id, &mut entries)?;
-        plan_preparation_retry_decision_entries(
-            store_root,
-            canonical_root,
-            run_id,
-            &mut entries,
-        )?;
-        plan_worker_process_exit_receipt_entries(
-            store_root,
-            canonical_root,
-            run_id,
-            &mut entries,
-        )?;
-        plan_preparation_process_launch_entries(
-            store_root,
-            canonical_root,
-            run_id,
-            &mut entries,
-        )?;
+        plan_preparation_retry_decision_entries(store_root, canonical_root, run_id, &mut entries)?;
+        plan_worker_process_exit_receipt_entries(store_root, canonical_root, run_id, &mut entries)?;
+        plan_preparation_process_launch_entries(store_root, canonical_root, run_id, &mut entries)?;
         plan_preparation_process_exit_receipt_entries(
             store_root,
             canonical_root,
@@ -854,9 +834,8 @@ fn plan_preparation_resource_lease_entries(
                 bail!("preparation resource lease record must be JSON: `{file_name}`");
             };
             crate::repository_path::validate_store_id(lease_token)?;
-            let archive_path = format!(
-                "runs/{run_id}/preparation_resource_leases/{resource_id}/{file_name}"
-            );
+            let archive_path =
+                format!("runs/{run_id}/preparation_resource_leases/{resource_id}/{file_name}");
             validate_portable_namespace_path(&archive_path)?;
             if let Some(data) =
                 read_store_file_if_exists(store_root, canonical_root, &lease_entry.path())?
@@ -902,15 +881,13 @@ fn plan_preparation_retry_decision_entries(
             bail!("preparation retry decision must be JSON: `{file_name}`");
         };
         crate::repository_path::validate_store_id(decision_id)?;
-        let archive_path = format!(
-            "runs/{run_id}/preparation_retry_decisions/{file_name}"
-        );
+        let archive_path = format!("runs/{run_id}/preparation_retry_decisions/{file_name}");
         validate_portable_namespace_path(&archive_path)?;
         if let Some(data) =
             read_store_file_if_exists(store_root, canonical_root, &decision_entry.path())?
         {
-            let decision: crate::FmsPreparationRetryDecision = serde_json::from_slice(&data)
-                .context("preparation retry decision is not typed")?;
+            let decision: crate::FmsPreparationRetryDecision =
+                serde_json::from_slice(&data).context("preparation retry decision is not typed")?;
             if decision.relative_path()? != archive_path {
                 bail!("preparation retry decision path identity mismatch");
             }
@@ -950,8 +927,7 @@ fn plan_worker_process_exit_receipt_entries(
             bail!("worker process exit receipt must be JSON: `{file_name}`");
         };
         crate::repository_path::validate_store_id(receipt_id)?;
-        let archive_path =
-            format!("runs/{run_id}/worker_process_exit_receipts/{file_name}");
+        let archive_path = format!("runs/{run_id}/worker_process_exit_receipts/{file_name}");
         validate_portable_namespace_path(&archive_path)?;
         if let Some(data) =
             read_store_file_if_exists(store_root, canonical_root, &receipt_entry.path())?
@@ -997,8 +973,7 @@ fn plan_preparation_process_exit_receipt_entries(
             bail!("preparation process exit receipt must be JSON: `{file_name}`");
         };
         crate::repository_path::validate_store_id(receipt_id)?;
-        let archive_path =
-            format!("runs/{run_id}/preparation_process_exit_receipts/{file_name}");
+        let archive_path = format!("runs/{run_id}/preparation_process_exit_receipts/{file_name}");
         validate_portable_namespace_path(&archive_path)?;
         if let Some(data) =
             read_store_file_if_exists(store_root, canonical_root, &receipt_entry.path())?
@@ -1049,8 +1024,8 @@ fn plan_preparation_process_launch_entries(
         if let Some(data) =
             read_store_file_if_exists(store_root, canonical_root, &launch_entry.path())?
         {
-            let launch: crate::FmsPreparationProcessLaunch = serde_json::from_slice(&data)
-                .context("preparation process launch is not typed")?;
+            let launch: crate::FmsPreparationProcessLaunch =
+                serde_json::from_slice(&data).context("preparation process launch is not typed")?;
             if launch.relative_path()? != archive_path {
                 bail!("preparation process launch path identity mismatch");
             }
@@ -1066,15 +1041,15 @@ fn plan_task_admission_entries(
     run_id: &str,
     entries: &mut Vec<PackEntry>,
 ) -> Result<()> {
-    let root = store_root
-        .join("runs")
-        .join(run_id)
-        .join("task_admissions");
+    let root = store_root.join("runs").join(run_id).join("task_admissions");
     if !store_source_exists(&root)? {
         return Ok(());
     }
     if !root.is_dir() {
-        bail!("task_admissions path is not a directory: {}", root.display());
+        bail!(
+            "task_admissions path is not a directory: {}",
+            root.display()
+        );
     }
     for task_entry in fs::read_dir(&root)? {
         let task_entry = task_entry?;
@@ -1095,15 +1070,13 @@ fn plan_task_admission_entries(
                 bail!("task admission record must be JSON: `{file_name}`");
             };
             crate::repository_path::validate_store_id(attempt_id)?;
-            let archive_path = format!(
-                "runs/{run_id}/task_admissions/{task_id}/{file_name}"
-            );
+            let archive_path = format!("runs/{run_id}/task_admissions/{task_id}/{file_name}");
             validate_portable_namespace_path(&archive_path)?;
             if let Some(data) =
                 read_store_file_if_exists(store_root, canonical_root, &record_entry.path())?
             {
-                let record: FmsTaskAdmissionRecord = serde_json::from_slice(&data)
-                    .context("task admission record is not typed")?;
+                let record: FmsTaskAdmissionRecord =
+                    serde_json::from_slice(&data).context("task admission record is not typed")?;
                 record.validate()?;
                 if record.lease.run_id != run_id
                     || record.task.task_id != task_id

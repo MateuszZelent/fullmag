@@ -160,8 +160,14 @@ pub(crate) fn sync_directory(path: &Path) -> Result<()> {
 /// verifying exact payload identity. Visibility alone is not confirmation.
 pub(crate) fn confirm_publication(dest: &Path) -> Result<()> {
     let result = (|| {
-        File::options().read(true).write(true).open(dest)?.sync_all()?;
-        let parent = dest.parent().context("publication has no parent directory")?;
+        File::options()
+            .read(true)
+            .write(true)
+            .open(dest)?
+            .sync_all()?;
+        let parent = dest
+            .parent()
+            .context("publication has no parent directory")?;
         sync_directory(parent)?;
         #[cfg(test)]
         if take_directory_barrier_failure(dest) {

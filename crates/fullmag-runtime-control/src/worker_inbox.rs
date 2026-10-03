@@ -1,8 +1,8 @@
 //! Process-owned durable worker command inbox.
 use anyhow::Result;
 use fullmag_application::{
-    ExecutionError, ProtocolDisposition, TaskClaim, WorkerCommandEnvelope,
-    WorkerCommandInbox, WorkerInboxCheckpoint,
+    ExecutionError, ProtocolDisposition, TaskClaim, WorkerCommandEnvelope, WorkerCommandInbox,
+    WorkerInboxCheckpoint,
 };
 use fullmag_session::SessionStore;
 
@@ -17,14 +17,22 @@ pub struct DurableWorkerInbox {
 impl DurableWorkerInbox {
     pub fn new(store: SessionStore, claim: TaskClaim) -> Self {
         let inbox = WorkerCommandInbox::new(&claim);
-        Self { store, claim, inbox }
+        Self {
+            store,
+            claim,
+            inbox,
+        }
     }
 
     /// Restore only an existing persisted checkpoint. A missing inbox is not
     /// interpreted as permission to replay a command after restart.
     pub fn recover(store: SessionStore, claim: TaskClaim) -> Result<Self> {
         let inbox = crate::recover_worker_inbox(&store, &claim)?;
-        Ok(Self { store, claim, inbox })
+        Ok(Self {
+            store,
+            claim,
+            inbox,
+        })
     }
 
     pub fn claim(&self) -> &TaskClaim {
@@ -61,9 +69,10 @@ impl DurableWorkerInbox {
     ) -> Result<(), ExecutionError> {
         let store = &self.store;
         let claim = &self.claim;
-        self.inbox.confirm_pending_applied_durable(envelope, |checkpoint| {
-            persist_checkpoint(store, claim, checkpoint)
-        })
+        self.inbox
+            .confirm_pending_applied_durable(envelope, |checkpoint| {
+                persist_checkpoint(store, claim, checkpoint)
+            })
     }
 }
 

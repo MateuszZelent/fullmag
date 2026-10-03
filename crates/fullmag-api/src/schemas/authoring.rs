@@ -1671,11 +1671,9 @@ mod stage_autosave_tests {
             "fields": [{"quantity": "m", "every_seconds": 1e-12}]
         }))
         .unwrap();
-        assert!(
-            resource
-                .validate()
-                .unwrap_err()
-                .contains("scalar tables only")
-        );
+        assert!(resource
+            .validate()
+            .unwrap_err()
+            .contains("scalar tables only"));
     }
 }

@@ -52,12 +52,10 @@ fn planar_sampling_fdm_constant_scalar_and_vector_basis_are_exact() {
     )
     .unwrap();
     assert_eq!(result.scalar_values, vec![7.25; 4]);
-    assert!(
-        result
-            .occupancy
-            .iter()
-            .all(|value| *value == Occupancy::Occupied)
-    );
+    assert!(result
+        .occupancy
+        .iter()
+        .all(|value| *value == Occupancy::Occupied));
 
     let mut vectors = Vec::new();
     for _ in 0..8 {
@@ -135,12 +133,10 @@ fn planar_fdm_grid_overlay_honors_membership_mask() {
 
     let overlay = crate::planar_sampling::fdm::build_grid_overlay(&field, &frame).unwrap();
     assert_eq!(overlay.segments.len(), 4);
-    assert!(
-        overlay
-            .segments
-            .iter()
-            .all(|segment| { segment.a_uv_m[0] <= 1.0 && segment.b_uv_m[0] <= 1.0 })
-    );
+    assert!(overlay
+        .segments
+        .iter()
+        .all(|segment| { segment.a_uv_m[0] <= 1.0 && segment.b_uv_m[0] <= 1.0 }));
 }
 
 #[test]
@@ -770,11 +766,9 @@ fn planar_sampling_rejects_unpublished_surface_selectors_instead_of_using_object
     .unwrap_err();
 
     assert_eq!(error.status, axum::http::StatusCode::UNPROCESSABLE_ENTITY);
-    assert!(
-        error
-            .message
-            .starts_with("unsupported_region_boundary_projection:")
-    );
+    assert!(error
+        .message
+        .starts_with("unsupported_region_boundary_projection:"));
 }
 
 #[test]
@@ -862,11 +856,9 @@ fn planar_sampling_surface_preserves_nanometer_scale_boundary_measure() {
     )
     .unwrap();
 
-    assert!(
-        result
-            .occupancy
-            .iter()
-            .any(|occupancy| *occupancy != Occupancy::Empty)
-    );
+    assert!(result
+        .occupancy
+        .iter()
+        .any(|occupancy| *occupancy != Occupancy::Empty));
     assert!(result.meta.occupied_measure > 0.0);
 }

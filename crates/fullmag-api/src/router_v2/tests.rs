@@ -861,9 +861,7 @@ fn simulation_preparation_fixture(status: &str) -> SimulationPreparationSnapshot
     }
 }
 
-pub(crate) async fn test_app_state_with_simulation_preparation(
-    status: &str,
-) -> Arc<AppState> {
+pub(crate) async fn test_app_state_with_simulation_preparation(status: &str) -> Arc<AppState> {
     test_app_state_with_simulation_preparation_snapshot(simulation_preparation_fixture(status))
         .await
 }
@@ -28959,29 +28957,52 @@ async fn uploaded_airbox_h5_field_state_can_be_attached_without_apply_shape_chec
 #[tokio::test]
 async fn session_recovery_is_scoped_to_current_session() {
     let (app, state, repo_root) = test_router_with_session_store_state().await;
-    let context = crate::capture_current_live_request_context(&state).await.unwrap();
+    let context = crate::capture_current_live_request_context(&state)
+        .await
+        .unwrap();
     let store = crate::session_persistence::open_store(&state).unwrap();
     for id in [context.session_id.as_str(), "foreign-recovery-session"] {
-        store.write_recovery(&fullmag_session::FmsSessionManifest::new(
-            id, id, fullmag_session::SaveProfile::Compact,
-        )).unwrap();
+        store
+            .write_recovery(&fullmag_session::FmsSessionManifest::new(
+                id,
+                id,
+                fullmag_session::SaveProfile::Compact,
+            ))
+            .unwrap();
     }
-    let response = app.clone().oneshot(Request::builder()
-        .uri("/v2/sessions/current/persistence/recovery")
-        .body(Body::empty()).unwrap()).await.unwrap();
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/persistence/recovery")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     let json = body_json(response).await;
     assert_eq!(json["snapshots"].as_array().unwrap().len(), 1);
     assert_eq!(json["snapshots"][0]["session_id"], context.session_id);
     for expected_count in [1, 0] {
-        let response = app.clone().oneshot(Request::builder()
-            .method("DELETE")
-            .uri("/v2/sessions/current/persistence/recovery")
-            .body(Body::empty()).unwrap()).await.unwrap();
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri("/v2/sessions/current/persistence/recovery")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(body_json(response).await["cleared"], expected_count);
     }
-    assert!(store.read_session_recovery("foreign-recovery-session").unwrap().is_some());
+    assert!(store
+        .read_session_recovery("foreign-recovery-session")
+        .unwrap()
+        .is_some());
     let _ = fs::remove_dir_all(&repo_root);
 }
 

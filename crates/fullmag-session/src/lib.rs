@@ -35,8 +35,8 @@ pub mod solution_tensor_field;
 pub mod solution_tensor_source;
 pub mod store;
 pub mod types;
-mod writer;
 mod worker_inbox;
+mod writer;
 pub use worker_inbox::FmsWorkerInboxRecord;
 
 // Re-export the most commonly used items at crate root.

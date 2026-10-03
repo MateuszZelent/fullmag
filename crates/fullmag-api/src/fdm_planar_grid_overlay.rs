@@ -1,6 +1,6 @@
 use crate::{
     error::ApiError,
-    planar_sampling::{MAX_FDM_PLANAR_GRID_SEGMENTS, PlanarMeshOverlay},
+    planar_sampling::{PlanarMeshOverlay, MAX_FDM_PLANAR_GRID_SEGMENTS},
 };
 
 const FMFG_HEADER_LEN: usize = 160;

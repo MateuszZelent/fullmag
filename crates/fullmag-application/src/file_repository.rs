@@ -7,8 +7,8 @@
 //! process, or runner job.
 
 use crate::project::{
-    CURRENT_PROJECT_SCHEMA, CURRENT_SCENE_SCHEMA, MigrationReport, OpaqueAsset, OpaqueDocument,
-    ProjectDefinition, ProjectEnvelope, ProjectId, ProjectSource, ProjectTarget, RawJsonEnvelope,
+    MigrationReport, OpaqueAsset, OpaqueDocument, ProjectDefinition, ProjectEnvelope, ProjectId,
+    ProjectSource, ProjectTarget, RawJsonEnvelope, CURRENT_PROJECT_SCHEMA, CURRENT_SCENE_SCHEMA,
 };
 use crate::repository::{
     DurabilityGuarantee, ProjectRepository, RepositoryCommitRequest, RepositoryCommitResult,

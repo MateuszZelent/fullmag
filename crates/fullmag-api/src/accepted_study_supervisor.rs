@@ -1,8 +1,9 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use fullmag_application::{CoordinatorPhase, TaskLifecycle, WorkerCommand, WorkerEvent};
 use fullmag_session::{
-    FMS_RETRY_DECISION_SCHEMA, FMS_WORKER_PROCESS_EXIT_RECEIPT_SCHEMA, FmsResourceLease,
-    FmsRetryAction, FmsRetryDecision, FmsRetryTrigger, FmsWorkerProcessExitReceipt, SessionStore,
+    FmsResourceLease, FmsRetryAction, FmsRetryDecision, FmsRetryTrigger,
+    FmsWorkerProcessExitReceipt, SessionStore, FMS_RETRY_DECISION_SCHEMA,
+    FMS_WORKER_PROCESS_EXIT_RECEIPT_SCHEMA,
 };
 use serde::{Deserialize, Serialize};
 use std::fs::{self, OpenOptions};
@@ -763,9 +764,10 @@ fn worker_gpu_uuid(lease: &fullmag_session::FmsResourceLease) -> Result<Option<S
     if lease.kind != fullmag_session::FmsResourceKind::Gpu {
         return Ok(None);
     }
-    let (_, uuid) = lease.resource_id.rsplit_once(".gpu.").context(
-        "accepted GPU resource id has no local-discovery `.gpu.<nvidia-uuid>` binding",
-    )?;
+    let (_, uuid) = lease
+        .resource_id
+        .rsplit_once(".gpu.")
+        .context("accepted GPU resource id has no local-discovery `.gpu.<nvidia-uuid>` binding")?;
     if uuid.is_empty()
         || !uuid
             .bytes()
@@ -1832,11 +1834,9 @@ mod tests {
             0,
         )
         .unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("max concurrency must be positive")
-        );
+        assert!(error
+            .to_string()
+            .contains("max concurrency must be positive"));
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -1923,12 +1923,10 @@ mod tests {
         assert!(!outcome.stop_requested);
         assert!(!outcome.timed_out);
         assert!(!outcome.output.status.success());
-        assert!(
-            outcome
-                .control_failure_reason
-                .as_deref()
-                .is_some_and(|reason| reason.contains("controlled Stop polling failure"))
-        );
+        assert!(outcome
+            .control_failure_reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("controlled Stop polling failure")));
         assert!(started.elapsed() < Duration::from_secs(5));
     }
 

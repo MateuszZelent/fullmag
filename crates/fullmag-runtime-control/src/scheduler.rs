@@ -5,17 +5,16 @@
 //! durably queues, claims, prepares, and starts one task. Process supervision
 //! remains a separate boundary owned by `fullmag-api`.
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use fullmag_application::{
-    CoordinatorError, CoordinatorMessage, DurableWorkerCoordinator, ExecutionError, ResourceLease,
-    RequestedResourceBudget, ResourceKind, RunId, TaskClaim, WORKER_PROTOCOL_SCHEMA,
-    WorkerCommandEnvelope, WorkerCoordinator,
-    WorkerEvent, WorkerEventEnvelope,
+    CoordinatorError, CoordinatorMessage, DurableWorkerCoordinator, ExecutionError,
+    RequestedResourceBudget, ResourceKind, ResourceLease, RunId, TaskClaim, WorkerCommandEnvelope,
+    WorkerCoordinator, WorkerEvent, WorkerEventEnvelope, WORKER_PROTOCOL_SCHEMA,
 };
 use fullmag_authoring::StudyInputSource;
 use fullmag_session::{FmsTaskLifecycle, FmsTaskReadiness, SessionStore};
 
-use crate::claim::{ClaimedTaskResourceCompatibility, claimed_task_resource_compatibility};
+use crate::claim::{claimed_task_resource_compatibility, ClaimedTaskResourceCompatibility};
 
 #[derive(Clone, Debug)]
 pub struct ScheduledAcceptedTask {
@@ -28,10 +27,7 @@ pub struct ScheduledAcceptedTask {
 
 /// Report whether an accepted run has at least one task the scheduler can
 /// queue without mutating durable state.
-pub fn accepted_run_has_scheduler_ready_task(
-    store: &SessionStore,
-    run_id: &RunId,
-) -> Result<bool> {
+pub fn accepted_run_has_scheduler_ready_task(store: &SessionStore, run_id: &RunId) -> Result<bool> {
     let intent = store
         .read_run_intent(run_id.as_str())?
         .context("accepted scheduler requires an immutable run intent")?;

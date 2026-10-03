@@ -6,14 +6,14 @@
 use crate::error::ApiError;
 #[cfg(test)]
 use crate::field_projection::project_values;
-use crate::field_projection::{ComponentSelection, parse_component};
+use crate::field_projection::{parse_component, ComponentSelection};
 use crate::planar_sampling::{
     FdmPlanarField, FemPlanarField, Occupancy, PlanarCompatibilityReduction, PlanarComponent,
     PlanarSamplingEngine, ResolvedPlanarSampleRequest,
 };
 use fullmag_ir::{
-    EmptyPolicyIR, PLANAR_FRAME_NORMALIZATION_VERSION, PlanarExtentIR, PlanarFrameIR,
-    PlanarOperatorIR, PlanarReductionIR,
+    EmptyPolicyIR, PlanarExtentIR, PlanarFrameIR, PlanarOperatorIR, PlanarReductionIR,
+    PLANAR_FRAME_NORMALIZATION_VERSION,
 };
 use serde::{Deserialize, Serialize};
 
@@ -2091,13 +2091,11 @@ mod tests {
         let stddev =
             fem_projection_exact(&field, &resolve_projection_query(&stddev_query, 1).unwrap())
                 .unwrap();
-        assert!(
-            stddev
-                .scalar_values
-                .iter()
-                .filter(|value| value.is_finite())
-                .all(|value| value.abs() < 1.0e-12)
-        );
+        assert!(stddev
+            .scalar_values
+            .iter()
+            .filter(|value| value.is_finite())
+            .all(|value| value.abs() < 1.0e-12));
     }
 
     #[test]

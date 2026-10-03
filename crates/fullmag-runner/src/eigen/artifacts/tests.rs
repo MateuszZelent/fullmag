@@ -1648,7 +1648,10 @@ fn field_sweep_topology_preserves_verified_mesh_identity_for_result_fields() {
         topology.topology_fingerprint.as_deref(),
         Some("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
     );
-    assert_eq!(topology.mesh_generation_id.as_deref(), Some("generation:test"));
+    assert_eq!(
+        topology.mesh_generation_id.as_deref(),
+        Some("generation:test")
+    );
 
     let numeric_revision = topology_from_diagnostics(Some(&serde_json::json!({
         "mesh_id": "mesh:test",

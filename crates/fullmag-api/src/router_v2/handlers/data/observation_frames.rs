@@ -1,16 +1,16 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, HeaderName, HeaderValue};
 use axum::response::Response;
+use axum::Json;
 use fullmag_quantities::{QuantityId, QuantityValue};
 use sha2::{Digest, Sha256};
 
 use crate::error::ApiError;
 use crate::field_store::{
-    FieldVectorBinaryMetadataV4, FieldVectorIndexing, serialize_field_vector_binary_v4,
+    serialize_field_vector_binary_v4, FieldVectorBinaryMetadataV4, FieldVectorIndexing,
 };
 use crate::schemas::observations::{
     ObservationFrameListQuery, ObservationFrameListResource, ObservationFrameResource,

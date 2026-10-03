@@ -147,8 +147,7 @@ impl SessionStore {
         let root = fs::canonicalize(root)?;
         let writer = Writer::new(root.clone());
         let cas = CasStore::existing(checked_path(&root, "objects")?, writer.clone())?;
-        let solution_sets =
-            SolutionSetCatalog::with_existing_writer(root.clone(), writer.clone());
+        let solution_sets = SolutionSetCatalog::with_existing_writer(root.clone(), writer.clone());
         Ok(Self {
             root,
             cas,
@@ -586,10 +585,8 @@ impl SessionStore {
         let path = create_parent(&self.root, &relative)?;
         if path.exists() {
             reject_link(&path)?;
-            let existing: FmsSchedulerPoolCheckpoint =
-                serde_json::from_slice(&fs::read(&path)?).with_context(|| {
-                    format!("parsing scheduler pool checkpoint `{relative}`")
-                })?;
+            let existing: FmsSchedulerPoolCheckpoint = serde_json::from_slice(&fs::read(&path)?)
+                .with_context(|| format!("parsing scheduler pool checkpoint `{relative}`"))?;
             existing.validate()?;
             if existing == *checkpoint {
                 return Ok(SchedulerPoolCheckpointCommitDisposition::Replayed);
@@ -626,9 +623,7 @@ impl SessionStore {
             })?;
         checkpoint.validate()?;
         if checkpoint.pool_id != pool_id {
-            anyhow::bail!(
-                "preparation scheduler pool checkpoint identity does not match its path"
-            );
+            anyhow::bail!("preparation scheduler pool checkpoint identity does not match its path");
         }
         Ok(Some(checkpoint))
     }
@@ -650,15 +645,12 @@ impl SessionStore {
             anyhow::bail!("preparation scheduler pool checkpoint sequence is not contiguous");
         }
         let _writer_lease = self.write_transaction()?;
-        let relative = format!(
-            "scheduler_pools/{}.preparation.json",
-            checkpoint.pool_id
-        );
+        let relative = format!("scheduler_pools/{}.preparation.json", checkpoint.pool_id);
         let path = create_parent(&self.root, &relative)?;
         if path.exists() {
             reject_link(&path)?;
-            let existing: FmsSchedulerPoolCheckpoint =
-                serde_json::from_slice(&fs::read(&path)?).with_context(|| {
+            let existing: FmsSchedulerPoolCheckpoint = serde_json::from_slice(&fs::read(&path)?)
+                .with_context(|| {
                     format!("parsing preparation scheduler pool checkpoint `{relative}`")
                 })?;
             existing.validate()?;
@@ -716,17 +708,13 @@ impl SessionStore {
         let path = create_parent(&self.root, &relative)?;
         if path.exists() {
             reject_link(&path)?;
-            let existing: FmsSchedulerResourcePool =
-                serde_json::from_slice(&fs::read(&path)?).with_context(|| {
-                    format!("parsing scheduler resource pool `{relative}`")
-                })?;
+            let existing: FmsSchedulerResourcePool = serde_json::from_slice(&fs::read(&path)?)
+                .with_context(|| format!("parsing scheduler resource pool `{relative}`"))?;
             existing.validate()?;
             if existing == *pool {
                 return Ok(SchedulerResourcePoolCommitDisposition::Replayed);
             }
-            if existing.pool_id != pool.pool_id
-                || existing.generation != expected_generation
-            {
+            if existing.pool_id != pool.pool_id || existing.generation != expected_generation {
                 anyhow::bail!("scheduler resource pool compare-and-swap conflict");
             }
         } else if expected_generation != 0 {
@@ -777,17 +765,13 @@ impl SessionStore {
         let path = create_parent(&self.root, &relative)?;
         if path.exists() {
             reject_link(&path)?;
-            let existing: FmsPreparationResourcePool =
-                serde_json::from_slice(&fs::read(&path)?).with_context(|| {
-                    format!("parsing preparation resource pool `{relative}`")
-                })?;
+            let existing: FmsPreparationResourcePool = serde_json::from_slice(&fs::read(&path)?)
+                .with_context(|| format!("parsing preparation resource pool `{relative}`"))?;
             existing.validate()?;
             if existing == *pool {
                 return Ok(PreparationResourcePoolCommitDisposition::Replayed);
             }
-            if existing.pool_id != pool.pool_id
-                || existing.generation != expected_generation
-            {
+            if existing.pool_id != pool.pool_id || existing.generation != expected_generation {
                 anyhow::bail!("preparation resource pool compare-and-swap conflict");
             }
         } else if expected_generation != 0 {
@@ -1418,21 +1402,20 @@ impl SessionStore {
             .context("worker process exit receipt task is missing from the run catalog")?;
         receipt.validate_for_task(task)?;
         let lease = self
-            .read_resource_lease(
-                &receipt.run_id,
-                &receipt.resource_id,
-                &receipt.lease_token,
-            )?
+            .read_resource_lease(&receipt.run_id, &receipt.resource_id, &receipt.lease_token)?
             .context("worker process exit receipt requires its durable resource lease")?;
         receipt.validate_for_lease(&lease)?;
 
         let relative = receipt.relative_path()?;
         let path = checked_path(&self.root, &relative)?;
         if path.exists() {
-            let data = fs::read(&path)
-                .with_context(|| format!("reading worker process exit receipt {}", path.display()))?;
+            let data = fs::read(&path).with_context(|| {
+                format!("reading worker process exit receipt {}", path.display())
+            })?;
             let existing: FmsWorkerProcessExitReceipt = serde_json::from_slice(&data)
-                .with_context(|| format!("parsing worker process exit receipt {}", path.display()))?;
+                .with_context(|| {
+                    format!("parsing worker process exit receipt {}", path.display())
+                })?;
             existing.validate()?;
             if existing.relative_path()? != relative {
                 anyhow::bail!("worker process exit receipt identity does not match its path");
@@ -1458,9 +1441,7 @@ impl SessionStore {
     ) -> Result<Option<FmsWorkerProcessExitReceipt>> {
         validate_store_id(run_id)?;
         validate_store_id(receipt_id)?;
-        let relative = format!(
-            "runs/{run_id}/worker_process_exit_receipts/{receipt_id}.json"
-        );
+        let relative = format!("runs/{run_id}/worker_process_exit_receipts/{receipt_id}.json");
         let path = checked_path(&self.root, &relative)?;
         if !path.exists() {
             return Ok(None);
@@ -1527,11 +1508,9 @@ impl SessionStore {
             .find(|task| task.task_id == receipt.task_id)
             .context("worker process exit recovery task is missing from the run catalog")?;
         receipt.validate_for_task(task)?;
-        let Some(lease) = self.read_resource_lease(
-            &receipt.run_id,
-            &receipt.resource_id,
-            &receipt.lease_token,
-        )? else {
+        let Some(lease) =
+            self.read_resource_lease(&receipt.run_id, &receipt.resource_id, &receipt.lease_token)?
+        else {
             return Ok(None);
         };
         if lease.state == FmsResourceLeaseState::Released {
@@ -1578,10 +1557,10 @@ impl SessionStore {
         let relative = launch.relative_path()?;
         let path = checked_path(&self.root, &relative)?;
         if path.exists() {
-            let existing: FmsPreparationProcessLaunch =
-                serde_json::from_slice(&fs::read(&path)?).with_context(|| {
-                    format!("parsing preparation process launch {}", path.display())
-                })?;
+            let existing: FmsPreparationProcessLaunch = serde_json::from_slice(&fs::read(&path)?)
+                .with_context(|| {
+                format!("parsing preparation process launch {}", path.display())
+            })?;
             existing.validate()?;
             if existing.relative_path()? != relative {
                 anyhow::bail!("preparation process launch identity does not match its path");
@@ -1725,13 +1704,14 @@ impl SessionStore {
         if path.exists() {
             let existing: FmsPreparationProcessExitReceipt =
                 serde_json::from_slice(&fs::read(&path)?).with_context(|| {
-                    format!("parsing preparation process exit receipt {}", path.display())
+                    format!(
+                        "parsing preparation process exit receipt {}",
+                        path.display()
+                    )
                 })?;
             existing.validate()?;
             if existing.relative_path()? != relative {
-                anyhow::bail!(
-                    "preparation process exit receipt identity does not match its path"
-                );
+                anyhow::bail!("preparation process exit receipt identity does not match its path");
             }
             if existing == *receipt {
                 return Ok(PreparationProcessExitReceiptCommitDisposition::Replayed);
@@ -1755,16 +1735,18 @@ impl SessionStore {
     ) -> Result<Option<FmsPreparationProcessExitReceipt>> {
         validate_store_id(run_id)?;
         validate_store_id(receipt_id)?;
-        let relative =
-            format!("runs/{run_id}/preparation_process_exit_receipts/{receipt_id}.json");
+        let relative = format!("runs/{run_id}/preparation_process_exit_receipts/{receipt_id}.json");
         let path = checked_path(&self.root, &relative)?;
         if !path.exists() {
             return Ok(None);
         }
         let receipt: FmsPreparationProcessExitReceipt = serde_json::from_slice(&fs::read(&path)?)
             .with_context(|| {
-                format!("parsing preparation process exit receipt {}", path.display())
-            })?;
+            format!(
+                "parsing preparation process exit receipt {}",
+                path.display()
+            )
+        })?;
         if receipt.relative_path()? != relative {
             anyhow::bail!("preparation process exit receipt identity does not match its path");
         }
@@ -1817,7 +1799,8 @@ impl SessionStore {
             &receipt.run_id,
             &receipt.resource_id,
             &receipt.lease_token,
-        )? else {
+        )?
+        else {
             return Ok(None);
         };
         if lease.state == FmsResourceLeaseState::Released {
@@ -1954,10 +1937,10 @@ impl SessionStore {
         let path = checked_path(&self.root, &relative)?;
         if path.exists() {
             reject_link(&path)?;
-            let existing: FmsPreparationRetryDecision =
-                serde_json::from_slice(&fs::read(&path)?).with_context(|| {
-                    format!("parsing preparation retry decision {}", path.display())
-                })?;
+            let existing: FmsPreparationRetryDecision = serde_json::from_slice(&fs::read(&path)?)
+                .with_context(|| {
+                format!("parsing preparation retry decision {}", path.display())
+            })?;
             existing.validate()?;
             if existing.relative_path()? != relative {
                 anyhow::bail!("preparation retry decision identity does not match its path");
@@ -2018,7 +2001,9 @@ impl SessionStore {
                 .insert(receipt.preparation_attempt_id.clone(), receipt)
                 .is_some()
             {
-                anyhow::bail!("preparation task has duplicate failed exit receipts for one attempt");
+                anyhow::bail!(
+                    "preparation task has duplicate failed exit receipts for one attempt"
+                );
             }
         }
         let target = failed_attempts
@@ -2081,9 +2066,7 @@ impl SessionStore {
     ) -> Result<Option<FmsPreparationRetryDecision>> {
         validate_store_id(run_id)?;
         validate_store_id(decision_id)?;
-        let relative = format!(
-            "runs/{run_id}/preparation_retry_decisions/{decision_id}.json"
-        );
+        let relative = format!("runs/{run_id}/preparation_retry_decisions/{decision_id}.json");
         let path = checked_path(&self.root, &relative)?;
         if !path.exists() {
             return Ok(None);
@@ -2168,7 +2151,9 @@ impl SessionStore {
             || task.attempt_id.is_some()
             || task.ownership_epoch.is_some()
             || task.resource_id.is_some()
-            || self.read_task_preparation_receipt(run_id, task_id)?.is_some()
+            || self
+                .read_task_preparation_receipt(run_id, task_id)?
+                .is_some()
             || self
                 .find_active_preparation_resource_lease_for_task_unlocked(run_id, task_id)?
                 .is_some()
@@ -2370,9 +2355,7 @@ impl SessionStore {
                 continue;
             }
             if existing.lease_token != entry.lease_token {
-                anyhow::bail!(
-                    "coordinator journal lease token changed within one task attempt"
-                );
+                anyhow::bail!("coordinator journal lease token changed within one task attempt");
             }
             match existing.direction {
                 FmsCoordinatorJournalDirection::Command => {
@@ -3013,11 +2996,8 @@ impl SessionStore {
             anyhow::bail!("task admission requires a fresh active resource lease");
         }
         let _writer_lease = self.write_transaction()?;
-        let record_path = self.task_admission_path(
-            &lease.run_id,
-            &lease.task_id,
-            &lease.attempt_id,
-        )?;
+        let record_path =
+            self.task_admission_path(&lease.run_id, &lease.task_id, &lease.attempt_id)?;
         if record_path.exists() {
             let record: FmsTaskAdmissionRecord = serde_json::from_slice(&fs::read(&record_path)?)
                 .context("parsing durable task admission")?;
@@ -3135,8 +3115,10 @@ impl SessionStore {
                 if entry_path.extension().and_then(|value| value.to_str()) != Some("json") {
                     anyhow::bail!("task admission record must use the .json extension");
                 }
-                let record: FmsTaskAdmissionRecord = serde_json::from_slice(&fs::read(&entry_path)?)
-                    .with_context(|| format!("parsing task admission {}", entry_path.display()))?;
+                let record: FmsTaskAdmissionRecord =
+                    serde_json::from_slice(&fs::read(&entry_path)?).with_context(|| {
+                        format!("parsing task admission {}", entry_path.display())
+                    })?;
                 record.validate()?;
                 if record.lease.run_id != run_id
                     || record.task.task_id != task_id
@@ -3148,11 +3130,16 @@ impl SessionStore {
             }
         }
         records.sort_by(|left, right| {
-            (left.lease.ownership_epoch, &left.task.task_id, &left.lease.attempt_id).cmp(&(
-                right.lease.ownership_epoch,
-                &right.task.task_id,
-                &right.lease.attempt_id,
-            ))
+            (
+                left.lease.ownership_epoch,
+                &left.task.task_id,
+                &left.lease.attempt_id,
+            )
+                .cmp(&(
+                    right.lease.ownership_epoch,
+                    &right.task.task_id,
+                    &right.lease.attempt_id,
+                ))
         });
         records
             .iter()
@@ -3210,9 +3197,7 @@ impl SessionStore {
         if current.attempt_id.is_some() {
             anyhow::bail!("task admission conflicts with another current attempt");
         }
-        if catalog.revision < record.expected_catalog_revision
-            || current != &record.queued_task
-        {
+        if catalog.revision < record.expected_catalog_revision || current != &record.queued_task {
             anyhow::bail!("task admission source changed before replay");
         }
         if self
@@ -3390,7 +3375,10 @@ impl SessionStore {
         let catalog = self
             .read_run_catalog(&lease.run_id)?
             .context("preparation resource lease requires a durable run catalog")?;
-        let task = catalog.tasks.iter().find(|task| task.task_id == lease.task_id);
+        let task = catalog
+            .tasks
+            .iter()
+            .find(|task| task.task_id == lease.task_id);
         let task_available = task.is_some_and(|task| {
             task.lifecycle == FmsTaskLifecycle::Accepted
                 && matches!(
@@ -3402,10 +3390,8 @@ impl SessionStore {
                 && task.ownership_epoch.is_none()
                 && task.resource_id.is_none()
         });
-        let authorization_sequence = self.preparation_attempt_authorization_sequence_unlocked(
-            &lease.run_id,
-            &lease.task_id,
-        )?;
+        let authorization_sequence = self
+            .preparation_attempt_authorization_sequence_unlocked(&lease.run_id, &lease.task_id)?;
         if !task_available
             || self
                 .read_task_preparation_receipt(&lease.run_id, &lease.task_id)?
@@ -3415,12 +3401,10 @@ impl SessionStore {
             return Ok(None);
         }
 
-        if let Some(existing) =
-            self.find_active_preparation_resource_lease_for_task_unlocked(
-                &lease.run_id,
-                &lease.task_id,
-            )?
-        {
+        if let Some(existing) = self.find_active_preparation_resource_lease_for_task_unlocked(
+            &lease.run_id,
+            &lease.task_id,
+        )? {
             if existing.identity_matches(lease) && existing.budget == lease.budget {
                 return Ok(Some(PreparationResourceLeaseCommitDisposition::Replayed));
             }
@@ -3444,12 +3428,10 @@ impl SessionStore {
         lease: &FmsPreparationResourceLease,
     ) -> Result<PreparationResourceLeaseCommitDisposition> {
         self.validate_preparation_resource_lease_owner_unlocked(lease)?;
-        if let Some(existing) =
-            self.find_active_preparation_resource_lease_for_task_unlocked(
-                &lease.run_id,
-                &lease.task_id,
-            )?
-        {
+        if let Some(existing) = self.find_active_preparation_resource_lease_for_task_unlocked(
+            &lease.run_id,
+            &lease.task_id,
+        )? {
             if existing.identity_matches(lease) && existing.budget == lease.budget {
                 return Ok(PreparationResourceLeaseCommitDisposition::Replayed);
             }
@@ -3508,9 +3490,8 @@ impl SessionStore {
         for value in [run_id, resource_id, lease_token] {
             validate_store_id(value)?;
         }
-        let relative = format!(
-            "runs/{run_id}/preparation_resource_leases/{resource_id}/{lease_token}.json"
-        );
+        let relative =
+            format!("runs/{run_id}/preparation_resource_leases/{resource_id}/{lease_token}.json");
         let path = checked_path(&self.root, &relative)?;
         if !path.exists() {
             return Ok(None);
@@ -3591,12 +3572,18 @@ impl SessionStore {
             }
         }
         active.sort_by(|left, right| {
-            (&left.run_id, &left.task_id, &left.resource_id, &left.lease_token).cmp(&(
-                &right.run_id,
-                &right.task_id,
-                &right.resource_id,
-                &right.lease_token,
-            ))
+            (
+                &left.run_id,
+                &left.task_id,
+                &left.resource_id,
+                &left.lease_token,
+            )
+                .cmp(&(
+                    &right.run_id,
+                    &right.task_id,
+                    &right.resource_id,
+                    &right.lease_token,
+                ))
         });
         Ok(active)
     }
@@ -3628,9 +3615,7 @@ impl SessionStore {
             anyhow::bail!("preparation resource lease heartbeat conflicts with durable payload");
         }
         if lease.heartbeat_sequence != current.heartbeat_sequence.saturating_add(1) {
-            anyhow::bail!(
-                "preparation resource lease heartbeat sequence must advance by one"
-            );
+            anyhow::bail!("preparation resource lease heartbeat sequence must advance by one");
         }
         atomic_write(&path, &serde_json::to_vec_pretty(lease)?)?;
         Ok(())
@@ -3668,9 +3653,7 @@ impl SessionStore {
                     && receipt.lease_token == lease.lease_token
             })
         {
-            anyhow::bail!(
-                "preparation lease with a durable process exit must use finalization"
-            );
+            anyhow::bail!("preparation lease with a durable process exit must use finalization");
         }
         current.state = FmsResourceLeaseState::Released;
         current.released_at = Some(chrono::Utc::now());
@@ -3941,12 +3924,12 @@ impl SessionStore {
         }
         if !allow_terminal_reconciliation
             && matches!(
-            task.lifecycle,
-            FmsTaskLifecycle::Succeeded
-                | FmsTaskLifecycle::Failed
-                | FmsTaskLifecycle::Cancelled
-                | FmsTaskLifecycle::Interrupted
-        )
+                task.lifecycle,
+                FmsTaskLifecycle::Succeeded
+                    | FmsTaskLifecycle::Failed
+                    | FmsTaskLifecycle::Cancelled
+                    | FmsTaskLifecycle::Interrupted
+            )
         {
             anyhow::bail!("terminal task cannot acquire or renew a resource lease");
         }
@@ -4119,9 +4102,7 @@ impl SessionStore {
             .filter(|lease| lease.run_id == run_id && lease.task_id == task_id);
         let active = matching.next();
         if matching.next().is_some() {
-            anyhow::bail!(
-                "multiple active preparation leases found for task `{run_id}/{task_id}`"
-            );
+            anyhow::bail!("multiple active preparation leases found for task `{run_id}/{task_id}`");
         }
         Ok(active)
     }
@@ -4796,11 +4777,10 @@ mod tests {
                 .unwrap(),
             br#"{"revision":2}"#
         );
-        let generation_count = fs::read_dir(
-            root.join("live_command_journals/session-command-journal/generations"),
-        )
-        .unwrap()
-        .count();
+        let generation_count =
+            fs::read_dir(root.join("live_command_journals/session-command-journal/generations"))
+                .unwrap()
+                .count();
         assert_eq!(generation_count, 1);
 
         let report = crate::reachability::walk_store_root(
@@ -4811,9 +4791,8 @@ mod tests {
         assert!(report
             .file_refs
             .contains("live_command_journals/session-command-journal/CURRENT"));
-        assert!(report.file_refs.iter().any(|reference| reference.starts_with(
-            "live_command_journals/session-command-journal/generations/generation-"
-        )));
+        assert!(report.file_refs.iter().any(|reference| reference
+            .starts_with("live_command_journals/session-command-journal/generations/generation-")));
     }
 
     fn test_resource_lease(
@@ -5023,9 +5002,7 @@ mod tests {
             crate::reachability::ReachabilityMode::Export,
         )
         .unwrap();
-        assert!(report
-            .file_refs
-            .contains("scheduler_pools/pool-a.json"));
+        assert!(report.file_refs.contains("scheduler_pools/pool-a.json"));
 
         let mut second = first.clone();
         second.sequence = 2;
@@ -5204,7 +5181,9 @@ mod tests {
             .commit_preparation_process_exit_receipt(&failed_exit)
             .unwrap();
         assert_eq!(
-            store.finalize_preparation_process_exit(&failed_exit).unwrap(),
+            store
+                .finalize_preparation_process_exit(&failed_exit)
+                .unwrap(),
             PreparationProcessFinalizationDisposition::Failed
         );
         assert_eq!(
@@ -5318,9 +5297,7 @@ mod tests {
             ..empty.clone()
         };
         assert_eq!(
-            store
-                .commit_scheduler_resource_pool(1, &populated)
-                .unwrap(),
+            store.commit_scheduler_resource_pool(1, &populated).unwrap(),
             SchedulerResourcePoolCommitDisposition::Accepted
         );
         let report = crate::reachability::walk_store_root(
@@ -5328,11 +5305,9 @@ mod tests {
             crate::reachability::ReachabilityMode::Export,
         )
         .unwrap();
-        assert!(
-            report
-                .file_refs
-                .contains("scheduler_pools/pool-dynamic.resources.json")
-        );
+        assert!(report
+            .file_refs
+            .contains("scheduler_pools/pool-dynamic.resources.json"));
         assert!(store.commit_scheduler_resource_pool(1, &empty).is_err());
 
         let mut invalid = populated;
@@ -6692,15 +6667,11 @@ mod admission_tests {
         };
 
         assert_eq!(
-            store
-                .commit_worker_process_exit_receipt(&receipt)
-                .unwrap(),
+            store.commit_worker_process_exit_receipt(&receipt).unwrap(),
             WorkerProcessExitReceiptCommitDisposition::Accepted
         );
         assert_eq!(
-            store
-                .commit_worker_process_exit_receipt(&receipt)
-                .unwrap(),
+            store.commit_worker_process_exit_receipt(&receipt).unwrap(),
             WorkerProcessExitReceiptCommitDisposition::Replayed
         );
         assert_eq!(
@@ -6743,7 +6714,11 @@ mod admission_tests {
         let temp = tempfile::tempdir().unwrap();
         let store = SessionStore::open(temp.path().join("session-store")).unwrap();
         seed_catalog(&store, vec![queued_task("task-admission-a")]);
-        let claim_lease = lease("task-admission-a", "attempt-admission-a", "lease-admission-a");
+        let claim_lease = lease(
+            "task-admission-a",
+            "attempt-admission-a",
+            "lease-admission-a",
+        );
 
         assert_eq!(
             store.commit_task_admission(&claim_lease).unwrap(),
@@ -6759,7 +6734,10 @@ mod admission_tests {
         let catalog = store.read_run_catalog("run-admission").unwrap().unwrap();
         assert_eq!(catalog.revision, 2);
         assert_eq!(catalog.tasks[0].lifecycle, FmsTaskLifecycle::Preparing);
-        assert_eq!(catalog.tasks[0].attempt_id.as_deref(), Some("attempt-admission-a"));
+        assert_eq!(
+            catalog.tasks[0].attempt_id.as_deref(),
+            Some("attempt-admission-a")
+        );
         assert_eq!(
             store
                 .read_active_resource_lease_for_task("run-admission", "task-admission-a")
@@ -6772,9 +6750,7 @@ mod admission_tests {
         assert!(lease_path.starts_with(&canonical_temp_root));
         fs::remove_file(lease_path).unwrap();
         assert_eq!(
-            store
-                .reconcile_task_admissions("run-admission")
-                .unwrap(),
+            store.reconcile_task_admissions("run-admission").unwrap(),
             vec![TaskAdmissionCommitDisposition::Replayed]
         );
         assert_eq!(
@@ -6798,12 +6774,13 @@ mod admission_tests {
         let temp = tempfile::tempdir().unwrap();
         let store = SessionStore::open(temp.path().join("session-store")).unwrap();
         seed_catalog(&store, vec![queued_task("task-admission-a")]);
-        let mut catalog = store
-            .read_run_catalog("run-admission")
-            .unwrap()
-            .unwrap();
+        let mut catalog = store.read_run_catalog("run-admission").unwrap().unwrap();
         let queued = catalog.tasks.remove(0);
-        let claim_lease = lease("task-admission-a", "attempt-admission-a", "lease-admission-a");
+        let claim_lease = lease(
+            "task-admission-a",
+            "attempt-admission-a",
+            "lease-admission-a",
+        );
         let mut admitted = queued.clone();
         admitted.lifecycle = FmsTaskLifecycle::Preparing;
         admitted.readiness = FmsTaskReadiness::Ready;
@@ -6826,14 +6803,15 @@ mod admission_tests {
         atomic_write(&path, &serde_json::to_vec_pretty(&record).unwrap()).unwrap();
 
         assert_eq!(
-            store
-                .reconcile_task_admissions("run-admission")
-                .unwrap(),
+            store.reconcile_task_admissions("run-admission").unwrap(),
             vec![TaskAdmissionCommitDisposition::Admitted]
         );
         let catalog = store.read_run_catalog("run-admission").unwrap().unwrap();
         assert_eq!(catalog.revision, 2);
-        assert_eq!(catalog.tasks[0].attempt_id.as_deref(), Some("attempt-admission-a"));
+        assert_eq!(
+            catalog.tasks[0].attempt_id.as_deref(),
+            Some("attempt-admission-a")
+        );
         assert_eq!(
             store
                 .read_active_resource_lease_for_task("run-admission", "task-admission-a")
@@ -6853,7 +6831,10 @@ mod admission_tests {
         let store = SessionStore::open(temp.path().join("session-store")).unwrap();
         seed_catalog(
             &store,
-            vec![queued_task("task-admission-a"), queued_task("task-admission-b")],
+            vec![
+                queued_task("task-admission-a"),
+                queued_task("task-admission-b"),
+            ],
         );
         store
             .commit_task_admission(&lease(

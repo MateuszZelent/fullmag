@@ -1,19 +1,19 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use fullmag_ir::{
-    CartesianComponentIR, ClosedIntervalIR, ComparisonOpIR, ConstraintActivationIR,
-    EmptySelectionPolicyIR, FrozenReferencePolicyIR, FrozenSpinsIR, InactiveSelectionPolicyIR,
-    RESOLVED_FROZEN_SPINS_PLAN_SCHEMA_VERSION, ResolvedFrozenSpinsPlanIR,
-    SELECTION_CERTIFICATE_SCHEMA_VERSION, SELECTION_EXPR_SCHEMA_VERSION,
+    canonical_selection_sha256, selection_is_state_dependent, CartesianComponentIR,
+    ClosedIntervalIR, ComparisonOpIR, ConstraintActivationIR, EmptySelectionPolicyIR,
+    FrozenReferencePolicyIR, FrozenSpinsIR, InactiveSelectionPolicyIR, ResolvedFrozenSpinsPlanIR,
     SelectionAuthoredFingerprintIR, SelectionCertificateIR, SelectionDefinitionIR, SelectionExprIR,
     SelectionFrameIR, SelectionMembershipPolicyIR, SelectionScalarExprIR,
-    SelectionValidationContext, canonical_selection_sha256, selection_is_state_dependent,
+    SelectionValidationContext, RESOLVED_FROZEN_SPINS_PLAN_SCHEMA_VERSION,
+    SELECTION_CERTIFICATE_SCHEMA_VERSION, SELECTION_EXPR_SCHEMA_VERSION,
 };
 use sha2::{Digest, Sha256};
 
 use super::geometry::{
-    AffineTransform3, BoundaryMembership, GeometryPredicate, SelectionError,
-    validate_affine_transform, world_point_in_frame,
+    validate_affine_transform, world_point_in_frame, AffineTransform3, BoundaryMembership,
+    GeometryPredicate, SelectionError,
 };
 
 pub const FDM_SELECTION_EVALUATOR_ID: &str = "selection.fdm_cell_center.v1";

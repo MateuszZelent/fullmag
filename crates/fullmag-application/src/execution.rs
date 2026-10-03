@@ -366,15 +366,26 @@ pub enum WorkerEvent {
     Accepted,
     Prepared,
     Started,
-    HeartbeatAck { lease_heartbeat_sequence: u64 },
-    Progress { source_step: u64 },
+    HeartbeatAck {
+        lease_heartbeat_sequence: u64,
+    },
+    Progress {
+        source_step: u64,
+    },
     /// The worker completed its side effect and is draining every control
     /// command that won the journal fence before terminal publication.
     Completing,
     Stopped,
-    Completed { assessment: ScientificAssessment },
-    Failed { retryable: bool, reason: String },
-    Rejected { reason: String },
+    Completed {
+        assessment: ScientificAssessment,
+    },
+    Failed {
+        retryable: bool,
+        reason: String,
+    },
+    Rejected {
+        reason: String,
+    },
 }
 
 impl WorkerEvent {
@@ -1425,7 +1436,10 @@ fn validate_protocol_identity(
     message_id: &str,
     sequence: u64,
 ) -> Result<(), ExecutionError> {
-    if !matches!(schema_version, "worker_protocol.v2" | WORKER_PROTOCOL_SCHEMA) {
+    if !matches!(
+        schema_version,
+        "worker_protocol.v2" | WORKER_PROTOCOL_SCHEMA
+    ) {
         return Err(ExecutionError::Invalid(format!(
             "schema_version must be worker_protocol.v2 or {WORKER_PROTOCOL_SCHEMA}"
         )));

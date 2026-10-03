@@ -1,6 +1,6 @@
 //! Native OpenAPI v2 spec assembly.
 
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use utoipa::OpenApi;
 
 #[derive(OpenApi)]
@@ -1280,21 +1280,15 @@ mod tests {
         let document = openapi_json();
         let schemas = &document["components"]["schemas"];
 
-        assert!(
-            schemas["SamplingPeriodPolicyResource"]
-                .to_string()
-                .contains("auto_sinc_cutoff")
-        );
-        assert!(
-            schemas["AutomaticOutputSamplingResource"]
-                .to_string()
-                .contains("field_auto")
-        );
-        assert!(
-            schemas["AutomaticOutputSamplingResource"]
-                .to_string()
-                .contains("scalar_auto")
-        );
+        assert!(schemas["SamplingPeriodPolicyResource"]
+            .to_string()
+            .contains("auto_sinc_cutoff"));
+        assert!(schemas["AutomaticOutputSamplingResource"]
+            .to_string()
+            .contains("field_auto"));
+        assert!(schemas["AutomaticOutputSamplingResource"]
+            .to_string()
+            .contains("scalar_auto"));
     }
 
     #[test]
@@ -1305,23 +1299,19 @@ mod tests {
         assert!(stage.contains("target"));
         assert!(stage.contains("layout"));
         assert!(stage.contains("format"));
-        assert!(
-            schemas["StageAutosaveFormatResource"]
-                .to_string()
-                .contains("hdf5")
-        );
-        assert!(
-            schemas["StageAutosaveLayoutResource"]
-                .to_string()
-                .contains("continuous")
-        );
+        assert!(schemas["StageAutosaveFormatResource"]
+            .to_string()
+            .contains("hdf5"));
+        assert!(schemas["StageAutosaveLayoutResource"]
+            .to_string()
+            .contains("continuous"));
     }
 
     #[test]
     fn openapi_current_transport_preserves_conservative_current_view_payload() {
         let document = openapi_json();
-        let property = &document["components"]["schemas"]["KnownSceneCurrentTransport"]["properties"]
-            ["conservative_current_view"];
+        let property = &document["components"]["schemas"]["KnownSceneCurrentTransport"]
+            ["properties"]["conservative_current_view"];
 
         assert_eq!(
             property["additionalProperties"],
@@ -1337,32 +1327,25 @@ mod tests {
         let property =
             &schemas["KnownSceneCurrentTransport"]["properties"]["structured_current_closure"];
 
-        assert!(
-            property
-                .to_string()
-                .contains("#/components/schemas/SceneStructuredCurrentClosure")
-        );
-        assert!(
-            schemas["SceneStructuredCurrentClosure"]
-                .to_string()
-                .contains("closed_geometry")
-        );
-        assert!(
-            !schemas["SceneStructuredCurrentClosure"]
-                .to_string()
-                .contains("certified_import")
-        );
-        assert!(
-            schemas["SceneStructuredCurrentDrive"]
-                .to_string()
-                .contains("impressed_potential_jump")
-        );
+        assert!(property
+            .to_string()
+            .contains("#/components/schemas/SceneStructuredCurrentClosure"));
+        assert!(schemas["SceneStructuredCurrentClosure"]
+            .to_string()
+            .contains("closed_geometry"));
+        assert!(!schemas["SceneStructuredCurrentClosure"]
+            .to_string()
+            .contains("certified_import"));
+        assert!(schemas["SceneStructuredCurrentDrive"]
+            .to_string()
+            .contains("impressed_potential_jump"));
     }
 
     #[test]
     fn openapi_topological_charge_v2_is_closed_and_versioned() {
         let document = openapi_json();
-        let operation = &document["paths"]["/v2/sessions/current/analysis/extensions/objects/{object_id}/topological-charge"]
+        let operation = &document["paths"]
+            ["/v2/sessions/current/analysis/extensions/objects/{object_id}/topological-charge"]
             ["get"];
         let parameters = operation["parameters"]
             .as_array()

@@ -1,6 +1,6 @@
+use fullmag_application::{DocumentMode, FileProjectRepository, ProjectApplication, ProjectSource};
 use fullmag_engine::fem::MeshTopology;
 use fullmag_engine::fem_solution_transfer::{normalize_unit_vectors, transfer_fem_field_to_grid};
-use fullmag_application::{DocumentMode, FileProjectRepository, ProjectApplication, ProjectSource};
 use fullmag_ir::{
     validate_mesh_for_execution, BackendPlanIR, MeshIR, ProblemIR, TextureMappingIR,
     TextureProjectionMode,

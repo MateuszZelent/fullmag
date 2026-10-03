@@ -27,11 +27,11 @@ use crate::schemas::projects::{
     ProjectDocumentResource, ProjectMigrationResource, ProjectRunCatalogState,
     ProjectRunExecutionState, ProjectRunListQuery, ProjectRunListResource,
     ProjectRunMaterializationResource, ProjectRunMinimumResourceBudgetResource,
-    ProjectRunRequestedExecutionResource, ProjectRunResource,
-    ProjectRunSubmitDisposition, ProjectRunSubmitRequest, ProjectRunSubmitResource,
-    ProjectRunSummaryResource, ProjectRunTaskCancellationDisposition,
-    ProjectRunTaskCancellationRequest, ProjectRunTaskCancellationResource, ProjectRunTaskLifecycle,
-    ProjectRunTaskResource, PROJECT_ARCHIVE_MAX_BYTES,
+    ProjectRunRequestedExecutionResource, ProjectRunResource, ProjectRunSubmitDisposition,
+    ProjectRunSubmitRequest, ProjectRunSubmitResource, ProjectRunSummaryResource,
+    ProjectRunTaskCancellationDisposition, ProjectRunTaskCancellationRequest,
+    ProjectRunTaskCancellationResource, ProjectRunTaskLifecycle, ProjectRunTaskResource,
+    PROJECT_ARCHIVE_MAX_BYTES,
 };
 use crate::types::AppState;
 
@@ -524,15 +524,14 @@ pub async fn get_run(
                 device: specification.requested_execution.device,
                 precision: specification.requested_execution.precision,
                 mode: specification.requested_execution.mode,
-                minimum_resources: specification
-                    .requested_execution
-                    .minimum_resources
-                    .map(|resources| ProjectRunMinimumResourceBudgetResource {
+                minimum_resources: specification.requested_execution.minimum_resources.map(
+                    |resources| ProjectRunMinimumResourceBudgetResource {
                         cpu_millis: resources.cpu_millis,
                         memory_bytes: resources.memory_bytes,
                         gpu_memory_bytes: resources.gpu_memory_bytes,
                         storage_bytes: resources.storage_bytes,
-                    }),
+                    },
+                ),
             },
             catalog_state,
             catalog_revision,
@@ -660,15 +659,14 @@ pub async fn list_runs(
                     device: specification.requested_execution.device,
                     precision: specification.requested_execution.precision,
                     mode: specification.requested_execution.mode,
-                    minimum_resources: specification
-                        .requested_execution
-                        .minimum_resources
-                        .map(|resources| ProjectRunMinimumResourceBudgetResource {
+                    minimum_resources: specification.requested_execution.minimum_resources.map(
+                        |resources| ProjectRunMinimumResourceBudgetResource {
                             cpu_millis: resources.cpu_millis,
                             memory_bytes: resources.memory_bytes,
                             gpu_memory_bytes: resources.gpu_memory_bytes,
                             storage_bytes: resources.storage_bytes,
-                        }),
+                        },
+                    ),
                 },
                 catalog_state,
                 catalog_revision,

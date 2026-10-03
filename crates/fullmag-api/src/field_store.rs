@@ -777,10 +777,10 @@ pub(crate) fn serialize_fem_mesh_topology_binary_v2(
 #[cfg(test)]
 mod tests {
     use super::{
-        FieldVectorBinaryMetadata, FieldVectorBinaryMetadataV4, FieldVectorIndexing,
         checked_fem_mesh_topology_binary_v2_len, serialize_fem_mesh_topology_binary_v2,
         serialize_field_vector_binary_v2, serialize_field_vector_binary_v3,
-        serialize_field_vector_binary_v4,
+        serialize_field_vector_binary_v4, FieldVectorBinaryMetadata, FieldVectorBinaryMetadataV4,
+        FieldVectorIndexing,
     };
 
     fn mixed_topology_mesh() -> fullmag_runner::FemMeshPayload {
@@ -866,9 +866,7 @@ mod tests {
         );
         assert_eq!(
             &binary[272..292],
-            &[
-                0, 0, 0, 0, 4, 0, 0, 0, 10, 0, 0, 0, 15, 0, 0, 0, 23, 0, 0, 0
-            ]
+            &[0, 0, 0, 0, 4, 0, 0, 0, 10, 0, 0, 0, 15, 0, 0, 0, 23, 0, 0, 0]
         );
         assert_eq!(&binary[392..404], &[1, 0, 0, 0, 2, 0, 0, 0, 1, 0, 0, 0]);
         assert_eq!(&binary[408..420], &[1, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0]);

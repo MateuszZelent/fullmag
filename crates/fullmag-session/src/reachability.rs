@@ -15,12 +15,13 @@ use fullmag_quantities::SolutionSet;
 use crate::archive_document::{ArchiveDocuments, ArchiveFileSnapshot};
 use crate::types::{
     ArtifactIndex, BackendStatePayload, CommonSolverState, FieldRole, FmsArtifactCatalog,
-    FmsCheckpoint, FmsCoordinatorJournalDirection, FmsExportProfile, FmsPreparationReceipt,
-    FmsPreparationProcessExitReceipt, FmsPreparationProcessLaunch, FmsPreparationResourceLease,
-    FmsPreparationResourcePool, FmsPreparationRetryDecision, FmsResourceLease, FmsRetryDecision,
-    FmsRunCatalog, FmsRunIntent, FmsRunManifest, FmsSchedulerPoolCheckpoint,
-    FmsSchedulerResourcePool, FmsSchedulerRunSource, FmsSessionManifest, FmsTaskAdmissionRecord,
-    FmsTaskPreparationReceipt, FmsWorkerProcessExitReceipt, FmsWorkspaceManifest, TensorDescriptor,
+    FmsCheckpoint, FmsCoordinatorJournalDirection, FmsExportProfile,
+    FmsPreparationProcessExitReceipt, FmsPreparationProcessLaunch, FmsPreparationReceipt,
+    FmsPreparationResourceLease, FmsPreparationResourcePool, FmsPreparationRetryDecision,
+    FmsResourceLease, FmsRetryDecision, FmsRunCatalog, FmsRunIntent, FmsRunManifest,
+    FmsSchedulerPoolCheckpoint, FmsSchedulerResourcePool, FmsSchedulerRunSource,
+    FmsSessionManifest, FmsTaskAdmissionRecord, FmsTaskPreparationReceipt,
+    FmsWorkerProcessExitReceipt, FmsWorkspaceManifest, TensorDescriptor,
 };
 
 /// The same claim-scoped continuity rules apply to stores and portable archives.
@@ -1311,11 +1312,7 @@ impl StoreWalker {
         Ok(())
     }
 
-    fn walk_run_preparation_retry_decisions(
-        &mut self,
-        run_dir: &Path,
-        run_id: &str,
-    ) -> Result<()> {
+    fn walk_run_preparation_retry_decisions(&mut self, run_dir: &Path, run_id: &str) -> Result<()> {
         let directory = run_dir.join("preparation_retry_decisions");
         if !directory.exists() {
             return Ok(());
@@ -1338,25 +1335,17 @@ impl StoreWalker {
                 bail!("preparation retry decision entry must be JSON: `{file_name}`")
             };
             validate_component(decision_id)?;
-            let relative = format!(
-                "runs/{run_id}/preparation_retry_decisions/{file_name}"
-            );
+            let relative = format!("runs/{run_id}/preparation_retry_decisions/{file_name}");
             let data = self.read_file(&entry.path(), &relative)?;
             let decision: FmsPreparationRetryDecision = parse_json(&data, &relative)?;
             if decision.relative_path()? != relative {
-                bail!(
-                    "preparation retry decision `{relative}` contains mismatched path identity"
-                )
+                bail!("preparation retry decision `{relative}` contains mismatched path identity")
             }
         }
         Ok(())
     }
 
-    fn walk_run_preparation_resource_leases(
-        &mut self,
-        run_dir: &Path,
-        run_id: &str,
-    ) -> Result<()> {
+    fn walk_run_preparation_resource_leases(&mut self, run_dir: &Path, run_id: &str) -> Result<()> {
         let directory = run_dir.join("preparation_resource_leases");
         if !directory.exists() {
             return Ok(());
@@ -1390,9 +1379,8 @@ impl StoreWalker {
                     bail!("preparation resource lease entry must be JSON: `{file_name}`")
                 };
                 validate_component(lease_token)?;
-                let relative = format!(
-                    "runs/{run_id}/preparation_resource_leases/{resource_id}/{file_name}"
-                );
+                let relative =
+                    format!("runs/{run_id}/preparation_resource_leases/{resource_id}/{file_name}");
                 let data = self.read_file(&lease_entry.path(), &relative)?;
                 let lease: FmsPreparationResourceLease = parse_json(&data, &relative)?;
                 lease.validate()?;
@@ -1470,10 +1458,7 @@ impl StoreWalker {
         for session_entry in read_directory(&directory)? {
             let session_id = session_entry.file_name().to_string_lossy().into_owned();
             validate_component(&session_id)?;
-            reject_link_chain(
-                &self.root,
-                &format!("live_command_journals/{session_id}"),
-            )?;
+            reject_link_chain(&self.root, &format!("live_command_journals/{session_id}"))?;
             if session_entry.file_type()?.is_symlink() || !session_entry.file_type()?.is_dir() {
                 bail!("live command journal session entry must be a directory: `{session_id}`");
             }
@@ -1572,14 +1557,11 @@ impl StoreWalker {
                 bail!("worker process exit receipt entry must be JSON: `{file_name}`")
             };
             validate_component(receipt_id)?;
-            let relative =
-                format!("runs/{run_id}/worker_process_exit_receipts/{file_name}");
+            let relative = format!("runs/{run_id}/worker_process_exit_receipts/{file_name}");
             let data = self.read_file(&entry.path(), &relative)?;
             let receipt: FmsWorkerProcessExitReceipt = parse_json(&data, &relative)?;
             if receipt.relative_path()? != relative {
-                bail!(
-                    "worker process exit receipt `{relative}` contains mismatched path identity"
-                )
+                bail!("worker process exit receipt `{relative}` contains mismatched path identity")
             }
         }
         Ok(())
@@ -1612,8 +1594,7 @@ impl StoreWalker {
                 bail!("preparation process exit receipt entry must be JSON: `{file_name}`")
             };
             validate_component(receipt_id)?;
-            let relative =
-                format!("runs/{run_id}/preparation_process_exit_receipts/{file_name}");
+            let relative = format!("runs/{run_id}/preparation_process_exit_receipts/{file_name}");
             let data = self.read_file(&entry.path(), &relative)?;
             let receipt: FmsPreparationProcessExitReceipt = parse_json(&data, &relative)?;
             if receipt.relative_path()? != relative {
@@ -1656,9 +1637,7 @@ impl StoreWalker {
             let data = self.read_file(&entry.path(), &relative)?;
             let launch: FmsPreparationProcessLaunch = parse_json(&data, &relative)?;
             if launch.relative_path()? != relative {
-                bail!(
-                    "preparation process launch `{relative}` contains mismatched path identity"
-                )
+                bail!("preparation process launch `{relative}` contains mismatched path identity")
             }
         }
         Ok(())
@@ -1975,9 +1954,8 @@ impl StoreWalker {
                     bail!("task admission record must be JSON: `{file_name}`");
                 };
                 validate_component(attempt_id)?;
-                let relative = format!(
-                    "runs/{expected_run_id}/task_admissions/{task_id}/{file_name}"
-                );
+                let relative =
+                    format!("runs/{expected_run_id}/task_admissions/{task_id}/{file_name}");
                 let data = self.read_file(&entry.path(), &relative)?;
                 let record: FmsTaskAdmissionRecord = parse_json(&data, &relative)?;
                 record.validate()?;
@@ -3148,8 +3126,7 @@ impl<'a> ArchiveWalker<'a> {
                 self.walk_preparation_retry_decision(&name, expected_run_id)?;
             }
         }
-        let process_exit_prefix =
-            format!("runs/{expected_run_id}/worker_process_exit_receipts/");
+        let process_exit_prefix = format!("runs/{expected_run_id}/worker_process_exit_receipts/");
         let process_exit_names = self.documents.keys().cloned().collect::<Vec<_>>();
         for name in process_exit_names {
             if name.starts_with(&process_exit_prefix) && name.ends_with(".json") {
@@ -3495,9 +3472,7 @@ impl<'a> ArchiveWalker<'a> {
             || decision.decision_id != decision_id
             || decision.relative_path()? != relative
         {
-            bail!(
-                "preparation retry decision `{relative}` contains mismatched path identity"
-            )
+            bail!("preparation retry decision `{relative}` contains mismatched path identity")
         }
         self.report.file_refs.insert(relative.to_string());
         Ok(())
@@ -3542,9 +3517,7 @@ impl<'a> ArchiveWalker<'a> {
             || lease.lease_token != lease_token
             || lease.relative_path()? != relative
         {
-            bail!(
-                "preparation resource lease `{relative}` contains mismatched path identity"
-            )
+            bail!("preparation resource lease `{relative}` contains mismatched path identity")
         }
         self.report.file_refs.insert(relative.to_string());
         Ok(())
@@ -3573,9 +3546,7 @@ impl<'a> ArchiveWalker<'a> {
         validate_component(receipt_id)?;
         let receipt: FmsWorkerProcessExitReceipt = parse_json(&data, relative)?;
         if receipt.run_id != expected_run_id || receipt.receipt_id != receipt_id {
-            bail!(
-                "worker process exit receipt `{relative}` contains mismatched path identity"
-            )
+            bail!("worker process exit receipt `{relative}` contains mismatched path identity")
         }
         receipt.validate()?;
         self.report.file_refs.insert(relative.to_string());
@@ -3605,9 +3576,7 @@ impl<'a> ArchiveWalker<'a> {
         validate_component(receipt_id)?;
         let receipt: FmsPreparationProcessExitReceipt = parse_json(&data, relative)?;
         if receipt.run_id != expected_run_id || receipt.receipt_id != receipt_id {
-            bail!(
-                "preparation process exit receipt `{relative}` contains mismatched path identity"
-            )
+            bail!("preparation process exit receipt `{relative}` contains mismatched path identity")
         }
         receipt.validate()?;
         self.report.file_refs.insert(relative.to_string());

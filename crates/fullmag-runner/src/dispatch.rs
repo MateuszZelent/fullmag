@@ -5539,10 +5539,7 @@ mod tests {
             std::env::remove_var("FULLMAG_FEM_EXECUTION");
         }
 
-        let result = validate_all_in_gpu_fem_runtime_contract(
-            "all_in_gpu_legacy_sparse",
-            &rk_plan,
-        );
+        let result = validate_all_in_gpu_fem_runtime_contract("all_in_gpu_legacy_sparse", &rk_plan);
 
         unsafe {
             std::env::remove_var("FULLMAG_FEM_ALL_IN_GPU");

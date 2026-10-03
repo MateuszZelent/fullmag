@@ -4,31 +4,31 @@ use fullmag_ir::{
     FemEigenBiasFieldSamplePlanIR, FemEigenDispersionValidationIR, FemEigenEngineIR,
     FemEigenExecutionResolutionIR, FemEigenK0KittelValidationIR, FemEigenPlanIR,
     FemFrequencyDomainEquilibriumProvenanceIR, FemFrequencyResponsePlanIR, FemMagnetoelasticPlanIR,
-    FemMechanicalModeIR, FemMechanicalPlanIR, FemPlanIR, GeometryEntryIR, IR_VERSION,
-    MagnetostrictionLawIR, MechanicalLoadIR, OutputPlanIR, ProblemIR, ProvenancePlanIR, SeedPolicy,
-    ThermalSeedConfig, TimeDependenceIR,
+    FemMechanicalModeIR, FemMechanicalPlanIR, FemPlanIR, GeometryEntryIR, MagnetostrictionLawIR,
+    MechanicalLoadIR, OutputPlanIR, ProblemIR, ProvenancePlanIR, SeedPolicy, ThermalSeedConfig,
+    TimeDependenceIR, IR_VERSION,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::antenna_zeeman::{has_prescribed_zeeman_mask_source, resolve_prescribed_zeeman_masks};
 use crate::current_transport::{
-    CurrentTransportExecutableLane, has_mqs_antenna_field_source, resolve_current_transports,
+    has_mqs_antenna_field_source, resolve_current_transports, CurrentTransportExecutableLane,
 };
 use crate::error::PlanError;
 use crate::mesh::{
-    AIR_OBJECT_SEGMENT_ID, MagnetPlanningEntry, build_air_box_config,
-    build_mesh_parts_from_segments, compatible_fem_material, geometry_object_translation,
-    initial_vectors_for_magnet, load_mesh_from_source, merge_fem_meshes, mesh_bounds,
-    object_space_sample_points, reject_unsupported_mixed_topology, resolve_fem_domain_mesh_asset,
-    resolved_domain_mesh_mode, study_universe_planner_note,
+    build_air_box_config, build_mesh_parts_from_segments, compatible_fem_material,
+    geometry_object_translation, initial_vectors_for_magnet, load_mesh_from_source,
+    merge_fem_meshes, mesh_bounds, object_space_sample_points, reject_unsupported_mixed_topology,
+    resolve_fem_domain_mesh_asset, resolved_domain_mesh_mode, study_universe_planner_note,
+    MagnetPlanningEntry, AIR_OBJECT_SEGMENT_ID,
 };
-use crate::oersted::{ResolvedOerstedTerm, resolve_fem_oersted_term};
+use crate::oersted::{resolve_fem_oersted_term, ResolvedOerstedTerm};
 use crate::spin_torque::{
-    SpinTorqueExecutableLane, resolve_legacy_spin_torque, resolve_sot_fields,
+    resolve_legacy_spin_torque, resolve_sot_fields, SpinTorqueExecutableLane,
 };
 use crate::util::{
-    MU0, mesh_workflow_metadata, problem_domain_frame, runtime_requests_cuda,
-    shared_domain_mesh_requested,
+    mesh_workflow_metadata, problem_domain_frame, runtime_requests_cuda,
+    shared_domain_mesh_requested, MU0,
 };
 use crate::validate::{
     planned_study_controls, validate_eigen_outputs, validate_executable_outputs,
@@ -1156,17 +1156,15 @@ mod fem_exchange_stiffness_tests {
     fn rotated_dmi_open_boundary_requires_positive_resolved_exchange() {
         let mesh = tet_mesh(1.0);
         let material = ProblemIR::bootstrap_example().materials[0].clone();
-        assert!(
-            rotated_dmi_exchange_stiffness_error(
-                Some(3e-3),
-                true,
-                true,
-                &mesh,
-                &material,
-                Some(&[material.exchange_stiffness]),
-            )
-            .is_none()
-        );
+        assert!(rotated_dmi_exchange_stiffness_error(
+            Some(3e-3),
+            true,
+            true,
+            &mesh,
+            &material,
+            Some(&[material.exchange_stiffness]),
+        )
+        .is_none());
         let error = rotated_dmi_exchange_stiffness_error(
             Some(3e-3),
             true,
@@ -1743,12 +1741,10 @@ mod fem_demag_accuracy_contract_tests {
             Some(fullmag_ir::ResolvedFemDemagIR::FredkinKoehler),
         )
         .expect_err("the P2 airbox contract must not be attached to FEM/BEM");
-        assert!(
-            error
-                .reasons
-                .iter()
-                .any(|reason| reason.contains("requires Poisson airbox demag"))
-        );
+        assert!(error
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("requires Poisson airbox demag")));
     }
 }
 

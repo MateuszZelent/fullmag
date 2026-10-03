@@ -8,19 +8,24 @@
 
 use crate::execution::{
     ExecutionError, ObservationState, ProtocolDisposition, ResolvedTaskInput, TaskClaim,
-    TaskLifecycle, TaskRecord, WORKER_PROTOCOL_SCHEMA, WorkerCommand, WorkerCommandEnvelope,
-    WorkerEvent, WorkerEventEnvelope, WorkerProtocolLedger,
+    TaskLifecycle, TaskRecord, WorkerCommand, WorkerCommandEnvelope, WorkerEvent,
+    WorkerEventEnvelope, WorkerProtocolLedger, WORKER_PROTOCOL_SCHEMA,
 };
 use crate::preparation::{PreparationReceipt, PreparationReceiptError};
-use uuid::Uuid;
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 pub const COORDINATOR_TRANSPORT_SCHEMA: &str = "coordinator_transport.v1";
 pub const COORDINATOR_CHECKPOINT_SCHEMA: &str = "coordinator_checkpoint.v1";
 pub const COORDINATOR_TRANSITION_SCHEMA: &str = "coordinator_transition.v1";
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "direction", content = "envelope", rename_all = "snake_case", deny_unknown_fields)]
+#[serde(
+    tag = "direction",
+    content = "envelope",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum CoordinatorMessage {
     Command(WorkerCommandEnvelope),
     Event(WorkerEventEnvelope),
@@ -118,59 +123,99 @@ pub struct DurableWorkerCoordinator {
 
 impl DurableWorkerCoordinator {
     pub fn new(active: WorkerCoordinator) -> Self {
-        Self { active, pending: None }
+        Self {
+            active,
+            pending: None,
+        }
     }
 
-    pub fn checkpoint(&self) -> CoordinatorCheckpoint { self.active.checkpoint() }
-    pub fn claim(&self) -> &TaskClaim { self.active.claim() }
-    pub fn phase(&self) -> CoordinatorPhase { self.active.phase() }
-    pub fn protocol_schema(&self) -> &str { self.active.protocol_schema() }
+    pub fn checkpoint(&self) -> CoordinatorCheckpoint {
+        self.active.checkpoint()
+    }
+    pub fn claim(&self) -> &TaskClaim {
+        self.active.claim()
+    }
+    pub fn phase(&self) -> CoordinatorPhase {
+        self.active.phase()
+    }
+    pub fn protocol_schema(&self) -> &str {
+        self.active.protocol_schema()
+    }
     pub fn pending_transition(&self) -> Option<&CoordinatorTransition> {
         self.pending.as_ref().map(|(_, transition)| transition)
     }
 
     fn require_confirmed(&self) -> Result<(), CoordinatorError> {
         if self.pending.is_some() {
-            return Err(CoordinatorError::Invalid("coordinator publication requires reconciliation".into()));
+            return Err(CoordinatorError::Invalid(
+                "coordinator publication requires reconciliation".into(),
+            ));
         }
         Ok(())
     }
 
-    pub fn commit_command<F>(&mut self, command: WorkerCommand, receipt: Option<&PreparationReceipt>, publish: F)
-        -> Result<WorkerCommandEnvelope, CoordinatorError>
-    where F: FnOnce(&CoordinatorTransition) -> Result<(), CoordinatorError> {
+    pub fn commit_command<F>(
+        &mut self,
+        command: WorkerCommand,
+        receipt: Option<&PreparationReceipt>,
+        publish: F,
+    ) -> Result<WorkerCommandEnvelope, CoordinatorError>
+    where
+        F: FnOnce(&CoordinatorTransition) -> Result<(), CoordinatorError>,
+    {
         self.require_confirmed()?;
         let mut candidate = self.active.clone();
         let mut transition = None;
         let envelope = candidate.commit_command(command, receipt, |entry| {
-            transition = Some(entry.clone()); Ok(())
+            transition = Some(entry.clone());
+            Ok(())
         })?;
-        self.pending = Some((candidate, transition.expect("accepted command produces a transition")));
+        self.pending = Some((
+            candidate,
+            transition.expect("accepted command produces a transition"),
+        ));
         self.retry_publication(publish)?;
         Ok(envelope)
     }
 
-    pub fn commit_event<F>(&mut self, event: WorkerEventEnvelope, publish: F)
-        -> Result<CoordinatorDisposition, CoordinatorError>
-    where F: FnOnce(&CoordinatorTransition) -> Result<(), CoordinatorError> {
+    pub fn commit_event<F>(
+        &mut self,
+        event: WorkerEventEnvelope,
+        publish: F,
+    ) -> Result<CoordinatorDisposition, CoordinatorError>
+    where
+        F: FnOnce(&CoordinatorTransition) -> Result<(), CoordinatorError>,
+    {
         self.require_confirmed()?;
         let mut candidate = self.active.clone();
         let mut transition = None;
         let disposition = candidate.commit_event(event, |entry| {
-            transition = Some(entry.clone()); Ok(())
+            transition = Some(entry.clone());
+            Ok(())
         })?;
-        if disposition == CoordinatorDisposition::Replayed { return Ok(disposition); }
-        self.pending = Some((candidate, transition.expect("accepted event produces a transition")));
+        if disposition == CoordinatorDisposition::Replayed {
+            return Ok(disposition);
+        }
+        self.pending = Some((
+            candidate,
+            transition.expect("accepted event produces a transition"),
+        ));
         self.retry_publication(publish)?;
         Ok(disposition)
     }
 
     /// Retry exactly the retained record, including its original message ID.
     /// On failure neither the candidate nor its transition is discarded.
-    pub fn retry_publication<F>(&mut self, publish: F) -> Result<CoordinatorMessage, CoordinatorError>
-    where F: FnOnce(&CoordinatorTransition) -> Result<(), CoordinatorError> {
-        let (_, transition) = self.pending.as_ref()
-            .ok_or_else(|| CoordinatorError::Invalid("no pending coordinator publication".into()))?;
+    pub fn retry_publication<F>(
+        &mut self,
+        publish: F,
+    ) -> Result<CoordinatorMessage, CoordinatorError>
+    where
+        F: FnOnce(&CoordinatorTransition) -> Result<(), CoordinatorError>,
+    {
+        let (_, transition) = self.pending.as_ref().ok_or_else(|| {
+            CoordinatorError::Invalid("no pending coordinator publication".into())
+        })?;
         publish(transition)?;
         let (candidate, transition) = self.pending.take().expect("pending publication retained");
         self.active = candidate;
@@ -228,13 +273,21 @@ impl WorkerCoordinator {
     {
         let mut staged = self.clone();
         let envelope = match command {
-            WorkerCommand::Prepare { resolved_input } => staged.prepare(resolved_input,
-                receipt.ok_or_else(|| CoordinatorError::Invalid("prepare requires a receipt".into()))?)?,
+            WorkerCommand::Prepare { resolved_input } => staged.prepare(
+                resolved_input,
+                receipt.ok_or_else(|| {
+                    CoordinatorError::Invalid("prepare requires a receipt".into())
+                })?,
+            )?,
             WorkerCommand::Start => staged.start()?,
-            WorkerCommand::Heartbeat { lease_heartbeat_sequence } => {
+            WorkerCommand::Heartbeat {
+                lease_heartbeat_sequence,
+            } => {
                 let envelope = staged.heartbeat()?;
                 if staged.claim.lease.heartbeat_sequence != lease_heartbeat_sequence {
-                    return Err(CoordinatorError::Invalid("heartbeat sequence mismatch".into()));
+                    return Err(CoordinatorError::Invalid(
+                        "heartbeat sequence mismatch".into(),
+                    ));
                 }
                 envelope
             }
@@ -283,16 +336,21 @@ impl WorkerCoordinator {
             || checkpoint.command_sequence != commands.len() as u64
             || checkpoint.event_sequence != events.len() as u64
         {
-            return Err(CoordinatorError::Invalid("checkpoint schema or journal watermarks mismatch".into()));
+            return Err(CoordinatorError::Invalid(
+                "checkpoint schema or journal watermarks mismatch".into(),
+            ));
         }
         let mut task = checkpoint.task;
         let claim = checkpoint.claim;
         task.fence(&claim)?;
-        if task.run_id != claim.run_id || task.task_id != claim.task_id
+        if task.run_id != claim.run_id
+            || task.task_id != claim.task_id
             || task.attempt_id.as_ref() != Some(&claim.attempt_id)
             || task.ownership_epoch != Some(claim.ownership_epoch)
         {
-            return Err(CoordinatorError::Invalid("checkpoint task identity mismatch".into()));
+            return Err(CoordinatorError::Invalid(
+                "checkpoint task identity mismatch".into(),
+            ));
         }
         let ledger = WorkerProtocolLedger::restore(&claim, commands, events)?;
         let protocol_schema = commands
@@ -314,13 +372,17 @@ impl WorkerCoordinator {
         let terminal_lifecycle = match events.last().map(|entry| &entry.event) {
             Some(WorkerEvent::Completed { assessment }) => {
                 if task.assessment != Some(*assessment) {
-                    return Err(CoordinatorError::Invalid("checkpoint assessment mismatch".into()));
+                    return Err(CoordinatorError::Invalid(
+                        "checkpoint assessment mismatch".into(),
+                    ));
                 }
                 Some(TaskLifecycle::Succeeded)
             }
             Some(WorkerEvent::Failed { .. } | WorkerEvent::Rejected { .. }) => {
                 if task.assessment != Some(crate::execution::ScientificAssessment::Invalid) {
-                    return Err(CoordinatorError::Invalid("checkpoint failure assessment mismatch".into()));
+                    return Err(CoordinatorError::Invalid(
+                        "checkpoint failure assessment mismatch".into(),
+                    ));
                 }
                 Some(TaskLifecycle::Failed)
             }
@@ -336,11 +398,17 @@ impl WorkerCoordinator {
         };
         if let Some(expected) = terminal_lifecycle {
             if task.lifecycle != expected {
-                return Err(CoordinatorError::Invalid("checkpoint terminal lifecycle mismatch".into()));
+                return Err(CoordinatorError::Invalid(
+                    "checkpoint terminal lifecycle mismatch".into(),
+                ));
             }
         } else {
-            let started = events.iter().any(|entry| matches!(entry.event, WorkerEvent::Started));
-            let stopping = commands.iter().any(|entry| matches!(entry.command, WorkerCommand::Stop { .. }));
+            let started = events
+                .iter()
+                .any(|entry| matches!(entry.event, WorkerEvent::Started));
+            let stopping = commands
+                .iter()
+                .any(|entry| matches!(entry.command, WorkerCommand::Stop { .. }));
             let expected = if stopping {
                 TaskLifecycle::Stopping
             } else if started {
@@ -349,19 +417,33 @@ impl WorkerCoordinator {
                 TaskLifecycle::Preparing
             };
             if task.lifecycle != expected || task.assessment.is_some() {
-                return Err(CoordinatorError::Invalid("checkpoint active lifecycle mismatch".into()));
+                return Err(CoordinatorError::Invalid(
+                    "checkpoint active lifecycle mismatch".into(),
+                ));
             }
         }
-        let heartbeat = commands.iter().filter_map(|entry| match entry.command {
-            WorkerCommand::Heartbeat { lease_heartbeat_sequence } => Some(lease_heartbeat_sequence),
-            _ => None,
-        }).last().unwrap_or(0);
+        let heartbeat = commands
+            .iter()
+            .filter_map(|entry| match entry.command {
+                WorkerCommand::Heartbeat {
+                    lease_heartbeat_sequence,
+                } => Some(lease_heartbeat_sequence),
+                _ => None,
+            })
+            .last()
+            .unwrap_or(0);
         if heartbeat != claim.lease.heartbeat_sequence {
-            return Err(CoordinatorError::Invalid("checkpoint heartbeat watermark mismatch".into()));
+            return Err(CoordinatorError::Invalid(
+                "checkpoint heartbeat watermark mismatch".into(),
+            ));
         }
-        let next_command_sequence = checkpoint.command_sequence.checked_add(1)
-            .ok_or_else(|| CoordinatorError::Invalid("coordinator command sequence exhausted".into()))?;
-        let release_requested = commands.last().is_some_and(|entry| matches!(entry.command, WorkerCommand::Release));
+        let next_command_sequence =
+            checkpoint.command_sequence.checked_add(1).ok_or_else(|| {
+                CoordinatorError::Invalid("coordinator command sequence exhausted".into())
+            })?;
+        let release_requested = commands
+            .last()
+            .is_some_and(|entry| matches!(entry.command, WorkerCommand::Release));
         task.mark_reconciling();
         Ok(Self {
             task,
@@ -436,7 +518,10 @@ impl WorkerCoordinator {
         &mut self,
         reason: impl Into<String>,
     ) -> Result<WorkerCommandEnvelope, CoordinatorError> {
-        if !matches!(self.task.lifecycle, TaskLifecycle::Preparing | TaskLifecycle::Running) {
+        if !matches!(
+            self.task.lifecycle,
+            TaskLifecycle::Preparing | TaskLifecycle::Running
+        ) {
             return Err(CoordinatorError::Invalid(
                 "stop requires a preparing or running task".into(),
             ));
@@ -545,10 +630,9 @@ impl WorkerCoordinator {
 
     fn emit(&mut self, command: WorkerCommand) -> Result<WorkerCommandEnvelope, CoordinatorError> {
         let sequence = self.next_command_sequence;
-        let next_sequence =
-            self.next_command_sequence.checked_add(1).ok_or_else(|| {
-                CoordinatorError::Invalid("coordinator command sequence exhausted".into())
-            })?;
+        let next_sequence = self.next_command_sequence.checked_add(1).ok_or_else(|| {
+            CoordinatorError::Invalid("coordinator command sequence exhausted".into())
+        })?;
         let envelope = WorkerCommandEnvelope {
             schema_version: self.protocol_schema.clone(),
             message_id: format!("command-{}", Uuid::new_v4().simple()),
@@ -578,11 +662,11 @@ impl WorkerCoordinator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ProjectId;
     use crate::execution::{ResourceBudget, ResourceKind, ResourceLease};
     use crate::run_spec::{
         ProjectSnapshot, RequestedExecution, RunId, RunSpecification, StudyId, StudyReference,
     };
+    use crate::ProjectId;
     use fullmag_ir::BackendTarget;
     use fullmag_plan::{
         PreparationCertificate, PreparationMarkerCertificate, PreparationPlan, PreparationProducer,
@@ -756,61 +840,107 @@ mod tests {
     fn uncertain_publication_retains_identity_and_blocks_new_work() {
         let mut coordinator = DurableWorkerCoordinator::new(coordinator());
         let before = coordinator.checkpoint();
-        let failure = |_: &CoordinatorTransition| Err(CoordinatorError::Invalid("publication uncertain".into()));
-        assert!(coordinator.commit_command(WorkerCommand::Start, None, failure).is_err());
+        let failure = |_: &CoordinatorTransition| {
+            Err(CoordinatorError::Invalid("publication uncertain".into()))
+        };
+        assert!(coordinator
+            .commit_command(WorkerCommand::Start, None, failure)
+            .is_err());
         let pending = coordinator.pending_transition().unwrap().clone();
         assert_eq!(coordinator.checkpoint(), before);
-        assert!(coordinator.commit_command(WorkerCommand::Start, None,
-            |_| panic!("new publication must be blocked")).is_err());
+        assert!(coordinator
+            .commit_command(WorkerCommand::Start, None, |_| panic!(
+                "new publication must be blocked"
+            ))
+            .is_err());
         let started = WorkerEventEnvelope {
-            schema_version: WORKER_PROTOCOL_SCHEMA.into(), message_id: "started".into(),
-            sequence: 1, claim: coordinator.claim().identity(), event: WorkerEvent::Started,
+            schema_version: WORKER_PROTOCOL_SCHEMA.into(),
+            message_id: "started".into(),
+            sequence: 1,
+            claim: coordinator.claim().identity(),
+            event: WorkerEvent::Started,
         };
-        assert!(coordinator.commit_event(started.clone(), |_| panic!("event must be blocked")).is_err());
-        assert!(coordinator.retry_publication(|entry| {
-            assert_eq!(entry, &pending); Err(CoordinatorError::Invalid("still uncertain".into()))
-        }).is_err());
-        let message = coordinator.retry_publication(|entry| { assert_eq!(entry, &pending); Ok(()) }).unwrap();
+        assert!(coordinator
+            .commit_event(started.clone(), |_| panic!("event must be blocked"))
+            .is_err());
+        assert!(coordinator
+            .retry_publication(|entry| {
+                assert_eq!(entry, &pending);
+                Err(CoordinatorError::Invalid("still uncertain".into()))
+            })
+            .is_err());
+        let message = coordinator
+            .retry_publication(|entry| {
+                assert_eq!(entry, &pending);
+                Ok(())
+            })
+            .unwrap();
         assert_eq!(message, pending.message);
         assert!(coordinator.pending_transition().is_none());
         assert_eq!(coordinator.checkpoint(), pending.checkpoint);
-        assert!(coordinator.commit_event(started.clone(), |_| Err(CoordinatorError::Invalid("uncertain event".into()))).is_err());
+        assert!(coordinator
+            .commit_event(started.clone(), |_| Err(CoordinatorError::Invalid(
+                "uncertain event".into()
+            )))
+            .is_err());
         assert_eq!(coordinator.phase(), CoordinatorPhase::Preparing);
         coordinator.retry_publication(|_| Ok(())).unwrap();
         assert_eq!(coordinator.phase(), CoordinatorPhase::Running);
-        assert_eq!(coordinator.commit_event(started, |_| panic!("replay must not publish")).unwrap(), CoordinatorDisposition::Replayed);
+        assert_eq!(
+            coordinator
+                .commit_event(started, |_| panic!("replay must not publish"))
+                .unwrap(),
+            CoordinatorDisposition::Replayed
+        );
     }
 
     #[test]
     fn durable_transition_publishes_before_state_or_outbox() {
         let mut coordinator = coordinator();
         let before = coordinator.checkpoint();
-        assert!(coordinator.commit_command(WorkerCommand::Start, None, |_| {
-            Err(CoordinatorError::Invalid("storage unavailable".into()))
-        }).is_err());
+        assert!(coordinator
+            .commit_command(WorkerCommand::Start, None, |_| {
+                Err(CoordinatorError::Invalid("storage unavailable".into()))
+            })
+            .is_err());
         assert_eq!(coordinator.checkpoint(), before);
         let mut published = Vec::new();
-        let start = coordinator.commit_command(WorkerCommand::Start, None, |entry| {
-            published.push(entry.clone()); Ok(())
-        }).unwrap();
+        let start = coordinator
+            .commit_command(WorkerCommand::Start, None, |entry| {
+                published.push(entry.clone());
+                Ok(())
+            })
+            .unwrap();
         assert_eq!(start.sequence, 1);
         assert_eq!(published[0].checkpoint, coordinator.checkpoint());
         assert_eq!(published[0].message, CoordinatorMessage::Command(start));
         let started = event(&coordinator, 1, "started", WorkerEvent::Started);
         let before = coordinator.checkpoint();
-        assert!(coordinator.commit_event(started.clone(), |_| {
-            Err(CoordinatorError::Invalid("storage unavailable".into()))
-        }).is_err());
+        assert!(coordinator
+            .commit_event(started.clone(), |_| {
+                Err(CoordinatorError::Invalid("storage unavailable".into()))
+            })
+            .is_err());
         assert_eq!(coordinator.checkpoint(), before);
-        coordinator.commit_event(started.clone(), |entry| {
-            published.push(entry.clone()); Ok(())
-        }).unwrap();
+        coordinator
+            .commit_event(started.clone(), |entry| {
+                published.push(entry.clone());
+                Ok(())
+            })
+            .unwrap();
         assert_eq!(published[1].checkpoint, coordinator.checkpoint());
         assert_eq!(coordinator.phase(), CoordinatorPhase::Running);
-        assert_eq!(coordinator.commit_event(started, |_| panic!("replay must not republish"))
-            .unwrap(), CoordinatorDisposition::Replayed);
+        assert_eq!(
+            coordinator
+                .commit_event(started, |_| panic!("replay must not republish"))
+                .unwrap(),
+            CoordinatorDisposition::Replayed
+        );
         let encoded = serde_json::to_vec(&published[1]).unwrap();
-        assert_eq!(serde_json::from_slice::<CoordinatorTransition>(&encoded).unwrap(), published[1]);
+        assert_eq!(
+            serde_json::from_slice::<CoordinatorTransition>(&encoded).unwrap(),
+            published[1]
+        );
     }
 
     #[test]
@@ -827,8 +957,14 @@ mod tests {
         let events = vec![started.clone()];
         let mut restored = WorkerCoordinator::restore(decoded, &commands, &events).unwrap();
         assert_eq!(restored.phase(), CoordinatorPhase::Running);
-        assert_eq!(restored.task().observation, Some(ObservationState::Reconciling));
-        assert_eq!(restored.accept_event(started).unwrap(), CoordinatorDisposition::Replayed);
+        assert_eq!(
+            restored.task().observation,
+            Some(ObservationState::Reconciling)
+        );
+        assert_eq!(
+            restored.accept_event(started).unwrap(),
+            CoordinatorDisposition::Replayed
+        );
         let stop = restored.stop("operator request").unwrap();
         assert_eq!(stop.sequence, 3);
         assert!(WorkerCoordinator::restore(checkpoint.clone(), &[start], &events).is_err());
@@ -852,18 +988,27 @@ mod tests {
         let start = original.start().unwrap();
         let started = event(&original, 1, "started", WorkerEvent::Started);
         original.accept_event(started.clone()).unwrap();
-        let completed = event(&original, 2, "completed", WorkerEvent::Completed {
-            assessment: crate::execution::ScientificAssessment::Converged,
-        });
+        let completed = event(
+            &original,
+            2,
+            "completed",
+            WorkerEvent::Completed {
+                assessment: crate::execution::ScientificAssessment::Converged,
+            },
+        );
         original.accept_event(completed.clone()).unwrap();
         let release = original.request_release().unwrap();
         let checkpoint = original.checkpoint();
         let commands = vec![start, release];
         let events = vec![started, completed.clone()];
-        let mut restored = WorkerCoordinator::restore(checkpoint.clone(), &commands, &events).unwrap();
+        let mut restored =
+            WorkerCoordinator::restore(checkpoint.clone(), &commands, &events).unwrap();
         assert_eq!(restored.phase(), CoordinatorPhase::ReleaseRequested);
         assert_eq!(restored.task(), original.task());
-        assert_eq!(restored.accept_event(completed).unwrap(), CoordinatorDisposition::Replayed);
+        assert_eq!(
+            restored.accept_event(completed).unwrap(),
+            CoordinatorDisposition::Replayed
+        );
         assert!(restored.request_release().is_err());
         let mut corrupt = checkpoint;
         corrupt.task.lifecycle = TaskLifecycle::Running;
@@ -874,7 +1019,9 @@ mod tests {
     fn rejected_command_does_not_consume_sequence_or_change_task() {
         let mut coordinator = coordinator();
         let first = coordinator.start().unwrap();
-        coordinator.accept_event(event(&coordinator, 1, "started", WorkerEvent::Started)).unwrap();
+        coordinator
+            .accept_event(event(&coordinator, 1, "started", WorkerEvent::Started))
+            .unwrap();
         let original = coordinator.task().clone();
         assert!(coordinator.stop(" ").is_err());
         assert_eq!(coordinator.task(), &original);
@@ -887,7 +1034,9 @@ mod tests {
     fn stop_before_started_is_restorable_and_finishes_cancelled() {
         let mut coordinator = coordinator();
         let start = coordinator.start().unwrap();
-        let stop = coordinator.stop("operator cancelled before worker start").unwrap();
+        let stop = coordinator
+            .stop("operator cancelled before worker start")
+            .unwrap();
         assert_eq!(coordinator.phase(), CoordinatorPhase::Stopping);
         let checkpoint = coordinator.checkpoint();
         let mut restored = WorkerCoordinator::restore(checkpoint, &[start, stop], &[]).unwrap();
@@ -902,13 +1051,24 @@ mod tests {
     fn rejected_event_does_not_consume_sequence_or_change_task() {
         let mut coordinator = coordinator();
         let original = coordinator.task().clone();
-        assert!(coordinator.accept_event(event(
-            &coordinator, 1, "premature-progress", WorkerEvent::Progress { source_step: 1 },
-        )).is_err());
+        assert!(coordinator
+            .accept_event(event(
+                &coordinator,
+                1,
+                "premature-progress",
+                WorkerEvent::Progress { source_step: 1 },
+            ))
+            .is_err());
         assert_eq!(coordinator.task(), &original);
         let started = event(&coordinator, 1, "started", WorkerEvent::Started);
-        assert_eq!(coordinator.accept_event(started.clone()).unwrap(), CoordinatorDisposition::Accepted);
-        assert_eq!(coordinator.accept_event(started).unwrap(), CoordinatorDisposition::Replayed);
+        assert_eq!(
+            coordinator.accept_event(started.clone()).unwrap(),
+            CoordinatorDisposition::Accepted
+        );
+        assert_eq!(
+            coordinator.accept_event(started).unwrap(),
+            CoordinatorDisposition::Replayed
+        );
         assert_eq!(coordinator.phase(), CoordinatorPhase::Running);
     }
 
@@ -949,16 +1109,14 @@ mod tests {
             .is_err());
         coordinator.request_release().unwrap();
         assert_eq!(coordinator.phase(), CoordinatorPhase::ReleaseRequested);
-        assert!(
-            coordinator
-                .accept_event(event(
-                    &coordinator,
-                    5,
-                    "late",
-                    WorkerEvent::Progress { source_step: 9 }
-                ))
-                .is_err()
-        );
+        assert!(coordinator
+            .accept_event(event(
+                &coordinator,
+                5,
+                "late",
+                WorkerEvent::Progress { source_step: 9 }
+            ))
+            .is_err());
     }
 
     #[test]

@@ -1,13 +1,13 @@
 //! Recover a current typed task claim from its durable catalog and lease.
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use fullmag_application::{
     AttemptId, LeaseToken, OwnershipEpoch, ResourceBudget, ResourceKind, ResourceLease, RunId,
     TaskClaim, TaskId, TaskLifecycle, TaskRecord,
 };
 use fullmag_ir::ExecutionDevice;
 use fullmag_session::{
-    FMS_RESOURCE_LEASE_SCHEMA, FmsResourceBudget, FmsResourceKind, FmsResourceLease,
-    FmsResourceLeaseState, FmsTaskLifecycle, FmsTaskReadiness, SessionStore,
+    FmsResourceBudget, FmsResourceKind, FmsResourceLease, FmsResourceLeaseState, FmsTaskLifecycle,
+    FmsTaskReadiness, SessionStore, FMS_RESOURCE_LEASE_SCHEMA,
 };
 
 /// Durably admit a claimed application task before publishing its worker
@@ -252,7 +252,7 @@ fn invalid_solver_resource_budget(
 
 #[cfg(test)]
 mod tests {
-    use super::{ClaimedTaskResourceCompatibility, solver_resource_compatibility};
+    use super::{solver_resource_compatibility, ClaimedTaskResourceCompatibility};
     use fullmag_application::{ResourceBudget, ResourceKind};
 
     fn budget(

@@ -1011,9 +1011,8 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
     assert_eq!(second_run.status(), StatusCode::CREATED);
     let second_run = body_json(second_run).await;
     let second_run_id = second_run["run_id"].as_str().unwrap().to_string();
-    let second_materialization_route = format!(
-        "/v2/persistence/projects/project-submit/runs/{second_run_id}/materialization"
-    );
+    let second_materialization_route =
+        format!("/v2/persistence/projects/project-submit/runs/{second_run_id}/materialization");
     let second_materialization = app
         .clone()
         .oneshot(
@@ -1167,8 +1166,7 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
         persisted_task.readiness,
         fullmag_session::FmsTaskReadiness::Blocked { .. }
     ));
-    let scheduler_e2e =
-        std::env::var("FULLMAG_ACCEPTED_SCHEDULER_E2E").as_deref() == Ok("1");
+    let scheduler_e2e = std::env::var("FULLMAG_ACCEPTED_SCHEDULER_E2E").as_deref() == Ok("1");
     let scheduler_pool_e2e =
         std::env::var("FULLMAG_ACCEPTED_SCHEDULER_POOL_E2E").as_deref() == Ok("1");
     let scheduler_discovery_e2e =
@@ -1176,13 +1174,11 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
     let scheduler_persistent_cursor_e2e =
         std::env::var("FULLMAG_ACCEPTED_SCHEDULER_PERSISTENT_CURSOR_E2E").as_deref() == Ok("1");
     let scheduler_parallel_resources_e2e =
-        std::env::var("FULLMAG_ACCEPTED_SCHEDULER_PARALLEL_RESOURCES_E2E").as_deref()
-            == Ok("1");
+        std::env::var("FULLMAG_ACCEPTED_SCHEDULER_PARALLEL_RESOURCES_E2E").as_deref() == Ok("1");
     let scheduler_resource_pool_e2e =
         std::env::var("FULLMAG_ACCEPTED_SCHEDULER_RESOURCE_POOL_E2E").as_deref() == Ok("1");
     let scheduler_dynamic_resource_pool_e2e =
-        std::env::var("FULLMAG_ACCEPTED_SCHEDULER_DYNAMIC_RESOURCE_POOL_E2E").as_deref()
-            == Ok("1");
+        std::env::var("FULLMAG_ACCEPTED_SCHEDULER_DYNAMIC_RESOURCE_POOL_E2E").as_deref() == Ok("1");
     let scheduler_resident_discovery_e2e =
         std::env::var("FULLMAG_ACCEPTED_SCHEDULER_RESIDENT_DISCOVERY_E2E").as_deref() == Ok("1");
     let scheduler_resident_drain_e2e =
@@ -1240,8 +1236,7 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
         let mut first = scheduler_command(accepted_run_id.as_str(), "cpu-parallel-a")
             .spawn()
             .expect("spawn first parallel accepted scheduler");
-        let first_running_deadline =
-            std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let first_running_deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         loop {
             let lifecycle = store
                 .read_run_catalog(accepted_run_id.as_str())
@@ -1274,8 +1269,7 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
             String::from_utf8_lossy(&conflict.stderr)
         );
 
-        let contention_deadline =
-            std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let contention_deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         let writer_contention = loop {
             match store.write_transaction() {
                 Ok(transaction) => break transaction,
@@ -1295,8 +1289,7 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
             .expect("spawn second parallel accepted scheduler");
         std::thread::sleep(std::time::Duration::from_millis(250));
         drop(writer_contention);
-        let overlap_deadline =
-            std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let overlap_deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         loop {
             let first_lifecycle = store
                 .read_run_catalog(accepted_run_id.as_str())
@@ -1401,7 +1394,9 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
                 .arg("--expected-generation")
                 .arg(expected_generation.to_string());
             if let Some(resource) = resource {
-                command.arg("--resource-offer").arg(resource_offer(resource));
+                command
+                    .arg("--resource-offer")
+                    .arg(resource_offer(resource));
             }
             let output = command.output().expect("publish scheduler resource pool");
             assert!(
@@ -1442,7 +1437,10 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
             .arg("250")
             .arg("--max-automatic-retries")
             .arg("0")
-            .env("FULLMAG_TEST_ACCEPTED_WORKER_AFTER_STARTED_DELAY_MS", "1000")
+            .env(
+                "FULLMAG_TEST_ACCEPTED_WORKER_AFTER_STARTED_DELAY_MS",
+                "1000",
+            )
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
@@ -1457,8 +1455,7 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
         let first = publish(1, Some("cpu-dynamic-a"));
         assert_eq!(first["generation"], 2);
 
-        let running_deadline =
-            std::time::Instant::now() + std::time::Duration::from_secs(20);
+        let running_deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
         loop {
             let first_lifecycle = store
                 .read_run_catalog(accepted_run_id.as_str())
@@ -1524,10 +1521,7 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
                 fullmag_session::FmsTaskLifecycle::Succeeded
             );
             assert!(store
-                .read_active_resource_lease_for_task(
-                    run_id,
-                    catalog.tasks[0].task_id.as_str(),
-                )
+                .read_active_resource_lease_for_task(run_id, catalog.tasks[0].task_id.as_str(),)
                 .unwrap()
                 .is_none());
         }
@@ -1587,8 +1581,7 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
             .stderr(std::process::Stdio::piped())
             .spawn()
             .expect("spawn bounded resource pool scheduler");
-        let overlap_deadline =
-            std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let overlap_deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         loop {
             let first_lifecycle = store
                 .read_run_catalog(accepted_run_id.as_str())
@@ -1711,8 +1704,7 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
             .spawn()
             .expect("spawn resident accepted scheduler");
         let mut scheduler = KillOnDropChild::new(scheduler);
-        let initial_deadline =
-            std::time::Instant::now() + std::time::Duration::from_secs(30);
+        let initial_deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
         loop {
             let first = store
                 .read_run_catalog(accepted_run_id.as_str())
@@ -1753,8 +1745,7 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
         third_payload["run_intent"]["specification"]["run_id"] =
             serde_json::json!("run-http-resident-third");
         let third_body = third_payload.to_string();
-        let third_deadline =
-            std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let third_deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         let third_run = loop {
             let response = app
                 .clone()
@@ -1791,8 +1782,7 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
             .unwrap();
         assert_eq!(third_materialization.status(), StatusCode::OK);
 
-        let completion_deadline =
-            std::time::Instant::now() + std::time::Duration::from_secs(30);
+        let completion_deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
         loop {
             if scheduler.try_wait().unwrap().is_some() {
                 break;
@@ -1878,23 +1868,23 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
             .arg("250")
             .arg("--max-automatic-retries")
             .arg("0")
-            .env("FULLMAG_TEST_ACCEPTED_WORKER_AFTER_STARTED_DELAY_MS", "1500")
+            .env(
+                "FULLMAG_TEST_ACCEPTED_WORKER_AFTER_STARTED_DELAY_MS",
+                "1500",
+            )
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
-            command.creation_flags(
-                windows_sys::Win32::System::Threading::CREATE_NEW_PROCESS_GROUP,
-            );
+            command.creation_flags(windows_sys::Win32::System::Threading::CREATE_NEW_PROCESS_GROUP);
         }
         let scheduler = command
             .spawn()
             .expect("spawn resident drain accepted scheduler");
         let mut scheduler = KillOnDropChild::new(scheduler);
-        let running_deadline =
-            std::time::Instant::now() + std::time::Duration::from_secs(30);
+        let running_deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
         loop {
             let first = store
                 .read_run_catalog(accepted_run_id.as_str())
@@ -1975,35 +1965,63 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
             scheduler.arg("--pool-id").arg("scheduler-persistent-e2e");
         }
         let output = scheduler
-            .arg("--resource-id").arg("cpu-scheduler-e2e")
-            .arg("--resource-kind").arg("cpu")
-            .arg("--cpu-millis").arg("100")
-            .arg("--memory-bytes").arg("1048576")
-            .arg("--gpu-memory-bytes").arg("0")
-            .arg("--storage-bytes").arg("8388608")
-            .arg("--worker-executable").arg(&worker_executable)
-            .arg("--max-concurrency").arg("1")
-            .arg("--max-tasks").arg(if scheduler_multi_run_e2e { "3" } else { "1" })
-            .arg("--max-idle-polls").arg(if scheduler_multi_run_e2e { "1" } else { "0" })
-            .arg("--idle-poll-milliseconds").arg("10")
-            .arg("--worker-timeout-seconds").arg("30")
-            .arg("--heartbeat-interval-milliseconds").arg("500")
-            .arg("--max-automatic-retries").arg("0")
+            .arg("--resource-id")
+            .arg("cpu-scheduler-e2e")
+            .arg("--resource-kind")
+            .arg("cpu")
+            .arg("--cpu-millis")
+            .arg("100")
+            .arg("--memory-bytes")
+            .arg("1048576")
+            .arg("--gpu-memory-bytes")
+            .arg("0")
+            .arg("--storage-bytes")
+            .arg("8388608")
+            .arg("--worker-executable")
+            .arg(&worker_executable)
+            .arg("--max-concurrency")
+            .arg("1")
+            .arg("--max-tasks")
+            .arg(if scheduler_multi_run_e2e { "3" } else { "1" })
+            .arg("--max-idle-polls")
+            .arg(if scheduler_multi_run_e2e { "1" } else { "0" })
+            .arg("--idle-poll-milliseconds")
+            .arg("10")
+            .arg("--worker-timeout-seconds")
+            .arg("30")
+            .arg("--heartbeat-interval-milliseconds")
+            .arg("500")
+            .arg("--max-automatic-retries")
+            .arg("0")
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .output()
             .expect("run the built accepted scheduler");
-        assert!(output.status.success(), "accepted scheduler E2E failed: {}", String::from_utf8_lossy(&output.stderr));
+        assert!(
+            output.status.success(),
+            "accepted scheduler E2E failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
         let summary: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(summary["status"], "completed");
-        assert_eq!(summary["scheduled_count"], if scheduler_multi_run_e2e { 2 } else { 1 });
+        assert_eq!(
+            summary["scheduled_count"],
+            if scheduler_multi_run_e2e { 2 } else { 1 }
+        );
         assert_eq!(
             summary["run_source"],
-            if scheduler_discovery_e2e { "store" } else { "explicit" }
+            if scheduler_discovery_e2e {
+                "store"
+            } else {
+                "explicit"
+            }
         );
         assert_eq!(summary["executed"][0]["run_id"], accepted_run_id.as_str());
-        assert_eq!(summary["executed"][0]["task_id"], persisted_task.task_id.as_str());
+        assert_eq!(
+            summary["executed"][0]["task_id"],
+            persisted_task.task_id.as_str()
+        );
         assert_eq!(summary["executed"][0]["step_id"], step.step_id.as_str());
         assert_eq!(summary["executed"][0]["admission"], "admitted");
         assert_eq!(summary["executed"][0]["worker"]["status"], "completed");
@@ -2011,53 +2029,100 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
             assert_eq!(summary["pool_id"], "scheduler-persistent-e2e");
             assert_eq!(summary["pool_checkpoint_sequence"], 1);
         }
-        let catalog = store.read_run_catalog(accepted_run_id.as_str()).unwrap().unwrap();
-        let task = catalog.tasks.iter().find(|task| task.task_id == persisted_task.task_id).unwrap();
+        let catalog = store
+            .read_run_catalog(accepted_run_id.as_str())
+            .unwrap()
+            .unwrap();
+        let task = catalog
+            .tasks
+            .iter()
+            .find(|task| task.task_id == persisted_task.task_id)
+            .unwrap();
         assert_eq!(task.lifecycle, fullmag_session::FmsTaskLifecycle::Succeeded);
         assert_eq!(task.ownership_epoch, Some(1));
         assert!(!task.artifact_ids.is_empty());
-        assert!(store.read_active_resource_lease_for_task(accepted_run_id.as_str(), persisted_task.task_id.as_str()).unwrap().is_none());
+        assert!(store
+            .read_active_resource_lease_for_task(
+                accepted_run_id.as_str(),
+                persisted_task.task_id.as_str()
+            )
+            .unwrap()
+            .is_none());
         if scheduler_persistent_cursor_e2e {
             let second_output = std::process::Command::new(&scheduler_executable)
-                .arg("--store-root").arg(store.root())
-                .arg("--run-id").arg(accepted_run_id.as_str())
-                .arg("--run-id").arg(&second_run_id)
-                .arg("--pool-id").arg("scheduler-persistent-e2e")
-                .arg("--resource-id").arg("cpu-scheduler-e2e")
-                .arg("--resource-kind").arg("cpu")
-                .arg("--cpu-millis").arg("100")
-                .arg("--memory-bytes").arg("1048576")
-                .arg("--gpu-memory-bytes").arg("0")
-                .arg("--storage-bytes").arg("8388608")
-                .arg("--worker-executable").arg(&worker_executable)
-                .arg("--max-concurrency").arg("1")
-                .arg("--max-tasks").arg("1")
-                .arg("--max-idle-polls").arg("0")
-                .arg("--idle-poll-milliseconds").arg("10")
-                .arg("--worker-timeout-seconds").arg("30")
-                .arg("--heartbeat-interval-milliseconds").arg("500")
-                .arg("--max-automatic-retries").arg("0")
+                .arg("--store-root")
+                .arg(store.root())
+                .arg("--run-id")
+                .arg(accepted_run_id.as_str())
+                .arg("--run-id")
+                .arg(&second_run_id)
+                .arg("--pool-id")
+                .arg("scheduler-persistent-e2e")
+                .arg("--resource-id")
+                .arg("cpu-scheduler-e2e")
+                .arg("--resource-kind")
+                .arg("cpu")
+                .arg("--cpu-millis")
+                .arg("100")
+                .arg("--memory-bytes")
+                .arg("1048576")
+                .arg("--gpu-memory-bytes")
+                .arg("0")
+                .arg("--storage-bytes")
+                .arg("8388608")
+                .arg("--worker-executable")
+                .arg(&worker_executable)
+                .arg("--max-concurrency")
+                .arg("1")
+                .arg("--max-tasks")
+                .arg("1")
+                .arg("--max-idle-polls")
+                .arg("0")
+                .arg("--idle-poll-milliseconds")
+                .arg("10")
+                .arg("--worker-timeout-seconds")
+                .arg("30")
+                .arg("--heartbeat-interval-milliseconds")
+                .arg("500")
+                .arg("--max-automatic-retries")
+                .arg("0")
                 .stdin(std::process::Stdio::null())
                 .stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::piped())
                 .output()
                 .expect("restart the accepted scheduler with its durable cursor");
-            assert!(second_output.status.success(), "accepted scheduler cursor restart E2E failed: {}", String::from_utf8_lossy(&second_output.stderr));
+            assert!(
+                second_output.status.success(),
+                "accepted scheduler cursor restart E2E failed: {}",
+                String::from_utf8_lossy(&second_output.stderr)
+            );
             let second_summary: serde_json::Value =
                 serde_json::from_slice(&second_output.stdout).unwrap();
             assert_eq!(second_summary["scheduled_count"], 1);
             assert_eq!(second_summary["pool_checkpoint_sequence"], 2);
-            assert_eq!(second_summary["executed"][0]["run_id"], second_run_id.as_str());
-            assert_eq!(second_summary["executed"][0]["worker"]["status"], "completed");
+            assert_eq!(
+                second_summary["executed"][0]["run_id"],
+                second_run_id.as_str()
+            );
+            assert_eq!(
+                second_summary["executed"][0]["worker"]["status"],
+                "completed"
+            );
             let checkpoint = store
                 .read_scheduler_pool_checkpoint("scheduler-persistent-e2e")
                 .unwrap()
                 .unwrap();
             assert_eq!(checkpoint.sequence, 2);
-            assert_eq!(checkpoint.next_run_id.as_deref(), Some(accepted_run_id.as_str()));
+            assert_eq!(
+                checkpoint.next_run_id.as_deref(),
+                Some(accepted_run_id.as_str())
+            );
             let second_catalog = store.read_run_catalog(&second_run_id).unwrap().unwrap();
             let second_task = second_catalog.tasks.first().unwrap();
-            assert_eq!(second_task.lifecycle, fullmag_session::FmsTaskLifecycle::Succeeded);
+            assert_eq!(
+                second_task.lifecycle,
+                fullmag_session::FmsTaskLifecycle::Succeeded
+            );
             assert!(store
                 .read_active_resource_lease_for_task(&second_run_id, second_task.task_id.as_str())
                 .unwrap()
@@ -2073,10 +2138,16 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
             );
             assert_eq!(summary["idle_poll_count"], 1);
             assert_eq!(summary["executed"][1]["run_id"], second_run_id.as_str());
-            assert_eq!(summary["executed"][1]["task_id"], second_task.task_id.as_str());
+            assert_eq!(
+                summary["executed"][1]["task_id"],
+                second_task.task_id.as_str()
+            );
             assert_eq!(summary["executed"][1]["admission"], "admitted");
             assert_eq!(summary["executed"][1]["worker"]["status"], "completed");
-            assert_eq!(second_task.lifecycle, fullmag_session::FmsTaskLifecycle::Succeeded);
+            assert_eq!(
+                second_task.lifecycle,
+                fullmag_session::FmsTaskLifecycle::Succeeded
+            );
             assert!(store
                 .read_active_resource_lease_for_task(&second_run_id, second_task.task_id.as_str())
                 .unwrap()
@@ -2858,9 +2929,7 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
                     .arg("500")
                     .arg("--max-automatic-retries")
                     .arg("1")
-                    .env_remove(
-                        "FULLMAG_TEST_ACCEPTED_SUPERVISOR_FAIL_AFTER_PROCESS_EXIT_RECEIPT",
-                    )
+                    .env_remove("FULLMAG_TEST_ACCEPTED_SUPERVISOR_FAIL_AFTER_PROCESS_EXIT_RECEIPT")
                     .stdin(std::process::Stdio::null())
                     .stdout(std::process::Stdio::piped())
                     .stderr(std::process::Stdio::piped())
@@ -2921,34 +2990,62 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
                 let scheduler_executable = std::env::var_os("FULLMAG_ACCEPTED_SCHEDULER_E2E_BIN")
                     .expect("scheduler retry E2E requires the built scheduler binary");
                 let retry = std::process::Command::new(scheduler_executable)
-                    .arg("--store-root").arg(store.root())
-                    .arg("--run-id").arg(accepted_run_id.as_str())
-                    .arg("--resource-id").arg("cpu-scheduler-retry-e2e")
-                    .arg("--resource-kind").arg("cpu")
-                    .arg("--cpu-millis").arg("100")
-                    .arg("--memory-bytes").arg("1048576")
-                    .arg("--gpu-memory-bytes").arg("0")
-                    .arg("--storage-bytes").arg("8388608")
-                    .arg("--worker-executable").arg(worker_executable)
-                    .arg("--max-concurrency").arg("1")
-                    .arg("--max-tasks").arg("1")
-                    .arg("--worker-timeout-seconds").arg("30")
-                    .arg("--heartbeat-interval-milliseconds").arg("5000")
-                    .arg("--max-automatic-retries").arg("0")
+                    .arg("--store-root")
+                    .arg(store.root())
+                    .arg("--run-id")
+                    .arg(accepted_run_id.as_str())
+                    .arg("--resource-id")
+                    .arg("cpu-scheduler-retry-e2e")
+                    .arg("--resource-kind")
+                    .arg("cpu")
+                    .arg("--cpu-millis")
+                    .arg("100")
+                    .arg("--memory-bytes")
+                    .arg("1048576")
+                    .arg("--gpu-memory-bytes")
+                    .arg("0")
+                    .arg("--storage-bytes")
+                    .arg("8388608")
+                    .arg("--worker-executable")
+                    .arg(worker_executable)
+                    .arg("--max-concurrency")
+                    .arg("1")
+                    .arg("--max-tasks")
+                    .arg("1")
+                    .arg("--worker-timeout-seconds")
+                    .arg("30")
+                    .arg("--heartbeat-interval-milliseconds")
+                    .arg("5000")
+                    .arg("--max-automatic-retries")
+                    .arg("0")
                     .env_remove("FULLMAG_TEST_ACCEPTED_WORKER_FAIL_BEFORE_EFFECT")
                     .stdin(std::process::Stdio::null())
                     .stdout(std::process::Stdio::piped())
                     .stderr(std::process::Stdio::piped())
                     .output()
                     .expect("run scheduler for the durable retry");
-                assert!(retry.status.success(), "accepted scheduler retry E2E failed: {}", String::from_utf8_lossy(&retry.stderr));
-                let retry_summary: serde_json::Value = serde_json::from_slice(&retry.stdout).unwrap();
+                assert!(
+                    retry.status.success(),
+                    "accepted scheduler retry E2E failed: {}",
+                    String::from_utf8_lossy(&retry.stderr)
+                );
+                let retry_summary: serde_json::Value =
+                    serde_json::from_slice(&retry.stdout).unwrap();
                 assert_eq!(retry_summary["status"], "completed");
                 assert_eq!(retry_summary["scheduled_count"], 1);
                 assert_eq!(retry_summary["executed"][0]["ownership_epoch"], 2);
-                assert_eq!(retry_summary["executed"][0]["worker"]["status"], "completed");
-                let catalog = store.read_run_catalog(accepted_run_id.as_str()).unwrap().unwrap();
-                assert_eq!(catalog.tasks[0].lifecycle, fullmag_session::FmsTaskLifecycle::Succeeded);
+                assert_eq!(
+                    retry_summary["executed"][0]["worker"]["status"],
+                    "completed"
+                );
+                let catalog = store
+                    .read_run_catalog(accepted_run_id.as_str())
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(
+                    catalog.tasks[0].lifecycle,
+                    fullmag_session::FmsTaskLifecycle::Succeeded
+                );
                 assert_eq!(catalog.tasks[0].ownership_epoch, Some(2));
                 assert!(!catalog.tasks[0].artifact_ids.is_empty());
             }
@@ -3423,7 +3520,10 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
     assert_eq!(public_run.status(), StatusCode::OK);
     let public_run = body_json(public_run).await;
     let public_accepted_state = &public_run["tasks"][0]["accepted_state_ref"];
-    assert_eq!(public_accepted_state["id"]["run_id"], accepted_run_id.as_str());
+    assert_eq!(
+        public_accepted_state["id"]["run_id"],
+        accepted_run_id.as_str()
+    );
     assert_eq!(public_accepted_state["id"]["stage_id"], step.step_id);
     assert_eq!(
         public_accepted_state["id"]["state_digest"],
@@ -3488,7 +3588,10 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
         .provenance
         .resolved_plan_digest
         .starts_with("sha256:"));
-    assert!(solution.provenance.acquisition_digest.starts_with("sha256:"));
+    assert!(solution
+        .provenance
+        .acquisition_digest
+        .starts_with("sha256:"));
     fullmag_runtime_control::reconcile_coordinator_catalog(&store, &claim).unwrap();
     assert_eq!(
         store
@@ -3512,9 +3615,11 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
         .compute_quantities(&accepted_state_ref.id, &[fullmag_quantities::QuantityId::M])
         .expect("compute one atomic historical magnetization batch");
     assert_eq!(observation_batch.source, accepted_state_ref.id);
-    assert_eq!(observation_batch.quantity_ids, [fullmag_quantities::QuantityId::M]);
-    let fullmag_quantities::QuantityValue::VectorField(values) =
-        &observation_batch.values[0].1
+    assert_eq!(
+        observation_batch.quantity_ids,
+        [fullmag_quantities::QuantityId::M]
+    );
+    let fullmag_quantities::QuantityValue::VectorField(values) = &observation_batch.values[0].1
     else {
         panic!("historical m must remain a vector field");
     };

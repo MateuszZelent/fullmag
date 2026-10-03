@@ -6,9 +6,9 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 
 use crate::selection::geometry::{
-    AffineTransform3, BoundaryMembership, GeometryPredicate, contains_point,
+    contains_point, AffineTransform3, BoundaryMembership, GeometryPredicate,
 };
-use crate::{PlanError, util::MU0};
+use crate::{util::MU0, PlanError};
 
 pub(crate) fn resolve_fdm_regional_field_drives(
     drives: &[RegionalFieldDriveIR],

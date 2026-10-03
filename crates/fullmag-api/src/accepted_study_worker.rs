@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use fullmag_application::DecodedStudyArtifact;
 use fullmag_authoring::{
     StudyAcceptancePolicy, StudyInputPort, StudyInputSource, StudyOutputPort, StudyPortDataKind,
@@ -16,8 +16,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -1544,10 +1544,9 @@ fn apply_accepted_start_effect(
         return publish_worker_stopped(store, claim, control_result);
     }
     loop {
-        let recovered_before_completing = retry_store_writer_busy(|| {
-            fullmag_runtime_control::recover_coordinator(store, claim)
-        })
-        .context("recover worker coordinator before completion barrier")?;
+        let recovered_before_completing =
+            retry_store_writer_busy(|| fullmag_runtime_control::recover_coordinator(store, claim))
+                .context("recover worker coordinator before completion barrier")?;
         match recovered_before_completing.coordinator.phase() {
             fullmag_application::CoordinatorPhase::Stopping => {
                 let control_result = finish_worker_control(store, claim, control)?;

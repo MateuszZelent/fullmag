@@ -1,6 +1,6 @@
 use crate::project::{
-    CURRENT_PROJECT_SCHEMA, CURRENT_SCENE_SCHEMA, DefinitionRevision, MigrationReport,
-    ProjectEnvelope, ProjectId, ProjectSource, ProjectTarget,
+    DefinitionRevision, MigrationReport, ProjectEnvelope, ProjectId, ProjectSource, ProjectTarget,
+    CURRENT_PROJECT_SCHEMA, CURRENT_SCENE_SCHEMA,
 };
 use crate::repository::{DurabilityGuarantee, ProjectRepository, RepositoryCommitRequest};
 use std::fmt;

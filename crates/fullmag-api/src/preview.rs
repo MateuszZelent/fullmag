@@ -1,7 +1,7 @@
 //! Grid resampling, preview math, and vector field utilities.
 
 use crate::types::*;
-use fullmag_quantities::{QuantityShape as QuantityKind, quantity_spec};
+use fullmag_quantities::{quantity_spec, QuantityShape as QuantityKind};
 use fullmag_runner::{FemMeshPayload, LivePreviewField};
 use serde_json::Value;
 
@@ -160,8 +160,8 @@ pub(crate) fn mesh_preview_active_mask(mesh: &FemMeshPayload, quantity: &str) ->
 #[cfg(test)]
 mod tests {
     use super::{
-        AIR_OBJECT_SEGMENT_ID, mesh_preview_active_mask, quantity_spatial_domain,
-        sampled_flat_grid_scalar_2d,
+        mesh_preview_active_mask, quantity_spatial_domain, sampled_flat_grid_scalar_2d,
+        AIR_OBJECT_SEGMENT_ID,
     };
     use fullmag_runner::{FemMeshObjectSegment, FemMeshPartPayload, FemMeshPayload};
 

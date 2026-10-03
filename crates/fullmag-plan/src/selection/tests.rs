@@ -2,7 +2,7 @@ use fullmag_ir::{
     GeometryEntryIR, ObjectRegionIR, RegionFrameIR, RegionRealizationPolicyIR, RegionShapeIR,
 };
 
-use super::geometry::{AffineTransform3, BoundaryMembership, GeometryPredicate, contains_point};
+use super::geometry::{contains_point, AffineTransform3, BoundaryMembership, GeometryPredicate};
 
 fn box_entry(name: &str, size: [f64; 3]) -> GeometryEntryIR {
     GeometryEntryIR::Box {

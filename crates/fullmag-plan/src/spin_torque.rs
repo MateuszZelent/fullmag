@@ -836,21 +836,17 @@ mod tests {
 
         let legacy_error = resolve_legacy_spin_torque(&problem, SpinTorqueExecutableLane::Fdm, &[])
             .expect_err("deprecated wire variant must not enter the legacy FDM path");
-        assert!(
-            legacy_error
-                .reasons
-                .iter()
-                .any(|reason| reason.contains("deprecated") && reason.contains("fail_closed"))
-        );
+        assert!(legacy_error
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("deprecated") && reason.contains("fail_closed")));
 
         let sot_error = resolve_sot_fields(&problem, &[], false)
             .expect_err("deprecated wire variant must not enter SOT field resolution");
-        assert!(
-            sot_error
-                .reasons
-                .iter()
-                .any(|reason| reason.contains("deprecated") && reason.contains("fail_closed"))
-        );
+        assert!(sot_error
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("deprecated") && reason.contains("fail_closed")));
     }
 
     #[test]
@@ -1020,11 +1016,10 @@ mod tests {
         ];
         let err =
             resolve_legacy_spin_torque(&problem, SpinTorqueExecutableLane::Fdm, &[]).unwrap_err();
-        assert!(
-            err.reasons
-                .iter()
-                .any(|reason| reason.contains("only one executable module at a time"))
-        );
+        assert!(err
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("only one executable module at a time")));
     }
 
     #[test]
@@ -1139,11 +1134,10 @@ mod tests {
 
         let err =
             resolve_legacy_spin_torque(&problem, SpinTorqueExecutableLane::Fdm, &[]).unwrap_err();
-        assert!(
-            err.reasons
-                .iter()
-                .any(|reason| reason.contains("legacy STT fields disagree"))
-        );
+        assert!(err
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("legacy STT fields disagree")));
     }
 
     #[test]
@@ -1160,10 +1154,9 @@ mod tests {
 
         let err =
             resolve_legacy_spin_torque(&problem, SpinTorqueExecutableLane::Fem, &[]).unwrap_err();
-        assert!(
-            err.reasons.iter().any(
-                |reason| reason.contains("spin_orbit_torque") && reason.contains("fail_closed")
-            )
-        );
+        assert!(err
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("spin_orbit_torque") && reason.contains("fail_closed")));
     }
 }

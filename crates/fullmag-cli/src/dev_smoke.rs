@@ -810,7 +810,10 @@ mod tests {
             }
             parse_fmmt_header(&bytes).expect("optional global ordinals must be accepted");
             bytes.pop();
-            assert!(parse_fmmt_header(&bytes).is_err(), "truncated ordinals must reject");
+            assert!(
+                parse_fmmt_header(&bytes).is_err(),
+                "truncated ordinals must reject"
+            );
         }
     }
 

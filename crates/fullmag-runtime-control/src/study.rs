@@ -1,18 +1,18 @@
 //! Resolve accepted study inputs without mutable session state.
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use fullmag_application::{
-    COORDINATOR_TRANSITION_SCHEMA, CoordinatorError, CoordinatorMessage, CoordinatorTransition,
-    DurableWorkerCoordinator, PreparationBinding, PreparationReceipt, ProjectId, ResolvedInput,
-    ResolvedStudyArtifact, ResolvedTaskInput, RunId, RunSpecification, TaskClaim, TaskRecord,
-    WorkerCommand, WorkerCommandEnvelope,
+    CoordinatorError, CoordinatorMessage, CoordinatorTransition, DurableWorkerCoordinator,
+    PreparationBinding, PreparationReceipt, ProjectId, ResolvedInput, ResolvedStudyArtifact,
+    ResolvedTaskInput, RunId, RunSpecification, TaskClaim, TaskRecord, WorkerCommand,
+    WorkerCommandEnvelope, COORDINATOR_TRANSITION_SCHEMA,
 };
 use fullmag_authoring::{
     StudyInputPort, StudyInputSource, StudyPlan, StudyPortDataKind, StudyStep,
 };
 use fullmag_ir::{ExecutionDevice, ExecutionMode, ExecutionPlanIR, ExecutionPrecision, ProblemIR};
 use fullmag_plan::{
-    PreparationMaterialization, PreparationPlanSource, StudyExecutionPlan, StudyProblemCatalog,
-    StudyStepLoweringStatus, lower_study_plan_with_catalog,
+    lower_study_plan_with_catalog, PreparationMaterialization, PreparationPlanSource,
+    StudyExecutionPlan, StudyProblemCatalog, StudyStepLoweringStatus,
 };
 use fullmag_session::SessionStore;
 use serde::Deserialize;
@@ -496,7 +496,10 @@ pub fn queue_accepted_study_task(
         && durable_task.coordinator_watermark.is_none()
         && durable_task.coordinator_genesis.is_none();
     let retry_queue_replay = if durable_task.lifecycle == fullmag_session::FmsTaskLifecycle::Queued
-        && matches!(&durable_task.readiness, fullmag_session::FmsTaskReadiness::Ready)
+        && matches!(
+            &durable_task.readiness,
+            fullmag_session::FmsTaskReadiness::Ready
+        )
         && durable_task.attempt_id.is_none()
         && durable_task.resolved_input_fingerprint.is_none()
         && durable_task.artifact_ids.is_empty()
@@ -578,8 +581,12 @@ pub fn queue_accepted_study_task(
     task.observation = durable_task.observation.map(|value| match value {
         fullmag_session::FmsObservationState::Live => fullmag_application::ObservationState::Live,
         fullmag_session::FmsObservationState::Stale => fullmag_application::ObservationState::Stale,
-        fullmag_session::FmsObservationState::Disconnected => fullmag_application::ObservationState::Disconnected,
-        fullmag_session::FmsObservationState::Reconciling => fullmag_application::ObservationState::Reconciling,
+        fullmag_session::FmsObservationState::Disconnected => {
+            fullmag_application::ObservationState::Disconnected
+        }
+        fullmag_session::FmsObservationState::Reconciling => {
+            fullmag_application::ObservationState::Reconciling
+        }
     });
     Ok(QueuedAcceptedStudyTask {
         task,
@@ -1060,9 +1067,8 @@ pub fn load_study_observation_runtime(
         .cas()
         .get(manifest_ref)?
         .context("study observation source manifest is missing from CAS")?;
-    let manifest: fullmag_session::FmsStudyOutputManifest =
-        serde_json::from_slice(&manifest_bytes)
-            .context("study observation source manifest is not a typed document")?;
+    let manifest: fullmag_session::FmsStudyOutputManifest = serde_json::from_slice(&manifest_bytes)
+        .context("study observation source manifest is not a typed document")?;
     manifest.validate()?;
     if manifest.run_id != run_id
         || manifest.task_id != task_id
@@ -1428,8 +1434,8 @@ pub fn publish_study_outputs(
             schema_version: fullmag_session::FMS_OBSERVATION_SOURCE_SCHEMA.into(),
             adapter_id: fullmag_session::FMS_FDM_CPU_OBSERVATION_ADAPTER_ID.into(),
             accepted_state_ref: source.accepted_state_ref.clone(),
-            snapshot_schema_version:
-                fullmag_session::FMS_FDM_CPU_ACCEPTED_STATE_SNAPSHOT_SCHEMA.into(),
+            snapshot_schema_version: fullmag_session::FMS_FDM_CPU_ACCEPTED_STATE_SNAPSHOT_SCHEMA
+                .into(),
             snapshot_artifact_id,
             snapshot_object_ref,
             state_codec_id: fullmag_application::STUDY_MAGNETIZATION_CODEC_ID.into(),
@@ -1483,8 +1489,7 @@ pub fn publish_study_outputs(
         required: true,
         study_output: None,
     });
-    let catalog = store
-        .append_artifact_catalog_entries_for_lease(&durable_lease, &entries)?;
+    let catalog = store.append_artifact_catalog_entries_for_lease(&durable_lease, &entries)?;
     crate::solution_set::publish_open_study_solution(store, accepted, claim, step_id, &catalog)?;
     Ok(catalog)
 }

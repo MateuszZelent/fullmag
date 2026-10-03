@@ -8,7 +8,7 @@ use crate::planar_sampling::{
     FemPlanarField, Occupancy, PlanarComponent, PlanarSamplingEngine, ResolvedPlanarSampleRequest,
 };
 use fullmag_ir::{
-    PLANAR_FRAME_NORMALIZATION_VERSION, PlanarExtentIR, PlanarFrameIR, PlanarOperatorIR,
+    PlanarExtentIR, PlanarFrameIR, PlanarOperatorIR, PLANAR_FRAME_NORMALIZATION_VERSION,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -9,7 +9,7 @@ use fullmag_ir::{
 
 use crate::current_transport::ResolvedCurrentTransport;
 use crate::error::PlanError;
-use crate::geometry::{FDM_GRID_ESTIMATED_BYTES_PER_CELL, checked_fdm_grid_cost};
+use crate::geometry::{checked_fdm_grid_cost, FDM_GRID_ESTIMATED_BYTES_PER_CELL};
 use crate::physics_graph::{
     physics_module_execution_enabled, physics_module_execution_enabled_at_sources,
 };
@@ -1112,11 +1112,10 @@ mod tests {
         )
         .unwrap_err();
 
-        assert!(
-            err.reasons
-                .iter()
-                .any(|reason| reason.contains("parallel to the cylindrical axis"))
-        );
+        assert!(err
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("parallel to the cylindrical axis")));
     }
 
     #[test]

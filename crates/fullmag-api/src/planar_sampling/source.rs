@@ -1,6 +1,6 @@
 use fullmag_ir::{
-    MonitorTargetIR, PLANAR_FRAME_NORMALIZATION_VERSION, PlanarExtentIR, PlanarFrameIR,
-    PlanarFramePresetIR, PlanarMonitorIR, PlanarOperatorIR,
+    MonitorTargetIR, PlanarExtentIR, PlanarFrameIR, PlanarFramePresetIR, PlanarMonitorIR,
+    PlanarOperatorIR, PLANAR_FRAME_NORMALIZATION_VERSION,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -535,11 +535,9 @@ mod tests {
     fn missing_authored_monitor_fails_with_stable_reason_code() {
         let error = resolve_authored_planar_source(&[], "missing").unwrap_err();
         assert_eq!(error.status, axum::http::StatusCode::NOT_FOUND);
-        assert!(
-            error
-                .message
-                .starts_with("planar_source_monitor_not_found:")
-        );
+        assert!(error
+            .message
+            .starts_with("planar_source_monitor_not_found:"));
     }
 
     #[test]

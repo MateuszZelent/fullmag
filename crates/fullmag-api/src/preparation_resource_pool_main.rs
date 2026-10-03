@@ -1,9 +1,9 @@
 mod worker_startup_gate;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use fullmag_session::{
-    FMS_PREPARATION_RESOURCE_POOL_SCHEMA, FmsPreparationResourceOffer, FmsPreparationResourcePool,
-    PreparationResourcePoolCommitDisposition,
+    FmsPreparationResourceOffer, FmsPreparationResourcePool,
+    PreparationResourcePoolCommitDisposition, FMS_PREPARATION_RESOURCE_POOL_SCHEMA,
 };
 use std::path::PathBuf;
 

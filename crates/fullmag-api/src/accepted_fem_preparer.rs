@@ -1,12 +1,12 @@
 //! One-shot native FEM preparation for an immutable accepted study task.
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use fullmag_application::{RunId, RunSpecification};
 use fullmag_ir::{BackendPlanIR, BackendTarget};
 use fullmag_plan::StudyStepLoweringStatus;
 use fullmag_session::{
-    FmsResourceLeaseState, FmsTaskLifecycle, FmsTaskPreparationReceipt,
-    FmsTaskReadiness, PreparationReceiptCommitDisposition, SessionStore,
+    FmsResourceLeaseState, FmsTaskLifecycle, FmsTaskPreparationReceipt, FmsTaskReadiness,
+    PreparationReceiptCommitDisposition, SessionStore,
 };
 
 #[derive(Debug)]

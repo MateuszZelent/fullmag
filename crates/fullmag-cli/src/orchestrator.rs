@@ -5816,10 +5816,7 @@ fn print_script_summary(summary: &ScriptRunSummary) {
         println!("- final_E_dmi: {:.6e} J", final_e_dmi);
     }
     if let Some(final_e_rotated_dmi) = summary.final_e_rotated_dmi {
-        println!(
-            "- final_E_rotated_dmi: {:.6e} J",
-            final_e_rotated_dmi
-        );
+        println!("- final_E_rotated_dmi: {:.6e} J", final_e_rotated_dmi);
     }
     if let Some(final_e_total) = summary.final_e_total {
         println!("- final_E_total: {:.6e} J", final_e_total);
@@ -8441,7 +8438,8 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                             command_stage.entrypoint_kind = stages[0].entrypoint_kind.clone();
                             command_stage.ir.problem_meta.entrypoint_kind =
                                 stages[0].ir.problem_meta.entrypoint_kind.clone();
-                            command_stage.incoming_transition = stages[0].incoming_transition.clone();
+                            command_stage.incoming_transition =
+                                stages[0].incoming_transition.clone();
                         }
                         stages[0] = command_stage;
                         stage_execution_plans[0] = command_plan.clone();
@@ -11608,27 +11606,16 @@ pub(crate) fn prepare_live_workspace_for_ui(
 #[cfg(test)]
 mod tests {
     use super::{
-        accepted_relax_handoff_for_eigen_stage,
-        accepted_relax_handoff_from_completed_stage,
-        adaptive_remesh_backend_legality_reason,
-        adaptive_remesh_legality_reason,
-        apply_current_fem_overrides,
-        apply_initial_magnetization_state_override,
-        apply_live_step_update_to_workspace_state,
-        apply_remeshed_problem_snapshot_to_stages,
-        apply_scene_discretization_patch,
-        apply_stage_heartbeat_progress,
+        accepted_relax_handoff_for_eigen_stage, accepted_relax_handoff_from_completed_stage,
+        adaptive_remesh_backend_legality_reason, adaptive_remesh_legality_reason,
+        apply_current_fem_overrides, apply_initial_magnetization_state_override,
+        apply_live_step_update_to_workspace_state, apply_remeshed_problem_snapshot_to_stages,
+        apply_scene_discretization_patch, apply_stage_heartbeat_progress,
         apply_terminal_live_step_update_to_workspace_state,
-        attach_initial_magnetization_state_override_metadata,
-        attach_region_realization_revisions,
-        attach_stage_fem_mesh_identity,
-        classify_wait_for_solve_command,
-        continuation_source_from_backend_plan,
-        CommandApplicationBoundary,
-        cumulative_rhs_evals,
-        current_fdm_mesh_workspace,
-        default_domain_region_markers,
-        deferred_mesh_failure_stage,
+        attach_initial_magnetization_state_override_metadata, attach_region_realization_revisions,
+        attach_stage_fem_mesh_identity, classify_wait_for_solve_command,
+        continuation_source_from_backend_plan, cumulative_rhs_evals, current_fdm_mesh_workspace,
+        default_domain_region_markers, deferred_mesh_failure_stage,
         discard_active_paused_stage_execution,
         ensure_frequency_response_relaxed_continuation_is_qualified, execute_synthetic_stage,
         fail_owned_preparation_stage, fem_gpu_memory_preflight_message,
@@ -11652,10 +11639,11 @@ mod tests {
         step_update_has_frequency_response_progress, user_cancelled_stage_completion,
         validate_periodic_remesh_candidate, wait_for_failed_preparation_close,
         wait_for_solve_prompt, wait_for_solve_should_block, wait_for_solve_supported,
-        write_sampling_resolution_stage_record, ActiveSequenceState, ContinuationStageSource,
-        LiveProgressCadence, LoadedInitialMagnetizationState, RuntimeCommandPrecondition,
-        SceneProblemPatch, StageProgressHeartbeat, WaitForSolveCommandAction,
-        FEM_FREQUENCY_RESPONSE_PROGRESS_KEY, LIVE_PROGRESS_PUBLISH_INTERVAL,
+        write_sampling_resolution_stage_record, ActiveSequenceState, CommandApplicationBoundary,
+        ContinuationStageSource, LiveProgressCadence, LoadedInitialMagnetizationState,
+        RuntimeCommandPrecondition, SceneProblemPatch, StageProgressHeartbeat,
+        WaitForSolveCommandAction, FEM_FREQUENCY_RESPONSE_PROGRESS_KEY,
+        LIVE_PROGRESS_PUBLISH_INTERVAL,
     };
     use crate::live_workspace::{CurrentLivePublisher, LocalLiveWorkspace};
     use crate::simulation_preparation::{
@@ -11757,7 +11745,10 @@ mod tests {
         let certified_block = production
             .split("let next_continuation_certified_fields =")
             .nth(1)
-            .and_then(|tail| tail.split("let next_continuation_recomputed_certificate =").next())
+            .and_then(|tail| {
+                tail.split("let next_continuation_recomputed_certificate =")
+                    .next()
+            })
             .expect("certified FEM equilibrium field handoff block");
         let recomputed_block = production
             .split("let next_continuation_recomputed_certificate =")
@@ -12143,8 +12134,8 @@ mod tests {
         assert_eq!(stages[0].ir, stages_before[0].ir);
         assert_eq!(plans, plans_before);
 
-        let initial_plan = fullmag_plan::plan(&stages[0].ir)
-            .expect("bootstrap problem should plan");
+        let initial_plan =
+            fullmag_plan::plan(&stages[0].ir).expect("bootstrap problem should plan");
         let prepared = prepare_remesh_stage_transaction(
             &stages,
             &[initial_plan],

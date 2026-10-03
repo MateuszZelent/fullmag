@@ -474,9 +474,10 @@ pub fn request_accepted_task_stop(
             });
         }
         if recovered.coordinator.phase() == fullmag_application::CoordinatorPhase::Running
-            && recovered.events.iter().any(|event| {
-                matches!(&event.event, fullmag_application::WorkerEvent::Completing)
-            })
+            && recovered
+                .events
+                .iter()
+                .any(|event| matches!(&event.event, fullmag_application::WorkerEvent::Completing))
         {
             bail!("accepted task is already completing");
         }
@@ -507,12 +508,12 @@ pub fn request_accepted_task_stop(
                 retry_store_writer_busy(|| {
                     commit_transition_with_catalog_revision(store, transition)
                 })
-                    .map(|(_, revision)| {
-                        catalog_revision = Some(revision);
-                    })
-                    .map_err(|error| {
-                        fullmag_application::CoordinatorError::Invalid(format!("{error:#}"))
-                    })
+                .map(|(_, revision)| {
+                    catalog_revision = Some(revision);
+                })
+                .map_err(|error| {
+                    fullmag_application::CoordinatorError::Invalid(format!("{error:#}"))
+                })
             },
         ) {
             Ok(command) => command,
@@ -585,8 +586,7 @@ pub use claim::{commit_claimed_task_admission, load_current_task_claim};
 
 mod scheduler;
 pub use scheduler::{
-    accepted_run_has_scheduler_ready_task, schedule_next_ready_accepted_task,
-    ScheduledAcceptedTask,
+    accepted_run_has_scheduler_ready_task, schedule_next_ready_accepted_task, ScheduledAcceptedTask,
 };
 
 mod solution_set;
@@ -597,11 +597,11 @@ mod study_dataset;
 mod study;
 pub use study::{
     load_accepted_study_snapshot, load_accepted_worker_step, load_accepted_worker_step_for_start,
-    publish_accepted_task_prepare, publish_accepted_task_start, publish_study_outputs,
-    queue_accepted_study_task, validate_requested_execution, validate_study_task_completion,
-    AcceptedStudySnapshot, AcceptedWorkerStep, LoadedStudyObservationRuntime,
-    ObservationSourcePayload, QueuedAcceptedStudyTask, StudyOutputPayload,
-    ACCEPTED_TASK_AWAITING_DEPENDENCY_RESOLUTION, load_study_observation_runtime,
+    load_study_observation_runtime, publish_accepted_task_prepare, publish_accepted_task_start,
+    publish_study_outputs, queue_accepted_study_task, validate_requested_execution,
+    validate_study_task_completion, AcceptedStudySnapshot, AcceptedWorkerStep,
+    LoadedStudyObservationRuntime, ObservationSourcePayload, QueuedAcceptedStudyTask,
+    StudyOutputPayload, ACCEPTED_TASK_AWAITING_DEPENDENCY_RESOLUTION,
 };
 
 mod worker_inbox;

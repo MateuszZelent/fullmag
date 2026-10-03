@@ -70,16 +70,13 @@ pub struct ProjectSnapshot {
 
 impl ProjectSnapshot {
     pub fn from_envelope(envelope: &ProjectEnvelope) -> Result<Self, RunSpecError> {
-        envelope
-            .validate_for_save()
-            .map_err(|error| RunSpecError::Invalid(format!("invalid project definition: {error}")))?;
+        envelope.validate_for_save().map_err(|error| {
+            RunSpecError::Invalid(format!("invalid project definition: {error}"))
+        })?;
         Ok(Self {
             project_id: envelope.definition.project_id.clone(),
             definition_revision: envelope.definition.revision,
-            definition_sha256: format!(
-                "{:x}",
-                Sha256::digest(envelope.raw_definition.raw_bytes())
-            ),
+            definition_sha256: format!("{:x}", Sha256::digest(envelope.raw_definition.raw_bytes())),
         })
     }
 
@@ -655,8 +652,8 @@ mod tests {
 
     #[test]
     fn project_snapshot_binds_exact_definition_bytes() {
-        let mut envelope = ProjectEnvelope::blank(ProjectId::parse("project-test").unwrap(), "Test")
-            .unwrap();
+        let mut envelope =
+            ProjectEnvelope::blank(ProjectId::parse("project-test").unwrap(), "Test").unwrap();
         let snapshot = ProjectSnapshot::from_envelope(&envelope).unwrap();
         snapshot.verify_envelope(&envelope).unwrap();
         envelope.definition.revision += 1;

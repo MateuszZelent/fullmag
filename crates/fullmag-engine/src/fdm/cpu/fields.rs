@@ -11,9 +11,9 @@ use crate::magnetoelastic;
 use crate::telemetry::{sections, StepTelemetry};
 use crate::vector::{add, cross, dot, max_cross_norm, max_norm, norm, scale, squared_norm, sub};
 use crate::{
-    ExchangeLlgProblem, FftWorkspace, OerstedCylinderConfig,
-    RhsEvaluation, SlonczewskiFormula, SlonczewskiSttConfig, SotConfig, SotFormula, Vector3,
-    VectorFieldSoA, ZhangLiFormula, ZhangLiSttConfig, MU0,
+    ExchangeLlgProblem, FftWorkspace, OerstedCylinderConfig, RhsEvaluation, SlonczewskiFormula,
+    SlonczewskiSttConfig, SotConfig, SotFormula, Vector3, VectorFieldSoA, ZhangLiFormula,
+    ZhangLiSttConfig, MU0,
 };
 
 #[path = "fields/direct_torques.rs"]

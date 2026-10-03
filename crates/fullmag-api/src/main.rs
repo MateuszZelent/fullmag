@@ -1,43 +1,43 @@
 use axum::extract::ws::{Message, WebSocket};
 use axum::extract::{DefaultBodyLimit, Query, State};
-use axum::http::StatusCode;
 use axum::http::header::CONTENT_TYPE;
+use axum::http::StatusCode;
 #[cfg(not(feature = "swagger-ui"))]
 use axum::response::Html;
 use axum::response::{IntoResponse, Response};
 use axum::{
-    Json, Router,
     routing::{get, post},
+    Json, Router,
 };
 use base64::Engine;
 use fullmag_authoring::{
-    MagnetizationAsset, SceneDocument, normalize_scene_document_magnetization_assets,
-    normalize_scene_document_study_pipeline_labels,
+    normalize_scene_document_magnetization_assets, normalize_scene_document_study_pipeline_labels,
     scene_document_has_unresolved_solve_prerequisites, validate_scene_document_for_authoring,
+    MagnetizationAsset, SceneDocument,
 };
 use fullmag_ir::{TextureMappingIR, TextureProjectionMode, TextureTransform3DIR};
-use fullmag_plan::{TextureSamplePoint, sample_preset_texture_versioned};
-use serde_json::{Value, json};
+use fullmag_plan::{sample_preset_texture_versioned, TextureSamplePoint};
+use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use tokio::sync::{Mutex, RwLock, broadcast, watch};
-use tokio::time::{Duration, Instant, sleep_until};
+use std::sync::Arc;
+use tokio::sync::{broadcast, watch, Mutex, RwLock};
+use tokio::time::{sleep_until, Duration, Instant};
 use tower_http::services::{ServeDir, ServeFile};
 use tracing::info;
 
-use fullmag_quantities::{QuantityShape as QuantityKind, quantity_spec};
+use fullmag_quantities::{quantity_spec, QuantityShape as QuantityKind};
 use fullmag_runner::LivePreviewField;
 
-mod analysis;
 #[path = "accepted_fem_state.rs"]
 mod accepted_fem_state;
 #[path = "accepted_fem_study_worker.rs"]
 mod accepted_fem_study_worker;
 mod accepted_study_worker;
+mod analysis;
 mod artifacts;
 mod assets;
 mod build_info;
@@ -54,8 +54,8 @@ mod field_projection;
 mod field_render_png;
 mod field_slice;
 mod field_store;
-mod live_scene_preparation;
 mod live_command_journal;
+mod live_scene_preparation;
 mod openapi_v2;
 mod orientation_color;
 mod periodic_pairs_binary;
@@ -776,10 +776,8 @@ mod realtime_change_tests {
         assert!(fetches.contains("/v2/sessions/current/meshing/meshes/shared-domain/manifest"));
         assert!(fetches.contains("/v2/sessions/current/meshing/meshes/shared-domain/topology"));
         assert!(fetches.contains("/v2/sessions/current/meshing/meshes/shared-domain/quality"));
-        assert!(
-            fetches
-                .contains("/v2/sessions/current/meshing/meshes/shared-domain/realized-size-fields")
-        );
+        assert!(fetches
+            .contains("/v2/sessions/current/meshing/meshes/shared-domain/realized-size-fields"));
         assert!(fetches.contains("/v2/sessions/current/meshing/mesh/periodic_pairs.v1"));
         assert!(fetches.contains("/v2/sessions/current/model/scene"));
         assert!(fetches.contains("/v2/sessions/current/model/planar-monitors"));
@@ -841,26 +839,18 @@ mod realtime_change_tests {
             .filter(|change| matches!(change.resource, RealtimeResourceName::PlanarFields))
             .collect::<Vec<_>>();
         assert_eq!(planar_fields.len(), 3);
-        assert!(
-            planar_fields
-                .iter()
-                .all(|change| change.recommended_fetch.is_none())
-        );
-        assert!(
-            planar_fields
-                .iter()
-                .any(|change| change.resource_id.as_deref() == Some("monitor"))
-        );
-        assert!(
-            planar_fields
-                .iter()
-                .any(|change| change.resource_id.as_deref() == Some("field"))
-        );
-        assert!(
-            planar_fields
-                .iter()
-                .any(|change| change.resource_id.as_deref() == Some("mesh"))
-        );
+        assert!(planar_fields
+            .iter()
+            .all(|change| change.recommended_fetch.is_none()));
+        assert!(planar_fields
+            .iter()
+            .any(|change| change.resource_id.as_deref() == Some("monitor")));
+        assert!(planar_fields
+            .iter()
+            .any(|change| change.resource_id.as_deref() == Some("field")));
+        assert!(planar_fields
+            .iter()
+            .any(|change| change.resource_id.as_deref() == Some("mesh")));
         let wire = serde_json::to_string(&planar_fields).expect("realtime changes serialize");
         for forbidden in [
             "scalar_values",
@@ -1076,12 +1066,10 @@ mod realtime_change_tests {
                     == Some("/v2/sessions/current/data/tables/default/rows")
         }));
         // Field samples should NOT show up.
-        assert!(
-            changes
-                .iter()
-                .all(|c| !(matches!(c.resource, RealtimeResourceName::Fields)
-                    && c.resource_id.as_deref() == Some("samples")))
-        );
+        assert!(changes
+            .iter()
+            .all(|c| !(matches!(c.resource, RealtimeResourceName::Fields)
+                && c.resource_id.as_deref() == Some("samples"))));
     }
 
     #[test]
@@ -1180,20 +1168,16 @@ mod realtime_change_tests {
         assert_eq!(batches.len(), 2);
         assert_eq!(batches[0].1, false);
         assert_eq!(batches[0].2, 0);
-        assert!(
-            batches[0]
-                .0
-                .iter()
-                .all(|change| matches!(change.resource, RealtimeResourceName::Stages))
-        );
+        assert!(batches[0]
+            .0
+            .iter()
+            .all(|change| matches!(change.resource, RealtimeResourceName::Stages)));
         assert_eq!(batches[1].1, true);
         assert_eq!(batches[1].2, policy.field_sample_publish_ms);
-        assert!(
-            batches[1]
-                .0
-                .iter()
-                .all(|change| matches!(change.resource, RealtimeResourceName::Fields))
-        );
+        assert!(batches[1]
+            .0
+            .iter()
+            .all(|change| matches!(change.resource, RealtimeResourceName::Fields)));
     }
 
     #[test]
@@ -1230,20 +1214,16 @@ mod realtime_change_tests {
         assert_eq!(batches.len(), 2);
         assert_eq!(batches[0].1, true);
         assert_eq!(batches[0].2, policy.table_rows_min_refetch_ms);
-        assert!(
-            batches[0]
-                .0
-                .iter()
-                .all(|change| matches!(change.resource, RealtimeResourceName::Scalars))
-        );
+        assert!(batches[0]
+            .0
+            .iter()
+            .all(|change| matches!(change.resource, RealtimeResourceName::Scalars)));
         assert_eq!(batches[1].1, true);
         assert_eq!(batches[1].2, policy.field_sample_publish_ms);
-        assert!(
-            batches[1]
-                .0
-                .iter()
-                .all(|change| matches!(change.resource, RealtimeResourceName::Fields))
-        );
+        assert!(batches[1]
+            .0
+            .iter()
+            .all(|change| matches!(change.resource, RealtimeResourceName::Fields)));
     }
 
     #[test]
@@ -1576,12 +1556,10 @@ mod terminal_snapshot_route_tests {
                 .map(|live| live.status.as_str()),
             Some("completed")
         );
-        assert!(
-            snapshot
-                .live_state
-                .as_ref()
-                .is_some_and(|live| live.latest_step.finished)
-        );
+        assert!(snapshot
+            .live_state
+            .as_ref()
+            .is_some_and(|live| live.latest_step.finished));
         assert!(snapshot.latest_fields.get("m").is_some());
         assert!(snapshot.latest_fields.get("H_eff").is_some());
 
@@ -2662,7 +2640,8 @@ async fn healthz() -> Json<HealthResponse> {
 
 async fn vision() -> Json<VisionResponse> {
     Json(VisionResponse {
-        north_star: "Describe one physical problem and execute it through FDM, FEM, or hybrid plans.",
+        north_star:
+            "Describe one physical problem and execute it through FDM, FEM, or hybrid plans.",
         modes: ["strict", "extended", "hybrid"],
         runtime_spine: "current-live",
     })
@@ -3248,10 +3227,8 @@ async fn materialize_current_live_preparation(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CurrentLivePreparationMaterializationRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let published = crate::live_scene_preparation::materialize_current_live_preparation(
-        &state, req,
-    )
-    .await?;
+    let published =
+        crate::live_scene_preparation::materialize_current_live_preparation(&state, req).await?;
     Ok(Json(serde_json::json!({
         "status": "ok",
         "disposition": published.disposition,
@@ -3418,16 +3395,13 @@ mod preparation_materialization_route_tests {
         let state = crate::router_v2::tests::test_app_state_with_live_session().await;
         let context = capture_current_live_request_context(&state).await.unwrap();
         let mut receipt = unvalidated_preparation_receipt();
-        receipt.accepted_run_source = Some(
-            fullmag_application::AcceptedRunPreparationSource {
-                schema_version: fullmag_application::ACCEPTED_RUN_PREPARATION_SOURCE_SCHEMA
-                    .into(),
-                run_id: fullmag_application::RunId::parse("accepted-run-test").unwrap(),
-                specification_fingerprint: format!("sha256:{}", "a".repeat(64)),
-                step_id: "study-step-test".into(),
-                problem_fingerprint: format!("sha256:{}", "b".repeat(64)),
-            },
-        );
+        receipt.accepted_run_source = Some(fullmag_application::AcceptedRunPreparationSource {
+            schema_version: fullmag_application::ACCEPTED_RUN_PREPARATION_SOURCE_SCHEMA.into(),
+            run_id: fullmag_application::RunId::parse("accepted-run-test").unwrap(),
+            specification_fingerprint: format!("sha256:{}", "a".repeat(64)),
+            step_id: "study-step-test".into(),
+            problem_fingerprint: format!("sha256:{}", "b".repeat(64)),
+        });
 
         let error = crate::live_scene_preparation::commit_live_preparation_receipt_for_context(
             &state, &context, receipt, None, None, None,
@@ -3488,12 +3462,10 @@ mod preparation_materialization_route_tests {
         assert_eq!(response.0["status"], "ok");
         assert_eq!(response.0["disposition"], "accepted");
         assert_eq!(response.0["preparation_id"], "prep-api-materialized");
-        assert!(
-            response.0["receipt_sha256"]
-                .as_str()
-                .unwrap()
-                .starts_with("sha256:")
-        );
+        assert!(response.0["receipt_sha256"]
+            .as_str()
+            .unwrap()
+            .starts_with("sha256:"));
 
         let replay = materialize_current_live_preparation(
             State(state),
@@ -3612,8 +3584,7 @@ mod preparation_materialization_route_tests {
             .unwrap();
         let response = crate::router_v2::build_v2_router()
             .with_state(
-                crate::router_v2::tests::test_app_state_with_simulation_preparation("ready")
-                    .await,
+                crate::router_v2::tests::test_app_state_with_simulation_preparation("ready").await,
             )
             .oneshot(request)
             .await
@@ -3640,8 +3611,7 @@ mod preparation_materialization_route_tests {
             .unwrap();
         let response = crate::router_v2::build_v2_router()
             .with_state(
-                crate::router_v2::tests::test_app_state_with_simulation_preparation("ready")
-                    .await,
+                crate::router_v2::tests::test_app_state_with_simulation_preparation("ready").await,
             )
             .oneshot(request)
             .await
@@ -5252,7 +5222,11 @@ fn rotate_point_by_quat(point: [f64; 3], quat: [f64; 4]) -> [f64; 3] {
 }
 
 fn safe_scale_component(value: f64) -> f64 {
-    if value.abs() > 1.0e-30 { value } else { 1.0 }
+    if value.abs() > 1.0e-30 {
+        value
+    } else {
+        1.0
+    }
 }
 
 fn scene_magnetization_summary(scene: &SceneDocument) -> String {

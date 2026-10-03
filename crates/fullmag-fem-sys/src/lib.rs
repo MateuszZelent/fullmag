@@ -414,8 +414,7 @@ pub const FULLMAG_FEM_MESH_DESC_ABI_LAYOUT_FINGERPRINT: &str =
     "fullmag:fem-mesh-desc:abi:v2:lp64:size232:typed-csr-global-ordinals";
 pub const FULLMAG_FEM_MESH_SPACE_PREPARATION_ABI_VERSION: u32 = 1;
 pub const FULLMAG_FEM_MESH_SPACE_PREPARATION_PRODUCER_ID: &str = "fullmag.mfem.mesh_space";
-pub const FULLMAG_FEM_MESH_SPACE_PREPARATION_SCHEMA_VERSION: &str =
-    "mfem_mesh_space_evidence.v1";
+pub const FULLMAG_FEM_MESH_SPACE_PREPARATION_SCHEMA_VERSION: &str = "mfem_mesh_space_evidence.v1";
 pub const FULLMAG_FEM_MESH_SPACE_PREPARATION_PRODUCER_VERSION: &str = "1";
 pub const FULLMAG_FEM_MESH_SPACE_PREPARATION_FINGERPRINT_CAPACITY: usize = 65;
 pub const FULLMAG_FEM_FE_FAMILY_H1: u32 = 1;
@@ -567,11 +566,36 @@ const _: () = {
     assert!(std::mem::size_of::<fullmag_fem_mesh_space_preparation_evidence_v1>() == 360);
     assert!(std::mem::align_of::<fullmag_fem_mesh_space_preparation_evidence_v1>() == 8);
     assert!(std::mem::offset_of!(fullmag_fem_mesh_space_preparation_evidence_v1, node_count) == 24);
-    assert!(std::mem::offset_of!(fullmag_fem_mesh_space_preparation_evidence_v1, min_jacobian_determinant) == 80);
-    assert!(std::mem::offset_of!(fullmag_fem_mesh_space_preparation_evidence_v1, topology_fingerprint) == 96);
-    assert!(std::mem::offset_of!(fullmag_fem_mesh_space_preparation_evidence_v1, marker_map_fingerprint) == 161);
-    assert!(std::mem::offset_of!(fullmag_fem_mesh_space_preparation_evidence_v1, quality_fingerprint) == 226);
-    assert!(std::mem::offset_of!(fullmag_fem_mesh_space_preparation_evidence_v1, space_fingerprint) == 291);
+    assert!(
+        std::mem::offset_of!(
+            fullmag_fem_mesh_space_preparation_evidence_v1,
+            min_jacobian_determinant
+        ) == 80
+    );
+    assert!(
+        std::mem::offset_of!(
+            fullmag_fem_mesh_space_preparation_evidence_v1,
+            topology_fingerprint
+        ) == 96
+    );
+    assert!(
+        std::mem::offset_of!(
+            fullmag_fem_mesh_space_preparation_evidence_v1,
+            marker_map_fingerprint
+        ) == 161
+    );
+    assert!(
+        std::mem::offset_of!(
+            fullmag_fem_mesh_space_preparation_evidence_v1,
+            quality_fingerprint
+        ) == 226
+    );
+    assert!(
+        std::mem::offset_of!(
+            fullmag_fem_mesh_space_preparation_evidence_v1,
+            space_fingerprint
+        ) == 291
+    );
     assert!(std::mem::size_of::<fullmag_fem_mesh_abi_layout>() == 360);
     assert!(std::mem::align_of::<fullmag_fem_mesh_abi_layout>() == 8);
     assert!(std::mem::offset_of!(fullmag_fem_mesh_abi_layout, abi_version) == 0);

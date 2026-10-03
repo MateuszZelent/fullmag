@@ -7,7 +7,7 @@ mod accepted_study_worker;
 
 mod worker_startup_gate;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 

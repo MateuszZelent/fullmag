@@ -81,10 +81,9 @@ impl FmsWorkerInboxRecord {
             if !matches!(
                 schema_version,
                 "worker_protocol.v1" | "worker_protocol.v2" | "worker_protocol.v3"
-            )
-                || protocol_schema
-                    .as_deref()
-                    .is_some_and(|previous| previous != schema_version)
+            ) || protocol_schema
+                .as_deref()
+                .is_some_and(|previous| previous != schema_version)
                 || envelope["claim"] != self.payload["claim"]
                 || envelope["sequence"].as_u64() != Some(index as u64 + 1)
             {

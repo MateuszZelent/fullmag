@@ -55,9 +55,8 @@ pub use repository::{
 };
 pub use run_spec::{
     ImmutableAssetReference, ProjectSnapshot, RequestedExecution, RequestedResourceBudget,
-    RunDependency, RunId, RunIntent,
-    RunIntentLedger, RunSpecError, RunSpecification, StudyId, StudyReference, SubmitDisposition,
-    SubmitReceipt, RUN_INTENT_SCHEMA, RUN_SPEC_SCHEMA,
+    RunDependency, RunId, RunIntent, RunIntentLedger, RunSpecError, RunSpecification, StudyId,
+    StudyReference, SubmitDisposition, SubmitReceipt, RUN_INTENT_SCHEMA, RUN_SPEC_SCHEMA,
 };
 pub use study_artifact::{
     decode_magnetization_field_semantics,

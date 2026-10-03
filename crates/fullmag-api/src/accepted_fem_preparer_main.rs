@@ -3,7 +3,7 @@ mod accepted_fem_preparer;
 
 mod worker_startup_gate;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -122,11 +122,10 @@ fn parse_args() -> Result<PreparerArgs> {
                 )
             }
             "--preparation-attempt-id" if preparation_attempt_id.is_none() => {
-                preparation_attempt_id = Some(
-                    value.into_string().map_err(|_| {
+                preparation_attempt_id =
+                    Some(value.into_string().map_err(|_| {
                         anyhow::anyhow!("preparation attempt id must be valid UTF-8")
-                    })?,
-                )
+                    })?)
             }
             "--lease-token" if lease_token.is_none() => {
                 lease_token = Some(

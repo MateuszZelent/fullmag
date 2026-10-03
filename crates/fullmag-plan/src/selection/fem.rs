@@ -4,8 +4,8 @@ use fullmag_ir::ResolvedFrozenSpinsPlanIR;
 use std::cell::Cell;
 
 use super::certificate::{
-    FEM_SELECTION_EVALUATOR_ID, FrozenSpinsCompileRequest, SelectionDomainView,
-    compile_domain_frozen_spins,
+    compile_domain_frozen_spins, FrozenSpinsCompileRequest, SelectionDomainView,
+    FEM_SELECTION_EVALUATOR_ID,
 };
 use super::geometry::SelectionError;
 

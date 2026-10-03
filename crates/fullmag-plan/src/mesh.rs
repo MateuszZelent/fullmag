@@ -1,8 +1,8 @@
 use fullmag_ir::{
-    AirBoxConfigIR, FemCellTypeIR, FemConnectivityIR, FemDomainMeshAssetIR, FemDomainMeshModeIR,
-    FemDomainRegionMarkerIR, FemFacetConnectivityIR, FemMeshPartIR, FemMeshPartRole,
-    FemMeshPartSelector, FemObjectSegmentIR, InitialMagnetizationIR, MeshIR, MeshQualityIR,
-    ProblemIR, validate_mesh_for_execution,
+    validate_mesh_for_execution, AirBoxConfigIR, FemCellTypeIR, FemConnectivityIR,
+    FemDomainMeshAssetIR, FemDomainMeshModeIR, FemDomainRegionMarkerIR, FemFacetConnectivityIR,
+    FemMeshPartIR, FemMeshPartRole, FemMeshPartSelector, FemObjectSegmentIR,
+    InitialMagnetizationIR, MeshIR, MeshQualityIR, ProblemIR,
 };
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -12,7 +12,7 @@ use std::sync::{Mutex, OnceLock};
 
 use crate::magnetization_textures::TextureSamplePoint;
 use crate::magnetization_textures_v2::sample_preset_texture_versioned;
-use crate::util::{StudyUniverseMetadata, generate_random_unit_vectors, study_universe_metadata};
+use crate::util::{generate_random_unit_vectors, study_universe_metadata, StudyUniverseMetadata};
 
 pub(crate) const AIR_OBJECT_SEGMENT_ID: &str = "__air__";
 pub(crate) const AIR_REGION_MARKER: u32 = 0;

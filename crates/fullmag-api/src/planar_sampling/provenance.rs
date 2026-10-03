@@ -1,4 +1,4 @@
-use super::{Occupancy, PLANAR_SAMPLER_VERSION, PlanarSampleMeta, ResolvedPlanarSampleRequest};
+use super::{Occupancy, PlanarSampleMeta, ResolvedPlanarSampleRequest, PLANAR_SAMPLER_VERSION};
 
 pub(super) fn meta(
     request: &ResolvedPlanarSampleRequest,
