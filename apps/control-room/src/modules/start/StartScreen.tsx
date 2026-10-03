@@ -16,6 +16,7 @@ import {
   readProjectArchiveAtPath,
   resumeRun,
 } from "./model/recentIndexHost";
+import { useAuthorName } from "./model/useAuthorName";
 import { useComputeProbe } from "./model/useComputeProbe";
 import { useRecentIndex } from "./model/useRecentIndex";
 import { startActionDisabledReason } from "./model/startCommands";
@@ -43,6 +44,7 @@ export function StartScreen({ kernel }: ModuleProps) {
   useProjectDocumentSnapshot();
   const recent = useRecentIndex();
   const compute = useComputeProbe();
+  const authorName = useAuthorName();
   const { section, selectedProjectId, selectedTemplateId } = useSyncExternalStore(
     startScreenStore.subscribe,
     startScreenStore.getSnapshot,
@@ -161,6 +163,7 @@ export function StartScreen({ kernel }: ModuleProps) {
               browseDisabledReason={browseDisabledReason}
               disabledReasons={disabledReasons}
               initialFocusRef={initialFocusRef}
+              name={authorName}
               recent={recent}
               onDiscardContinue={discardContinue}
               onOpenRecent={openRecent}

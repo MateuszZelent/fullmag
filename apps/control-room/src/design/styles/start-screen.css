@@ -1460,6 +1460,100 @@
   padding-left: var(--fm-space-4);
 }
 
+/* ── Provenance tabs ──────────────────────────────────────────────────── */
+
+.fm-start-people {
+  display: grid;
+  gap: var(--fm-space-3);
+  margin: 0 0 var(--fm-space-4);
+  padding: 0;
+  list-style: none;
+}
+
+.fm-start-people li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--fm-space-2);
+}
+
+.fm-start-people__name {
+  font-weight: var(--fm-font-weight-semibold);
+}
+
+.fm-start-people__meta {
+  color: var(--fm-start-meta);
+  font-size: var(--fm-font-size-xs);
+}
+
+.fm-start-bibtex {
+  margin: 0 0 var(--fm-space-2);
+  overflow-x: auto;
+  border-radius: var(--fm-radius-md);
+  background: var(--fm-bg-canvas);
+  font-family: var(--fm-font-mono);
+  font-size: var(--fm-font-size-2xs);
+  line-height: 1.5;
+  padding: var(--fm-space-3);
+}
+
+.fm-start-bibtex__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--fm-space-3);
+}
+
+.fm-start-timeline {
+  display: grid;
+  gap: var(--fm-space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* The marker colour mirrors the kind; the kind is also written out. */
+.fm-start-timeline__item {
+  --fm-start-marker: var(--fm-accent);
+  display: grid;
+  gap: var(--fm-space-1);
+  border-left: 2px solid var(--fm-start-marker);
+  font-size: var(--fm-font-size-sm);
+  padding-left: var(--fm-space-3);
+}
+
+.fm-start-timeline__item--run { --fm-start-marker: var(--fm-success); }
+.fm-start-timeline__item--migrate { --fm-start-marker: var(--fm-degraded); }
+.fm-start-timeline__item--import { --fm-start-marker: var(--fm-info); }
+
+.fm-start-timeline__head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--fm-space-2);
+}
+
+.fm-start-timeline__kind {
+  font-weight: var(--fm-font-weight-semibold);
+}
+
+.fm-start-timeline__meta {
+  color: var(--fm-start-meta);
+  font-size: var(--fm-font-size-xs);
+}
+
+.fm-start-timeline__changes {
+  margin: 0;
+  padding-left: var(--fm-space-4);
+  color: var(--fm-start-meta);
+  font-family: var(--fm-font-mono);
+  font-size: var(--fm-font-size-xs);
+}
+
+.fm-start-runs th,
+.fm-start-runs td {
+  font-size: var(--fm-font-size-xs);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .fm-start *,
   .fm-start *::before,
