@@ -2,6 +2,7 @@
 //! checkpoint share one payload and one session-store publication.
 use anyhow::{bail, Context, Result};
 pub mod accepted_store;
+pub mod application_service_status;
 pub mod local_resources;
 pub mod runtime_service_client;
 use fullmag_application::{

@@ -1002,13 +1002,7 @@ impl RuntimeServiceConfig {
             .file_name()
             .and_then(|n| n.to_str())
             .context("config name is not UTF-8")?;
-        let mut bytes = Vec::new();
-        File::open(checked_path(parent, name)?)?
-            .take(65537)
-            .read_to_end(&mut bytes)?;
-        if bytes.len() > 65536 {
-            bail!("service config exceeds budget");
-        }
+        let bytes = crate::repository_path::read_bounded_regular_file(parent, name, 65536)?;
         let config: Self = serde_json::from_slice(&bytes)?;
         config.validate()?;
         Ok(config)

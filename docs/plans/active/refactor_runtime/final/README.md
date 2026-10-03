@@ -429,3 +429,5 @@ Checkpoint P8-C: [29 — stabilna konfiguracja usługi aplikacji](p8/29-stable-a
 Checkpoint P8-C: [30 — domyślne budżety natywnej usługi](p8/30-native-service-resource-budgets.md).
 
 Checkpoint P8-C: [31 — inicjalizacja zasobów pakietu i handshake](p8/31-packaged-service-preparation.md).
+
+Checkpoint P8-C: [32 — rzeczywisty odczyt stanu natywnej usługi](p8/32-native-service-status-observer.md).

@@ -193,6 +193,17 @@ resource statusu usługi i obsługi niedostępności bez blokowania authoringu.
 
 ### Artefakty i kwalifikacja
 
+Wewnętrzny `application_service_status::observe` zwraca thin typed status bez
+inicjalizacji store lub startu procesu. Ready wymaga live config-aware probe,
+pozostałe stany ownera są ostatnim zapisem, nie dowodem liveness. Obcy target,
+pool/build, błąd odczytu lub OWNER.lock bez deskryptora dają niepewną obserwację.
+Konfiguracja i owner używają shared bounded regular-file reader: lokalny FS,
+guarded path, metadata ścieżki i uchwytu, Unix nonblocking/no-follow,
+Windows final-reparse open/rejection i limit payloadu. Root/przodkowie muszą
+pozostać zaufane. RPC deadline nie jest deadline sterownika dysku.
+Przyszły zasób platform status oraz jego klient pozostają niepodłączone,
+dopóki canonical OpenAPI i generated transport nie zostaną zweryfikowane.
+
 Operational lock/descriptor/logs nie zawierają korzeni naukowych CAS i nie są
 pakowane do FMS. Import nie przejmuje katalogu runtime-services i zachowuje
 wymóg pustego staging store. Nie resetuje to żadnej istniejącej sesji.

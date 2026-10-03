@@ -9,7 +9,6 @@ use fullmag_session::{
 };
 use serde::Deserialize;
 use std::{
-    fs::File,
     io::{Read, Write},
     net::{SocketAddr, TcpStream},
     path::Path,
@@ -321,7 +320,7 @@ pub fn probe(
     )
 }
 
-fn probe_with_config(
+pub(crate) fn probe_with_config(
     store_root: &Path,
     target: &str,
     timeout: Duration,
@@ -335,15 +334,12 @@ fn probe_with_config(
     {
         bail!("native service discovery requires an absolute existing store directory");
     }
-    let path = checked_path(store_root, RUNTIME_SERVICE_OWNER_DESCRIPTOR_PATH)?;
-    let mut bytes = Vec::new();
-    File::open(path)
-        .context("read native service descriptor; no automatic start")?
-        .take((MAX_RESPONSE + 1) as u64)
-        .read_to_end(&mut bytes)?;
-    if bytes.len() > MAX_RESPONSE {
-        bail!("native service descriptor exceeds budget");
-    }
+    let bytes = fullmag_session::repository_path::read_bounded_regular_file(
+        store_root,
+        RUNTIME_SERVICE_OWNER_DESCRIPTOR_PATH,
+        MAX_RESPONSE,
+    )
+    .context("read native service descriptor; no automatic start")?;
     let expected: RuntimeServiceOwnerDescriptor = serde_json::from_slice(&bytes)?;
     let identity = fullmag_build_info::identity();
     require_ready(
@@ -435,13 +431,11 @@ fn ensure_config(config: RuntimeServiceConfig) -> Result<RuntimeServiceOwnerDesc
     let descriptor_path = checked_path(&config.store_root, RUNTIME_SERVICE_OWNER_DESCRIPTOR_PATH)?;
     match std::fs::symlink_metadata(&descriptor_path) {
         Ok(_) => {
-            let mut bytes = Vec::new();
-            File::open(&descriptor_path)?
-                .take((MAX_RESPONSE + 1) as u64)
-                .read_to_end(&mut bytes)?;
-            if bytes.len() > MAX_RESPONSE {
-                bail!("native service descriptor exceeds budget");
-            }
+            let bytes = fullmag_session::repository_path::read_bounded_regular_file(
+                &config.store_root,
+                RUNTIME_SERVICE_OWNER_DESCRIPTOR_PATH,
+                MAX_RESPONSE,
+            )?;
             let owner: RuntimeServiceOwnerDescriptor = serde_json::from_slice(&bytes)?;
             validate_descriptor(&owner)?;
             if !matches!(
