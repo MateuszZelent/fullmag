@@ -26,6 +26,9 @@ const PROJECT_WORKSPACE_COMMAND_IDS = new Set([
   "start.browse",
   "start.search",
   "start.rebuild-index",
+  "start.open-selected",
+  "start.pin-selected",
+  "start.remove-selected",
 ]);
 
 export function isProjectWorkspaceCommand(commandId: string): boolean {

@@ -30,7 +30,11 @@ export interface StartScreenSnapshot {
   /** Bumped by palette commands so the mounted list can react without props. */
   readonly searchFocusNonce: number;
   readonly rebuildNonce: number;
+  /** A palette-driven action on the selected project; `seq` makes each request distinct. */
+  readonly selectionAction: { readonly seq: number; readonly kind: SelectionActionKind } | null;
 }
+
+export type SelectionActionKind = "open" | "pin" | "remove";
 
 type Listener = () => void;
 
@@ -41,6 +45,7 @@ const INITIAL_SNAPSHOT: StartScreenSnapshot = {
   selectedTemplateId: null,
   searchFocusNonce: 0,
   rebuildNonce: 0,
+  selectionAction: null,
 };
 
 class StartScreenStore {
@@ -63,6 +68,11 @@ class StartScreenStore {
 
   requestSearchFocus(): void {
     this.publish({ ...this.snapshot, searchFocusNonce: this.snapshot.searchFocusNonce + 1 });
+  }
+
+  requestSelectionAction(kind: SelectionActionKind): void {
+    const seq = (this.snapshot.selectionAction?.seq ?? 0) + 1;
+    this.publish({ ...this.snapshot, selectionAction: { seq, kind } });
   }
 
   requestRebuild(): void {

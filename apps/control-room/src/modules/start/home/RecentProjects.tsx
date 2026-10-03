@@ -18,7 +18,7 @@ import { SegmentedControl } from "@/shared/ui/SegmentedControl";
 import { cn } from "@/shared/utils/className";
 
 import { filterEntries, sortEntries } from "../model/recentIndex";
-import { startScreenStore } from "../model/startScreenState";
+import { startScreenStore, type SelectionActionKind } from "../model/startScreenState";
 import { startSettings } from "../model/startSettings";
 import type { RecentEntry, RecentFilter, RecentSort } from "../model/types";
 import type { RecentIndexController } from "../model/useRecentIndex";
@@ -61,7 +61,7 @@ export function RecentProjects({
   onOpen,
   searchRef,
 }: RecentProjectsProps) {
-  const { searchFocusNonce, rebuildNonce, selectedProjectId } = useSyncExternalStore(
+  const { searchFocusNonce, rebuildNonce, selectedProjectId, selectionAction } = useSyncExternalStore(
     startScreenStore.subscribe,
     startScreenStore.getSnapshot,
     startScreenStore.getServerSnapshot,
@@ -156,6 +156,34 @@ export function RecentProjects({
   }, [rebuildNonce, rebuild]);
 
   const forgetSelection = recent.forget;
+
+  /** Shared by the keyboard shortcuts and the palette commands. */
+  const runSelectionAction = (kind: SelectionActionKind) => {
+    const entry = selectable[activeIndex];
+    if (!entry) return;
+    if (kind === "open") {
+      void activate(entry.projectId);
+    } else if (kind === "pin") {
+      void recent.pin(entry.projectId, !entry.pinned);
+    } else {
+      void forgetSelection(entry.projectId);
+      // Focus moves to the next row, or the previous one if this was last.
+      const next = selectable[activeIndex + 1] ?? selectable[activeIndex - 1];
+      startScreenStore.setSelectedProject(next?.projectId ?? null);
+    }
+  };
+
+  // Each palette request carries a new sequence number; handle it once. The
+  // ref starts at the current number so a remount does not replay an old one.
+  const handledAction = useRef(selectionAction?.seq ?? 0);
+  useEffect(() => {
+    if (!selectionAction || selectionAction.seq === handledAction.current) return;
+    handledAction.current = selectionAction.seq;
+    runSelectionAction(selectionAction.kind);
+    // runSelectionAction closes over the latest selection on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectionAction]);
+
   const onListKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     const current = activeIndex < 0 ? 0 : activeIndex;
     // In the grid, Up and Down move a whole row of cards.
@@ -185,27 +213,18 @@ export function RecentProjects({
       case "PageUp":
         select(jumpGroup(items, current, event.key === "PageDown" ? 1 : -1));
         break;
-      case "Enter": {
-        const entry = selectable[activeIndex];
-        if (entry) void activate(entry.projectId);
+      case "Enter":
+        runSelectionAction("open");
         break;
-      }
-      case "Delete": {
-        const entry = selectable[activeIndex];
-        if (!entry) return;
-        void forgetSelection(entry.projectId);
-        // Focus moves to the next row, or the previous one if this was last.
-        const next = selectable[activeIndex + 1] ?? selectable[activeIndex - 1];
-        startScreenStore.setSelectedProject(next?.projectId ?? null);
+      case "Delete":
+        if (activeIndex < 0) return;
+        runSelectionAction("remove");
         break;
-      }
       case "p":
-      case "P": {
+      case "P":
         if (!event.ctrlKey && !event.metaKey) return;
-        const entry = selectable[activeIndex];
-        if (entry) void recent.pin(entry.projectId, !entry.pinned);
+        runSelectionAction("pin");
         break;
-      }
       case "/":
         inputRef.current?.focus();
         break;
