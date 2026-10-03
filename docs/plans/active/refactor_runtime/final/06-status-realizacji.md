@@ -1,5 +1,18 @@
 # Status realizacji całego planu refaktoryzacji
 
+Checkpoint B-06, 03.10.2026: 23 istniejące metody DMI Rust FDM CPU wydzielono
+do `fields/dmi.rs`. Niezależne porównanie sygnatur i ciał oraz całego pozostałego
+rodzica PASS. Cztery przypadkowo przeniesione metody spoza DMI przywrócono;
+guard ownership obejmuje ten przypadek. Fused loop i widoczność bez zmian.
+[Zakres i granice](b/06-fdm-cpu-dmi-owner.md). Test layoutu NOT COMPILED / NOT RUN,
+runtime i nauka NOT VERIFIED; procenty bez awansu.
+
+Stan buildu 218 po tym checkpointcie: rzeczywisty worker jest aktywny,
+native-build zakończył się exit 0, trwa frontend-dependencies.
+To build commita `9f7eadb06b7f4e9be3b0fed7b1c9006a4666ea04` (B-03),
+nie obejmuje B-04/B-05/B-06. Terminalny wynik i pełny receipt nadal otwarte.
+Nie usuwano danych, nie restartowano workera ani UI3104.
+
 Checkpoint P8-46, 03.10.2026: odtwarzalny read-only verifier Windows ma
 18 interpretowanych regresji PASS i końcowy review bez P0/P1. Świeży skan
 potwierdził 18 662 linki i integralność pięciu kapsuł; dziesięć znanych

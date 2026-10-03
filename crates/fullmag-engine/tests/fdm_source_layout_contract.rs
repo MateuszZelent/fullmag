@@ -207,6 +207,96 @@ fn fdm_cpu_anisotropy_has_one_realization_owner() {
 }
 
 #[test]
+fn fdm_cpu_dmi_has_one_realization_owner() {
+    let root = crate_root();
+    let owner =
+        fs::read_to_string(root.join("src/fdm/cpu/fields/dmi.rs")).expect("read FDM CPU DMI owner");
+    let fields = fs::read_to_string(root.join("src/fdm/cpu/fields.rs"))
+        .expect("read FDM CPU field orchestration");
+    assert!(
+        fields.contains("fields/dmi.rs") && fields.contains("mod dmi;"),
+        "FDM fields owner must include its dedicated DMI module"
+    );
+
+    for declaration in [
+        "fn dmi_energy_from_vectors(",
+        "fn rotated_interfacial_dmi_energy_from_vectors(",
+        "fn dmi_energy_density_from_vectors(",
+        "fn rotated_interfacial_dmi_energy_density_from_vectors(",
+        "fn dmi_energy_density_with_coefficients(",
+        "fn dmi_energy_from_soa(",
+        "fn dmi_energy_with<F>(",
+        "fn dmi_energy_with_coefficients<F>(",
+        "fn dmi_cell_face_energy_with_coefficients<F>(",
+        "fn dmi_face_energy_with_coefficients(",
+        "fn dmi_boundary_faces(",
+        "fn interfacial_dmi_boundary_correction(",
+        "fn rotated_interfacial_dmi_boundary_correction(",
+        "fn bulk_dmi_boundary_correction(",
+        "fn interfacial_dmi_field(",
+        "fn rotated_interfacial_dmi_field(",
+        "fn bulk_dmi_field(",
+        "fn interfacial_dmi_field_add_into_soa(",
+        "fn bulk_dmi_field_add_into_soa(",
+        "fn rotated_interfacial_dmi_field_add_into_soa(",
+        "fn interfacial_dmi_field_add_into(",
+        "fn bulk_dmi_field_add_into(",
+        "fn rotated_interfacial_dmi_field_add_into(",
+    ] {
+        assert_eq!(
+            owner.matches(declaration).count(),
+            1,
+            "missing or duplicate {declaration}"
+        );
+        assert!(
+            !fields.contains(declaration),
+            "field orchestration still owns {declaration}"
+        );
+    }
+
+    for declaration in [
+        "fn external_field_add_into(",
+        "fn regional_field_drives_add_into_at_time(",
+        "fn soa_fast_path_supported(",
+        "fn soa_fast_path_rejection_reason(",
+    ] {
+        assert!(
+            fields.contains(declaration) && !owner.contains(declaration),
+            "non-DMI method was moved into the DMI owner: {declaration}"
+        );
+    }
+
+    assert!(
+        fields.contains("fused_local_terms_add_into")
+            && !owner.contains("fused_local_terms_add_into"),
+        "the fused local-term loop must remain outside the DMI owner"
+    );
+
+    for (path, symbol) in [
+        ("src/fdm/cpu/fields/energy.rs", "dmi_energy_from_soa"),
+        ("src/fdm/cpu/fields/energy.rs", "dmi_energy_from_vectors"),
+        ("src/fdm/cpu/fields/observables.rs", "interfacial_dmi_field"),
+        (
+            "src/fdm/cpu/fields/observables.rs",
+            "dmi_energy_from_vectors",
+        ),
+        (
+            "src/fdm/cpu/integrators.rs",
+            "interfacial_dmi_field_add_into_soa",
+        ),
+        ("src/fdm/cpu/integrators.rs", "dmi_energy_from_soa"),
+        ("src/lib.rs", "rotated_interfacial_dmi_field"),
+        ("src/lib.rs", "dmi_energy_from_vectors"),
+    ] {
+        let source = fs::read_to_string(root.join(path)).expect("read DMI consumer");
+        assert!(
+            source.contains(symbol),
+            "DMI consumer {path} no longer calls {symbol}"
+        );
+    }
+}
+
+#[test]
 fn fdm_engine_shared_vector_field_has_fdm_owner() {
     let root = crate_root();
     for path in [

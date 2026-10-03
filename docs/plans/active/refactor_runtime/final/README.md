@@ -1,5 +1,11 @@
 # Fullmag — finalny audyt i plan refaktoryzacji
 
+Checkpoint B-06: [właściciel DMI FDM CPU](b/06-fdm-cpu-dmi-owner.md).
+23 metody zachowują sygnatury i ciała; cztery metody spoza DMI oraz fused loop
+pozostają w rodzicu. Source comparison PASS; runtime i kwalifikacja otwarte.
+Build 218 jest aktywny: native-build exit 0, trwa instalacja zależności frontendu.
+Buduje źródło B-03, bez późniejszych B-04/B-05/B-06; pełny receipt jeszcze otwarty.
+
 Checkpoint P8-46: [odtwarzalny audyt execution](p8/46-read-only-execution-verifier.md).
 18 regresji i review PASS; pełny świeży dowód zachowany w storage. Kapsuły
 integralne, znane różnice jawne i skopiowane. Sprzątanie pozostaje niewykonane.
@@ -10,7 +16,8 @@ pozostają przy dotychczasowych konsumentach. Runtime i kwalifikacja otwarte.
 
 Checkpoint P8-48: [dokładne kopie zmienionych plików execution](p8/48-execution-source-preservation.md).
 Dziesięć kopii i ich hashe zachowano w kanonicznym storage. Nie wykonano
-sprzątania; audyt P8-46 wymaga poprawek po review, build nadal czeka na miejsce.
+sprzątania. Historyczna blokada miejsca została usunięta poza tym zadaniem;
+bieżący stan audytu i buildu opisują nowsze checkpointy powyżej.
 
 Checkpoint P8-44/45: [audyt siedmiu zakończonych execution](p8/44-execution-cleanup-proposal.md)
 i [natywny Windows fixture usuwania samych linków](p8/45-windows-reparse-unlink-fixture.md).
