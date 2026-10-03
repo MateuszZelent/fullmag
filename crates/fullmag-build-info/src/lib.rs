@@ -7,7 +7,9 @@ pub struct BuildIdentity {
 }
 
 const BUILD_STAMP: &str = concat!(
-    "[fullmag] build: ",
+    "[fullmag] version: ",
+    env!("FULLMAG_PRODUCT_VERSION"),
+    " | build: ",
     env!("FULLMAG_BUILD_TIMESTAMP_UTC"),
     " | commit: ",
     env!("FULLMAG_BUILD_GIT_COMMIT"),
@@ -16,6 +18,10 @@ const BUILD_STAMP: &str = concat!(
     " | source snapshot: ",
     env!("FULLMAG_BUILD_SOURCE_SNAPSHOT_SHA256"),
 );
+
+pub fn version() -> &'static str {
+    env!("FULLMAG_PRODUCT_VERSION")
+}
 
 pub fn identity() -> BuildIdentity {
     BuildIdentity {
@@ -36,7 +42,7 @@ pub fn print_startup_stamp() {
 
 #[cfg(test)]
 mod tests {
-    use super::{identity, stamp};
+    use super::{identity, stamp, version};
 
     #[test]
     fn stamp_contains_all_build_identity_fields() {
@@ -44,7 +50,8 @@ mod tests {
         assert_eq!(
             stamp(),
             format!(
-                "[fullmag] build: {} | commit: {} | {} | source snapshot: {}",
+                "[fullmag] version: {} | build: {} | commit: {} | {} | source snapshot: {}",
+                version(),
                 identity.built_at_utc,
                 identity.git_commit,
                 identity.worktree_state,

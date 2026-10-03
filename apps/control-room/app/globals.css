@@ -1,4 +1,6 @@
-@import "tailwindcss";
+@import "tailwindcss" source(none);
+@source "./";
+@source "../src";
 @import "../src/design/styles/tailwind-theme.css";
 @import "../src/design/styles/tokens.css" layer(fm-tokens);
 @import "../src/design/styles/theme.css" layer(fm-tokens);

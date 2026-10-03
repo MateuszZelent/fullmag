@@ -1,5 +1,16 @@
 # Status realizacji całego planu refaktoryzacji
 
+Checkpoint P8-50/51 i P6-78, 03.10.2026: natywny build Windows utworzył
+wersjonowane CLI/API/UI, pusty workspace i zapis zmienionej geometrii
+sprawdzono w przeglądarce na 3197. Cały własny przebieg zakończył się kodem 0;
+WebGL i HMR PASS. Naprawiono pętlę Tailwind oraz guard po ACK szkicu.
+[Launcher](p8/50-windows-empty-ui-just-route.md),
+[wersja](p8/51-development-build-version.md),
+[Inspector](p6/78-primitive-ack-selection.md).
+88 regresji Python i 4 Node PASS, produkcyjny source check PASS. Pełny produkt
+Windows, native FEM, science i cały plan nadal mają otwarte bramki;
+procenty etapów bez awansu.
+
 Checkpoint P8-49 / P6-76, 03.10.2026: rzeczywisty eksport OpenAPI z
 terminalnego buildu 218, weryfikacja tożsamości i hashy oraz cleanup PASS.
 25 interpretowanych regresji eksportera i 11 regresji importu PASS.

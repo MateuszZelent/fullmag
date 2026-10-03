@@ -17,18 +17,57 @@ Tabela powyżej opisuje bieżące trasy rozwojowe; kontenerowy FEM nie realizuje
 docelowej bramki natywnego produktu. Pełny pakiet Windows pozostaje
 **NOT VERIFIED**. Osobny Linux/managed target zachowuje swoje bramki.
 
-Launcher deweloperski ma teraz jawny tryb pustego workspace:
+Launcher deweloperski ma jawny tryb pustego workspace. Kanoniczna recepta
+`just` uruchamia natywną trasę Windows bez skryptu wejściowego, a domyślnie
+wybiera developerski frontend, port 3197 i automatyczną decyzję o budowie:
 
 ```powershell
-.\scripts\windows\run_fullmag.ps1 -BuildMode false -Frontend static -RunMode workspace -WebPort 3197
+just windows-ui
 ```
 
-Wymaga wcześniej zbudowanego, zgodnego natywnego pakietu i statycznego UI;
-nie buduje brakującego pakietu ani nie obchodzi manifestu/hashów. Wywołuje
-`fullmag ui` bez skryptu. Backend i urządzenie wybiera się przy tworzeniu
-problemu w UI, więc ten tryb odrzuca parametry obliczeń zamiast je ignorować.
-Nie uruchomiono jeszcze tego polecenia z aktualnym natywnym pakietem:
-testy argumentów nie są dowodem startupu, zapisu ani wykonania FEM.
+Tryb developerski używa izolowanego workspace frontendu w storage: katalogi
+źródłowe są zwykłymi plikami synchronizowanymi z checkoutem przez watcher.
+Cache i wynik pracy pozostają w osobnym katalogu. Edycje React/CSS są
+widoczne bez unieważniania pakietu backendu; zmiany konfiguracji lub
+zależności wymagają ponownego przygotowania workspace. Tryb statyczny kopiuje źródła do izolowanego
+workspace przed zbudowaniem eksportu. Przykłady:
+
+```powershell
+just windows-ui dev 3197 auto
+just windows-ui static 3197 false
+just windows-ui dev 3197 true
+```
+
+Odpowiednik bezpośredni w PowerShell:
+
+```powershell
+.\scripts\windows\run_fullmag.ps1 -BuildMode auto -Frontend dev -RunMode workspace -WebPort 3197
+```
+
+`build=auto` buduje brakujący lub nieaktualny pakiet, `build=false` wymaga
+zgodnego istniejącego pakietu, a `build=true` wymusza budowę. Automatyczna
+budowa jest zamknięta w trasie `run-windows-workspace` resolvera i korzysta z
+odrębnego natywnego locka heavy; nie zmienia zasad ogólnej trasy Linuxowego
+runnera ani kolejki/job 219. Budowa na żądanie użytkownika jest dozwolona dla
+tej konkretnej natywnej trasy, przy zachowaniu preflightu storage, blokad,
+manifestu, hashów i terminalnego receiptu. `fullmag ui` otwiera pusty
+workspace; backend i urządzenie wybiera się przy tworzeniu problemu w UI,
+więc launcher odrzuca parametry obliczeń zamiast je ignorować.
+
+03.10.2026: 88 interpretowanych regresji, 2 pominięcia i 13 subtestów oraz
+4 kontrole Node synchronizacji źródeł i granicy Tailwind PASS. Natywny build
+wytworzył wersjonowane CLI/API/UI. Browser na 3197, utworzenie pustej sesji,
+boxa i zmienionego cylindra oraz działający WebGL PASS. Poprawka Inspectora
+dotarła przez HMR bez nowej kompilacji Rust. Cały przebieg po zamknięciu
+własnego okna zakończył się kodem 0. Save/restart, pełny authoring
+regionów/materiałów, inne porty, instalator i pełna kwalifikacja Windows
+pozostają **NOT VERIFIED**. [Dowody](../plans/active/refactor_runtime/final/p8/50-windows-empty-ui-just-route.md).
+
+Wersja bazowa Cargo pozostaje numerem planowanego wydania. Automatyczny
+rekord buildu dodaje datę UTC, commit i snapshot lokalnych zmian, np.
+`0.1.0-dev.20261003.gbdc8578d0493.dirty.s081c18f2caeb+9772`.
+Python otrzymuje równoważną wersję PEP 440; CLI/API/UI i metadata EXE
+korzystają z jednego rekordu. [Kontrakt wersji](../plans/active/refactor_runtime/final/p8/51-development-build-version.md).
 
 Build obejmujący Control Room musi wytworzyć również `fullmag-ui.exe`
 z pakietu `fullmag-desktop`. Manifest zapisuje `desktop_binary_sha256`,

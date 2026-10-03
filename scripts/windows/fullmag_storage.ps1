@@ -167,6 +167,51 @@ function Invoke-FullmagStorageManagedScript {
   }
 }
 
+function Invoke-FullmagStorageWindowsWorkspace {
+  param(
+    [Parameter(Mandatory = $true)][string]$RepoRoot,
+    [Parameter(Mandatory = $true)][string]$Profile,
+    [Parameter(Mandatory = $true)][ValidateSet("static", "dev")][string]$Frontend,
+    [Parameter()][ValidateSet("auto", "true", "false")][string]$BuildMode = "auto",
+    [Parameter(Mandatory = $true)][ValidateRange(1, 65535)][int]$WebPort
+  )
+
+  if ($Profile -ne "windows-native-fdm-cpu") {
+    throw "Native Windows workspace requires profile windows-native-fdm-cpu"
+  }
+  $resolver = Join-Path $RepoRoot "scripts\fullmag_storage.py"
+  if (-not (Test-Path -LiteralPath $resolver -PathType Leaf)) {
+    throw "Fullmag storage resolver is missing: $resolver"
+  }
+  $python = Get-Command "python" -ErrorAction SilentlyContinue
+  if (-not $python) {
+    throw "Python is required to invoke the native Windows workspace"
+  }
+
+  # This action is intentionally separate from Invoke-FullmagStorageManagedScript:
+  # it admits only the no-build workspace operation and never becomes a generic
+  # heavy-slot bypass. The resolver derives and validates the child command.
+  $previousSentinel = $env:FULLMAG_STORAGE_MANAGED_ENTRY
+  $env:FULLMAG_STORAGE_MANAGED_ENTRY = "1"
+  try {
+    & $python.Source @(
+      $resolver, "run-windows-workspace", "--repo-root", $RepoRoot,
+      "--profile", $Profile, "--workspace-frontend", $Frontend,
+      "--workspace-build-mode", $BuildMode,
+      "--workspace-web-port", $WebPort.ToString()
+    ) | Out-Host
+    return [int]$LASTEXITCODE
+  }
+  finally {
+    if ($null -eq $previousSentinel) {
+      Remove-Item Env:FULLMAG_STORAGE_MANAGED_ENTRY -ErrorAction SilentlyContinue
+    }
+    else {
+      $env:FULLMAG_STORAGE_MANAGED_ENTRY = $previousSentinel
+    }
+  }
+}
+
 function Set-FullmagStorageEnvironment {
   param([Parameter(Mandatory = $true)]$Layout)
 

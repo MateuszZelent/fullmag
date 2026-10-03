@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
   [Parameter(Mandatory = $true)]
-  [ValidateSet("true", "false")]
+  [ValidateSet("auto", "true", "false")]
   [string]$BuildMode,
 
   [ValidateSet("static", "dev")]
@@ -51,6 +51,9 @@ if ($RunMode -eq "workspace" -and (
     $Backend -ne "auto" -or $Device -ne "auto")) {
   throw "Workspace mode opens an empty authoring shell; choose backend/device in the UI and omit simulation inputs"
 }
+if ($BuildMode -eq "auto" -and $RunMode -ne "workspace") {
+  throw "Automatic build selection is supported only for the empty Windows workspace"
+}
 
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $TargetTriple = "x86_64-pc-windows-msvc"
@@ -96,9 +99,17 @@ if ($env:FULLMAG_STORAGE_MANAGED_ENTRY -ne "1") {
   if ($BuildOnly) { $managedArguments += "-BuildOnly" }
   if ($SkipCompatibilityLinks) { $managedArguments += "-SkipCompatibilityLinks" }
   if ($SkipLocalChanges) { $managedArguments += "-SkipLocalChanges" }
-  $managedExitCode = Invoke-FullmagStorageManagedScript `
-    -RepoRoot $RepoRoot -Profile $StorageProfile -ScriptPath $PSCommandPath `
-    -Arguments $managedArguments
+  if ($RunMode -eq "workspace" -and -not $BuildOnly -and
+      -not $SkipCompatibilityLinks -and -not $SkipLocalChanges) {
+    $managedExitCode = Invoke-FullmagStorageWindowsWorkspace `
+      -RepoRoot $RepoRoot -Profile $StorageProfile -Frontend $Frontend `
+      -WebPort $WebPort -BuildMode $BuildMode
+  }
+  else {
+    $managedExitCode = Invoke-FullmagStorageManagedScript `
+      -RepoRoot $RepoRoot -Profile $StorageProfile -ScriptPath $PSCommandPath `
+      -Arguments $managedArguments
+  }
   exit $managedExitCode
 }
 
@@ -150,7 +161,19 @@ function Invoke-Uv {
     Invoke-External "uv" $Arguments
     return
   }
-  throw "Missing required command: uv; run scripts/windows/setup_fullmag.ps1 -InstallMissing"
+  $toolPackages = Join-Path $CacheRoot "tools\python-packages"
+  if (-not (Test-Path -LiteralPath (Join-Path $toolPackages "uv\__main__.py") -PathType Leaf)) {
+    if ($BuildMode -ne "true") {
+      throw "Managed uv is missing; rebuild the Windows workspace"
+    }
+    Invoke-External "python" @("-m", "pip", "install", "--target", $toolPackages, "uv")
+  }
+  $previousPythonPath = $env:PYTHONPATH
+  try {
+    $env:PYTHONPATH = $toolPackages
+    Invoke-External "python" (@("-m", "uv") + $Arguments)
+  }
+  finally { $env:PYTHONPATH = $previousPythonPath }
 }
 
 function Add-NodePaths {
@@ -237,29 +260,38 @@ function Ensure-PythonEnvironment {
   if (-not (Test-Path -LiteralPath $PythonExe -PathType Leaf)) {
     throw "Fullmag Python environment was not created at $PythonExe"
   }
-  $packagePath = Join-Path $RepoRoot "packages\fullmag-py[meshing]"
-  Invoke-Uv @(
-    "pip", "install", "--python", $PythonExe, "--editable", $packagePath
-  )
 }
 
 function Ensure-ControlRoomDependencies {
   Ensure-PinnedPnpm
+  $dependencyWorkspace = $RepoRoot
+  if ($RunMode -eq "workspace") {
+    $stageOutput = (& python (Join-Path $PSScriptRoot "stage_workspace_frontend.py") --repo-root $RepoRoot --build-root $BuildRoot --mode $Frontend --web-port $WebPort 2>&1 | Out-String)
+    if ($LASTEXITCODE -ne 0) { throw "Native frontend staging failed: $stageOutput" }
+    $stage = $stageOutput | ConvertFrom-Json
+    $script:FrontendWorkspaceRoot = Assert-FullmagStoragePath -Layout $StorageLayout -Path ([string]$stage.workspace_root) -Label "native frontend workspace" -Parent $BuildRoot
+    $script:FrontendCacheRoot = Assert-FullmagStoragePath -Layout $StorageLayout -Path ([string]$stage.frontend_root) -Label "native frontend cache" -Parent $BuildRoot
+    $script:FrontendSourceManifestPath = [string]$stage.manifest_path
+    $script:FrontendSourceManifestSha256 = [string]$stage.manifest_sha256
+    $script:StaticControlRoom = Join-Path $FrontendWorkspaceRoot "apps\control-room\out\index.html"
+    $env:FULLMAG_FRONTEND_ROOT = $FrontendCacheRoot
+    $dependencyWorkspace = $FrontendWorkspaceRoot
+  }
   $pnpmArguments = @("install", "--frozen-lockfile")
   $windowsSwc = Get-ChildItem `
-    -LiteralPath (Join-Path $RepoRoot "node_modules\.pnpm") `
+    -LiteralPath (Join-Path $dependencyWorkspace "node_modules\.pnpm") `
     -Directory `
     -Filter "@next+swc-win32-x64-msvc@*" `
     -ErrorAction SilentlyContinue |
     Select-Object -First 1
-  if ((Test-Path -LiteralPath (Join-Path $RepoRoot "node_modules") -PathType Container) -and
+  if ((Test-Path -LiteralPath (Join-Path $dependencyWorkspace "node_modules") -PathType Container) -and
       $null -eq $windowsSwc) {
     Write-Host "Replacing non-Windows node_modules with Windows dependencies"
     $pnpmArguments += "--force"
   }
   $previousCi = $env:CI
   $env:CI = "1"
-  Push-Location $RepoRoot
+  Push-Location $dependencyWorkspace
   try {
     Invoke-External "node" (@($PinnedPnpmCli) + $pnpmArguments)
     if ($Frontend -eq "static") {
@@ -285,7 +317,12 @@ function Ensure-ControlRoomDependencies {
 function Ensure-PinnedPnpm {
   Require-Command "node"
   if (-not (Test-Path -LiteralPath $PinnedPnpmCli -PathType Leaf)) {
-    throw "Pinned pnpm $PinnedPnpmVersion is missing at $PinnedPnpmCli; run scripts/windows/setup_fullmag.ps1 -InstallMissing or build=True"
+    if ($BuildMode -ne "true") {
+      throw "Pinned pnpm $PinnedPnpmVersion is missing at $PinnedPnpmCli; rebuild the Windows workspace"
+    }
+    Require-Command "corepack"
+    $env:COREPACK_HOME = Join-Path $CacheRoot "corepack"
+    Invoke-External "corepack" @("prepare", "pnpm@$PinnedPnpmVersion", "--activate")
   }
   $resolvedPnpmVersion = (& node $PinnedPnpmCli --version 2>&1 | Out-String).Trim()
   if ($LASTEXITCODE -ne 0 -or $resolvedPnpmVersion -ne $PinnedPnpmVersion) {
@@ -303,10 +340,22 @@ function Ensure-NodeToolchain {
   Ensure-PinnedPnpm
 }
 
-function Get-SourceIdentity {
-  if (-not (Test-Path -LiteralPath $PythonExe -PathType Leaf)) {
-    throw "Fullmag Python environment is missing at $PythonExe; source identity cannot be captured"
+function Ensure-NativeRustToolchain {
+  Require-Command "rustup"
+  $toolchain = "fullmag-native-x86_64-pc-windows-msvc"
+  $env:RUSTUP_TOOLCHAIN = $toolchain
+  if (Test-Path -LiteralPath (Join-Path $RustupHome "toolchains\$toolchain\bin\rustc.exe") -PathType Leaf) { return }
+  # Reuse an already installed host compiler as an SDK. Only the link metadata
+  # is new and is stored in the managed RUSTUP_HOME; compiler files stay intact.
+  $sdk = Join-Path $env:USERPROFILE ".rustup\toolchains\nightly-x86_64-pc-windows-msvc"
+  if (-not (Test-Path -LiteralPath (Join-Path $sdk "bin\rustc.exe") -PathType Leaf)) {
+    throw "An installed nightly Windows/MSVC Rust SDK is required for the native workspace build"
   }
+  Invoke-External "rustup" @("toolchain", "link", $toolchain, $sdk)
+}
+
+function Get-SourceIdentity {
+  $identityPython = if (Test-Path -LiteralPath $PythonExe -PathType Leaf) { $PythonExe } else { "python" }
   $identityScript = Join-Path $RepoRoot "scripts\capture_source_snapshot_identity.py"
   $previousGitOptionalLocks = $env:GIT_OPTIONAL_LOCKS
   $identityOutput = $null
@@ -316,7 +365,7 @@ function Get-SourceIdentity {
     # optional index refresh.  Avoid competing with a VS Code commit over
     # .git/index.lock while preserving all mandatory Git locking semantics.
     $env:GIT_OPTIONAL_LOCKS = "0"
-    $identityOutput = (& $PythonExe $identityScript --repo-root $RepoRoot --ignore-non-runtime-dirty 2>&1 | Out-String)
+    $identityOutput = (& $identityPython $identityScript --repo-root $RepoRoot --ignore-non-runtime-dirty 2>&1 | Out-String)
     $identityExitCode = $LASTEXITCODE
   }
   finally {
@@ -349,8 +398,57 @@ function Write-JsonAtomic {
     [Parameter(Mandatory = $true)]$Value
   )
   $temporary = "$Path.tmp.$PID"
-  $Value | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $temporary -Encoding UTF8
+  $json = $Value | ConvertTo-Json -Depth 100
+  [System.IO.File]::WriteAllText($temporary, $json, (New-Object System.Text.UTF8Encoding($false)))
   Move-Item -LiteralPath $temporary -Destination $Path -Force
+}
+
+function Get-WindowsBackendSourceDigest {
+  param([switch]$FrontendSources)
+  $digestArguments = @("--repo-root", $RepoRoot)
+  if ($FrontendSources) { $digestArguments += "--frontend" }
+  $output = (& python (Join-Path $PSScriptRoot "workspace_backend_identity.py") @digestArguments 2>&1 | Out-String)
+  if ($LASTEXITCODE -ne 0) { throw "Native workspace source fingerprint failed: $output" }
+  $identity = $output | ConvertFrom-Json
+  if ([string]$identity.sha256 -notmatch '^[0-9a-f]{64}$') { throw "Invalid native workspace source fingerprint" }
+  return [string]$identity.sha256
+}
+
+function Test-WindowsWorkspaceBuildRequired {
+  param([string]$BackendDigest)
+  foreach ($path in @($FullmagExe, $FullmagApiExe, $FullmagUiExe, $PythonExe, $ManifestPath, $PinnedPnpmCli)) {
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return $true }
+  }
+  try {
+    $candidate = Get-Content -LiteralPath $ManifestPath -Raw | ConvertFrom-Json
+    if ([int]$candidate.schema_version -ne 1 -or
+        [string]$candidate.backend_source_sha256 -ne $BackendDigest -or
+        [string]$candidate.workspace_namespace -ne $WorkspaceNamespace -or
+        [string]$candidate.target_triple -ne $TargetTriple -or
+        [string]$candidate.frontend_mode -ne $Frontend -or
+        [string]$candidate.git_commit -notmatch '^[0-9a-f]{40}$' -or
+        [string]$candidate.source_snapshot_sha256 -notmatch '^[0-9a-f]{64}$' -or
+        [string]$candidate.source_identity_check -ne "passed" -or
+        [string]$candidate.local_changes_check -ne "enforced" -or
+        -not $FrontendWorkspaceRoot -or -not $FrontendCacheRoot -or
+        -not (Test-Path -LiteralPath (Join-Path $FrontendWorkspaceRoot "apps\control-room\node_modules\next\package.json") -PathType Leaf) -or
+        [string]$candidate.build_version.schema -ne "fullmag.build-version.v1" -or
+        [string]$candidate.build_version.git_commit -ne [string]$candidate.git_commit -or
+        [string]$candidate.build_version.source_snapshot_sha256 -ne [string]$candidate.source_snapshot_sha256 -or
+        [string]$candidate.binary_sha256 -ne (Get-Sha256File $FullmagExe) -or
+        [string]$candidate.api_binary_sha256 -ne (Get-Sha256File $FullmagApiExe) -or
+        [string]$candidate.desktop_binary_sha256 -ne (Get-Sha256File $FullmagUiExe)) { return $true }
+    $versionFile = Assert-FullmagStoragePath -Layout $StorageLayout -Path ([string]$candidate.build_version_file) -Label "build version file" -Parent $BuildRoot
+    $frontendManifest = Assert-FullmagStoragePath -Layout $StorageLayout -Path ([string]$candidate.frontend_source_manifest) -Label "frontend source manifest" -Parent $BuildRoot
+    if ([string]$candidate.build_version_file_sha256 -ne (Get-Sha256File $versionFile) -or
+        [string]$candidate.frontend_source_manifest_sha256 -ne (Get-Sha256File $frontendManifest)) { return $true }
+    if ($Frontend -eq "static" -and (
+        [string]$candidate.frontend_source_sha256 -ne (Get-WindowsBackendSourceDigest -FrontendSources) -or
+        -not (Test-Path -LiteralPath $StaticControlRoom -PathType Leaf) -or
+        [string]$candidate.static_web_sha256 -ne (Get-DirectorySha256 (Split-Path -Parent $StaticControlRoom)))) { return $true }
+  }
+  catch { return $true }
+  return $false
 }
 
 function Get-DirectorySha256 {
@@ -361,7 +459,9 @@ function Get-DirectorySha256 {
   $records = @(Get-ChildItem -LiteralPath $Path -File -Recurse -ErrorAction Stop |
     Sort-Object FullName |
     ForEach-Object {
-      $relative = [System.IO.Path]::GetRelativePath($Path, $_.FullName).Replace('\', '/')
+    # Windows PowerShell uses .NET Framework, which lacks Path.GetRelativePath.
+    $prefix = [System.IO.Path]::GetFullPath($Path).TrimEnd('\', '/') + [System.IO.Path]::DirectorySeparatorChar
+    $relative = $_.FullName.Substring($prefix.Length).Replace('\', '/')
       $hash = Get-Sha256File $_.FullName
       "$relative|$hash"
     })
@@ -445,7 +545,28 @@ $FullmagExe = Join-Path $TargetRoot "$TargetTriple\release\fullmag.exe"
 $FullmagApiExe = Join-Path $TargetRoot "$TargetTriple\release\fullmag-api.exe"
 $FullmagUiExe = Join-Path $TargetRoot "$TargetTriple\release\fullmag-ui.exe"
 $StaticControlRoom = Join-Path $RepoRoot "apps\control-room\out\index.html"
-$needsControlRoomToolchain = $Frontend -eq "static" -or
+$FrontendWorkspaceRoot = $null
+$FrontendCacheRoot = $null
+$FrontendSourceManifestPath = $null
+$FrontendSourceManifestSha256 = $null
+if ($RunMode -eq "workspace" -and (Test-Path -LiteralPath $ManifestPath -PathType Leaf)) {
+  try {
+    $existingWorkspaceManifest = Get-Content -LiteralPath $ManifestPath -Raw | ConvertFrom-Json
+    if ($existingWorkspaceManifest.frontend_workspace_root) {
+      $FrontendWorkspaceRoot = Assert-FullmagStoragePath -Layout $StorageLayout -Path ([string]$existingWorkspaceManifest.frontend_workspace_root) -Label "native frontend workspace" -Parent $BuildRoot
+      $FrontendCacheRoot = Assert-FullmagStoragePath -Layout $StorageLayout -Path ([string]$existingWorkspaceManifest.frontend_cache_root) -Label "native frontend cache" -Parent $BuildRoot
+      $StaticControlRoom = Join-Path $FrontendWorkspaceRoot "apps\control-room\out\index.html"
+    }
+  }
+  catch { $FrontendWorkspaceRoot = $null }
+}
+$BackendSourceDigest = if ($RunMode -eq "workspace") { Get-WindowsBackendSourceDigest } else { $null }
+$FrontendSourceDigest = if ($RunMode -eq "workspace" -and $Frontend -eq "static") { Get-WindowsBackendSourceDigest -FrontendSources } else { $null }
+if ($BuildMode -eq "auto") {
+  $BuildMode = if (Test-WindowsWorkspaceBuildRequired -BackendDigest $BackendSourceDigest) { "true" } else { "false" }
+  Write-Host "Windows workspace automatic build selection: $BuildMode"
+}
+$needsControlRoomToolchain = $RunMode -eq "workspace" -or $Frontend -eq "static" -or
   (-not $BuildOnly -and $RunMode -in @("interactive", "workspace"))
 
 $nextDistDir = if ($needsControlRoomToolchain -and $Frontend -eq "dev") {
@@ -457,19 +578,19 @@ $prepareArguments = @{
   RepoRoot = $RepoRoot
   Profile = $StorageProfile
 }
-if (-not $SkipCompatibilityLinks) {
+if (-not $SkipCompatibilityLinks -and $RunMode -ne "workspace") {
   $prepareArguments.Compat = $true
 }
-if ($needsControlRoomToolchain) {
+if ($needsControlRoomToolchain -and $RunMode -ne "workspace") {
   $prepareArguments.Frontend = $true
 }
-if ($nextDistDir) {
+if ($nextDistDir -and $RunMode -ne "workspace") {
   $prepareArguments.NextDistDir = $nextDistDir
 }
 if ($SkipCompatibilityLinks -and -not $BuildOnly) {
   throw "SkipCompatibilityLinks is allowed only for an isolated BuildOnly invocation"
 }
-if (-not $SkipCompatibilityLinks -or $needsControlRoomToolchain) {
+if ($RunMode -ne "workspace" -and (-not $SkipCompatibilityLinks -or $needsControlRoomToolchain)) {
   $null = Prepare-FullmagStorageLinks @prepareArguments
 }
 
@@ -490,6 +611,7 @@ $env:RUSTUP_HOME = $RustupHome
 $env:CARGO_INCREMENTAL = if ($Frontend -eq "dev" -and -not $BuildOnly) { "1" } else { "0" }
 $env:FULLMAG_FDM_EXECUTION = $null
 $env:UV_PYTHON_INSTALL_DIR = Join-Path $PythonRoot "managed"
+$env:UV_PYTHON_BIN_DIR = Join-Path $PythonRoot "bin"
 $env:PYTHONPATH = Join-Path $RepoRoot "packages\fullmag-py\src"
 $env:FULLMAG_PYTHON = $PythonExe
 Add-NodePaths
@@ -534,6 +656,31 @@ $env:FULLMAG_SOURCE_GIT_COMMIT = $sourceCommit
 $env:FULLMAG_SOURCE_WORKTREE_STATE = $sourceWorktreeState
 $env:FULLMAG_SOURCE_SNAPSHOT_SHA256 = $sourceSnapshotSha256
 
+if ($BuildMode -eq "true") {
+  $versionIdentityPath = Join-Path $BuildRoot "windows-runtime\build-source-identity.json"
+  $versionRecordPath = Join-Path $BuildRoot "windows-runtime\build-version.json"
+  Write-JsonAtomic -Path $versionIdentityPath -Value $sourceIdentity
+  Invoke-External $PythonExe @(
+    "-B", (Join-Path $RepoRoot "scripts\build_version.py"),
+    "--repo-root", $RepoRoot, "--source-identity", $versionIdentityPath,
+    "--output", $versionRecordPath
+  )
+  $buildVersion = Get-Content -LiteralPath $versionRecordPath -Raw | ConvertFrom-Json
+  if ([string]$buildVersion.git_commit -ne $sourceCommit -or
+      [string]$buildVersion.source_snapshot_sha256 -ne $sourceSnapshotSha256) {
+    throw "Build version does not match the captured native source identity"
+  }
+  $env:FULLMAG_BUILD_VERSION_FILE = $versionRecordPath
+  $env:FULLMAG_BUILD_VERSION = [string]$buildVersion.semver_version
+  $env:FULLMAG_WINDOWS_FILE_VERSION = [string]$buildVersion.windows_file_version
+  $env:SOURCE_DATE_EPOCH = ([DateTimeOffset]::Parse([string]$buildVersion.build_date_utc)).ToUnixTimeSeconds().ToString()
+  $tauriConfig = if ($env:TAURI_CONFIG) { $env:TAURI_CONFIG | ConvertFrom-Json } else { [pscustomobject]@{} }
+  $tauriConfig | Add-Member -NotePropertyName version -NotePropertyValue ([string]$buildVersion.semver_version) -Force
+  $env:TAURI_CONFIG = $tauriConfig | ConvertTo-Json -Depth 100 -Compress
+  Invoke-Uv @("pip", "install", "--python", $PythonExe, "--editable", (Join-Path $RepoRoot "packages\fullmag-py[meshing]"))
+  Write-Host "Fullmag build version: $($buildVersion.semver_version)"
+}
+
 # Headless runs never launch the Control Room, so they must not be coupled to
 # the Node/pnpm profile recorded by a binary-only (`-BuildOnly`) build.  Static
 # exports always need the frontend toolchain; interactive dev runs do as well.
@@ -547,6 +694,7 @@ if ($BuildMode -eq "true") {
   Require-Command "rustup"
   Require-Command "cmake"
   Import-VsEnvironment
+  Ensure-NativeRustToolchain
   if ($useCuda) {
     $cudaCompiler = Resolve-CudaCompiler
     $cudaBin = Split-Path -Parent $cudaCompiler
@@ -596,6 +744,20 @@ if ($BuildMode -eq "true") {
       (Get-Item -LiteralPath $FullmagUiExe).Length -eq 0)) {
     throw "Native Fullmag desktop binary was not produced at $FullmagUiExe"
   }
+  $versionedBinaries = @($FullmagExe, $FullmagApiExe)
+  if ($needsControlRoomToolchain) { $versionedBinaries += $FullmagUiExe }
+  foreach ($versionedBinary in $versionedBinaries) {
+    $peVersion = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($versionedBinary)
+    $peNumericVersion = "$($peVersion.FileMajorPart).$($peVersion.FileMinorPart).$($peVersion.FileBuildPart).$($peVersion.FilePrivatePart)"
+    if ($peVersion.ProductVersion -ne [string]$buildVersion.semver_version -or
+        $peNumericVersion -ne [string]$buildVersion.windows_file_version) {
+      throw "Native binary version does not match the generated build identity: $versionedBinary"
+    }
+  }
+  $pythonPackageVersion = (& $PythonExe -c "from importlib.metadata import version; print(version('fullmag'))" | Out-String).Trim()
+  if ($LASTEXITCODE -ne 0 -or $pythonPackageVersion -ne [string]$buildVersion.pep440_version) {
+    throw "Installed Fullmag Python version does not match the generated build identity"
+  }
   $nativeFdmDll = $null
   if ($useCuda) {
     $nativeFdmDll = Stage-NativeFdmDll
@@ -606,6 +768,9 @@ if ($BuildMode -eq "true") {
   $finalSourceIdentity = Get-SourceIdentity
   $sourceIdentityChanged = [string]$finalSourceIdentity.head_commit_full -ne $sourceCommit -or
       [string]$finalSourceIdentity.source_snapshot_sha256 -ne $sourceSnapshotSha256
+  if ($RunMode -eq "workspace" -and $Frontend -eq "dev") {
+    $sourceIdentityChanged = (Get-WindowsBackendSourceDigest) -ne $BackendSourceDigest
+  }
   if ($sourceIdentityChanged -and -not $SkipLocalChanges) {
     throw "Fullmag source changed while the native runtime was building; rerun with build=True after the checkout is stable"
   }
@@ -626,6 +791,17 @@ if ($BuildMode -eq "true") {
     git_commit = $sourceCommit
     worktree_state = $sourceWorktreeState
     source_snapshot_sha256 = $sourceSnapshotSha256
+    build_version = $buildVersion
+    build_version_file = $versionRecordPath
+    build_version_file_sha256 = Get-Sha256File $versionRecordPath
+    installed_python_version = $pythonPackageVersion
+    backend_source_sha256 = $BackendSourceDigest
+    frontend_source_sha256 = $FrontendSourceDigest
+    frontend_mode = $Frontend
+    frontend_workspace_root = $FrontendWorkspaceRoot
+    frontend_cache_root = $FrontendCacheRoot
+    frontend_source_manifest = $FrontendSourceManifestPath
+    frontend_source_manifest_sha256 = $FrontendSourceManifestSha256
     source_identity_check = if ($SkipLocalChanges) { "skipped" } else { "passed" }
     local_changes_check = $localChangesCheck
     source_commit_after = [string]$finalSourceIdentity.head_commit_full
@@ -638,7 +814,7 @@ if ($BuildMode -eq "true") {
     api_binary_sha256 = Get-Sha256File $FullmagApiExe
     desktop_binary_sha256 = if ($needsControlRoomToolchain) { Get-Sha256File $FullmagUiExe } else { $null }
     native_fdm_dll_sha256 = if ($nativeFdmDll) { Get-Sha256File $nativeFdmDll } else { $null }
-    built_at_utc = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
+    built_at_utc = [string]$buildVersion.build_date_utc
   }
   Write-JsonAtomic -Path $ManifestPath -Value $manifest
 }
@@ -665,9 +841,18 @@ else {
       [string]$manifest.target_triple -ne $TargetTriple -or
       [string]$manifest.node_version -ne [string]$expectedNodeVersion -or
       [string]$manifest.pnpm_version -ne [string]$expectedPnpmVersion
+  if ($RunMode -eq "workspace") {
+    $manifestStructureMismatch = $manifestStructureMismatch -or [string]$manifest.frontend_mode -ne $Frontend -or
+        [string]$manifest.build_version.schema -ne "fullmag.build-version.v1" -or
+        [string]$manifest.build_version.git_commit -ne [string]$manifest.git_commit -or
+        [string]$manifest.build_version.source_snapshot_sha256 -ne [string]$manifest.source_snapshot_sha256
+  }
   $manifestSourceMismatch = [string]$manifest.git_commit -ne $sourceCommit -or
       [string]$manifest.worktree_state -ne $sourceWorktreeState -or
       [string]$manifest.source_snapshot_sha256 -ne $sourceSnapshotSha256
+  if ($RunMode -eq "workspace" -and $Frontend -eq "dev") {
+    $manifestSourceMismatch = [string]$manifest.backend_source_sha256 -ne $BackendSourceDigest
+  }
   if ($manifestStructureMismatch -or
       (-not $SkipLocalChanges -and $manifestSourceMismatch)) {
     throw "Existing Windows runtime does not match the current source identity; rerun with build=True"
@@ -683,6 +868,14 @@ else {
   }
   if ($needsControlRoomToolchain) {
     Assert-FullmagDesktopRuntime -Path $FullmagUiExe -ExpectedHash ([string]$manifest.desktop_binary_sha256)
+  }
+  if ($RunMode -eq "workspace") {
+    $versionFile = Assert-FullmagStoragePath -Layout $StorageLayout -Path ([string]$manifest.build_version_file) -Label "build version file" -Parent $BuildRoot
+    $frontendManifest = Assert-FullmagStoragePath -Layout $StorageLayout -Path ([string]$manifest.frontend_source_manifest) -Label "frontend source manifest" -Parent $BuildRoot
+    if ([string]$manifest.build_version_file_sha256 -ne (Get-Sha256File $versionFile) -or
+        [string]$manifest.frontend_source_manifest_sha256 -ne (Get-Sha256File $frontendManifest)) {
+      throw "Native workspace metadata hash does not match the build manifest; rebuild the Windows workspace"
+    }
   }
   if ($Frontend -eq "static" -and
       [string]$manifest.static_web_sha256 -ne (Get-DirectorySha256 (Split-Path -Parent $StaticControlRoom))) {
@@ -727,6 +920,11 @@ if ($BuildOnly) {
 }
 
 if ($RunMode -eq "workspace") {
+  if (-not $FrontendWorkspaceRoot -or -not $FrontendCacheRoot) { throw "Native frontend workspace is missing from the build manifest" }
+  $env:FULLMAG_REPO_ROOT = $FrontendWorkspaceRoot
+  $env:FULLMAG_FRONTEND_ROOT = $FrontendCacheRoot
+  $env:FULLMAG_STATE_ROOT = Join-Path $StorageLayout.runtime_root "state"
+  $env:FULLMAG_DEV_SOURCE_ROOT = if ($Frontend -eq "dev") { Join-Path $RepoRoot "apps\control-room" } else { "" }
   $workspaceArguments = @("ui", "--web-port", $WebPort.ToString())
   if ($Frontend -eq "dev") { $workspaceArguments += "--dev" }
   Push-Location $RepoRoot

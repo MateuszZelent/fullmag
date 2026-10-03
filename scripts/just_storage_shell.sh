@@ -45,6 +45,21 @@ is_windows_shell() {
 # Admit this fixed helper before generic diagnostic substring handling, so a
 # composite command cannot use a diagnostic marker to bypass its argument check.
 case "${recipe}" in
+  *"scripts/windows/run_fullmag.ps1"*" -RunMode workspace "*)
+    windows_ui_pattern='^powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "[^"]+/scripts/windows/run_fullmag.ps1" -BuildMode "(auto|true|false)" -Frontend "(static|dev)" -RunMode workspace -WebPort "([1-9][0-9]{0,4})"$'
+    if [[ ! "${recipe}" =~ ${windows_ui_pattern} ]]; then
+      echo "[fullmag just] invalid native Windows workspace recipe" >&2
+      exit 2
+    fi
+    build_mode="${BASH_REMATCH[1]}"; frontend="${BASH_REMATCH[2]}"; web_port="${BASH_REMATCH[3]}"
+    if ! is_windows_shell || (( web_port > 65535 )); then
+      echo "[fullmag just] native Windows workspace requires Windows and a port from 1 to 65535" >&2
+      exit 2
+    fi
+    # The native launcher owns storage preflight, locking and terminal receipts.
+    # Dispatch only this checkout's launcher; never evaluate the recipe text.
+    exec powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "${repo_root}/scripts/windows/run_fullmag.ps1" -BuildMode "${build_mode}" -Frontend "${frontend}" -RunMode workspace -WebPort "${web_port}"
+    ;;
   *"scripts/export_runner_openapi.py"*)
     export_openapi_pattern='^[^[:space:]]+ "[^"]+/scripts/export_runner_openapi.py" --repo-root "[^"]+" --job-id "([0-9a-f]{32})" --expected-commit "([0-9a-f]{40})"$'
     if [[ ! "${recipe}" =~ ${export_openapi_pattern} ]]; then

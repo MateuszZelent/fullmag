@@ -30,7 +30,8 @@ $ast = [System.Management.Automation.Language.Parser]::ParseFile(
 if ($errors.Count) { throw ($errors | Out-String) }
 $blocks = @($ast.FindAll({ param($node)
   $node -is [System.Management.Automation.Language.IfStatementAst] -and
-  $node.Extent.Text.StartsWith('if ($RunMode -eq "workspace") {')
+  $node.Extent.Text.StartsWith('if ($RunMode -eq "workspace") {') -and
+  $node.Extent.Text.Contains('$workspaceArguments = @("ui"')
 }, $true))
 if ($blocks.Count -ne 1) { throw "Expected one workspace dispatch" }
 function Invoke-External {
@@ -38,6 +39,9 @@ function Invoke-External {
   [ordered]@{command=$Command; arguments=@($Arguments)} | ConvertTo-Json -Compress
 }
 $RunMode = "workspace"; $WebPort = 3197; $FullmagExe = "native-fullmag.exe"
+$FrontendWorkspaceRoot = Join-Path $RepoRoot "frontend-workspace"
+$FrontendCacheRoot = Join-Path $RepoRoot "frontend-cache"
+$StorageLayout = @{runtime_root=(Join-Path $RepoRoot "runtime")}
 & ([scriptblock]::Create($blocks[0].Extent.Text))
 ''', encoding="utf-8")
     result = subprocess.run([POWERSHELL, "-NoProfile", "-File", str(probe),
@@ -138,3 +142,50 @@ function Invoke-External {
             "build", "--locked", "--release", "--target", "x86_64-pc-windows-msvc",
             "-p", "fullmag-desktop"]})
     assert calls == expected
+
+
+@pytest.mark.parametrize("frontend,port", [("static", "3197"), ("dev", "3198")])
+def test_just_windows_ui_dispatches_fixed_launcher_without_generic_preparation(tmp_path, frontend, port):
+    import os
+    bash = Path("C:/Program Files/Git/bin/bash.exe") if os.name == "nt" else Path(shutil.which("bash") or "/missing")
+    if not bash.is_file():
+        pytest.skip("Bash required")
+    root = LAUNCHER.resolve().parents[2]
+    stub = tmp_path / "powershell.exe"
+    stub.write_text('#!/usr/bin/env bash\nprintf "%s\\n" "$@"\n', encoding="utf-8")
+    stub.chmod(0o755)
+    recipe = (f'powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass '
+              f'-File "{root.as_posix()}/scripts/windows/run_fullmag.ps1" '
+              f'-BuildMode "auto" -Frontend "{frontend}" -RunMode workspace -WebPort "{port}"')
+    env = {**os.environ, "OS": "Windows_NT", "PATH": str(tmp_path) + os.pathsep + os.environ["PATH"]}
+    result = subprocess.run([str(bash), "scripts/just_storage_shell.sh", recipe], cwd=root,
+                            env=env, capture_output=True, text=True, timeout=20)
+    assert result.returncode == 0, result.stderr
+    arguments = result.stdout.splitlines()
+    assert arguments[:5] == ["-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File"]
+    assert arguments[5].replace("\\", "/").endswith("/scripts/windows/run_fullmag.ps1")
+    assert arguments[6:] == ["-BuildMode", "auto", "-Frontend", frontend,
+                             "-RunMode", "workspace", "-WebPort", port]
+    assert "inventoried migration" not in result.stderr
+
+
+@pytest.mark.parametrize("frontend,port,suffix", [
+    ("static", "0", ""), ("static", "65536", ""), ("static", "03197", ""),
+    ("invalid", "3197", ""), ("static", "3197", " && printf MUST_NOT_EXECUTE"),
+    ("static", "3197", " # fullmag_storage.py resolve"),
+])
+def test_just_windows_ui_rejects_invalid_or_composite_recipe(frontend, port, suffix):
+    import os
+    bash = Path("C:/Program Files/Git/bin/bash.exe") if os.name == "nt" else Path(shutil.which("bash") or "/missing")
+    if not bash.is_file():
+        pytest.skip("Bash required")
+    root = LAUNCHER.resolve().parents[2]
+    recipe = (f'powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass '
+              f'-File "{root.as_posix()}/scripts/windows/run_fullmag.ps1" '
+              f'-BuildMode "auto" -Frontend "{frontend}" -RunMode workspace -WebPort "{port}"{suffix}')
+    result = subprocess.run([str(bash), "scripts/just_storage_shell.sh", recipe], cwd=root,
+                            capture_output=True, text=True, timeout=20)
+    assert result.returncode == 2, result.stderr
+    assert "[fullmag just]" in result.stderr
+    assert "MUST_NOT_EXECUTE" not in result.stdout
+    assert "inventoried migration" not in result.stderr

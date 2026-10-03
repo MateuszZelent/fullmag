@@ -1,10 +1,13 @@
 [build-system]
-requires = ["setuptools>=69"]
+requires = [
+    "setuptools>=69",
+    "tomli>=2; python_version < '3.11'",
+]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "fullmag"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Embedded Python DSL for the Fullmag micromagnetics platform."
 requires-python = ">=3.10"
 dependencies = [
@@ -42,3 +45,15 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 fullmag = ["py.typed"]
+
+[tool.uv]
+cache-keys = [
+    { file = "pyproject.toml" },
+    { file = "setup.py" },
+    { file = "fullmag_build_backend.py" },
+    { env = "FULLMAG_BUILD_VERSION" },
+    { env = "FULLMAG_BUILD_VERSION_FILE" },
+    { env = "FULLMAG_SOURCE_IDENTITY_FILE" },
+    { env = "SOURCE_DATE_EPOCH" },
+    { git = { commit = true } },
+]

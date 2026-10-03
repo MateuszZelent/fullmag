@@ -395,7 +395,7 @@ pub(crate) fn build_live_status(
 
     LiveStatus {
         api_contract_version: "1.0.0".into(),
-        runtime_bundle_version: crate::build_info::backend_build_date().to_string(),
+        runtime_bundle_version: fullmag_build_info::version().to_string(),
         session,
         run,
         solver,

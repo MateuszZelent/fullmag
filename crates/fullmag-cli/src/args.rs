@@ -5,7 +5,7 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 
 #[derive(Parser)]
-#[command(name = "fullmag")]
+#[command(name = "fullmag", version = fullmag_build_info::version())]
 #[command(
     about = "Rust-hosted Fullmag CLI for Python-authored ProblemIR validation, planning, and execution"
 )]

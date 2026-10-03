@@ -2,17 +2,23 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[path = "../../scripts/rust/build_version_stamp.rs"]
+mod build_version_stamp;
+
 fn main() {
     println!("cargo:rerun-if-env-changed=SOURCE_DATE_EPOCH");
     println!("cargo:rerun-if-env-changed=FULLMAG_SOURCE_GIT_COMMIT");
     println!("cargo:rerun-if-env-changed=FULLMAG_SOURCE_WORKTREE_STATE");
     println!("cargo:rerun-if-env-changed=FULLMAG_SOURCE_SNAPSHOT_SHA256");
+    println!("cargo:rerun-if-env-changed=FULLMAG_BUILD_VERSION");
+    println!("cargo:rerun-if-changed=../../scripts/rust/build_version_stamp.rs");
     let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(Path::parent)
         .expect("fullmag-build-info must live below the workspace crates directory");
 
-    let timestamp = build_timestamp_utc();
+    let seconds = build_unix_seconds();
+    let timestamp = format_unix_seconds_utc(seconds);
     let (commit, worktree_state, source_snapshot_sha256) = injected_source_identity()
         .unwrap_or_else(|| {
             emit_git_rerun_paths(repo_root);
@@ -28,6 +34,11 @@ fn main() {
             (commit, worktree_state.to_string(), "unknown".to_string())
         });
 
+    let version = build_version_stamp::development_version(
+        env!("CARGO_PKG_VERSION"), seconds, &timestamp, &commit,
+        &worktree_state, &source_snapshot_sha256,
+    );
+    println!("cargo:rustc-env=FULLMAG_PRODUCT_VERSION={version}");
     println!("cargo:rustc-env=FULLMAG_BUILD_TIMESTAMP_UTC={timestamp}");
     println!("cargo:rustc-env=FULLMAG_BUILD_GIT_COMMIT={commit}");
     println!("cargo:rustc-env=FULLMAG_BUILD_WORKTREE_STATE={worktree_state}");
@@ -66,12 +77,16 @@ fn injected_source_identity() -> Option<(String, String, String)> {
     }
 }
 
-fn build_timestamp_utc() -> String {
-    let seconds = std::env::var("SOURCE_DATE_EPOCH")
-        .ok()
-        .and_then(|value| value.parse::<i64>().ok())
-        .unwrap_or_else(current_unix_seconds);
-    format_unix_seconds_utc(seconds)
+fn build_unix_seconds() -> i64 {
+    match std::env::var("SOURCE_DATE_EPOCH") {
+        Ok(value) => {
+            let seconds = value.parse::<i64>().expect("SOURCE_DATE_EPOCH must be an integer");
+            assert!(seconds >= 0, "SOURCE_DATE_EPOCH must be nonnegative");
+            seconds
+        }
+        Err(std::env::VarError::NotPresent) => current_unix_seconds(),
+        Err(std::env::VarError::NotUnicode(_)) => panic!("SOURCE_DATE_EPOCH must be UTF-8"),
+    }
 }
 
 fn current_unix_seconds() -> i64 {

@@ -2,6 +2,7 @@
 
 import json
 import os
+from contextlib import contextmanager
 from pathlib import Path
 import shutil
 import subprocess
@@ -170,6 +171,68 @@ class StorageTests(unittest.TestCase):
         self.assertEqual(record["exit_code"], 7)
         with storage.build_lock(layout):
             pass
+
+    def test_windows_workspace_uses_runtime_lane_while_generic_run_keeps_heavy_guard(self):
+        layout = self.resolve(profile="windows-native-fdm-cpu")
+        storage.initialize(layout)
+        storage.prepare_links(layout, compat=True)
+        launcher = self.repo / "scripts" / "windows" / "run_fullmag.ps1"
+        launcher.parent.mkdir(parents=True)
+        launcher.write_text("# workspace fixture\n", encoding="utf-8")
+        runner_marker = Path(layout["storage_root"]) / "index" / "local-runner-container.json"
+        runner_marker.write_text(json.dumps({"container_id": "fixture"}), encoding="utf-8")
+
+        with self.assertRaises(storage.StorageError):
+            storage.run(layout, [sys.executable, "-c", "raise SystemExit(99)"])
+
+        @contextmanager
+        def unlocked(*_args, **_kwargs):
+            yield
+
+        calls = []
+
+        def fake_git(_repo, *args):
+            if args == ("rev-parse", "HEAD"):
+                return "0" * 40
+            if args == ("status", "--porcelain", "--untracked-files=normal"):
+                return ""
+            raise AssertionError(args)
+
+        def fake_run(command, **_kwargs):
+            calls.append(command)
+            return subprocess.CompletedProcess(command, 0)
+
+        with patch.object(storage, "_is_native_windows", return_value=True), \
+             patch.object(storage, "file_lock", unlocked), \
+             patch.object(storage, "git", side_effect=fake_git), \
+             patch.object(storage.subprocess, "run", side_effect=fake_run):
+            result = storage.run_windows_workspace(layout, "static", 3197, build_mode="false")
+
+        self.assertEqual(result, 0)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][0:6], [
+            "powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive",
+            "-ExecutionPolicy", "Bypass",
+        ])
+        self.assertEqual(calls[0][calls[0].index("-RunMode") + 1], "workspace")
+        self.assertEqual(calls[0][calls[0].index("-WebPort") + 1], "3197")
+        receipt = json.loads((Path(layout["build_root"]) / "build-status.json").read_text(encoding="utf-8"))
+        self.assertEqual(receipt["execution_mode"], "windows-workspace")
+
+        calls.clear()
+        with patch.object(storage, "_is_native_windows", return_value=True), \
+             patch.object(storage, "file_lock", unlocked), \
+             patch.object(storage, "git", side_effect=fake_git), \
+             patch.object(storage.subprocess, "run", side_effect=fake_run):
+            result = storage.run_windows_workspace(layout, "static", 3197, build_mode="auto")
+
+        self.assertEqual(result, 0)
+        self.assertEqual(len(calls), 2)
+        self.assertIn("-BuildOnly", calls[0])
+        self.assertEqual(calls[0][calls[0].index("-BuildMode") + 1], "auto")
+        self.assertNotIn("-BuildOnly", calls[1])
+        self.assertEqual(calls[1][calls[1].index("-BuildMode") + 1], "false")
+        self.assertEqual(calls[1][calls[1].index("-RunMode") + 1], "workspace")
 
     def test_initialize_rechecks_redirected_build_path(self):
         layout = self.resolve()
