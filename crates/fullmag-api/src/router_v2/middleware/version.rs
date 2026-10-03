@@ -17,10 +17,29 @@ fn instance_id() -> &'static str {
 
 fn matches_instance(headers: &axum::http::HeaderMap) -> bool {
     let mut values = headers.get_all(INSTANCE_HEADER).iter();
-    match values.next() {
+    let http_matches = match values.next() {
         None => true,
         Some(value) => value.to_str().ok() == Some(instance_id()) && values.next().is_none(),
+    };
+    // Browsers cannot add an HTTP header to a websocket upgrade. A companion
+    // subprotocol carries the same immutable pin; the selected protocol stays v1.
+    let mut websocket_pins = Vec::new();
+    for value in headers.get_all("sec-websocket-protocol") {
+        let Ok(value) = value.to_str() else {
+            return false;
+        };
+        websocket_pins.extend(
+            value
+                .split(',')
+                .filter_map(|protocol| protocol.trim().strip_prefix("fullmag.api-instance.")),
+        );
     }
+    http_matches
+        && match websocket_pins.as_slice() {
+            [] => true,
+            [pin] => *pin == instance_id(),
+            _ => false,
+        }
 }
 
 pub async fn contract_version_middleware(req: Request, next: Next) -> Response {
@@ -53,6 +72,41 @@ mod tests {
         Arc,
     };
     use tower::ServiceExt;
+
+    #[test]
+    fn websocket_companion_pin_must_be_unique_and_match_the_process() {
+        let mut headers = axum::http::HeaderMap::new();
+        for (protocols, accepted) in [
+            ("fullmag.live.v1".to_owned(), true),
+            (
+                format!("fullmag.live.v1, fullmag.api-instance.{}", instance_id()),
+                true,
+            ),
+            (
+                "fullmag.live.v1, fullmag.api-instance.stale".to_owned(),
+                false,
+            ),
+            (
+                format!(
+                    "fullmag.live.v1, fullmag.api-instance.{0}, fullmag.api-instance.{0}",
+                    instance_id()
+                ),
+                false,
+            ),
+        ] {
+            headers.insert(
+                "sec-websocket-protocol",
+                HeaderValue::from_str(&protocols).unwrap(),
+            );
+            assert_eq!(matches_instance(&headers), accepted);
+        }
+        headers.insert(INSTANCE_HEADER, HeaderValue::from_static("stale"));
+        headers.insert(
+            "sec-websocket-protocol",
+            HeaderValue::from_static("fullmag.live.v1"),
+        );
+        assert!(!matches_instance(&headers));
+    }
 
     #[tokio::test]
     async fn stale_or_duplicate_pin_never_reaches_handler() {

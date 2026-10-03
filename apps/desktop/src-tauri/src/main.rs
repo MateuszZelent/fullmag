@@ -32,12 +32,13 @@ fn main() {
                 let sidecar =
                     ApiSidecar::start().map_err(|e| Box::<dyn std::error::Error>::from(e))?;
                 let base = sidecar.base_url();
+                let ui_url = sidecar.ui_url();
                 app.manage(AppConfig {
                     api_base: base.clone(),
-                    ui_url: base.clone(),
+                    ui_url: ui_url.clone(),
                     launch_intent: launch_intent.clone(),
                 });
-                (base, Some(sidecar))
+                (ui_url, Some(sidecar))
             };
 
             let parsed_url: url::Url = url.parse().map_err(|error| {

@@ -16,6 +16,20 @@ OpenAPI `info.version` and the runtime compatibility contract are not the same v
 Swagger catalog is `2.0.0`; `ControlRoomApi` validates the runtime response header
 `x-api-contract-version: 1.0.0`, and realtime envelopes carry `contract_version: "1.0.0"`.
 
+Native launchers additionally pass `fullmag_api_instance` in the workspace URL.
+The facade captures this immutable process pin once, sends it as
+`x-fullmag-api-instance` on JSON and binary requests, and refuses further traffic
+after a missing or different response pin. It never adopts a replacement API.
+Realtime offers `fullmag.api-instance.<UUID>` alongside the existing
+`fullmag.live.v1` subprotocol; the API checks the companion before upgrade and
+still selects the existing protocol. Reconnect keeps the original pin, checked
+with a bounded pinned health request before connect/reconnect. A known mismatch
+stops reconnect; transient failures retain the existing reconnect policy.
+Closing the client invalidates an in-flight connection check. This is
+process fencing, not authentication or durable session identity. Standalone
+clients without a launch pin retain the existing contract. No JSON resource
+schema, generated path, or realtime envelope is changed by this mechanism.
+
 Current `apps/control-room` implementation:
 
 - `pnpm --dir apps/control-room generate:api` prints backend OpenAPI v2 from `fullmag-api`, generates TypeScript with `openapi-typescript`, and regenerates the `openapi-fetch` transport/path wrapper;

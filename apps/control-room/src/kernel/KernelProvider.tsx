@@ -13,7 +13,7 @@ import {
   createBinaryDecodeScheduler,
   type BinaryDecodeDiagnosticEvent,
 } from "./api/binaryDecodeScheduler";
-import { ControlRoomApi } from "./api/ControlRoomApi";
+import { ControlRoomApi, ControlRoomApiError } from "./api/ControlRoomApi";
 import {
   resolveControlRoomApiBase,
   resolveControlRoomWebSocketUrl,
@@ -328,10 +328,20 @@ function RealtimeConnector({ kernel, sessionIdentity }: { kernel: KernelApi; ses
     }
 
     const client = new RealtimeClient({
+      beforeConnect: kernel.api.getExpectedApiInstance() ? async () => {
+        try {
+          await kernel.api.platform.health({ signal: AbortSignal.timeout(3000) });
+          return true;
+        } catch (error) {
+          if (error instanceof ControlRoomApiError && error.code === "API_INSTANCE_MISMATCH") return false;
+          throw error;
+        }
+      } : undefined,
       bridge: kernel.realtime,
       diagnostics: kernel.diagnostics,
       expectedRequestScopeEpoch,
       expectedSessionId,
+      expectedApiInstance: kernel.api.getExpectedApiInstance(),
       onReconnected: () => {
         kernel.realtime.handleReconnect();
       },

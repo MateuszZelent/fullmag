@@ -17,6 +17,7 @@ const HEALTH_TIMEOUT: Duration = Duration::from_secs(30);
 pub struct ApiSidecar {
     child: Child,
     port: u16,
+    api_instance_id: String,
 }
 
 impl ApiSidecar {
@@ -69,16 +70,32 @@ impl ApiSidecar {
             .spawn()
             .map_err(|e| format!("failed to spawn fullmag-api at {}: {e}", api_exe.display()))?;
 
-        let mut sidecar = Self { child, port };
+        let mut sidecar = Self {
+            child,
+            port,
+            api_instance_id: String::new(),
+        };
         sidecar.wait_healthy()?;
-        fullmag_runtime_control::runtime_service_client::ensure_for_application(
-            &repo_root, &state_root, port,
-        ).map_err(|error| format!("native runtime service attach failed: {error:#}"))?;
+        let binding = fullmag_runtime_control::runtime_service_client::ensure_for_application(
+            &repo_root,
+            &state_root,
+            port,
+        )
+        .map_err(|error| format!("native runtime service attach failed: {error:#}"))?;
+        sidecar.api_instance_id = binding.api_instance_id;
         Ok(sidecar)
     }
 
     pub fn base_url(&self) -> String {
         format!("http://localhost:{}/", self.port)
+    }
+
+    pub fn ui_url(&self) -> String {
+        format!(
+            "{}workspace?fullmag_api_instance={}",
+            self.base_url(),
+            self.api_instance_id
+        )
     }
 
     fn wait_healthy(&mut self) -> Result<(), String> {

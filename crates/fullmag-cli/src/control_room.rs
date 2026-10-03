@@ -1202,11 +1202,20 @@ fn find_fullmag_ui_binary() -> Result<PathBuf> {
 pub(crate) fn open_in_tauri(
     ready: &ControlPlaneReady,
     intent: &str,
+    api_instance_id: &str,
 ) -> Result<std::process::Child> {
+    let instance = uuid::Uuid::parse_str(api_instance_id).context("invalid API instance pin")?;
+    if instance.is_nil() || instance.to_string() != api_instance_id {
+        bail!("API instance pin must be a canonical nonzero UUID");
+    }
+    let ui_url = format!(
+        "{}workspace?fullmag_api_instance={api_instance_id}",
+        ready.web_url.trim_end_matches('/').to_owned() + "/"
+    );
     let ui_exe = find_fullmag_ui_binary()?;
     let mut command = ProcessCommand::new(&ui_exe);
     command
-        .env("FULLMAG_UI_URL", &ready.web_url)
+        .env("FULLMAG_UI_URL", ui_url)
         .env(
             "FULLMAG_API_BASE",
             format!("http://localhost:{}/", ready.api_port),

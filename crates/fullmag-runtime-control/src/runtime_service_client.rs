@@ -112,15 +112,27 @@ fn require_api_identity(document: &serde_json::Value, commit: &str, snapshot: &s
     Ok(())
 }
 
+/// API process pin and optional service owner observed during application startup.
+pub struct ApplicationRuntimeBinding {
+    pub api_instance_id: String,
+    pub owner: Option<RuntimeServiceOwnerDescriptor>,
+}
+
 /// Initialize the canonical accepted store and ensure its explicitly configured service.
-/// An absent configuration leaves authoring available without inventing resource offers.
+/// An absent configuration still verifies the API without inventing resource offers.
 pub fn ensure_for_application(
     repo_root: &Path,
     state_root: &Path,
     api_port: u16,
-) -> Result<Option<RuntimeServiceOwnerDescriptor>> {
+) -> Result<ApplicationRuntimeBinding> {
     let Some(config_path) = std::env::var_os("FULLMAG_RUNTIME_SERVICE_CONFIG") else {
-        return Ok(None);
+        let (document, api_instance_id) = read_api_document(api_port)?;
+        let local = fullmag_build_info::identity();
+        require_api_identity(&document, local.git_commit, local.source_snapshot_sha256)?;
+        return Ok(ApplicationRuntimeBinding {
+            api_instance_id,
+            owner: None,
+        });
     };
     let config_path = std::path::PathBuf::from(config_path);
     let config = RuntimeServiceConfig::read(&config_path)?;
@@ -134,7 +146,10 @@ pub fn ensure_for_application(
     if verify_api_store(api_port, &expected)? != api_instance {
         bail!("API instance changed during native service startup; attach refused");
     }
-    Ok(Some(owner))
+    Ok(ApplicationRuntimeBinding {
+        api_instance_id: api_instance,
+        owner: Some(owner),
+    })
 }
 
 fn require_application_store(configured_root: &Path, expected: &Path) -> Result<()> {

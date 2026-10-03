@@ -91,9 +91,11 @@ Dokładny kontrakt: [native-runtime-service-v1](../specs/native-runtime-service-
 
 HTTP API ma osobny UUID procesu. Opcjonalny pin żądania odrzuca replacement
 przed handlerem, a launcher porównuje UUID przed i po ensure. To nie jest
-autoryzacja ani pełny lease. Obecnie nieprzypięte klienty pozostają zgodne;
-HTTP facade, WebSocket i przekazanie pin do UI są otwartym obowiązkiem migracji.
-Usunięcie ograniczenia reuse API wymaga tych ścieżek i dowodu runtime.
+autoryzacja ani pełny lease. Nieprzypięte klienty pozostają zgodne. CLI/desktop
+przekazują pin do workspace, facade obejmuje JSON/binary, a WebSocket przesyła
+go jako towarzyszący subprotocol przed upgrade. Obserwowany mismatch zatrzymuje
+kolejne HTTP tego klienta; reconnect realtime nie adoptuje replacement.
+Usunięcie ograniczenia reuse API nadal wymaga dowodu runtime tych ścieżek.
 
 Publikatory również sprawdzają przypięty commit/snapshot przed otwarciem store.
 Procesy są obserwowane z deadline: niepotwierdzony publisher/scheduler pozostaje

@@ -6237,3 +6237,63 @@ describe("ControlRoomApi", () => {
     ]);
   });
 });
+
+
+describe("API instance fence", () => {
+  it("discards binary output when replacement is observed during decoding", async () => {
+    const pin = "12345678-1234-4234-8234-123456789abc";
+    let releaseDecode: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => { releaseDecode = resolve; });
+    let decoding = false;
+    const api = new ControlRoomApi({
+      baseUrl: "http://localhost",
+      expectedApiInstance: pin,
+      binaryDecodeScheduler: async ({ buffer, decodeInline }) => {
+        decoding = true;
+        await gate;
+        return decodeInline(buffer);
+      },
+      fetchImpl: async (url) => new URL(String(url)).pathname.endsWith("/topology")
+        ? binaryResponse(makeTopologyBuffer(), { headers: { ...contractHeaders, "x-fullmag-api-instance": pin } })
+        : new Response("{}", { headers: { "x-fullmag-api-instance": "replacement" } }),
+    });
+    const pending = api.data.domain.topology();
+    await vi.waitFor(() => expect(decoding).toBe(true));
+    await expect(api.platform.health()).rejects.toMatchObject({ code: "API_INSTANCE_MISMATCH" });
+    const rejected = expect(pending).rejects.toMatchObject({ code: "API_INSTANCE_MISMATCH" });
+    releaseDecode?.();
+    await rejected;
+  });
+
+  it("discards an in-flight old response after another request observes replacement", async () => {
+    const pin = "12345678-1234-4234-8234-123456789abc";
+    let releaseOld: ((response: Response) => void) | undefined;
+    const oldResponse = new Promise<Response>((resolve) => { releaseOld = resolve; });
+    const fetchImpl = vi.fn()
+      .mockImplementationOnce(() => oldResponse)
+      .mockResolvedValueOnce(new Response("{}", { headers: { "x-fullmag-api-instance": "replacement" } }));
+    const api = new ControlRoomApi({ expectedApiInstance: pin, fetchImpl });
+    const pending = api.sessions.current.status();
+    while (fetchImpl.mock.calls.length === 0) await Promise.resolve();
+    await expect(api.sessions.current.status()).rejects.toMatchObject({ code: "API_INSTANCE_MISMATCH" });
+    const rejected = expect(pending).rejects.toMatchObject({ code: "API_INSTANCE_MISMATCH" });
+    releaseOld?.(new Response("{}", { headers: { "x-fullmag-api-instance": pin } }));
+    await rejected;
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it("pins requests and permanently refuses a replacement without retries", async () => {
+    const pin = "12345678-1234-4234-8234-123456789abc";
+    const fetchImpl = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+      expect(new Headers(init?.headers).get("x-fullmag-api-instance")).toBe(pin);
+      return new Response("{}", { headers: {
+        "x-api-contract-version": "1.0.0",
+        "x-fullmag-api-instance": "87654321-1234-4234-8234-123456789abc",
+      } });
+    });
+    const api = new ControlRoomApi({ expectedApiInstance: pin, fetchImpl });
+    await expect(api.sessions.current.status()).rejects.toMatchObject({ code: "API_INSTANCE_MISMATCH" });
+    await expect(api.sessions.current.status()).rejects.toMatchObject({ code: "API_INSTANCE_MISMATCH" });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+});

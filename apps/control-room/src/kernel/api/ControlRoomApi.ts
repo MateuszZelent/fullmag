@@ -1,3 +1,4 @@
+import { API_INSTANCE_HEADER, isApiInstanceId, resolveApiInstancePin } from "./apiInstancePin";
 import {
   ANALYSIS_FREQUENCY_DOMAIN_MANIFEST_V1_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_BRANCHES_V2_PATH,
@@ -951,6 +952,7 @@ function delay(ms: number, signal?: AbortSignal | null): Promise<void> {
 }
 
 interface ControlRoomApiOptions {
+  expectedApiInstance?: string | null;
   baseUrl?: string;
   binaryDecodeScheduler?: BinaryDecodeScheduler;
   diagnostics?: RequestDiagnosticsController;
@@ -973,6 +975,8 @@ export class ControlRoomApiError extends Error {
 }
 
 export class ControlRoomApi {
+  private readonly expectedApiInstance: string | null;
+  private apiInstanceMismatch = false;
   private readonly baseUrl: string;
   private readonly binaryDecodeScheduler: BinaryDecodeScheduler;
   private readonly requestDiagnostics: RequestDiagnosticsController | null;
@@ -3006,6 +3010,7 @@ export class ControlRoomApi {
         if (result.status === "not-applicable") return null;
         if (result.status !== "ready") throw new ControlRoomApiError("Expected a complete pinned topology body", 0);
         await verifySavedTopologyBody(result.data, geometry, options?.signal);
+        this.requireApiInstanceCurrent();
         const topology = await this.binaryDecodeScheduler({
           buffer: result.data,
           decodeInline: decodeTopology,
@@ -3013,6 +3018,7 @@ export class ControlRoomApi {
           path: PROJECT_SAVED_FIELD_TOPOLOGY_PATH,
           signal: options?.signal,
         });
+        this.requireApiInstanceCurrent();
         if (topology.formatVersion !== 2 || String(topology.nodeCount) !== geometry.node_count ||
             String(topology.cellCount) !== geometry.cell_count || String(topology.facetCount) !== geometry.facet_count) {
           throw new ControlRoomApiError("Pinned topology extents differ from saved geometry", 0);
@@ -3038,6 +3044,7 @@ export class ControlRoomApi {
         if (result.status === "not-applicable") return null;
         if (result.status !== "ready") throw new ControlRoomApiError("Expected a complete pinned support body", 0);
         const support = await decodeSavedSupport(result.data, identity, options?.signal);
+        this.requireApiInstanceCurrent();
         let active = 0;
         for (const byte of support.bits) {
           let remaining = byte;
@@ -3284,6 +3291,7 @@ export class ControlRoomApi {
 
   constructor({
     baseUrl,
+    expectedApiInstance = resolveApiInstancePin(),
     binaryDecodeScheduler = createBinaryDecodeScheduler(),
     diagnostics,
     fetchImpl,
@@ -3292,6 +3300,10 @@ export class ControlRoomApi {
     requestIdFactory = createRequestId,
   }: ControlRoomApiOptions = {}) {
     this.baseUrl = resolveBaseUrl(baseUrl);
+    if (expectedApiInstance !== null && !isApiInstanceId(expectedApiInstance)) {
+      throw new ControlRoomApiError("Invalid API instance pin", 0, null, "API_INSTANCE_MISMATCH");
+    }
+    this.expectedApiInstance = expectedApiInstance;
     this.binaryDecodeScheduler = binaryDecodeScheduler;
     this.requestDiagnostics = diagnostics ?? null;
     this.fetchImpl = fetchImpl ?? resolveDefaultFetch();
@@ -3309,6 +3321,16 @@ export class ControlRoomApi {
     return this.baseUrl;
   }
 
+  getExpectedApiInstance(): string | null {
+    return this.expectedApiInstance;
+  }
+
+  private requireApiInstanceCurrent(): void {
+    if (this.apiInstanceMismatch) {
+      throw new ControlRoomApiError("API instance changed; reopen Fullmag", 409, null, "API_INSTANCE_MISMATCH");
+    }
+  }
+
   private async requestJson<T>(
     path: OpenApiV2Path,
     options: RequestOptions = {},
@@ -3320,6 +3342,7 @@ export class ControlRoomApi {
       params,
       signal: options.signal,
     } as never);
+    this.requireApiInstanceCurrent();
     return readOpenApiResult<T>(result);
   }
 
@@ -3334,6 +3357,7 @@ export class ControlRoomApi {
       params,
       signal: options.signal,
     } as never);
+    this.requireApiInstanceCurrent();
 
     if (result.response?.status === 204 || result.response?.status === 304) {
       return null;
@@ -3353,6 +3377,7 @@ export class ControlRoomApi {
       params,
       signal: options.signal,
     } as never);
+    this.requireApiInstanceCurrent();
 
     if (result.response?.status === 204) {
       return { data: null, status: "pending" };
@@ -3394,6 +3419,7 @@ export class ControlRoomApi {
       params,
       signal: options.signal,
     } as never);
+    this.requireApiInstanceCurrent();
     return readOpenApiResult<TResponse>(result);
   }
 
@@ -3410,6 +3436,7 @@ export class ControlRoomApi {
       params,
       signal: options.signal,
     } as never);
+    this.requireApiInstanceCurrent();
     return readOpenApiResult<TResponse>(result);
   }
 
@@ -3426,6 +3453,7 @@ export class ControlRoomApi {
       params,
       signal: options.signal,
     } as never);
+    this.requireApiInstanceCurrent();
     return {
       data: readOpenApiResult<TResponse>(result),
       requestId: result.response.headers.get("x-request-id"),
@@ -3445,6 +3473,7 @@ export class ControlRoomApi {
       params,
       signal: options.signal,
     } as never);
+    this.requireApiInstanceCurrent();
     return readOpenApiResult<TResponse>(result);
   }
 
@@ -3459,6 +3488,7 @@ export class ControlRoomApi {
       params,
       signal: options.signal,
     } as never);
+    this.requireApiInstanceCurrent();
     return readOpenApiResult<TResponse>(result);
   }
 
@@ -3475,6 +3505,7 @@ export class ControlRoomApi {
       params,
       signal: options.signal,
     } as never);
+    this.requireApiInstanceCurrent();
     return readOpenApiResult<TResponse>(result);
   }
 
@@ -3558,6 +3589,7 @@ export class ControlRoomApi {
       options,
       pathParams,
     );
+    this.requireApiInstanceCurrent();
     return {
       byteLength: expectedByteLength,
       data,
@@ -4055,6 +4087,7 @@ export class ControlRoomApi {
               } as never) as unknown as BinaryOpenApiTransportResult,
           );
         } catch (error) {
+          this.requireApiInstanceCurrent();
           const lastResponse = requestState.lastResponse;
           if (lastResponse && !lastResponse.ok) {
             throw new ControlRoomApiError(
@@ -4064,6 +4097,7 @@ export class ControlRoomApi {
           }
           throw error;
         }
+        this.requireApiInstanceCurrent();
         if (!result) {
           throw new ControlRoomApiError("Binary resource request did not return a response", 0);
         }
@@ -4121,6 +4155,7 @@ export class ControlRoomApi {
                     signal: options.signal,
                   }),
           );
+          this.requireApiInstanceCurrent();
         } catch (error) {
           this.requestDiagnostics?.record({
             byteLength,
@@ -4204,7 +4239,11 @@ export class ControlRoomApi {
     acceptedStatuses = new Set<number>(),
     allowMissingContractVersion = false,
   ): Promise<Response> {
+    if (this.apiInstanceMismatch) {
+      throw new ControlRoomApiError("API instance changed; reopen Fullmag", 409, null, "API_INSTANCE_MISMATCH");
+    }
     const headers = new Headers(init.headers);
+    if (this.expectedApiInstance) headers.set(API_INSTANCE_HEADER, this.expectedApiInstance);
     const requestId = this.requestIdFactory();
     headers.set("x-request-id", requestId);
 
@@ -4215,6 +4254,9 @@ export class ControlRoomApi {
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
+        if (this.apiInstanceMismatch) {
+          throw new ControlRoomApiError("API instance changed; reopen Fullmag", 409, null, "API_INSTANCE_MISMATCH");
+        }
         this.requestDiagnostics?.record({
           byteLength: byteLengthFromBody(init.body),
           channel: "http",
@@ -4239,6 +4281,11 @@ export class ControlRoomApi {
           method,
         });
 
+        if (this.apiInstanceMismatch || (this.expectedApiInstance && response.headers.get(API_INSTANCE_HEADER) !== this.expectedApiInstance)) {
+          this.apiInstanceMismatch = true;
+          throw new ControlRoomApiError("API instance changed; reopen Fullmag", 409, response.headers.get("x-request-id"), "API_INSTANCE_MISMATCH");
+        }
+
         const contractVersionError = resolveContractVersionError(response, {
           allowMissing: allowMissingContractVersion,
         });
@@ -4251,6 +4298,7 @@ export class ControlRoomApi {
           path,
           response,
         });
+        this.requireApiInstanceCurrent();
         this.requestDiagnostics?.record({
           byteLength: byteLengthFromHeaders(response.headers),
           channel: "http",

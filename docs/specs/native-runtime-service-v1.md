@@ -126,8 +126,23 @@ Mismatch, niepoprawna lub wielokrotna wartość daje HTTP 409 z kodem
 dotychczasowy kontrakt nieprzypiętych klientów. UUID nie jest tokenem autoryzacji.
 Launcher wymaga jednego kanonicznego niezerowego UUID w odpowiedzi handshake
 i identycznej instancji przed oraz po ensure. Nie zatrzymuje usługi po odmowie.
-Przekazywanie pin do UI oraz handshake WebSocket pozostają do implementacji;
-sam nagłówek backendu nie dowodzi ochrony całej otwartej aplikacji.
+CLI i desktop przekazują UUID bezpośrednio do `/workspace` przez parametr
+`fullmag_api_instance`, bez redirectu strony głównej gubiącego query. Także bez
+konfiguracji usługi launcher wymaga zgodnego buildu i UUID API; authoring nie
+otrzymuje przez to fikcyjnych zasobów compute/preparation.
+ControlRoomApi przechwytuje pin raz i dodaje go do wspólnego fetch dla JSON
+i binary. Brak lub inny nagłówek odpowiedzi powoduje trwałą lokalną odmowę
+kolejnych żądań tego klienta, bez retry/adopcji nowego procesu. Nowe uruchomienie
+z launchera ustanawia nowe powiązanie. Nie zapisuje się pin w persisted state.
+Realtime oferuje obok `fullmag.live.v1` towarzyszący subprotocol
+`fullmag.api-instance.<UUID>`; middleware odrzuca mismatch i duplikaty przed
+upgrade. Serwer wybiera nadal podstawowy `fullmag.live.v1`. Reconnect zachowuje
+pin i nie przejmuje replacement API. Nieprzypięte standalone klienty pozostają
+zgodne; pełny runtime/browser odbiór wymaga bieżącego buildu, nie starej sesji UI.
+Przypięty realtime przed connect/reconnect sprawdza cienki resource health przez
+tę samą facade, z timeoutem 3 sekund. Mismatch zatrzymuje reconnect; błąd
+przejściowy zachowuje politykę ponawiania z tym samym pin. Close unieważnia
+oczekujący preflight i zapobiega otwarciu socketu po unmount.
 
 Oba admissions zamyka się przed oczekiwaniem na procesy. Aktywne workery kończą
 się według supervisor/lease/receipt. Błąd jednego schedulera drenuje drugi,

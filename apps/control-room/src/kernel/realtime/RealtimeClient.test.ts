@@ -34,6 +34,65 @@ class FakeWebSocket implements RealtimeWebSocketLike {
 }
 
 describe("RealtimeClient", () => {
+  it("does not open or retry a socket after the API preflight rejects replacement", async () => {
+    const createSocket = vi.fn(() => new FakeWebSocket());
+    const onScopeMismatch = vi.fn();
+    const scheduleReconnect = vi.fn(() => () => {});
+    const client = new RealtimeClient({
+      beforeConnect: async () => false,
+      bridge: { handleEvent: () => true },
+      createSocket,
+      onScopeMismatch,
+      scheduleReconnect,
+      url: "ws://localhost/v2/sessions/current/events/ws",
+    });
+    client.connect();
+    await vi.waitFor(() => expect(onScopeMismatch).toHaveBeenCalledTimes(1));
+    expect(createSocket).not.toHaveBeenCalled();
+    expect(scheduleReconnect).not.toHaveBeenCalled();
+    client.close();
+  });
+
+  it("does not resurrect a socket after close during API preflight", async () => {
+    let release: ((allowed: boolean) => void) | undefined;
+    const check = new Promise<boolean>((resolve) => { release = resolve; });
+    const beforeConnect = vi.fn(() => check);
+    const createSocket = vi.fn(() => new FakeWebSocket());
+    const client = new RealtimeClient({
+      beforeConnect,
+      bridge: { handleEvent: () => true },
+      createSocket,
+      url: "ws://localhost/v2/sessions/current/events/ws",
+    });
+    client.connect();
+    await vi.waitFor(() => expect(beforeConnect).toHaveBeenCalledTimes(1));
+    client.close();
+    release?.(true);
+    await check;
+    await Promise.resolve();
+    expect(createSocket).not.toHaveBeenCalled();
+  });
+  it("preserves the API instance companion protocol across reconnect", () => {
+    const pin = "12345678-1234-4234-8234-123456789abc";
+    const socket = new FakeWebSocket();
+    const createSocket = vi.fn(() => socket);
+    let reconnect: (() => void) | undefined;
+    const client = new RealtimeClient({
+      bridge: { handleEvent: () => true },
+      createSocket,
+      expectedApiInstance: pin,
+      scheduleReconnect: (callback) => { reconnect = callback; return () => {}; },
+      url: "ws://localhost/v2/sessions/current/events/ws",
+    });
+    client.connect();
+    socket.emit("close", "");
+    reconnect?.();
+    expect(createSocket).toHaveBeenCalledTimes(2);
+    for (const args of createSocket.mock.calls) {
+      expect(args).toEqual(["ws://localhost/v2/sessions/current/events/ws", "fullmag.live.v1", `fullmag.api-instance.${pin}`]);
+    }
+    client.close();
+  });
   it("rejects a hello from another request scope before accepting events", () => {
     const socket = new FakeWebSocket();
     const handleEvent = vi.fn(() => true);

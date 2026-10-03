@@ -415,3 +415,5 @@ Checkpoint P7-C: [22 — UI i kanoniczny accepted store](p8/22-native-ui-service
 Checkpoint P7-C: [23 — handshake store API](p8/23-api-accepted-store-handshake.md).
 
 Checkpoint P7-C: [24 — tożsamość procesu i HTTP fence](p8/24-api-instance-fence.md).
+
+Checkpoint P7-C: [25 — przypięcie native UI do API](p8/25-native-ui-instance-pinning.md).
