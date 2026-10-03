@@ -395,10 +395,26 @@ def _manifest_identity(
     operator_name, operator_value = operator
     operator_digest = _digest_prefixed(operator_value, f"{operator_name}")
 
-    phase_values = solver_artifacts.get("phase_constraint_sha256")
-    if not isinstance(phase_values, list) or len(phase_values) != 1:
-        raise ValidationError("native solver artifacts do not expose one phase identity")
-    phase_digest = _digest_prefixed(phase_values[0], "phase_constraint_sha256")
+    phase_values = solver_artifacts.get("phase_constraints_by_sample")
+    if not isinstance(phase_values, list) or len(phase_values) != EXPECTED_SAMPLE_COUNT:
+        raise ValidationError("native solver artifacts do not expose per-sample phase identities")
+    phase_constraints = []
+    for sample_index, value in enumerate(phase_values):
+        if (not isinstance(value, Mapping)
+                or isinstance(value.get("sample_index"), bool)
+                or value.get("sample_index") != sample_index
+                or value.get("k_vector_rad_per_m")
+                != list(PARALLEL_PROBE_VECTORS_RAD_PER_M[sample_index])):
+            raise ValidationError("native solver phase identity has an invalid sample binding")
+        phase_constraints.append({
+            "sample_index": sample_index,
+            "k_vector_rad_per_m": value["k_vector_rad_per_m"],
+            "phase_constraint_sha256": _digest_prefixed(
+                value.get("phase_constraint_sha256"), "phase_constraints_by_sample"
+            ),
+        })
+    # Preserve the legacy scalar field as the first-sample summary binding.
+    phase_digest = phase_constraints[0]["phase_constraint_sha256"]
 
     equilibrium_digest = _digest_prefixed(
         probe["equilibrium_artifact_sha256"], "parallel_probe.equilibrium_artifact_sha256"
@@ -424,6 +440,7 @@ def _manifest_identity(
         "mesh_identity": mesh_identity,
         "operator_input_signature_sha256": operator_digest,
         "phase_constraint_sha256": phase_digest,
+        "phase_constraints_by_sample": phase_constraints,
         "equilibrium_artifact_sha256": equilibrium_digest,
         "linearization_state_sha256": linearization_digest,
         "periodic_mesh_certificate_sha256": periodic_digest,
@@ -704,6 +721,7 @@ def _compare_report_inputs(serial_report: Mapping[str, Any], adaptive_report: Ma
 def _compare_mesh_identity(serial: Mapping[str, Any], adaptive: Mapping[str, Any]) -> dict[str, Any]:
     fields = (
         "mesh_identity", "operator_input_signature_sha256", "phase_constraint_sha256",
+        "phase_constraints_by_sample",
         "equilibrium_artifact_sha256", "linearization_state_sha256",
         "periodic_mesh_certificate_sha256",
     )

@@ -117,7 +117,7 @@ def _write_native_probe_artifacts(case):
             "raw_mode_index": 0,
             "frequency_hz": 11.2e9,
             "residual_relative_l2": 2e-10,
-            "phase_constraint_sha256": phase_hash,
+            "phase_constraint_sha256": phase_hash if sample_index != 1 else "sha256:" + "b" * 64,
             "floquet_descriptor_certified": True,
             "floquet_full_descriptor_certified": True,
             "floquet_gauge_policy_satisfied": True,
@@ -293,6 +293,44 @@ class ParallelProbeTests(unittest.TestCase):
                     requested_shifted_ksp_rtol="1e-9",
                     requested_gmres_restart="8",
                 )
+
+    def test_phase_identity_is_bound_to_each_signed_sample(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case = Path(directory)
+            _write_native_probe_artifacts(case)
+            report = validate_parallel_probe_solver_artifacts(
+                case, requested_eps_prefilter="1e-9", requested_shifted_ksp_rtol="1e-9",
+                requested_gmres_restart="8")
+            bindings = report["phase_constraints_by_sample"]
+            self.assertEqual([item["sample_index"] for item in bindings], [0, 1, 2])
+            self.assertEqual([item["k_vector_rad_per_m"] for item in bindings],
+                             [list(k) for k in PARALLEL_PROBE_VECTORS_RAD_PER_M])
+            self.assertNotEqual(bindings[0]["phase_constraint_sha256"],
+                                bindings[1]["phase_constraint_sha256"])
+            self.assertEqual(bindings[0]["phase_constraint_sha256"],
+                             bindings[2]["phase_constraint_sha256"])
+            summary_path = case / "eigen/metadata/eigen_summary.json"
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            summary["modes"][0]["phase_constraint_sha256"] = bindings[1]["phase_constraint_sha256"]
+            summary_path.write_text(json.dumps(summary), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "summary phase identity"):
+                validate_parallel_probe_solver_artifacts(
+                    case, requested_eps_prefilter="1e-9", requested_shifted_ksp_rtol="1e-9",
+                    requested_gmres_restart="8")
+
+    def test_unpinned_sample_count_rejects_nonfinite_k_vector(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case = Path(directory)
+            _write_native_probe_artifacts(case)
+            path = case / "eigen/spectrum.v3.json"
+            spectrum = json.loads(path.read_text(encoding="utf-8"))
+            spectrum["samples"] = spectrum["samples"][:2]
+            spectrum["samples"][0]["k_vector"] = [0.0, float("nan"), 0.0]
+            path.write_text(json.dumps(spectrum), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "invalid k vector"):
+                validate_parallel_probe_solver_artifacts(
+                    case, expected_sample_count=2, requested_eps_prefilter="1e-9",
+                    requested_shifted_ksp_rtol="1e-9", requested_gmres_restart="8")
 
     def test_selected_only_guard_rejects_boolean_mode_count(self):
         with tempfile.TemporaryDirectory() as directory:

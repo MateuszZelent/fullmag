@@ -235,6 +235,7 @@ def validate_parallel_probe_solver_artifacts(
     sample_indices = set()
     max_physical_residual = 0.0
     phase_hashes = set()
+    phase_constraints_by_sample = []
     for position, sample in enumerate(samples):
         if not isinstance(sample, dict):
             raise ValueError(f"parallel probe spectrum sample {position} is invalid")
@@ -243,7 +244,12 @@ def validate_parallel_probe_solver_artifacts(
                 or sample_index != position or sample_index in sample_indices):
             raise ValueError("parallel probe spectrum sample indices are not canonical")
         sample_indices.add(sample_index)
-        if expected_vectors is not None and sample.get("k_vector") != list(expected_vectors[position]):
+        k_vector = sample.get("k_vector")
+        if (not isinstance(k_vector, list) or len(k_vector) != 3
+                or any(isinstance(value, bool) or not isinstance(value, (int, float))
+                       or not math.isfinite(value) for value in k_vector)):
+            raise ValueError(f"parallel probe sample {sample_index} has an invalid k vector")
+        if expected_vectors is not None and k_vector != list(expected_vectors[position]):
             raise ValueError("parallel probe spectrum signed k vector disagrees with the request")
         modes = sample.get("modes")
         if not isinstance(modes, list) or len(modes) != 1:
@@ -290,9 +296,12 @@ def validate_parallel_probe_solver_artifacts(
                 or PHASE_CONSTRAINT_SHA256_RE.fullmatch(phase_hash) is None):
             raise ValueError(f"parallel probe sample {sample_index} has no valid phase constraint identity")
         phase_hashes.add(phase_hash)
-
-    if len(phase_hashes) != 1:
-        raise ValueError("parallel probe samples do not share one Floquet phase identity")
+        # The native phase digest includes k and must be bound per sample.
+        phase_constraints_by_sample.append({
+            "sample_index": sample_index,
+            "k_vector_rad_per_m": k_vector,
+            "phase_constraint_sha256": phase_hash,
+        })
 
     summary_modes = summary.get("modes")
     if not isinstance(summary_modes, list) or not summary_modes:
@@ -300,7 +309,8 @@ def validate_parallel_probe_solver_artifacts(
     summary_mode = summary_modes[0]
     if not isinstance(summary_mode, dict):
         raise ValueError("parallel probe eigen summary mode is invalid")
-    if summary_mode.get("phase_constraint_sha256") not in phase_hashes:
+    if (summary_mode.get("phase_constraint_sha256")
+            != phase_constraints_by_sample[0]["phase_constraint_sha256"]):
         raise ValueError("parallel probe summary phase identity is not bound to the spectrum")
 
     def finite_number(value, label, *, positive=False):
@@ -393,6 +403,7 @@ def validate_parallel_probe_solver_artifacts(
         "resolved_gmres_restart": requested_restart,
         "max_physical_residual": max_physical_residual,
         "phase_constraint_sha256": sorted(phase_hashes),
+        "phase_constraints_by_sample": phase_constraints_by_sample,
         "pending_requirements": [
             "mesh, airbox and mode-count convergence",
             "serial/adaptive frequency parity and scientific comparison",

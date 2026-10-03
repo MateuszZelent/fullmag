@@ -345,6 +345,16 @@ class SerialAdaptiveProbeTests(unittest.TestCase):
             with self.assertRaisesRegex(ValidationError, "physical residual"):
                 validate_serial_adaptive_probe(serial, adaptive)
 
+    def test_phase_mismatch_in_second_sample_fails_parity(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            serial, adaptive = _make_batches(Path(directory))
+            path = adaptive / PILOT / "eigen/spectrum.v3.json"
+            spectrum = json.loads(path.read_text(encoding="utf-8"))
+            spectrum["samples"][1]["modes"][0]["phase_constraint_sha256"] = "sha256:" + "f" * 64
+            path.write_text(json.dumps(spectrum), encoding="utf-8")
+            with self.assertRaisesRegex(ValidationError, "phase_constraints_by_sample"):
+                validate_serial_adaptive_probe(serial, adaptive)
+
     def test_report_hash_is_bound_to_completed_adaptive_receipt(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             serial, adaptive = _make_batches(Path(directory))
