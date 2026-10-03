@@ -394,6 +394,9 @@ verify-pinned-dataset-browser:
 lint-control-room-source:
     {{storage_python}} "{{repo_root}}/scripts/verify_control_room_sources.py" --route lint --repo-root "{{repo_root}}"
 
+doctor-control-room-source:
+    {{storage_python}} "{{repo_root}}/scripts/verify_control_room_sources.py" --route react-doctor --repo-root "{{repo_root}}"
+
 
 # Run only after the operator has allowed compilation of these regression tests.
 verify-session-persistence:

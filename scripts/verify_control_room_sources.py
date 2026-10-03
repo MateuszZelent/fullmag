@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 import fullmag_storage as storage
 
 PROFILE = "windows-control-room-source-check"
-ROUTES = ("generate-client", "production-source", "api-hygiene", "lint", "openapi-import-check")
+ROUTES = ("generate-client", "production-source", "api-hygiene", "lint", "openapi-import-check", "react-doctor")
 
 
 def timestamp():
@@ -94,6 +94,20 @@ def run(repo: Path, route: str):
                 commands = [[node, "scripts/check-api-hygiene.mjs"]]
             elif route == "lint":
                 commands = [cli("eslint", "bin/eslint.js") + [".", "--max-warnings=0"]]
+            elif route == "react-doctor":
+                # Reuse the repository-pinned tool without installing or
+                # contacting the score/supply-chain services. Dumps and caches
+                # inherit the managed storage environment of this source run.
+                doctor = repo / "node_modules/react-doctor/bin/react-doctor.js"
+                if not doctor.is_file():
+                    raise storage.StorageError("Repository-pinned React Doctor is unavailable")
+                env["NODE_DISABLE_COMPILE_CACHE"] = "1"
+                commands = [[node, str(doctor), ".", "--verbose", "--scope", "changed",
+                             "--base", "HEAD", "--no-score", "--no-supply-chain",
+                             "--no-dead-code", "--no-parallel", "--yes",
+                             "--output-dir", str(run_root / "diagnostics")]]
+                receipt["scope"] = "changed_against_HEAD"
+                receipt["online_services"] = "disabled_score_and_supply_chain"
             else:
                 # This is source checking, not compilation of test targets. UI
                 # route generation is unchanged and existing typegen is reused.

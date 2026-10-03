@@ -1,4 +1,4 @@
-import { act } from "react";
+import { act, useEffect } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ControlRoomApiError } from "@/kernel/api/ControlRoomApi";
@@ -178,9 +178,12 @@ describe("GeometryObjectPanel primitive transaction", () => {
       committed_scene: { objects: [{ id: "new-box" }], revision: 13 },
       scene_revision: 13,
     });
-    const activeForm = { current: null as ReturnType<typeof useInspectorEditSession> };
+    const activeFormRef = { current: null as ReturnType<typeof useInspectorEditSession> };
     function CaptureForm() {
-      activeForm.current = useInspectorEditSession();
+      const form = useInspectorEditSession();
+      useEffect(() => {
+        activeFormRef.current = form;
+      }, [form]);
       return null;
     }
     const dom = installSimulationPreparationTestDom();
@@ -195,10 +198,10 @@ describe("GeometryObjectPanel primitive transaction", () => {
         </InspectorEditSessionProvider>,
       ));
       await act(async () => changeInput(container, "Size X", "2e-7"));
-      expect(activeForm.current?.dirty).toBe(true);
+      expect(activeFormRef.current?.dirty).toBe(true);
       mocks.select.mockImplementationOnce(() => {
         // The real guard reads this facade synchronously inside selection.set.
-        expect(activeForm.current?.dirty).toBe(false);
+        expect(activeFormRef.current?.dirty).toBe(false);
       });
       await act(async () => findButton(container, "Apply Draft").click());
       expect(mocks.commitTransaction).toHaveBeenCalledOnce();

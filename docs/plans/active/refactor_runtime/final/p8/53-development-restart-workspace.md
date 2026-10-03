@@ -105,6 +105,37 @@ zrealizowane w [P8-53B](53b-development-build-status.md). Watcher ma domyślne
 120 sekund bez zmian źródeł oraz heartbeat; gotowy build nadal nie oznacza
 dostępnego restartu.
 
-Pozostają: resource hook/banner i komenda v2, admission/drain, kontrola szkiców, restore przed
-listen, nowy pin oraz rzeczywisty przebieg Windows/browser. Nie zwiększamy
-procentu całego planu na podstawie samego zapisu handoffu.
+Resource hook i jeden banner workspace są zaimplementowane; konsument używa
+generated facade oraz klucza cache przypiętego do klienta API. Banner zajmuje
+własne miejsce nad workspace, zamiast zasłaniać dock/Inspector. Produkcyjne
+typowanie i higiena API przeszły; browser na 3197 potwierdził położenie bannera
+oraz schowanie/przywrócenie Inspektora w pustej sesji. Nie jest to jeszcze
+przebieg restartu i odtworzenia niepustego modelu.
+
+[P8-53C](53c-mutation-admission.md) dodaje admission przed transition, również
+dla mutujących odczytów, oraz cancellation-safe freeze. Jego konsument restartu
+nie jest jeszcze podłączony. Pozostają: komenda v2, drain, kontrola szkiców,
+restore przed listen, nowy pin oraz rzeczywisty przebieg Windows/browser.
+Nie zwiększamy procentu całego planu na podstawie tych częściowych dowodów.
+
+[P8-53D](53d-native-owner-recovery.md) usuwa blokadę porzuconego owner record
+przez sprawdzony recovery z zachowaniem oryginalnych bajtów. Po recovery
+produkcyjny build Windows i 24 sprawdzenia natywnego API przeszły. Pełny
+kontrolowany restart i jego fault gates pozostają otwarte.
+
+Po scaleniu `origin/master` (`90cf0198a9550976e5d187c2eca276a25953defc`)
+przywrócono tylko własne poprawki z zachowanej kopii stash
+`145b21d093913126c48bdd29cd72a4ff606ac63c`; nowy ekran startowy pozostał
+w aktualnej wersji. Ponownie przeszły produkcyjne typowanie, lint, higiena API
+i React Doctor (5 zmienionych plików, bez zgłoszeń):
+
+- typowanie: `f699742633c849dc9a07fc90fb6cede2`;
+- lint: `acd61345780f4e96b423cccded56b473`;
+- API: `0b79060ba6f8410cb14f7173a6f4040b`;
+- React Doctor: `3fe3c6c061214f7eb68d10ef9a21d51a`.
+
+Receipty znajdują się w profilu `windows-control-room-source-check`.
+Szczegóły są w [P8-53F](53f-development-banner-source-integration.md).
+Poprzednie uruchomienie `just windows-ui dev` na 3197 (handle 95546)
+zakończyło się z exit 0; watcher opublikował `stopped`. Późniejsze dowody
+źródłowe nie zastępują ponownego sprawdzenia w przeglądarce po scaleniu.

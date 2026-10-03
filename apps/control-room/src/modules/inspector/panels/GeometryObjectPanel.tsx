@@ -313,6 +313,56 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
     });
   }
 
+  const geometryDraftChanged = draft.mode === "committed" && !sameDraftFields(
+    draft,
+    baseDraft,
+    ["archHeight", "geometryKind", "height", "length", "radius", "size", "width", "z0"],
+  );
+  const transformDraftChanged = draft.mode === "committed" && !sameDraftFields(
+    draft,
+    baseDraft,
+    ["translation"],
+  );
+  const newObjectDraftChanged = draft.mode === "draft-new" && !sameDraftValues(draft, baseDraft);
+  const inspectorDirty = geometryDraftChanged || transformDraftChanged || newObjectDraftChanged;
+  const geometryPatch = buildGeometryDraftPatch(draft);
+  const transformPatch = buildTransformDraftPatch(draft);
+  const inspectorValid = !inspectorDirty || (
+    draft.baseRevision !== null &&
+    Object.keys(primitiveDraft.errors).length === 0 &&
+    (draft.mode !== "draft-new" || (geometryPatch.error === null && transformPatch.error === null)) &&
+    (!geometryDraftChanged || geometryPatch.error === null) &&
+    (!transformDraftChanged || transformPatch.error === null)
+  );
+  const inspectorApplyBlockReason = revisionConflictPhase !== null
+    ? "Resolve the scene revision conflict before applying this draft."
+    : geometryDraftChanged && transformDraftChanged
+      ? "Apply geometry and transform separately so each change has its own history entry."
+      : undefined;
+
+  async function applyRegisteredDraft(): Promise<boolean> {
+    if (draft.mode === "draft-new") return applyCreateDraft();
+    if (draft.mode !== "committed") return false;
+    if (geometryDraftChanged && !transformDraftChanged) return applyGeometryPatch();
+    if (transformDraftChanged && !geometryDraftChanged) return applyTransformPatch();
+    return false;
+  }
+
+  const acknowledgeCommittedDraft = useRegisterInspectorEditSession(
+    draft.mode === "missing" ? null : "staged",
+    pending,
+    inspectorDirty,
+    inspectorValid,
+    undefined,
+    applyRegisteredDraft,
+    revertDraft,
+    {
+      applyBlockReason: inspectorApplyBlockReason,
+      historyMode: "mutation-owned",
+    },
+  );
+
+
   async function applyCreateDraft(): Promise<boolean> {
     if (draft.baseRevision === null) {
       setFeedback({ kind: "error", message: "The canonical scene revision is unavailable. Refetch the scene before applying." });
@@ -529,54 +579,6 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
     setFeedback(null);
   }
 
-  const geometryDraftChanged = draft.mode === "committed" && !sameDraftFields(
-    draft,
-    baseDraft,
-    ["archHeight", "geometryKind", "height", "length", "radius", "size", "width", "z0"],
-  );
-  const transformDraftChanged = draft.mode === "committed" && !sameDraftFields(
-    draft,
-    baseDraft,
-    ["translation"],
-  );
-  const newObjectDraftChanged = draft.mode === "draft-new" && !sameDraftValues(draft, baseDraft);
-  const inspectorDirty = geometryDraftChanged || transformDraftChanged || newObjectDraftChanged;
-  const geometryPatch = buildGeometryDraftPatch(draft);
-  const transformPatch = buildTransformDraftPatch(draft);
-  const inspectorValid = !inspectorDirty || (
-    draft.baseRevision !== null &&
-    Object.keys(primitiveDraft.errors).length === 0 &&
-    (draft.mode !== "draft-new" || (geometryPatch.error === null && transformPatch.error === null)) &&
-    (!geometryDraftChanged || geometryPatch.error === null) &&
-    (!transformDraftChanged || transformPatch.error === null)
-  );
-  const inspectorApplyBlockReason = revisionConflictPhase !== null
-    ? "Resolve the scene revision conflict before applying this draft."
-    : geometryDraftChanged && transformDraftChanged
-      ? "Apply geometry and transform separately so each change has its own history entry."
-      : undefined;
-
-  async function applyRegisteredDraft(): Promise<boolean> {
-    if (draft.mode === "draft-new") return applyCreateDraft();
-    if (draft.mode !== "committed") return false;
-    if (geometryDraftChanged && !transformDraftChanged) return applyGeometryPatch();
-    if (transformDraftChanged && !geometryDraftChanged) return applyTransformPatch();
-    return false;
-  }
-
-  const acknowledgeCommittedDraft = useRegisterInspectorEditSession(
-    draft.mode === "missing" ? null : "staged",
-    pending,
-    inspectorDirty,
-    inspectorValid,
-    undefined,
-    applyRegisteredDraft,
-    revertDraft,
-    {
-      applyBlockReason: inspectorApplyBlockReason,
-      historyMode: "mutation-owned",
-    },
-  );
 
   return (
     <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">

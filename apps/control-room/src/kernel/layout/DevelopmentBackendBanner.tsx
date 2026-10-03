@@ -21,15 +21,9 @@ export function DevelopmentBackendBanner() {
   return (
     <section
       aria-live="polite"
-      className="pointer-events-auto flex max-w-[min(34rem,calc(100vw-1.5rem))] flex-wrap items-center gap-x-3 gap-y-1 rounded-fm-control border border-fm-border bg-fm-surface px-3 py-2 text-fm-xs text-fm-secondary shadow-fm-control"
+      className="pointer-events-auto my-1 mr-3 flex max-w-[min(34rem,calc(100vw-1.5rem))] shrink-0 self-end flex-wrap items-center gap-x-3 gap-y-1 rounded-fm-control border border-fm-border bg-fm-surface px-3 py-2 text-fm-xs text-fm-secondary shadow-fm-control"
       data-development-backend-state={view.state}
       role="status"
-      style={{
-        bottom: "calc(var(--fm-status-height) + 0.5rem)",
-        position: "absolute",
-        right: "0.75rem",
-        zIndex: 40,
-      }}
     >
       <span className="font-medium text-fm-primary">Development backend</span>
       <span>{view.message}</span>
@@ -109,8 +103,7 @@ function viewForDevelopmentBackendState(
     case "ready":
       return {
         action: null,
-        message:
-          "A verified backend build is ready. Restart controls are not available yet.",
+        message: "Backend build is ready. Restart is not available yet.",
         state: "ready",
       };
     case "failed":
