@@ -441,7 +441,7 @@ pub(super) fn solve_complex_hermitian_eigenpairs(
         }
         let lifted = l_inv.transpose() * spectrum.eigenvectors.column(index).into_owned();
         let complex = real_block_vector_to_complex(&lifted, active_count);
-        let normalized = normalize_complex_mode(&complex, &mass, &plan.normalization);
+        let normalized = normalize_complex_mode(&complex, &mass, &plan.normalization)?;
         let normalized_block = complex_vector_to_real_block(&normalized);
         let (residual_absolute_l2, residual_relative_l2, residual_linf) =
             generalized_residual_norms(&stiffness_block, &mass_block, *value, &normalized_block);
@@ -752,30 +752,90 @@ fn normalize_real_mode(
     }
 }
 
+pub(super) fn checked_complex_normalization_scale(
+    vector: &[Complex64],
+    quadratic: Option<Complex64>,
+    normalization: &EigenNormalizationIR,
+) -> Result<f64, RunError> {
+    if vector.is_empty()
+        || vector
+            .iter()
+            .any(|v| !v.re.is_finite() || !v.im.is_finite())
+    {
+        return Err(RunError {
+            message: "modal normalization requires nonempty finite coefficients".into(),
+        });
+    }
+    let scale = match normalization {
+        EigenNormalizationIR::UnitL2 => {
+            let value = quadratic.ok_or_else(|| RunError {
+                message: "unit_l2 normalization requires the physical mass norm".into(),
+            })?;
+            if !value.re.is_finite() || !value.im.is_finite() || value.re <= 0.0 {
+                return Err(RunError { message: "unit_l2 normalization requires a positive finite mass norm; underflow is not replaced by a floor".into() });
+            }
+            value.re.sqrt()
+        }
+        EigenNormalizationIR::UnitMaxAmplitude => vector
+            .iter()
+            .fold(0.0_f64, |acc, v| acc.max(v.re.hypot(v.im))),
+    };
+    if !scale.is_finite() || scale <= 0.0 {
+        return Err(RunError {
+            message: "modal normalization requires a positive finite scale".into(),
+        });
+    }
+    Ok(scale)
+}
+
+pub(super) fn normalize_complex_vector_with_scale(
+    vector: &[Complex64],
+    scale: f64,
+) -> Result<Vec<Complex64>, RunError> {
+    if !scale.is_finite() || scale <= 0.0 {
+        return Err(RunError {
+            message: "modal normalization requires a positive finite scale".into(),
+        });
+    }
+    let normalized: Vec<_> = vector
+        .iter()
+        .map(|v| Complex64::new(v.re / scale, v.im / scale))
+        .collect();
+    if normalized
+        .iter()
+        .any(|v| !v.re.is_finite() || !v.im.is_finite())
+    {
+        return Err(RunError {
+            message: "modal coefficients overflow after normalization".into(),
+        });
+    }
+    Ok(normalized)
+}
+
+pub(super) fn normalize_complex_mode_and_scale(
+    vector: &[Complex64],
+    mass: &[Vec<Complex64>],
+    normalization: &EigenNormalizationIR,
+) -> Result<(Vec<Complex64>, f64), RunError> {
+    if mass.len() != vector.len() || mass.iter().any(|row| row.len() != vector.len()) {
+        return Err(RunError {
+            message: "modal normalization mass metric dimensions do not match the vector".into(),
+        });
+    }
+    let quadratic = match normalization {
+        EigenNormalizationIR::UnitL2 => Some(complex_mass_norm(mass, vector)),
+        EigenNormalizationIR::UnitMaxAmplitude => None,
+    };
+    let scale = checked_complex_normalization_scale(vector, quadratic, normalization)?;
+    Ok((normalize_complex_vector_with_scale(vector, scale)?, scale))
+}
+
 pub(super) fn normalize_complex_mode(
     vector: &[Complex64],
     mass: &[Vec<Complex64>],
     normalization: &EigenNormalizationIR,
-) -> Vec<Complex64> {
-    match normalization {
-        EigenNormalizationIR::UnitL2 => {
-            let mut quadratic = Complex64::new(0.0, 0.0);
-            for row in 0..vector.len() {
-                for col in 0..vector.len() {
-                    quadratic += vector[row].conj() * mass[row][col] * vector[col];
-                }
-            }
-            let scale = quadratic.re.max(1e-30).sqrt();
-            vector.iter().map(|value| *value / scale).collect()
-        }
-        EigenNormalizationIR::UnitMaxAmplitude => {
-            let scale = vector
-                .iter()
-                .fold(0.0_f64, |acc, value| acc.max(value.norm()))
-                .max(1e-30);
-            vector.iter().map(|value| *value / scale).collect()
-        }
-    }
+) -> Result<Vec<Complex64>, RunError> {
+    normalize_complex_mode_and_scale(vector, mass, normalization).map(|(vector, _)| vector)
 }
 
 pub(super) fn complex_mass_norm(mass: &[Vec<Complex64>], vector: &[Complex64]) -> Complex64 {

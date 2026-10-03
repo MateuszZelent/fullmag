@@ -1221,3 +1221,17 @@ kwalifikuje solvera, demagnetyzacji ani zgodności dyspersji z analityką.
 | `scripts/validate_de_physical_potential.py` | `_reconstruct_field_with_bounds` |
 | `scripts/validate_de_physical_potential.py` | `validate_physical_potential` |
 | `scripts/test_de_physical_potential.py` | `test_near_zero_p1_component_uses_forward_roundoff_bound` |
+
+(modal-normalization-common-scale)=
+## Wspólna skala normalizacji sprzężonego modu — korekta 2026-10-03
+
+Pełny descriptor opisuje jeden zespolony mod: współczynniki magnetyczne $q$, potencjał $\delta\phi$ i ewentualny mnożnik gauge muszą otrzymać ten sam dodatni, skończony dzielnik. `unit_l2` korzysta z bieżącej geometrycznej metryki objętościowej; `unit_max_amplitude` zachowuje dotychczasowe maksimum modułu skalarnego współczynnika. Ta korekta nie wprowadza powierzchniowej normy falowodu z 0833 ani nie zmienia publicznych tokenów Python/IR.
+
+Historyczny dense consumer obliczał skalę certyfikatu jako pierwiastek z nieujemnej normy, ograniczony od dołu przez 1e-30, lecz dla $q$ ograniczał od dołu normę kwadratową przez 1e-30 przed pierwiastkiem. Dawało to różne skale dla dodatniej normy kwadratowej mniejszej niż 1e-30. Nowy consumer ma obliczyć skalę raz i użyć jej zarówno do wektora magnetycznego, jak i rekonstruowanego potencjału/certyfikatu. Zero, ujemna norma kwadratowa, niefinitywne współczynniki, niezgodny rozmiar metryki oraz overflow normalizowanych współczynników są błędem przed publikacją wyniku; nie zastępować ich sztucznym floor. Underflow obliczonej normy do zera wymaga jawnego błędu, nie publikacji pozornie znormalizowanego modu.
+
+Właściciele źródłowi: `crates/fullmag-runner/src/fem/eigen_solve.rs` + `normalize_complex_mode_and_scale` oraz `crates/fullmag-runner/src/fem/eigen_native_result.rs` + `normalize_complex_block_mode`. Obie realizacje postprocess korzystają ze wspólnego checked scale i nie zmieniają operatora MFEM, eigenvalue, tolerancji residualu ani jednostek artefaktów. Regresje obejmują normę poniżej historycznego floor, równą skalę magnetyzacji/potencjału, normę zerową/ujemną/niefinitywną i niedopasowaną metrykę. Kompilacja i managed runtime tej korekty pozostają NOT VERIFIED.
+
+| Source ID | Path + symbol | Odpowiedzialność | Lane | Dowód |
+|---|---|---|---|---|
+| source-modal-common-normalization | crates/fullmag-runner/src/fem/eigen_solve.rs + normalize_complex_mode_and_scale | Jedna sprawdzona skala q/potencjału, bez floor | FEM postprocess CPU/GPU | source-only; runtime NOT VERIFIED |
+| source-modal-block-normalization | crates/fullmag-runner/src/fem/eigen_native_result.rs + normalize_complex_block_mode | Atomowe zastosowanie skali i zwrócenie jej dla certyfikatu | FEM postprocess CPU/GPU | source-only; runtime NOT VERIFIED |

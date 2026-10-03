@@ -9456,3 +9456,64 @@ fn consumer_plan_snapshot_uses_the_identity_digest_preimage_bytes() {
     modified.push(b' ');
     assert_ne!(digest, format!("sha256:{:x}", Sha256::digest(&modified)));
 }
+
+#[test]
+fn complex_modal_normalization_uses_one_scale_below_the_historical_floor() {
+    let vector = [Complex64::new(1.0, 0.0)];
+    let mass = vec![vec![Complex64::new(1.0e-40, 0.0)]];
+    let (normalized, scale) =
+        normalize_complex_mode_and_scale(&vector, &mass, &EigenNormalizationIR::UnitL2).unwrap();
+    assert!((scale / 1.0e-20 - 1.0).abs() < 1.0e-14);
+    assert!((complex_mass_norm(&mass, &normalized).re - 1.0).abs() < 1.0e-14);
+    // A coupled potential proportional to q must retain the same ratio.
+    let potential = Complex64::new(3.0, -2.0) / scale;
+    assert!((potential / normalized[0] - Complex64::new(3.0, -2.0)).norm() < 1.0e-14);
+    let block_mass = DMatrix::from_element(1, 1, 1.0e-40);
+    let mut block = vector.to_vec();
+    let block_scale =
+        normalize_complex_block_mode(&mut block, &block_mass, EigenNormalizationIR::UnitL2)
+            .unwrap();
+    assert_eq!(block_scale, scale);
+    assert_eq!(block, normalized);
+}
+
+#[test]
+fn complex_modal_normalization_rejects_invalid_norms_and_preserves_input() {
+    let unit = [Complex64::new(1.0, 0.0)];
+    for value in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+        let mass = vec![vec![Complex64::new(value, 0.0)]];
+        assert!(normalize_complex_mode(&unit, &mass, &EigenNormalizationIR::UnitL2).is_err());
+        let mut block = unit.to_vec();
+        let block_mass = DMatrix::from_element(1, 1, value);
+        assert!(normalize_complex_block_mode(
+            &mut block,
+            &block_mass,
+            EigenNormalizationIR::UnitL2
+        )
+        .is_err());
+        assert_eq!(block, unit);
+    }
+    let mass = vec![vec![Complex64::new(1.0, 0.0)]];
+    for normalization in [
+        EigenNormalizationIR::UnitL2,
+        EigenNormalizationIR::UnitMaxAmplitude,
+    ] {
+        assert!(
+            normalize_complex_mode(&[Complex64::new(0.0, 0.0)], &mass, &normalization).is_err()
+        );
+        assert!(
+            normalize_complex_mode(&[Complex64::new(f64::NAN, 0.0)], &mass, &normalization)
+                .is_err()
+        );
+        assert!(normalize_complex_mode(&unit, &[], &normalization).is_err());
+    }
+}
+
+#[test]
+fn coupled_potential_normalization_rejects_overflow_after_scaling() {
+    let finite_potential = [Complex64::new(1.0e308, 0.0)];
+    assert!(normalize_complex_vector_with_scale(&finite_potential, 1.0e-20).is_err());
+    let valid = [Complex64::new(3.0, -2.0)];
+    let normalized = normalize_complex_vector_with_scale(&valid, 1.0e-20).unwrap();
+    assert!(normalized[0].re.is_finite() && normalized[0].im.is_finite());
+}

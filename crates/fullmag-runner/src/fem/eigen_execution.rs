@@ -1305,7 +1305,7 @@ fn execute_native_gpu_k0_kittel_modal(
     validate_native_modal_lambda_frequency_mapping(omega_rad_s, omega_rad_s, frequency_hz)?;
 
     let mut mode_vector = k0_macrospin_modal_vector(active_nodes);
-    normalize_complex_block_mode(&mut mode_vector, &mass, plan.normalization);
+    normalize_complex_block_mode(&mut mode_vector, &mass, plan.normalization)?;
     let tangent_dof = stiffness_field.nrows();
     let stiffness_omega = stiffness_field * plan.gyromagnetic_ratio;
     let gyrotropic_row_major = gyrotropic_matrix_row_major_from_tangent_mass(&mass, active_nodes)?;

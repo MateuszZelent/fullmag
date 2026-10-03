@@ -359,7 +359,9 @@
       "path": "scripts/test_de_physical_potential.py",
       "symbol": "test_near_zero_p1_component_uses_forward_roundoff_bound",
       "responsibility": "Check an analytically known affine potential on a cancellation-prone Tet4 and reject a field perturbation outside the local roundoff envelope."
-    }
+    },
+    {"id": "source-modal-common-normalization", "path": "crates/fullmag-runner/src/fem/eigen_solve.rs", "symbol": "normalize_complex_mode_and_scale", "responsibility": "Compute one checked physical mass scale for magnetic coefficients and potential certificate; reject invalid normalization."},
+    {"id": "source-modal-block-normalization", "path": "crates/fullmag-runner/src/fem/eigen_native_result.rs", "symbol": "normalize_complex_block_mode", "responsibility": "Apply the same checked scalar to all magnetic coefficients and return it for coupled potential normalization."}
   ],
   "public_api": {
     "parameters": [

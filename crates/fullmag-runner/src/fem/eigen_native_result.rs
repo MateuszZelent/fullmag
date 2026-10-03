@@ -1,6 +1,8 @@
 use super::eigen_mass_metric::ModalMassMetric;
 use super::eigen_solve::{
-    complex_mass_norm, deembed_native_bloch_floquet_mode_vector, normalize_complex_mode,
+    checked_complex_normalization_scale, complex_mass_norm,
+    deembed_native_bloch_floquet_mode_vector, normalize_complex_mode_and_scale,
+    normalize_complex_vector_with_scale,
 };
 use super::eigen_types::{NativeBlochFloquetDensePayload, SharedDomainModeContext};
 use crate::types::RunError;
@@ -592,8 +594,7 @@ pub(super) fn native_poisson_airbox_mode_from_json(
         });
     }
     let normalization_scale =
-        complex_block_mode_normalization_scale(&vector, tangent_mass, plan.normalization);
-    normalize_complex_block_mode(&mut vector, tangent_mass, plan.normalization);
+        normalize_complex_block_mode(&mut vector, tangent_mass, plan.normalization)?;
     let floquet_certificate = if mode
         .get("potential_representation")
         .and_then(|v| v.as_str())
@@ -635,11 +636,12 @@ pub(super) fn native_poisson_airbox_mode_from_json(
                 .to_string(),
         });
     }
-    let phi_vector = phi_real
+    let raw_phi_vector = phi_real
         .iter()
         .zip(phi_imag.iter())
-        .map(|(re, im)| Complex64::new(*re, *im) / normalization_scale)
+        .map(|(re, im)| Complex64::new(*re, *im))
         .collect::<Vec<_>>();
+    let phi_vector = normalize_complex_vector_with_scale(&raw_phi_vector, normalization_scale)?;
     let (residual_absolute_l2, residual_relative_l2, residual_linf, backend_reported_residual) =
         native_modal_residuals_from_json(mode)?;
     let block_residual_q = if shared_domain_context.is_some() {
@@ -798,17 +800,9 @@ fn native_bloch_floquet_mode_from_json(
         .collect::<Vec<_>>();
     let mut vector =
         deembed_native_bloch_floquet_mode_vector(&embedded, payload.physical_complex_dof)?;
-    let normalization_scale = match plan.normalization {
-        EigenNormalizationIR::UnitL2 => complex_mass_norm(&payload.physical_mass, &vector)
-            .re
-            .max(0.0)
-            .sqrt(),
-        EigenNormalizationIR::UnitMaxAmplitude => vector
-            .iter()
-            .fold(0.0_f64, |acc, value| acc.max(value.norm())),
-    }
-    .max(1.0e-30);
-    vector = normalize_complex_mode(&vector, &payload.physical_mass, &plan.normalization);
+    let (normalized, normalization_scale) =
+        normalize_complex_mode_and_scale(&vector, &payload.physical_mass, &plan.normalization)?;
+    vector = normalized;
     let floquet_certificate = native_floquet_mode_certificate_from_json(mode, normalization_scale)?;
     let eigenvalue_real = required_f64(mode, "eigenvalue_real")?;
     let eigenvalue_imag = required_f64(mode, "eigenvalue_imag")?;
@@ -892,8 +886,7 @@ fn native_modal_mode_from_json(
         .map(|(re, im)| Complex64::new(*re, *im))
         .collect::<Vec<_>>();
     let normalization_scale =
-        complex_block_mode_normalization_scale(&vector, tangent_mass, plan.normalization);
-    normalize_complex_block_mode(&mut vector, tangent_mass, plan.normalization);
+        normalize_complex_block_mode(&mut vector, tangent_mass, plan.normalization)?;
     let floquet_certificate = native_floquet_mode_certificate_from_json(mode, normalization_scale)?;
     let eigenvalue_real = required_f64(mode, "eigenvalue_real")?;
     let eigenvalue_imag = required_f64(mode, "eigenvalue_imag")?;
@@ -1389,24 +1382,21 @@ pub(super) fn normalize_complex_block_mode(
     vector: &mut [Complex64],
     mass: &dyn ModalMassMetric,
     normalization: EigenNormalizationIR,
-) {
-    let scale = complex_block_mode_normalization_scale(vector, mass, normalization);
-    for value in vector {
-        *value /= scale;
+) -> Result<f64, RunError> {
+    if mass.nrows() != vector.len() {
+        return Err(RunError {
+            message: "modal normalization mass metric dimensions do not match the vector".into(),
+        });
     }
-}
-fn complex_block_mode_normalization_scale(
-    vector: &[Complex64],
-    mass: &dyn ModalMassMetric,
-    normalization: EigenNormalizationIR,
-) -> f64 {
-    match normalization {
-        EigenNormalizationIR::UnitL2 => mass.quadratic_form(vector).re.max(0.0).sqrt(),
-        EigenNormalizationIR::UnitMaxAmplitude => vector
-            .iter()
-            .fold(0.0_f64, |acc, value| acc.max(value.norm())),
-    }
-    .max(1.0e-30)
+    let quadratic = match normalization {
+        EigenNormalizationIR::UnitL2 => Some(mass.quadratic_form(vector)),
+        EigenNormalizationIR::UnitMaxAmplitude => None,
+    };
+    let scale = checked_complex_normalization_scale(vector, quadratic, &normalization)?;
+    let normalized = normalize_complex_vector_with_scale(vector, scale)?;
+    // Commit the complete checked vector atomically; invalid input leaves it intact.
+    vector.copy_from_slice(&normalized);
+    Ok(scale)
 }
 pub(super) fn complex_block_mass_norm(
     mass: &dyn ModalMassMetric,
