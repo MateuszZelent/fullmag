@@ -45,6 +45,7 @@ pub(crate) use eigen_path::{
 pub(crate) use eigen_path::test_support;
 pub(crate) mod eigen_policy;
 pub(crate) mod eigen_progress;
+pub(crate) mod single_k_checkpoint;
 pub(crate) mod eigen_projection;
 pub(crate) mod eigen_reduction;
 pub(crate) mod eigen_shared_domain;
