@@ -1801,6 +1801,23 @@ bool floquet_diagnostic_tolerance(
     return false;
 }
 
+bool floquet_diagnostic_shifted_ksp_type(const char **out_value) noexcept
+{
+    if (out_value == nullptr) {
+        return false;
+    }
+    const char *value = std::getenv("FULLMAG_FLOQUET_SHIFTED_KSP_TYPE");
+    if (value == nullptr || std::strcmp(value, KSPGMRES) == 0) {
+        *out_value = KSPGMRES;
+        return true;
+    }
+    if (std::strcmp(value, KSPFGMRES) == 0) {
+        *out_value = KSPFGMRES;
+        return true;
+    }
+    return false;
+}
+
 bool floquet_diagnostic_gmres_restart(PetscInt *out_value) noexcept
 {
     if (out_value == nullptr) {
@@ -3063,6 +3080,7 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
                  static_cast<PetscReal>(1.0e-3 * eigen_tolerance)));
     PetscReal eps_absolute_tolerance = default_eps_absolute_tolerance;
     PetscReal shifted_ksp_tolerance = default_shifted_ksp_tolerance;
+    const char *requested_shifted_ksp_type = KSPGMRES;
     PetscInt requested_gmres_restart = kFloquetShiftedGmresDefaultRestart;
     if (!floquet_diagnostic_tolerance(
             "FULLMAG_FLOQUET_EPS_PREFILTER_ABS",
@@ -3072,11 +3090,18 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
             "FULLMAG_FLOQUET_SHIFTED_KSP_RTOL",
             default_shifted_ksp_tolerance,
             &shifted_ksp_tolerance) ||
-        !floquet_diagnostic_gmres_restart(&requested_gmres_restart)) {
+        !floquet_diagnostic_gmres_restart(&requested_gmres_restart) ||
+        !floquet_diagnostic_shifted_ksp_type(&requested_shifted_ksp_type)) {
         result.status = "validation_error";
         result.unsupported_reason = "floquet_diagnostic_ksp_option_invalid";
         destroy_all();
         return result;
+    }
+    result.ksp_type = requested_shifted_ksp_type;
+    if (std::strcmp(requested_shifted_ksp_type, KSPFGMRES) == 0) {
+        // FGMRES does not use the GMRES residual-gap breakdown control.
+        result.ksp_breakdown_tolerance =
+            std::numeric_limits<double>::quiet_NaN();
     }
     result.eps_normalized_absolute_tolerance =
         static_cast<double>(eps_absolute_tolerance);
@@ -3149,18 +3174,19 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
     if (
         STSetPreconditionerMat(spectral_transform, shifted_preconditioner) != 0 ||
         STGetKSP(spectral_transform, &shifted_ksp) != 0 ||
-        KSPSetType(shifted_ksp, KSPGMRES) != 0 ||
+        KSPSetType(shifted_ksp, requested_shifted_ksp_type) != 0 ||
         KSPGMRESSetRestart(shifted_ksp, requested_gmres_restart) != 0 ||
-        // The Schur MatShell contains a finite-tolerance inner Poisson solve,
-        // so the recursive GMRES norm can drift from the explicitly
+        // The Schur MatShell applies Poisson through PREONLY/LU. Roundoff
+        // can make the recursive GMRES norm drift from the explicitly
         // recomputed norm at restart. Permit residual replacement while the
         // rebuilt norm stays within twice the norm at the beginning of the
         // cycle. PETSc still reports larger discrepancies and all actual
         // nonconvergence as hard errors; the independent true-residual and
         // original-pencil gates below remain authoritative.
-        KSPGMRESSetBreakdownTolerance(
-            shifted_ksp,
-            kFloquetShiftedGmresBreakdownTolerance) != 0 ||
+        (std::strcmp(requested_shifted_ksp_type, KSPGMRES) == 0 &&
+         KSPGMRESSetBreakdownTolerance(
+             shifted_ksp,
+             kFloquetShiftedGmresBreakdownTolerance) != 0) ||
         // The CGS refinement pilot did not clear the physical mode gate.
         // The restart option tests whether recomputing the residual before
         // projected convergence improves the true shifted-solve residual.
@@ -3199,6 +3225,16 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
         destroy_all();
         return result;
     }
+    const char *resolved_shifted_ksp_type = nullptr;
+    if (KSPGetType(shifted_ksp, &resolved_shifted_ksp_type) != 0 ||
+        resolved_shifted_ksp_type == nullptr ||
+        std::strcmp(resolved_shifted_ksp_type, requested_shifted_ksp_type) != 0) {
+        result.status = "solve_error";
+        result.unsupported_reason = "floquet_shifted_ksp_type_mismatch";
+        destroy_all();
+        return result;
+    }
+    result.ksp_type = requested_shifted_ksp_type; // Static token survives EPS teardown.
     PetscReal shifted_actual_rtol = 0.0;
     PetscReal shifted_actual_atol = 0.0;
     PetscReal shifted_actual_dtol = 0.0;

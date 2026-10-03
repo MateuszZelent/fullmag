@@ -106,6 +106,7 @@ for _geometry_prefix in ("", "bv-"):
         PILOTS.setdefault(f"de-smoke-{_sampling}", ("examples/fem_de_smoke_numeric.py", _sampling))
 SOLVER_RTOL_CHOICES = ("1e-8", "1e-7", "1e-6")
 EPS_PREFILTER_CHOICES = ("1e-8", "1e-9", "1e-10", "1e-11")
+SHIFTED_KSP_TYPE_CHOICES = ("gmres", "fgmres")
 SHIFTED_KSP_RTOL_CHOICES = ("1e-8", "1e-9", "1e-10", "1e-11", "1e-12")
 GMRES_RESTART_CHOICES = ("8", "10", "12", "16", "30")
 MESH_LEVEL_CHOICES = ("L0", "L1", "L2", "L3")
@@ -1029,7 +1030,7 @@ def _ui_archive_shell(pilot):
     ]
 
 
-def compose_command(context, output, timeout_seconds=managed.DEFAULT_TIMEOUT_SECONDS, *, pilot="de100", external_model=False, dense_oracle=False, solver_rtol=None, eps_prefilter=None, shifted_ksp_rtol=None, gmres_restart=None, mesh_level=None, thickness_layers=None, nearest_target_frequency_ghz=None, spectral_target=None, frequency_min_ghz=None, frequency_max_ghz=None, ui_web_root=None, ui_host_port=UI_API_PORT, capture_session=False, probe_input_dir=None, probe_manifest_sha256=None, parallel_mode=None, schur_action_diagnostic=False):
+def compose_command(context, output, timeout_seconds=managed.DEFAULT_TIMEOUT_SECONDS, *, pilot="de100", external_model=False, dense_oracle=False, solver_rtol=None, eps_prefilter=None, shifted_ksp_rtol=None, gmres_restart=None, mesh_level=None, thickness_layers=None, nearest_target_frequency_ghz=None, spectral_target=None, frequency_min_ghz=None, frequency_max_ghz=None, ui_web_root=None, ui_host_port=UI_API_PORT, capture_session=False, probe_input_dir=None, probe_manifest_sha256=None, parallel_mode=None, schur_action_diagnostic=False, shifted_ksp_type=None):
     model = pilot_model(pilot)
     parallel_probe = _is_parallel_probe(pilot)
     signed_fifteen = pilot == SIGNED_FIFTEEN_PILOT
@@ -1038,6 +1039,8 @@ def compose_command(context, output, timeout_seconds=managed.DEFAULT_TIMEOUT_SEC
             raise managed.BenchmarkError("signed-fifteen requires a versioned model and explicit serial/adaptive policy")
         if probe_input_dir is not None or probe_manifest_sha256 is not None:
             raise managed.BenchmarkError("signed-fifteen cannot use probe input artifacts")
+    if shifted_ksp_type is not None and (pilot == "de100" or shifted_ksp_type not in SHIFTED_KSP_TYPE_CHOICES):
+        raise managed.BenchmarkError("shifted KSP type diagnostic requires DE-SMOKE and gmres/fgmres")
     if schur_action_diagnostic and (pilot == "de100" or parallel_probe):
         raise managed.BenchmarkError(
             "Schur action diagnostic is restricted to non-parallel DE-SMOKE pilots")
@@ -1166,6 +1169,7 @@ def compose_command(context, output, timeout_seconds=managed.DEFAULT_TIMEOUT_SEC
         *(["export FULLMAG_DE_SMOKE_SOLVER_RTOL=" + solver_rtol] if solver_rtol else []),
         *(["export FULLMAG_FLOQUET_EPS_PREFILTER_ABS=" + eps_prefilter] if eps_prefilter else []),
         *(["export FULLMAG_FLOQUET_SHIFTED_KSP_RTOL=" + shifted_ksp_rtol] if shifted_ksp_rtol else []),
+        *(["export FULLMAG_FLOQUET_SHIFTED_KSP_TYPE=" + shifted_ksp_type] if shifted_ksp_type else []),
         *(["export FULLMAG_FLOQUET_GMRES_RESTART=" + gmres_restart] if gmres_restart else []),
         *(["export FULLMAG_FLOQUET_SCHUR_ACTION_DIAGNOSTIC=1"]
            if schur_action_diagnostic else []),
@@ -1595,7 +1599,9 @@ def validate_thickness_layers_metadata(case, requested):
             "qualification": "NOT VERIFIED"}
 
 
-def execute(context, output, command, model_sha, timeout_seconds=managed.DEFAULT_TIMEOUT_SECONDS, *, pilot="de100", model_identity=None, dense_oracle=False, solver_rtol=None, eps_prefilter=None, shifted_ksp_rtol=None, gmres_restart=None, mesh_level=None, thickness_layers=None, nearest_target_frequency_ghz=None, spectral_target=None, frequency_min_ghz=None, frequency_max_ghz=None, ui_enabled=False, capture_session=False, ui_frontend=None, ui_web_root=None, ui_host_port=UI_API_PORT, parallel_mode=None, probe_input_dir=None, schur_action_diagnostic=False):
+def execute(context, output, command, model_sha, timeout_seconds=managed.DEFAULT_TIMEOUT_SECONDS, *, pilot="de100", model_identity=None, dense_oracle=False, solver_rtol=None, eps_prefilter=None, shifted_ksp_rtol=None, gmres_restart=None, mesh_level=None, thickness_layers=None, nearest_target_frequency_ghz=None, spectral_target=None, frequency_min_ghz=None, frequency_max_ghz=None, ui_enabled=False, capture_session=False, ui_frontend=None, ui_web_root=None, ui_host_port=UI_API_PORT, parallel_mode=None, probe_input_dir=None, schur_action_diagnostic=False, shifted_ksp_type=None):
+    if shifted_ksp_type is not None and (pilot == "de100" or shifted_ksp_type not in SHIFTED_KSP_TYPE_CHOICES):
+        raise managed.BenchmarkError("shifted KSP type diagnostic requires DE-SMOKE and gmres/fgmres")
     if schur_action_diagnostic and (pilot == "de100" or _is_parallel_probe(pilot)):
         raise managed.BenchmarkError(
             "Schur action diagnostic is restricted to non-parallel DE-SMOKE pilots")
@@ -1614,6 +1620,7 @@ def execute(context, output, command, model_sha, timeout_seconds=managed.DEFAULT
     request["solver_rtol_sweep_requested"] = solver_rtol
     request["eps_prefilter_diagnostic_requested"] = eps_prefilter
     request["shifted_ksp_rtol_diagnostic_requested"] = shifted_ksp_rtol
+    request["shifted_ksp_type_diagnostic_requested"] = shifted_ksp_type
     request["gmres_restart_diagnostic_requested"] = gmres_restart
     request["schur_action_diagnostic_requested"] = bool(schur_action_diagnostic)
     request["mesh_level_requested"] = mesh_level
@@ -1673,6 +1680,7 @@ def execute(context, output, command, model_sha, timeout_seconds=managed.DEFAULT
               "job": request["job"], "source": request["source"], "runtime": request["runtime"],
               "model_sha256": model_sha, "return_code": None, "artifacts": None,
               "container_cleanup": {"status": "not_requested"}, "ui": ui_metadata}
+    result["shifted_ksp_type_diagnostic_requested"] = shifted_ksp_type
     result["schur_action_diagnostic_requested"] = bool(schur_action_diagnostic)
     if "parallel_probe" in request:
         result["parallel_probe"] = request["parallel_probe"]
@@ -2039,6 +2047,8 @@ def main(argv=None):
                         help="diagnostic EPS absolute true-residual cutoff for DE-SMOKE pilots")
     parser.add_argument("--shifted-ksp-rtol", choices=SHIFTED_KSP_RTOL_CHOICES,
                         help="diagnostic shift-invert KSP rtol for DE-SMOKE pilots")
+    parser.add_argument("--shifted-ksp-type", choices=SHIFTED_KSP_TYPE_CHOICES,
+                        help="opt-in shifted solver trial; native default remains GMRES")
     parser.add_argument("--gmres-restart", choices=GMRES_RESTART_CHOICES,
                         help="diagnostic shift-invert GMRES restart for DE-SMOKE pilots")
     parser.add_argument(
@@ -2060,6 +2070,8 @@ def main(argv=None):
     )
     args = parser.parse_args(argv)
     try:
+        if args.shifted_ksp_type is not None and args.pilot == "de100":
+            raise ValueError("--shifted-ksp-type requires a DE-SMOKE pilot")
         if args.with_ui and args.capture_session:
             raise ValueError("--with-ui and --capture-session are mutually exclusive")
         if args.with_ui and not args.web_build_root:
@@ -2144,6 +2156,7 @@ def main(argv=None):
                 model_input.verify_model(output, input_identity)
             print(json.dumps({"status": "dry_run", "qualification": "NOT VERIFIED",
                               "model_sha256": model_sha, "model_source": input_identity,
+                              "shifted_ksp_type_diagnostic_requested": args.shifted_ksp_type,
                               "schur_action_diagnostic_requested": args.schur_action_diagnostic,
                               "command": compose_command(
                                   context, output, pilot=args.pilot,
@@ -2152,6 +2165,7 @@ def main(argv=None):
                                   schur_action_diagnostic=args.schur_action_diagnostic,
                                   eps_prefilter=args.eps_prefilter,
                                   shifted_ksp_rtol=args.shifted_ksp_rtol,
+                                  shifted_ksp_type=args.shifted_ksp_type,
                                   gmres_restart=args.gmres_restart, mesh_level=args.mesh_level,
                                   thickness_layers=args.thickness_layers,
                                   nearest_target_frequency_ghz=args.nearest_target_frequency_ghz,
@@ -2186,6 +2200,7 @@ def main(argv=None):
                 schur_action_diagnostic=args.schur_action_diagnostic,
                 eps_prefilter=args.eps_prefilter,
                 shifted_ksp_rtol=args.shifted_ksp_rtol,
+                shifted_ksp_type=args.shifted_ksp_type,
                 gmres_restart=args.gmres_restart, mesh_level=args.mesh_level,
                 thickness_layers=args.thickness_layers,
                 nearest_target_frequency_ghz=args.nearest_target_frequency_ghz,
@@ -2203,6 +2218,7 @@ def main(argv=None):
                 dense_oracle=args.dense_oracle, solver_rtol=args.solver_rtol,
                 schur_action_diagnostic=args.schur_action_diagnostic,
                 eps_prefilter=args.eps_prefilter, shifted_ksp_rtol=args.shifted_ksp_rtol,
+                shifted_ksp_type=args.shifted_ksp_type,
                 gmres_restart=args.gmres_restart, mesh_level=args.mesh_level,
                 thickness_layers=args.thickness_layers,
                 nearest_target_frequency_ghz=args.nearest_target_frequency_ghz,

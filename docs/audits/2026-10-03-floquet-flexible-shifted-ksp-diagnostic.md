@@ -1,0 +1,31 @@
+# Floquet — ograniczona próba Flexible GMRES
+
+Data: 2026-10-03. Zakres: FEM CPU, diagnostyczny wybór Krylov dla przesuniętego układu Schura. Bez deklaracji naprawienia błędu lub kwalifikacji fizycznej.
+
+## Potwierdzone dane i hipoteza
+
+Build #221, digest fa998c121f9288ab255011d1a36ffe0cce66e55108603546cd1a22c3d59c637c, przeszedł receipt/ABI/runtime dla MFEM4.10, PETSc3.24.6 i SLEPc3.24.3. Kampania signed15-adaptive-v1 zatrzymała się na k=-25 rad/µm. Jednopunktowe odtworzenie schur-km25-restart8-v1 powtórzyło dokładnie normy GMRES: recursion8.54271e-16, recomputed3.94672e-13, początek cyklu1.21126e-13.
+
+Schur action przed EPS: repeatability0, homogeneity/additivity około2e-16, Poisson residual3.64e-15. To nie test preconditionera na faktycznych wektorach Arnoldiego i nie dowód dokładności shifted inverse. Modalny Poisson używa PREONLY/LU bez shiftu; wcześniejszy komentarz o iteracyjnym wewnętrznym solve nie opisuje tej realizacji. PC_RIGHT i norma unpreconditioned są potwierdzone przed EPS.
+
+Hipoteza do rozdzielenia: rekonstrukcja prawego preconditionera może wzmacniać roundoff/cancellation. GMRES rekonstruuje rozwiązanie przez zastosowanie preconditionera do kombinacji wektorów Krylov; FGMRES zachowuje osobne preconditioned kierunki. W arytmetyce dokładnej przy stałym liniowym preconditionerze metody dotyczą tego samego układu. Nie zakładamy, że PCLU jest nieliniowy, ani że sama zamiana algorytmu naprawi błąd.
+
+## Granice próby
+
+- Kanoniczna fizyka, równania, jednostki SI i residual oryginalnego układu pozostają w [0828](../physics/0828-fem-frequency-domain-floquet-demag.md). Nie zmieniamy demaga, siatki, stanu równowagi, znaków fazy, regularizacji Poissona, EPS/KSP rtol, physical residual1e-8 ani kryteriów window/field.
+- Opt-in `FULLMAG_FLOQUET_SHIFTED_KSP_TYPE=fgmres`, sterowany jawnym `--shifted-ksp-type fgmres` w managed driverze. Brak opcji zachowuje GMRES; inne wartości są odrzucane. Opcja dotyczy tylko tego natywnego właściciela FEM CPU Floquet, nie K0, GPU lub FDM.
+- Restart i CGS refine-always pozostają wspólne. Breakdown tolerance GMRES nie jest reklamowana jako aktywna dla FGMRES: diagnostyka podaje null. Faktyczny typ jest sprawdzany przez KSPGetType przed EPS, bez fallbacku.
+- Run-request i run-result wiążą żądany wariant. Native diagnostics publikuje rzeczywisty typ. To nadal `NOT VERIFIED`; nie wolno przepisać starego wyniku GMRES jako FGMRES.
+
+## Odbiór i dalsze kroki
+
+Kontrole interpretowane sprawdzają opt-in, odrzucenie nieobsługiwanej wartości, przepływ do managed command i receipt. Nie są wykonaniem PETSc. Kompilowanie native unit tests nadal zabronione. Nowa kapsuła runtime-v2 musi przejść kolejkę, atestację i konkretny punkt -25, z pełnymi polami oraz original-pencil residual. Porównanie całych EPS runów zmienia kolejne RHS, więc jest testem zachowania metody, nie izolowanym replay tego samego RHS. Do przypisania przyczyny potrzebny jest pomiar rzeczywistych wektorów i działania preconditionera; brak takiego replay pozostaje jawny.
+
+Po poprawnym punkcie wymagane Γ/±10 i docelowe15 rzeczywistych punktów, walidacja oraz wykres. Parytet serial/adaptive, zbieżności, COMSOL, GPU i cały S00–S12 pozostają otwarte. Nie zmieniono wersji PETSc/SLEPc.
+
+## Mapa źródeł i źródła pierwotne
+
+- `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp` + `floquet_diagnostic_shifted_ksp_type`, `solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context`: wybór oraz konfiguracja native KSP.
+- `scripts/run_de_100nm_pilot.py` + `compose_command`, `execute`, `main`: jawna opcja i provenance receiptu.
+- `scripts/test_de_shifted_ksp_type.py`: kontrola scope i provenance, bez native compilation.
+- [PETSc FGMRES](https://petsc.org/release/manualpages/KSP/KSPFGMRES/), [kod GMRES](https://petsc.org/release/src/ksp/ksp/impls/gmres/gmres.c.html). Dokumentacja online jest nowsza od runtime3.24.6; zgodność API wymaga managed builda.
