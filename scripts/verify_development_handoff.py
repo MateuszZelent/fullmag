@@ -23,6 +23,12 @@ SOURCE_PATHS = (
     "scripts/verify_development_handoff.py",
     "scripts/fullmag_storage.py",
     "scripts/windows/runtime_bundle.py",
+    "scripts/windows/development_status.py",
+    "scripts/windows/watch_backend.py",
+    "scripts/windows/workspace_backend_identity.py",
+    "scripts/windows/runtime_lease.py",
+    "scripts/windows/run_fullmag.ps1",
+    "scripts/test_windows_development_status.py",
     "scripts/just_storage_shell.sh",
     "justfile",
 )
@@ -72,7 +78,7 @@ def run(repo_root: str) -> int:
             "head": storage.git(repo, "rev-parse", "HEAD"),
             "source_sha256": source_before, "source_paths": list(SOURCE_PATHS),
             "started_at": storage.now(), "state": "running",
-            "scope": "interpreted persistence checks; no solver or process restart",
+            "scope": "interpreted handoff and development watcher checks; no solver or process restart",
         }
         storage.atomic_json(receipt_path, receipt)
         code = 1
@@ -81,7 +87,7 @@ def run(repo_root: str) -> int:
                    "PYTHONDONTWRITEBYTECODE": "1", "PYTHONUTF8": "1",
                    "TEMP": str(fixtures), "TMP": str(fixtures), "TMPDIR": str(fixtures)}
             command = [sys.executable, "-m", "unittest", "discover", "-s", "scripts",
-                       "-p", "test_*development_handoff.py", "-v"]
+                       "-p", "test_*development_*.py", "-v"]
             with log_path.open("w", encoding="utf-8") as log:
                 code = subprocess.run(command, cwd=repo, env=env, stdout=log,
                                       stderr=subprocess.STDOUT, check=False).returncode

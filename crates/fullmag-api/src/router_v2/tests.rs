@@ -641,6 +641,7 @@ pub(crate) fn test_app_state() -> Arc<AppState> {
     let (control_events_tx, _rx) = watch::channel(0u64);
 
     Arc::new(AppState {
+        development_backend: crate::router_v2::handlers::platform::development_backend::DevelopmentBackendConfig::Disabled,
         repo_root: PathBuf::from("."),
         submit_store_root: None,
         submit_backlog_limit: std::num::NonZeroUsize::new(
@@ -2763,6 +2764,7 @@ async fn test_router_with_session_store_state() -> (axum::Router, Arc<AppState>,
     let (control_events_tx, _rx) = watch::channel(0u64);
 
     let state = Arc::new(AppState {
+        development_backend: crate::router_v2::handlers::platform::development_backend::DevelopmentBackendConfig::Disabled,
         repo_root: repo_root.clone(),
         submit_store_root: Some(repo_root.join("submit-store")),
         submit_backlog_limit: std::num::NonZeroUsize::new(

@@ -108,6 +108,9 @@ pub(crate) enum MeshCommandTarget {
 
 #[derive(Debug, Clone)]
 pub(crate) struct AppState {
+    /// Immutable native launcher binding; ordinary API startup leaves it disabled.
+    pub development_backend:
+        crate::router_v2::handlers::platform::development_backend::DevelopmentBackendConfig,
     pub repo_root: PathBuf,
     /// Managed, project-owned run storage resolved before this API starts.
     pub submit_store_root: Option<PathBuf>,

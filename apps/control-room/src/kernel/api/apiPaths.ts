@@ -23,6 +23,10 @@ export const PLATFORM_HEALTH_PATH = openApiV2Path(
   "/v2/platform/health",
 );
 
+export const PLATFORM_DEVELOPMENT_BACKEND_PATH = openApiV2Path(
+  "/v2/platform/development-backend",
+);
+
 export const PLATFORM_OPENAPI_PATH = openApiV2Path(
   "/v2/platform/openapi.json",
 );

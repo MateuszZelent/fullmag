@@ -297,12 +297,21 @@ def run_sealed_runtime(layout, command, env, profile):
             if sealed and profile == "dev" and command[command.index("-Frontend") + 1] == "dev":
                 import sys
                 watch_env = dict(env)
-                for key in ("FULLMAG_STORAGE_LOCK_TOKEN", "FULLMAG_STORAGE_LOCK_KEY", "FULLMAG_NATIVE_RUNTIME_ACTIVE"):
+                for key in (
+                    "FULLMAG_STORAGE_LOCK_TOKEN",
+                    "FULLMAG_STORAGE_LOCK_KEY",
+                    "FULLMAG_NATIVE_RUNTIME_ACTIVE",
+                    "FULLMAG_DEVELOPMENT_BACKEND_GENERATION",
+                    "FULLMAG_DEVELOPMENT_BACKEND_STATUS_FILE",
+                    "FULLMAG_DEVELOPMENT_BACKEND_SOURCE",
+                    "FULLMAG_DEVELOPMENT_BACKEND_VERSION",
+                ):
                     watch_env.pop(key, None)
                 watcher = subprocess.Popen([
                     sys.executable, str(Path(__file__).with_name("watch_backend.py")),
                     "--repo-root", layout["repo_root"], "--web-port", command[command.index("-WebPort") + 1],
                     "--stop-file", str(stop_file), "--baseline-digest", bundle["source"]["backend_source_sha256"],
+                    "--generation-id", nonce,
                 ], cwd=layout["repo_root"], env=watch_env)
                 state["watcher_pid"] = watcher.pid
                 state["watcher_waited"] = False

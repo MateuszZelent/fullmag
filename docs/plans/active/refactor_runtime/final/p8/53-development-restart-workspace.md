@@ -8,7 +8,7 @@ Restart nie może przerwać aktywnej symulacji ani utracić niezapisanych szkic�
 zapisany stan projektu i workspace ma zostać odtworzony. P8-52 realizuje
 kompilację i separację EXE. Niniejszy krok dodaje pełny lifecycle w UI.
 
-## Ustalenia źródłowe
+## Ustalenia źródłowe na wejściu do P8-53
 
 1. Watcher publikuje `backend-watch-status.json`, ale obecnie nie ma jego
    publicznego zasobu v2, facade, resource hook ani konsumenta UI.
@@ -100,6 +100,11 @@ Szczegóły zakresu są w [checkpointcie handoffu](53a-authoring-handoff-persist
 Prymityw nie jest jeszcze konsumentem API ani launchera. Wymaga przekazania
 wszystkich referencji do plików przez semantycznego właściciela sceny.
 Nie zatrzymuje procesów i nie dowodzi odtworzenia workspace w nowym API.
-Pozostają: zasób/komenda v2, admission/drain, kontrola szkiców, restore przed
+Zasób statusu buildu v2, jego generated kontrakt i typowana fasada są już
+zrealizowane w [P8-53B](53b-development-build-status.md). Watcher ma domyślne
+120 sekund bez zmian źródeł oraz heartbeat; gotowy build nadal nie oznacza
+dostępnego restartu.
+
+Pozostają: resource hook/banner i komenda v2, admission/drain, kontrola szkiców, restore przed
 listen, nowy pin oraz rzeczywisty przebieg Windows/browser. Nie zwiększamy
 procentu całego planu na podstawie samego zapisu handoffu.

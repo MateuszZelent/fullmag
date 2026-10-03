@@ -92,7 +92,15 @@ case "${recipe}" in
     # Invoke only this checkout's helper, never the supplied recipe text.
     exec "${python_cmd}" "${script_dir}/export_runner_openapi.py" --repo-root "${repo_root}" --job-id "${BASH_REMATCH[1]}" --expected-commit "${BASH_REMATCH[2]}"
     ;;
-  *"scripts/verify_development_handoff.py"*)
+    *"scripts/verify_development_backend_api.py"*)
+      development_api_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_development_backend_api.py" --repo-root "[^"]+"$'
+      if [[ ! "${recipe}" =~ ${development_api_pattern} ]]; then
+        echo "[fullmag just] invalid development API check recipe" >&2
+        exit 2
+      fi
+      exec "${python_cmd}" "${script_dir}/verify_development_backend_api.py" --repo-root "${repo_root}"
+      ;;
+    *"scripts/verify_development_handoff.py"*)
     handoff_check_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_development_handoff.py" --repo-root "[^"]+"$'
     if [[ ! "${recipe}" =~ ${handoff_check_pattern} ]]; then
       echo "[fullmag just] invalid development handoff check recipe" >&2

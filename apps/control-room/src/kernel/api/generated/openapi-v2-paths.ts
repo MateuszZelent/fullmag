@@ -20,6 +20,7 @@ export const openApiV2PathLiterals = [
   "/v2/persistence/projects/{project_id}/runs/{run_id}/tasks/{task_id}/cancellation",
   "/v2/platform/asyncapi.json",
   "/v2/platform/capabilities",
+  "/v2/platform/development-backend",
   "/v2/platform/docs/asyncapi",
   "/v2/platform/health",
   "/v2/platform/openapi.json",

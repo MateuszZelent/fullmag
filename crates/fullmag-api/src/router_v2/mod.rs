@@ -29,6 +29,10 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             "/v2/platform/runtime-service",
             get(handlers::platform::runtime_service::get_runtime_service),
         )
+        .route(
+            "/v2/platform/development-backend",
+            get(handlers::platform::development_backend::get_development_backend),
+        )
         .route("/v2", get(get_v2_index))
         .route("/v2/", get(get_v2_index))
         .route("/v2/platform/openapi.json", get(get_openapi_json))
@@ -1186,7 +1190,8 @@ mod runtime_binding_tests {
 
     #[tokio::test]
     async fn platform_document_binds_actual_accepted_store_without_initializing_it() {
-        let directory = std::env::temp_dir().join(format!("runtime-binding-{}", uuid::Uuid::new_v4()));
+        let directory =
+            std::env::temp_dir().join(format!("runtime-binding-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir(&directory).unwrap();
         let root = directory.join("accepted-store");
         let mut state = crate::router_v2::tests::test_app_state();
@@ -1194,10 +1199,14 @@ mod runtime_binding_tests {
         let Json(document) = get_openapi_json(State(state)).await;
         let binding = &document["x-fullmag-runtime-store-binding"];
         assert_eq!(binding["schema_version"], "runtime_store_binding.v1");
-        assert_eq!(binding["binding"].as_str(), fullmag_runtime_control::accepted_store::store_binding(&root).as_deref());
+        assert_eq!(
+            binding["binding"].as_str(),
+            fullmag_runtime_control::accepted_store::store_binding(&root).as_deref()
+        );
         assert!(!root.exists());
         assert!(!binding.to_string().contains(root.to_str().unwrap()));
-        let Json(document) = get_openapi_json(State(crate::router_v2::tests::test_app_state())).await;
+        let Json(document) =
+            get_openapi_json(State(crate::router_v2::tests::test_app_state())).await;
         assert!(document["x-fullmag-runtime-store-binding"]["binding"].is_null());
         std::fs::remove_dir(directory).unwrap();
     }

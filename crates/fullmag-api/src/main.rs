@@ -2426,12 +2426,9 @@ async fn main() {
         tracing::error!("Cannot initialize runtime state: {error}");
         std::process::exit(1);
     });
-    let current_workspace_root = runtime_state_root
-        .join("local-live")
-        .join("current");
-    let current_command_journal_store_root = runtime_state_root
-        .join("local-live")
-        .join("session-store");
+    let current_workspace_root = runtime_state_root.join("local-live").join("current");
+    let current_command_journal_store_root =
+        runtime_state_root.join("local-live").join("session-store");
     let static_web_root = resolve_static_web_root(&repo_root);
 
     let feature_flags = FeatureFlags::resolve();
@@ -2443,6 +2440,7 @@ async fn main() {
     }
 
     let state = Arc::new(AppState {
+        development_backend: router_v2::handlers::platform::development_backend::DevelopmentBackendConfig::from_environment(),
         repo_root: repo_root.clone(),
         submit_store_root: run_intent_persistence::configured_submit_store_root(
             &repo_root,

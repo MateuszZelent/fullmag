@@ -38,6 +38,19 @@ just windows-ui static 3197 false
 just windows-ui dev 3197 true
 ```
 
+Watcher backendu domyślnie rozpoczyna kompilację po 120 sekundach bez zmian
+jego źródeł. Każdy zapis zeruje odliczanie; zapis podczas kompilacji powoduje
+odrzucenie tego wyniku i ponowne oczekiwanie. HMR frontendu działa od razu.
+Wartość można zmienić przed startem (1–300 sekund):
+
+```powershell
+$env:FULLMAG_BACKEND_DEV_DEBOUNCE_SECONDS = "120"
+just windows-ui dev
+```
+
+Już działający watcher zachowuje ustawienie ze swojego startu. Nowa wartość
+obowiązuje po ponownym uruchomieniu workspace; najpierw zapisz model i szkice.
+
 Odpowiednik bezpośredni w PowerShell:
 
 ```powershell

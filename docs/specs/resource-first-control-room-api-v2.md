@@ -72,6 +72,31 @@ The API is organized by platform concepts, not by frontend screens:
 
 The default frontend base path is `/v2/sessions/current`.
 
+### Status kompilacji backendu developerskiego (P8-53)
+
+`GET /v2/platform/development-backend` obserwuje prywatny status natywnego
+watchera. Konfiguracja jest przechwytywana raz przy starcie API z launchera
+Windows dev. Bez niej zasób zwraca `disabled`; częściowa lub błędna konfiguracja
+zwraca `unknown`. Release nie uzyskuje konfiguracji dev.
+
+Zasób zawiera `schema_version`, `configured`, `revision`, `state`,
+`current_build`, `ready_build`, `restart_available` i zamknięty kod `reason`.
+Tożsamości buildów obejmują `id` i `source_sha256`: bieżący identyfikator to
+wersja zapieczętowanego procesu, gotowy to SHA256 zweryfikowanego manifestu.
+Nie są identyfikatorami sesji ani dowodem kwalifikacji solvera.
+
+Status prywatny musi mieć zgodny worktree i generację launchera, poprawny
+schemat oraz heartbeat młodszy niż 10 sekund. Brak, niezgodność, zbyt duży
+plik, niebezpieczna ścieżka lub stary heartbeat nie stają się `ready`.
+Heartbeat odświeża obserwację co około 2 sekundy również podczas kompilacji;
+sam nie zmienia publicznej rewizji ani ETag. GET wspiera `If-None-Match`/304.
+
+Publiczny zasób nie zawiera ścieżek hosta, generacji procesu, PID ani modelu.
+`ready` oznacza tylko ukończoną kompilację. Do integracji komendy handoffu
+`restart_available=false` oraz `reason=restart_integration_pending` przy
+gotowym buildzie. Ten odczyt nie wywołuje restartu, zapisu projektu ani
+przerwania symulacji. Kontrakt docelowego restartu określa ADR 0050.
+
 Jawne operacje `POST /v2/persistence/projects/{project_id}/runs` i
 `POST /v2/persistence/projects/{project_id}/runs/{run_id}/materialization`
 zwracają `409` z kodem `run_store_busy`, jeżeli magazyn ma aktywnego pisarza.

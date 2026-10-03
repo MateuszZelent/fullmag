@@ -203,6 +203,7 @@ import {
   PROJECT_RUN_TASK_CANCELLATION_PATH,
   PLATFORM_CAPABILITIES_PATH,
   PLATFORM_HEALTH_PATH,
+  PLATFORM_DEVELOPMENT_BACKEND_PATH,
   SESSIONS_PATH,
   SESSION_EVENTS_COMMUNICATION_POLICY_PATH,
   SESSION_STATUS_PATH,
@@ -319,6 +320,7 @@ import type {
   GeometryValidationResource,
   GpuTelemetryResource,
   HealthResource,
+  DevelopmentBackendResource,
   ImportSessionAssetRequest,
   JsonObject,
   LiveStatusResource,
@@ -1006,6 +1008,8 @@ export class ControlRoomApi {
   };
 
   readonly platform = {
+    developmentBackend: (options?: RequestOptions) =>
+      this.requestJson<DevelopmentBackendResource>(PLATFORM_DEVELOPMENT_BACKEND_PATH, options),
     capabilities: (options?: RequestOptions) =>
       this.requestJson<PlatformCapabilitiesResource>(
         PLATFORM_CAPABILITIES_PATH,

@@ -321,8 +321,13 @@ use utoipa::OpenApi;
         crate::router_v2::handlers::platform::system::get_capabilities,
         crate::router_v2::handlers::platform::system::get_health,
         crate::router_v2::handlers::platform::runtime_service::get_runtime_service,
+        crate::router_v2::handlers::platform::development_backend::get_development_backend,
     ),
     components(schemas(
+        crate::schemas::development_backend::DevelopmentBackendResource,
+        crate::schemas::development_backend::DevelopmentBackendState,
+        crate::schemas::development_backend::DevelopmentBackendReason,
+        crate::schemas::development_backend::DevelopmentBuildIdentity,
         crate::schemas::runtime_service::RuntimeServiceStatusResource,
         crate::schemas::runtime_service::RuntimeServiceStatusState,
         crate::schemas::runtime_service::RuntimeServiceStatusReason,

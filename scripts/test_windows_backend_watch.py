@@ -5,7 +5,7 @@ from windows.watch_backend import BuildWatcher
 def test_debounce_coalesces_edits_and_never_rebuilds_unchanged_inputs():
     current = ["a"]
     builds, states = [], []
-    watcher = BuildWatcher(lambda: current[0], lambda: builds.append(current[0]) or 0, states.append)
+    watcher = BuildWatcher(lambda: current[0], lambda: builds.append(current[0]) or 0, states.append, debounce=1)
     watcher.step(0)
     current[0] = "b"
     watcher.step(0.5)

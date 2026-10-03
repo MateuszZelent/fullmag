@@ -490,10 +490,40 @@ function Publish-NativeWorkspaceRuntime {
       $env:FULLMAG_NATIVE_RUNTIME_NONCE -notmatch '^[0-9a-f]{32}$') {
     throw "Native workspace runtime requires its managed publication handshake"
   }
+  foreach ($name in @(
+    "FULLMAG_DEVELOPMENT_BACKEND_GENERATION",
+    "FULLMAG_DEVELOPMENT_BACKEND_STATUS_FILE",
+    "FULLMAG_DEVELOPMENT_BACKEND_SOURCE",
+    "FULLMAG_DEVELOPMENT_BACKEND_VERSION"
+  )) {
+    Remove-Item "Env:$name" -ErrorAction SilentlyContinue
+  }
   $readyPath = Assert-FullmagStoragePath -Layout $StorageLayout -Path $env:FULLMAG_NATIVE_RUNTIME_READY_FILE -Label "native runtime handshake" -Parent $StorageLayout.runtime_root
   $bundleOutput = (& python (Join-Path $PSScriptRoot "runtime_bundle.py") --build-root $BuildRoot --runtime-root $StorageLayout.runtime_root --manifest $ManifestPath --profile $SelectedBackendProfile 2>&1 | Out-String)
   if ($LASTEXITCODE -ne 0) { throw "Native runtime publication failed: $bundleOutput" }
   $bundle = $bundleOutput | ConvertFrom-Json
+  $bundleManifestPath = Assert-FullmagStoragePath -Layout $StorageLayout -Path ([string]$bundle.manifest) -Label "sealed native runtime manifest" -Parent (Join-Path $StorageLayout.runtime_root "native-bundles")
+  if (-not (Test-Path -LiteralPath $bundleManifestPath -PathType Leaf)) { throw "Sealed native runtime manifest is missing" }
+  $sealedBundle = Get-Content -LiteralPath $bundleManifestPath -Raw | ConvertFrom-Json
+  if ([string]$sealedBundle.schema -ne "fullmag.native-runtime-bundle.v1" -or
+      [string]$sealedBundle.profile -ne $SelectedBackendProfile -or
+      [string]$sealedBundle.compiler_profile -ne $CargoCompilerProfile -or
+      [string]$sealedBundle.source.backend_source_sha256 -ne [string]$manifest.backend_source_sha256 -or
+      [string]$sealedBundle.source.build_version.product_version -ne [string]$manifest.build_version.product_version) {
+    throw "Sealed native runtime identity does not match the validated build manifest"
+  }
+  if ($SelectedBackendProfile -eq "dev" -and $Frontend -eq "dev") {
+    $statusPath = Assert-FullmagStoragePath -Layout $StorageLayout -Path (Join-Path $BuildRoot "backend-watch-status.json") -Label "development backend status" -Parent $BuildRoot
+    $backendSource = [string]$sealedBundle.source.backend_source_sha256
+    $productVersion = [string]$sealedBundle.source.build_version.product_version
+    if ($backendSource -notmatch '^[0-9a-f]{64}$' -or -not $productVersion) {
+      throw "Sealed native runtime is missing its development backend identity"
+    }
+    $env:FULLMAG_DEVELOPMENT_BACKEND_GENERATION = $env:FULLMAG_NATIVE_RUNTIME_NONCE
+    $env:FULLMAG_DEVELOPMENT_BACKEND_STATUS_FILE = [string]$statusPath
+    $env:FULLMAG_DEVELOPMENT_BACKEND_SOURCE = $backendSource
+    $env:FULLMAG_DEVELOPMENT_BACKEND_VERSION = $productVersion
+  }
   Write-JsonAtomic -Path $readyPath -Value ([ordered]@{
     schema = "fullmag.native-runtime-ready.v1"
     nonce = $env:FULLMAG_NATIVE_RUNTIME_NONCE

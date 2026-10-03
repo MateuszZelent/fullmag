@@ -4822,6 +4822,103 @@
         ],
         "type": "object"
       },
+      "DevelopmentBackendReason": {
+        "enum": [
+          "disabled",
+          "configuration_invalid",
+          "observation_unavailable",
+          "observation_invalid",
+          "observation_stale",
+          "watcher_stopped",
+          "build_pending",
+          "build_failed",
+          "restart_integration_pending"
+        ],
+        "type": "string"
+      },
+      "DevelopmentBackendResource": {
+        "description": "Compilation observation only; applying a build requires a separate guarded command.",
+        "properties": {
+          "configured": {
+            "type": "boolean"
+          },
+          "current_build": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DevelopmentBuildIdentity"
+              }
+            ]
+          },
+          "ready_build": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DevelopmentBuildIdentity"
+              }
+            ]
+          },
+          "reason": {
+            "$ref": "#/components/schemas/DevelopmentBackendReason"
+          },
+          "restart_available": {
+            "type": "boolean"
+          },
+          "revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/DevelopmentBackendState"
+          }
+        },
+        "required": [
+          "schema_version",
+          "configured",
+          "revision",
+          "state",
+          "restart_available",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "DevelopmentBackendState": {
+        "enum": [
+          "disabled",
+          "waiting",
+          "building",
+          "ready",
+          "failed",
+          "superseded",
+          "stopped",
+          "unknown"
+        ],
+        "type": "string"
+      },
+      "DevelopmentBuildIdentity": {
+        "properties": {
+          "id": {
+            "description": "Opaque identity: running product version or verified candidate manifest digest.",
+            "type": "string"
+          },
+          "source_sha256": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "source_sha256"
+        ],
+        "type": "object"
+      },
       "DisplayPatch": {
         "properties": {
           "active_quantity_id": {
@@ -40193,6 +40290,29 @@
               }
             },
             "description": "Runtime capabilities"
+          }
+        },
+        "tags": [
+          "platform"
+        ]
+      }
+    },
+    "/v2/platform/development-backend": {
+      "get": {
+        "operationId": "platform_get_platform_development_backend",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DevelopmentBackendResource"
+                }
+              }
+            },
+            "description": "Read-only native development compilation status"
+          },
+          "304": {
+            "description": "Development backend status has not changed"
           }
         },
         "tags": [

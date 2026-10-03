@@ -324,6 +324,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/platform/development-backend": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["platform_get_platform_development_backend"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/platform/docs/asyncapi": {
         parameters: {
             query?: never;
@@ -5407,6 +5423,27 @@ export interface components {
             plane: components["schemas"]["PlanarAxisPlane"];
             /** Format: double */
             position_fraction: number;
+        };
+        /** @enum {string} */
+        DevelopmentBackendReason: "disabled" | "configuration_invalid" | "observation_unavailable" | "observation_invalid" | "observation_stale" | "watcher_stopped" | "build_pending" | "build_failed" | "restart_integration_pending";
+        /** @description Compilation observation only; applying a build requires a separate guarded command. */
+        DevelopmentBackendResource: {
+            configured: boolean;
+            current_build?: null | components["schemas"]["DevelopmentBuildIdentity"];
+            ready_build?: null | components["schemas"]["DevelopmentBuildIdentity"];
+            reason: components["schemas"]["DevelopmentBackendReason"];
+            restart_available: boolean;
+            /** Format: int64 */
+            revision: number;
+            schema_version: string;
+            state: components["schemas"]["DevelopmentBackendState"];
+        };
+        /** @enum {string} */
+        DevelopmentBackendState: "disabled" | "waiting" | "building" | "ready" | "failed" | "superseded" | "stopped" | "unknown";
+        DevelopmentBuildIdentity: {
+            /** @description Opaque identity: running product version or verified candidate manifest digest. */
+            id: string;
+            source_sha256: string;
         };
         DisplayPatch: {
             active_quantity_id?: string | null;
@@ -14875,6 +14912,33 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["RuntimeCapabilityMatrix"];
                 };
+            };
+        };
+    };
+    platform_get_platform_development_backend: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Read-only native development compilation status */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DevelopmentBackendResource"];
+                };
+            };
+            /** @description Development backend status has not changed */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

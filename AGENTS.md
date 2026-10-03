@@ -81,6 +81,10 @@ FEM/MFEM ani dowolny ręczny `cargo`, `cmake` lub Docker.
 
 - Frontend reaguje na zapis plików przez HMR. Zmiany backendu watcher scala
   i buduje przyrostowo w profilu Cargo `backend-dev`, zachowując cache.
+  Domyślnie czeka 120 sekund bez zmian źródeł backendu; każdy kolejny zapis
+  rozpoczyna odliczanie od nowa. `FULLMAG_BACKEND_DEV_DEBOUNCE_SECONDS`
+  pozwala ustawić 1–300 sekund przed uruchomieniem workspace. Zmiana źródeł
+  podczas kompilacji odrzuca wynik i rozpoczyna pełne okno oczekiwania.
   Nie usuwaj `target` ani współdzielonych cache dla zwykłej iteracji.
 - `build=auto` w receptach oznacza sprawdzenie tożsamości źródeł i pakietu;
   `true` wymusza build, a `false` dopuszcza wyłącznie istniejący, zgodny pakiet.
