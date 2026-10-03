@@ -139,3 +139,17 @@ Szczegóły są w [P8-53F](53f-development-banner-source-integration.md).
 Poprzednie uruchomienie `just windows-ui dev` na 3197 (handle 95546)
 zakończyło się z exit 0; watcher opublikował `stopped`. Późniejsze dowody
 źródłowe nie zastępują ponownego sprawdzenia w przeglądarce po scaleniu.
+
+[P8-53E](53e-semantic-scene-assets.md) dodaje semantyczną inwentaryzację plików
+sceny, zapis v2 z zachowaniem formatów i odczyt przepinający referencje na
+zweryfikowane kopie, także przy kolejnym handoffie. Końcowa zarządzana seria
+wykonała 72 interpretowane regresje, bez skipów (receipt
+`589fc55b04ef43c899273e6fae820c64`, exit 0). Nieznane asset-id bez registry
+blokują restart zamiast deklarować niepełny snapshot jako sukces. Warstwa
+nie jest jeszcze wywoływana przez komendę API ani launcher.
+
+[P8-53G](53g-start-command-registration.md) usuwa podwójną rejestrację
+komend Start Screen, która blokowała aktualny dev frontend błędem 500.
+HMR przywrócił ekran na 3197 bez restartu backendu; przejścia Home/Templates
+oraz kontrole TypeScript/lint/API/React Doctor przeszły. To dowód uruchomienia
+UI, a nie kontrolowanego odtworzenia modelu po restarcie.

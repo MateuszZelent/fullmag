@@ -1409,6 +1409,7 @@ def _export_stage_draft(stage: LoadedStage) -> dict[str, object]:
             "eigen_operator": study.operator,
             "eigen_include_demag": study.include_demag,
             "eigen_equilibrium_source": study.equilibrium_source,
+            "eigen_equilibrium_artifact": _text_value(study.equilibrium_artifact),
             "eigen_normalization": study.normalization,
             "eigen_damping_policy": study.damping_policy,
             "eigen_k_vector": ",".join(str(component) for component in study.k_vector) if study.k_vector is not None else "",
@@ -5975,8 +5976,9 @@ def _render_stages(
                 call_parts.append(f"operator={_py_repr(operator)}")
             call_parts.append(f"include_demag={include_demag!r}")
             call_parts.append(f"equilibrium_source={_py_repr(equilibrium_source)}")
-            if study.equilibrium_artifact is not None:
-                call_parts.append(f"equilibrium_artifact={_py_repr(study.equilibrium_artifact)}")
+            equilibrium_artifact = _override_string(stage_override, "eigen_equilibrium_artifact", study.equilibrium_artifact)
+            if equilibrium_artifact is not None:
+                call_parts.append(f"equilibrium_artifact={_py_repr(equilibrium_artifact)}")
             call_parts.append(f"normalization={_py_repr(normalization)}")
             call_parts.append(f"damping_policy={_py_repr(damping_policy)}")
             spin_wave_bc_config = stage_override.get("eigen_spin_wave_bc_config")
@@ -6043,10 +6045,12 @@ def _render_stages(
             if abs(study.excitation_phase_rad) > 1e-15:
                 call_parts.append(f"excitation_phase_rad={_py_number(study.excitation_phase_rad)}")
             call_parts.append(f"include_demag={study.include_demag!r}")
-            if study.equilibrium_source != "provided":
-                call_parts.append(f"equilibrium_source={_py_repr(study.equilibrium_source)}")
-            if study.equilibrium_artifact is not None:
-                call_parts.append(f"equilibrium_artifact={_py_repr(study.equilibrium_artifact)}")
+            equilibrium_source = _override_string(stage_override, "frequency_equilibrium_source", study.equilibrium_source) or study.equilibrium_source
+            equilibrium_artifact = _override_string(stage_override, "frequency_equilibrium_artifact", study.equilibrium_artifact)
+            if equilibrium_source != "provided":
+                call_parts.append(f"equilibrium_source={_py_repr(equilibrium_source)}")
+            if equilibrium_artifact is not None:
+                call_parts.append(f"equilibrium_artifact={_py_repr(equilibrium_artifact)}")
             if study.normalization != "unit_l2":
                 call_parts.append(f"normalization={_py_repr(study.normalization)}")
             if study.damping_policy != "ignore":

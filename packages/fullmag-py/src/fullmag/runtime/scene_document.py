@@ -2072,7 +2072,10 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
                     if isinstance(stage.get("eigen_include_demag"), bool)
                     else None
                 ),
-                "eigen_equilibrium_source": stage.get("eigen_equilibrium_source") or None,
+                "eigen_equilibrium_source": stage.get("eigen_equilibrium_source") or stage.get("equilibrium_source") or None,
+                "eigen_equilibrium_artifact": stage.get("eigen_equilibrium_artifact") or stage.get("equilibrium_artifact") or None,
+                "frequency_equilibrium_source": stage.get("frequency_equilibrium_source") or stage.get("equilibrium_source") or None,
+                "frequency_equilibrium_artifact": stage.get("frequency_equilibrium_artifact") or stage.get("equilibrium_artifact") or None,
                 "eigen_normalization": stage.get("eigen_normalization") or None,
                 "eigen_target_frequency": _number_or_none(stage.get("eigen_target_frequency")),
                 "eigen_frequency_min": _number_or_none(stage.get("eigen_frequency_min")),

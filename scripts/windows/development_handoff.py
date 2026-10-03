@@ -31,6 +31,7 @@ _STORAGE_SPEC.loader.exec_module(_STORAGE)
 
 
 SCHEMA = "fullmag.development-authoring-handoff.v1"
+SCENE_ASSET_SCHEMA = "fullmag.development-authoring-handoff.v2"
 RECEIPT_SCHEMA = "fullmag.development-authoring-handoff-receipt.v1"
 HANDOFF_DIRECTORY = "development-handoffs"
 MAX_SNAPSHOT_BYTES = 64 * 1024 * 1024
@@ -40,6 +41,7 @@ MAX_ASSET_COUNT = 512
 MAX_BINDING_TEXT = 256
 MAX_DETAIL_LENGTH = 2048
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_SOURCE_SUFFIX = re.compile(r"(?:\.[A-Za-z0-9]{1,16})?")
 _UUID_FIELDS = ("api_instance_id", "generation_id")
 _SESSION_ID = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 _BINDING_FIELDS = frozenset(
@@ -495,6 +497,28 @@ def create_handoff(
     bytes are copied into the capsule after matching the supplied SHA256.
     """
     root = _validate_runtime_root(runtime_root)
+    return _stage_handoff(root, binding, scene, editor, workspace, project_document,
+                          assets=assets, asset_source_root=root)
+
+
+def _stage_handoff(
+    runtime_root: Path,
+    binding: Mapping[str, Any],
+    scene: dict[str, Any],
+    editor: Any,
+    workspace: Any,
+    project_document: Any,
+    *,
+    assets: Sequence[Mapping[str, str]],
+    asset_source_root: Path,
+    verified_prior_assets: frozenset[str] = frozenset(),
+    capsule_schema: str = SCHEMA,
+    asset_suffixes: Mapping[str, str] | None = None,
+) -> dict[str, str]:
+    """Private stage boundary; semantic callers supply a resolved source root."""
+    root = _validate_runtime_root(runtime_root)
+    _require_directory(asset_source_root, asset_source_root, "handoff asset source root")
+    _contained_path(root, asset_source_root, "handoff runtime root")
     normalized_binding = _validate_binding(binding)
     if not isinstance(scene, dict):
         raise HandoffError("scene must be the complete canonical SceneDocument JSON object")
@@ -512,6 +536,16 @@ def create_handoff(
     }
     payload_hash = _sha256(payload_bytes)
     normalized_assets = _asset_inputs(assets)
+    if not isinstance(capsule_schema, str) or capsule_schema not in {SCHEMA, SCENE_ASSET_SCHEMA}:
+        raise HandoffError("Unknown handoff writer schema")
+    if capsule_schema == SCENE_ASSET_SCHEMA:
+        if asset_suffixes is None or set(asset_suffixes) != {asset["asset_id"] for asset in normalized_assets}:
+            raise HandoffError("Semantic handoff requires a source suffix for every asset")
+        if any(not isinstance(suffix, str) or not _SOURCE_SUFFIX.fullmatch(suffix)
+               for suffix in asset_suffixes.values()):
+            raise HandoffError("Scene asset source suffix is not a bounded file extension")
+    elif asset_suffixes is not None:
+        raise HandoffError("Legacy handoff cannot declare semantic source suffixes")
     handoff_root = _handoff_root(root, create=True)
     binding_hash = _sha256(_canonical_json(normalized_binding, "handoff binding", 4096))
 
@@ -531,14 +565,16 @@ def create_handoff(
             asset_manifest = []
             total_asset_bytes = 0
             for item in normalized_assets:
-                source = _contained_path(item["source_path"], root, f"asset {item['asset_id']} source")
-                if _STORAGE.inside(source, handoff_root):
+                source = _contained_path(item["source_path"], asset_source_root, f"asset {item['asset_id']} source")
+                if _STORAGE.inside(source, handoff_root) and item["asset_id"] not in verified_prior_assets:
                     raise HandoffError("Handoff assets cannot reference another handoff capsule")
-                destination = _contained_path(asset_dir / f"{item['sha256']}.blob", staging_dir, "handoff asset copy")
+                suffix = asset_suffixes[item["asset_id"]] if asset_suffixes is not None else ".blob"
+                asset_name = f"{item['sha256']}{suffix}"
+                destination = _contained_path(asset_dir / asset_name, staging_dir, "handoff asset copy")
                 size = _copy_asset(
                     source,
                     destination,
-                    root,
+                    asset_source_root,
                     staging_dir,
                     item["sha256"],
                     MAX_HANDOFF_BYTES - MAX_SNAPSHOT_BYTES - total_asset_bytes,
@@ -547,7 +583,7 @@ def create_handoff(
                 asset_manifest.append(
                     {
                         "asset_id": item["asset_id"],
-                        "path": f"assets/{item['sha256']}.blob",
+                        "path": f"assets/{asset_name}",
                         "sha256": item["sha256"],
                         "size_bytes": size,
                     }
@@ -556,7 +592,7 @@ def create_handoff(
                 _fsync_directory(asset_dir)
 
             snapshot = {
-                "schema": SCHEMA,
+                "schema": capsule_schema,
                 "snapshot_id": snapshot_id,
                 "binding": normalized_binding,
                 "payload": normalized_payload,
@@ -624,7 +660,9 @@ def _validate_receipt(
     return receipt
 
 
-def _validate_asset_manifest(value: Any) -> list[dict[str, Any]]:
+def _validate_asset_manifest(value: Any, schema: str = SCHEMA) -> list[dict[str, Any]]:
+    if not isinstance(schema, str) or schema not in {SCHEMA, SCENE_ASSET_SCHEMA}:
+        raise HandoffError("Unknown handoff asset manifest schema")
     if not isinstance(value, list) or len(value) > MAX_ASSET_COUNT:
         raise HandoffError("Handoff asset manifest is invalid or too large")
     result = []
@@ -643,8 +681,13 @@ def _validate_asset_manifest(value: Any) -> list[dict[str, Any]]:
         digest = asset["sha256"]
         if not isinstance(digest, str) or not _SHA256.fullmatch(digest):
             raise HandoffError("Handoff asset manifest has an invalid SHA256")
-        expected_path = f"assets/{digest}.blob"
-        if asset["path"] != expected_path:
+        path = asset["path"]
+        prefix = f"assets/{digest}"
+        valid_path = path == prefix + ".blob" if schema == SCHEMA else (
+            isinstance(path, str) and path.startswith(prefix)
+            and _SOURCE_SUFFIX.fullmatch(path[len(prefix):]) is not None
+        )
+        if not valid_path:
             raise HandoffError("Handoff asset path is not content-addressed within the capsule")
         size = asset["size_bytes"]
         if isinstance(size, bool) or not isinstance(size, int) or size <= 0:
@@ -678,7 +721,9 @@ def _load_capsule(
     snapshot_hash = _sha256(snapshot_bytes)
     snapshot = _strict_json(snapshot_bytes, "handoff snapshot")
     _exact_keys(snapshot, _SNAPSHOT_FIELDS, "handoff snapshot")
-    if snapshot["schema"] != SCHEMA or snapshot["snapshot_id"] != str(parsed_id):
+    if (not isinstance(snapshot["schema"], str)
+            or snapshot["schema"] not in {SCHEMA, SCENE_ASSET_SCHEMA}
+            or snapshot["snapshot_id"] != str(parsed_id)):
         raise HandoffError("Handoff snapshot belongs to a different schema or identity")
     binding = _validate_binding(snapshot["binding"])
     if _canonical_json(binding, "snapshot binding", 4096) != _canonical_json(
@@ -706,7 +751,7 @@ def _load_capsule(
         if _sha256(_canonical_json(payload[field], f"payload.{field}", MAX_SNAPSHOT_BYTES)) != digest:
             raise HandoffError(f"Handoff {field} SHA256 does not match")
 
-    asset_manifest = _validate_asset_manifest(snapshot["assets"])
+    asset_manifest = _validate_asset_manifest(snapshot["assets"], snapshot["schema"])
     expected_entries = {"snapshot.json", "receipt.json"}
     if asset_manifest:
         expected_entries.add("assets")

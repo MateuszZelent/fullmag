@@ -66,6 +66,17 @@ zarządzanego launchera nie udostępniają tej komendy.
 Rollback wyłącza komendę zastosowania wersji, pozostawiając kompilację w tle
 i ręczne zamknięcie/uruchomienie. Nie usuwa handoffów, wyników ani cache.
 
+Prywatny zapis semantycznego handoffu używa schematu
+`fullmag.development-authoring-handoff.v2`: assety mają ścieżki adresowane
+SHA256 z zachowanym rozszerzeniem źródła. Jest to wymagane przez obecne
+importery siatki/geometrii wybierające format po rozszerzeniu. Czytnik
+prymitywu nadal obsługuje v1 (`.blob`); starszy writer nie zapisuje v2.
+Inwentaryzacja odwołań wynika z typów sceny, a nie wyszukiwania dowolnych
+kluczy `path`. Kolejny restart może kopiować dane poprzedniego handoffu
+dopiero po zweryfikowaniu całej jego kapsuły i konkretnego assetu.
+Ta warstwa przygotowuje dane; nie zastępuje admission/drain, instalacji
+sceny przed listenerem ani potwierdzenia nowej instancji API.
+
 ## Weryfikacja
 
 Wymagane są: zgodność generated API, regresje błędnego/starego handoffu,

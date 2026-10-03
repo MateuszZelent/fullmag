@@ -411,7 +411,20 @@ pub fn scene_document_to_script_builder_overrides(
             "eigen_count": parse_optional_text_u64(&stage.eigen_count),
             "eigen_target": string_or_null(&stage.eigen_target),
             "eigen_include_demag": stage.eigen_include_demag,
-            "eigen_equilibrium_source": string_or_null(&stage.eigen_equilibrium_source),
+            "eigen_equilibrium_source": if stage.eigen_equilibrium_source.is_empty() {
+                stage.extra.get("equilibrium_source").cloned().unwrap_or(Value::Null)
+            } else {
+                string_or_null(&stage.eigen_equilibrium_source)
+            },
+            "eigen_equilibrium_artifact": stage.extra.get("eigen_equilibrium_artifact")
+                .filter(|value| value.as_str().is_some_and(|text| !text.is_empty()))
+                .or_else(|| stage.extra.get("equilibrium_artifact")),
+            "frequency_equilibrium_source": stage.extra.get("frequency_equilibrium_source")
+                .filter(|value| value.as_str().is_some_and(|text| !text.is_empty()))
+                .or_else(|| stage.extra.get("equilibrium_source")),
+            "frequency_equilibrium_artifact": stage.extra.get("frequency_equilibrium_artifact")
+                .filter(|value| value.as_str().is_some_and(|text| !text.is_empty()))
+                .or_else(|| stage.extra.get("equilibrium_artifact")),
             "eigen_normalization": string_or_null(&stage.eigen_normalization),
         })).collect::<Vec<_>>(),
         "study_pipeline": builder.study_pipeline.as_ref().map(|document| {
@@ -3128,6 +3141,53 @@ mod tests {
             scene_document_problem_projection(&scene_document_from_script_builder(&malformed))
                 .expect_err("malformed present numerics must not normalize to null");
         assert!(error.message.contains("fixed_timestep"));
+    }
+
+    #[test]
+    fn scene_override_preserves_modal_equilibrium_artifact_paths() {
+        for (kind, prefix) in [("eigenmodes", "eigen"), ("frequency_response", "frequency")] {
+            for artifact_key in [
+                format!("{prefix}_equilibrium_artifact"),
+                "equilibrium_artifact".into(),
+            ] {
+                let mut encoded = serde_json::to_value(sample_builder()).unwrap();
+                encoded["stages"][0]["kind"] = serde_json::json!(kind);
+                encoded["stages"][0][format!("{prefix}_equilibrium_source")] =
+                    serde_json::json!("artifact");
+                encoded["stages"][0][&artifact_key] = serde_json::json!("storage/preserved.json");
+                let builder: ScriptBuilderState = serde_json::from_value(encoded).unwrap();
+                let scene = scene_document_from_script_builder(&builder);
+                let overrides = scene_document_to_script_builder_overrides(&scene).unwrap();
+                assert_eq!(
+                    overrides["stages"][0][format!("{prefix}_equilibrium_artifact")],
+                    serde_json::json!("storage/preserved.json")
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn scene_override_preserves_generic_equilibrium_with_empty_prefixed_aliases() {
+        for (kind, prefix) in [("eigenmodes", "eigen"), ("frequency_response", "frequency")] {
+            let mut encoded = serde_json::to_value(sample_builder()).unwrap();
+            encoded["stages"][0]["kind"] = serde_json::json!(kind);
+            encoded["stages"][0][format!("{prefix}_equilibrium_source")] = serde_json::json!("");
+            encoded["stages"][0][format!("{prefix}_equilibrium_artifact")] = Value::Null;
+            encoded["stages"][0]["equilibrium_source"] = serde_json::json!("artifact");
+            encoded["stages"][0]["equilibrium_artifact"] =
+                serde_json::json!("storage/preserved.json");
+            let builder: ScriptBuilderState = serde_json::from_value(encoded).unwrap();
+            let scene = scene_document_from_script_builder(&builder);
+            let overrides = scene_document_to_script_builder_overrides(&scene).unwrap();
+            assert_eq!(
+                overrides["stages"][0][format!("{prefix}_equilibrium_source")],
+                "artifact"
+            );
+            assert_eq!(
+                overrides["stages"][0][format!("{prefix}_equilibrium_artifact")],
+                "storage/preserved.json"
+            );
+        }
     }
 
     #[test]
