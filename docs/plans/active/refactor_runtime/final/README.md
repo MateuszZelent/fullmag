@@ -1,5 +1,12 @@
 # Fullmag — finalny audyt i plan refaktoryzacji
 
+Checkpoint B-08: [właściciel pola zewnętrznego i regionalnego FDM CPU](b/08-fdm-cpu-zeeman-owner.md).
+Osiem metod zachowuje sygnatury i ciała; Oersted, SoA capability i fused loop
+pozostają bez zmian. Source comparison i review PASS.
+Build 218 zakończył się succeeded/exit 0: 120 artefaktów i 15 wymaganych wyjść
+zweryfikowano razem z kapsułą źródeł. Dotyczy źródła B-03; B-04–B-08, runtime,
+fizyka i produkt Windows nadal wymagają osobnych dowodów.
+
 Checkpoint B-07: [właściciel magnetoelastyczności FDM CPU](b/07-fdm-cpu-magnetoelastic-owner.md).
 Pięć metod zachowuje sygnatury i ciała; fused loop i wspólny moduł naukowy
 pozostają bez zmian. Source comparison i niezależny review PASS.

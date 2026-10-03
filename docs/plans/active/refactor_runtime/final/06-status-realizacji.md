@@ -1,5 +1,17 @@
 # Status realizacji całego planu refaktoryzacji
 
+Checkpoint B-08, 03.10.2026: osiem metod pól zewnętrznych i regionalnych
+Rust FDM CPU wydzielono do `fields/zeeman.rs`. Pełne sygnatury i ciała oraz
+pozostały rodzic identyczne z bazą poza wiringiem; source review PASS.
+Pięć metod Oersteda, capability SoA i fused loop pozostają w rodzicu.
+[Zakres i granice](b/08-fdm-cpu-zeeman-owner.md). Testy NOT COMPILED / NOT RUN;
+runtime i nauka B-08 NOT VERIFIED; procenty bez awansu.
+
+Aktualny stan 218: kolejka succeeded/exit 0 i worker Exited/exit 0.
+Niezależny validator potwierdził 120 artefaktów, komplet 15 niepustych wyjść,
+zgodny snapshot oraz 6829 plików kapsuły. Build obejmuje commit B-03;
+nie obejmuje B-04–B-08. Nie jest dowodem runtime, nauki ani produktu Windows.
+
 Checkpoint B-07, 03.10.2026: pięć istniejących metod magnetoelastycznych
 Rust FDM CPU wydzielono do `fields/magnetoelastic.rs`. Niezależne porównanie
 pełnych sygnatur i ciał, pozostałego rodzica i fused loop PASS; review bez P0/P1.

@@ -254,15 +254,24 @@ fn fdm_cpu_dmi_has_one_realization_owner() {
         );
     }
 
+    let zeeman_owner = fs::read_to_string(root.join("src/fdm/cpu/fields/zeeman.rs"))
+        .expect("read FDM CPU Zeeman owner");
     for declaration in [
         "fn external_field_add_into(",
         "fn regional_field_drives_add_into_at_time(",
+    ] {
+        assert!(
+            zeeman_owner.contains(declaration) && !owner.contains(declaration),
+            "Zeeman method must have a dedicated owner and stay out of the DMI owner: {declaration}"
+        );
+    }
+    for declaration in [
         "fn soa_fast_path_supported(",
         "fn soa_fast_path_rejection_reason(",
     ] {
         assert!(
             fields.contains(declaration) && !owner.contains(declaration),
-            "non-DMI method was moved into the DMI owner: {declaration}"
+            "SoA capability method must remain in field orchestration: {declaration}"
         );
     }
 
@@ -292,6 +301,100 @@ fn fdm_cpu_dmi_has_one_realization_owner() {
         assert!(
             source.contains(symbol),
             "DMI consumer {path} no longer calls {symbol}"
+        );
+    }
+}
+
+#[test]
+fn fdm_cpu_zeeman_has_one_realization_owner() {
+    let root = crate_root();
+    let owner = fs::read_to_string(root.join("src/fdm/cpu/fields/zeeman.rs"))
+        .expect("read FDM CPU Zeeman owner");
+    let fields = fs::read_to_string(root.join("src/fdm/cpu/fields.rs"))
+        .expect("read FDM CPU field orchestration");
+    assert!(
+        fields.contains("fields/zeeman.rs") && fields.contains("mod zeeman;"),
+        "FDM fields owner must include its dedicated Zeeman module"
+    );
+
+    for declaration in [
+        "fn external_field_vectors(",
+        "fn has_external_zeeman_source(",
+        "fn external_zeeman_field_vectors(",
+        "fn external_zeeman_field_vectors_at_time(",
+        "fn external_field_add_into(",
+        "fn regional_field_drives_add_into_at_time(",
+        "fn external_field_add_into_soa(",
+        "fn regional_field_drives_add_into_soa_at_time(",
+    ] {
+        assert_eq!(
+            owner.matches(declaration).count(),
+            1,
+            "missing or duplicate {declaration}"
+        );
+        assert!(
+            !fields.contains(declaration),
+            "field orchestration still owns {declaration}"
+        );
+    }
+
+    for declaration in [
+        "fn oersted_field_add_into(",
+        "fn oersted_field_at_time(",
+        "fn oersted_field_add_into_at_time(",
+        "fn oersted_field_add_into_soa(",
+        "fn oersted_field_add_into_soa_at_time(",
+        "fn soa_fast_path_supported(",
+        "fn soa_fast_path_rejection_reason(",
+    ] {
+        assert!(
+            fields.contains(declaration) && !owner.contains(declaration),
+            "non-Zeeman method must remain in field orchestration: {declaration}"
+        );
+    }
+    assert!(
+        fields.contains("fused_local_terms_add_into")
+            && !owner.contains("fused_local_terms_add_into"),
+        "the fused local-term loop must remain outside the Zeeman owner"
+    );
+
+    for (path, symbol) in [
+        (
+            "src/fdm/cpu/fields/energy.rs",
+            "external_zeeman_field_vectors",
+        ),
+        (
+            "src/fdm/cpu/fields/energy.rs",
+            "external_field_add_into_soa",
+        ),
+        (
+            "src/fdm/cpu/fields/observables.rs",
+            "external_field_vectors",
+        ),
+        (
+            "src/fdm/cpu/fields/observables.rs",
+            "regional_field_drives_add_into_at_time",
+        ),
+        ("src/fdm/cpu/integrators.rs", "external_field_add_into_soa"),
+        (
+            "src/fdm/cpu/integrators.rs",
+            "regional_field_drives_add_into_soa_at_time",
+        ),
+        ("src/fdm/shared/problem.rs", "external_field_vectors"),
+        (
+            "src/fdm/shared/problem.rs",
+            "external_zeeman_field_vectors_at_time",
+        ),
+        ("src/fdm/cpu/fields.rs", "external_field_add_into"),
+        (
+            "src/fdm/cpu/fields.rs",
+            "regional_field_drives_add_into_at_time",
+        ),
+    ] {
+        let source = fs::read_to_string(root.join(path)).expect("read Zeeman consumer");
+        assert!(
+            source.contains(symbol),
+            "Zeeman consumer {path} no longer calls {symbol}"
         );
     }
 }
