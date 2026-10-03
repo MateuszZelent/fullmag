@@ -11,6 +11,7 @@ import socket
 import subprocess
 import sys
 import time
+import traceback
 import urllib.error
 import urllib.request
 import uuid
@@ -53,7 +54,7 @@ def run(repo_root: str) -> int:
                    "build_snapshot_sha256": manifest["source_snapshot_sha256"],
                    "build_commit": manifest["git_commit"],
                    "started_at": storage.now(), "checks": [], "processes": [],
-                   "scope": "native resource observation, open mutation admission and empty-service terminal drain; no workspace freeze, restart, solver or release qualification"}
+                   "scope": "native resource observation, private owner-authorized authoring acquisition and admission freeze/abort/disconnect, empty-service terminal drain; no process replacement, full workspace restart, solver or release qualification"}
         storage.atomic_json(receipt_path, receipt)
         code = 1
         try:
@@ -92,6 +93,7 @@ def run(repo_root: str) -> int:
         except Exception as error:
             receipt["reason"] = type(error).__name__
             receipt["detail"] = str(error)[:1000]
+            receipt["traceback"] = traceback.format_exc(limit=8)
             raise
         finally:
             receipt.update(state="completed" if code == 0 else "failed", exit_code=code, finished_at=storage.now())
@@ -380,7 +382,7 @@ def exercise(api: Path, repo: Path, run_root: Path, receipt: dict) -> None:
         with socket.socket() as reservation:
             reservation.bind(("127.0.0.1", 0))
             port = reservation.getsockname()[1]
-        env = {key: os.environ[key] for key in ("SYSTEMROOT", "WINDIR", "PATH", "PATHEXT", "TEMP", "TMP") if key in os.environ}
+        env = {key: os.environ[key] for key in ("SYSTEMROOT", "WINDIR", "PATH", "PATHEXT", "TEMP", "TMP", "COMPUTERNAME") if key in os.environ}
         env.update(FULLMAG_REPO_ROOT=str(repo), FULLMAG_STATE_ROOT=str(run_root / (label + "-state")), FULLMAG_API_PORT=str(port), FULLMAG_DISABLE_STATIC_CONTROL_ROOM="1")
         env.update(config)
         log_path = run_root / (label + ".log")
@@ -434,6 +436,8 @@ def exercise(api: Path, repo: Path, run_root: Path, receipt: dict) -> None:
                         if time.monotonic() >= deadline:
                             raise RuntimeError("Owned API did not become available")
                         time.sleep(0.1)
+                get.owner_pid = child.pid
+                get.api_port = port
                 callback(get)
             finally:
                 if child.stdin is not None and not child.stdin.closed:
@@ -484,6 +488,134 @@ def exercise(api: Path, repo: Path, run_root: Path, receipt: dict) -> None:
     }
     restore_config = {**configured, "FULLMAG_DEVELOPMENT_RESTORE_STDIN": "1"}
     storage.atomic_json(run_root / "restore-cli-input.json", restore_envelope)
+
+    owner_token = "7" * 32
+
+    def private_acquisition(get, expected_scene=None):
+        owner_root = fixture_storage / "runtimes" / worktree
+        deadline = time.monotonic() + 5
+        while True:
+            records = [json.loads(path.read_text()) for path in owner_root.glob("development-api-owner-*.json")]
+            matching = [item for item in records if item["pid"] == get.owner_pid and item["api_port"] == get.api_port]
+            if len(matching) == 1:
+                owner = matching[0]
+                break
+            assert time.monotonic() < deadline, "Private owner discovery was not published"
+            time.sleep(0.05)
+        assert owner["schema"] == "fullmag.development-api-owner.v1"
+        assert owner["owner_token_sha256"] == hashlib.sha256(owner_token.encode()).hexdigest()
+        assert owner_token not in json.dumps(owner)
+        address, port = owner["control_address"].rsplit(":", 1)
+        assert address == "127.0.0.1" and 0 < int(port) < 65536
+        checks.append("private-owner-discovery-bound-to-owned-api")
+
+        def connect():
+            return socket.create_connection((address, int(port)), timeout=8)
+
+        def exchange(stream, message):
+            stream.sendall(json.dumps(message).encode() + b"\n")
+            response = bytearray()
+            while b"\n" not in response:
+                block = stream.recv(4096)
+                assert block and len(response) + len(block) <= 64 * 1024 * 1024
+                response.extend(block)
+            line, trailing = response.split(b"\n", 1)
+            assert not trailing.strip()
+            exchange.last_raw = line
+            return json.loads(line)
+
+        # Retain Rust's scalar number tokens while independently sorting object
+        # keys. Python's float printer uses a different exponent spelling.
+        class NumberToken(str):
+            pass
+
+        def canonical_wire_bytes(value):
+            if isinstance(value, NumberToken):
+                return value.encode()
+            if isinstance(value, list):
+                return b"[" + b",".join(map(canonical_wire_bytes, value)) + b"]"
+            if isinstance(value, dict):
+                return b"{" + b",".join(json.dumps(key, ensure_ascii=False).encode() + b":"
+                    + canonical_wire_bytes(value[key]) for key in sorted(value)) + b"}"
+            return json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode()
+
+        canonical = None
+        if expected_scene is not None:
+            code, _, canonical = get("/v2/sessions/current/model/scene")
+            assert code == 200
+
+        frame = dict(schema="fullmag.development-api-control.v1", owner_token=owner_token,
+                     api_instance_id=owner["api_instance_id"], nonce=str(uuid.uuid4()), command="acquire")
+        for change in ({"owner_token": "8" * 32}, {"api_instance_id": str(uuid.uuid4())},
+                       {"nonce": "invalid"}, {"unexpected": True}):
+            with connect() as stream:
+                denied = exchange(stream, {**frame, **change})
+                assert denied["status"] == "rejected" and "workspace" not in denied, denied
+        checks.append("private-acquisition-auth-identity-nonce-and-schema-rejected")
+
+        def assert_mutation_frozen():
+            try:
+                # No request body: verify admission's 409 independently of
+                # HTTP transport handling of an unread rejected body.
+                get("/v2/sessions", method="POST")
+            except urllib.error.HTTPError as error:
+                assert error.code == 409, error.code
+            else:
+                raise AssertionError("Private acquisition did not freeze mutation admission")
+
+        with connect() as stream:
+            acquired = exchange(stream, frame)
+            assert acquired["schema"] == "fullmag.development-authoring-acquisition.v1", acquired
+            assert acquired["nonce"] == frame["nonce"] and acquired["api_instance_id"] == owner["api_instance_id"]
+            workspace = acquired["workspace"]
+            if expected_scene is None:
+                assert workspace == {"state": "no_session", "session_epoch": 0}, workspace
+            else:
+                assert workspace["state"] == "session", workspace
+                assert workspace["scene_document"] == canonical
+                assert canonical["scene"]["id"] == expected_scene["scene"]["id"]
+                assert workspace["identity"]["api_instance_id"] == owner["api_instance_id"]
+                assert workspace["identity"]["session_epoch"] == 1
+                wire_scene = json.loads(exchange.last_raw, parse_float=NumberToken,
+                    parse_int=NumberToken)["workspace"]["scene_document"]
+                assert workspace["scene_sha256"] == hashlib.sha256(canonical_wire_bytes(wire_scene)).hexdigest()
+            checks.append("private-acquisition-canonical-workspace-and-provenance")
+            time.sleep(2.2)  # Prove the held guard exceeds the initial frame timeout.
+            assert_mutation_frozen()
+            checks.append("private-acquisition-remains-frozen-beyond-initial-frame-timeout")
+            abort = exchange(stream, {**frame, "command": "abort"})
+            assert abort["schema"] == "fullmag.development-api-abort.v1" and abort["nonce"] == frame["nonce"]
+        checks.append("private-acquisition-freezes-and-abort-reopens-admission")
+        # A disconnected owner must never leave the active model frozen.
+        with connect() as stream:
+            acquired = exchange(stream, {**frame, "nonce": str(uuid.uuid4())})
+            assert acquired["schema"] == "fullmag.development-authoring-acquisition.v1"
+            assert_mutation_frozen()
+        deadline = time.monotonic() + 5
+        while True:
+            try:
+                if expected_scene is None:
+                    code, _, _ = get("/v2/sessions", method="POST", payload={"name": "After disconnect",
+                        "backend": "fdm", "device": "cpu", "precision": "double"})
+                    assert code == 201
+                else:
+                    code, _, canonical = get("/v2/sessions/current/model/scene")
+                    code, _, _ = get("/v2/sessions/current/model/scene", method="PUT", payload=canonical)
+                    assert code == 200
+                break
+            except urllib.error.HTTPError as error:
+                assert error.code == 409 and time.monotonic() < deadline
+                time.sleep(0.05)
+        checks.append("private-acquisition-disconnect-reopens-admission")
+
+    for label, configuration in (
+        ("owner-nonmanaged", {"FULLMAG_DEVELOPMENT_OWNER_TOKEN": owner_token}),
+        ("owner-invalid-token", {**configured, "FULLMAG_DEVELOPMENT_OWNER_TOKEN": "invalid"}),
+    ):
+        with_api(label, configuration, None, reject_startup=True)
+    with_api("owner-empty", {**configured, "FULLMAG_DEVELOPMENT_OWNER_TOKEN": owner_token}, private_acquisition)
+    with_api("owner-restored", {**restore_config, "FULLMAG_DEVELOPMENT_OWNER_TOKEN": owner_token},
+             lambda get: private_acquisition(get, restored_scene), restore_input=json.dumps(restore_envelope).encode())
 
     def restored(get):
         code, _, current = get("/v2/sessions/current")

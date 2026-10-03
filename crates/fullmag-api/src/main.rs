@@ -42,6 +42,7 @@ mod artifacts;
 mod assets;
 mod build_info;
 mod coordinator_persistence;
+mod development_owner_control;
 mod error;
 mod fdm_planar_grid_overlay;
 mod feature_flags;
@@ -2496,6 +2497,9 @@ async fn main() {
         .await
         .expect("private development authoring restore must succeed before API startup");
 
+    let owner_control = development_owner_control::prepare(state.clone())
+        .expect("private development owner configuration must be valid before API startup");
+
     let cors = router_v2::middleware::cors::cors_layer();
 
     let app = Router::new()
@@ -2583,9 +2587,17 @@ async fn main() {
         .await
         .expect("binding API listener should succeed");
 
-    axum::serve(listener, app)
-        .await
-        .expect("serving API should succeed");
+    let owner_control_task = owner_control.map(|control| {
+        control.start(listener.local_addr().expect("API listener address").port())
+            .expect("publishing private development owner must succeed")
+    });
+
+    let result = axum::serve(listener, app).await;
+    if let Some(task) = owner_control_task {
+        task.abort();
+        let _ = task.await;
+    }
+    result.expect("serving API should succeed");
 }
 
 #[cfg(feature = "swagger-ui")]

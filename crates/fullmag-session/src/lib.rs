@@ -22,6 +22,7 @@ pub mod cas;
 pub mod communication_policy;
 pub mod dataset_slice_adapter;
 mod durability;
+mod development_owner;
 pub mod fms;
 pub mod mesh_operation;
 pub mod materialized_dataset;
@@ -38,6 +39,7 @@ pub mod types;
 mod worker_inbox;
 mod writer;
 pub use worker_inbox::FmsWorkerInboxRecord;
+pub use development_owner::publish_managed_owner_record;
 
 // Re-export the most commonly used items at crate root.
 pub use capture::{

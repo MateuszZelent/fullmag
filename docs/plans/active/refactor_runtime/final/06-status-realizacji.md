@@ -1,5 +1,11 @@
 # Status realizacji całego planu refaktoryzacji
 
+Checkpoint P8-53Q, 04.10.2026: [kanał przejęcia authoring](p8/53q-private-owner-acquisition.md)
+jest podłączony do produkcyjnego API. Build Windows i 69 sprawdzeń runtime
+przeszły: tożsamość ownera, kanoniczna scena, freeze, abort i rozłączenie.
+Obsługa odrzucanego body HTTP, manager, shutdown, szkice i repin pozostają
+otwarte. Aktywne UI 3197 zachowane; procenty etapów bez awansu.
+
 Checkpoint P8-53O/P, 03.10.2026: trwały admission fence i idle drain mają
 produkcyjny dowód procesu; [recovery preparation](p8/53p-preparation-recovery-pool-scope.md)
 nie przejmuje leases spoza aktualnej puli. Końcowy build Windows i 55 sprawdzeń

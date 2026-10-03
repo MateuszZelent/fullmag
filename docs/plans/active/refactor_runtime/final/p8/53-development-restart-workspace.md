@@ -10,6 +10,7 @@ Prywatna tożsamość po restore: [P8-53M](53m-restored-authoring-provenance.md)
 Inventory brakującego globalnego fence: [P8-53N](53n-global-idle-fence-inventory.md).
 Implementacja durable admission fence i dowód idle drain: [P8-53O](53o-durable-admission-fence.md).
 Recovery preparation ograniczone do własnej puli: [P8-53P](53p-preparation-recovery-pool-scope.md).
+Prywatny kanał przejęcia authoring i dowód freeze/abort: [P8-53Q](53q-private-owner-acquisition.md).
 
 Jedno `just windows-ui dev` uruchamia HMR frontendu i obserwację backendu.
 Po kompilacji UI pokazuje „Nowy backend gotowy” oraz przycisk restartu.
