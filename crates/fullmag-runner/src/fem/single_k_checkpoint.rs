@@ -13,11 +13,16 @@ use std::fmt;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::types::AuxiliaryArtifact;
 
 const CHECKPOINT_SCHEMA_V1: &str = "fullmag.single_k_checkpoint.internal.v1";
 const SPECTRUM_ARTIFACT: &str = "eigen/spectrum.json";
+const MAX_RAW_CHECKPOINT_ATTEMPT_COLLISIONS: usize = 32;
+
+static NEXT_RAW_CHECKPOINT_ATTEMPT_ID: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug)]
 pub enum SingleKCheckpointError {
@@ -352,6 +357,131 @@ fn is_windows_reserved_component(component: &str) -> bool {
         })
 }
 
+/// Resolve and prepare the solver's output directory before native execution.
+///
+/// Every path prefix is checked as an ordinary directory before dot or parent
+/// components can affect the resolved path. Missing ordinary directories are
+/// created one component at a time; symlinks and reparse points are rejected.
+pub(super) fn prepare_checkpoint_process_root(
+    output_dir: &Path,
+) -> Result<PathBuf, SingleKCheckpointError> {
+    let current_dir = std::env::current_dir()
+        .map_err(|source| io_error("read current directory", output_dir, source))?;
+    prepare_checkpoint_process_root_from_base(output_dir, &current_dir)
+}
+
+fn prepare_checkpoint_process_root_from_base(
+    output_dir: &Path,
+    base_dir: &Path,
+) -> Result<PathBuf, SingleKCheckpointError> {
+    if !base_dir.is_absolute() {
+        return Err(SingleKCheckpointError::InvalidInput(
+            "checkpoint output base must be absolute",
+        ));
+    }
+    if !output_dir.is_absolute()
+        && output_dir
+            .components()
+            .any(|component| matches!(component, std::path::Component::Prefix(_)))
+    {
+        return Err(SingleKCheckpointError::InvalidInput(
+            "checkpoint output directory must not be drive-relative",
+        ));
+    }
+
+    let requested = if output_dir.is_absolute() {
+        output_dir.to_path_buf()
+    } else {
+        base_dir.join(output_dir)
+    };
+    if !requested.is_absolute() {
+        return Err(SingleKCheckpointError::InvalidInput(
+            "checkpoint output directory must resolve to an absolute path",
+        ));
+    }
+
+    let mut current = PathBuf::new();
+    for component in requested.components() {
+        match component {
+            std::path::Component::Prefix(_) => current.push(component.as_os_str()),
+            std::path::Component::RootDir => {
+                current.push(component.as_os_str());
+                ensure_existing_plain_directory(&current)?;
+            }
+            std::path::Component::CurDir => ensure_existing_plain_directory(&current)?,
+            std::path::Component::ParentDir => {
+                // Inspect the directory being left before applying parent traversal.
+                ensure_existing_plain_directory(&current)?;
+                if let Some(parent) = current.parent() {
+                    current = parent.to_path_buf();
+                }
+                ensure_existing_plain_directory(&current)?;
+            }
+            std::path::Component::Normal(name) => {
+                current.push(name);
+                ensure_plain_directory(&current)?;
+            }
+        }
+    }
+    ensure_existing_plain_directory(&current)?;
+    validate_managed_process_root(&current)
+}
+
+/// Allocate a fresh immutable namespace for raw checkpoints from one run.
+pub(super) fn create_raw_checkpoint_attempt(
+    process_root: &Path,
+) -> Result<PathBuf, SingleKCheckpointError> {
+    let process_root = validate_managed_process_root(process_root)?;
+    let eigen_root = process_root.join("eigen");
+    ensure_plain_directory(&eigen_root)?;
+    let attempts_root = eigen_root.join("raw-checkpoint-attempts");
+    ensure_plain_directory(&attempts_root)?;
+
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| {
+            SingleKCheckpointError::InvalidInput(
+                "system clock is before the Unix epoch for checkpoint attempt naming",
+            )
+        })?
+        .as_nanos();
+    let mut last_attempt = attempts_root.clone();
+    for _ in 0..MAX_RAW_CHECKPOINT_ATTEMPT_COLLISIONS {
+        let counter = NEXT_RAW_CHECKPOINT_ATTEMPT_ID.fetch_add(1, Ordering::Relaxed);
+        let attempt_root = attempts_root.join(format!(
+            "attempt-{}-{timestamp}-{counter}",
+            std::process::id()
+        ));
+        last_attempt = attempt_root.clone();
+        match fs::create_dir(&attempt_root) {
+            Ok(()) => {
+                ensure_existing_plain_directory(&attempt_root)?;
+                return validate_managed_process_root(&attempt_root);
+            }
+            Err(source) if source.kind() == io::ErrorKind::AlreadyExists => {
+                // A collision is never reused. Inspect it immediately so an
+                // unexpected symlink or reparse point fails closed.
+                ensure_existing_plain_directory(&attempt_root)?;
+            }
+            Err(source) => {
+                return Err(io_error(
+                    "create raw checkpoint attempt",
+                    &attempt_root,
+                    source,
+                ));
+            }
+        }
+    }
+    Err(io_error(
+        "allocate unique raw checkpoint attempt",
+        &last_attempt,
+        io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "exhausted bounded attempt-name collision retries",
+        ),
+    ))
+}
+
 fn validate_managed_process_root(root: &Path) -> Result<PathBuf, SingleKCheckpointError> {
     if !root.is_absolute() {
         return Err(SingleKCheckpointError::InvalidInput(
@@ -398,9 +528,17 @@ fn ensure_plain_directory(path: &Path) -> Result<(), SingleKCheckpointError> {
             }
         }
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            fs::create_dir(path)
-                .map_err(|source| io_error("create checkpoint parent", path, source))?;
-            ensure_existing_plain_directory(path)?;
+            match fs::create_dir(path) {
+                Ok(()) => ensure_existing_plain_directory(path)?,
+                Err(source) if source.kind() == io::ErrorKind::AlreadyExists => {
+                    // Another invocation may have created this ordinary
+                    // directory. Verify it immediately, including link bits.
+                    ensure_existing_plain_directory(path)?;
+                }
+                Err(source) => {
+                    return Err(io_error("create checkpoint parent", path, source));
+                }
+            }
         }
         Err(source) => return Err(io_error("inspect checkpoint parent", path, source)),
     }
@@ -805,6 +943,129 @@ mod tests {
             "commit marker is last"
         );
         assert!(!sample_root.join("manifest.pending").exists());
+    }
+
+    #[test]
+    fn prepares_relative_nonexistent_output_root_against_explicit_base() {
+        let base = TestDirectory::new();
+        let output = Path::new("new-run/nested");
+        let resolved = prepare_checkpoint_process_root_from_base(output, base.path())
+            .expect("prepare relative output root");
+        assert_eq!(
+            resolved,
+            fs::canonicalize(base.path().join(output)).expect("canonical output root")
+        );
+        assert!(resolved.is_absolute());
+        assert!(resolved.is_dir());
+    }
+
+    #[test]
+    fn verifies_components_before_parent_normalization() {
+        let base = TestDirectory::new();
+        let output = Path::new("created-before-parent/../resolved/./nested");
+        let resolved = prepare_checkpoint_process_root_from_base(output, base.path())
+            .expect("normalize checked ordinary directories");
+        assert!(base.path().join("created-before-parent").is_dir());
+        assert_eq!(
+            resolved,
+            fs::canonicalize(base.path().join("resolved/nested"))
+                .expect("canonical normalized root")
+        );
+    }
+
+    #[test]
+    fn rejects_non_directory_before_parent_normalization() {
+        let base = TestDirectory::new();
+        fs::write(base.path().join("file"), b"keep").expect("create non-directory prefix");
+        assert!(prepare_checkpoint_process_root_from_base(
+            Path::new("file/../output"),
+            base.path()
+        )
+        .is_err());
+        assert!(!base.path().join("output").exists());
+    }
+
+    #[test]
+    fn same_sample_index_is_isolated_by_fresh_attempt_roots() {
+        let root = TestDirectory::new();
+        let first_root =
+            create_raw_checkpoint_attempt(root.path()).expect("first checkpoint attempt");
+        let second_root =
+            create_raw_checkpoint_attempt(root.path()).expect("second checkpoint attempt");
+        assert_ne!(first_root, second_root);
+
+        let k = [0.0, 0.0, 0.0];
+        let plan = single_k_plan(k);
+        let mut first_files = artifacts();
+        first_files[0].bytes = b"first raw spectrum".to_vec();
+        let first_manifest =
+            run(&first_root, 0, k, &plan, &first_files).expect("write first sample zero");
+        let first_spectrum = first_manifest
+            .parent()
+            .expect("first sample namespace")
+            .join("artifacts/eigen/spectrum.json");
+        let first_bytes = fs::read(&first_spectrum).expect("read first raw spectrum");
+
+        let mut second_files = artifacts();
+        second_files[0].bytes = b"second raw spectrum".to_vec();
+        let second_manifest =
+            run(&second_root, 0, k, &plan, &second_files).expect("write second sample zero");
+        let second_spectrum = second_manifest
+            .parent()
+            .expect("second sample namespace")
+            .join("artifacts/eigen/spectrum.json");
+        assert_eq!(
+            fs::read(&first_spectrum).expect("first remains immutable"),
+            first_bytes
+        );
+        assert_eq!(
+            fs::read(&second_spectrum).expect("second raw spectrum"),
+            second_files[0].bytes
+        );
+        assert!(first_manifest.is_file());
+        assert!(second_manifest.is_file());
+    }
+
+    #[test]
+    fn concurrent_attempt_allocations_are_unique() {
+        let root = TestDirectory::new();
+        let handles = (0..8)
+            .map(|_| {
+                let process_root = root.path().to_path_buf();
+                std::thread::spawn(move || {
+                    create_raw_checkpoint_attempt(&process_root)
+                        .expect("allocate concurrent checkpoint attempt")
+                })
+            })
+            .collect::<Vec<_>>();
+        let paths = handles
+            .into_iter()
+            .map(|handle| handle.join().expect("attempt allocation thread"))
+            .collect::<BTreeSet<_>>();
+        assert_eq!(paths.len(), 8);
+        assert!(paths.iter().all(|path| path.is_dir()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_symlink_prefix_before_parent_normalization() {
+        use std::os::unix::fs::symlink;
+
+        let base = TestDirectory::new();
+        let external = TestDirectory::new();
+        symlink(external.path(), base.path().join("link")).expect("create test symlink");
+        assert!(prepare_checkpoint_process_root_from_base(
+            Path::new("link/../output"),
+            base.path()
+        )
+        .is_err());
+        assert!(!base.path().join("output").exists());
+        assert_eq!(
+            fs::read_dir(external.path())
+                .expect("external directory")
+                .count(),
+            0
+        );
     }
 
     #[cfg(unix)]
