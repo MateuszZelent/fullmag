@@ -43,10 +43,17 @@ zgodnie z aktualnym zakazem AGENTS.md.
 Production build aktualnego źródła, realny eksport OpenAPI, generacja
 transportu, facade/resource hook, Saved Results UI i browser smoke pozostają
 NOT VERIFIED. Build 214 jest przypięty do wcześniejszego SHA i nie dowodzi
-tej zmiany. Runner pozostaje wstrzymany decyzją operatora; brak zgody
-na wznowienie nie pozwala zastąpić managed route ciężkim buildem hosta.
+tej zmiany. Aktualizacja 03.10.2026: istniejący koordynator przyjmuje zadania;
+nie wykonywano jego restartu ani wznowienia w tym przyroście. Build 215
+(`901bf4779f5848ebaf9900311dd4b9bd`) czeka za żywym buildem 214 i obejmuje
+źródła P6-75 oraz P8-37: commit `7b5248c515eeee788c62050073b05d3affe6ddcb`,
+snapshot `d612ebfff5e40a7e190874348ef9af934bde37d9d9c1946552a3b61cfdf2981c`.
+Przyjęcie zadania do kolejki nie stanowi dowodu kompilacji ani działania API.
 
 Następny krok: odebrać build nowego źródła, importować raw OpenAPI przez
 zweryfikowany importer, wygenerować typy/transport i podłączyć istniejący
 SavedResultsBrowser przez centralny facade oraz hook. Nie tworzyć nowego
 Results Explorer ani bezpośredniego fetch w komponencie.
+
+Checklistę integracji i odbioru istniejącego panelu zawiera
+[P6-76](76-scalar-frontend-integration-checklist.md).
