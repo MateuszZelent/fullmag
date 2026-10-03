@@ -3,7 +3,6 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
-  APP_DROPDOWN_ITEMS,
   MAIN_MENUS,
   QUICK_ACTIONS,
   type AppMenuNode,
@@ -62,7 +61,6 @@ describe("app menu command model", () => {
       }
     }
     const exposedIds = [
-      ...flattenMenuIds(APP_DROPDOWN_ITEMS),
       ...flattenMenuIds(MAIN_MENUS),
       ...QUICK_ACTIONS.map((action) => action.id),
     ].filter((id) => placeholderIds.has(id));

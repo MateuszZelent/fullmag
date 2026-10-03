@@ -11,8 +11,6 @@ import {
 } from "lucide-react";
 import { useRef, type KeyboardEvent, type Ref } from "react";
 
-import { FullmagLogoVector } from "@/shared/brand/FullmagLogoVector";
-
 import type { StartSection } from "../model/startScreenState";
 import type { ComputeProbeState } from "../model/types";
 
@@ -66,12 +64,6 @@ export function StartRail({ compute, onRunCommand, ref, section }: StartRailProp
 
   return (
     <div className="fm-start__rail" ref={ref}>
-      <div className="fm-start-rail__id">
-        <FullmagLogoVector aria-hidden="true" className="fm-start-rail__mark" focusable="false" />
-        <div className="fm-start-rail__id-copy">
-          <span className="fm-start-rail__id-name">Fullmag</span>
-        </div>
-      </div>
       <nav aria-label="Start screen sections">
         <ul className="fm-start-rail__nav">
           {RAIL_SECTIONS.map((entry, index) => {

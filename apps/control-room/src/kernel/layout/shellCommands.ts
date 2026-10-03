@@ -1,4 +1,5 @@
 import { requestThemeToggle } from "@/design/theme/themeEvents";
+import { homeView } from "./homeView";
 
 import type { CommandContribution } from "../commands/commandTypes";
 import { applyAuthoringHistoryWorkspaceTransition } from "../authoring/authoringHistoryWorkspaceRestore";
@@ -131,6 +132,17 @@ export const SHELL_COMMANDS: CommandContribution[] = [
   disabledPlaceholder("workspace.preferences", "Preferences", "Application"),
   disabledPlaceholder("workspace.docs", "Physics Documentation", "Application"),
   disabledPlaceholder("workspace.about", "About Fullmag", "Application"),
+  {
+    id: "workspace.home",
+    title: "Home",
+    group: "workspace",
+    category: "View",
+    scope: "global",
+    run: () => {
+      homeView.toggle();
+      return { status: "completed" };
+    },
+  },
   {
     id: "workspace.new-problem",
     title: "New Problem",

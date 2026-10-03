@@ -1,5 +1,7 @@
 "use client";
 
+import { useEffect } from "react";
+
 import {
   WorkspaceStartupGateView,
   useSimulationStartupOverlayState,
@@ -13,6 +15,8 @@ import { WorkspaceDockLayout } from "./WorkspaceDockLayout";
 import { WorkspaceContentScopeProvider } from "./WorkspaceContentScope";
 import { useProjectDocumentSnapshot } from "../persistence/ProjectDocumentStatus";
 import { useKernel } from "../KernelContext";
+import { sessionRequestScopeKey } from "../resources/sessionResourceIdentity";
+import { homeView, useHomeViewOpen } from "./homeView";
 import { useLayoutSelector } from "./useLayout";
 
 export function WorkspaceShellClient() {
@@ -20,6 +24,14 @@ export function WorkspaceShellClient() {
   const project = useProjectDocumentSnapshot();
   const identity = useSessionResourceIdentity();
   const sessionState = sessions.state === "ready" && !identity ? "loading" : sessions.state;
+  const sessionScopeKey = sessionRequestScopeKey(identity);
+  const startOwnsPage = sessionState !== "ready" && project.state !== "ready";
+
+  // The overlay is a visit, not a mode: starting or opening something, or the
+  // workspace going away, ends it so it cannot reappear on top of the next one.
+  useEffect(() => {
+    homeView.close();
+  }, [sessionScopeKey, startOwnsPage]);
 
   if (sessionState !== "ready" && project.state === "ready") {
     return <ProjectWorkspaceShell sessionState={sessionState} />;
@@ -55,6 +67,7 @@ function ProjectWorkspaceShell({
 }) {
   const kernel = useKernel();
   const panels = useLayoutSelector((layout) => layout.panelVisible);
+  const homeOpen = useHomeViewOpen();
   const detail = sessionState === "no-session"
     ? "No active session. Saved project results are available independently."
     : sessionState === "error"
@@ -80,6 +93,7 @@ function ProjectWorkspaceShell({
       <WorkspaceRenderProfiler id="WorkspaceDockLayout">
         <WorkspaceDockLayout />
       </WorkspaceRenderProfiler>
+      {homeOpen ? <HomeOverlay /> : null}
     </WorkspaceContentScopeProvider>
   );
 }
@@ -127,6 +141,7 @@ function SessionCollectionError({ onRetry }: { readonly onRetry: () => void }) {
 
 function ActiveWorkspaceShell() {
   const startupState = useSimulationStartupOverlayState();
+  const homeOpen = useHomeViewOpen();
 
   return (
     <>
@@ -140,10 +155,24 @@ function ActiveWorkspaceShell() {
           <WorkspaceDockLayout />
         </WorkspaceRenderProfiler>
         <SlotHost slotId="status-bar" />
+        {homeOpen ? <HomeOverlay /> : null}
         <div className="fm-workspace-overlay-host">
           <SlotHost slotId="overlay" />
         </div>
       </WorkspaceStartupGateView>
     </>
+  );
+}
+
+/**
+ * The start screen laid over a mounted workspace. Hiding the workspace with
+ * visibility (see layout.css) rather than unmounting keeps its WebGL context,
+ * drafts and undo history alive while the user looks at Home.
+ */
+function HomeOverlay() {
+  return (
+    <div className="fm-home-overlay" data-state="home-overlay">
+      <SlotHost slotId="start-screen" />
+    </div>
   );
 }
