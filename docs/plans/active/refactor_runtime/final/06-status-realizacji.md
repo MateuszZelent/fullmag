@@ -1,5 +1,13 @@
 # Status realizacji całego planu refaktoryzacji
 
+Checkpoint P8-49 / P6-76, 03.10.2026: rzeczywisty eksport OpenAPI z
+terminalnego buildu 218, weryfikacja tożsamości i hashy oraz cleanup PASS.
+25 interpretowanych regresji eksportera i 11 regresji importu PASS.
+Kontrakt scalar/runtime-service i klient zostały wygenerowane; produkcyjny
+source check baseline PASS. [Dowody i granice](p8/49-managed-package-openapi-export.md).
+Integracja skalarów w UI trwa; runtime, nauka, B-04–B-08 i Windows nadal
+wymagają odrębnych dowodów. Procenty etapów bez awansu.
+
 Checkpoint B-08, 03.10.2026: osiem metod pól zewnętrznych i regionalnych
 Rust FDM CPU wydzielono do `fields/zeeman.rs`. Pełne sygnatury i ciała oraz
 pozostały rodzic identyczne z bazą poza wiringiem; source review PASS.

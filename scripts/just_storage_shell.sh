@@ -42,6 +42,21 @@ is_windows_shell() {
   return 1
 }
 
+# Admit this fixed helper before generic diagnostic substring handling, so a
+# composite command cannot use a diagnostic marker to bypass its argument check.
+case "${recipe}" in
+  *"scripts/export_runner_openapi.py"*)
+    export_openapi_pattern='^[^[:space:]]+ "[^"]+/scripts/export_runner_openapi.py" --repo-root "[^"]+" --job-id "([0-9a-f]{32})" --expected-commit "([0-9a-f]{40})"$'
+    if [[ ! "${recipe}" =~ ${export_openapi_pattern} ]]; then
+      echo "[fullmag just] invalid managed OpenAPI export recipe" >&2
+      exit 2
+    fi
+    # The helper owns read-only admission, path checks and its terminal proof.
+    # Invoke only this checkout's helper, never the supplied recipe text.
+    exec "${python_cmd}" "${script_dir}/export_runner_openapi.py" --repo-root "${repo_root}" --job-id "${BASH_REMATCH[1]}" --expected-commit "${BASH_REMATCH[2]}"
+    ;;
+esac
+
 # Read-only listing/help recipes must not create a storage marker or any
 # compatibility path.  The resolver's own read-only actions can therefore be
 # used for inspection even when the checkout has not been initialized yet.
@@ -114,7 +129,7 @@ case "${recipe}" in
   *"scripts/verify_control_room_sources.py"*)
     # Never execute the recipe text: accept only the fixed argument shape and
     # invoke the trusted helper from this checkout with the selected route.
-    source_recipe_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_control_room_sources.py" --route (generate-client|production-source|api-hygiene|lint) --repo-root "[^"]+"$'
+    source_recipe_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_control_room_sources.py" --route (generate-client|production-source|api-hygiene|lint|openapi-import-check) --repo-root "[^"]+"$'
     if [[ ! "${recipe}" =~ ${source_recipe_pattern} ]]; then
       echo "[fullmag just] invalid lightweight frontend recipe" >&2
       exit 2

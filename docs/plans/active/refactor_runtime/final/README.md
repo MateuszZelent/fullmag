@@ -1,5 +1,13 @@
 # Fullmag — finalny audyt i plan refaktoryzacji
 
+Checkpoint P8-49 / P6-76, 03.10.2026: rzeczywisty eksport OpenAPI z
+terminalnego buildu 218, weryfikacja tożsamości i hashy oraz cleanup PASS.
+25 interpretowanych regresji eksportera i 11 regresji importu PASS.
+Kontrakt scalar/runtime-service i klient zostały wygenerowane; produkcyjny
+source check baseline PASS. [Dowody i granice](p8/49-managed-package-openapi-export.md).
+Integracja skalarów w UI trwa; runtime, nauka, B-04–B-08 i Windows nadal
+wymagają odrębnych dowodów. Procenty etapów bez awansu.
+
 Checkpoint B-08: [właściciel pola zewnętrznego i regionalnego FDM CPU](b/08-fdm-cpu-zeeman-owner.md).
 Osiem metod zachowuje sygnatury i ciała; Oersted, SoA capability i fused loop
 pozostają bez zmian. Source comparison i review PASS.
