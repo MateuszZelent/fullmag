@@ -38,6 +38,12 @@ po zaobserwowanej zmianie instancji podczas tych operacji asynchronicznych.
   nie jest to zaliczona bramka całego frontendu.
 - Statyczny lint siedmiu zmienionych plików frontendowych bez cache/emisji:
   PASS, exit 0 po finalnych poprawkach; nie zastępuje pełnej bramki lint.
+- React Doctor zainstalowany w repo, scope changed względem
+  `34a283eb8e16282eb6e35012e5f3a8d68f48e0da`: PASS, siedem plików,
+  brak nowych issues, receipt `9e80d85ca70e4112be7fb5c3600dca6a`.
+  Hook commita zgłosił uwagi skanu z rootu bez rozpoznanego frameworka;
+  właściwy skan aplikacji Control Room nie potwierdził regresji fragmentu.
+  Wynik jest statyczną diagnostyką; nie dowodzi poprawnego browser/runtime.
 - Niezależne source review native/API i frontend: PASS, bez otwartych P0/P1.
   Dwa wykryte wyścigi (diagnostyczny await i binary decode) poprawiono oraz
   ponownie przejrzano; regresje pozostają NOT RUN, nie są dowodem wykonania.
@@ -52,3 +58,6 @@ To nie spełnia progu admission 8 GiB ani nie jest zgodą na hostowy fallback.
 
 Pełny cel P0–P8 pozostaje otwarty. Kolejne bramki obejmują domyślne zasoby
 produktu, pełny accepted execution cutover, managed runtime, browser i wydanie.
+
+Kod P8-25 opublikowano na master w commicie
+`c4376d93be011a5bf184bf7d98ec3989464da580`. Obce unstaged zmiany zachowano.
