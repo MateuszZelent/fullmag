@@ -136,6 +136,10 @@ windows-ui frontend="dev" web_port="3197" build="auto" backend_profile="auto":
 windows-workspace-build backend_profile="dev" frontend="dev" web_port="3197" build="auto":
     powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "{{repo_root}}/scripts/windows/run_fullmag.ps1" -BuildMode "{{build}}" -Frontend "{{frontend}}" -BackendProfile "{{backend_profile}}" -RunMode workspace -WebPort "{{web_port}}" -BuildOnly
 
+# Recover a stale native workspace owner only after Windows process/listener checks.
+windows-runtime-recover port="3197":
+    @{{storage_python}} "{{repo_root}}/scripts/windows/recover_runtime.py" --repo-root "{{repo_root}}" --web-port "{{port}}"
+
 # Watch native backend inputs and build a new dev binary after edits. The
 # active workspace remains untouched until the user saves and restarts it.
 windows-backend-dev web_port="3197":

@@ -76,6 +76,7 @@ FEM/MFEM ani dowolny ręczny `cargo`, `cmake` lub Docker.
 | `just windows-ui dev` | Uruchamia pusty workspace na porcie 3197, frontend Next.js z HMR i jeden automatyczny watcher backendu. Brakujący lub nieaktualny pakiet buduje przed startem. |
 | `just windows-ui dev 3197 auto dev` | Jawnie wybiera ten sam tryb: automatyczny wybór buildu i backendowy profil dev. |
 | `just windows-workspace-build dev dev 3197 auto` | Buduje brakujący lub nieaktualny pakiet dev bez uruchamiania UI. |
+| `just windows-runtime-recover 3197` | Odzyskuje niepotwierdzony owner record dopiero po sprawdzeniu braku procesów i zamkniętego portu; zachowuje oryginalny zapis. Nie zatrzymuje procesów ani nie odtwarza modelu. |
 | `just windows-backend-dev 3197` | Osobny watcher dla już uruchomionego workspace; nie uruchamiaj go obok watchera automatycznie utworzonego przez `windows-ui dev`. |
 | `just windows-ui static` | Uruchamia workspace z produkcyjnie zbudowanym frontendem i backendem release; brakujący lub nieaktualny pakiet buduje przed startem. |
 

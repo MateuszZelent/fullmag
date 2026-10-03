@@ -45,6 +45,21 @@ is_windows_shell() {
 # Admit this fixed helper before generic diagnostic substring handling, so a
 # composite command cannot use a diagnostic marker to bypass its argument check.
 case "${recipe}" in
+  *"scripts/windows/recover_runtime.py"*)
+    runtime_recovery_pattern='^[^[:space:]]+ "[^"]+/scripts/windows/recover_runtime.py" --repo-root "[^"]+" --web-port "([1-9][0-9]{0,4})"$'
+    if [[ ! "${recipe}" =~ ${runtime_recovery_pattern} ]]; then
+      echo "[fullmag just] invalid native runtime recovery recipe" >&2
+      exit 2
+    fi
+    web_port="${BASH_REMATCH[1]}"
+    if ! is_windows_shell || (( web_port > 65535 )); then
+      echo "[fullmag just] native runtime recovery requires Windows and a port from 1 to 65535" >&2
+      exit 2
+    fi
+    # This fixed helper owns resolver validation, both managed locks, process
+    # inspection and the exact-status archive/receipt transition.
+    exec "${python_cmd}" "${script_dir}/windows/recover_runtime.py" --repo-root "${repo_root}" --web-port "${web_port}"
+    ;;
   *"scripts/windows/run_fullmag.ps1"*" -RunMode workspace "*)
     windows_ui_pattern='^powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "[^"]+/scripts/windows/run_fullmag.ps1" -BuildMode "(auto|true|false)" -Frontend "(static|dev)" -BackendProfile "(auto|dev|release)" -RunMode workspace -WebPort "([1-9][0-9]{0,4})"( -BuildOnly)?$'
     if [[ ! "${recipe}" =~ ${windows_ui_pattern} ]]; then
