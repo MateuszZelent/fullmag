@@ -160,3 +160,10 @@ przeszedł tę granicę, a natywny verifier zakończył 31 sprawdzeń z exit 0.
 Prywatne przejęcie sceny jest nadal w realizacji. Nie jest to jeszcze
 koordynatorem restartu: accepted-work gate, zapis/restore i nowy pin API
 pozostają do podłączenia. `restart_available` nadal jest `false`.
+
+[P8-53I](53i-stable-authoring-acquisition.md) dodaje prywatny guard stabilnej
+sceny, kolejki i ledgera. Rozpoznaje rzeczywiste terminalne kształty mesha,
+w tym ready/active i failed FDM, bez ogólnego dopuszczenia aktywnej pracy.
+Końcowy native build i 31 sprawdzeń API/service przeszły. Sam guard nie ma
+jeszcze wykonującego go koordynatora; runtime wyścigów Start i pełne restore
+pozostają NOT VERIFIED.
