@@ -65,6 +65,22 @@ describe("start commands", () => {
     expect(startScreenStore.getSnapshot().section).toBe("home");
   });
 
+  it("acts on the selected project only when one is selected", async () => {
+    const registry = registryWithShellAndStart();
+    startScreenStore.attach(hostFor(registry));
+
+    expect(registry.isEnabled("start.pin-selected", WITH_PROJECTS)).toBe(false);
+    expect(registry.get("start.pin-selected")?.disabledReason?.(WITH_PROJECTS)).toBe(
+      "Select a project in the list first.",
+    );
+
+    startScreenStore.setSelectedProject("p1");
+    expect(registry.isEnabled("start.pin-selected", WITH_PROJECTS)).toBe(true);
+    await registry.execute("start.pin-selected", WITH_PROJECTS);
+    await registry.execute("start.remove-selected", WITH_PROJECTS);
+    expect(startScreenStore.getSnapshot().selectionAction).toEqual({ seq: 2, kind: "remove" });
+  });
+
   it("delegates new simulations to workspace.new-problem with the solver", async () => {
     const registry = registryWithShellAndStart();
     const emit = vi.fn();

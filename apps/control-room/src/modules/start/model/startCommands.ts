@@ -6,6 +6,7 @@ import type {
 
 import {
   startScreenStore,
+  type SelectionActionKind,
   type StartScreenHost,
   type StartSection,
 } from "./startScreenState";
@@ -137,6 +138,37 @@ function listCommand(
   };
 }
 
+/** Acts on the project selected in the recent list, so it needs one. */
+function selectionCommand(
+  id: string,
+  title: string,
+  kind: SelectionActionKind,
+  shortcut?: string,
+): CommandContribution {
+  const reason = () => {
+    const snapshot = startScreenStore.getSnapshot();
+    if (!snapshot.host) return NOT_SHOWING;
+    if (snapshot.section !== "home") return "Open the Home section first.";
+    return snapshot.selectedProjectId ? null : "Select a project in the list first.";
+  };
+  return {
+    id,
+    title,
+    group: "start-list",
+    category: "Start",
+    scope: "workspace",
+    shortcut,
+    isEnabled: () => reason() === null,
+    disabledReason: reason,
+    run: () => {
+      const blocked = reason();
+      if (blocked) return { message: blocked, status: "failed" };
+      startScreenStore.requestSelectionAction(kind);
+      return { status: "completed" };
+    },
+  };
+}
+
 export const START_COMMANDS: readonly CommandContribution[] = [
   navigationCommand("start.section.home", "Start: Home", "home", "Ctrl+1"),
   navigationCommand("start.section.templates", "Start: Templates", "templates", "Ctrl+2"),
@@ -150,5 +182,8 @@ export const START_COMMANDS: readonly CommandContribution[] = [
   actionCommand("start.new-fem", "New FEM simulation", "Ctrl+Shift+N"),
   actionCommand("start.browse", "Open project…", "Ctrl+O"),
   listCommand("start.search", "Search recent projects", () => startScreenStore.requestSearchFocus()),
+  selectionCommand("start.open-selected", "Open selected project", "open"),
+  selectionCommand("start.pin-selected", "Pin or unpin selected project", "pin"),
+  selectionCommand("start.remove-selected", "Remove selected project from recent", "remove"),
   listCommand("start.rebuild-index", "Rebuild project index", () => startScreenStore.requestRebuild()),
 ];

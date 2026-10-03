@@ -29,6 +29,7 @@ describe("startScreenStore", () => {
       selectedTemplateId: null,
       searchFocusNonce: 0,
       rebuildNonce: 0,
+      selectionAction: null,
     });
   });
 
@@ -67,6 +68,7 @@ describe("startScreenStore", () => {
       selectedTemplateId: null,
       searchFocusNonce: 0,
       rebuildNonce: 0,
+      selectionAction: null,
     });
   });
 });
