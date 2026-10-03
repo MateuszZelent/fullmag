@@ -1,8 +1,8 @@
 # P8-42 — wymagania pakietu niezależne od rejestru profili
 
 Data: 03.10.2026. Baza: `19f6b9f059e92b3e685e429e966d6ad2b0413c99`.
-Zmiana źródeł koordynatora/entrypointu; wdrożenie tego przyrostu pozostaje
-otwarte. Wdrożony P8-41 obejmuje tylko sondy nightly.
+Zmiana źródeł koordynatora/entrypointu. Pełny kontrakt następnie wdrożono
+w [P8-43](43-package-contract-runner-overlay.md); P8-41 obejmował tylko sondy nightly.
 
 ## Przyczyna i poprawka
 
@@ -34,18 +34,16 @@ binarium obejmuje teraz dziewięć `fullmag-api-*` oraz runtime service,
 | Diff check własnych czterech plików | PASS. |
 | Niezależny source review | PASS, brak P0/P1; legality/admission oraz provenance zachowane. |
 | Native/Rust/TypeScript unit compilation | NOT RUN; testy Python używają fixture/mocków, nie wykonują builda solvera. |
-| Wdrożenie pełnego kontraktu | OPEN; nie skopiowano całego masterowego pliku z trzema profilami na obraz rozszerzony. |
+| Wdrożenie pełnego kontraktu | DEPLOYED w P8-43; minimalny overlay zachowuje profile rozszerzonego obrazu. |
 | Build 218 / runtime / nauka | QUEUED / NOT VERIFIED / NOT VERIFIED; stan storage nie został zmieniony. |
 
-## Następne wymagane kroki
+## Wdrożenie i dalsza bramka
 
-Przygotować minimalny overlay na rzeczywiście wdrożonym obrazie P8-41:
-zachować wszystkie osiem definicji profili i resztę funkcji koordynatora;
-zmienić tylko selekcję/walidację wymaganych outputów oraz jej import.
-Powtórzyć kluczowe interpretowane regresje przeciwko kodowi tego obrazu,
-potwierdzić hashe i tożsamość. Wymiana wymaga własnej kontrolowanej pauzy
-zdrowej kolejki bez aktywnych jobs, a następnie wznowienia własnej pauzy.
-Jeżeli build już się wykonuje, najpierw odebrać jego terminalny wynik.
+P8-43 wdrożył minimalny overlay na rzeczywistym obrazie P8-41, zachowując
+osiem definicji profili i specjalistyczne funkcje koordynatora. Kluczowe
+interpretowane regresje obrazu przeszły; rzeczywiste hashe i tożsamość
+potwierdzono. Wymianę poprzedziła własna kontrolowana pauza zdrowej kolejki
+bez aktywnych jobs; po wymianie tę pauzę wznowiono.
 
 Po wdrożeniu nadal potrzebny jest rzeczywisty receipt i komplet artefaktów
 218 na przypiętym źródle. Przejście kontroli fixture ani wymiana obrazu

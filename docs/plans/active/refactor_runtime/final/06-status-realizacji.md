@@ -1,5 +1,14 @@
 # Status realizacji całego planu refaktoryzacji
 
+Checkpoint P8-43, 03.10.2026: pełny kontrakt 15 niepustych release outputów
+wdrożono w rzeczywistym rozszerzonym runnerze przez własną pauzę pustej
+kolejki, managed replace i resume. Siedem interpretowanych regresji obrazu
+PASS; niezależny review PASS. Specjalistyczne gałęzie receipt, osiem
+profili obrazu, siedem operatorowych i mounty zachowane. Hashe odczytane
+z nowego kontenera zgodne. [Dowody wdrożenia](p8/43-package-contract-runner-overlay.md).
+218 zachował cały status queued i kapsułę; nadal waiting_for_disk.
+Build/runtime/Windows/UI i kwalifikacja NOT VERIFIED; procenty bez awansu.
+
 Checkpoint P8-42, 03.10.2026: wspólny selector wymaga 15 outputów dla
 trzech release profiles i zachowuje pięć dla legalnych profili specjalistycznych,
 niezależnie od rozszerzonego PROFILES. Dwie regresje RED przed poprawką,

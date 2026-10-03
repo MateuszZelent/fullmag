@@ -1,5 +1,10 @@
 # Fullmag — finalny audyt i plan refaktoryzacji
 
+Checkpoint P8-43: [pełny kontrakt pakietu wdrożony do runnera](p8/43-package-contract-runner-overlay.md).
+Siedem interpretowanych regresji obrazu i niezależny review PASS; profile,
+mounty i queued job 218 zachowane. Kolejka zdrowa i wznowiona, build nadal
+blokuje storage; runtime i kwalifikacja pozostają otwarte.
+
 Checkpoint 03.10.2026: [P7-C/P8 — niezależny proces runtime](p8/18-native-runtime-service.md)
 — source owner lock, gated scheduler startup, loopback drain i packaging;
 49 lekkich testów pakowania PASS. UI attach/detach i runtime pozostają otwarte.
