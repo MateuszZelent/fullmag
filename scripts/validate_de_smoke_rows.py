@@ -8,6 +8,7 @@ import csv
 import json
 import math
 from pathlib import Path
+import re
 
 SAMPLING = {
     "two": (0.0, 2e6),
@@ -20,8 +21,13 @@ SAMPLING = {
     "k0": (0.0,),
     "positive-26": tuple(k * 1e6 for k in range(26)),
     "bv-positive-26": tuple(k * 1e6 for k in range(26)),
+    "signed-fifteen": tuple(k * 1e6 for k in (-25, -20, -15, -10, -7, -5, -2, 0, 2, 5, 7, 10, 15, 20, 25)),
     "signed-eleven": (-3e6, -2e6, -1.5e6, -1e6, -0.5e6, 0.0,
                       0.5e6, 1e6, 1.5e6, 2e6, 3e6),
+    # Closed serial/adaptive parity probe.  The repeated -10 rad/um sample
+    # is intentional: sample_index, rather than a deduplicated k value, is
+    # the identity used by the execution and tracking contracts.
+    "parallel-probe": (-10e6, 10e6, -10e6),
 }
 for _prefix in ("", "bv-"):
     for _k_um in range(-25, 26):
@@ -32,6 +38,366 @@ MAX_PROBE_RELATIVE_TOLERANCE = 1e-8
 GAMMA_NZ_RELATIVE_TOLERANCE = 5e-3
 GAMMA_NY_ABSOLUTE_TOLERANCE = 5e-3
 GEOMETRY_RELATIVE_TOLERANCE = 1e-6
+PARALLEL_PROBE_FREQUENCY_WINDOW_HZ = (10.5e9, 11.5e9)
+PARALLEL_PROBE_VECTORS_RAD_PER_M = (
+    (0.0, -10e6, 0.0),
+    (0.0, 10e6, 0.0),
+    (0.0, -10e6, 0.0),
+)
+PHASE_CONSTRAINT_SHA256_RE = re.compile(r"sha256:[0-9a-f]{64}\Z")
+
+
+def validate_parallel_probe_metadata(
+    metadata_path: Path,
+    *,
+    model_sha256: str,
+    parallel_mode: str,
+):
+    """Validate the closed probe's authoring and native execution metadata.
+
+    This is an input/metadata guard only.  It does not qualify a dispersion
+    result or replace the row, residual, mesh, or scientific gates.
+    """
+
+    if parallel_mode not in {"serial", "adaptive"}:
+        raise ValueError("parallel probe mode must be serial or adaptive")
+    if not isinstance(model_sha256, str) or len(model_sha256) != 64 \
+            or any(character not in "0123456789abcdef" for character in model_sha256):
+        raise ValueError("parallel probe model hash is invalid")
+    try:
+        metadata = json.loads(Path(metadata_path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError("missing or invalid parallel probe metadata") from error
+    try:
+        model = metadata["problem_meta"]["runtime_metadata"]["de_smoke"]
+    except (KeyError, TypeError) as error:
+        raise ValueError("parallel probe metadata is missing the DE-SMOKE descriptor") from error
+    if not isinstance(model, dict) or model.get("schema") != "fullmag.de-smoke.v1":
+        raise ValueError("parallel probe metadata has an unsupported DE-SMOKE descriptor")
+    if model.get("sampling") != "parallel-probe":
+        raise ValueError("parallel probe metadata has the wrong sampling")
+    if model.get("orientation") != "M0=x,k=y,normal=z":
+        raise ValueError("parallel probe requires Damon-Eshbach orientation M0=x,k=y,normal=z")
+    if model.get("k_vectors_rad_per_m") != [list(vector) for vector in PARALLEL_PROBE_VECTORS_RAD_PER_M]:
+        raise ValueError("parallel probe metadata has the wrong signed k path")
+    if model.get("dispersion_geometry") != "damon_eshbach":
+        raise ValueError("parallel probe metadata must declare Damon-Eshbach geometry")
+    if model.get("modal_target") != "frequency_window" or model.get("selection_scope") != "frequency_window":
+        raise ValueError("parallel probe must use a complete frequency-window target")
+    if model.get("frequency_window_hz") != list(PARALLEL_PROBE_FREQUENCY_WINDOW_HZ):
+        raise ValueError("parallel probe frequency window is not pinned to 10.5-11.5 GHz")
+    requested_mode_count = model.get("requested_mode_count")
+    if isinstance(requested_mode_count, bool) or requested_mode_count != 1:
+        raise ValueError("parallel probe metadata must request one mode")
+    if model.get("mesh_level") != "L2" or model.get("through_thickness_elements") != 3:
+        raise ValueError("parallel probe mesh metadata is not pinned to L2/3")
+    if model.get("outer_boundary_kind") != "poisson_dirichlet":
+        raise ValueError("parallel probe metadata must declare the Poisson Dirichlet airbox")
+    try:
+        stage = metadata["problem_meta"]["runtime_metadata"]["model_builder"]["problem"]["study"]
+    except (KeyError, TypeError) as error:
+        raise ValueError(
+            "parallel probe metadata is missing the canonical model_builder.problem.study") from error
+    if not isinstance(stage, dict) or stage.get("kind") != "eigenmodes":
+        raise ValueError("parallel probe canonical study is not an eigenmodes stage")
+    operator = stage.get("operator")
+    if not isinstance(operator, dict) or operator.get("kind") != "full_2x2" \
+            or operator.get("include_demag") is not True:
+        raise ValueError("parallel probe eigenmodes stage must use full_2x2 with demag")
+    if stage.get("magnetostatic_bc") != "floquet_airbox":
+        raise ValueError("parallel probe eigenmodes stage must use floquet_airbox")
+    source = stage.get("equilibrium")
+    source_kind = source.get("kind") if isinstance(source, dict) else source
+    source_path = source.get("path") if isinstance(source, dict) else stage.get("equilibrium_artifact")
+    if source_kind != "artifact" or source_path != "/workspace/benchmark-input/equilibrium_artifact.v7.json":
+        raise ValueError("parallel probe must use the pinned equilibrium artifact")
+    count = stage.get("count", stage.get("mode_count"))
+    if isinstance(count, bool) or not isinstance(count, int) or count != 1:
+        raise ValueError("parallel probe must request exactly one mode")
+    try:
+        runtime = metadata["problem_meta"]["runtime_metadata"]["model_builder"]["problem"]["runtime"]
+        policy = runtime["parallel_execution"]
+    except (KeyError, TypeError) as error:
+        raise ValueError(
+            "parallel probe metadata is missing the canonical requested execution policy") from error
+    if not isinstance(policy, dict) or policy.get("mode") != parallel_mode:
+        raise ValueError("parallel probe metadata has the wrong requested execution mode")
+    expected_policy = {
+        "max_cpu_percent": 90.0,
+        "max_memory_percent": 80.0,
+        "memory_reserve_bytes": 1024**3,
+        "max_workers": 2,
+        "threads_per_worker": 1,
+    }
+    for key, expected in expected_policy.items():
+        value = policy.get(key)
+        if isinstance(value, bool) or value != expected:
+            raise ValueError(f"parallel probe policy field {key} is not pinned")
+    problem_meta = metadata.get("problem_meta")
+    problem_source_hash = problem_meta.get("source_hash") if isinstance(problem_meta, dict) else None
+    root_source_hash = metadata.get("source_hash")
+    if root_source_hash != model_sha256 or problem_source_hash != model_sha256:
+        raise ValueError(
+            "parallel probe metadata source_hash fields disagree with the staged input")
+    return {
+        "schema": "fullmag.parallel-probe-metadata.v1",
+        "status": "pass",
+        "qualification": "NOT VERIFIED",
+        "model_sha256": model_sha256,
+        "source_hash": model_sha256,
+        "parallel_mode": parallel_mode,
+        "sampling": "parallel-probe",
+        "frequency_window_hz": list(PARALLEL_PROBE_FREQUENCY_WINDOW_HZ),
+        "k_vectors_rad_per_m": [list(vector) for vector in PARALLEL_PROBE_VECTORS_RAD_PER_M],
+        "operator": "full_2x2+demag+floquet_airbox",
+        "pending_requirements": [
+            "native receipt and immutable input manifest binding",
+            "serial/adaptive frequency and residual parity",
+            "mesh, airbox and mode-count convergence",
+        ],
+    }
+
+
+def validate_parallel_probe_solver_artifacts(
+    case_dir: Path,
+    *,
+    requested_eps_prefilter: str,
+    requested_shifted_ksp_rtol: str,
+    requested_gmres_restart: str,
+    expected_sample_count: int | None = None,
+    physical_residual_tolerance: float = DENSE_CERTIFICATION_TOLERANCE,
+):
+    """Validate resolved modal, KSP and Floquet evidence from native artifacts.
+
+    The probe's command line requests EPS/KSP ``1e-9`` and GMRES restart ``8``.
+    Native SLEPc may resolve the EPS true-residual cutoff more strictly (for
+    example to ``1e-11`` for a physical ``1e-8`` residual policy), so the
+    resolved values are checked against the requested upper bounds and their
+    actual convergence evidence is required.  This remains a runtime artifact
+    preflight; mesh, airbox and dispersion qualification stay separate.
+    """
+
+    if requested_eps_prefilter != "1e-9":
+        raise ValueError("parallel probe EPS request is not pinned to 1e-9")
+    if requested_shifted_ksp_rtol != "1e-9":
+        raise ValueError("parallel probe KSP request is not pinned to 1e-9")
+    if requested_gmres_restart != "8":
+        raise ValueError("parallel probe GMRES restart request is not pinned to 8")
+    if (isinstance(physical_residual_tolerance, bool)
+            or not isinstance(physical_residual_tolerance, (int, float))
+            or not math.isfinite(physical_residual_tolerance)
+            or physical_residual_tolerance <= 0.0):
+        raise ValueError("parallel probe physical residual tolerance is invalid")
+    requested_eps = float(requested_eps_prefilter)
+    requested_ksp = float(requested_shifted_ksp_rtol)
+    requested_restart = int(requested_gmres_restart)
+    if expected_sample_count is None:
+        expected_sample_count = len(PARALLEL_PROBE_VECTORS_RAD_PER_M)
+    if (isinstance(expected_sample_count, bool) or not isinstance(expected_sample_count, int)
+            or expected_sample_count <= 0):
+        raise ValueError("parallel probe expected sample count is invalid")
+    case_dir = Path(case_dir)
+
+    def read_json(relative, label):
+        try:
+            value = json.loads((case_dir / relative).read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            raise ValueError(f"parallel probe {label} artifact is missing or invalid") from error
+        if not isinstance(value, dict):
+            raise ValueError(f"parallel probe {label} artifact must be an object")
+        return value
+
+    diagnostics = read_json("eigen/diagnostics/solver.v1.json", "solver diagnostics")
+    summary = read_json("eigen/metadata/eigen_summary.json", "eigen summary")
+    spectrum = read_json("eigen/spectrum.v3.json", "spectrum")
+    if diagnostics.get("schema_version") != "frequency_domain_modal_solver_diagnostics.v1":
+        raise ValueError("parallel probe native diagnostics schema is unsupported")
+    if spectrum.get("schema_version") != "eigen_spectrum.v3":
+        raise ValueError("parallel probe native spectrum schema is unsupported")
+    if summary.get("study_kind") != "eigenmodes" or summary.get("spin_wave_bc") != "floquet":
+        raise ValueError("parallel probe summary does not prove a Floquet eigenmode solve")
+    boundary = summary.get("boundary_config")
+    if (not isinstance(boundary, dict) or boundary.get("kind") != "floquet"
+            or boundary.get("phase_convention") != "exp_minus_i_k_dot_delta_r"):
+        raise ValueError("parallel probe summary has no canonical Floquet phase convention")
+    if (spectrum.get("phase_convention") is not None
+            and spectrum.get("phase_convention") != "exp_minus_i_k_dot_delta_r"):
+        raise ValueError("parallel probe spectrum has no canonical Floquet phase convention")
+
+    samples = spectrum.get("samples")
+    if not isinstance(samples, list) or len(samples) != expected_sample_count:
+        raise ValueError("parallel probe spectrum sample count disagrees with the request")
+    expected_vectors = (
+        PARALLEL_PROBE_VECTORS_RAD_PER_M
+        if expected_sample_count == len(PARALLEL_PROBE_VECTORS_RAD_PER_M)
+        else None
+    )
+    sample_indices = set()
+    max_physical_residual = 0.0
+    phase_hashes = set()
+    for position, sample in enumerate(samples):
+        if not isinstance(sample, dict):
+            raise ValueError(f"parallel probe spectrum sample {position} is invalid")
+        sample_index = sample.get("sample_index")
+        if (isinstance(sample_index, bool) or not isinstance(sample_index, int)
+                or sample_index != position or sample_index in sample_indices):
+            raise ValueError("parallel probe spectrum sample indices are not canonical")
+        sample_indices.add(sample_index)
+        if expected_vectors is not None and sample.get("k_vector") != list(expected_vectors[position]):
+            raise ValueError("parallel probe spectrum signed k vector disagrees with the request")
+        modes = sample.get("modes")
+        if not isinstance(modes, list) or len(modes) != 1:
+            raise ValueError(f"parallel probe spectrum sample {sample_index} must publish one mode")
+        mode = modes[0]
+        if not isinstance(mode, dict):
+            raise ValueError(f"parallel probe spectrum sample {sample_index} mode is invalid")
+        frequency = mode.get("frequency_hz")
+        residual = mode.get("residual_relative_l2")
+        if (isinstance(frequency, bool) or not isinstance(frequency, (int, float))
+                or not math.isfinite(frequency) or frequency <= 0.0):
+            raise ValueError(f"parallel probe sample {sample_index} has no finite frequency")
+        if (isinstance(residual, bool) or not isinstance(residual, (int, float))
+                or not math.isfinite(residual) or residual < 0.0
+                or residual > physical_residual_tolerance):
+            raise ValueError(f"parallel probe sample {sample_index} exceeds the physical residual gate")
+        max_physical_residual = max(max_physical_residual, float(residual))
+        block = mode.get("block_residuals")
+        if not isinstance(block, dict) or block.get("certified") is not True:
+            raise ValueError(f"parallel probe sample {sample_index} lacks a certified Floquet block")
+        if block.get("certification_tolerance") != physical_residual_tolerance:
+            raise ValueError(f"parallel probe sample {sample_index} has the wrong physical tolerance")
+        for key in (
+            "floquet_cartesian_magnetic_seam_relative_residual",
+            "floquet_equilibrium_pair_relative_residual",
+            "floquet_full_magnetic_relative_residual",
+            "floquet_full_potential_relative_residual",
+            "floquet_scalar_phase_seam_relative_residual",
+            "floquet_tangent_frame_seam_relative_residual",
+        ):
+            value = block.get(key)
+            if (isinstance(value, bool) or not isinstance(value, (int, float))
+                    or not math.isfinite(value) or value < 0.0
+                    or value > physical_residual_tolerance):
+                raise ValueError(f"parallel probe sample {sample_index} has invalid {key}")
+        for key in (
+            "floquet_descriptor_certified", "floquet_full_descriptor_certified",
+            "floquet_gauge_policy_satisfied", "floquet_seam_frame_certified",
+        ):
+            if mode.get(key) is not True:
+                raise ValueError(f"parallel probe sample {sample_index} lacks {key}")
+        phase_hash = mode.get("phase_constraint_sha256")
+        if (not isinstance(phase_hash, str)
+                or PHASE_CONSTRAINT_SHA256_RE.fullmatch(phase_hash) is None):
+            raise ValueError(f"parallel probe sample {sample_index} has no valid phase constraint identity")
+        phase_hashes.add(phase_hash)
+
+    if len(phase_hashes) != 1:
+        raise ValueError("parallel probe samples do not share one Floquet phase identity")
+
+    summary_modes = summary.get("modes")
+    if not isinstance(summary_modes, list) or not summary_modes:
+        raise ValueError("parallel probe eigen summary has no published mode")
+    summary_mode = summary_modes[0]
+    if not isinstance(summary_mode, dict):
+        raise ValueError("parallel probe eigen summary mode is invalid")
+    if summary_mode.get("phase_constraint_sha256") not in phase_hashes:
+        raise ValueError("parallel probe summary phase identity is not bound to the spectrum")
+
+    def finite_number(value, label, *, positive=False):
+        if (isinstance(value, bool) or not isinstance(value, (int, float))
+                or not math.isfinite(value) or (positive and value <= 0.0)):
+            raise ValueError(f"parallel probe native diagnostics have invalid {label}")
+        return float(value)
+
+    records = diagnostics.get("sample_solver_diagnostics")
+    if records is None:
+        records = [{"sample_index": 0, "diagnostics": diagnostics}]
+    if not isinstance(records, list) or len(records) != len(samples):
+        raise ValueError("parallel probe native diagnostics do not cover every sample")
+    seen_records = set()
+    resolved_eps = []
+    resolved_ksp = []
+    for position, record in enumerate(records):
+        if not isinstance(record, dict):
+            raise ValueError(f"parallel probe native diagnostics sample {position} is invalid")
+        sample_index = record.get("sample_index")
+        if (isinstance(sample_index, bool) or not isinstance(sample_index, int)
+                or sample_index not in sample_indices or sample_index in seen_records):
+            raise ValueError("parallel probe native diagnostics sample identity is invalid")
+        seen_records.add(sample_index)
+        sample_diagnostics = record.get("diagnostics")
+        if not isinstance(sample_diagnostics, dict):
+            raise ValueError("parallel probe native diagnostics sample payload is invalid")
+        policy = sample_diagnostics.get("modal_solver_policy")
+        if (not isinstance(policy, dict)
+                or policy.get("requested_residual_tolerance") != physical_residual_tolerance):
+            raise ValueError("parallel probe native diagnostics have the wrong requested residual policy")
+        accepted = sample_diagnostics.get("accepted_mode_count")
+        deduped = sample_diagnostics.get("accepted_mode_count_after_dedup", accepted)
+        if (isinstance(accepted, bool) or accepted != 1
+                or isinstance(deduped, bool) or deduped != 1):
+            raise ValueError("parallel probe native diagnostics do not prove one accepted mode")
+        ksp_rtol = finite_number(sample_diagnostics.get("ksp_rtol"), "ksp_rtol", positive=True)
+        if ksp_rtol > requested_ksp:
+            raise ValueError("parallel probe resolved KSP rtol is looser than the pinned request")
+        restart = sample_diagnostics.get("ksp_restart")
+        if isinstance(restart, bool) or restart != requested_restart:
+            raise ValueError("parallel probe resolved GMRES restart disagrees with the request")
+        resolved_ksp.append(ksp_rtol)
+        subwindows = sample_diagnostics.get("subwindows")
+        if not isinstance(subwindows, list) or not subwindows:
+            raise ValueError("parallel probe native diagnostics have no resolved EPS subwindow")
+        has_converged_window = False
+        for subwindow in subwindows:
+            if not isinstance(subwindow, dict):
+                raise ValueError("parallel probe native EPS subwindow is invalid")
+            eps_tolerance = finite_number(
+                subwindow.get("eps_normalized_absolute_tolerance"),
+                "eps_normalized_absolute_tolerance", positive=True)
+            if eps_tolerance > requested_eps or eps_tolerance > physical_residual_tolerance:
+                raise ValueError("parallel probe resolved EPS cutoff is looser than the pinned request")
+            eps_residual = finite_number(
+                subwindow.get("eps_normalized_absolute_residual_max"),
+                "eps_normalized_absolute_residual_max")
+            if eps_residual > eps_tolerance:
+                raise ValueError("parallel probe EPS true residual exceeds its resolved cutoff")
+            physical = finite_number(subwindow.get("residual_max"), "residual_max")
+            if physical > physical_residual_tolerance:
+                raise ValueError("parallel probe native candidate residual exceeds the physical gate")
+            true_residual = finite_number(
+                subwindow.get("ksp_max_true_relative_residual"),
+                "ksp_max_true_relative_residual")
+            if true_residual > physical_residual_tolerance:
+                raise ValueError("parallel probe native KSP true residual exceeds the physical gate")
+            finite_number(subwindow.get("ksp_final_residual"), "ksp_final_residual")
+            if (subwindow.get("ksp_diagnostics_available") is not True
+                    or subwindow.get("ksp_last_true_residual_available") is not True
+                    or subwindow.get("ksp_true_residual_measurement_failure_count") != 0
+                    or subwindow.get("ksp_converged_reason", 0) <= 0
+                    or subwindow.get("eps_converged_reason", 0) <= 0
+                    or subwindow.get("eps_convergence_test") != "absolute_true_residual"):
+                raise ValueError("parallel probe native EPS/KSP convergence evidence is incomplete")
+            if subwindow.get("stop_reason") == "converged":
+                has_converged_window = True
+            resolved_eps.append(eps_tolerance)
+        if not has_converged_window:
+            raise ValueError("parallel probe has no converged EPS subwindow")
+
+    return {
+        "schema": "fullmag.parallel-probe-solver-artifacts.v1",
+        "status": "pass",
+        "qualification": "NOT VERIFIED",
+        "sample_count": len(samples),
+        "resolved_eps_normalized_absolute_tolerance": resolved_eps,
+        "resolved_ksp_rtol": resolved_ksp,
+        "resolved_gmres_restart": requested_restart,
+        "max_physical_residual": max_physical_residual,
+        "phase_constraint_sha256": sorted(phase_hashes),
+        "pending_requirements": [
+            "mesh, airbox and mode-count convergence",
+            "serial/adaptive frequency parity and scientific comparison",
+        ],
+    }
 
 
 def load_solver_diagnostics(path: Path):
@@ -665,6 +1031,11 @@ def validate_rows(path: Path, sampling: str, solver_diagnostics_path: Path,
             not math.isfinite(solver_rtol) or solver_rtol <= 0):
         raise ValueError("DE-SMOKE eigen_solver_rtol must be finite and positive")
     native_modes = load_spectrum_v3_modes(Path(path).parent / "spectrum.v3.json")
+    if sampling == "parallel-probe":
+        expected_mode_keys = {(sample_index, 0) for sample_index in range(len(expected))}
+        if set(native_modes) != expected_mode_keys:
+            raise ValueError(
+                "parallel probe spectrum requires exactly one mode (raw_mode_index=0) per sample")
     if sampling in DENSE_SAMPLING:
         if ({sample for sample, _ in native_modes} != set(range(len(expected))) or
                 len(native_modes) != len(expected)):
@@ -720,10 +1091,13 @@ def validate_rows(path: Path, sampling: str, solver_diagnostics_path: Path,
             if not math.isclose(values[propagation_key], expected[sample], rel_tol=1e-12, abs_tol=1e-12):
                 raise ValueError("wavevector does not match its sample index")
             if selection_scope == "frequency_window":
-                frequency_min = 12e9 if sampling in ("k25", "k-25") else 8.5e9
-                wide_de_window = (sampling in ("positive-six", "positive-26") or
-                                  (not sampling.startswith("bv-") and len(expected) == 1 and abs(expected[0]) >= 15e6))
-                frequency_max = 16e9 if wide_de_window else 12e9
+                if sampling == "parallel-probe":
+                    frequency_min, frequency_max = PARALLEL_PROBE_FREQUENCY_WINDOW_HZ
+                else:
+                    frequency_min = 12e9 if sampling in ("k25", "k-25") else 8.5e9
+                    wide_de_window = (sampling in ("positive-six", "positive-26", "signed-fifteen") or
+                                      (not sampling.startswith("bv-") and len(expected) == 1 and abs(expected[0]) >= 15e6))
+                    frequency_max = 16e9 if wide_de_window else 12e9
                 if not frequency_min <= values["frequency_hz"] <= frequency_max:
                     raise ValueError("frequency outside the frozen DE-SMOKE window")
             mode_key = (sample, indices["raw_mode_index"])
@@ -764,6 +1138,11 @@ def validate_rows(path: Path, sampling: str, solver_diagnostics_path: Path,
             })
     if sampling in DENSE_SAMPLING and len(rows) != len(expected):
         raise ValueError("dense DE/BV rows require exactly one mode for each requested sample")
+    if sampling == "parallel-probe" and (
+            len(rows) != len(expected) or
+            any(row["raw_mode_index"] != 0 for row in rows)):
+        raise ValueError(
+            "parallel probe rows require exactly one mode (raw_mode_index=0) per sample")
     if {r["sample_index"] for r in rows} != set(range(len(expected))):
         raise ValueError("missing DE-SMOKE samples")
     pending_requirements = [

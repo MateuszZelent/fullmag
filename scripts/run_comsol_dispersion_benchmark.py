@@ -716,25 +716,51 @@ def _container_identity(context: BuildContext, output_dir: Path) -> dict[str, An
 
 
 def _expected_container_mounts(
-    context: BuildContext, output_dir: Path
+    context: BuildContext,
+    output_dir: Path,
+    *,
+    extra_mounts: Sequence[Mapping[str, Any]] = (),
 ) -> tuple[dict[str, Any], ...]:
-    return (
+    mounts: list[dict[str, Any]] = [
         {
+            "type": "bind",
             "source": os.path.abspath(str(context.source_tree)),
             "destination": "/workspace/capsule",
             "read_only": True,
         },
         {
+            "type": "bind",
             "source": os.path.abspath(str(context.runtime_root)),
             "destination": "/workspace/.fullmag/local",
             "read_only": True,
         },
         {
+            "type": "bind",
             "source": os.path.abspath(str(output_dir)),
             "destination": "/workspace/benchmark-output",
             "read_only": False,
         },
-    )
+    ]
+    for extra in extra_mounts:
+        if not isinstance(extra, Mapping):
+            raise BenchmarkError("expected benchmark mount is not an object")
+        mount = dict(extra)
+        mount_type = mount.get("type", "bind")
+        if mount_type not in {"bind", "tmpfs"}:
+            raise BenchmarkError("expected benchmark mount has an unsupported type")
+        destination = mount.get("destination")
+        if not isinstance(destination, str) or not destination.startswith("/"):
+            raise BenchmarkError("expected benchmark mount has an invalid destination")
+        if any(existing.get("destination") == destination for existing in mounts):
+            raise BenchmarkError("expected benchmark mount destinations are ambiguous")
+        if mount_type == "bind":
+            source = mount.get("source")
+            if not isinstance(source, str) or not os.path.isabs(source):
+                raise BenchmarkError("expected bind mount has an invalid source")
+        elif "source" in mount:
+            raise BenchmarkError("expected tmpfs mount must not declare a host source")
+        mounts.append(mount)
+    return tuple(mounts)
 
 
 def _normalized_mount_source(value: object) -> str | None:
@@ -763,6 +789,29 @@ def _mount_source_matches(actual: object, expected: str) -> bool:
         projected = f"/host_mnt/{drive}{expected_normalized[2:]}"
         return actual_normalized == projected
     return False
+
+
+def _normalized_tmpfs_options(value: object) -> tuple[str, ...] | None:
+    """Normalize Docker tmpfs options while preserving an exact option set."""
+
+    if not isinstance(value, str) or not value.strip():
+        return None
+    normalized: list[str] = []
+    size_units = {"k": 1024, "m": 1024**2, "g": 1024**3, "t": 1024**4}
+    for raw_option in value.split(","):
+        option = raw_option.strip().lower()
+        if not option:
+            return None
+        if option.startswith("size="):
+            match = re.fullmatch(r"size=(\d+)([kmgt]?)", option)
+            if match is None:
+                return None
+            amount = int(match.group(1))
+            unit = match.group(2)
+            normalized.append(f"size={amount * size_units.get(unit, 1)}b")
+        else:
+            normalized.append(option)
+    return tuple(sorted(normalized))
 
 
 def _inspect_benchmark_container(
@@ -824,8 +873,14 @@ def _inspect_benchmark_container(
     if identity.get("image_digest", EXPECTED_IMAGE_DIGEST) not in {image, configured_image}:
         return {"status": "blocked", "reason": "container image identity mismatch"}
     mounts = inspected.get("Mounts")
-    if not isinstance(mounts, list) or len(mounts) != len(expected_mounts):
-        return {"status": "blocked", "reason": "container mount set is not exact"}
+    if not isinstance(mounts, list):
+        return {"status": "blocked", "reason": "container bind mount set is not exact"}
+    expected_bind_mounts = tuple(
+        expected for expected in expected_mounts if expected.get("type", "bind") == "bind"
+    )
+    expected_tmpfs_mounts = tuple(
+        expected for expected in expected_mounts if expected.get("type") == "tmpfs"
+    )
     actual_by_destination: dict[str, Mapping[str, Any]] = {}
     for mount in mounts:
         if not isinstance(mount, Mapping):
@@ -833,8 +888,14 @@ def _inspect_benchmark_container(
         destination = mount.get("Destination")
         if not isinstance(destination, str) or destination in actual_by_destination:
             return {"status": "blocked", "reason": "container mount destinations are ambiguous"}
+        if mount.get("Type") != "bind":
+            return {"status": "blocked", "reason": "container bind mount set contains an unexpected type"}
         actual_by_destination[destination] = mount
-    for expected in expected_mounts:
+    if set(actual_by_destination) != {
+        expected.get("destination") for expected in expected_bind_mounts
+    }:
+        return {"status": "blocked", "reason": "container bind mount set is not exact"}
+    for expected in expected_bind_mounts:
         destination = expected.get("destination")
         actual = actual_by_destination.get(destination)
         if actual is None:
@@ -843,6 +904,25 @@ def _inspect_benchmark_container(
             return {"status": "blocked", "reason": f"container mount source mismatch: {destination}"}
         if actual.get("RW") != (not bool(expected.get("read_only"))):
             return {"status": "blocked", "reason": f"container mount mode mismatch: {destination}"}
+    host_config = inspected.get("HostConfig")
+    actual_tmpfs = host_config.get("Tmpfs") if isinstance(host_config, Mapping) else None
+    if actual_tmpfs is None:
+        actual_tmpfs = {}
+    if not isinstance(actual_tmpfs, Mapping):
+        return {"status": "blocked", "reason": "container tmpfs configuration is invalid"}
+    expected_tmpfs_by_destination = {
+        expected.get("destination"): expected for expected in expected_tmpfs_mounts
+    }
+    if set(actual_tmpfs) != set(expected_tmpfs_by_destination):
+        return {"status": "blocked", "reason": "container tmpfs set is not exact"}
+    for destination, expected in expected_tmpfs_by_destination.items():
+        expected_mode = expected.get("mode")
+        if not isinstance(expected_mode, str) or not expected_mode:
+            return {"status": "blocked", "reason": f"container tmpfs expectation is incomplete: {destination}"}
+        actual_mode = _normalized_tmpfs_options(actual_tmpfs[destination])
+        expected_normalized = _normalized_tmpfs_options(expected_mode)
+        if actual_mode is None or expected_normalized is None or actual_mode != expected_normalized:
+            return {"status": "blocked", "reason": f"container tmpfs mode mismatch: {destination}"}
     return {"status": "owned", "container_id": container_id, "inspect": dict(inspected)}
 
 
@@ -850,12 +930,17 @@ def _cleanup_benchmark_container(
     context: BuildContext,
     output_dir: Path,
     *,
+    extra_mounts: Sequence[Mapping[str, Any]] = (),
     run: Any = subprocess.run,
 ) -> dict[str, Any]:
     """Stop and remove only a fully attested container for this run."""
 
     identity = _container_identity(context, output_dir)
-    expected_mounts = _expected_container_mounts(context, output_dir)
+    expected_mounts = (
+        _expected_container_mounts(context, output_dir, extra_mounts=extra_mounts)
+        if extra_mounts
+        else _expected_container_mounts(context, output_dir)
+    )
     inspected = _inspect_benchmark_container(identity, expected_mounts, run=run)
     if inspected.get("status") == "absent":
         return {"status": "verified_absent", "container_name": identity["name"]}

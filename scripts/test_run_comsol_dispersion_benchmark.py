@@ -386,16 +386,27 @@ class ComsolDispersionBenchmarkTests(unittest.TestCase):
             with self.assertRaises(benchmark.BenchmarkError):
                 benchmark._new_output_dir(context, str(candidate))
 
-    def _owned_container_payload(self, context, output_dir, *, running=True, labels=None):
+    def _owned_container_payload(self, context, output_dir, *, running=True, labels=None,
+                                 extra_mounts=()):
         identity = benchmark._container_identity(context, output_dir)
+        expected_mounts = benchmark._expected_container_mounts(
+            context, output_dir, extra_mounts=extra_mounts
+        )
         mounts = [
             {
+                "Type": "bind",
                 "Source": mount["source"],
                 "Destination": mount["destination"],
                 "RW": not mount["read_only"],
             }
-            for mount in benchmark._expected_container_mounts(context, output_dir)
+            for mount in expected_mounts
+            if mount.get("type", "bind") == "bind"
         ]
+        tmpfs = {
+            mount["destination"]: mount["mode"]
+            for mount in expected_mounts
+            if mount.get("type") == "tmpfs"
+        }
         return {
             "Id": "a" * 64,
             "Name": "/" + identity["name"],
@@ -405,8 +416,110 @@ class ComsolDispersionBenchmarkTests(unittest.TestCase):
                 "Labels": dict(labels or identity["labels"]),
             },
             "Mounts": mounts,
+            "HostConfig": {"Tmpfs": tmpfs},
             "State": {"Running": running, "Status": "running" if running else "exited"},
         }
+
+    def test_cleanup_attests_model_ui_and_tmpfs_mounts_exactly(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            context = self.fake_context(root)
+            output_dir = root / "output"
+            output_dir.mkdir()
+            model = output_dir / "model-input.py"
+            model.write_text("# model\n", encoding="utf-8")
+            web = output_dir / "ui-web"
+            web.mkdir()
+            (web / "index.html").write_text("<html></html>", encoding="utf-8")
+            extras = (
+                {"type": "bind", "source": str(model.resolve()),
+                 "destination": "/workspace/benchmark-model.py", "read_only": True},
+                {"type": "tmpfs", "destination": "/workspace/fullmag-ui-workspace",
+                 "read_only": False, "mode": "rw,nosuid,nodev,size=1g"},
+                {"type": "bind", "source": str(web.resolve()),
+                 "destination": "/workspace/fullmag-web", "read_only": True},
+            )
+            payload = self._owned_container_payload(
+                context, output_dir, extra_mounts=extras, running=False
+            )
+            calls = []
+            inspect_count = 0
+
+            def docker_run(argv, **kwargs):
+                nonlocal inspect_count
+                calls.append(argv)
+                if argv[:4] == ["docker", "container", "inspect", argv[3]]:
+                    inspect_count += 1
+                    if inspect_count > 1:
+                        return SimpleNamespace(returncode=1, stdout="", stderr="No such container")
+                    return SimpleNamespace(returncode=0, stdout=json.dumps([payload]), stderr="")
+                if argv[:4] == ["docker", "container", "rm", argv[3]]:
+                    return SimpleNamespace(returncode=0, stdout="", stderr="")
+                return SimpleNamespace(returncode=1, stdout="", stderr="No such container")
+
+            result = benchmark._cleanup_benchmark_container(
+                context, output_dir, extra_mounts=extras, run=docker_run
+            )
+            self.assertEqual(result["status"], "removed")
+            self.assertIn(["docker", "container", "rm", "a" * 64], calls)
+
+    def test_cleanup_blocks_unexpected_tmpfs_mode(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            context = self.fake_context(root)
+            output_dir = root / "output"
+            output_dir.mkdir()
+            extras = ({
+                "type": "tmpfs", "destination": "/workspace/fullmag-ui-workspace",
+                "read_only": False, "mode": "rw,nosuid,nodev,size=1g",
+            },)
+            payload = self._owned_container_payload(
+                context, output_dir, extra_mounts=({**extras[0], "mode": "rw"},), running=False
+            )
+
+            def docker_run(argv, **kwargs):
+                return SimpleNamespace(returncode=0, stdout=json.dumps([payload]), stderr="")
+
+            result = benchmark._cleanup_benchmark_container(
+                context, output_dir, extra_mounts=extras, run=docker_run
+            )
+            self.assertEqual(result["status"], "blocked")
+            self.assertIn("tmpfs mode mismatch", result["reason"])
+
+    def test_cleanup_attests_hostconfig_tmpfs_with_equivalent_size_and_order(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            context = self.fake_context(root)
+            output_dir = root / "output"
+            output_dir.mkdir()
+            extras = ({
+                "type": "tmpfs", "destination": "/tmp",
+                "read_only": False, "mode": "rw,nosuid,nodev,size=1g",
+            },)
+            payload = self._owned_container_payload(
+                context, output_dir, extra_mounts=extras, running=False
+            )
+            payload["HostConfig"]["Tmpfs"] = {
+                "/tmp": "size=1024m,nodev,rw,nosuid"
+            }
+            inspect_count = 0
+
+            def docker_run(argv, **kwargs):
+                nonlocal inspect_count
+                if argv[:3] == ["docker", "container", "inspect"]:
+                    inspect_count += 1
+                    if inspect_count > 1:
+                        return SimpleNamespace(
+                            returncode=1,
+                            stdout="",
+                            stderr="No such container",
+                        )
+                return SimpleNamespace(returncode=0, stdout=json.dumps([payload]), stderr="")
+
+            result = benchmark._cleanup_benchmark_container(
+                context, output_dir, extra_mounts=extras, run=docker_run
+            )
+            self.assertEqual(result["status"], "removed")
 
     def test_windows_mount_projection_preserves_forward_slashes(self):
         expected = r"C:\git\fullmag\storage\runs\benchmark"

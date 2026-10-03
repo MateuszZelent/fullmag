@@ -10,6 +10,7 @@ import argparse
 import hashlib
 import json
 import math
+import os
 import re
 from pathlib import Path
 import sqlite3
@@ -21,8 +22,17 @@ import zipfile
 from control_room_port import is_bindable
 import run_comsol_dispersion_benchmark as managed
 from runtime_source_change_policy import is_non_runtime_path
-from validate_de_smoke_rows import validate_rows, validate_selected_only_diagnostics, SAMPLING
+from validate_de_smoke_rows import (
+    PARALLEL_PROBE_FREQUENCY_WINDOW_HZ,
+    PARALLEL_PROBE_VECTORS_RAD_PER_M,
+    SAMPLING,
+    validate_parallel_probe_metadata,
+    validate_parallel_probe_solver_artifacts,
+    validate_rows,
+    validate_selected_only_diagnostics,
+)
 from validate_de_physical_potential import validate_physical_potential, _extract_mesh
+from validate_parallel_execution_report import validate_parallel_execution_report, ValidationError as ParallelReportError
 import de_smoke_model_input as model_input
 from run_de_ui_model import copy_web
 
@@ -30,6 +40,47 @@ MODEL = "examples/fem_de_film_100nm_numeric_pilot.py"
 NEAREST_PILOT = "de-smoke-nearest-k2"
 NEAREST_PILOTS = frozenset((NEAREST_PILOT,))
 DEFAULT_NEAREST_TARGET_FREQUENCY_GHZ = 10.0
+SIGNED_FIFTEEN_PILOT = "de-smoke-signed-fifteen"
+PARALLEL_PROBE_PILOT = "de-smoke-parallel-probe"
+PARALLEL_PROBE_SAMPLING = "parallel-probe"
+PARALLEL_PROBE_MODEL_SOURCE_COMMIT = "6cf0b786dc688e6a6993f7273df96dcb50727b1b"
+PARALLEL_PROBE_MODEL_SHA256 = "ea1a0afd90ae60b779db5264125756bd3073264717a4b09f1dcfdf59862b50a8"
+PARALLEL_PROBE_MANIFEST_SHA256 = "ecc7e0defad7ff161400703f6ed51d26add34aae28fb476a937ef72b206093db"
+PARALLEL_PROBE_EQUILIBRIUM_SHA256 = "ce9d630b90234933cce60304b5564f543304d587680d08e5793e114be1f655d1"
+PARALLEL_PROBE_LINEARIZATION_SHA256 = "c0e5bb847a17b5da0f43b1c0a7ba3303028be44f3dcd926cd3e7e620f242864e"
+PARALLEL_PROBE_INPUT_RELATIVE_ROOT = (
+    "runs/eigensolve-dispersion-plan-20260-c5dfad6d7f548079/"
+    "scientific-batches/nonzero-k-validation/d30406a2ef6d42cb9120ce04d58d646a/"
+    "serial-adaptive-probe-v1"
+)
+PARALLEL_PROBE_REQUIRED_CPU_CORES = 4
+PARALLEL_PROBE_REQUIRED_MEMORY_BYTES = 8 * 1024**3
+PARALLEL_PROBE_POLICY = {
+    "max_cpu_percent": 90.0,
+    "max_memory_percent": 80.0,
+    "memory_reserve_bytes": 1024**3,
+    "max_workers": 2,
+    "threads_per_worker": 1,
+}
+SCHUR_ACTION_DIAGNOSTIC_STATUSES = frozenset(("measured", "failed", "unavailable"))
+SCHUR_ACTION_DIAGNOSTIC_DEFECT_FIELDS = (
+    "max_potential_relative_residual",
+    "max_repeatability_relative_defect",
+    "repeatability_first_relative_defect",
+    "repeatability_second_relative_defect",
+    "max_homogeneity_relative_defect",
+    "homogeneity_half_relative_defect",
+    "homogeneity_double_relative_defect",
+    "homogeneity_tiny_relative_defect",
+    "additivity_relative_defect",
+    "mat_shell_reconstruction_relative_defect",
+    "min_cancellation_ratio",
+    "max_magnetic_l2_norm",
+    "max_feedback_l2_norm",
+    "max_combined_l2_norm",
+    "min_rhs_l2_norm",
+    "max_rhs_l2_norm",
+)
 PILOTS = {
     "de100": (MODEL, None),
     "de-smoke-two": ("examples/fem_de_smoke_numeric.py", "two"),
@@ -43,6 +94,8 @@ PILOTS = {
     "de-smoke-positive-26": ("examples/fem_de_smoke_numeric.py", "positive-26"),
     "de-smoke-bv-positive-26": ("examples/fem_de_smoke_numeric.py", "bv-positive-26"),
     "de-smoke-signed-eleven": ("examples/fem_de_smoke_numeric.py", "signed-eleven"),
+    SIGNED_FIFTEEN_PILOT: ("examples/fem_de_smoke_numeric.py", "signed-fifteen"),
+    PARALLEL_PROBE_PILOT: ("examples/fem_de_smoke_numeric.py", PARALLEL_PROBE_SAMPLING),
     NEAREST_PILOT: ("examples/fem_de_smoke_numeric.py", "k2"),
 }
 for _geometry_prefix in ("", "bv-"):
@@ -395,10 +448,244 @@ def pilot_model(pilot):
     return PILOTS[pilot][0]
 
 
+def _validate_parallel_probe_build(context, expected_source_digest):
+    """Bind both probe runs to one deliberately selected, verified CPU capsule."""
+    if not isinstance(expected_source_digest, str) or not re.fullmatch(
+        r"[0-9a-f]{64}", expected_source_digest
+    ):
+        raise managed.BenchmarkError("parallel probe requires a lowercase SHA256 source digest")
+    if context.job.get("source_digest") != expected_source_digest:
+        raise managed.BenchmarkError("parallel probe build source digest differs from the requested capsule")
+    if context.job.get("profile") != managed.CPU_ABI_RUNTIME_PROFILE:
+        raise managed.BenchmarkError("parallel probe requires the CPU-only runtime-v2 build profile")
+    required_sources = {
+        "crates/fullmag-ir/src/parallel_execution.rs",
+        "crates/fullmag-runner/src/adaptive_resources.rs",
+        "crates/fullmag-runner/src/adaptive_resources_linux.rs",
+        "crates/fullmag-runner/src/eigen/k_process_pool.rs",
+        "crates/fullmag-runner/src/fem/eigen_k_pool.rs",
+        "crates/fullmag-runner/src/fem/eigen_k_worker.rs",
+    }
+    captured = {entry.get("path") for entry in context.manifest.get("files", [])
+                if isinstance(entry, dict)}
+    missing = sorted(required_sources - captured)
+    if missing:
+        raise managed.BenchmarkError("parallel probe capsule lacks adaptive sources: " + ", ".join(missing))
+
+
+def signed_fifteen_campaign_identity(model_identity, parallel_mode):
+    if (parallel_mode not in {"serial", "adaptive"} or not isinstance(model_identity, dict)
+            or model_identity.get("kind") != "versioned_standalone_input"
+            or not isinstance(model_identity.get("commit"), str)
+            or not re.fullmatch(r"[0-9a-f]{40}", model_identity["commit"])
+            or not isinstance(model_identity.get("sha256"), str)
+            or not re.fullmatch(r"[0-9a-f]{64}", model_identity["sha256"])):
+        raise managed.BenchmarkError("signed-fifteen is missing its pinned execution policy")
+    return {
+        "mode": parallel_mode, "sampling": "signed-fifteen",
+        "model_sha256": model_identity["sha256"],
+        "model_source_commit": model_identity["commit"],
+        "max_cpu_percent": 90, "max_memory_percent": 80,
+        "memory_reserve_bytes": 1073741824,
+        "max_workers": None, "threads_per_worker": 1,
+    }
+
+
+def bind_parallel_report(case_dir, artifacts, *, expected_policy, expected_indices):
+    """Bind actual scheduler telemetry to the numerical campaign receipt."""
+    relative = "eigen/parallel_execution.v1.json"
+    path = Path(case_dir) / relative
+    managed._regular_file(path, "adaptive process-pool report")
+    raw = managed._json_file(path, "adaptive process-pool report", max_bytes=4 * 1024 * 1024)
+    try:
+        validation = validate_parallel_execution_report(
+            raw, expected_mode="adaptive", expected_sample_count=len(expected_indices),
+            require_concurrency=False)
+    except ParallelReportError as error:
+        raise managed.BenchmarkError("adaptive report validation failed: " + str(error)) from error
+    if raw.get("policy") != expected_policy:
+        raise managed.BenchmarkError("adaptive report policy differs from the campaign request")
+    if [entry["sample_index"] for entry in raw.get("inputs", [])] != list(expected_indices):
+        raise managed.BenchmarkError("adaptive report sample indices differ from the campaign")
+    binding = {"size": path.stat().st_size, "sha256": managed._sha256_file(path)}
+    artifacts["required_artifact_hashes"][relative] = binding
+    artifacts["parallel_execution_report"] = validation
+    return validation
+
+
+def _is_parallel_probe(pilot):
+    return pilot == PARALLEL_PROBE_PILOT
+
+
+def _parallel_probe_root(layout, requested=None):
+    storage_root = Path(layout["storage_root"])
+    canonical = storage_root.joinpath(*PARALLEL_PROBE_INPUT_RELATIVE_ROOT.split("/"))
+    candidate = canonical if requested is None else Path(requested).expanduser()
+    if not candidate.is_absolute():
+        candidate = storage_root / candidate
+    if os.path.normcase(os.path.abspath(str(candidate))) != os.path.normcase(
+            os.path.abspath(str(canonical))):
+        raise managed.BenchmarkError(
+            "parallel probe input root must be the pinned managed campaign directory")
+    try:
+        return managed.fullmag_storage.validate_path(
+            canonical, storage_root, "parallel probe input root"
+        )
+    except managed.fullmag_storage.StorageError as error:
+        raise managed.BenchmarkError("parallel probe input root escapes managed storage or traverses a link") from error
+
+
+def _parallel_probe_sha256(path, label):
+    try:
+        return managed._sha256_file(managed._regular_file(Path(path), label))
+    except (OSError, ValueError, managed.BenchmarkError) as error:
+        raise managed.BenchmarkError(f"cannot hash parallel probe {label}") from error
+
+
+def _validate_parallel_probe_inputs(layout, requested_root, mode):
+    """Load only the immutable input bundle pinned for the parity probe."""
+
+    if mode not in {"serial", "adaptive"}:
+        raise managed.BenchmarkError("parallel probe mode must be serial or adaptive")
+    root = _parallel_probe_root(layout, requested_root)
+    managed._regular_dir(root, "parallel probe root")
+    model_path = managed._regular_file(root / "model-input.py", "parallel probe model input")
+    model_data = model_path.read_bytes()
+    if not model_data or len(model_data) > 1024 * 1024:
+        raise managed.BenchmarkError("parallel probe model input is empty or oversized")
+    try:
+        compile(model_data, "model-input.py", "exec")
+    except (SyntaxError, ValueError) as error:
+        raise managed.BenchmarkError("parallel probe model input is not valid Python") from error
+    model_sha256 = _parallel_probe_sha256(model_path, "model input")
+    if model_sha256 != PARALLEL_PROBE_MODEL_SHA256:
+        raise managed.BenchmarkError("parallel probe model input hash is not the pinned SHA")
+
+    input_dir = managed._regular_dir(root / "input", "parallel probe input directory")
+    manifest_path = managed._regular_file(input_dir / "input-manifest.json", "parallel probe input manifest")
+    manifest_sha256 = _parallel_probe_sha256(manifest_path, "input manifest")
+    if manifest_sha256 != PARALLEL_PROBE_MANIFEST_SHA256:
+        raise managed.BenchmarkError("parallel probe input manifest hash is not the pinned SHA")
+    manifest = managed._json_file(manifest_path, "parallel probe input manifest", max_bytes=4 * 1024 * 1024)
+    if manifest.get("schema") != "fullmag.serial-adaptive-probe-input-manifest.v1":
+        raise managed.BenchmarkError("parallel probe input manifest schema is invalid")
+    if manifest.get("copy_policy") != "byte-exact copies of already validated metadata; immutable inputs for both policy runs":
+        raise managed.BenchmarkError("parallel probe input manifest copy policy is invalid")
+    entries = manifest.get("files")
+    if not isinstance(entries, list) or len(entries) != 2:
+        raise managed.BenchmarkError("parallel probe input manifest must bind exactly two files")
+    expected = {
+        "equilibrium_artifact.v7.json": ("equilibrium_artifact.v7", PARALLEL_PROBE_EQUILIBRIUM_SHA256),
+        "linearization_state.v6.json": ("LinearizationState.v6", PARALLEL_PROBE_LINEARIZATION_SHA256),
+    }
+    observed = {}
+    allowed_input_names = set(expected) | {"input-manifest.json"}
+    for child in input_dir.iterdir():
+        if child.name not in allowed_input_names:
+            raise managed.BenchmarkError(
+                f"parallel probe input directory contains an unbound file: {child.name}")
+    for entry in entries:
+        if not isinstance(entry, dict) or not isinstance(entry.get("path"), str):
+            raise managed.BenchmarkError("parallel probe manifest contains an invalid file entry")
+        relative = entry["path"]
+        if relative not in expected or relative in observed:
+            raise managed.BenchmarkError("parallel probe manifest contains an unexpected or duplicate file")
+        schema, expected_sha256 = expected[relative]
+        if entry.get("schema_version") != schema or entry.get("sha256") != expected_sha256:
+            raise managed.BenchmarkError(f"parallel probe manifest binding is invalid for {relative}")
+        artifact_path = managed._regular_file(input_dir / relative, f"parallel probe input {relative}")
+        actual_sha256 = _parallel_probe_sha256(artifact_path, relative)
+        if actual_sha256 != expected_sha256:
+            raise managed.BenchmarkError(f"parallel probe input hash mismatch for {relative}")
+        artifact = managed._json_file(artifact_path, f"parallel probe input {relative}", max_bytes=32 * 1024 * 1024)
+        if artifact.get("schema_version") != schema:
+            raise managed.BenchmarkError(f"parallel probe input schema mismatch for {relative}")
+        if not isinstance(entry.get("content_sha256"), str) \
+                or entry.get("content_sha256") != artifact.get("content_sha256"):
+            raise managed.BenchmarkError(f"parallel probe content hash binding is invalid for {relative}")
+        if relative == "equilibrium_artifact.v7.json":
+            expected_id = f"equilibrium_artifact.v7:{artifact.get('content_sha256', '').removeprefix('sha256:')}"
+            if entry.get("equilibrium_id") != expected_id:
+                raise managed.BenchmarkError("parallel probe equilibrium identity binding is invalid")
+        else:
+            expected_id = f"LinearizationState.v6:{artifact.get('content_sha256', '').removeprefix('sha256:')}"
+            if entry.get("linearization_state_id") != expected_id:
+                raise managed.BenchmarkError("parallel probe linearization identity binding is invalid")
+        observed[relative] = {
+            "sha256": actual_sha256,
+            "schema_version": schema,
+            "content_sha256": artifact.get("content_sha256"),
+        }
+    if set(observed) != set(expected):
+        raise managed.BenchmarkError("parallel probe input manifest does not cover the pinned files")
+    equilibrium_content = observed["equilibrium_artifact.v7.json"]["content_sha256"]
+    linearization = managed._json_file(
+        input_dir / "linearization_state.v6.json",
+        "parallel probe linearization state",
+        max_bytes=32 * 1024 * 1024,
+    )
+    if linearization.get("source_equilibrium_artifact") != equilibrium_content:
+        raise managed.BenchmarkError("parallel probe linearization state is not bound to the equilibrium artifact")
+    return model_data, {
+        "kind": "pinned_parallel_probe_input",
+        "source_commit": PARALLEL_PROBE_MODEL_SOURCE_COMMIT,
+        "path": "serial-adaptive-probe-v1/model-input.py",
+        "sha256": model_sha256,
+        "manifest_path": "serial-adaptive-probe-v1/input/input-manifest.json",
+        "manifest_sha256": manifest_sha256,
+        "equilibrium_artifact_sha256": PARALLEL_PROBE_EQUILIBRIUM_SHA256,
+        "equilibrium_artifact_role": "solver_consumed",
+        "linearization_state_sha256": PARALLEL_PROBE_LINEARIZATION_SHA256,
+        "linearization_state_role": "reference_provenance_only_not_consumed_by_solver",
+        "parallel_mode": mode,
+        "policy": dict(PARALLEL_PROBE_POLICY),
+        "required_cpu_cores": PARALLEL_PROBE_REQUIRED_CPU_CORES,
+        "required_memory_bytes": PARALLEL_PROBE_REQUIRED_MEMORY_BYTES,
+    }, input_dir
+
+
 def _is_single_k_pilot(pilot):
     sampling = PILOTS.get(pilot, (None, None))[1]
     return (pilot.startswith("de-smoke-") and sampling in SAMPLING and
             len(SAMPLING[sampling]) == 1)
+
+
+def _cleanup_extra_mounts(output, *, model_identity=None, ui_enabled=False,
+                          capture_session=False, ui_web_root=None,
+                          include_model=True, probe_input_dir=None):
+    """Return the exact non-base mounts created by this pilot invocation."""
+
+    mounts = []
+    output = Path(output)
+    if include_model and model_identity is not None:
+        mounts.append({
+            "type": "bind",
+            "source": os.path.abspath(str(output / "model-input.py")),
+            "destination": "/workspace/benchmark-model.py",
+            "read_only": True,
+        })
+    if probe_input_dir is not None:
+        mounts.append({
+            "type": "bind",
+            "source": os.path.abspath(str(Path(probe_input_dir).resolve())),
+            "destination": "/workspace/benchmark-input",
+            "read_only": True,
+        })
+    if ui_enabled or capture_session:
+        mounts.append({
+            "type": "tmpfs",
+            "destination": UI_WORKSPACE_ROOT,
+            "read_only": False,
+            "mode": "rw,nosuid,nodev,size=1g",
+        })
+    if ui_web_root is not None:
+        mounts.append({
+            "type": "bind",
+            "source": os.path.abspath(str(Path(ui_web_root).resolve())),
+            "destination": UI_WEB_ROOT,
+            "read_only": True,
+        })
+    return tuple(mounts)
 
 
 def _modal_selection(pilot, target_frequency_ghz=None, spectral_target=None):
@@ -736,8 +1023,55 @@ def _ui_archive_shell(pilot):
     ]
 
 
-def compose_command(context, output, timeout_seconds=managed.DEFAULT_TIMEOUT_SECONDS, *, pilot="de100", external_model=False, dense_oracle=False, solver_rtol=None, eps_prefilter=None, shifted_ksp_rtol=None, gmres_restart=None, mesh_level=None, thickness_layers=None, nearest_target_frequency_ghz=None, spectral_target=None, frequency_min_ghz=None, frequency_max_ghz=None, ui_web_root=None, ui_host_port=UI_API_PORT, capture_session=False):
+def compose_command(context, output, timeout_seconds=managed.DEFAULT_TIMEOUT_SECONDS, *, pilot="de100", external_model=False, dense_oracle=False, solver_rtol=None, eps_prefilter=None, shifted_ksp_rtol=None, gmres_restart=None, mesh_level=None, thickness_layers=None, nearest_target_frequency_ghz=None, spectral_target=None, frequency_min_ghz=None, frequency_max_ghz=None, ui_web_root=None, ui_host_port=UI_API_PORT, capture_session=False, probe_input_dir=None, probe_manifest_sha256=None, parallel_mode=None, schur_action_diagnostic=False):
     model = pilot_model(pilot)
+    parallel_probe = _is_parallel_probe(pilot)
+    signed_fifteen = pilot == SIGNED_FIFTEEN_PILOT
+    if signed_fifteen:
+        if not external_model or parallel_mode not in {"serial", "adaptive"}:
+            raise managed.BenchmarkError("signed-fifteen requires a versioned model and explicit serial/adaptive policy")
+        if probe_input_dir is not None or probe_manifest_sha256 is not None:
+            raise managed.BenchmarkError("signed-fifteen cannot use probe input artifacts")
+    if schur_action_diagnostic and (pilot == "de100" or parallel_probe):
+        raise managed.BenchmarkError(
+            "Schur action diagnostic is restricted to non-parallel DE-SMOKE pilots")
+    if parallel_probe:
+        if not external_model or probe_input_dir is None or probe_manifest_sha256 is None:
+            raise managed.BenchmarkError(
+                "parallel probe requires the pinned standalone model and input manifest")
+        if parallel_mode not in {"serial", "adaptive"}:
+            raise managed.BenchmarkError("parallel probe mode must be serial or adaptive")
+        try:
+            canonical_probe_root = _parallel_probe_root(
+                context.layout, Path(probe_input_dir).parent)
+        except (AttributeError, KeyError, TypeError, ValueError, managed.BenchmarkError) as error:
+            raise managed.BenchmarkError(
+                "parallel probe input must come from the pinned managed campaign directory") from error
+        if os.path.normcase(os.path.abspath(str(Path(probe_input_dir)))) != os.path.normcase(
+                os.path.abspath(str(canonical_probe_root / "input"))):
+            raise managed.BenchmarkError(
+                "parallel probe input directory must be the pinned campaign input directory")
+        if ui_web_root is not None or capture_session:
+            raise managed.BenchmarkError("parallel probe is headless and cannot start the UI")
+        spectral_target = spectral_target or "frequency_window"
+        frequency_min_ghz = frequency_min_ghz or format(
+            PARALLEL_PROBE_FREQUENCY_WINDOW_HZ[0] / 1e9, ".17g")
+        frequency_max_ghz = frequency_max_ghz or format(
+            PARALLEL_PROBE_FREQUENCY_WINDOW_HZ[1] / 1e9, ".17g")
+        mesh_level = mesh_level or "L2"
+        thickness_layers = thickness_layers or "3"
+        eps_prefilter = eps_prefilter or "1e-9"
+        shifted_ksp_rtol = shifted_ksp_rtol or "1e-9"
+        gmres_restart = gmres_restart or "8"
+        if mesh_level != "L2" or thickness_layers != "3":
+            raise managed.BenchmarkError("parallel probe mesh is pinned to L2 with three thickness layers")
+        if eps_prefilter != "1e-9" or shifted_ksp_rtol != "1e-9" or gmres_restart != "8":
+            raise managed.BenchmarkError("parallel probe solver diagnostics are pinned to EPS=1e-9, KSP=1e-9, restart=8")
+        if (not isinstance(probe_manifest_sha256, str) or len(probe_manifest_sha256) != 64
+                or any(character not in "0123456789abcdef" for character in probe_manifest_sha256)):
+            raise managed.BenchmarkError("parallel probe manifest hash is invalid")
+    elif not signed_fifteen and any(value is not None for value in (probe_input_dir, probe_manifest_sha256, parallel_mode)):
+        raise managed.BenchmarkError("parallel probe inputs are restricted to de-smoke-parallel-probe")
     modal_target, target_frequency_hz = _modal_selection(
         pilot, nearest_target_frequency_ghz, spectral_target)
     frequency_window = _frequency_window_bounds(
@@ -767,9 +1101,34 @@ def compose_command(context, output, timeout_seconds=managed.DEFAULT_TIMEOUT_SEC
     if gmres_restart is not None and gmres_restart not in GMRES_RESTART_CHOICES:
         raise managed.BenchmarkError("GMRES restart value is unsupported")
     command = managed._compose_command(context, output, ("c1",), timeout_seconds=timeout_seconds)
+    if parallel_probe or signed_fifteen:
+        override_path = Path(output) / "compose.benchmark.override.yaml"
+        try:
+            override = override_path.read_text(encoding="utf-8")
+        except OSError as error:
+            raise managed.BenchmarkError("parallel probe Compose override is missing") from error
+        expected_override = (
+            "services:\n"
+            "  fem-modal-cpu:\n"
+            "    network_mode: none\n"
+            "    volumes: !reset []\n"
+        )
+        if override != expected_override:
+            raise managed.BenchmarkError("parallel probe Compose override was not generated by the managed route")
+        override_path.write_text(
+            expected_override
+            + "    cpus: 4.0\n"
+            + "    mem_limit: 8g\n",
+            encoding="utf-8",
+            newline="\n",
+        )
     if external_model:
         command[command.index("run")+1:command.index("run")+1] = [
             "-v", f"{output / 'model-input.py'}:/workspace/benchmark-model.py:ro"]
+    if parallel_probe:
+        input_source = os.path.abspath(str(Path(probe_input_dir)))
+        command[command.index("run")+1:command.index("run")+1] = [
+            "-v", f"{input_source}:/workspace/benchmark-input:ro"]
     ui_enabled = ui_web_root is not None
     if ui_enabled and capture_session:
         raise managed.BenchmarkError("--with-ui and --capture-session are mutually exclusive")
@@ -802,8 +1161,55 @@ def compose_command(context, output, timeout_seconds=managed.DEFAULT_TIMEOUT_SEC
         *(["export FULLMAG_FLOQUET_EPS_PREFILTER_ABS=" + eps_prefilter] if eps_prefilter else []),
         *(["export FULLMAG_FLOQUET_SHIFTED_KSP_RTOL=" + shifted_ksp_rtol] if shifted_ksp_rtol else []),
         *(["export FULLMAG_FLOQUET_GMRES_RESTART=" + gmres_restart] if gmres_restart else []),
+        *(["export FULLMAG_FLOQUET_SCHUR_ACTION_DIAGNOSTIC=1"]
+           if schur_action_diagnostic else []),
         *(["export FULLMAG_DE_SMOKE_MESH_LEVEL=" + mesh_level] if mesh_level else []),
         *(["export FULLMAG_DE_SMOKE_THICKNESS_LAYERS=" + thickness_layers] if thickness_layers else []),
+        *(["export FULLMAG_DE_SMOKE_PARALLEL_MODE=" + parallel_mode,
+           "export FULLMAG_CPU_THREADS=1",
+           "export OMP_NUM_THREADS=1",
+           "export RAYON_NUM_THREADS=1"] if signed_fifteen else []),
+        *(["export FULLMAG_PROBE_PARALLEL_MODE=" + parallel_mode,
+           "export FULLMAG_PROBE_INPUT_MANIFEST_SHA256=" + probe_manifest_sha256,
+           "export FULLMAG_PROBE_MAX_CPU_PERCENT=90",
+           "export FULLMAG_PROBE_MAX_MEMORY_PERCENT=80",
+           "export FULLMAG_PROBE_MEMORY_RESERVE_BYTES=1073741824",
+           "export FULLMAG_PROBE_MAX_WORKERS=2",
+           "export FULLMAG_PROBE_THREADS_PER_WORKER=1",
+           "export FULLMAG_PROBE_REQUIRED_CPU_CORES=" + str(PARALLEL_PROBE_REQUIRED_CPU_CORES),
+           "export FULLMAG_PROBE_REQUIRED_MEMORY_BYTES=" + str(PARALLEL_PROBE_REQUIRED_MEMORY_BYTES),
+           "export FULLMAG_PROBE_REQUIRE_RESOURCE_ALLOCATION=1",
+           "export FULLMAG_CPU_THREADS=1",
+           "export OMP_NUM_THREADS=1",
+           "export RAYON_NUM_THREADS=1",
+           "probe_input_dir=/workspace/benchmark-input",
+           'probe_manifest="$probe_input_dir/input-manifest.json"',
+           'test -r "$probe_manifest"',
+           'actual_manifest_sha="$(sha256sum "$probe_manifest")"',
+           'test "${actual_manifest_sha%% *}" = "$FULLMAG_PROBE_INPUT_MANIFEST_SHA256"',
+           'test -r "$probe_input_dir/equilibrium_artifact.v7.json"',
+           'test -r "$probe_input_dir/linearization_state.v6.json"',
+           "python3 - <<'PY'",
+           "import os",
+           "from pathlib import Path",
+           "def read(path):",
+           "    try: return Path(path).read_text(encoding='utf-8').strip()",
+           "    except OSError: return ''",
+           "cpu_max = read('/sys/fs/cgroup/cpu.max').split()",
+           "if len(cpu_max) != 2: raise SystemExit('parallel probe requires cgroup v2 cpu.max')",
+           "affinity_cpu = len(os.sched_getaffinity(0))",
+           "if affinity_cpu < int(os.environ['FULLMAG_PROBE_REQUIRED_CPU_CORES']): raise SystemExit('parallel probe CPU affinity is below four cores')",
+           "if cpu_max[0] == 'max': effective_cpu = affinity_cpu",
+           "else:",
+           "    try: effective_cpu = int(float(cpu_max[0]) / float(cpu_max[1]))",
+           "    except (ValueError, ZeroDivisionError): raise SystemExit('invalid cgroup v2 cpu.max')",
+           "if effective_cpu < int(os.environ['FULLMAG_PROBE_REQUIRED_CPU_CORES']): raise SystemExit('parallel probe CPU allocation is below four cores')",
+           "memory_max = read('/sys/fs/cgroup/memory.max')",
+           "if not memory_max or memory_max == 'max': raise SystemExit('parallel probe requires finite cgroup memory.max')",
+           "try: memory_bytes = int(memory_max)",
+           "except ValueError: raise SystemExit('invalid cgroup v2 memory.max')",
+           "if memory_bytes < int(os.environ['FULLMAG_PROBE_REQUIRED_MEMORY_BYTES']): raise SystemExit('parallel probe memory allocation is below 8 GiB')",
+           "PY"] if parallel_probe else []),
         'test -x "$runtime_bin"',
         'test -f "$source_script"',
         "case_dir=/workspace/benchmark-output/" + pilot,
@@ -927,6 +1333,132 @@ def validate_smoke_potential_fields(case_dir, expected_sample_count):
             "mode_count": len(reports), "modes": reports}
 
 
+def validate_schur_action_diagnostic(case_dir):
+    """Preserve and structurally validate the opt-in Schur action observation.
+
+    The native probe is diagnostic evidence only.  Missing, unavailable, or
+    failed observations are exported as such and never turn the pilot into a
+    failed solve or a physical certificate.
+    """
+
+    relative_path = "eigen/diagnostics/solver.v1.json"
+    report = {
+        "schema": "fullmag.floquet-schur-action-diagnostic-report.v1",
+        "qualification": "NOT VERIFIED",
+        "physical_certificate": False,
+        "source": relative_path,
+        "native": None,
+    }
+    try:
+        payload = json.loads(
+            (Path(case_dir) / relative_path).read_text(encoding="utf-8")
+        )
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return {
+            **report,
+            "status": "unavailable",
+            "validation_status": "unavailable",
+            "reason": "native_solver_diagnostics_missing_or_invalid",
+        }
+    if not isinstance(payload, dict):
+        return {
+            **report,
+            "status": "failed",
+            "validation_status": "failed",
+            "reason": "native_solver_diagnostics_are_not_an_object",
+        }
+    native = payload.get("floquet_schur_action_diagnostic")
+    if native is None:
+        return {
+            **report,
+            "status": "unavailable",
+            "validation_status": "unavailable",
+            "reason": "floquet_schur_action_diagnostic_was_not_exported",
+        }
+    if not isinstance(native, dict):
+        return {
+            **report,
+            "status": "failed",
+            "validation_status": "failed",
+            "reason": "floquet_schur_action_diagnostic_is_not_an_object",
+            "native": native,
+        }
+
+    native_status = native.get("status")
+    status = native_status if native_status in SCHUR_ACTION_DIAGNOSTIC_STATUSES else "failed"
+    errors = []
+    if native.get("schema_version") != "floquet_schur_action_diagnostic.v1":
+        errors.append("schema_version")
+    if native_status not in SCHUR_ACTION_DIAGNOSTIC_STATUSES:
+        errors.append("status")
+
+    def require_bool(name, expected=None):
+        value = native.get(name)
+        if type(value) is not bool or (expected is not None and value is not expected):
+            errors.append(name)
+
+    if native_status == "measured":
+        require_bool("available", True)
+        require_bool("pre_eps_only", True)
+        require_bool("dense_materialization", False)
+        if native.get("measurement_phase") != "before_eps_solve":
+            errors.append("measurement_phase")
+        if native.get("workspace_scope") != "isolated_clone_of_production_context":
+            errors.append("workspace_scope")
+        for name in ("q_complex_dof_count", "real_split_dimension"):
+            value = native.get(name)
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                errors.append(name)
+        phase_sign = native.get("context_phase_sign")
+        if isinstance(phase_sign, bool) or phase_sign not in (-1, 1):
+            errors.append("context_phase_sign")
+        action_count = native.get("action_count")
+        if (isinstance(action_count, bool) or not isinstance(action_count, int)
+                or action_count != 9):
+            errors.append("action_count")
+        if native.get("expected_action_count") != 9:
+            errors.append("expected_action_count")
+        nonzero_count = native.get("nonzero_signal_count")
+        action_limit = action_count if isinstance(action_count, int) and not isinstance(action_count, bool) else -1
+        if (isinstance(nonzero_count, bool) or not isinstance(nonzero_count, int)
+                or nonzero_count <= 0 or nonzero_count > action_limit):
+            errors.append("nonzero_signal_count")
+        for name in SCHUR_ACTION_DIAGNOSTIC_DEFECT_FIELDS:
+            value = native.get(name)
+            if (isinstance(value, bool) or not isinstance(value, (int, float))
+                    or not math.isfinite(value) or value < 0.0):
+                errors.append(name)
+        for name in ("operator_normalization_scale", "preconditioner_normalization_scale"):
+            value = native.get(name)
+            if (isinstance(value, bool) or not isinstance(value, (int, float))
+                    or not math.isfinite(value) or value <= 0.0):
+                errors.append(name)
+    elif native_status in {"failed", "unavailable"}:
+        # Preserve the native failure state and reason.  Metrics are optional
+        # on these paths because the native probe may stop before allocation.
+        action_count = native.get("action_count")
+        if (action_count is not None and
+                (isinstance(action_count, bool) or not isinstance(action_count, int)
+                 or not 0 <= action_count <= 9)):
+            errors.append("action_count")
+
+    if errors:
+        validation_status = "failed"
+    elif native_status == "measured":
+        validation_status = "pass"
+    else:
+        validation_status = "preserved"
+    return {
+        **report,
+        "status": status,
+        "validation_status": validation_status,
+        "reason": native.get("reason") if isinstance(native.get("reason"), str)
+        else ("invalid_native_diagnostic_fields" if errors else ""),
+        "validation_errors": errors,
+        "native": native,
+    }
+
+
 def validate_selected_only_metadata(case_dir, expected_target_frequency_hz, expected_sampling=None):
     """Validate authoring and native scope of a one-point nearest-mode pilot.
 
@@ -962,7 +1494,8 @@ def validate_selected_only_metadata(case_dir, expected_target_frequency_hz, expe
         raise managed.BenchmarkError("selected-only DE-SMOKE metadata does not identify one single-k sample")
     if expected_sampling is not None and sampling != expected_sampling:
         raise managed.BenchmarkError("selected-only DE-SMOKE sampling disagrees with the request")
-    if model.get("requested_mode_count") != 1:
+    requested_mode_count = model.get("requested_mode_count")
+    if isinstance(requested_mode_count, bool) or requested_mode_count != 1:
         raise managed.BenchmarkError("selected-only DE-SMOKE metadata requests more than one mode")
     vectors = model.get("k_vectors_rad_per_m")
     if not isinstance(vectors, list) or len(vectors) != 1:
@@ -1052,7 +1585,10 @@ def validate_thickness_layers_metadata(case, requested):
             "qualification": "NOT VERIFIED"}
 
 
-def execute(context, output, command, model_sha, timeout_seconds=managed.DEFAULT_TIMEOUT_SECONDS, *, pilot="de100", model_identity=None, dense_oracle=False, solver_rtol=None, eps_prefilter=None, shifted_ksp_rtol=None, gmres_restart=None, mesh_level=None, thickness_layers=None, nearest_target_frequency_ghz=None, spectral_target=None, frequency_min_ghz=None, frequency_max_ghz=None, ui_enabled=False, capture_session=False, ui_frontend=None, ui_host_port=UI_API_PORT):
+def execute(context, output, command, model_sha, timeout_seconds=managed.DEFAULT_TIMEOUT_SECONDS, *, pilot="de100", model_identity=None, dense_oracle=False, solver_rtol=None, eps_prefilter=None, shifted_ksp_rtol=None, gmres_restart=None, mesh_level=None, thickness_layers=None, nearest_target_frequency_ghz=None, spectral_target=None, frequency_min_ghz=None, frequency_max_ghz=None, ui_enabled=False, capture_session=False, ui_frontend=None, ui_web_root=None, ui_host_port=UI_API_PORT, parallel_mode=None, probe_input_dir=None, schur_action_diagnostic=False):
+    if schur_action_diagnostic and (pilot == "de100" or _is_parallel_probe(pilot)):
+        raise managed.BenchmarkError(
+            "Schur action diagnostic is restricted to non-parallel DE-SMOKE pilots")
     model = pilot_model(pilot)
     modal_target, target_frequency_hz = _modal_selection(
         pilot, nearest_target_frequency_ghz, spectral_target)
@@ -1069,6 +1605,7 @@ def execute(context, output, command, model_sha, timeout_seconds=managed.DEFAULT
     request["eps_prefilter_diagnostic_requested"] = eps_prefilter
     request["shifted_ksp_rtol_diagnostic_requested"] = shifted_ksp_rtol
     request["gmres_restart_diagnostic_requested"] = gmres_restart
+    request["schur_action_diagnostic_requested"] = bool(schur_action_diagnostic)
     request["mesh_level_requested"] = mesh_level
     request["thickness_layers_requested"] = thickness_layers
     request["modal_target"] = modal_target
@@ -1080,6 +1617,25 @@ def execute(context, output, command, model_sha, timeout_seconds=managed.DEFAULT
         {"min": frequency_window["min_ghz"], "max": frequency_window["max_ghz"]}
         if frequency_window is not None else None
     )
+    if _is_parallel_probe(pilot):
+        if parallel_mode not in {"serial", "adaptive"} or not isinstance(model_identity, dict):
+            raise managed.BenchmarkError("parallel probe execution is missing its pinned policy identity")
+        request["parallel_probe"] = {
+            "schema": "fullmag.parallel-probe-request.v1",
+            "mode": parallel_mode,
+            "model_source_commit": model_identity.get("source_commit"),
+            "model_sha256": model_identity.get("sha256"),
+            "policy": dict(PARALLEL_PROBE_POLICY),
+            "required_cpu_cores": PARALLEL_PROBE_REQUIRED_CPU_CORES,
+            "required_memory_bytes": PARALLEL_PROBE_REQUIRED_MEMORY_BYTES,
+            "input_manifest_sha256": model_identity.get("manifest_sha256"),
+            "equilibrium_artifact_sha256": model_identity.get("equilibrium_artifact_sha256"),
+            "equilibrium_artifact_role": model_identity.get("equilibrium_artifact_role"),
+            "linearization_state_sha256": model_identity.get("linearization_state_sha256"),
+            "linearization_state_role": model_identity.get("linearization_state_role"),
+        }
+    if pilot == SIGNED_FIFTEEN_PILOT:
+        request["parallel_campaign"] = signed_fifteen_campaign_identity(model_identity, parallel_mode)
     request["source"]["public_model_files"] = [*managed.PUBLIC_MODEL_FILES] if model_identity else [model, *managed.PUBLIC_MODEL_FILES]
     if ui_enabled and capture_session:
         raise managed.BenchmarkError("--with-ui and --capture-session are mutually exclusive")
@@ -1105,6 +1661,11 @@ def execute(context, output, command, model_sha, timeout_seconds=managed.DEFAULT
               "job": request["job"], "source": request["source"], "runtime": request["runtime"],
               "model_sha256": model_sha, "return_code": None, "artifacts": None,
               "container_cleanup": {"status": "not_requested"}, "ui": ui_metadata}
+    result["schur_action_diagnostic_requested"] = bool(schur_action_diagnostic)
+    if "parallel_probe" in request:
+        result["parallel_probe"] = request["parallel_probe"]
+    if "parallel_campaign" in request:
+        result["parallel_campaign"] = request["parallel_campaign"]
     try:
         if model_identity:
             model_input.verify_model(output, model_identity)
@@ -1136,9 +1697,30 @@ def execute(context, output, command, model_sha, timeout_seconds=managed.DEFAULT
                 )
                 artifacts["potential_reconstruction"] = validate_smoke_potential_fields(
                     output / pilot, artifacts["row_preflight"]["sample_count"])
+                if _is_parallel_probe(pilot):
+                    artifacts["parallel_probe_metadata"] = validate_parallel_probe_metadata(
+                        output / pilot / "metadata.json",
+                        model_sha256=model_sha,
+                        parallel_mode=parallel_mode,
+                    )
+                    artifacts["parallel_probe_solver_artifacts"] = validate_parallel_probe_solver_artifacts(
+                        output / pilot,
+                        requested_eps_prefilter=eps_prefilter,
+                        requested_shifted_ksp_rtol=shifted_ksp_rtol,
+                        requested_gmres_restart=gmres_restart,
+                        expected_sample_count=len(PARALLEL_PROBE_VECTORS_RAD_PER_M),
+                    )
                 if modal_target == "nearest":
                     artifacts["selected_only_preflight"] = validate_selected_only_metadata(
                         output / pilot, target_frequency_hz, PILOTS[pilot][1])
+            if parallel_mode == "adaptive" and (_is_parallel_probe(pilot) or pilot == SIGNED_FIFTEEN_PILOT):
+                policy = {"mode": "adaptive", **PARALLEL_PROBE_POLICY} if _is_parallel_probe(pilot) else {
+                    key: request["parallel_campaign"][key] for key in (
+                        "mode", "max_cpu_percent", "max_memory_percent", "memory_reserve_bytes",
+                        "max_workers", "threads_per_worker")}
+                indices = range(len(PARALLEL_PROBE_VECTORS_RAD_PER_M)) if _is_parallel_probe(pilot) else range(1, 15)
+                bind_parallel_report(output / pilot, artifacts,
+                                     expected_policy=policy, expected_indices=indices)
             if mesh_level is not None:
                 artifacts["mesh_level_resolution"] = validate_mesh_level_metadata(output / pilot, mesh_level)
             if thickness_layers is not None:
@@ -1173,9 +1755,30 @@ def execute(context, output, command, model_sha, timeout_seconds=managed.DEFAULT
                 result.update(status="failed", error=str(error))
         if result["return_code"] != 0:
             try:
-                result["container_cleanup"] = managed._cleanup_benchmark_container(context, output)
+                cleanup_mounts = _cleanup_extra_mounts(
+                    output,
+                    model_identity=model_identity,
+                    ui_enabled=ui_enabled,
+                    capture_session=capture_session,
+                    ui_web_root=ui_web_root,
+                    probe_input_dir=probe_input_dir if _is_parallel_probe(pilot) else None,
+                )
+                if cleanup_mounts:
+                    result["container_cleanup"] = managed._cleanup_benchmark_container(
+                        context, output, extra_mounts=cleanup_mounts
+                    )
+                else:
+                    result["container_cleanup"] = managed._cleanup_benchmark_container(context, output)
             except (managed.BenchmarkError, OSError, ValueError, TypeError, KeyboardInterrupt) as error:
                 result["container_cleanup"] = {"status": "blocked", "reason": str(error)}
+        if schur_action_diagnostic:
+            artifacts = result.get("artifacts")
+            if not isinstance(artifacts, dict):
+                artifacts = {}
+            artifacts["floquet_schur_action_diagnostic"] = validate_schur_action_diagnostic(
+                output / pilot
+            )
+            result["artifacts"] = artifacts
         result["finished_at_unix"] = time.time()
         managed._write_new_json(output / "run-result.json", result)
     print(json.dumps({"output_dir": str(output), **result}, indent=2))
@@ -1398,7 +2001,24 @@ def main(argv=None):
     parser.add_argument("--thickness-layers", choices=THICKNESS_LAYERS_CHOICES,
                         help="explicit number of elements through the film thickness")
     parser.add_argument("--model-ref", help="full commit of standalone DE-SMOKE input; runtime remains build-bound")
+    parser.add_argument(
+        "--probe-root",
+        help="pinned managed input root for de-smoke-parallel-probe; arbitrary paths are rejected",
+    )
+    parser.add_argument(
+        "--probe-build-source-digest",
+        help="exact verified source capsule SHA256; use the same build digest for serial and adaptive",
+    )
+    parser.add_argument(
+        "--parallel-mode",
+        choices=("serial", "adaptive"),
+        help="explicit execution policy for parallel-probe or signed-fifteen",
+    )
     parser.add_argument("--dense-oracle", action="store_true", help="run the bounded diagnostic dense Schur oracle for DE-SMOKE k2")
+    parser.add_argument(
+        "--schur-action-diagnostic", action="store_true",
+        help="run the opt-in action-only Floquet Schur diagnostic for DE-SMOKE",
+    )
     parser.add_argument("--solver-rtol", choices=SOLVER_RTOL_CHOICES,
                         help="request a diagnostic DE-SMOKE k2 tolerance; default model uses 1e-8")
     parser.add_argument("--eps-prefilter", choices=EPS_PREFILTER_CHOICES,
@@ -1434,6 +2054,40 @@ def main(argv=None):
             raise ValueError("--web-build-root requires --with-ui")
         if (args.with_ui or args.capture_session) and args.dry_run:
             raise ValueError("live API capture cannot be combined with --dry-run")
+        parallel_probe = _is_parallel_probe(args.pilot)
+        signed_fifteen = args.pilot == SIGNED_FIFTEEN_PILOT
+        if signed_fifteen:
+            if not args.model_ref or args.parallel_mode not in {"serial", "adaptive"}:
+                raise ValueError("signed-fifteen requires --model-ref and --parallel-mode")
+            if not args.probe_build_source_digest or not re.fullmatch(r"[0-9a-f]{64}", args.probe_build_source_digest):
+                raise ValueError("signed-fifteen requires --probe-build-source-digest SHA256")
+            if args.probe_root:
+                raise ValueError("signed-fifteen cannot use --probe-root")
+        if args.schur_action_diagnostic and (args.pilot == "de100" or parallel_probe):
+            raise ValueError(
+                "--schur-action-diagnostic is restricted to non-parallel DE-SMOKE pilots"
+            )
+        if parallel_probe:
+            if not args.probe_build_source_digest or not re.fullmatch(
+                r"[0-9a-f]{64}", args.probe_build_source_digest
+            ):
+                raise ValueError("de-smoke-parallel-probe requires --probe-build-source-digest SHA256")
+            if args.parallel_mode not in {"serial", "adaptive"}:
+                raise ValueError("de-smoke-parallel-probe requires --parallel-mode serial or adaptive")
+            if args.model_ref:
+                raise ValueError("de-smoke-parallel-probe uses its pinned standalone model input")
+            if args.with_ui or args.capture_session:
+                raise ValueError("de-smoke-parallel-probe is headless")
+            args.spectral_target = args.spectral_target or "frequency_window"
+            args.frequency_min_ghz = args.frequency_min_ghz or "10.5"
+            args.frequency_max_ghz = args.frequency_max_ghz or "11.5"
+            args.mesh_level = args.mesh_level or "L2"
+            args.thickness_layers = args.thickness_layers or "3"
+            args.eps_prefilter = args.eps_prefilter or "1e-9"
+            args.shifted_ksp_rtol = args.shifted_ksp_rtol or "1e-9"
+            args.gmres_restart = args.gmres_restart or "8"
+        elif not signed_fifteen and (args.probe_root or args.parallel_mode or args.probe_build_source_digest):
+            raise ValueError("probe-specific options require de-smoke-parallel-probe")
         if args.with_ui:
             if isinstance(args.ui_port, bool) or not 1 <= args.ui_port <= 65535:
                 raise ValueError("--ui-port must be in the range 1-65535")
@@ -1442,8 +2096,14 @@ def main(argv=None):
         layout = managed.fullmag_storage.resolve_layout(args.repo_root, "windows-native")
         input_data = None
         input_identity = None
+        probe_input_dir = None
+        if parallel_probe:
+            input_data, input_identity, probe_input_dir = _validate_parallel_probe_inputs(
+                layout, args.probe_root, args.parallel_mode
+            )
         if (args.mesh_level or args.thickness_layers) and not args.model_ref:
-            raise ValueError("mesh controls require a versioned standalone --model-ref")
+            if not parallel_probe:
+                raise ValueError("mesh controls require a versioned standalone --model-ref")
         if args.model_ref:
             if args.pilot == "de100":
                 raise ValueError("--model-ref requires a DE-SMOKE pilot")
@@ -1452,6 +2112,8 @@ def main(argv=None):
             managed.fullmag_storage.initialize(layout)
         if args.dry_run:
             context = managed._validate_build_context(layout, managed._read_job(layout, args.job_id))
+            if parallel_probe or signed_fifteen:
+                _validate_parallel_probe_build(context, args.probe_build_source_digest)
             model_sha = input_identity["sha256"] if input_identity else validate_model(context, args.pilot)
             modal_target, _ = _modal_selection(
                 args.pilot, args.nearest_target_frequency_ghz, args.spectral_target
@@ -1460,12 +2122,37 @@ def main(argv=None):
                 args.pilot, modal_target, args.frequency_min_ghz, args.frequency_max_ghz
             )
             output = Path(layout["storage_root"]) / "runs" / layout["worktree_id"] / args.job_id / (args.pilot + "-preview")
+            output.mkdir(parents=True, exist_ok=True)
+            if input_data is not None:
+                model_path = output / "model-input.py"
+                if not model_path.exists():
+                    model_input.stage_model(output, input_data)
+                model_input.verify_model(output, input_identity)
             print(json.dumps({"status": "dry_run", "qualification": "NOT VERIFIED",
                               "model_sha256": model_sha, "model_source": input_identity,
-                              "command": compose_command(context, output, pilot=args.pilot, external_model=input_identity is not None, dense_oracle=args.dense_oracle, solver_rtol=args.solver_rtol, eps_prefilter=args.eps_prefilter, shifted_ksp_rtol=args.shifted_ksp_rtol, gmres_restart=args.gmres_restart, mesh_level=args.mesh_level, thickness_layers=args.thickness_layers, nearest_target_frequency_ghz=args.nearest_target_frequency_ghz, spectral_target=args.spectral_target, frequency_min_ghz=args.frequency_min_ghz, frequency_max_ghz=args.frequency_max_ghz)}, indent=2))
+                              "schur_action_diagnostic_requested": args.schur_action_diagnostic,
+                              "command": compose_command(
+                                  context, output, pilot=args.pilot,
+                                  external_model=input_identity is not None,
+                                  dense_oracle=args.dense_oracle, solver_rtol=args.solver_rtol,
+                                  schur_action_diagnostic=args.schur_action_diagnostic,
+                                  eps_prefilter=args.eps_prefilter,
+                                  shifted_ksp_rtol=args.shifted_ksp_rtol,
+                                  gmres_restart=args.gmres_restart, mesh_level=args.mesh_level,
+                                  thickness_layers=args.thickness_layers,
+                                  nearest_target_frequency_ghz=args.nearest_target_frequency_ghz,
+                                  spectral_target=args.spectral_target,
+                                  frequency_min_ghz=args.frequency_min_ghz,
+                                  frequency_max_ghz=args.frequency_max_ghz,
+                                  probe_input_dir=probe_input_dir,
+                                  probe_manifest_sha256=(input_identity or {}).get("manifest_sha256"),
+                                  parallel_mode=args.parallel_mode,
+                              )}, indent=2))
             return 0
         with managed.fullmag_storage.build_lock(layout):
             context = managed._validate_build_context(layout, managed._read_job(layout, args.job_id))
+            if parallel_probe or signed_fifteen:
+                _validate_parallel_probe_build(context, args.probe_build_source_digest)
             model_sha = input_identity["sha256"] if input_identity else validate_model(context, args.pilot)
             managed._inspect_image(context.image_digest)
             output = managed._new_output_dir(context, args.output_dir)
@@ -1482,6 +2169,7 @@ def main(argv=None):
                 context, output, pilot=args.pilot,
                 external_model=input_identity is not None,
                 dense_oracle=args.dense_oracle, solver_rtol=args.solver_rtol,
+                schur_action_diagnostic=args.schur_action_diagnostic,
                 eps_prefilter=args.eps_prefilter,
                 shifted_ksp_rtol=args.shifted_ksp_rtol,
                 gmres_restart=args.gmres_restart, mesh_level=args.mesh_level,
@@ -1490,24 +2178,30 @@ def main(argv=None):
                 spectral_target=args.spectral_target,
                 frequency_min_ghz=args.frequency_min_ghz,
                 frequency_max_ghz=args.frequency_max_ghz,
+                probe_input_dir=probe_input_dir,
+                probe_manifest_sha256=(input_identity or {}).get("manifest_sha256"),
+                parallel_mode=args.parallel_mode,
                 ui_web_root=ui_web_root, ui_host_port=args.ui_port,
                 capture_session=args.capture_session,
             )
-            return execute(
-                context, output, command, model_sha, pilot=args.pilot,
-                model_identity=input_identity, dense_oracle=args.dense_oracle,
-                solver_rtol=args.solver_rtol, eps_prefilter=args.eps_prefilter,
-                shifted_ksp_rtol=args.shifted_ksp_rtol,
+            execute_kwargs = dict(
+                pilot=args.pilot, model_identity=input_identity,
+                dense_oracle=args.dense_oracle, solver_rtol=args.solver_rtol,
+                schur_action_diagnostic=args.schur_action_diagnostic,
+                eps_prefilter=args.eps_prefilter, shifted_ksp_rtol=args.shifted_ksp_rtol,
                 gmres_restart=args.gmres_restart, mesh_level=args.mesh_level,
                 thickness_layers=args.thickness_layers,
                 nearest_target_frequency_ghz=args.nearest_target_frequency_ghz,
                 spectral_target=args.spectral_target,
                 frequency_min_ghz=args.frequency_min_ghz,
                 frequency_max_ghz=args.frequency_max_ghz,
+                parallel_mode=args.parallel_mode,
                 ui_enabled=args.with_ui, capture_session=args.capture_session,
-                ui_frontend=ui_frontend,
+                ui_frontend=ui_frontend, ui_web_root=ui_web_root,
                 ui_host_port=args.ui_port,
+                probe_input_dir=probe_input_dir,
             )
+            return execute(context, output, command, model_sha, **execute_kwargs)
     except (managed.BenchmarkError, managed.fullmag_storage.StorageError, OSError, ValueError, sqlite3.Error, subprocess.SubprocessError, SyntaxError) as error:
         print(f"de100-pilot: {error}", file=sys.stderr)
         return 2

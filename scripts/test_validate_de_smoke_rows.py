@@ -156,6 +156,12 @@ def write_spectrum_v3(path, sampling, *, residual=1e-12, omit_residual=False,
 
 def validate_fixture(tmp_path, csv_path, sampling, diagnostics_path):
     metadata_path=tmp_path/'metadata.json';write_metadata(metadata_path)
+    if sampling == 'signed-fifteen':
+        metadata = json.loads(metadata_path.read_text(encoding='utf-8'))
+        model = metadata['problem_meta']['runtime_metadata']['de_smoke']
+        model['sampling'] = sampling
+        model['k_vectors_rad_per_m'] = [[0.0, k, 0.0] for k in SAMPLING[sampling]]
+        metadata_path.write_text(json.dumps(metadata), encoding='utf-8')
     write_spectrum_v3(csv_path.parent/'spectrum.v3.json', sampling)
     return validate_rows(csv_path,sampling,diagnostics_path,metadata_path)
 
@@ -547,3 +553,34 @@ def test_25_wavevector_and_geometry_are_checked(tmp_path, sampling):
     write(csv_path, sample_rows)
     with pytest.raises(ValueError, match="propagation direction"):
         validate_rows(csv_path, sampling, diagnostics_path, metadata_path)
+
+
+def test_signed_fifteen_has_exact_indices_and_enforces_gamma_probe(tmp_path):
+    expected = (-25, -20, -15, -10, -7, -5, -2, 0, 2, 5, 7, 10, 15, 20, 25)
+    assert SAMPLING['signed-fifteen'] == tuple(k * 1e6 for k in expected)
+    csv_path = tmp_path / 'dispersion.csv'
+    write(csv_path, rows('signed-fifteen'))
+    diag_path = tmp_path / 'solver.v1.json'
+    write_diagnostics(diag_path, 'signed-fifteen')
+    report = validate_fixture(tmp_path, csv_path, 'signed-fifteen', diag_path)
+    assert report is not None
+    write_diagnostics(diag_path, 'signed-fifteen', k0_mutation='failed_direction')
+    with pytest.raises(ValueError):
+        validate_fixture(tmp_path, csv_path, 'signed-fifteen', diag_path)
+
+
+def test_signed_fifteen_rejects_inconsistent_model_descriptor(tmp_path):
+    csv_path = tmp_path / 'dispersion.csv'
+    write(csv_path, rows('signed-fifteen'))
+    diag_path = tmp_path / 'solver.v1.json'
+    write_diagnostics(diag_path, 'signed-fifteen')
+    validate_fixture(tmp_path, csv_path, 'signed-fifteen', diag_path)
+    metadata_path = tmp_path / 'metadata.json'
+    pristine = metadata_path.read_text(encoding='utf-8')
+    for key, value in [('orientation', 'M0=x,k=x,normal=z'),
+                       ('sampling', 'signed-eleven'), ('k_vectors_rad_per_m', [[0, 0, 0]])]:
+        metadata = json.loads(pristine)
+        metadata['problem_meta']['runtime_metadata']['de_smoke'][key] = value
+        metadata_path.write_text(json.dumps(metadata), encoding='utf-8')
+        with pytest.raises(ValueError, match='metadata disagrees'):
+            validate_rows(csv_path, 'signed-fifteen', diag_path, metadata_path)

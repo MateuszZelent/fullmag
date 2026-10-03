@@ -112,6 +112,32 @@ def _write_fms_fixture(
     }
 
 
+def _schur_action_fixture(*, status="measured"):
+    diagnostic = {
+        "schema_version": "floquet_schur_action_diagnostic.v1",
+        "status": status,
+        "reason": "bounded_action_and_matshell_observation" if status == "measured" else "diagnostic_not_reached_before_solver_setup_failure",
+        "available": status == "measured",
+        "pre_eps_only": True,
+        "dense_materialization": False,
+        "measurement_phase": "before_eps_solve",
+        "workspace_scope": "isolated_clone_of_production_context",
+    }
+    if status == "measured":
+        diagnostic.update({
+            "q_complex_dof_count": 32,
+            "real_split_dimension": 64,
+            "context_phase_sign": -1,
+            "action_count": 9,
+            "expected_action_count": 9,
+            "nonzero_signal_count": 9,
+            "operator_normalization_scale": 1.0,
+            "preconditioner_normalization_scale": 1.0,
+            **{name: 0.0 for name in pilot.SCHUR_ACTION_DIAGNOSTIC_DEFECT_FIELDS},
+        })
+    return diagnostic
+
+
 class PilotTests(unittest.TestCase):
     def test_requires_pilot_from_build_capsule(self):
         with TemporaryDirectory() as tmp:
@@ -381,6 +407,142 @@ class PilotTests(unittest.TestCase):
         self.assertIn(str(Path("/capsule")) + ":/workspace/capsule:ro", command)
         self.assertNotIn("build", command)
 
+    def test_schur_action_diagnostic_is_opt_in_and_scoped(self):
+        context = SimpleNamespace(source_tree=Path("/capsule"), runtime_root=Path("/runtime"),
+                                  image_digest="sha256:test",
+                                  job={"job_id": "a" * 32, "profile": "fem-cpu-slepc-runtime-v1"})
+        default_shell = pilot.compose_command(
+            context, Path("/outputs"), pilot="de-smoke-k2"
+        )[-1]
+        self.assertNotIn("FULLMAG_FLOQUET_SCHUR_ACTION_DIAGNOSTIC", default_shell)
+        diagnostic_shell = pilot.compose_command(
+            context, Path("/outputs"), pilot="de-smoke-k2",
+            schur_action_diagnostic=True,
+        )[-1]
+        self.assertIn("export FULLMAG_FLOQUET_SCHUR_ACTION_DIAGNOSTIC=1", diagnostic_shell)
+        with self.assertRaisesRegex(pilot.managed.BenchmarkError, "non-parallel DE-SMOKE"):
+            pilot.compose_command(
+                context, Path("/outputs"), pilot="de100",
+                schur_action_diagnostic=True,
+            )
+        with self.assertRaisesRegex(pilot.managed.BenchmarkError, "non-parallel DE-SMOKE"):
+            pilot.compose_command(
+                context, Path("/outputs"), pilot=pilot.PARALLEL_PROBE_PILOT,
+                schur_action_diagnostic=True,
+            )
+
+    def test_schur_action_diagnostic_validator_preserves_native_states(self):
+        with TemporaryDirectory() as tmp:
+            case = Path(tmp) / "case"
+            diagnostics = case / "eigen/diagnostics"
+            diagnostics.mkdir(parents=True)
+            path = diagnostics / "solver.v1.json"
+            path.write_text(json.dumps({
+                "floquet_schur_action_diagnostic": _schur_action_fixture(),
+            }), encoding="utf-8")
+            measured = pilot.validate_schur_action_diagnostic(case)
+            self.assertEqual(measured["status"], "measured")
+            self.assertEqual(measured["validation_status"], "pass")
+            self.assertFalse(measured["physical_certificate"])
+
+            unavailable_native = _schur_action_fixture(status="unavailable")
+            unavailable_native.update({
+                "q_complex_dof_count": None,
+                "real_split_dimension": None,
+                "max_potential_relative_residual": None,
+            })
+            path.write_text(json.dumps({
+                "floquet_schur_action_diagnostic": unavailable_native,
+            }), encoding="utf-8")
+            unavailable = pilot.validate_schur_action_diagnostic(case)
+            self.assertEqual(unavailable["status"], "unavailable")
+            self.assertEqual(unavailable["validation_status"], "preserved")
+
+            path.write_text(json.dumps({
+                "floquet_schur_action_diagnostic": _schur_action_fixture(status="failed"),
+            }), encoding="utf-8")
+            failed = pilot.validate_schur_action_diagnostic(case)
+            self.assertEqual(failed["status"], "failed")
+            self.assertEqual(failed["validation_status"], "preserved")
+
+            malformed = _schur_action_fixture()
+            for invalid_count in (10, 9.5, True, -1, 8):
+                with self.subTest(invalid_count=invalid_count):
+                    malformed["action_count"] = invalid_count
+                    path.write_text(json.dumps({
+                        "floquet_schur_action_diagnostic": malformed,
+                    }), encoding="utf-8")
+                    invalid = pilot.validate_schur_action_diagnostic(case)
+                    self.assertEqual(invalid["status"], "measured")
+                    self.assertEqual(invalid["validation_status"], "failed")
+                    self.assertIn("action_count", invalid["validation_errors"])
+
+            partial = _schur_action_fixture(status="failed")
+            partial["action_count"] = 0
+            path.write_text(json.dumps({
+                "floquet_schur_action_diagnostic": partial,
+            }), encoding="utf-8")
+            partial_report = pilot.validate_schur_action_diagnostic(case)
+            self.assertEqual(partial_report["status"], "failed")
+            self.assertEqual(partial_report["validation_status"], "preserved")
+
+    def test_schur_action_diagnostic_exports_unavailable_after_solver_failure(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            context = SimpleNamespace(
+                layout={"repo_root": str(root)}, image_digest="sha256:test"
+            )
+            request = {"source": {}, "job": {}, "runtime": {}}
+            with patch.object(pilot.managed, "_run_request", return_value=request), \
+                 patch.object(pilot.managed, "_compose_environment", return_value={}), \
+                 patch.object(pilot.subprocess, "run", return_value=SimpleNamespace(returncode=7)), \
+                 patch.object(pilot.managed, "_cleanup_benchmark_container", return_value={"status": "absent"}), \
+                 patch("builtins.print"):
+                self.assertEqual(pilot.execute(
+                    context, root, ["docker"], "abc", pilot="de-smoke-k2",
+                    schur_action_diagnostic=True,
+                ), 1)
+            result = json.loads((root / "run-result.json").read_text())
+            self.assertTrue(result["schur_action_diagnostic_requested"])
+            self.assertEqual(
+                result["artifacts"]["floquet_schur_action_diagnostic"]["status"],
+                "unavailable",
+            )
+
+    def test_schur_action_failure_does_not_block_solver_artifact_export(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            case = root / "de-smoke-k2/eigen/diagnostics"
+            case.mkdir(parents=True)
+            (case / "solver.v1.json").write_text(json.dumps({
+                "floquet_schur_action_diagnostic": _schur_action_fixture(status="failed"),
+            }), encoding="utf-8")
+            context = SimpleNamespace(
+                layout={"repo_root": str(root)}, image_digest="sha256:test"
+            )
+            request = {"source": {}, "job": {}, "runtime": {}}
+            with patch.object(pilot.managed, "_run_request", return_value=request), \
+                 patch.object(pilot.managed, "_compose_environment", return_value={}), \
+                 patch.object(pilot.subprocess, "run", return_value=SimpleNamespace(returncode=0)), \
+                 patch.object(pilot.managed, "_validate_case_artifacts", return_value={}), \
+                 patch.object(pilot, "validate_rows", return_value={"sample_count": 1}), \
+                 patch.object(pilot, "validate_smoke_potential_fields", return_value={}), \
+                 patch("builtins.print"):
+                self.assertEqual(pilot.execute(
+                    context, root, ["docker"], "abc", pilot="de-smoke-k2",
+                    schur_action_diagnostic=True,
+                ), 0)
+            result = json.loads((root / "run-result.json").read_text())
+            self.assertEqual(result["status"], "completed_unqualified")
+            self.assertEqual(
+                result["artifacts"]["floquet_schur_action_diagnostic"]["status"],
+                "failed",
+            )
+            self.assertEqual(
+                result["artifacts"]["floquet_schur_action_diagnostic"]["validation_status"],
+                "preserved",
+            )
+
     def test_frequency_window_override_is_paired_and_explicit(self):
         context = SimpleNamespace(source_tree=Path("/capsule"), runtime_root=Path("/runtime"),
                                   image_digest="sha256:test",
@@ -459,6 +621,34 @@ class PilotTests(unittest.TestCase):
             self.assertNotIn("error.code not in (404, 409)", shell)
             self.assertNotIn("--headless", shell)
             self.assertTrue((output / "compose.benchmark.override.yaml").is_file())
+
+    def test_cleanup_mount_contract_includes_model_ui_tmpfs_and_web_bind(self):
+        with TemporaryDirectory() as tmp:
+            output = Path(tmp) / "output"
+            web = output / "ui-web"
+            web.mkdir(parents=True)
+            mounts = pilot._cleanup_extra_mounts(
+                output,
+                model_identity={"sha256": "a" * 64},
+                ui_enabled=True,
+                ui_web_root=web,
+            )
+            by_destination = {mount["destination"]: mount for mount in mounts}
+            self.assertEqual(
+                by_destination["/workspace/benchmark-model.py"]["source"],
+                str((output / "model-input.py").resolve()),
+            )
+            self.assertEqual(
+                by_destination[pilot.UI_WORKSPACE_ROOT]["type"], "tmpfs"
+            )
+            self.assertEqual(
+                by_destination[pilot.UI_WORKSPACE_ROOT]["mode"],
+                "rw,nosuid,nodev,size=1g",
+            )
+            self.assertEqual(
+                by_destination[pilot.UI_WEB_ROOT]["source"],
+                str(web.resolve()),
+            )
 
     def test_runtime_capsule_signature_ignores_only_declared_non_runtime_paths(self):
         base = {
@@ -642,6 +832,67 @@ class PilotTests(unittest.TestCase):
                     ui_web_root=output, capture_session=True,
                 )
 
+
+    def test_signed_fifteen_uses_grouped_adaptive_execution(self):
+        context = SimpleNamespace(source_tree=Path("/capsule"), runtime_root=Path("/runtime"),
+                                  image_digest="sha256:test",
+                                  job={"job_id": "a" * 32, "profile": "fem-cpu-slepc-runtime-v2"})
+        with TemporaryDirectory() as temporary:
+            output = Path(temporary)
+            command = pilot.compose_command(context, output,
+                pilot=pilot.SIGNED_FIFTEEN_PILOT, external_model=True,
+                parallel_mode="adaptive", mesh_level="L2", thickness_layers="3")
+            shell = command[-1]
+            self.assertIn("FULLMAG_DE_SMOKE_SAMPLING=signed-fifteen", shell)
+            self.assertIn("FULLMAG_DE_SMOKE_PARALLEL_MODE=adaptive", shell)
+            self.assertIn("OMP_NUM_THREADS=1", shell)
+            self.assertNotIn("FULLMAG_PROBE_PARALLEL_MODE", shell)
+            self.assertNotIn("FULLMAG_DE_SMOKE_SOLVER_RTOL", shell)
+            override = (output / "compose.benchmark.override.yaml").read_text(encoding="utf-8")
+            self.assertIn("cpus: 4.0", override)
+            self.assertIn("mem_limit: 8g", override)
+            for kwargs in ({"external_model": False, "parallel_mode": "adaptive"},
+                           {"external_model": True, "parallel_mode": None},
+                           {"external_model": True, "parallel_mode": "adaptive;bad"},
+                           {"external_model": True, "parallel_mode": "adaptive", "probe_input_dir": output}):
+                with self.assertRaises(pilot.managed.BenchmarkError):
+                    pilot.compose_command(context, output, pilot=pilot.SIGNED_FIFTEEN_PILOT, **kwargs)
+
+    def test_adaptive_report_binding_rejects_policy_and_sample_drift(self):
+        from test_validate_parallel_execution_report import _adaptive_report, _policy
+        with TemporaryDirectory() as temporary:
+            case = Path(temporary)
+            (case / "eigen").mkdir()
+            path = case / "eigen/parallel_execution.v1.json"
+            path.write_text(json.dumps(_adaptive_report()["report"]), encoding="utf-8")
+            artifacts = {"required_artifact_hashes": {}}
+            pilot.bind_parallel_report(case, artifacts, expected_policy=_policy(), expected_indices=range(3))
+            self.assertEqual(artifacts["required_artifact_hashes"]["eigen/parallel_execution.v1.json"]["sha256"],
+                             hashlib.sha256(path.read_bytes()).hexdigest())
+            with self.assertRaises(pilot.managed.BenchmarkError):
+                pilot.bind_parallel_report(case, artifacts, expected_policy={**_policy(), "max_cpu_percent": 80}, expected_indices=range(3))
+            with self.assertRaises(pilot.managed.BenchmarkError):
+                pilot.bind_parallel_report(case, artifacts, expected_policy=_policy(), expected_indices=range(1, 4))
+
+    def test_signed_fifteen_preserves_actual_model_commit_identity(self):
+        identity = {"kind": "versioned_standalone_input", "commit": "a" * 40, "sha256": "b" * 64}
+        campaign = pilot.signed_fifteen_campaign_identity(identity, "adaptive")
+        self.assertEqual(campaign["model_source_commit"], identity["commit"])
+        self.assertEqual(campaign["model_sha256"], identity["sha256"])
+        for mutation in ({**identity, "commit": None}, {**identity, "sha256": None},
+                         {"kind": identity["kind"], "source_commit": identity["commit"], "sha256": identity["sha256"]}):
+            with self.assertRaises(pilot.managed.BenchmarkError):
+                pilot.signed_fifteen_campaign_identity(mutation, "adaptive")
+
+    def test_signed_fifteen_cli_requires_pinned_policy_and_build(self):
+        for options in ([], ["--parallel-mode", "adaptive"],
+                        ["--parallel-mode", "adaptive", "--model-ref", "a" * 40],
+                        ["--parallel-mode", "adaptive", "--model-ref", "a" * 40,
+                         "--probe-build-source-digest", "b" * 64, "--probe-root", "bad"]):
+            with patch.object(pilot.managed.fullmag_storage, "resolve_layout") as resolve:
+                self.assertEqual(pilot.main(["--job-id", "a" * 32,
+                    "--pilot", pilot.SIGNED_FIFTEEN_PILOT, *options]), 2)
+                resolve.assert_not_called()
 
     def test_signed_path_prefilter_diagnostic_keeps_physical_tolerance_unchanged(self):
         context = SimpleNamespace(source_tree=Path("/capsule"), runtime_root=Path("/runtime"),
