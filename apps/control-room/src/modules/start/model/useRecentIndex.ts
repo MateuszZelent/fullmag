@@ -16,6 +16,8 @@ export interface RecentIndexController {
   readonly rebuilding: boolean;
   /** Result of the last action, for an aria-live region. */
   readonly announcement: string;
+  /** Re-reads the index the host already has; cheap, unlike a rebuild. */
+  readonly refresh: () => Promise<void>;
   readonly rebuild: () => Promise<void>;
   readonly pin: (projectId: string, pinned: boolean) => Promise<void>;
   readonly forget: (projectId: string) => Promise<void>;
@@ -40,6 +42,11 @@ export function useRecentIndex(): RecentIndexController {
     return () => {
       alive.current = false;
     };
+  }, []);
+
+  const refresh = useCallback(async () => {
+    const next = await readRecentIndex();
+    if (alive.current) setState(next);
   }, []);
 
   const rebuild = useCallback(async () => {
@@ -77,5 +84,5 @@ export function useRecentIndex(): RecentIndexController {
     [mutate],
   );
 
-  return { state, rebuilding, announcement, rebuild, pin, forget };
+  return { state, rebuilding, announcement, refresh, rebuild, pin, forget };
 }

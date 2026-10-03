@@ -1206,6 +1206,116 @@
   white-space: nowrap;
 }
 
+/* ── Continue card ────────────────────────────────────────────────────── */
+
+.fm-start-thumb--continue {
+  flex: none;
+  width: var(--fm-start-continue-thumb-w);
+  height: var(--fm-start-continue-thumb-h);
+  border-radius: var(--fm-radius-md);
+}
+
+/* The one accent wash on the page: it makes this read as "the thing to do"
+   without a coloured border or a badge. */
+.fm-start-continue {
+  position: relative;
+  display: flex;
+  gap: var(--fm-space-4);
+  overflow: hidden;
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-lg);
+  background: var(--fm-bg-surface);
+  padding: var(--fm-space-3);
+}
+
+.fm-start-continue::after {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    100deg,
+    color-mix(in srgb, var(--fm-accent) 7%, transparent),
+    transparent 42%
+  );
+  content: "";
+  pointer-events: none;
+}
+
+.fm-start-continue__body {
+  position: relative;
+  z-index: var(--fm-z-base);
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.fm-start-continue__name {
+  margin: 0;
+  overflow: hidden;
+  font-size: var(--fm-font-size-lg);
+  font-weight: var(--fm-font-weight-semibold);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fm-start-continue__path {
+  margin: 0 0 var(--fm-space-3);
+  overflow: hidden;
+  color: var(--fm-start-meta);
+  font-family: var(--fm-font-mono);
+  font-size: var(--fm-font-size-2xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fm-start-continue__progress {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--fm-space-2) var(--fm-space-3);
+  margin-bottom: var(--fm-space-3);
+}
+
+.fm-start-bar {
+  flex: 1;
+  min-width: calc(var(--fm-space-12) * 2);
+  height: var(--fm-space-1);
+  overflow: hidden;
+  border-radius: var(--fm-radius-pill);
+  background: var(--fm-bg-panel-raised);
+}
+
+.fm-start-bar__fill {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--fm-chart-yellow), var(--fm-chart-peach));
+  transition: width var(--fm-duration-moderate);
+}
+
+.fm-start-continue__pct {
+  color: var(--fm-text-secondary);
+  font-family: var(--fm-font-mono);
+  font-size: var(--fm-font-size-xs);
+}
+
+.fm-start-continue__detail {
+  color: var(--fm-start-meta);
+  font-size: var(--fm-font-size-xs);
+  white-space: nowrap;
+}
+
+.fm-start-continue__reason {
+  color: var(--fm-project-migrate-text);
+  font-size: var(--fm-font-size-xs);
+}
+
+.fm-start-continue__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--fm-space-2);
+  margin-top: auto;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .fm-start *,
   .fm-start *::before,
