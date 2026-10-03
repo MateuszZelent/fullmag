@@ -5,7 +5,7 @@ use fullmag_application::{
 };
 use crate::{compute_probe, provenance, recent_index};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager};
@@ -427,6 +427,18 @@ fn recent_project_roots(app: &AppHandle, file: &Path) -> Vec<PathBuf> {
     let mut seen = std::collections::HashSet::new();
     roots.retain(|root| seen.insert(root.clone()));
     roots
+}
+
+/// What this desktop build is, for the About page and bug reports.
+#[tauri::command]
+pub fn app_build_info() -> Value {
+    json!({
+        "version": env!("CARGO_PKG_VERSION"),
+        "os": std::env::consts::OS,
+        "arch": std::env::consts::ARCH,
+        "profile": if cfg!(debug_assertions) { "debug" } else { "release" },
+        "project_schema": fullmag_application::CURRENT_PROJECT_SCHEMA,
+    })
 }
 
 /// Who the user is, for the start screen's greeting: git config, then the OS user.

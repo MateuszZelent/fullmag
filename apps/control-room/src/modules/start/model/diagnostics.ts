@@ -1,3 +1,4 @@
+import { describeBuild, type BuildInfo } from "./buildInfo";
 import type { ComputeProbeState, RecentIndexState } from "./types";
 
 export interface DiagnosticsInput {
@@ -5,6 +6,7 @@ export interface DiagnosticsInput {
   readonly userAgent: string;
   readonly locale: string;
   readonly now: Date;
+  readonly build: BuildInfo | null;
   readonly index: RecentIndexState;
   readonly compute: ComputeProbeState;
 }
@@ -46,7 +48,7 @@ export function buildDiagnostics(input: DiagnosticsInput): string {
     "Fullmag start screen diagnostics",
     `Captured: ${input.now.toISOString()}`,
     `Host: ${input.host}`,
-    `Build: not exposed to the renderer`,
+    `Build: ${describeBuild(input.build)}`,
     `Locale: ${input.locale}`,
     `User agent: ${input.userAgent}`,
     `Recent index: ${describeIndex(input.index)}`,

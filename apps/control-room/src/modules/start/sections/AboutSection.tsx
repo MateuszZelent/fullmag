@@ -1,11 +1,12 @@
 "use client";
 
 import { Copy } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { tauriInvoke } from "@/kernel/persistence/ProjectDocumentController";
 import { Button } from "@/shared/ui/Button";
 
+import { readBuildInfo, type BuildInfo } from "../model/buildInfo";
 import { buildDiagnostics } from "../model/diagnostics";
 import type { ComputeProbeState, RecentIndexState } from "../model/types";
 
@@ -16,6 +17,17 @@ export interface AboutSectionProps {
 
 export function AboutSection({ compute, index }: AboutSectionProps) {
   const [copied, setCopied] = useState(false);
+  const [build, setBuild] = useState<BuildInfo | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void readBuildInfo().then((found) => {
+      if (!cancelled) setBuild(found);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const copyDiagnostics = () => {
     const text = buildDiagnostics({
@@ -23,6 +35,7 @@ export function AboutSection({ compute, index }: AboutSectionProps) {
       userAgent: navigator.userAgent,
       locale: navigator.language,
       now: new Date(),
+      build,
       index,
       compute,
     });
@@ -44,6 +57,34 @@ export function AboutSection({ compute, index }: AboutSectionProps) {
         </div>
       </div>
 
+      <section aria-labelledby="fm-start-about-build" className="fm-start-section">
+        <h2 className="fm-start-section__title" id="fm-start-about-build">
+          Build
+        </h2>
+        {build ? (
+          <dl className="fm-start-kv__grid">
+            <div className="fm-start-kv__row">
+              <dt>Version</dt>
+              <dd>
+                {build.version} ({build.profile})
+              </dd>
+            </div>
+            <div className="fm-start-kv__row">
+              <dt>Platform</dt>
+              <dd>
+                {build.os} / {build.arch}
+              </dd>
+            </div>
+            <div className="fm-start-kv__row">
+              <dt>Project schema</dt>
+              <dd>{build.projectSchema}</dd>
+            </div>
+          </dl>
+        ) : (
+          <p className="fm-start-inspector__note">The build is reported by the desktop app.</p>
+        )}
+      </section>
+
       <section aria-labelledby="fm-start-about-diag" className="fm-start-section">
         <h2 className="fm-start-section__title" id="fm-start-about-diag">
           Diagnostics
@@ -59,7 +100,7 @@ export function AboutSection({ compute, index }: AboutSectionProps) {
       </section>
 
       <p className="fm-start-notice">
-        Build, runtime and citation details are not exposed to this page yet.
+        The runtime stack and a citation for Fullmag are not exposed to this page yet.
       </p>
     </>
   );
