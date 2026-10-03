@@ -1,8 +1,9 @@
 //! Exchange-field realization for the FDM CPU reference lane.
 
 use super::{
-    neighbor_index, scale, sub, AxisBoundary, ExchangeLlgProblem, Vector3, VectorFieldSoA, MU0,
+    scale, sub, ExchangeLlgProblem, Vector3, VectorFieldSoA, MU0,
 };
+use crate::fdm::shared::types::{neighbor_index, AxisBoundary};
 
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;

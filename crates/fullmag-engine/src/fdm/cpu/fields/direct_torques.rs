@@ -1,10 +1,11 @@
 //! Direct STT/SOT realization for the FDM CPU reference lane.
 
 use super::{
-    add, cross, dot, neighbor_index, scale, AxisBoundary, ExchangeLlgProblem, SlonczewskiFormula,
+    add, cross, dot, scale, ExchangeLlgProblem, SlonczewskiFormula,
     SlonczewskiSttConfig, SotConfig, SotFormula, Vector3, VectorFieldSoA, ZhangLiFormula,
     ZhangLiSttConfig, MU0,
 };
+use crate::fdm::shared::types::{neighbor_index, AxisBoundary};
 
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
