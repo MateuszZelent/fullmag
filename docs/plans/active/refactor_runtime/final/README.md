@@ -435,3 +435,5 @@ Checkpoint P8-C: [32 — rzeczywisty odczyt stanu natywnej usługi](p8/32-native
 Checkpoint P8-C: [33 — zasób API natywnej usługi](p8/33-native-service-api-resource.md).
 
 Checkpoint P8-C: [34 — import OpenAPI z przypiętego buildu](p8/34-managed-openapi-import.md).
+
+Checkpoint P8-C: [35 — regresja polecenia importu kontraktu](p8/35-managed-openapi-import-regression.md).

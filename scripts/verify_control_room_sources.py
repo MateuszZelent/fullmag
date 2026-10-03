@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 import fullmag_storage as storage
 
 PROFILE = "windows-control-room-source-check"
-ROUTES = ("generate-client", "production-source", "api-hygiene", "lint")
+ROUTES = ("generate-client", "production-source", "api-hygiene", "lint", "openapi-import-check")
 
 
 def timestamp():
@@ -86,6 +86,10 @@ def run(repo: Path, route: str):
                 return [node, str(path)]
             if route == "generate-client":
                 commands = [cli("openapi-typescript", "bin/cli.js") + ["src/kernel/api/generated/openapi-v2.json", "--output", "src/kernel/api/generated/openapi-v2-types.ts"], [node, "scripts/generate-v2-client.mjs"]]
+            elif route == "openapi-import-check":
+                commands = [[node, "--test", "scripts/normalize-openapi-build-identity.node-test.mjs", "scripts/managed-openapi-import.node-test.mjs"]]
+                receipt["interpreted_node_checks"] = True
+                receipt["unit_tests"] = "interpreted_node_only_no_compilation"
             elif route == "api-hygiene":
                 commands = [[node, "scripts/check-api-hygiene.mjs"]]
             elif route == "lint":

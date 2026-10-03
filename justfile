@@ -348,6 +348,10 @@ generate-control-room-client:
 check-control-room-production-source:
     {{storage_python}} "{{repo_root}}/scripts/verify_control_room_sources.py" --route production-source --repo-root "{{repo_root}}"
 
+# Interpreted Node contract checks in isolated managed fixtures; no unit builds.
+verify-control-room-openapi-import:
+    {{storage_python}} "{{repo_root}}/scripts/verify_control_room_sources.py" --route openapi-import-check --repo-root "{{repo_root}}"
+
 check-control-room-api-hygiene:
     {{storage_python}} "{{repo_root}}/scripts/verify_control_room_sources.py" --route api-hygiene --repo-root "{{repo_root}}"
 
