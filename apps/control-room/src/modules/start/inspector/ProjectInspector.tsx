@@ -1,6 +1,9 @@
 import { Box, GraduationCap, Import, Info, LayoutGrid, Settings, type LucideIcon } from "lucide-react";
 
 import type { StartSection } from "../model/startScreenState";
+import type { ContinueSession, RecentEntry } from "../model/types";
+
+import { ProjectDetails } from "./ProjectDetails";
 
 interface InspectorHint {
   readonly body: string;
@@ -41,11 +44,26 @@ const INSPECTOR_HINTS: Readonly<Record<StartSection, InspectorHint>> = {
   },
 };
 
+export interface ProjectInspectorProps {
+  readonly section: StartSection;
+  /** The selected recent project; only the Home section has one. */
+  readonly entry: RecentEntry | null;
+  readonly session?: ContinueSession;
+  readonly openDisabledReason: string | null;
+  readonly onOpen: (entry: RecentEntry) => Promise<string | null>;
+  readonly onTogglePin: (projectId: string, pinned: boolean) => void;
+  readonly onForget: (projectId: string) => void;
+}
+
 /**
- * Until the recent index exists there is nothing to select, so the inspector
- * explains what will appear here for the current section.
+ * Details of the selected project, or, when there is none, what will appear
+ * here for the current section. It is never blank.
  */
-export function ProjectInspector({ section }: { readonly section: StartSection }) {
+export function ProjectInspector({ section, entry, ...actions }: ProjectInspectorProps) {
+  if (section === "home" && entry) {
+    // Keyed so the tab and the copied flag reset when another project is chosen.
+    return <ProjectDetails entry={entry} key={entry.projectId} {...actions} />;
+  }
   const hint = INSPECTOR_HINTS[section];
   const Icon = hint.icon;
   return (

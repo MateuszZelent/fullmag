@@ -3,6 +3,7 @@
 import { useSyncExternalStore, type Ref } from "react";
 
 import type { RecentEntry } from "../model/types";
+import type { RecentIndexController } from "../model/useRecentIndex";
 
 import { LaunchTiles } from "./LaunchTiles";
 import { RecentProjects } from "./RecentProjects";
@@ -26,6 +27,7 @@ function useToday(): string {
 }
 
 export interface HomeSectionProps {
+  readonly recent: RecentIndexController;
   readonly browseDisabledReason: string | null;
   readonly disabledReasons: Readonly<Record<string, string | null>>;
   readonly initialFocusRef?: Ref<HTMLButtonElement>;
@@ -37,6 +39,7 @@ export function HomeSection({
   browseDisabledReason,
   disabledReasons,
   initialFocusRef,
+  recent,
   onOpenRecent,
   onRunCommand,
 }: HomeSectionProps) {
@@ -57,6 +60,7 @@ export function HomeSection({
         onRunCommand={onRunCommand}
       />
       <RecentProjects
+        recent={recent}
         browseDisabledReason={browseDisabledReason}
         onBrowse={() => onRunCommand("start.browse")}
         onOpen={onOpenRecent}

@@ -139,3 +139,5 @@ export type RecentIndexState =
 export type RecentFilter = "all" | "fdm" | "fem" | "pinned";
 
 export type RecentSort = "lastOpened" | "name" | "created" | "size";
+
+export type InspectorTab = "overview" | "authors" | "history" | "runs";

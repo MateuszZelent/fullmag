@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 
 import { createCommandContext } from "@/kernel/commands/commandContext";
+import { homeView } from "@/kernel/layout/homeView";
 import { useProjectDocumentSnapshot } from "@/kernel/persistence/ProjectDocumentStatus";
 import { useSessionCollection } from "@/kernel/resources/useSessionCollection";
 import type { ModuleProps } from "@/kernel/types";
@@ -11,6 +12,7 @@ import { HomeSection } from "./home/HomeSection";
 import { LAUNCH_TILES } from "./home/LaunchTiles";
 import { ProjectInspector } from "./inspector/ProjectInspector";
 import { readProjectArchiveAtPath } from "./model/recentIndexHost";
+import { useRecentIndex } from "./model/useRecentIndex";
 import { startActionDisabledReason } from "./model/startCommands";
 import { startScreenStore, type StartScreenHost } from "./model/startScreenState";
 import type { RecentEntry } from "./model/types";
@@ -29,12 +31,15 @@ export function StartScreen({ kernel }: ModuleProps) {
   // Subscribing re-renders the tiles when the project controller changes the
   // enablement of workspace.open-project.
   useProjectDocumentSnapshot();
-  const { section } = useSyncExternalStore(
+  const recent = useRecentIndex();
+  const { section, selectedProjectId } = useSyncExternalStore(
     startScreenStore.subscribe,
     startScreenStore.getSnapshot,
     startScreenStore.getServerSnapshot,
   );
-  const canCreateProblem = sessions.state === "no-session";
+  // Over an open workspace the tiles still create or open; the problem dialog
+  // owns the "replace the current session" confirmation.
+  const canCreateProblem = sessions.state === "no-session" || sessions.state === "ready";
 
   const host = useMemo<StartScreenHost>(
     () => ({
@@ -68,7 +73,10 @@ export function StartScreen({ kernel }: ModuleProps) {
   const browseDisabledReason = startActionDisabledReason("start.browse", host, context);
 
   const runCommand = (commandId: string) => {
-    void kernel.commands.execute(commandId, context);
+    void kernel.commands.execute(commandId, context).then((result) => {
+      // Opening a project leaves Home; creating one is closed by the session change.
+      if (commandId === "start.browse" && result.status === "completed") homeView.close();
+    });
   };
 
   const openRecent = async (entry: RecentEntry): Promise<string | null> => {
@@ -81,8 +89,14 @@ export function StartScreen({ kernel }: ModuleProps) {
       ...context,
       input: archive.source,
     });
+    if (result.status === "completed") homeView.close();
     return result.status === "failed" ? (result.message ?? `Could not open ${entry.name}.`) : null;
   };
+
+  const selectedEntry =
+    recent.state.kind === "ready"
+      ? (recent.state.index.entries.find((e) => e.projectId === selectedProjectId) ?? null)
+      : null;
 
   const initialFocusRef = useRef<HTMLButtonElement>(null);
   const mainRef = useRef<HTMLElement>(null);
@@ -113,6 +127,7 @@ export function StartScreen({ kernel }: ModuleProps) {
               browseDisabledReason={browseDisabledReason}
               disabledReasons={disabledReasons}
               initialFocusRef={initialFocusRef}
+              recent={recent}
               onOpenRecent={openRecent}
               onRunCommand={runCommand}
             />
@@ -121,7 +136,18 @@ export function StartScreen({ kernel }: ModuleProps) {
           )}
         </div>
       </main>
-      <ProjectInspector section={section} />
+      <ProjectInspector
+        entry={selectedEntry}
+        onForget={(projectId) => {
+          startScreenStore.setSelectedProject(null);
+          void recent.forget(projectId);
+        }}
+        onOpen={openRecent}
+        onTogglePin={(projectId, pinned) => void recent.pin(projectId, pinned)}
+        openDisabledReason={browseDisabledReason}
+        section={section}
+        session={recent.state.kind === "ready" ? recent.state.index.continue : undefined}
+      />
     </div>
   );
 }
