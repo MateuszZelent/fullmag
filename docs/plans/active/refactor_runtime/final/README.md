@@ -1,5 +1,9 @@
 # Fullmag — finalny audyt i plan refaktoryzacji
 
+Checkpoint P8-46: [odtwarzalny audyt execution](p8/46-read-only-execution-verifier.md).
+18 regresji i review PASS; pełny świeży dowód zachowany w storage. Kapsuły
+integralne, znane różnice jawne i skopiowane. Sprzątanie pozostaje niewykonane.
+
 Checkpoint B-05: [właściciel anizotropii FDM CPU](b/05-fdm-cpu-anisotropy-owner.md).
 Sześć metod zachowuje sygnatury i ciała; wspólny helper energii i fused loop
 pozostają przy dotychczasowych konsumentach. Runtime i kwalifikacja otwarte.

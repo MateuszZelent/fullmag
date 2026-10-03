@@ -1,5 +1,13 @@
 # Status realizacji całego planu refaktoryzacji
 
+Checkpoint P8-46, 03.10.2026: odtwarzalny read-only verifier Windows ma
+18 interpretowanych regresji PASS i końcowy review bez P0/P1. Świeży skan
+potwierdził 18 662 linki i integralność pięciu kapsuł; dziesięć znanych
+różnic nadal daje `source_match=false`, kopie zachowano w P8-48.
+[Dowód i granice](p8/46-read-only-execution-verifier.md).
+Nie wykonano sprzątania; procedura operatora i osobna zgoda pozostają otwarte.
+Build/runtime/Windows i kwalifikacja NOT VERIFIED; procenty bez awansu.
+
 Checkpoint B-05, 03.10.2026: sześć metod anizotropii Rust FDM CPU wydzielono
 do `fields/anisotropy.rs`. Niezależne porównanie wszystkich sygnatur i ciał
 z bazą PASS; rodzic zawiera jedynie wiring/usunięcia i zachowany obcy reflow.

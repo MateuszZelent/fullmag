@@ -42,7 +42,8 @@ Dokument zawiera dokładne ścieżki, rozmiary i hashe dziesięciu kopii oraz
 Kopie rozliczają te dziesięć znanych różnic. Nie dowodzą kompletności innych
 plików dodanych podczas buildu, poprawności zachowanych kapsuł i artefaktów
 ani braku aktywnych użytkowników. Te warunki wymagają osobnych kontroli.
-Audyt P8-46 nadal wymaga poprawek po review i ponownego skanu.
+Odbiór audytu opisuje osobny [raport P8-46](46-read-only-execution-verifier.md).
+Niniejszy dowód kopii nie zastępuje tego audytu.
 Automatyczna retencja pozostaje zamknięta dla `unsafe_execution_tree`.
 Usunięcie dokładnych celów wymaga osobnej zgody zgodnie z AGENTS.md.
 Build i natywne uruchomienie Windows pozostają **NOT VERIFIED**.
