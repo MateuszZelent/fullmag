@@ -335,6 +335,7 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
     const finishPending = beginPendingOperation();
     setRevisionConflictPhase(null);
     let isCurrentMutationContext: (() => boolean) | null = null;
+    let selectedCreatedObject = false;
     try {
       const objectId = createDraftObjectId(draft);
       const historyContext = createHistoryMutationContext();
@@ -355,7 +356,7 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
             region_name: optionalRef(draft.region),
             transform: transformPayload,
           }, requestOptions);
-          if (historyContext.isCurrentSessionScope() !== false) {
+          if (historyContext.isCurrentSessionScope() !== false && acknowledgeCommittedDraft()) {
             selectionController.set(
               {
                 kind: "object.root",
@@ -372,11 +373,12 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
               },
               "geometry-authoring",
             );
+            selectedCreatedObject = true;
           }
           return created;
         },
         undefined,
-        { captureWorkspaceStateAfter: true },
+        { captureWorkspaceStateAfter: () => selectedCreatedObject },
       );
       if (historyContext.isCurrentSessionScope() === false) return false;
       const revision = acknowledgedAuthoringSceneRevision(response);
@@ -562,7 +564,7 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
     return false;
   }
 
-  useRegisterInspectorEditSession(
+  const acknowledgeCommittedDraft = useRegisterInspectorEditSession(
     draft.mode === "missing" ? null : "staged",
     pending,
     inspectorDirty,

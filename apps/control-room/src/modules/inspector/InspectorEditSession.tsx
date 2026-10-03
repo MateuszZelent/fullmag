@@ -149,7 +149,7 @@ export function useRegisterInspectorEditSession(
     applyBlockReason?: string;
     historyMode?: "bridge" | "mutation-owned";
   } = {},
-): void {
+): () => boolean {
   const historyMode = options.historyMode ?? "bridge";
   const applyBlockReason = options.applyBlockReason;
   const store = useContext(InspectorEditSessionContext);
@@ -248,4 +248,16 @@ export function useRegisterInspectorEditSession(
     if (!store) return;
     store.update(owner, sessionRef.current ? facade : null);
   }, [applying, applyBlockReason, dirty, facade, lockReason, mode, owner, store, valid]);
+
+  // Call only after this form's write has been acknowledged. Selection guards
+  // read the facade synchronously, before React can publish the next render.
+  // A late ACK must not clear a newer form's draft or change its selection.
+  return useCallback(() => {
+    if (!sessionRef.current || (store && store.getCurrentSession() !== facade)) {
+      return false;
+    }
+    sessionRef.current = { ...sessionRef.current, dirty: false };
+    store?.update(owner, facade);
+    return true;
+  }, [facade, owner, store]);
 }

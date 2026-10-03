@@ -1,4 +1,4 @@
-import { act } from "react";
+import { act, useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { describe, expect, it, vi } from "vitest";
 
@@ -16,12 +16,14 @@ function SessionHarness({
   apply,
   historyMode,
   capture,
+  captureAcknowledgement,
 }: {
   apply: () => Promise<boolean>;
   historyMode: "bridge" | "mutation-owned";
   capture: (session: InspectorEditSession | null) => void;
+  captureAcknowledgement?: (acknowledge: () => boolean) => void;
 }) {
-  useRegisterInspectorEditSession(
+  const acknowledge = useRegisterInspectorEditSession(
     "staged",
     false,
     true,
@@ -31,11 +33,51 @@ function SessionHarness({
     () => undefined,
     { historyMode },
   );
-  capture(useInspectorEditSession());
+  const session = useInspectorEditSession();
+  useEffect(() => {
+    captureAcknowledgement?.(acknowledge);
+    capture(session);
+  }, [acknowledge, capture, captureAcknowledgement, session]);
   return null;
 }
 
 describe("InspectorEditSession history ownership", () => {
+  it("does not let a late acknowledgement clear a newer form", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    const captured = {
+      acknowledge: null as (() => boolean) | null,
+      session: null as InspectorEditSession | null,
+    };
+    const renderForm = (key: string) => (
+      <InspectorEditSessionProvider>
+        <SessionHarness
+          key={key}
+          apply={async () => true}
+          capture={(session) => { captured.session = session; }}
+          captureAcknowledgement={(acknowledge) => { captured.acknowledge = acknowledge; }}
+          historyMode="mutation-owned"
+        />
+      </InspectorEditSessionProvider>
+    );
+    try {
+      await act(async () => root.render(renderForm("first")));
+      const oldAcknowledgement = captured.acknowledge!;
+      await act(async () => root.render(renderForm("second")));
+      expect(captured.session?.dirty).toBe(true);
+      expect(oldAcknowledgement()).toBe(false);
+      expect(captured.session?.dirty).toBe(true);
+      await act(async () => {
+        expect(captured.acknowledge!()).toBe(true);
+        expect(captured.session?.dirty).toBe(false);
+      });
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
   it("does not bracket mutation-owned callbacks or duplicate their history", async () => {
     const dom = installSimulationPreparationTestDom();
     const container = dom.document.createElement("div");

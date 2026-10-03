@@ -173,6 +173,43 @@ describe("GeometryObjectPanel primitive transaction", () => {
     }
   });
 
+  it("acknowledges a dirty primitive before the selection guard reads its form", async () => {
+    mocks.commitTransaction.mockResolvedValueOnce({
+      committed_scene: { objects: [{ id: "new-box" }], revision: 13 },
+      scene_revision: 13,
+    });
+    const activeForm = { current: null as ReturnType<typeof useInspectorEditSession> };
+    function CaptureForm() {
+      activeForm.current = useInspectorEditSession();
+      return null;
+    }
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const { createRoot } = await import("react-dom/client");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => root.render(
+        <InspectorEditSessionProvider>
+          <GeometryObjectPanel selection={selection} />
+          <CaptureForm />
+        </InspectorEditSessionProvider>,
+      ));
+      await act(async () => changeInput(container, "Size X", "2e-7"));
+      expect(activeForm.current?.dirty).toBe(true);
+      mocks.select.mockImplementationOnce(() => {
+        // The real guard reads this facade synchronously inside selection.set.
+        expect(activeForm.current?.dirty).toBe(false);
+      });
+      await act(async () => findButton(container, "Apply Draft").click());
+      expect(mocks.commitTransaction).toHaveBeenCalledOnce();
+      expect(mocks.select).toHaveBeenCalledOnce();
+      expect(mocks.recordHistory).toHaveBeenCalledOnce();
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
   it("requires refetch and rebase after 409 before issuing one retry", async () => {
     mocks.commitTransaction
       .mockRejectedValueOnce(
