@@ -34,6 +34,7 @@ from validate_de_smoke_rows import (
 from validate_de_physical_potential import validate_physical_potential, _extract_mesh
 from validate_parallel_execution_report import validate_parallel_execution_report, ValidationError as ParallelReportError
 import de_smoke_model_input as model_input
+from de_signed_state_closure import bind_signed_state_closure
 from run_de_ui_model import copy_web
 
 MODEL = "examples/fem_de_film_100nm_numeric_pilot.py"
@@ -1727,6 +1728,8 @@ def execute(context, output, command, model_sha, timeout_seconds=managed.DEFAULT
                 indices = range(len(PARALLEL_PROBE_VECTORS_RAD_PER_M)) if _is_parallel_probe(pilot) else range(1, 15)
                 bind_parallel_report(output / pilot, artifacts,
                                      expected_policy=policy, expected_indices=indices)
+            if pilot == SIGNED_FIFTEEN_PILOT:
+                bind_signed_state_closure(output / pilot, artifacts)
             if mesh_level is not None:
                 artifacts["mesh_level_resolution"] = validate_mesh_level_metadata(output / pilot, mesh_level)
             if thickness_layers is not None:
