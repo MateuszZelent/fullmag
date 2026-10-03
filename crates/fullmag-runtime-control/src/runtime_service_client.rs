@@ -495,10 +495,8 @@ pub(crate) fn ensure_config_cancellable(
         bail!("native service binary missing; no alternate runtime fallback");
     }
     let log_id = uuid::Uuid::new_v4().to_string();
-    let pinned_path = fullmag_session::repository_path::create_parent(
-        &config.store_root,
-        &format!("runtime-services/launchers/{log_id}.config.json"),
-    )?;
+    let launcher_paths = gate.prepare_launcher_paths(&log_id)?;
+    let pinned_path = launcher_paths.configuration;
     let mut pinned = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -506,22 +504,14 @@ pub(crate) fn ensure_config_cancellable(
     pinned.write_all(&serde_json::to_vec(&config)?)?;
     pinned.sync_all()?;
     drop(pinned);
-    let stdout_path = fullmag_session::repository_path::create_parent(
-        &config.store_root,
-        &format!("runtime-services/launchers/{log_id}.stdout.log"),
-    )?;
-    let stderr_path = checked_path(
-        &config.store_root,
-        &format!("runtime-services/launchers/{log_id}.stderr.log"),
-    )?;
     let output = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
-        .open(stdout_path)?;
+        .open(launcher_paths.stdout)?;
     let errors = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
-        .open(stderr_path)?;
+        .open(launcher_paths.stderr)?;
     let mut command = Command::new(executable);
     command
         .arg("--config")

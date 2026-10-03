@@ -445,3 +445,5 @@ Checkpoint P6-C/D: [75 — trwały skalar przez API](p6/75-durable-scalar-api.md
 Checkpoint P8-C: [37 — authoring przed attach runtime](p8/37-authoring-before-runtime-attach.md).
 
 Checkpoint P8-C: [38 — wersje rzeczywistego toolchaina w receipt](p8/38-nightly-build-evidence.md).
+
+Checkpoint P8-C: [39 — ścieżki launchera pod właścicielem blokady](p8/39-launcher-path-ownership.md).

@@ -1,5 +1,13 @@
 # Status realizacji całego planu refaktoryzacji
 
+Checkpoint P8-39, 03.10.2026: build 215 FAILED/exit 2, dwa E0603 na prywatnym
+helperze ścieżek SessionStore. Poprawka źródłowa przenosi przygotowanie
+ścieżek do RuntimeServiceLaunchGuard; Rustfmt/diff PASS, trzy regresje
+NOT COMPILED/NOT RUN. [Zakres](p8/39-launcher-path-ownership.md).
+Obraz poprawki sond P8-38 przygotowany, zachowane profile i cztery
+interpretowane regresje obrazu PASS; wdrożenie czeka na cudzy aktywny build
+216. Procenty bez awansu; cały plan pozostaje otwarty.
+
 Checkpoint P8-38, 03.10.2026: sondy Rust/Cargo w entrypoint źródłowym
 przypinają nightly używany przez Make; 22 regresje interpretowane Python
 i bezpośrednie sondy workera PASS. Review bez P0/P1. Wdrożenie poprawki

@@ -812,7 +812,46 @@ pub struct RuntimeServiceLaunchGuard {
     record_path: PathBuf,
 }
 
+/// Validated paths owned by one launcher attempt under the launch guard.
+pub struct RuntimeServiceLauncherPaths {
+    pub configuration: PathBuf,
+    pub stdout: PathBuf,
+    pub stderr: PathBuf,
+}
+
 impl RuntimeServiceLaunchGuard {
+    /// Prepare only the launcher namespace while this attempt holds the guard.
+    /// Files remain absent until the caller creates each one exclusively.
+    pub fn prepare_launcher_paths(&self, launcher_id: &str) -> Result<RuntimeServiceLauncherPaths> {
+        let id = Uuid::parse_str(launcher_id)?;
+        if id.to_string() != launcher_id {
+            bail!("launcher identifier must be a canonical UUID");
+        }
+        let root = self
+            .record_path
+            .parent()
+            .and_then(Path::parent)
+            .context("launch store root missing")?;
+        crate::writer::require_local_filesystem(root)?;
+        let configuration = create_parent(
+            root,
+            &format!("runtime-services/launchers/{launcher_id}.config.json"),
+        )?;
+        let stdout = checked_path(
+            root,
+            &format!("runtime-services/launchers/{launcher_id}.stdout.log"),
+        )?;
+        let stderr = checked_path(
+            root,
+            &format!("runtime-services/launchers/{launcher_id}.stderr.log"),
+        )?;
+        Ok(RuntimeServiceLauncherPaths {
+            configuration,
+            stdout,
+            stderr,
+        })
+    }
+
     pub fn try_acquire(root: &Path) -> Result<Option<Self>> {
         crate::writer::require_local_filesystem(root)?;
         let path = match create_parent(root, "runtime-services/LAUNCH.lock") {
@@ -908,6 +947,68 @@ struct RuntimeServiceLaunchRecord {
 #[cfg(test)]
 mod launch_tests {
     use super::*;
+
+    #[test]
+    fn launcher_paths_are_guard_owned_and_do_not_create_files() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(directory.path()).unwrap();
+        let guard = RuntimeServiceLaunchGuard::try_acquire(store.root())
+            .unwrap()
+            .unwrap();
+        let id = Uuid::new_v4().to_string();
+        let paths = guard.prepare_launcher_paths(&id).unwrap();
+        assert!(store.root().join("runtime-services/launchers").is_dir());
+        for path in [&paths.configuration, &paths.stdout, &paths.stderr] {
+            assert_eq!(
+                path.parent(),
+                Some(store.root().join("runtime-services/launchers").as_path())
+            );
+            assert!(!path.exists());
+        }
+        assert!(RuntimeServiceLaunchGuard::try_acquire(store.root())
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            paths.configuration.file_name().unwrap().to_str().unwrap(),
+            format!("{id}.config.json")
+        );
+    }
+
+    #[test]
+    fn invalid_launcher_id_is_refused_before_namespace_creation() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(directory.path()).unwrap();
+        let guard = RuntimeServiceLaunchGuard::try_acquire(store.root())
+            .unwrap()
+            .unwrap();
+        for id in [
+            "../escape",
+            "/absolute",
+            "not-a-uuid",
+            "AAAAAAAA-AAAA-4AAA-AAAA-AAAAAAAAAAAA",
+        ] {
+            assert!(guard.prepare_launcher_paths(id).is_err());
+            assert!(!store.root().join("runtime-services/launchers").exists());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn launcher_namespace_symlink_is_refused() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(directory.path().join("store")).unwrap();
+        let outside = directory.path().join("outside");
+        std::fs::create_dir(&outside).unwrap();
+        let guard = RuntimeServiceLaunchGuard::try_acquire(store.root())
+            .unwrap()
+            .unwrap();
+        std::os::unix::fs::symlink(&outside, store.root().join("runtime-services/launchers"))
+            .unwrap();
+        assert!(guard
+            .prepare_launcher_paths(&Uuid::new_v4().to_string())
+            .is_err());
+        assert_eq!(std::fs::read_dir(outside).unwrap().count(), 0);
+    }
 
     #[test]
     fn launch_lock_serializes_and_unknown_attempt_survives_guard_drop() {
