@@ -598,6 +598,7 @@ fn handle_session(cmd: args::SessionSubcommand) -> Result<()> {
 }
 
 fn launch_ui(ui: UiCli) -> Result<()> {
+    crate::control_room::development_restore_requested(ui.dev, ui.script.is_some())?;
     crate::control_room::init_api_port()?;
     let (session_id, live_workspace) = if let Some(script) = ui.script.as_ref() {
         let (session_id, live_workspace) =

@@ -17,6 +17,8 @@ import fullmag_storage as storage
 
 
 SOURCE_PATHS = (
+    "scripts/windows/development_restore_launch.py",
+    "scripts/test_windows_development_restore_launch.py",
     "scripts/windows/development_handoff.py",
     "scripts/windows/development_scene_handoff.py",
     "scripts/test_windows_development_scene_handoff.py",

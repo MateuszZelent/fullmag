@@ -18,6 +18,21 @@ pub(crate) const LOOPBACK_V4_OCTETS: [u8; 4] = [127, 0, 0, 1];
 
 static RESOLVED_API_PORT: OnceLock<u16> = OnceLock::new();
 
+/// Private manager input is legal only for a fresh development authoring hub.
+/// Check before preparing a script or touching startup state.
+pub(crate) fn development_restore_requested(dev_mode: bool, has_script: bool) -> Result<bool> {
+    match std::env::var_os("FULLMAG_DEVELOPMENT_RESTORE_STDIN") {
+        None => Ok(false),
+        Some(value) if value == "1" => {
+            if !dev_mode || has_script {
+                bail!("private development restore requires development UI without a script");
+            }
+            Ok(true)
+        }
+        Some(_) => bail!("invalid private development restore configuration"),
+    }
+}
+
 #[cfg(windows)]
 const EXE_SUFFIX: &str = ".exe";
 #[cfg(not(windows))]
@@ -841,6 +856,7 @@ pub(crate) fn bootstrap_control_plane(
     requested_port: Option<u16>,
     live_workspace: Option<&LocalLiveWorkspace>,
 ) -> Result<ControlPlaneReady> {
+    let restore_from_stdin = development_restore_requested(dev_mode, live_workspace.is_some())?;
     let root = repo_root();
     let state_root = runtime_state_root(&root);
     let log_dir = state_root.join("logs");
@@ -881,6 +897,9 @@ pub(crate) fn bootstrap_control_plane(
             .unwrap_or(false);
 
     let api_child = if api_port() != 0 && api_bridge_is_ready(api_port()) {
+        if restore_from_stdin {
+            bail!("private development restore requires a newly owned API; refusing API reuse");
+        }
         terminal_logger().emit(
             TerminalLogSource::Api,
             format!("reusing fullmag-api on :{} ...", api_port()),
@@ -916,6 +935,7 @@ pub(crate) fn bootstrap_control_plane(
             api_err,
             external_control_room_available,
             stream_api_logs_to_terminal,
+            restore_from_stdin,
         )?));
         wait_for_api_ready(
             api_port(),
@@ -2065,6 +2085,7 @@ pub(crate) fn spawn_fullmag_api(
     stderr: fs::File,
     disable_static_control_room: bool,
     stream_logs_to_terminal: bool,
+    restore_from_stdin: bool,
 ) -> Result<std::process::Child> {
     let packaged_root = packaged_install_root(self_exe);
     let runtime_root = packaged_root.clone().unwrap_or_else(|| root.to_path_buf());
@@ -2116,7 +2137,14 @@ pub(crate) fn spawn_fullmag_api(
             .env("FULLMAG_REPO_ROOT", &runtime_root)
             .env("FULLMAG_STATE_ROOT", &state_root)
             .env("FULLMAG_WEB_STATIC_DIR", &web_static_dir)
-            .stdin(Stdio::null());
+            // The manager supplies bounded, verified input and closes its pipe.
+            // API validation and its deadline remain authoritative; the CLI
+            // must not consume or transform the canonical scene on the way.
+            .stdin(if restore_from_stdin {
+                Stdio::inherit()
+            } else {
+                Stdio::null()
+            });
         if stream_logs_to_terminal {
             command.stdout(Stdio::piped()).stderr(Stdio::piped());
         } else {

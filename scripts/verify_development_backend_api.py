@@ -123,6 +123,67 @@ def exercise_service(repo: Path, run_root: Path, manifest: dict, receipt: dict) 
     (project / "main.py").write_text("# Empty development drain fixture\n", encoding="utf-8")
     env = {key: os.environ[key] for key in ("SYSTEMROOT", "WINDIR", "PATH", "PATHEXT", "TEMP", "TMP", "COMPUTERNAME", "HOSTNAME") if key in os.environ}
     env.update(FULLMAG_REPO_ROOT=str(repo), FULLMAG_STATE_ROOT=str(state_root))
+    for label, args, private_value, expected_error in (
+        ("restore-cli-release", ["ui"], "1", "requires development UI without a script"),
+        ("restore-cli-script", ["ui", "--dev", str(run_root / "missing-script.py")], "1", "requires development UI without a script"),
+        ("restore-cli-invalid", ["ui", "--dev"], "true", "invalid private development restore configuration"),
+    ):
+        rejected = subprocess.run(
+            [str(binaries / "fullmag.exe"), *args], cwd=repo,
+            env={**env, "FULLMAG_DEVELOPMENT_RESTORE_STDIN": private_value},
+            input=b"not consumed", capture_output=True, timeout=15,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+        output = rejected.stdout + rejected.stderr
+        (run_root / (label + ".log")).write_bytes(output)
+        if rejected.returncode == 0 or expected_error.encode() not in output:
+            raise storage.StorageError("Private CLI restore did not reject its invalid startup context")
+        receipt["checks"].append(label + "-rejected-before-bootstrap")
+    # Exercise the actual CLI -> API inherited pipe. A deliberate frontend URL
+    # failure occurs only after wait_for_api_ready, before any frontend/desktop
+    # process starts; the CLI's owned bootstrap guard then waits for its API.
+    if not shutil.which("node", path=env.get("PATH")):
+        raise storage.StorageError("CLI pipe fixture requires the configured Node runtime")
+    with socket.socket() as reservation:
+        reservation.bind(("127.0.0.1", 0))
+        bridge_port = reservation.getsockname()[1]
+    fixture_storage = run_root / "fixture-storage"
+    bridge_env = {**env,
+        "FULLMAG_STATE_ROOT": str(run_root / "restore-cli-state"),
+        "FULLMAG_API_PORT": str(bridge_port),
+        "FULLMAG_WEB_PUBLIC_PORT": "invalid-fixture-port",
+        "FULLMAG_DEVELOPMENT_RESTORE_STDIN": "1",
+        "FULLMAG_DEVELOPMENT_BACKEND_GENERATION": "1" * 32,
+        "FULLMAG_DEVELOPMENT_BACKEND_STATUS_FILE": str(fixture_storage / "builds/fixture-worktree/windows-native-fdm-cpu-dev/backend-watch-status.json"),
+        "FULLMAG_DEVELOPMENT_BACKEND_SOURCE": "a" * 64,
+        "FULLMAG_DEVELOPMENT_BACKEND_VERSION": "0.1.0-dev.fixture",
+        "FULLMAG_PROJECT_STORAGE_ROOT": str(fixture_storage),
+        "FULLMAG_WORKTREE_ID": "fixture-worktree",
+    }
+    bridge = subprocess.Popen([str(binaries / "fullmag.exe"), "ui", "--dev"],
+        cwd=repo, env=bridge_env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT, creationflags=subprocess.CREATE_NO_WINDOW)
+    bridge_record = dict(label="restore-cli-pipe", pid=bridge.pid, waited=False)
+    receipt["processes"].append(bridge_record)
+    try:
+        output, _ = bridge.communicate((run_root / "restore-cli-input.json").read_bytes(), timeout=90)
+    finally:
+        if bridge.poll() is None:
+            # Stopping only the CLI would orphan its API on Windows. This tree
+            # belongs exclusively to this empty verifier fixture, which has
+            # never reached frontend/desktop or accepted computation startup.
+            cleanup = subprocess.run(["taskkill", "/PID", str(bridge.pid), "/T", "/F"],
+                capture_output=True, timeout=10, creationflags=subprocess.CREATE_NO_WINDOW)
+            bridge_record["tree_cleanup_exit_code"] = cleanup.returncode
+        bridge_record.update(exit_code=bridge.wait(timeout=10), waited=True)
+        with socket.socket() as probe:
+            bridge_record["api_listener_closed"] = probe.connect_ex(("127.0.0.1", bridge_port)) != 0
+        if not bridge_record["api_listener_closed"]:
+            raise storage.StorageError("CLI bootstrap left its owned restore API listening")
+    (run_root / "restore-cli-pipe.log").write_bytes(output)
+    if bridge.returncode == 0 or b"FULLMAG_WEB_PUBLIC_PORT must contain digits" not in output:
+        raise storage.StorageError("CLI inherited restore pipe did not reach the post-API frontend gate")
+    receipt["checks"].extend(("restore-cli-inherited-pipe-reaches-fresh-api", "restore-cli-owned-api-drained-on-bootstrap-error"))
     initialized = subprocess.run([str(binaries / "fullmag.exe"), "session", "save", str(run_root / "empty.fms"), "--profile", "compact"],
                                  cwd=repo, env=env, capture_output=True, timeout=30,
                                  creationflags=subprocess.CREATE_NO_WINDOW)
@@ -366,6 +427,7 @@ def exercise(api: Path, repo: Path, run_root: Path, receipt: dict) -> None:
         "scene_document": restored_scene,
     }
     restore_config = {**configured, "FULLMAG_DEVELOPMENT_RESTORE_STDIN": "1"}
+    storage.atomic_json(run_root / "restore-cli-input.json", restore_envelope)
 
     def restored(get):
         code, _, current = get("/v2/sessions/current")
