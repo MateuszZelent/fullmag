@@ -1,0 +1,168 @@
+{
+  "schema_version": "1.2",
+  "project_id": "7b1f0c2e-9a44-4d1b-8f52-2c9e0a7d1101",
+  "name": "YIG waveguide — spin-wave dispersion",
+  "description": "Sinc-excited 20 µm YIG waveguide; FFT post-processing gives ω(k) for the first five width modes. Validated against Kalinikos–Slavin to 1.8 % over k ∈ [0, 20] rad/µm.",
+  "tags": ["magnonics", "dispersion", "YIG"],
+
+  "created": { "at": "2026-09-12T08:41:00Z", "by": "Mateusz Zelent" },
+  "modified": { "at": "2026-10-03T12:04:02Z", "by": "Mateusz Zelent" },
+  "revision": 42,
+  "source_hash": "sha256:4f1c9ab2e07d55c3a9f0b8d21e6c7745aa3b9012cf8e4d6b71a0e52c3d8f9b14",
+
+  "created_with": { "app": "Fullmag", "version": "0.9.1", "commit": "3fd91ac", "platform": "windows-x64" },
+  "modified_with": { "app": "Fullmag", "version": "0.9.3-beta", "commit": "a1b2c3d", "platform": "windows-x64" },
+
+  "authors": [
+    {
+      "name": "Mateusz Zelent",
+      "email": "mateusz.zelent@rptu.de",
+      "affiliation": "AG Magnonics, RPTU Kaiserslautern-Landau",
+      "orcid": "0000-0002-1234-1234",
+      "role": "creator"
+    },
+    {
+      "name": "A. Krysztofik",
+      "email": "a.krysztofik@rptu.de",
+      "affiliation": "AG Magnonics, RPTU Kaiserslautern-Landau",
+      "orcid": "0000-0003-7788-7788",
+      "role": "contributor"
+    }
+  ],
+
+  "citation": {
+    "doi": "10.5281/zenodo.14000000",
+    "url": "https://doi.org/10.5281/zenodo.14000000",
+    "license": "CC-BY-4.0"
+  },
+
+  "solver": {
+    "kind": "FDM",
+    "integrator": "RK45 (adaptive)",
+    "tolerance": 1e-6,
+    "preferred_device": "cuda"
+  },
+
+  "model_ref": {
+    "geometry": "model/geometry.json",
+    "mesh": "model/grid.json",
+    "materials": "model/materials.json",
+    "studies": "model/studies.json"
+  },
+
+  "summary": {
+    "discretisation": "512 × 512 × 8",
+    "cell_size": "2.0 × 2.0 × 5.0 nm",
+    "periodicity": "x",
+    "materials": ["YIG"],
+    "ms": "140 kA/m",
+    "aex": "3.65 pJ/m",
+    "alpha": "2.0e-4",
+    "interactions": ["exchange", "demag", "Zeeman", "Gilbert"],
+    "integrator": "RK45 (adaptive)",
+    "tolerance": "1e-6",
+    "excitation": "sinc, fc = 20 GHz",
+    "output_frames": 400,
+    "output_bytes": 1420000000,
+    "output_fields": ["m", "H_eff", "energy"]
+  },
+
+  "preview": {
+    "thumbnail": "preview/thumb.png",
+    "generated_at": "2026-10-02T09:53:00Z",
+    "generated_from_run": "r-0038",
+    "frame_count": 400,
+    "colouring": "hsl-sphere"
+  },
+
+  "history": [
+    {
+      "revision": 42,
+      "at": "2026-10-03T12:04:02Z",
+      "by": "Mateusz Zelent",
+      "kind": "run",
+      "summary": "Started transient run (sinc excitation)",
+      "changes": ["sweep: Bext 0 → 120 mT, 25 steps", "device RTX 4090, CUDA 12.4"],
+      "run_id": "r-0042",
+      "restorable": false
+    },
+    {
+      "revision": 41,
+      "at": "2026-10-03T11:38:00Z",
+      "by": "Mateusz Zelent",
+      "kind": "edit",
+      "summary": "Refined mesh in the waveguide cross-section",
+      "changes": ["cell z 10 → 5 nm", "grid 512×512×4 → 512×512×8"]
+    },
+    {
+      "revision": 38,
+      "at": "2026-10-02T09:12:00Z",
+      "by": "A. Krysztofik",
+      "kind": "edit",
+      "summary": "Added Gilbert damping profile at the strip ends",
+      "changes": ["absorbing boundary, α 2e-4 → 0.5 over 40 cells"]
+    },
+    {
+      "revision": 30,
+      "at": "2026-09-28T17:40:00Z",
+      "by": "fullmag-runner",
+      "kind": "run",
+      "summary": "Validation run against analytic Kalinikos–Slavin",
+      "changes": ["max deviation 1.8 % over k ∈ [0, 20] rad/µm"],
+      "run_id": "r-0030"
+    }
+  ],
+
+  "runs": [
+    {
+      "run_id": "r-0042",
+      "revision": 42,
+      "started_at": "2026-10-03T12:04:02Z",
+      "finished_at": null,
+      "duration_seconds": null,
+      "status": "running",
+      "device": "RTX 4090",
+      "backend": "cuda-12.4",
+      "output_dir": "runs/r-0042",
+      "output_bytes": 900000000,
+      "frames": 256,
+      "error": null,
+      "checkpoint": {
+        "path": "runs/r-0042/checkpoint-00256.fmck",
+        "at": "2026-10-03T12:04:02Z",
+        "sim_time_s": 3.2e-9,
+        "resumable": true
+      }
+    },
+    {
+      "run_id": "r-0038",
+      "revision": 38,
+      "started_at": "2026-10-02T09:12:00Z",
+      "finished_at": "2026-10-02T09:53:06Z",
+      "duration_seconds": 2466,
+      "status": "ready",
+      "device": "RTX 4090",
+      "backend": "cuda-12.4",
+      "output_dir": "runs/r-0038",
+      "output_bytes": 1420000000,
+      "frames": 400,
+      "error": null,
+      "checkpoint": null
+    },
+    {
+      "run_id": "r-0021",
+      "revision": 21,
+      "started_at": "2026-09-21T11:02:00Z",
+      "finished_at": "2026-09-21T11:04:10Z",
+      "duration_seconds": 130,
+      "status": "failed",
+      "device": "CPU ×32",
+      "backend": "cpu-rayon",
+      "output_dir": "runs/r-0021",
+      "output_bytes": 0,
+      "frames": 0,
+      "error": "Demagnetising-field FFT plan exceeded the 16 GB host memory budget. Reduce the grid or run on the GPU backend.",
+      "checkpoint": null
+    }
+  ]
+}

@@ -1,0 +1,1880 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fullmag — Start screen</title>
+<style>
+/* ===========================================================================
+   1. TOKENS — mirrored verbatim from
+      apps/control-room/src/design/styles/tokens.css + theme.css
+      (Catppuccin Mocha / Latte), then extended by start-screen.tokens.css
+   ======================================================================== */
+:root{
+  --fm-radius-xs:3px; --fm-radius-sm:4px; --fm-radius-md:6px; --fm-radius-lg:10px;
+  --fm-radius-input:7px; --fm-radius-segment:8px; --fm-radius-disclosure:10px;
+  --fm-radius-control:var(--fm-radius-input); --fm-radius-surface:var(--fm-radius-disclosure);
+  --fm-radius-pill:9999px;
+  --fm-space-1:4px; --fm-space-2:8px; --fm-space-3:12px; --fm-space-4:16px;
+  --fm-space-5:20px; --fm-space-6:24px; --fm-space-7:28px; --fm-space-8:32px; --fm-space-12:48px;
+  --fm-menu-height:38px; --fm-status-height:26px; --fm-panel-header-height:38px;
+  --fm-control-height-compact:26px; --fm-control-height-regular:30px;
+  --fm-font-ui:"Inter","Aptos",system-ui,"Segoe UI",sans-serif;
+  --fm-font-mono:"JetBrains Mono","Cascadia Code",ui-monospace,Consolas,monospace;
+  --fm-font-size-2xs:10px; --fm-font-size-xs:11px; --fm-font-size-sm:12px;
+  --fm-font-size-md:13px; --fm-font-size-lg:15px; --fm-font-size-xl:18px;
+  --fm-line-height-tight:1.1; --fm-line-height-normal:1.4; --fm-line-height-control:1.35;
+  --fm-font-weight-medium:500; --fm-font-weight-semibold:600; --fm-font-weight-bold:650;
+  --fm-transition-fast:120ms ease-out; --fm-transition-normal:180ms ease-out;
+  --fm-duration-instant:80ms; --fm-duration-fast:120ms; --fm-duration-normal:180ms;
+  --fm-duration-moderate:240ms;
+  --fm-scrim:rgba(0,0,0,.5);
+  --fm-shadow-md:0 4px 12px -2px rgba(0,0,0,.2),0 2px 6px -1px rgba(0,0,0,.1);
+  --fm-shadow-lg:0 6px 16px -2px rgba(0,0,0,.25),0 4px 8px -1px rgba(0,0,0,.15);
+  --fm-shadow-elevated:0 10px 30px -10px rgba(0,0,0,.5);
+  /* start-screen additions */
+  --fm-start-rail-width:232px; --fm-start-inspector-width:364px;
+  --fm-start-content-max:1040px; --fm-start-gutter:var(--fm-space-6);
+  --fm-start-section-gap:var(--fm-space-8);
+  --fm-start-row-height:52px; --fm-start-thumb-w:72px; --fm-start-thumb-h:45px;
+  --fm-start-card-w:232px; --fm-start-card-thumb-h:132px;
+  --fm-start-tile-height:92px;
+  --fm-start-continue-thumb-w:176px; --fm-start-continue-thumb-h:110px;
+  --fm-start-meta-label-width:104px;
+  --fm-start-title-size:22px; --fm-start-section-tracking:.07em;
+}
+:root,[data-theme="dark"]{
+  color-scheme:dark;
+  --fm-bg-app:#1e1e2e; --fm-bg-chrome:#181825; --fm-bg-panel:#1e1e2e;
+  --fm-bg-panel-raised:#313244; --fm-bg-viewport:#11111b; --fm-bg-overlay:#313244;
+  --fm-bg-selected:#264069; --fm-bg-canvas:#11111b; --fm-bg-surface:#242438;
+  --fm-bg-elevated:#313244; --fm-bg-muted:#262739; --fm-bg-hover:#3b3c4f;
+  --fm-bg-disabled:var(--fm-bg-muted);
+  --fm-border-subtle:#313244; --fm-border-default:#45475a; --fm-border-strong:#585b70;
+  --fm-border-muted:#292a3a;
+  --fm-text-primary:#cdd6f4; --fm-text-secondary:#bac2de; --fm-text-muted:#6c7086;
+  --fm-text-inverse:#11111b;
+  --fm-accent:#89b4fa; --fm-accent-strong:#b4befe; --fm-accent-soft:#2a2d52;
+  --fm-chart-blue:#89b4fa; --fm-chart-green:#a6e3a1; --fm-chart-yellow:#f9e2af;
+  --fm-chart-red:#f38ba8; --fm-chart-mauve:#cba6f7; --fm-chart-peach:#fab387;
+  --fm-chart-teal:#94e2d5; --fm-chart-sky:#89dceb; --fm-chart-lavender:#b4befe;
+  --fm-success:#a6e3a1; --fm-info:#89dceb; --fm-warning:#f9e2af; --fm-danger:#f38ba8;
+  --fm-stale:#cba6f7; --fm-degraded:#fab387;
+  --fm-shadow-panel:0 12px 34px rgb(0 0 0/40%); --fm-shadow-sm:0 1px 2px 0 rgb(0 0 0/50%);
+  --fm-shadow-control:0 1px 2px rgb(0 0 0/42%),inset 0 1px 0 rgb(255 255 255/8%);
+  --fm-shadow-control-hover:0 2px 5px rgb(0 0 0/46%),inset 0 1px 0 rgb(255 255 255/11%);
+  --fm-start-thumb-bg:var(--fm-bg-viewport);
+}
+[data-theme="light"]{
+  color-scheme:light;
+  --fm-bg-app:#eff1f5; --fm-bg-chrome:#e6e9ef; --fm-bg-panel:#eff1f5;
+  --fm-bg-panel-raised:#e6e9ef; --fm-bg-viewport:#dce0e8; --fm-bg-overlay:#e6e9ef;
+  --fm-bg-selected:#c4d7f5; --fm-bg-canvas:#dce0e8; --fm-bg-surface:#f7f8fb;
+  --fm-bg-elevated:#e6e9ef; --fm-bg-muted:#e9ecf2; --fm-bg-hover:#dce0e8;
+  --fm-bg-disabled:var(--fm-bg-muted);
+  --fm-border-subtle:#ccd0da; --fm-border-default:#bcc0cc; --fm-border-strong:#acb0be;
+  --fm-border-muted:#d7dae2;
+  --fm-text-primary:#4c4f69; --fm-text-secondary:#5c5f77; --fm-text-muted:#9ca0b0;
+  --fm-text-inverse:#eff1f5;
+  --fm-accent:#1e66f5; --fm-accent-strong:#7287fd; --fm-accent-soft:#d3e5fd;
+  --fm-chart-blue:#1e66f5; --fm-chart-green:#40a02b; --fm-chart-yellow:#df8e1d;
+  --fm-chart-red:#d20f39; --fm-chart-mauve:#8839ef; --fm-chart-peach:#fe640b;
+  --fm-chart-teal:#179299; --fm-chart-sky:#04a5e5; --fm-chart-lavender:#7287fd;
+  --fm-success:#40a02b; --fm-info:#04a5e5; --fm-warning:#df8e1d; --fm-danger:#d20f39;
+  --fm-stale:#8839ef; --fm-degraded:#fe640b;
+  --fm-shadow-panel:0 14px 40px rgb(76 79 105/10%); --fm-shadow-sm:0 1px 2px 0 rgb(0 0 0/5%);
+  --fm-shadow-control:0 1px 2px rgb(76 79 105/14%),inset 0 1px 0 rgb(255 255 255/72%);
+  --fm-shadow-control-hover:0 2px 5px rgb(76 79 105/18%),inset 0 1px 0 rgb(255 255 255/82%);
+  --fm-shadow-elevated:0 10px 30px -12px rgba(76,79,105,.28);
+  --fm-start-thumb-bg:#11111b;
+}
+/* semantic layer — see tokens/start-screen.tokens.css */
+:root,[data-theme]{
+  --fm-solver-fdm:var(--fm-chart-blue); --fm-solver-fem:var(--fm-chart-mauve);
+  /* mark colour — status dot, badge fill */
+  --fm-project-ready:var(--fm-success); --fm-project-running:var(--fm-chart-yellow);
+  --fm-project-failed:var(--fm-danger); --fm-project-draft:var(--fm-text-muted);
+  --fm-project-migrate:var(--fm-degraded); --fm-project-missing:var(--fm-danger);
+  --fm-project-readonly:var(--fm-chart-teal);
+}
+/* label colour — Mocha's palette already clears 6:1 as text */
+:root,[data-theme="dark"]{
+  --fm-project-ready-text:var(--fm-project-ready);
+  --fm-project-running-text:var(--fm-project-running);
+  --fm-project-failed-text:var(--fm-project-failed);
+  --fm-project-draft-text:#a6adc8;
+  --fm-project-migrate-text:var(--fm-project-migrate);
+  --fm-project-missing-text:var(--fm-project-missing);
+  --fm-project-readonly-text:var(--fm-project-readonly);
+  --fm-solver-fdm-text:var(--fm-solver-fdm); --fm-solver-fem-text:var(--fm-solver-fem);
+  --fm-badge-fill:13%;   /* tint of the mark colour; see the light block */
+  --fm-start-nav-active:var(--fm-accent); --fm-start-on-accent:var(--fm-text-inverse);
+  --fm-start-meta:#a6adc8;   /* Mocha subtext0 — 4.67:1; --fm-text-muted is 2.13:1 behind a kbd */
+}
+/* Latte is an accent palette, not a text palette: as 11–12px text its status
+   colours measure 2.1–3.1:1 on these surfaces. Darkened, hue preserved. */
+[data-theme="light"]{
+  --fm-project-ready-text:#256b15; --fm-project-running-text:#865006;
+  --fm-project-failed-text:#ba092f; --fm-project-draft-text:#585c71;
+  --fm-project-migrate-text:#a13b00; --fm-project-missing-text:#ba092f;
+  --fm-project-readonly-text:#09676c;
+  --fm-solver-fdm-text:#044ee0; --fm-solver-fem-text:#771af0;
+  --fm-start-nav-active:#044ee0; --fm-start-on-accent:#ffffff;
+  --fm-start-meta:#585c71;
+  /* On Latte a tinted fill drags the badge label under 4.5:1 once the row is
+     selected, so the badge becomes a neutral chip with a coloured border. */
+  --fm-badge-fill:0%;
+}
+
+/* ===========================================================================
+   2. BASE
+   ======================================================================== */
+*,*::before,*::after{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0; background:var(--fm-bg-viewport);
+  font-family:var(--fm-font-ui); font-size:var(--fm-font-size-md);
+  color:var(--fm-text-primary); -webkit-font-smoothing:antialiased;
+  display:flex; align-items:center; justify-content:center; padding:0;
+}
+@media (min-width:1500px){ body{padding:20px} }
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+input{font:inherit}
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--fm-border-default);border-radius:99px;border:3px solid transparent;background-clip:content-box}
+::-webkit-scrollbar-thumb:hover{background:var(--fm-border-strong);background-clip:content-box}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.ic{width:16px;height:16px;flex:none;stroke:currentColor;fill:none;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}
+.ic-sm{width:13px;height:13px}
+.ic-lg{width:20px;height:20px}
+
+/* ===========================================================================
+   3. WINDOW CHROME — titlebar + menu bar + status bar
+   ======================================================================== */
+.fm-window{
+  width:100%; height:100%; max-width:1760px; max-height:1060px;
+  display:grid; grid-template-rows:32px var(--fm-menu-height) minmax(0,1fr) var(--fm-status-height);
+  background:var(--fm-bg-app); overflow:hidden; isolation:isolate;
+}
+@media (min-width:1500px){
+  .fm-window{border-radius:10px;box-shadow:0 24px 70px -24px rgba(0,0,0,.65);border:1px solid var(--fm-border-subtle)}
+}
+.fm-titlebar{
+  display:flex;align-items:center;gap:var(--fm-space-2);
+  background:#11111b;padding-inline:var(--fm-space-3);user-select:none;
+  border-bottom:1px solid var(--fm-border-muted);
+}
+[data-theme="light"] .fm-titlebar{background:#dce0e8;border-bottom-color:var(--fm-border-subtle)}
+.fm-titlebar__dot{width:8px;height:8px;border-radius:99px;background:var(--fm-accent);opacity:.9}
+.fm-titlebar__name{font-size:var(--fm-font-size-sm);color:var(--fm-text-secondary);letter-spacing:.02em}
+.fm-titlebar__ctl{margin-left:auto;display:flex;gap:2px}
+.fm-titlebar__btn{width:40px;height:24px;display:grid;place-items:center;color:var(--fm-start-meta);border-radius:var(--fm-radius-xs)}
+.fm-titlebar__btn:hover{background:var(--fm-bg-panel-raised);color:var(--fm-text-primary)}
+.fm-titlebar__btn--close:hover{background:#c42b1c;color:#fff}
+
+.fm-header{
+  display:flex;height:var(--fm-menu-height);align-items:center;gap:var(--fm-space-1);
+  border-bottom:1px solid var(--fm-border-subtle);background:var(--fm-bg-chrome);
+  padding-inline:var(--fm-space-3);user-select:none;
+}
+.fm-header__brand{display:flex;align-items:center;gap:var(--fm-space-2);margin-right:var(--fm-space-1)}
+.fm-header__logo{width:26px;height:26px;border-radius:var(--fm-radius-sm);flex:none;box-shadow:var(--fm-shadow-sm);overflow:hidden}
+.fm-header__brand-copy{display:flex;flex-direction:column;gap:1px;line-height:1;min-width:0}
+.fm-header__title{color:var(--fm-text-primary);font-size:var(--fm-font-size-md);font-weight:600;letter-spacing:.02em;white-space:nowrap}
+.fm-header__subtitle{color:var(--fm-start-meta);font-size:var(--fm-font-size-2xs);letter-spacing:.02em;white-space:nowrap}
+.fm-header__nav{display:flex;align-items:center;gap:var(--fm-space-1)}
+.fm-header__nav-item{display:flex;align-items:center;height:26px;padding-inline:var(--fm-space-3);border-radius:var(--fm-radius-sm);color:var(--fm-text-secondary);font-size:var(--fm-font-size-sm);font-weight:500;white-space:nowrap;transition:background-color var(--fm-transition-fast),color var(--fm-transition-fast)}
+.fm-header__nav-item:hover{background:var(--fm-bg-panel-raised);color:var(--fm-text-primary)}
+.fm-header__search{
+  display:flex;width:min(280px,22vw);height:26px;align-items:center;gap:var(--fm-space-2);
+  margin-left:var(--fm-space-2);border:1px solid var(--fm-border-subtle);border-radius:var(--fm-radius-md);
+  background:var(--fm-bg-panel);color:var(--fm-start-meta);font-size:var(--fm-font-size-xs);
+  padding-inline:var(--fm-space-2);transition:border-color var(--fm-transition-fast),background var(--fm-transition-fast);
+}
+.fm-header__search:hover{border-color:var(--fm-border-default);background:var(--fm-bg-hover)}
+.fm-header__search kbd{margin-left:auto}
+kbd{
+  font-family:var(--fm-font-ui);font-size:var(--fm-font-size-2xs);line-height:1;
+  padding:2px 4px;border-radius:var(--fm-radius-xs);border:1px solid var(--fm-border-subtle);
+  background:var(--fm-bg-panel-raised);color:var(--fm-start-meta);white-space:nowrap;
+}
+.fm-header__right{margin-left:auto;display:flex;align-items:center;gap:var(--fm-space-1)}
+.fm-header__transport{display:flex;align-items:center;gap:2px;padding-left:var(--fm-space-2);border-left:1px solid var(--fm-border-subtle);margin-left:var(--fm-space-2)}
+.fm-iconbtn{width:26px;height:26px;display:grid;place-items:center;border-radius:var(--fm-radius-sm);color:var(--fm-start-meta);transition:background-color var(--fm-transition-fast),color var(--fm-transition-fast)}
+.fm-iconbtn:hover{background:var(--fm-bg-panel-raised);color:var(--fm-text-primary)}
+.fm-iconbtn[disabled]{opacity:.4;cursor:not-allowed}
+.fm-iconbtn[disabled]:hover{background:none;color:var(--fm-start-meta)}
+.fm-header__context{font-size:var(--fm-font-size-xs);color:var(--fm-start-meta);padding-inline:var(--fm-space-2);white-space:nowrap}
+
+.fm-status{
+  display:flex;align-items:center;gap:var(--fm-space-3);height:var(--fm-status-height);
+  border-top:1px solid var(--fm-border-subtle);background:var(--fm-bg-chrome);
+  padding-inline:var(--fm-space-3);font-size:var(--fm-font-size-2xs);color:var(--fm-start-meta);
+  user-select:none;
+}
+.fm-status__item{display:flex;align-items:center;gap:var(--fm-space-1);white-space:nowrap}
+.fm-status__sep{width:1px;height:12px;background:var(--fm-border-subtle)}
+.fm-status__spacer{margin-left:auto}
+.fm-status__link{color:var(--fm-start-meta);display:flex;align-items:center;gap:4px;border-radius:var(--fm-radius-xs);padding:2px 5px}
+.fm-status__link:hover{color:var(--fm-accent);background:var(--fm-bg-panel-raised)}
+.fm-status__badge{color:var(--fm-start-nav-active);display:flex;align-items:center;gap:4px;padding:2px 6px;border-radius:var(--fm-radius-pill);background:var(--fm-accent-soft)}
+
+/* ===========================================================================
+   4. START LAYOUT — rail | content | inspector
+   ======================================================================== */
+.fm-start{
+  display:grid; grid-template-columns:var(--fm-start-rail-width) minmax(0,1fr) var(--fm-start-inspector-width);
+  min-height:0; background:var(--fm-bg-app);
+}
+.fm-start[data-inspector="hidden"]{grid-template-columns:var(--fm-start-rail-width) minmax(0,1fr)}
+@media (max-width:1180px){
+  .fm-start{grid-template-columns:var(--fm-start-rail-width) minmax(0,1fr)}
+  .fm-inspector{display:none}
+}
+
+/* ── 4a. Rail ─────────────────────────────────────────────────────────── */
+.fm-rail{
+  display:flex;flex-direction:column;min-height:0;
+  background:var(--fm-bg-chrome);border-right:1px solid var(--fm-border-subtle);
+  padding:var(--fm-space-3) var(--fm-space-2);
+}
+.fm-rail__id{display:flex;align-items:center;gap:var(--fm-space-2);padding:var(--fm-space-1) var(--fm-space-2) var(--fm-space-3)}
+.fm-rail__mark{width:30px;height:30px;border-radius:var(--fm-radius-md);flex:none;overflow:hidden;box-shadow:var(--fm-shadow-sm)}
+.fm-rail__id-copy{display:flex;flex-direction:column;gap:2px;min-width:0}
+.fm-rail__id-name{font-size:var(--fm-font-size-md);font-weight:650;letter-spacing:.01em;line-height:1}
+.fm-rail__id-ver{display:flex;align-items:center;gap:5px;font-size:var(--fm-font-size-2xs);color:var(--fm-start-meta);font-family:var(--fm-font-mono)}
+.fm-rail__chan{
+  padding:1px 5px;border-radius:var(--fm-radius-xs);font-family:var(--fm-font-ui);
+  background:color-mix(in srgb,var(--fm-degraded) 18%,var(--fm-bg-surface));color:var(--fm-project-migrate-text);
+  font-size:9px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;
+}
+.fm-rail__nav{display:flex;flex-direction:column;gap:1px}
+.fm-rail__item{
+  display:flex;align-items:center;gap:var(--fm-space-2);width:100%;height:30px;
+  padding-inline:var(--fm-space-2);border-radius:var(--fm-radius-md);
+  color:var(--fm-text-secondary);font-size:var(--fm-font-size-sm);font-weight:500;text-align:left;
+  transition:background-color var(--fm-transition-fast),color var(--fm-transition-fast);
+  position:relative;
+}
+.fm-rail__item:hover{background:var(--fm-bg-panel-raised);color:var(--fm-text-primary)}
+.fm-rail__item[aria-current="page"]{background:var(--fm-bg-selected);color:var(--fm-start-nav-active)}
+.fm-rail__item[aria-current="page"]::before{content:"";position:absolute;left:-8px;top:7px;bottom:7px;width:2px;border-radius:0 2px 2px 0;background:var(--fm-accent)}
+.fm-rail__item kbd{margin-left:auto;opacity:0;transition:opacity var(--fm-transition-fast)}
+.fm-rail__item:hover kbd,.fm-rail__item[aria-current="page"] kbd{opacity:1}
+.fm-rail__count{margin-left:auto;font-size:var(--fm-font-size-2xs);color:var(--fm-start-meta);font-family:var(--fm-font-mono)}
+.fm-rail__sep{height:1px;background:var(--fm-border-subtle);margin:var(--fm-space-3) var(--fm-space-2)}
+.fm-rail__label{
+  padding:0 var(--fm-space-2) var(--fm-space-2);font-size:var(--fm-font-size-2xs);
+  color:var(--fm-start-meta);font-weight:600;letter-spacing:var(--fm-start-section-tracking);text-transform:uppercase;
+}
+
+/* Environment widget */
+.fm-env{margin-top:auto;padding:var(--fm-space-2);border-radius:var(--fm-radius-md);background:var(--fm-bg-panel);border:1px solid var(--fm-border-subtle)}
+.fm-env__row{display:flex;align-items:center;gap:var(--fm-space-2);font-size:var(--fm-font-size-xs);color:var(--fm-text-secondary);min-width:0}
+.fm-env__row+.fm-env__row{margin-top:6px}
+.fm-env__dot{width:7px;height:7px;border-radius:99px;flex:none;background:var(--fm-success);box-shadow:0 0 0 3px color-mix(in srgb,var(--fm-success) 22%,transparent)}
+.fm-env__name{font-weight:600;color:var(--fm-text-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fm-env__val{margin-left:auto;font-family:var(--fm-font-mono);font-size:var(--fm-font-size-2xs);color:var(--fm-start-meta);white-space:nowrap}
+.fm-meter{height:3px;border-radius:99px;background:var(--fm-bg-panel-raised);overflow:hidden;margin-top:6px}
+.fm-meter__fill{height:100%;border-radius:99px;background:var(--fm-accent)}
+.fm-env__cfg{margin-top:var(--fm-space-2);width:100%;height:24px;border-radius:var(--fm-radius-sm);font-size:var(--fm-font-size-xs);color:var(--fm-start-meta);display:flex;align-items:center;justify-content:center;gap:5px}
+.fm-env__cfg:hover{background:var(--fm-bg-panel-raised);color:var(--fm-text-primary)}
+
+/* ── 4b. Content column ───────────────────────────────────────────────── */
+.fm-content{min-height:0;overflow-y:auto;overflow-x:hidden;scroll-behavior:smooth}
+.fm-content__inner{max-width:var(--fm-start-content-max);margin:0 auto;padding:var(--fm-space-6) var(--fm-start-gutter) var(--fm-space-12)}
+.fm-page-head{display:flex;align-items:flex-end;gap:var(--fm-space-4);margin-bottom:var(--fm-space-6)}
+.fm-page-head__copy{min-width:0}
+.fm-page-head h1{margin:0;font-size:var(--fm-start-title-size);font-weight:650;letter-spacing:-.01em;line-height:1.2}
+.fm-page-head p{margin:5px 0 0;font-size:var(--fm-font-size-sm);color:var(--fm-text-secondary)}
+.fm-page-head__meta{margin-left:auto;text-align:right;font-size:var(--fm-font-size-xs);color:var(--fm-start-meta);white-space:nowrap}
+
+.fm-section{margin-bottom:var(--fm-start-section-gap)}
+.fm-section__head{display:flex;align-items:center;gap:var(--fm-space-2);margin-bottom:var(--fm-space-3);min-height:26px}
+.fm-section__title{
+  font-size:var(--fm-font-size-xs);font-weight:600;letter-spacing:var(--fm-start-section-tracking);
+  text-transform:uppercase;color:var(--fm-start-meta);
+}
+.fm-section__tools{margin-left:auto;display:flex;align-items:center;gap:var(--fm-space-2)}
+
+/* Continue card */
+.fm-continue{
+  display:flex;gap:var(--fm-space-4);padding:var(--fm-space-3);
+  border:1px solid var(--fm-border-subtle);border-radius:var(--fm-radius-lg);
+  background:var(--fm-bg-surface);position:relative;overflow:hidden;
+  box-shadow:var(--fm-shadow-sm);
+}
+.fm-continue::after{content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;
+  background:linear-gradient(100deg,color-mix(in srgb,var(--fm-accent) 7%,transparent),transparent 42%)}
+.fm-continue__thumb{
+  width:var(--fm-start-continue-thumb-w);height:var(--fm-start-continue-thumb-h);flex:none;
+  border-radius:var(--fm-radius-md);overflow:hidden;background:var(--fm-start-thumb-bg);
+  border:1px solid var(--fm-border-subtle);position:relative;
+}
+.fm-continue__thumb img{width:100%;height:100%;object-fit:cover;display:block}
+.fm-continue__body{display:flex;flex-direction:column;min-width:0;flex:1;position:relative;z-index:1}
+.fm-continue__name{font-size:var(--fm-font-size-lg);font-weight:600;letter-spacing:-.005em;margin-bottom:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fm-continue__sub{font-size:var(--fm-font-size-xs);color:var(--fm-start-meta);font-family:var(--fm-font-mono);margin-bottom:var(--fm-space-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fm-continue__prog{display:flex;align-items:center;gap:var(--fm-space-3);margin-bottom:var(--fm-space-3);flex-wrap:wrap;row-gap:var(--fm-space-2)}
+.fm-progress{flex:1;height:5px;border-radius:99px;background:var(--fm-bg-panel-raised);overflow:hidden;min-width:80px}
+.fm-progress__fill{height:100%;border-radius:99px;background:linear-gradient(90deg,var(--fm-accent),var(--fm-accent-strong));transition:width var(--fm-duration-moderate)}
+.fm-progress__fill[data-tone="running"]{background:linear-gradient(90deg,var(--fm-chart-yellow),var(--fm-chart-peach))}
+.fm-continue__pct{font-family:var(--fm-font-mono);font-size:var(--fm-font-size-xs);color:var(--fm-text-secondary);min-width:34px;text-align:right}
+.fm-continue__eta{font-size:var(--fm-font-size-xs);color:var(--fm-start-meta);white-space:nowrap}
+.fm-continue__actions{display:flex;gap:var(--fm-space-2);margin-top:auto}
+
+/* Buttons — mirrors shared/ui/Button.tsx variants */
+.fm-btn{
+  display:inline-flex;align-items:center;justify-content:center;gap:var(--fm-space-2);
+  height:var(--fm-control-height-regular);padding-inline:var(--fm-space-3);
+  border:1px solid var(--fm-border-default);border-radius:var(--fm-radius-control);
+  background:var(--fm-bg-panel-raised);color:var(--fm-text-primary);
+  font-size:var(--fm-font-size-xs);font-weight:500;line-height:1;white-space:nowrap;
+  box-shadow:var(--fm-shadow-control);
+  transition:transform var(--fm-duration-fast),background-color var(--fm-transition-fast),border-color var(--fm-transition-fast),box-shadow var(--fm-transition-fast),color var(--fm-transition-fast);
+}
+.fm-btn:hover{border-color:var(--fm-border-strong);box-shadow:var(--fm-shadow-control-hover)}
+.fm-btn:active{transform:scale(.98)}
+.fm-btn:focus-visible{outline:none;box-shadow:0 0 0 2px var(--fm-accent)}
+.fm-btn--primary{border-color:var(--fm-accent);background:var(--fm-accent);color:var(--fm-start-on-accent);font-weight:600}
+.fm-btn--ghost{border-color:transparent;background:transparent;box-shadow:none;color:var(--fm-text-secondary)}
+.fm-btn--ghost:hover{background:var(--fm-bg-panel-raised);color:var(--fm-text-primary);box-shadow:none}
+.fm-btn--sm{height:var(--fm-control-height-compact);padding-inline:var(--fm-space-2)}
+.fm-btn[disabled]{opacity:.45;cursor:not-allowed;box-shadow:none}
+.fm-btn--split{padding-inline:var(--fm-space-2);border-left:1px solid color-mix(in srgb,var(--fm-start-on-accent) 35%,transparent);border-radius:0 var(--fm-radius-control) var(--fm-radius-control) 0;margin-left:-1px}
+.fm-btn-group{display:inline-flex}
+.fm-btn-group>.fm-btn:first-child{border-radius:var(--fm-radius-control) 0 0 var(--fm-radius-control)}
+
+/* Launch tiles */
+.fm-tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(156px,1fr));gap:var(--fm-space-3)}
+.fm-tile{
+  display:flex;flex-direction:column;gap:5px;min-height:var(--fm-start-tile-height);
+  padding:var(--fm-space-3);text-align:left;
+  border:1px solid var(--fm-border-subtle);border-radius:var(--fm-radius-lg);
+  background:var(--fm-bg-surface);position:relative;overflow:hidden;
+  transition:border-color var(--fm-transition-fast),background-color var(--fm-transition-fast),transform var(--fm-duration-fast),box-shadow var(--fm-transition-fast);
+}
+.fm-tile:hover{border-color:var(--fm-border-strong);background:var(--fm-bg-elevated);transform:translateY(-1px);box-shadow:var(--fm-shadow-md)}
+.fm-tile:active{transform:translateY(0) scale(.995)}
+.fm-tile:focus-visible{outline:none;border-color:var(--fm-accent);box-shadow:0 0 0 2px var(--fm-accent-soft)}
+.fm-tile__top{display:flex;align-items:center;gap:var(--fm-space-2)}
+.fm-tile__glyph{width:26px;height:26px;border-radius:var(--fm-radius-md);display:grid;place-items:center;flex:none}
+.fm-tile__name{font-size:var(--fm-font-size-md);font-weight:600;letter-spacing:-.005em}
+.fm-tile__kbd{margin-left:auto}
+.fm-tile__desc{font-size:var(--fm-font-size-xs);color:var(--fm-start-meta);line-height:1.45}
+.fm-tile__foot{margin-top:auto;font-size:var(--fm-font-size-2xs);color:var(--fm-start-meta);font-family:var(--fm-font-mono);padding-top:6px}
+
+/* Toolbar controls */
+.fm-search{
+  display:flex;align-items:center;gap:var(--fm-space-2);height:var(--fm-control-height-compact);
+  width:200px;padding-inline:var(--fm-space-2);border:1px solid var(--fm-border-subtle);
+  border-radius:var(--fm-radius-control);background:var(--fm-bg-canvas);color:var(--fm-start-meta);
+  transition:border-color var(--fm-transition-fast),box-shadow var(--fm-transition-fast);
+}
+.fm-search:focus-within{border-color:var(--fm-accent);box-shadow:0 0 0 2px var(--fm-accent-soft)}
+.fm-search input{border:0;background:none;outline:none;color:var(--fm-text-primary);font-size:var(--fm-font-size-xs);width:100%;min-width:0}
+.fm-search input::placeholder{color:var(--fm-text-muted)}
+.fm-seg{display:inline-flex;padding:2px;border-radius:var(--fm-radius-segment);background:var(--fm-bg-canvas);border:1px solid var(--fm-border-subtle);gap:2px}
+.fm-seg button{
+  height:20px;padding-inline:var(--fm-space-2);border-radius:var(--fm-radius-sm);
+  font-size:var(--fm-font-size-2xs);font-weight:500;color:var(--fm-start-meta);
+  display:flex;align-items:center;gap:4px;transition:background-color var(--fm-transition-fast),color var(--fm-transition-fast);
+}
+.fm-seg button:hover{color:var(--fm-text-primary)}
+.fm-seg button[aria-pressed="true"]{background:var(--fm-bg-panel-raised);color:var(--fm-text-primary);box-shadow:var(--fm-shadow-sm)}
+.fm-select{
+  height:var(--fm-control-height-compact);padding-inline:var(--fm-space-2);border-radius:var(--fm-radius-control);
+  border:1px solid var(--fm-border-subtle);background:var(--fm-bg-canvas);color:var(--fm-text-secondary);
+  font-size:var(--fm-font-size-xs);display:inline-flex;align-items:center;gap:5px;
+}
+.fm-select:hover{border-color:var(--fm-border-default);color:var(--fm-text-primary)}
+
+/* ── Project list ─────────────────────────────────────────────────────── */
+.fm-group-head{
+  display:flex;align-items:center;gap:var(--fm-space-2);height:26px;
+  font-size:var(--fm-font-size-2xs);font-weight:600;letter-spacing:.05em;text-transform:uppercase;
+  color:var(--fm-start-meta);padding-inline:var(--fm-space-2);margin-top:var(--fm-space-3);
+  position:sticky;top:0;background:var(--fm-bg-app);z-index:2;
+}
+.fm-group-head::after{content:"";flex:1;height:1px;background:var(--fm-border-subtle)}
+.fm-list{display:flex;flex-direction:column;gap:1px}
+.fm-row{
+  display:grid;align-items:center;gap:var(--fm-space-3);
+  grid-template-columns:var(--fm-start-thumb-w) minmax(0,1fr) 74px 96px 64px 78px 26px;
+  min-height:var(--fm-start-row-height);padding:var(--fm-space-1) var(--fm-space-2);
+  border-radius:var(--fm-radius-md);border:1px solid transparent;text-align:left;width:100%;
+  transition:background-color var(--fm-transition-fast),border-color var(--fm-transition-fast);
+  position:relative;
+}
+.fm-row:hover{background:var(--fm-bg-surface)}
+.fm-row[aria-selected="true"]{background:var(--fm-bg-selected);border-color:color-mix(in srgb,var(--fm-accent) 40%,transparent)}
+.fm-row:focus-visible{outline:none;border-color:var(--fm-accent);box-shadow:0 0 0 2px var(--fm-accent-soft)}
+.fm-row[data-missing="true"]{opacity:.55}
+.fm-row__thumb{
+  width:var(--fm-start-thumb-w);height:var(--fm-start-thumb-h);border-radius:var(--fm-radius-sm);
+  overflow:hidden;background:var(--fm-start-thumb-bg);border:1px solid var(--fm-border-subtle);
+  position:relative;flex:none;
+}
+.fm-row__thumb img{width:100%;height:100%;object-fit:cover;display:block}
+.fm-row__thumb[data-missing="true"]{display:grid;place-items:center;color:var(--fm-danger)}
+.fm-row__main{min-width:0}
+.fm-row__name{display:flex;align-items:center;gap:6px;font-size:var(--fm-font-size-md);font-weight:500;letter-spacing:-.003em;line-height:1.3}
+.fm-row__name span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fm-row__path{font-family:var(--fm-font-mono);font-size:var(--fm-font-size-2xs);color:var(--fm-start-meta);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:2px;direction:rtl;text-align:left}
+.fm-row__meta{font-size:var(--fm-font-size-xs);color:var(--fm-start-meta);font-family:var(--fm-font-mono);text-align:right;white-space:nowrap}
+.fm-row__meta--left{text-align:left}
+.fm-row__pin{color:var(--fm-start-meta);opacity:0;width:26px;height:26px;display:grid;place-items:center;border-radius:var(--fm-radius-sm)}
+.fm-row:hover .fm-row__pin,.fm-row[aria-selected="true"] .fm-row__pin,.fm-row__pin[data-pinned="true"]{opacity:1}
+.fm-row__pin[data-pinned="true"]{color:var(--fm-chart-yellow)}
+.fm-row__pin:hover{background:var(--fm-bg-panel-raised);color:var(--fm-text-primary)}
+@media (max-width:1400px){
+  .fm-row{grid-template-columns:var(--fm-start-thumb-w) minmax(0,1fr) 74px 96px 78px 26px}
+  .fm-row__size{display:none}
+}
+
+/* Badges & pills */
+.fm-badge{
+  display:inline-flex;align-items:center;gap:4px;height:17px;padding-inline:6px;
+  border-radius:var(--fm-radius-xs);font-size:9px;font-weight:650;letter-spacing:.05em;
+  text-transform:uppercase;white-space:nowrap;
+  border:1px solid color-mix(in srgb,currentColor 35%,transparent);
+  background:color-mix(in srgb,currentColor 13%,transparent);
+}
+.fm-badge--fdm{
+  color:var(--fm-solver-fdm-text);
+  border-color:color-mix(in srgb,var(--fm-solver-fdm) 48%,transparent);
+  background:color-mix(in srgb,var(--fm-solver-fdm) var(--fm-badge-fill),var(--fm-bg-surface));
+}
+.fm-badge--fem{
+  color:var(--fm-solver-fem-text);
+  border-color:color-mix(in srgb,var(--fm-solver-fem) 48%,transparent);
+  background:color-mix(in srgb,var(--fm-solver-fem) var(--fm-badge-fill),var(--fm-bg-surface));
+}
+.fm-pill{
+  display:inline-flex;align-items:center;gap:5px;font-size:var(--fm-font-size-xs);white-space:nowrap;
+  --pill-mark:var(--fm-start-meta); --pill-text:var(--fm-text-secondary); color:var(--pill-text);
+}
+.fm-pill__dot{width:6px;height:6px;border-radius:99px;flex:none;background:var(--pill-mark)}
+.fm-pill[data-status="ready"]   {--pill-mark:var(--fm-project-ready);   --pill-text:var(--fm-project-ready-text)}
+.fm-pill[data-status="running"] {--pill-mark:var(--fm-project-running); --pill-text:var(--fm-project-running-text)}
+.fm-pill[data-status="failed"]  {--pill-mark:var(--fm-project-failed);  --pill-text:var(--fm-project-failed-text)}
+.fm-pill[data-status="draft"]   {--pill-mark:var(--fm-project-draft);   --pill-text:var(--fm-project-draft-text)}
+.fm-pill[data-status="migrate"] {--pill-mark:var(--fm-project-migrate); --pill-text:var(--fm-project-migrate-text)}
+.fm-pill[data-status="missing"] {--pill-mark:var(--fm-project-missing); --pill-text:var(--fm-project-missing-text)}
+.fm-pill[data-status="readonly"]{--pill-mark:var(--fm-project-readonly);--pill-text:var(--fm-project-readonly-text)}
+.fm-pill[data-status="running"] .fm-pill__dot{animation:fm-pulse 1.6s ease-in-out infinite}
+@keyframes fm-pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.35;transform:scale(.8)}}
+.fm-tag{
+  display:inline-flex;align-items:center;height:16px;padding-inline:5px;border-radius:var(--fm-radius-xs);
+  font-size:9px;background:var(--fm-bg-panel-raised);color:var(--fm-start-meta);white-space:nowrap;
+}
+
+/* Grid view */
+.fm-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(var(--fm-start-card-w),1fr));gap:var(--fm-space-3)}
+.fm-card{
+  display:flex;flex-direction:column;text-align:left;border:1px solid var(--fm-border-subtle);
+  border-radius:var(--fm-radius-lg);background:var(--fm-bg-surface);overflow:hidden;
+  transition:border-color var(--fm-transition-fast),transform var(--fm-duration-fast),box-shadow var(--fm-transition-fast);
+}
+.fm-card:hover{border-color:var(--fm-border-strong);transform:translateY(-2px);box-shadow:var(--fm-shadow-md)}
+.fm-card[aria-selected="true"]{border-color:var(--fm-accent);box-shadow:0 0 0 1px var(--fm-accent)}
+.fm-card__thumb{height:var(--fm-start-card-thumb-h);background:var(--fm-start-thumb-bg);position:relative;border-bottom:1px solid var(--fm-border-subtle)}
+.fm-card__thumb img{width:100%;height:100%;object-fit:cover;display:block}
+.fm-card__badges{position:absolute;top:6px;left:6px;display:flex;gap:4px}
+.fm-card__badges .fm-badge{backdrop-filter:blur(6px);background:color-mix(in srgb,#11111b 62%,transparent);border-color:color-mix(in srgb,currentColor 50%,transparent)}
+/* On the viewport-dark thumbnail the badge keeps Mocha's colours in both
+   themes — the backdrop is dark whatever the UI theme is doing. */
+.fm-card__badges .fm-badge--fdm{color:#89b4fa}
+.fm-card__badges .fm-badge--fem{color:#cba6f7}
+.fm-card__body{padding:var(--fm-space-2) var(--fm-space-3) var(--fm-space-3)}
+.fm-card__name{font-size:var(--fm-font-size-sm);font-weight:600;line-height:1.35;margin-bottom:4px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.fm-card__meta{display:flex;align-items:center;gap:var(--fm-space-2);font-size:var(--fm-font-size-2xs);color:var(--fm-start-meta);font-family:var(--fm-font-mono)}
+
+/* Footer actions under the list */
+.fm-list-foot{display:flex;align-items:center;gap:var(--fm-space-2);margin-top:var(--fm-space-4);padding-top:var(--fm-space-3);border-top:1px solid var(--fm-border-subtle)}
+.fm-list-foot__note{margin-left:auto;font-size:var(--fm-font-size-2xs);color:var(--fm-start-meta)}
+
+/* Empty / loading / error states */
+.fm-empty{display:grid;place-items:center;text-align:center;padding:var(--fm-space-12) var(--fm-space-4);gap:var(--fm-space-3)}
+.fm-empty__glyph{width:46px;height:46px;border-radius:var(--fm-radius-lg);display:grid;place-items:center;background:var(--fm-bg-surface);border:1px solid var(--fm-border-subtle);color:var(--fm-start-meta)}
+.fm-empty h2{margin:0;font-size:var(--fm-font-size-lg);font-weight:600}
+.fm-empty p{margin:0;font-size:var(--fm-font-size-sm);color:var(--fm-start-meta);max-width:42ch;line-height:1.5}
+.fm-skel{background:linear-gradient(90deg,var(--fm-bg-panel) 0%,var(--fm-bg-panel-raised) 50%,var(--fm-bg-panel) 100%);background-size:200% 100%;animation:fm-shimmer 1.4s ease-in-out infinite;border-radius:var(--fm-radius-sm)}
+@keyframes fm-shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+
+/* Banner / alert */
+.fm-banner{
+  display:flex;align-items:flex-start;gap:var(--fm-space-2);padding:var(--fm-space-2) var(--fm-space-3);
+  border-radius:var(--fm-radius-md);font-size:var(--fm-font-size-xs);line-height:1.5;
+  border-left:3px solid currentColor;margin-bottom:var(--fm-space-3);
+}
+.fm-banner[data-tone="warning"]{color:var(--fm-project-running-text);background:color-mix(in srgb,var(--fm-warning) 13%,transparent)}
+.fm-banner[data-tone="danger"]{color:var(--fm-project-failed-text);background:color-mix(in srgb,var(--fm-danger) 13%,transparent)}
+.fm-banner[data-tone="info"]{color:var(--fm-project-readonly-text);background:color-mix(in srgb,var(--fm-info) 13%,transparent)}
+.fm-banner strong{color:var(--fm-text-primary);font-weight:600}
+.fm-banner__body{color:var(--fm-text-primary);min-width:0}
+.fm-banner__actions{margin-left:auto;display:flex;gap:var(--fm-space-1);flex:none}
+
+/* ── 4c. Inspector ────────────────────────────────────────────────────── */
+.fm-inspector{
+  display:flex;flex-direction:column;min-height:0;min-width:0;
+  background:var(--fm-bg-panel);border-left:1px solid var(--fm-border-subtle);
+}
+.fm-inspector__scroll{overflow-y:auto;min-height:0;flex:1}
+.fm-preview{position:relative;aspect-ratio:16/10;background:var(--fm-start-thumb-bg);border-bottom:1px solid var(--fm-border-subtle)}
+.fm-preview img{width:100%;height:100%;object-fit:cover;display:block}
+.fm-preview__overlay{position:absolute;inset:auto 0 0 0;padding:var(--fm-space-2);display:flex;align-items:center;gap:var(--fm-space-2);
+  background:linear-gradient(transparent,rgba(0,0,0,.72));opacity:0;transition:opacity var(--fm-transition-normal)}
+.fm-preview:hover .fm-preview__overlay{opacity:1}
+.fm-preview__scrub{flex:1;height:3px;border-radius:99px;background:rgba(255,255,255,.25);position:relative}
+.fm-preview__scrub::after{content:"";position:absolute;inset:0 68% 0 0;border-radius:99px;background:#fff}
+.fm-preview__frame{font-family:var(--fm-font-mono);font-size:var(--fm-font-size-2xs);color:#fff;white-space:nowrap}
+.fm-preview__tag{position:absolute;top:var(--fm-space-2);left:var(--fm-space-2);font-size:9px;letter-spacing:.05em;text-transform:uppercase;
+  color:#cdd6f4;background:rgba(17,17,27,.66);backdrop-filter:blur(6px);padding:2px 6px;border-radius:var(--fm-radius-xs);font-weight:600}
+
+.fm-inspector__head{padding:var(--fm-space-3) var(--fm-space-3) var(--fm-space-2)}
+.fm-inspector__title{display:flex;align-items:flex-start;gap:var(--fm-space-2)}
+.fm-inspector__title h2{margin:0;font-size:var(--fm-font-size-lg);font-weight:650;line-height:1.3;letter-spacing:-.01em;min-width:0}
+.fm-inspector__title-actions{margin-left:auto;display:flex;gap:2px;flex:none}
+.fm-inspector__path{
+  display:flex;align-items:center;gap:5px;margin-top:5px;font-family:var(--fm-font-mono);
+  font-size:var(--fm-font-size-2xs);color:var(--fm-start-meta);min-width:0;
+}
+.fm-inspector__path span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;direction:rtl;text-align:left}
+.fm-inspector__chips{display:flex;flex-wrap:wrap;gap:var(--fm-space-2);align-items:center;margin-top:var(--fm-space-3)}
+
+.fm-tabs{display:flex;gap:2px;padding:0 var(--fm-space-3);border-bottom:1px solid var(--fm-border-subtle);margin-top:var(--fm-space-2)}
+.fm-tabs button{
+  height:30px;padding-inline:var(--fm-space-2);font-size:var(--fm-font-size-xs);font-weight:500;
+  color:var(--fm-start-meta);border-bottom:2px solid transparent;margin-bottom:-1px;
+  transition:color var(--fm-transition-fast),border-color var(--fm-transition-fast);
+}
+.fm-tabs button:hover{color:var(--fm-text-primary)}
+.fm-tabs button[aria-selected="true"]{color:var(--fm-start-nav-active);border-bottom-color:var(--fm-accent)}
+.fm-tabpanel{padding:var(--fm-space-3)}
+
+.fm-kv{display:grid;grid-template-columns:var(--fm-start-meta-label-width) minmax(0,1fr);gap:0 var(--fm-space-2);font-size:var(--fm-font-size-xs);align-items:baseline}
+.fm-kv dt{color:var(--fm-start-meta);padding:4px 0;white-space:nowrap}
+.fm-kv dd{margin:0;padding:4px 0;color:var(--fm-text-primary);font-family:var(--fm-font-mono);font-size:var(--fm-font-size-xs);min-width:0;word-break:break-word}
+.fm-kv dd.fm-kv--ui{font-family:var(--fm-font-ui)}
+.fm-kv__group{grid-column:1/-1;margin-top:var(--fm-space-3);padding-top:var(--fm-space-2);border-top:1px solid var(--fm-border-subtle);
+  font-size:var(--fm-font-size-2xs);font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--fm-start-meta)}
+.fm-kv__group:first-child{margin-top:0;padding-top:0;border-top:0}
+.fm-chiplist{display:flex;flex-wrap:wrap;gap:4px}
+
+/* Authors */
+.fm-author{display:flex;align-items:center;gap:var(--fm-space-2);padding:var(--fm-space-2) 0}
+.fm-author+.fm-author{border-top:1px solid var(--fm-border-subtle)}
+/* Avatar fills are pastel in both themes, so the initials are always dark ink. */
+.fm-avatar{width:28px;height:28px;border-radius:99px;flex:none;display:grid;place-items:center;font-size:var(--fm-font-size-xs);font-weight:650;color:#11111b}
+.fm-author__copy{min-width:0;flex:1}
+.fm-author__name{font-size:var(--fm-font-size-sm);font-weight:500;line-height:1.3}
+.fm-author__sub{font-size:var(--fm-font-size-2xs);color:var(--fm-start-meta);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fm-author__role{font-size:9px;letter-spacing:.04em;text-transform:uppercase;color:var(--fm-start-meta);border:1px solid var(--fm-border-subtle);padding:1px 5px;border-radius:var(--fm-radius-xs);flex:none}
+.fm-cite{margin-top:var(--fm-space-3);padding:var(--fm-space-2);border-radius:var(--fm-radius-md);background:var(--fm-bg-canvas);border:1px solid var(--fm-border-subtle)}
+.fm-cite pre{margin:0;font-family:var(--fm-font-mono);font-size:9.5px;line-height:1.55;color:var(--fm-text-secondary);white-space:pre-wrap;word-break:break-word;max-height:118px;overflow:auto}
+
+/* Timeline (history) */
+.fm-timeline{position:relative;padding-left:var(--fm-space-4)}
+.fm-timeline::before{content:"";position:absolute;left:4px;top:6px;bottom:6px;width:1px;background:var(--fm-border-subtle)}
+.fm-tl{position:relative;padding:0 0 var(--fm-space-3)}
+.fm-tl::before{content:"";position:absolute;left:calc(-1 * var(--fm-space-4) + 1px);top:5px;width:7px;height:7px;border-radius:99px;background:var(--fm-bg-panel);border:2px solid var(--fm-border-strong)}
+.fm-tl[data-kind="run"]::before{border-color:var(--fm-success)}
+.fm-tl[data-kind="edit"]::before{border-color:var(--fm-accent)}
+.fm-tl[data-kind="migrate"]::before{border-color:var(--fm-degraded)}
+.fm-tl__head{display:flex;align-items:baseline;gap:var(--fm-space-2)}
+.fm-tl__rev{font-family:var(--fm-font-mono);font-size:var(--fm-font-size-2xs);color:var(--fm-start-meta)}
+.fm-tl__sum{font-size:var(--fm-font-size-xs);font-weight:500;line-height:1.4}
+.fm-tl__when{margin-left:auto;font-size:9.5px;color:var(--fm-start-meta);white-space:nowrap;flex:none}
+.fm-tl__body{font-size:var(--fm-font-size-2xs);color:var(--fm-start-meta);line-height:1.6;margin-top:3px}
+.fm-tl__body li{margin-left:14px}
+
+/* Runs table */
+.fm-table{width:100%;border-collapse:collapse;font-size:var(--fm-font-size-xs)}
+.fm-table th{text-align:left;font-size:9px;letter-spacing:.05em;text-transform:uppercase;color:var(--fm-start-meta);font-weight:600;padding:0 var(--fm-space-2) var(--fm-space-1) 0;border-bottom:1px solid var(--fm-border-subtle)}
+.fm-table td{padding:6px var(--fm-space-2) 6px 0;border-bottom:1px solid var(--fm-border-subtle);font-family:var(--fm-font-mono);font-size:var(--fm-font-size-2xs);color:var(--fm-text-secondary);white-space:nowrap}
+.fm-table tr:hover td{background:var(--fm-bg-surface)}
+.fm-table td:last-child,.fm-table th:last-child{padding-right:0;text-align:right}
+
+.fm-inspector__foot{padding:var(--fm-space-3);border-top:1px solid var(--fm-border-subtle);background:var(--fm-bg-chrome);display:flex;gap:var(--fm-space-2)}
+.fm-inspector__foot .fm-btn-group{flex:1}
+.fm-inspector__foot .fm-btn-group>.fm-btn:first-child{flex:1}
+
+/* Template gallery / learn / settings / about panes */
+.fm-gallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(244px,1fr));gap:var(--fm-space-3)}
+.fm-gcard{display:flex;flex-direction:column;text-align:left;border:1px solid var(--fm-border-subtle);border-radius:var(--fm-radius-lg);background:var(--fm-bg-surface);overflow:hidden;transition:border-color var(--fm-transition-fast),transform var(--fm-duration-fast),box-shadow var(--fm-transition-fast)}
+.fm-gcard:hover{border-color:var(--fm-border-strong);transform:translateY(-2px);box-shadow:var(--fm-shadow-md)}
+.fm-gcard__thumb{height:120px;background:var(--fm-start-thumb-bg);border-bottom:1px solid var(--fm-border-subtle)}
+.fm-gcard__thumb img{width:100%;height:100%;object-fit:cover;display:block}
+.fm-gcard__body{padding:var(--fm-space-3);display:flex;flex-direction:column;gap:5px;flex:1}
+.fm-gcard__name{font-size:var(--fm-font-size-sm);font-weight:600;line-height:1.3}
+.fm-gcard__desc{font-size:var(--fm-font-size-2xs);color:var(--fm-start-meta);line-height:1.55;flex:1}
+.fm-gcard__foot{display:flex;align-items:center;gap:var(--fm-space-2);font-size:9.5px;color:var(--fm-start-meta);font-family:var(--fm-font-mono);padding-top:5px;border-top:1px solid var(--fm-border-subtle)}
+
+.fm-setting{display:flex;align-items:center;gap:var(--fm-space-3);padding:var(--fm-space-3) 0;border-bottom:1px solid var(--fm-border-subtle)}
+.fm-setting__copy{min-width:0;flex:1}
+.fm-setting__name{font-size:var(--fm-font-size-sm);font-weight:500}
+.fm-setting__desc{font-size:var(--fm-font-size-xs);color:var(--fm-start-meta);margin-top:2px;line-height:1.5}
+.fm-switch{width:34px;height:19px;border-radius:99px;background:var(--fm-bg-panel-raised);border:1px solid var(--fm-border-default);position:relative;flex:none;transition:background-color var(--fm-transition-fast),border-color var(--fm-transition-fast)}
+.fm-switch::after{content:"";position:absolute;top:2px;left:2px;width:13px;height:13px;border-radius:99px;background:var(--fm-start-meta);transition:transform var(--fm-transition-fast),background-color var(--fm-transition-fast)}
+.fm-switch[aria-checked="true"]{background:var(--fm-accent);border-color:var(--fm-accent)}
+.fm-switch[aria-checked="true"]::after{transform:translateX(15px);background:var(--fm-text-inverse)}
+
+.fm-about-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:var(--fm-space-3)}
+.fm-panelbox{border:1px solid var(--fm-border-subtle);border-radius:var(--fm-radius-lg);background:var(--fm-bg-surface);padding:var(--fm-space-3)}
+.fm-panelbox h3{margin:0 0 var(--fm-space-2);font-size:var(--fm-font-size-2xs);font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--fm-start-meta)}
+
+/* Shortcut sheet */
+.fm-keys{display:grid;grid-template-columns:repeat(auto-fit,minmax(248px,1fr));gap:0 var(--fm-space-6)}
+.fm-key{display:flex;align-items:center;gap:var(--fm-space-2);padding:5px 0;font-size:var(--fm-font-size-xs);border-bottom:1px solid var(--fm-border-subtle)}
+.fm-key__kbd{margin-left:auto;display:flex;gap:3px}
+
+/* ===========================================================================
+   5. MOCKUP CONTROL PANEL (not part of the product)
+   ======================================================================== */
+.mk{
+  position:fixed;bottom:14px;left:50%;transform:translateX(-50%);z-index:99;
+  display:flex;gap:6px;align-items:center;
+  padding:6px;border-radius:10px;background:rgba(24,24,37,.92);border:1px solid #45475a;
+  backdrop-filter:blur(10px);box-shadow:0 10px 30px -10px rgba(0,0,0,.6);
+  font-family:var(--fm-font-ui);font-size:11px;color:#bac2de;
+  opacity:.22;transition:opacity 160ms ease-out;
+}
+.mk:hover,.mk:focus-within{opacity:1}
+body[data-mk="off"] .mk{opacity:.12;padding:4px 6px}
+body[data-mk="off"] .mk:hover{opacity:1}
+.mk label{opacity:.7;padding-left:4px}
+.mk select,.mk button{
+  height:24px;border-radius:6px;border:1px solid #585b70;background:#313244;color:#cdd6f4;
+  font-size:11px;padding-inline:7px;cursor:pointer;
+}
+.mk button:hover,.mk select:hover{border-color:#89b4fa}
+.mk__hide{opacity:.6}
+body[data-mk="off"] .mk>*:not(.mk__hide){display:none}
+</style>
+</head>
+<body>
+
+<!-- ============================ ICON SPRITE ============================ -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+<symbol id="i-home" viewBox="0 0 24 24"><path d="M3 10.2 12 3l9 7.2V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></symbol>
+<symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.2 1.9"/></symbol>
+<symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7.5" height="7.5" rx="1.5"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.5"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.5"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.5"/></symbol>
+<symbol id="i-import" viewBox="0 0 24 24"><path d="M12 3v12"/><path d="m7.5 10.5 4.5 4.5 4.5-4.5"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></symbol>
+<symbol id="i-learn" viewBox="0 0 24 24"><path d="M12 4 2.5 8.5 12 13l9.5-4.5z"/><path d="M6 10.6V16c0 1.4 2.7 2.8 6 2.8s6-1.4 6-2.8v-5.4"/><path d="M21.5 8.5v5"/></symbol>
+<symbol id="i-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 14.5a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-2.7 1.1V21a2 2 0 1 1-4 0v-.2a1.6 1.6 0 0 0-2.8-1.1l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0-1.1-2.7H3a2 2 0 1 1 0-4h.2a1.6 1.6 0 0 0 1.1-2.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 2.7-1.1V3a2 2 0 1 1 4 0v.2a1.6 1.6 0 0 0 2.8 1.1l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0 1.1 2.7h.2a2 2 0 1 1 0 4H21a1.6 1.6 0 0 0-1.6 1.1z"/></symbol>
+<symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 16v-4.5"/><path d="M12 8h.01"/></symbol>
+<symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.6-3.6"/></symbol>
+<symbol id="i-star" viewBox="0 0 24 24"><path d="m12 3.6 2.6 5.3 5.9.9-4.2 4.1 1 5.8-5.3-2.8-5.3 2.8 1-5.8L3.5 9.8l5.9-.9z"/></symbol>
+<symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.3" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.3" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.3" fill="currentColor" stroke="none"/></symbol>
+<symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7.5a2 2 0 0 1 2-2h4l2 2.4h8a2 2 0 0 1 2 2V18a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
+<symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+<symbol id="i-chev-r" viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></symbol>
+<symbol id="i-chev-d" viewBox="0 0 24 24"><path d="m5 9 7 7 7-7"/></symbol>
+<symbol id="i-cpu" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9.5 9.5h5v5h-5z"/><path d="M9 3v3M15 3v3M9 18v3M15 18v3M3 9h3M3 15h3M18 9h3M18 15h3"/></symbol>
+<symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4.5 19 12 7 19.5z"/></symbol>
+<symbol id="i-pause" viewBox="0 0 24 24"><rect x="7" y="5" width="3.5" height="14" rx="1"/><rect x="13.5" y="5" width="3.5" height="14" rx="1"/></symbol>
+<symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1.5"/></symbol>
+<symbol id="i-step" viewBox="0 0 24 24"><path d="M6 5.5 15 12 6 18.5z"/><path d="M18 5v14"/></symbol>
+<symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 14.2A8.2 8.2 0 1 1 9.8 4 6.6 6.6 0 0 0 20 14.2"/></symbol>
+<symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M2.5 12h2M19.5 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4"/></symbol>
+<symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h8"/></symbol>
+<symbol id="i-ext" viewBox="0 0 24 24"><path d="M14 4h6v6"/><path d="m20 4-8.5 8.5"/><path d="M19 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5"/></symbol>
+<symbol id="i-list" viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13M3.5 6h.01M3.5 12h.01M3.5 18h.01"/></symbol>
+<symbol id="i-cards" viewBox="0 0 24 24"><rect x="3" y="4" width="8" height="7" rx="1.5"/><rect x="13" y="4" width="8" height="7" rx="1.5"/><rect x="3" y="13" width="8" height="7" rx="1.5"/><rect x="13" y="13" width="8" height="7" rx="1.5"/></symbol>
+<symbol id="i-sort" viewBox="0 0 24 24"><path d="M7 4v16M7 20l-3-3M7 20l3-3"/><path d="M17 20V4M17 4l-3 3M17 4l3 3"/></symbol>
+<symbol id="i-warn" viewBox="0 0 24 24"><path d="M10.3 3.9 2.6 17.1A2 2 0 0 0 4.3 20h15.4a2 2 0 0 0 1.7-2.9L13.7 3.9a2 2 0 0 0-3.4 0"/><path d="M12 9v4M12 17h.01"/></symbol>
+<symbol id="i-check" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m8.5 12.2 2.4 2.4 4.6-4.9"/></symbol>
+<symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
+<symbol id="i-min" viewBox="0 0 24 24"><path d="M5 12h14"/></symbol>
+<symbol id="i-max" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="1.5"/></symbol>
+<symbol id="i-users" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.4"/><path d="M2.6 20a6.4 6.4 0 0 1 12.8 0"/><path d="M16.5 5.2a3.4 3.4 0 0 1 0 6.6"/><path d="M18 14.4A6.4 6.4 0 0 1 21.4 20"/></symbol>
+<symbol id="i-history" viewBox="0 0 24 24"><path d="M3.5 9A9 9 0 1 1 3 13"/><path d="M3 4v5h5"/><path d="M12 8v4.3l3 1.8"/></symbol>
+<symbol id="i-activity" viewBox="0 0 24 24"><path d="M2.5 12h4l2.5-7 5 14 2.5-7h5"/></symbol>
+<symbol id="i-box" viewBox="0 0 24 24"><path d="m12 2.8 8.5 4.6v9.2L12 21.2 3.5 16.6V7.4z"/><path d="m3.6 7.4 8.4 4.6 8.4-4.6M12 12v9.2"/></symbol>
+<symbol id="i-dot" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="2.6" fill="currentColor" stroke="none"/></symbol>
+<symbol id="i-zap" viewBox="0 0 24 24"><path d="M13.2 2 4 13.5h6.4L10.8 22 20 10.4h-6.4z"/></symbol>
+<symbol id="i-grid3" viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="17" height="17" rx="1.5"/><path d="M9.2 3.5v17M14.8 3.5v17M3.5 9.2h17M3.5 14.8h17"/></symbol>
+<symbol id="i-tri" viewBox="0 0 24 24"><path d="M12 3.2 21 19H3z"/><path d="M12 3.2 7.5 19M12 3.2 16.5 19M7 11h10"/></symbol>
+<symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20.5 12a8.5 8.5 0 1 1-2.6-6.1"/><path d="M20.5 4v5h-5"/></symbol>
+<symbol id="i-pin" viewBox="0 0 24 24"><path d="M9 3h6l-.8 5.2 3.3 3.3H6.5l3.3-3.3z"/><path d="M12 11.5V21"/></symbol>
+<symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v11"/><path d="m7.8 9.8 4.2 4.2 4.2-4.2"/><path d="M4 20h16"/></symbol>
+<symbol id="i-book" viewBox="0 0 24 24"><path d="M4 4.5A1.5 1.5 0 0 1 5.5 3H19v15H5.5A1.5 1.5 0 0 0 4 19.5z"/><path d="M4 19.5A1.5 1.5 0 0 1 5.5 18H19v3H5.5A1.5 1.5 0 0 1 4 19.5"/></symbol>
+<symbol id="i-flask" viewBox="0 0 24 24"><path d="M9.5 3v6.2L4.3 18a2 2 0 0 0 1.7 3h12a2 2 0 0 0 1.7-3l-5.2-8.8V3"/><path d="M8 3h8M6.8 14.5h10.4"/></symbol>
+<symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M9.5 7V4.5h5V7M6 7l.9 12.1a2 2 0 0 0 2 1.9h6.2a2 2 0 0 0 2-1.9L18 7"/></symbol>
+<symbol id="i-link" viewBox="0 0 24 24"><path d="M10.5 13.5a4 4 0 0 0 5.7 0l2.8-2.8a4 4 0 0 0-5.7-5.7l-1.6 1.6"/><path d="M13.5 10.5a4 4 0 0 0-5.7 0l-2.8 2.8a4 4 0 1 0 5.7 5.7l1.6-1.6"/></symbol>
+<symbol id="i-layers" viewBox="0 0 24 24"><path d="m12 3 9 4.6-9 4.6-9-4.6z"/><path d="m3 12.4 9 4.6 9-4.6M3 16.8l9 4.6 9-4.6"/></symbol>
+</defs></svg>
+
+<!-- ============================ MOCKUP CONTROLS ============================ -->
+<div class="mk" role="group" aria-label="Mockup controls">
+  <label for="mk-theme">Theme</label>
+  <select id="mk-theme"><option value="dark">Mocha (dark)</option><option value="light">Latte (light)</option></select>
+  <label for="mk-state">State</label>
+  <select id="mk-state">
+    <option value="loaded">Loaded — 9 recent</option>
+    <option value="first-run">First run — empty</option>
+    <option value="loading">Loading — scanning</option>
+    <option value="error">Error — index unreadable</option>
+  </select>
+  <label for="mk-sec">Section</label>
+  <select id="mk-sec">
+    <option value="home">Home</option><option value="templates">Templates</option>
+    <option value="import">Import</option><option value="learn">Learn</option>
+    <option value="settings">Settings</option><option value="about">About</option>
+  </select>
+  <button id="mk-toggle" class="mk__hide" title="Hide these controls">Hide</button>
+</div>
+
+<!-- ============================ APP WINDOW ============================ -->
+<div class="fm-window">
+
+  <!-- Titlebar -->
+  <div class="fm-titlebar">
+    <span class="fm-titlebar__dot"></span>
+    <span class="fm-titlebar__name">Fullmag</span>
+    <div class="fm-titlebar__ctl">
+      <button class="fm-titlebar__btn" aria-label="Minimise"><svg class="ic ic-sm"><use href="#i-min"/></svg></button>
+      <button class="fm-titlebar__btn" aria-label="Maximise"><svg class="ic ic-sm"><use href="#i-max"/></svg></button>
+      <button class="fm-titlebar__btn fm-titlebar__btn--close" aria-label="Close"><svg class="ic ic-sm"><use href="#i-x"/></svg></button>
+    </div>
+  </div>
+
+  <!-- Menu bar -->
+  <header class="fm-header">
+    <div class="fm-header__brand">
+      <div class="fm-header__logo" id="brand-logo"></div>
+      <div class="fm-header__brand-copy">
+        <span class="fm-header__title">Fullmag</span>
+        <span class="fm-header__subtitle" id="hdr-session">No active session</span>
+      </div>
+    </div>
+    <nav class="fm-header__nav" aria-label="Application menu">
+      <button class="fm-header__nav-item">File</button>
+      <button class="fm-header__nav-item">Edit</button>
+      <button class="fm-header__nav-item">View</button>
+      <button class="fm-header__nav-item">Simulation</button>
+      <button class="fm-header__nav-item">Tools</button>
+      <button class="fm-header__nav-item">Help</button>
+    </nav>
+    <button class="fm-header__search">
+      <svg class="ic ic-sm"><use href="#i-search"/></svg>
+      <span>Command search</span><kbd>Ctrl K</kbd>
+    </button>
+    <div class="fm-header__right">
+      <div class="fm-header__transport">
+        <button class="fm-iconbtn" disabled aria-label="Run"><svg class="ic ic-sm"><use href="#i-play"/></svg></button>
+        <button class="fm-iconbtn" disabled aria-label="Pause"><svg class="ic ic-sm"><use href="#i-pause"/></svg></button>
+        <button class="fm-iconbtn" disabled aria-label="Stop"><svg class="ic ic-sm"><use href="#i-stop"/></svg></button>
+        <button class="fm-iconbtn" disabled aria-label="Step"><svg class="ic ic-sm"><use href="#i-step"/></svg></button>
+      </div>
+      <span class="fm-header__context" id="hdr-project">No project</span>
+      <button class="fm-iconbtn" id="hdr-theme" aria-label="Toggle theme"><svg class="ic ic-sm"><use href="#i-moon"/></svg></button>
+    </div>
+  </header>
+
+  <!-- Start screen -->
+  <div class="fm-start" id="start">
+    <!-- Rail -->
+    <nav class="fm-rail" aria-label="Start screen sections">
+      <div class="fm-rail__id">
+        <div class="fm-rail__mark" id="rail-logo"></div>
+        <div class="fm-rail__id-copy">
+          <span class="fm-rail__id-name">Fullmag</span>
+          <span class="fm-rail__id-ver">0.9.3 <span class="fm-rail__chan">beta</span></span>
+        </div>
+      </div>
+      <div class="fm-rail__nav" id="rail-nav"></div>
+      <div class="fm-rail__sep"></div>
+      <div class="fm-rail__label">Compute environment</div>
+      <div class="fm-env" id="env"></div>
+    </nav>
+
+    <!-- Content -->
+    <div class="fm-content" id="content"><div class="fm-content__inner" id="content-inner"></div></div>
+
+    <!-- Inspector -->
+    <aside class="fm-inspector" id="inspector" aria-label="Project details"></aside>
+  </div>
+
+  <!-- Status bar -->
+  <footer class="fm-status">
+    <span class="fm-status__item"><svg class="ic ic-sm" style="color:var(--fm-success)"><use href="#i-check"/></svg> Solver idle</span>
+    <span class="fm-status__sep"></span>
+    <span class="fm-status__item">Fullmag 0.9.3-beta · <span style="font-family:var(--fm-font-mono)">a1b2c3d</span></span>
+    <span class="fm-status__sep"></span>
+    <span class="fm-status__item">CUDA 12.4 · RTX 4090 · 5.8/24.0 GB</span>
+    <span class="fm-status__sep"></span>
+    <span class="fm-status__item" id="st-count">9 projects indexed</span>
+    <span class="fm-status__spacer"></span>
+    <button class="fm-status__badge"><svg class="ic ic-sm"><use href="#i-download"/></svg> 0.9.4 available</button>
+    <button class="fm-status__link"><svg class="ic ic-sm"><use href="#i-book"/></svg> Docs</button>
+    <button class="fm-status__link"><svg class="ic ic-sm"><use href="#i-activity"/></svg> Telemetry off</button>
+  </footer>
+</div>
+
+<script>
+/* ===========================================================================
+   DATA — stand-in for `recent-index.json` + per-project `.fms` manifests.
+   Shapes follow schema/*.schema.json in this folder.
+   ======================================================================== */
+const THUMBS = {
+  dispersion: "{{THUMB:dispersion-yig}}",
+  skyrmion:   "{{THUMB:skyrmion-lattice}}",
+  crystal:    "{{THUMB:magnonic-crystal}}",
+  sp4:        "{{THUMB:umag-sp4}}",
+  fmr:        "{{THUMB:fmr-spectrum}}",
+  dw:         "{{THUMB:domain-wall}}",
+  beam:       "{{THUMB:spinwave-beam}}",
+  vortex:     "{{THUMB:vortex-core}}",
+  mesh:       "{{THUMB:fem-mesh}}",
+};
+
+const MZ = {name:"Mateusz Zelent", email:"mateusz.zelent@rptu.de", aff:"AG Magnonics, RPTU Kaiserslautern-Landau", orcid:"0000-0002-XXXX-1234", color:"#89b4fa"};
+const AK = {name:"A. Krysztofik",  email:"a.krysztofik@rptu.de",   aff:"AG Magnonics, RPTU", orcid:"0000-0003-XXXX-7788", color:"#a6e3a1"};
+const PG = {name:"P. Gruszecki",   email:"gruszecki@amu.edu.pl",   aff:"Adam Mickiewicz University, Poznań", orcid:"0000-0001-XXXX-4521", color:"#cba6f7"};
+const RUNNER = {name:"fullmag-runner", email:"ci@fullmag.local", aff:"Automated run", orcid:"", color:"#6c7086"};
+
+const PROJECTS = [
+  {
+    id:"p-yig-wg", name:"YIG waveguide — spin-wave dispersion", thumb:"dispersion",
+    path:"D:\\sim\\magnonics\\yig-waveguide-dispersion.fms",
+    solver:"FDM", status:"running", pinned:true, size:1.42e9,
+    opened:"today 12:04", created:"12 Sep 2026", modified:"today 12:04",
+    revision:42, schema:"1.2", appVersion:"0.9.3-beta", mode:"read_write",
+    tags:["magnonics","dispersion","YIG"],
+    progress:{pct:64, t:"3.20 ns", of:"5.00 ns", eta:"≈ 12 min", frames:"256 / 400", device:"RTX 4090"},
+    model:{grid:"512 × 512 × 8", cell:"2.0 × 2.0 × 5.0 nm", pbc:"x", material:"YIG",
+      ms:"140 kA/m", aex:"3.65 pJ/m", alpha:"2.0e-4", interactions:["exchange","demag","Zeeman","Gilbert"],
+      integrator:"RK45 (adaptive)", tol:"1e-6", excitation:"sinc, fc = 20 GHz"},
+    outputs:{frames:400, size:"1.42 GB", fields:["m","H_eff","energy"]},
+    authors:[{...MZ,role:"creator"},{...AK,role:"contributor"}],
+    history:[
+      {rev:42,kind:"run",  when:"today 12:04", who:"MZ", sum:"Started transient run (sinc excitation)", body:["sweep: Bext 0 → 120 mT, 25 steps","device RTX 4090, CUDA 12.4"]},
+      {rev:41,kind:"edit", when:"today 11:38", who:"MZ", sum:"Refined mesh in the waveguide cross-section", body:["cell z 10 → 5 nm","grid 512×512×4 → 512×512×8"]},
+      {rev:38,kind:"edit", when:"2 Oct",       who:"AK", sum:"Added Gilbert damping profile at the strip ends", body:["absorbing boundary, α 2e-4 → 0.5 over 40 cells"]},
+      {rev:30,kind:"run",  when:"28 Sep",      who:"CI", sum:"Validation run against analytic Kalinikos–Slavin", body:["max deviation 1.8 % over k ∈ [0,20] rad/µm"]},
+    ],
+    runs:[
+      {id:"r-0042", when:"today 12:04", dur:"18m (running)", dev:"RTX 4090", status:"running", out:"0.9 GB"},
+      {id:"r-0038", when:"2 Oct 09:12", dur:"41m 06s",       dev:"RTX 4090", status:"ready",   out:"1.4 GB"},
+      {id:"r-0030", when:"28 Sep 17:40",dur:"38m 55s",       dev:"RTX 4090", status:"ready",   out:"1.3 GB"},
+      {id:"r-0021", when:"21 Sep 11:02",dur:"02m 10s",       dev:"CPU ×32",  status:"failed",  out:"—"},
+    ],
+    doi:"10.5281/zenodo.0000000",
+  },
+  {
+    id:"p-skyrmion", name:"Skyrmion lattice — DMI sweep", thumb:"skyrmion",
+    path:"D:\\sim\\topology\\skyrmion-lattice-dmi.fms",
+    solver:"FDM", status:"ready", pinned:true, size:8.6e8,
+    opened:"today 09:21", created:"3 Aug 2026", modified:"yesterday 18:55",
+    revision:118, schema:"1.2", appVersion:"0.9.3-beta", mode:"read_write",
+    tags:["skyrmion","DMI","topology"],
+    model:{grid:"256 × 256 × 1", cell:"1.0 × 1.0 × 0.6 nm", pbc:"x, y", material:"Co/Pt multilayer",
+      ms:"580 kA/m", aex:"15 pJ/m", alpha:"0.3", interactions:["exchange","DMI (interfacial)","demag","uniaxial anisotropy","Zeeman"],
+      integrator:"LLG relax + RK45", tol:"1e-7", excitation:"field ramp"},
+    outputs:{frames:144, size:"860 MB", fields:["m","topological charge"]},
+    authors:[{...MZ,role:"creator"},{...PG,role:"contributor"}],
+    history:[
+      {rev:118,kind:"edit",when:"yesterday 18:55",who:"MZ",sum:"Extended D sweep to 3.4 mJ/m²",body:["24 → 36 sweep points"]},
+      {rev:110,kind:"run", when:"28 Sep",         who:"MZ",sum:"Relaxation sweep completed",body:["skyrmion phase found for D ≥ 2.1 mJ/m²"]},
+      {rev:96, kind:"edit",when:"14 Sep",         who:"PG",sum:"Switched to interfacial DMI formulation",body:[]},
+    ],
+    runs:[
+      {id:"r-0118", when:"yesterday 19:02", dur:"1h 12m", dev:"RTX 4090", status:"ready", out:"860 MB"},
+      {id:"r-0110", when:"28 Sep 14:20",    dur:"58m 31s",dev:"RTX 4090", status:"ready", out:"640 MB"},
+    ],
+    doi:"",
+  },
+  {
+    id:"p-crystal", name:"Magnonic crystal — band gaps (1D)", thumb:"crystal",
+    path:"D:\\sim\\magnonics\\magnonic-crystal-1d.fms",
+    solver:"FEM", status:"ready", pinned:false, size:4.1e8,
+    opened:"yesterday 16:40", created:"19 Jul 2026", modified:"30 Sep 2026",
+    revision:64, schema:"1.2", appVersion:"0.9.2", mode:"read_write",
+    tags:["magnonics","band structure","eigensolver"],
+    model:{grid:"42 180 tetrahedra", cell:"h_max = 3.0 nm", pbc:"Bloch, x", material:"Py / Co stripes",
+      ms:"800 / 1400 kA/m", aex:"13 / 30 pJ/m", alpha:"0.008", interactions:["exchange","demag","Zeeman"],
+      integrator:"ARPACK eigensolver", tol:"1e-9", excitation:"eigenmode, 40 bands"},
+    outputs:{frames:40, size:"410 MB", fields:["eigenmodes","dispersion"]},
+    authors:[{...PG,role:"creator"},{...MZ,role:"contributor"}],
+    history:[
+      {rev:64,kind:"edit",when:"30 Sep",who:"PG",sum:"Raised band count 24 → 40",body:["eigensolve window widened to 18 GHz"]},
+      {rev:52,kind:"run", when:"22 Sep",who:"PG",sum:"Band structure over Γ–X–M",body:["3 gaps resolved: 0.34, 0.50, 0.62 GHz"]},
+    ],
+    runs:[{id:"r-0064", when:"30 Sep 10:11", dur:"2h 40m", dev:"CPU ×32", status:"ready", out:"410 MB"}],
+    doi:"10.1103/PhysRevB.000.000000",
+  },
+  {
+    id:"p-sp4", name:"µMAG Standard Problem #4", thumb:"sp4",
+    path:"D:\\sim\\validation\\umag-sp4.fms",
+    solver:"FDM", status:"ready", pinned:false, size:4.2e7,
+    opened:"yesterday 11:02", created:"2 Mar 2026", modified:"12 Sep 2026",
+    revision:9, schema:"1.2", appVersion:"0.9.3-beta", mode:"read_only", readonlyReason:"Reference benchmark — shipped with Fullmag",
+    tags:["validation","benchmark","µMAG"],
+    model:{grid:"200 × 50 × 1", cell:"2.5 × 2.5 × 3.0 nm", pbc:"none", material:"Permalloy",
+      ms:"800 kA/m", aex:"13 pJ/m", alpha:"0.02", interactions:["exchange","demag","Zeeman"],
+      integrator:"RK45 (adaptive)", tol:"1e-8", excitation:"field step, field 1"},
+    outputs:{frames:1000, size:"42 MB", fields:["m","energy"]},
+    authors:[{...RUNNER,role:"maintainer"},{...MZ,role:"contributor"}],
+    history:[
+      {rev:9,kind:"run",  when:"12 Sep",who:"CI",sum:"Nightly validation passed",body:["⟨mx⟩ crossing at 0.136 ns — reference 0.136 ns"]},
+      {rev:8,kind:"migrate",when:"1 Sep", who:"CI",sum:"Migrated manifest 1.1 → 1.2",body:["interactions[] replaces legacy terms{}"]},
+    ],
+    runs:[
+      {id:"r-0009", when:"12 Sep 02:00", dur:"01m 14s", dev:"RTX 4090", status:"ready", out:"42 MB"},
+      {id:"r-0008", when:"5 Sep 02:00",  dur:"01m 19s", dev:"RTX 4090", status:"ready", out:"42 MB"},
+    ],
+    doi:"10.1016/j.jmmm.0000.000000",
+  },
+  {
+    id:"p-fmr", name:"Py nanodot — broadband FMR sweep", thumb:"fmr",
+    path:"D:\\sim\\fmr\\py-nanodot-fmr.fms",
+    solver:"FDM", status:"failed", pinned:false, size:2.6e8,
+    opened:"1 Oct 15:33", created:"24 Sep 2026", modified:"1 Oct 2026",
+    revision:27, schema:"1.2", appVersion:"0.9.3-beta", mode:"read_write",
+    tags:["FMR","Py","sweep"],
+    error:"Run r-0027 diverged at t = 0.41 ns — |m| drift 4.2e-2 exceeded the 1e-3 tolerance. Likely cause: Δt too large for α = 0.001.",
+    model:{grid:"128 × 128 × 4", cell:"1.5 × 1.5 × 2.5 nm", pbc:"none", material:"Permalloy",
+      ms:"800 kA/m", aex:"13 pJ/m", alpha:"0.001", interactions:["exchange","demag","Zeeman"],
+      integrator:"RK45 (adaptive)", tol:"1e-6", excitation:"sinc, fc = 25 GHz"},
+    outputs:{frames:128, size:"260 MB", fields:["m","S11"]},
+    authors:[{...AK,role:"creator"}],
+    history:[
+      {rev:27,kind:"run", when:"1 Oct 15:33",who:"AK",sum:"Run diverged at t = 0.41 ns",body:["|m| drift 4.2e-2 > 1e-3","suggestion: lower Δt or raise α"]},
+      {rev:22,kind:"edit",when:"29 Sep",     who:"AK",sum:"Lowered damping 0.008 → 0.001",body:[]},
+    ],
+    runs:[
+      {id:"r-0027", when:"1 Oct 15:33", dur:"04m 02s", dev:"RTX 4090", status:"failed", out:"—"},
+      {id:"r-0022", when:"29 Sep 10:45",dur:"22m 18s", dev:"RTX 4090", status:"ready",  out:"260 MB"},
+    ],
+    doi:"",
+  },
+  {
+    id:"p-dw", name:"Domain-wall motion — CoFeB nanostrip", thumb:"dw",
+    path:"D:\\sim\\spintronics\\cofeb-dw-motion.fms",
+    solver:"FDM", status:"draft", pinned:false, size:1.1e7,
+    opened:"30 Sep 2026", created:"30 Sep 2026", modified:"30 Sep 2026",
+    revision:3, schema:"1.2", appVersion:"0.9.3-beta", mode:"read_write",
+    tags:["DW","spintronics","draft"],
+    model:{grid:"1024 × 64 × 1", cell:"2.0 × 2.0 × 1.0 nm", pbc:"none", material:"CoFeB",
+      ms:"1050 kA/m", aex:"19 pJ/m", alpha:"0.015", interactions:["exchange","demag","interfacial DMI","STT (Zhang–Li)"],
+      integrator:"—", tol:"—", excitation:"not configured"},
+    outputs:{frames:0, size:"11 MB", fields:[]},
+    authors:[{...MZ,role:"creator"}],
+    history:[{rev:3,kind:"edit",when:"30 Sep",who:"MZ",sum:"Created geometry and material set",body:["no study configured yet"]}],
+    runs:[],
+    doi:"",
+  },
+  {
+    id:"p-beam", name:"Spin-wave caustics — antenna array", thumb:"beam",
+    path:"E:\\shared\\magnonics\\caustics-antenna-array.fms",
+    solver:"FDM", status:"ready", pinned:false, size:3.1e9,
+    opened:"26 Sep 2026", created:"4 Jun 2026", modified:"25 Sep 2026",
+    revision:201, schema:"1.2", appVersion:"0.9.1", mode:"read_write",
+    tags:["magnonics","caustics","antenna"],
+    model:{grid:"1024 × 1024 × 2", cell:"4.0 × 4.0 × 15.0 nm", pbc:"none", material:"YIG",
+      ms:"140 kA/m", aex:"3.65 pJ/m", alpha:"5.0e-4", interactions:["exchange","demag","Zeeman","Oersted field"],
+      integrator:"RK45 (adaptive)", tol:"1e-6", excitation:"CPW antenna, 7.2 GHz"},
+    outputs:{frames:600, size:"3.10 GB", fields:["m","H_oersted","FFT"]},
+    authors:[{...AK,role:"creator"},{...MZ,role:"contributor"},{...PG,role:"contributor"}],
+    history:[
+      {rev:201,kind:"run", when:"25 Sep",who:"AK",sum:"Full 600-frame transient",body:["caustic opening angle 38.4° ± 0.6°"]},
+      {rev:180,kind:"edit",when:"18 Sep",who:"MZ",sum:"Added Oersted-field term from the CPW",body:[]},
+    ],
+    runs:[{id:"r-0201", when:"25 Sep 08:00", dur:"6h 21m", dev:"RTX 4090", status:"ready", out:"3.10 GB"}],
+    doi:"10.1038/s00000-000-00000-0",
+  },
+  {
+    id:"p-vortex", name:"Vortex core gyration — Py disc", thumb:"vortex",
+    path:"\\\\nas-magnonics\\projects\\vortex-gyration.fms",
+    solver:"FEM", status:"readonly", pinned:false, size:1.9e8,
+    opened:"18 Sep 2026", created:"11 Jan 2026", modified:"3 May 2026",
+    revision:77, schema:"1.1", appVersion:"0.8.6", mode:"read_only", readonlyReason:"Shared network location — opened read-only",
+    tags:["vortex","gyration","shared"],
+    model:{grid:"18 640 tetrahedra", cell:"h_max = 4.0 nm", pbc:"none", material:"Permalloy",
+      ms:"800 kA/m", aex:"13 pJ/m", alpha:"0.01", interactions:["exchange","demag","Zeeman"],
+      integrator:"RK45 (adaptive)", tol:"1e-6", excitation:"in-plane field pulse"},
+    outputs:{frames:220, size:"190 MB", fields:["m","core position"]},
+    authors:[{...PG,role:"creator"}],
+    history:[{rev:77,kind:"run",when:"3 May",who:"PG",sum:"Gyration frequency 285 MHz",body:[]}],
+    runs:[{id:"r-0077", when:"3 May 13:20", dur:"49m 02s", dev:"CPU ×16", status:"ready", out:"190 MB"}],
+    doi:"",
+  },
+  {
+    id:"p-mesh", name:"Py layer with hole — FEM mesh study", thumb:"mesh",
+    path:"D:\\sim\\meshing\\py-layer-with-hole.fms",
+    solver:"FEM", status:"migrate", pinned:false, size:9.4e7,
+    opened:"2 Aug 2026", created:"14 Feb 2026", modified:"2 Aug 2026",
+    revision:14, schema:"1.0", appVersion:"0.7.2", mode:"read_write",
+    tags:["meshing","FEM","convergence"],
+    migrate:{from:"1.0", to:"1.2", steps:["terms{} → interactions[]","mesh.quality metrics added","run manifests split per run id"]},
+    model:{grid:"96 420 tetrahedra", cell:"h_max = 2.0 nm", pbc:"none", material:"Permalloy",
+      ms:"800 kA/m", aex:"13 pJ/m", alpha:"0.02", interactions:["exchange","demag"],
+      integrator:"relaxation", tol:"1e-7", excitation:"none"},
+    outputs:{frames:6, size:"94 MB", fields:["m","mesh quality"]},
+    authors:[{...MZ,role:"creator"}],
+    history:[{rev:14,kind:"edit",when:"2 Aug",who:"MZ",sum:"Mesh convergence h = 6 → 2 nm",body:["energy converged to 0.3 % at h = 3 nm"]}],
+    runs:[{id:"r-0014", when:"2 Aug 10:02", dur:"1h 05m", dev:"CPU ×32", status:"ready", out:"94 MB"}],
+    doi:"",
+  },
+];
+
+const GROUPS = [
+  {label:"Today",            ids:["p-yig-wg","p-skyrmion"]},
+  {label:"Yesterday",        ids:["p-crystal","p-sp4"]},
+  {label:"Earlier this week",ids:["p-fmr","p-dw"]},
+  {label:"Older",            ids:["p-beam","p-vortex","p-mesh"]},
+];
+
+const TEMPLATES = [
+  {name:"µMAG Standard Problem #1", thumb:"sp4",       solver:"FDM", desc:"Hysteresis of a 1 × 2 µm Permalloy rectangle. The canonical first check that a solver build is sane.", meta:"~2 min · 0.4 GB VRAM"},
+  {name:"µMAG Standard Problem #4", thumb:"sp4",       solver:"FDM", desc:"Field-driven switching of a 500 × 125 × 3 nm Py strip; compare ⟨mx⟩ zero crossing against the reference.", meta:"~1 min · 0.3 GB VRAM"},
+  {name:"Spin-wave dispersion",     thumb:"dispersion",solver:"FDM", desc:"Sinc-excited waveguide with FFT post-processing — gives ω(k) maps directly in the results viewer.", meta:"~25 min · 6 GB VRAM"},
+  {name:"Magnonic crystal bands",   thumb:"crystal",   solver:"FEM", desc:"Bloch-periodic eigenmode study of a 1D stripe lattice; reports band edges and gap widths.", meta:"~2 h · CPU ×32"},
+  {name:"Skyrmion phase diagram",   thumb:"skyrmion",  solver:"FDM", desc:"Relaxation sweep over DMI strength and out-of-plane field, with topological-charge tracking.", meta:"~1 h · 8 GB VRAM"},
+  {name:"Broadband FMR",            thumb:"fmr",       solver:"FDM", desc:"Field-swept absorption map with S11 extraction — the usual starting point for a resonance study.", meta:"~20 min · 4 GB VRAM"},
+  {name:"Domain-wall motion",       thumb:"dw",        solver:"FDM", desc:"Current-driven wall propagation with Zhang–Li STT and an absorbing boundary at the strip ends.", meta:"~35 min · 5 GB VRAM"},
+  {name:"Vortex gyration",          thumb:"vortex",    solver:"FEM", desc:"Pulsed excitation of a Py disc; tracks the core trajectory and extracts the gyration frequency.", meta:"~45 min · CPU ×16"},
+];
+
+/* ===========================================================================
+   HELPERS
+   ======================================================================== */
+const $  = (s,r=document)=>r.querySelector(s);
+const el = (t,c,h)=>{const n=document.createElement(t); if(c)n.className=c; if(h!=null)n.innerHTML=h; return n;};
+const ic = (id,cls="ic")=>`<svg class="${cls}" aria-hidden="true"><use href="#${id}"/></svg>`;
+const bytes = b => b>=1e9 ? (b/1e9).toFixed(2)+" GB" : b>=1e6 ? Math.round(b/1e6)+" MB" : Math.round(b/1e3)+" kB";
+const initials = n => n.split(/[\s.]+/).filter(Boolean).slice(0,2).map(p=>p[0]).join("").toUpperCase();
+const byId = id => PROJECTS.find(p=>p.id===id);
+
+const STATUS = {
+  ready:   {label:"Ready",         icon:"i-check"},
+  running: {label:"Running",       icon:"i-dot"},
+  failed:  {label:"Failed",        icon:"i-warn"},
+  draft:   {label:"Draft",         icon:"i-dot"},
+  migrate: {label:"Migrate",       icon:"i-refresh"},
+  missing: {label:"Missing",       icon:"i-warn"},
+  readonly:{label:"Read-only",     icon:"i-check"},
+};
+
+const state = {
+  section:"home", screen:"loaded", view:"list", filter:"all", query:"",
+  selected:"p-yig-wg", tab:"overview", theme:"dark",
+};
+
+/* ===========================================================================
+   RAIL
+   ======================================================================== */
+const SECTIONS = [
+  {id:"home",     label:"Home",      icon:"i-home",     key:"1"},
+  {id:"templates",label:"Templates", icon:"i-grid",     key:"2", count:TEMPLATES.length},
+  {id:"import",   label:"Import",    icon:"i-import",   key:"3"},
+  {id:"learn",    label:"Learn",     icon:"i-learn",    key:"4"},
+  {id:"settings", label:"Settings",  icon:"i-settings", key:","},
+  {id:"about",    label:"About",     icon:"i-info",     key:""},
+];
+
+function renderRail(){
+  const nav = $("#rail-nav"); nav.innerHTML="";
+  SECTIONS.forEach(s=>{
+    const b = el("button","fm-rail__item",
+      `${ic(s.icon)}<span>${s.label}</span>` +
+      (s.count!=null?`<span class="fm-rail__count">${s.count}</span>`:"") +
+      (s.key?`<kbd>Ctrl ${s.key}</kbd>`:""));
+    if(state.section===s.id) b.setAttribute("aria-current","page");
+    b.onclick=()=>{state.section=s.id; render();};
+    nav.appendChild(b);
+  });
+  $("#env").innerHTML = `
+    <div class="fm-env__row"><span class="fm-env__dot"></span><span class="fm-env__name">RTX 4090</span><span class="fm-env__val">CUDA 12.4</span></div>
+    <div class="fm-meter"><div class="fm-meter__fill" style="width:24%"></div></div>
+    <div class="fm-env__row" style="margin-top:4px"><span class="fm-env__val" style="margin-left:0">VRAM</span><span class="fm-env__val">5.8 / 24.0 GB</span></div>
+    <div class="fm-env__row" style="margin-top:8px">${ic("i-cpu","ic ic-sm")}<span class="fm-env__name" style="font-weight:400">CPU fallback</span><span class="fm-env__val">32 threads</span></div>
+    <button class="fm-env__cfg">${ic("i-settings","ic ic-sm")} Configure compute</button>`;
+}
+
+/* ===========================================================================
+   CONTENT — HOME
+   ======================================================================== */
+function sectionHead(title, tools){
+  const h = el("div","fm-section__head", `<span class="fm-section__title">${title}</span>`);
+  if(tools) h.appendChild(tools);
+  return h;
+}
+
+function renderContinue(){
+  const p = byId("p-yig-wg");
+  const s = el("section","fm-section");
+  s.appendChild(sectionHead("Continue where you left off"));
+  const c = el("div","fm-continue");
+  c.innerHTML = `
+    <div class="fm-continue__thumb"><img src="${THUMBS[p.thumb]}" alt=""></div>
+    <div class="fm-continue__body">
+      <div class="fm-continue__name">${p.name}</div>
+      <div class="fm-continue__sub">${p.path}</div>
+      <div class="fm-continue__prog">
+        <span class="fm-pill" data-status="running"><span class="fm-pill__dot"></span>paused at t = ${p.progress.t} / ${p.progress.of}</span>
+        <div class="fm-progress"><div class="fm-progress__fill" data-tone="running" style="width:${p.progress.pct}%"></div></div>
+        <span class="fm-continue__pct">${p.progress.pct}%</span>
+        <span class="fm-continue__eta">${p.progress.eta} · ${p.progress.frames} frames</span>
+      </div>
+      <div class="fm-continue__actions">
+        <button class="fm-btn fm-btn--primary">${ic("i-play","ic ic-sm")} Resume run</button>
+        <button class="fm-btn">${ic("i-folder","ic ic-sm")} Open project</button>
+        <button class="fm-btn fm-btn--ghost">Discard checkpoint</button>
+      </div>
+    </div>`;
+  s.appendChild(c);
+  return s;
+}
+
+function renderLaunchTiles(){
+  const s = el("section","fm-section");
+  s.appendChild(sectionHead("Start something new"));
+  const tiles = el("div","fm-tiles");
+  const defs = [
+    {name:"FDM simulation", icon:"i-grid3", color:"var(--fm-solver-fdm)", key:"Ctrl N",
+     desc:"Structured finite-difference grid. GPU-accelerated, best for large uniform geometries.", foot:"empty problem"},
+    {name:"FEM simulation", icon:"i-tri", color:"var(--fm-solver-fem)", key:"Ctrl ⇧ N",
+     desc:"Unstructured tetrahedral mesh. Curved bodies, Bloch-periodic eigenmode studies.", foot:"empty problem"},
+    {name:"From template",  icon:"i-flask", color:"var(--fm-chart-teal)", key:"Ctrl T",
+     desc:"Benchmarks and ready-made studies — µMAG problems, dispersion, FMR, skyrmions.", foot:`${TEMPLATES.length} templates`},
+    {name:"Import",         icon:"i-import", color:"var(--fm-chart-peach)", key:"Ctrl I",
+     desc:"Bring in an existing model from another micromagnetic package or a Fullmag archive.", foot:".mif · .mx3 · .mph · .fms"},
+  ];
+  defs.forEach(d=>{
+    const t = el("button","fm-tile");
+    t.innerHTML = `
+      <div class="fm-tile__top">
+        <span class="fm-tile__glyph" style="color:${d.color};background:color-mix(in srgb,${d.color} 15%,transparent)">${ic(d.icon,"ic ic-sm")}</span>
+        <span class="fm-tile__name">${d.name}</span>
+        <kbd class="fm-tile__kbd">${d.key}</kbd>
+      </div>
+      <div class="fm-tile__desc">${d.desc}</div>
+      <div class="fm-tile__foot">${d.foot}</div>`;
+    tiles.appendChild(t);
+  });
+  s.appendChild(tiles);
+  return s;
+}
+
+function filteredProjects(){
+  const q = state.query.trim().toLowerCase();
+  return PROJECTS.filter(p=>{
+    if(state.filter==="fdm" && p.solver!=="FDM") return false;
+    if(state.filter==="fem" && p.solver!=="FEM") return false;
+    if(state.filter==="pinned" && !p.pinned) return false;
+    if(!q) return true;
+    return (p.name+" "+p.path+" "+p.tags.join(" ")+" "+p.solver).toLowerCase().includes(q);
+  });
+}
+
+function projectRow(p){
+  const st = STATUS[p.status];
+  const r = el("button","fm-row");
+  r.setAttribute("role","option");
+  if(state.selected===p.id) r.setAttribute("aria-selected","true");
+  r.innerHTML = `
+    <span class="fm-row__thumb"><img src="${THUMBS[p.thumb]}" alt=""></span>
+    <span class="fm-row__main">
+      <span class="fm-row__name">
+        <span>${p.name}</span>
+        ${p.mode==="read_only"?ic("i-link","ic ic-sm")+"":""}
+      </span>
+      <span class="fm-row__path">${p.path}</span>
+    </span>
+    <span><span class="fm-badge fm-badge--${p.solver.toLowerCase()}">${p.solver}</span></span>
+    <span class="fm-row__meta fm-row__meta--left"><span class="fm-pill" data-status="${p.status}"><span class="fm-pill__dot"></span>${st.label}</span></span>
+    <span class="fm-row__meta fm-row__size">${bytes(p.size)}</span>
+    <span class="fm-row__meta">${p.opened}</span>
+    <span class="fm-row__pin" data-pinned="${p.pinned}">${ic("i-star","ic ic-sm")}</span>`;
+  r.onclick=()=>{state.selected=p.id; state.tab="overview"; render();};
+  return r;
+}
+
+function projectCard(p){
+  const st = STATUS[p.status];
+  const c = el("button","fm-card");
+  if(state.selected===p.id) c.setAttribute("aria-selected","true");
+  c.innerHTML = `
+    <span class="fm-card__thumb">
+      <img src="${THUMBS[p.thumb]}" alt="">
+      <span class="fm-card__badges"><span class="fm-badge fm-badge--${p.solver.toLowerCase()}">${p.solver}</span></span>
+    </span>
+    <span class="fm-card__body">
+      <span class="fm-card__name">${p.name}</span>
+      <span class="fm-card__meta">
+        <span class="fm-pill" data-status="${p.status}"><span class="fm-pill__dot"></span>${st.label}</span>
+        <span style="margin-left:auto">${p.opened}</span>
+      </span>
+    </span>`;
+  c.onclick=()=>{state.selected=p.id; state.tab="overview"; render();};
+  return c;
+}
+
+function renderRecent(){
+  const s = el("section","fm-section");
+  const tools = el("div","fm-section__tools");
+  tools.innerHTML = `
+    <label class="fm-search">${ic("i-search","ic ic-sm")}
+      <input id="q" type="search" placeholder="Filter projects…" value="${state.query}">
+      <kbd>/</kbd>
+    </label>
+    <div class="fm-seg" id="filters">
+      <button data-f="all"    aria-pressed="${state.filter==="all"}">All</button>
+      <button data-f="fdm"    aria-pressed="${state.filter==="fdm"}">FDM</button>
+      <button data-f="fem"    aria-pressed="${state.filter==="fem"}">FEM</button>
+      <button data-f="pinned" aria-pressed="${state.filter==="pinned"}">${ic("i-star","ic ic-sm")}</button>
+    </div>
+    <button class="fm-select">${ic("i-sort","ic ic-sm")} Last opened ${ic("i-chev-d","ic ic-sm")}</button>
+    <div class="fm-seg" id="views">
+      <button data-v="list" aria-pressed="${state.view==="list"}" aria-label="List view">${ic("i-list","ic ic-sm")}</button>
+      <button data-v="grid" aria-pressed="${state.view==="grid"}" aria-label="Grid view">${ic("i-cards","ic ic-sm")}</button>
+    </div>`;
+  s.appendChild(sectionHead("Recent projects", tools));
+
+  const hits = filteredProjects();
+  if(!hits.length){
+    s.appendChild(el("div","fm-empty",
+      `<span class="fm-empty__glyph">${ic("i-search","ic ic-lg")}</span>
+       <h2>No project matches that filter</h2>
+       <p>Try a different term, or clear the filter to see all ${PROJECTS.length} indexed projects.</p>`));
+    return s;
+  }
+
+  if(state.view==="grid"){
+    const g = el("div","fm-grid");
+    hits.forEach(p=>g.appendChild(projectCard(p)));
+    s.appendChild(g);
+  } else {
+    GROUPS.forEach(grp=>{
+      const inGroup = grp.ids.map(byId).filter(p=>hits.includes(p));
+      if(!inGroup.length) return;
+      s.appendChild(el("div","fm-group-head",`<span>${grp.label}</span>`));
+      const list = el("div","fm-list");
+      list.setAttribute("role","listbox");
+      inGroup.forEach(p=>list.appendChild(projectRow(p)));
+      s.appendChild(list);
+    });
+  }
+
+  const foot = el("div","fm-list-foot");
+  foot.innerHTML = `
+    <button class="fm-btn">${ic("i-folder","ic ic-sm")} Browse…</button>
+    <button class="fm-btn fm-btn--ghost">${ic("i-trash","ic ic-sm")} Clear list</button>
+    <span class="fm-list-foot__note">${hits.length} of ${PROJECTS.length} shown · index rebuilt 4 min ago</span>`;
+  s.appendChild(foot);
+  return s;
+}
+
+function renderHome(){
+  const frag = document.createDocumentFragment();
+  const head = el("div","fm-page-head");
+  head.innerHTML = `
+    <div class="fm-page-head__copy">
+      <h1>Welcome back, Mateusz</h1>
+      <p>One run is paused and waiting. ${PROJECTS.length} projects are indexed on this machine.</p>
+    </div>
+    <div class="fm-page-head__meta">Saturday, 3 October 2026<br>AG Magnonics · RPTU</div>`;
+  frag.appendChild(head);
+  frag.appendChild(renderContinue());
+  frag.appendChild(renderLaunchTiles());
+  frag.appendChild(renderRecent());
+  return frag;
+}
+
+function renderFirstRun(){
+  const frag = document.createDocumentFragment();
+  const head = el("div","fm-page-head");
+  head.innerHTML = `
+    <div class="fm-page-head__copy">
+      <h1>Welcome to Fullmag</h1>
+      <p>Nothing is indexed yet. Start from an empty problem, or open a benchmark to see a complete study end to end.</p>
+    </div>`;
+  frag.appendChild(head);
+  frag.appendChild(renderLaunchTiles());
+
+  const s = el("section","fm-section");
+  s.appendChild(sectionHead("Suggested first steps"));
+  const g = el("div","fm-gallery");
+  TEMPLATES.slice(0,3).forEach(t=>{
+    const c = el("button","fm-gcard");
+    c.innerHTML = `
+      <span class="fm-gcard__thumb"><img src="${THUMBS[t.thumb]}" alt=""></span>
+      <span class="fm-gcard__body">
+        <span class="fm-gcard__name">${t.name}</span>
+        <span class="fm-gcard__desc">${t.desc}</span>
+        <span class="fm-gcard__foot"><span class="fm-badge fm-badge--${t.solver.toLowerCase()}">${t.solver}</span><span style="margin-left:auto">${t.meta}</span></span>
+      </span>`;
+    g.appendChild(c);
+  });
+  s.appendChild(g);
+  frag.appendChild(s);
+
+  const env = el("div","fm-banner");
+  env.dataset.tone = "info";
+  env.innerHTML = `${ic("i-cpu","ic ic-sm")}
+    <span class="fm-banner__body"><strong>Compute environment detected.</strong>
+    NVIDIA RTX 4090 with CUDA 12.4, 24 GB VRAM. Fullmag will use the GPU backend by default.</span>
+    <span class="fm-banner__actions"><button class="fm-btn fm-btn--sm fm-btn--ghost">Change</button></span>`;
+  frag.appendChild(env);
+  return frag;
+}
+
+function renderLoading(){
+  const frag = document.createDocumentFragment();
+  const head = el("div","fm-page-head");
+  head.innerHTML = `<div class="fm-page-head__copy"><h1>Welcome back, Mateusz</h1>
+    <p>Scanning project locations…</p></div>`;
+  frag.appendChild(head);
+  const s = el("section","fm-section");
+  s.appendChild(sectionHead("Recent projects"));
+  const list = el("div","fm-list");
+  for(let i=0;i<6;i++){
+    const r = el("div","fm-row");
+    r.innerHTML = `
+      <span class="fm-row__thumb fm-skel"></span>
+      <span class="fm-row__main">
+        <span class="fm-skel" style="display:block;height:11px;width:${42+Math.round(Math.random()*34)}%;margin-bottom:6px"></span>
+        <span class="fm-skel" style="display:block;height:8px;width:${28+Math.round(Math.random()*26)}%"></span>
+      </span>
+      <span class="fm-skel" style="height:15px;width:36px"></span>
+      <span class="fm-skel" style="height:11px;width:64px"></span>
+      <span class="fm-skel" style="height:11px;width:50px"></span>
+      <span class="fm-skel" style="height:11px;width:62px"></span><span></span>`;
+    r.style.animationDelay = (i*60)+"ms";
+    list.appendChild(r);
+  }
+  s.appendChild(list);
+  frag.appendChild(s);
+  return frag;
+}
+
+function renderErrorState(){
+  const frag = document.createDocumentFragment();
+  const head = el("div","fm-page-head");
+  head.innerHTML = `<div class="fm-page-head__copy"><h1>Welcome back, Mateusz</h1>
+    <p>The recent-project index could not be read.</p></div>`;
+  frag.appendChild(head);
+  const b = el("div","fm-banner"); b.dataset.tone="danger";
+  b.innerHTML = `${ic("i-warn","ic ic-sm")}
+    <span class="fm-banner__body"><strong>recent-index.json is unreadable.</strong>
+    Parse error at line 1, column 1 — the file is empty or truncated. Your projects are not affected;
+    only the recent list is. Rebuilding scans the configured project locations.</span>
+    <span class="fm-banner__actions">
+      <button class="fm-btn fm-btn--sm fm-btn--primary">Rebuild index</button>
+      <button class="fm-btn fm-btn--sm">Show file</button>
+    </span>`;
+  frag.appendChild(b);
+  frag.appendChild(renderLaunchTiles());
+  const s = el("section","fm-section");
+  s.appendChild(sectionHead("Recent projects"));
+  s.appendChild(el("div","fm-empty",
+    `<span class="fm-empty__glyph" style="color:var(--fm-danger)">${ic("i-warn","ic ic-lg")}</span>
+     <h2>Recent list unavailable</h2>
+     <p>You can still open a project from disk while the index is rebuilt.</p>
+     <button class="fm-btn fm-btn--primary">${ic("i-folder","ic ic-sm")} Open project…</button>`));
+  frag.appendChild(s);
+  return frag;
+}
+
+/* ===========================================================================
+   CONTENT — OTHER SECTIONS
+   ======================================================================== */
+function renderTemplates(){
+  const frag = document.createDocumentFragment();
+  const head = el("div","fm-page-head");
+  head.innerHTML = `<div class="fm-page-head__copy"><h1>Templates</h1>
+    <p>Ready-made studies. Each one opens as a new project with geometry, materials and a configured solver.</p></div>`;
+  frag.appendChild(head);
+  const s = el("section","fm-section");
+  const g = el("div","fm-gallery");
+  TEMPLATES.forEach(t=>{
+    const c = el("button","fm-gcard");
+    c.innerHTML = `
+      <span class="fm-gcard__thumb"><img src="${THUMBS[t.thumb]}" alt=""></span>
+      <span class="fm-gcard__body">
+        <span class="fm-gcard__name">${t.name}</span>
+        <span class="fm-gcard__desc">${t.desc}</span>
+        <span class="fm-gcard__foot"><span class="fm-badge fm-badge--${t.solver.toLowerCase()}">${t.solver}</span><span style="margin-left:auto">${t.meta}</span></span>
+      </span>`;
+    g.appendChild(c);
+  });
+  s.appendChild(g); frag.appendChild(s);
+  return frag;
+}
+
+function renderImport(){
+  const frag = document.createDocumentFragment();
+  const head = el("div","fm-page-head");
+  head.innerHTML = `<div class="fm-page-head__copy"><h1>Import</h1>
+    <p>Fullmag reads models from the common micromagnetic packages. What cannot be mapped is reported before anything is written.</p></div>`;
+  frag.appendChild(head);
+  const s = el("section","fm-section");
+  const defs = [
+    {n:"OOMMF", e:".mif (1.1 / 2.0)", d:"Geometry, material regions and Oxs_ evolver settings map to an FDM problem. Custom Tcl blocks are reported, not executed.", t:"full"},
+    {n:"mumax³", e:".mx3", d:"Grid, regions, material parameters and the run script translate directly; ext_ functions are flagged for review.", t:"full"},
+    {n:"COMSOL", e:".mph", d:"Mesh and material assignments are imported into an FEM problem. Physics interfaces other than micromagnetics are skipped.", t:"partial"},
+    {n:"Fullmag archive", e:".fms", d:"A complete project, including results and run history. Older schema versions are migrated on open.", t:"full"},
+    {n:"Mesh / geometry", e:".stl · .vtk · .msh", d:"Geometry only — you pick materials and the solver afterwards.", t:"geometry"},
+    {n:"Field data", e:".ovf · .omf · .npy", d:"Load a magnetisation state as the initial condition of a new or existing problem.", t:"state"},
+  ];
+  const g = el("div","fm-gallery");
+  defs.forEach(d=>{
+    const c = el("button","fm-gcard");
+    c.innerHTML = `
+      <span class="fm-gcard__body" style="padding-top:var(--fm-space-3)">
+        <span class="fm-gcard__name">${d.n}</span>
+        <span class="fm-gcard__desc">${d.d}</span>
+        <span class="fm-gcard__foot"><span style="font-family:var(--fm-font-mono)">${d.e}</span><span style="margin-left:auto;text-transform:uppercase;letter-spacing:.04em">${d.t}</span></span>
+      </span>`;
+    g.appendChild(c);
+  });
+  s.appendChild(g);
+  const drop = el("div","fm-empty");
+  drop.style.cssText="border:1px dashed var(--fm-border-default);border-radius:var(--fm-radius-lg);margin-top:var(--fm-space-4);padding:var(--fm-space-8)";
+  drop.innerHTML = `<span class="fm-empty__glyph">${ic("i-import","ic ic-lg")}</span>
+    <h2>Drop a model file here</h2><p>Or browse for one. Nothing is converted until you confirm the import report.</p>
+    <button class="fm-btn fm-btn--primary">${ic("i-folder","ic ic-sm")} Choose file…</button>`;
+  s.appendChild(drop);
+  frag.appendChild(s);
+  return frag;
+}
+
+function renderLearn(){
+  const frag = document.createDocumentFragment();
+  const head = el("div","fm-page-head");
+  head.innerHTML = `<div class="fm-page-head__copy"><h1>Learn</h1>
+    <p>Documentation, release notes and the keyboard map — the things you look up rather than memorise.</p></div>`;
+  frag.appendChild(head);
+
+  const s1 = el("section","fm-section");
+  s1.appendChild(sectionHead("What's new in 0.9.3-beta"));
+  const notes = el("div","fm-panelbox");
+  notes.innerHTML = `
+    <div class="fm-timeline">
+      <div class="fm-tl" data-kind="edit"><div class="fm-tl__head"><span class="fm-tl__rev">0.9.3</span><span class="fm-tl__sum">Eigensolver dispersion fix</span><span class="fm-tl__when">28 Sep 2026</span></div>
+        <ul class="fm-tl__body"><li>Band ordering is now stable across k-points; degenerate pairs no longer swap.</li><li>Bloch-periodic FEM studies report gap widths directly.</li></ul></div>
+      <div class="fm-tl" data-kind="edit"><div class="fm-tl__head"><span class="fm-tl__rev">0.9.3</span><span class="fm-tl__sum">HSL sphere colouring corrected</span><span class="fm-tl__when">22 Sep 2026</span></div>
+        <ul class="fm-tl__body"><li>Hue now follows the in-plane angle continuously through ±π.</li><li>Poles render as true black/white instead of tinted grey.</li></ul></div>
+      <div class="fm-tl" data-kind="run"><div class="fm-tl__head"><span class="fm-tl__rev">0.9.2</span><span class="fm-tl__sum">Project archive format 1.2</span><span class="fm-tl__when">1 Sep 2026</span></div>
+        <ul class="fm-tl__body"><li>Run manifests are split per run id; history survives a rename.</li><li>Projects on 1.0 and 1.1 migrate on open.</li></ul></div>
+    </div>`;
+  s1.appendChild(notes); frag.appendChild(s1);
+
+  const s2 = el("section","fm-section");
+  s2.appendChild(sectionHead("Keyboard"));
+  const keys = el("div","fm-panelbox");
+  const K = [
+    ["Command search","Ctrl K"],["New FDM simulation","Ctrl N"],["New FEM simulation","Ctrl ⇧ N"],
+    ["Open project","Ctrl O"],["Open recent (quick switch)","Ctrl ⇧ O"],["Browse templates","Ctrl T"],
+    ["Import model","Ctrl I"],["Filter the recent list","/"],["Move through the list","↑ ↓"],
+    ["Open selected","Enter"],["Open a copy","Ctrl Enter"],["Toggle preview pane","Space"],
+    ["Pin / unpin","Ctrl P"],["Remove from recent","Del"],["Rail sections","Ctrl 1–4"],
+    ["Settings","Ctrl ,"],["Documentation","F1"],["Toggle theme","Ctrl ⇧ L"],
+  ];
+  keys.innerHTML = `<div class="fm-keys">${K.map(([n,k])=>
+    `<div class="fm-key"><span>${n}</span><span class="fm-key__kbd">${k.split(" ").map(x=>`<kbd>${x}</kbd>`).join("")}</span></div>`).join("")}</div>`;
+  s2.appendChild(keys); frag.appendChild(s2);
+
+  const s3 = el("section","fm-section");
+  s3.appendChild(sectionHead("Resources"));
+  const res = el("div","fm-about-grid");
+  [["Documentation","Model reference, solver options and the Python API.","i-book"],
+   ["Tutorials","Eight guided studies from a first relaxation to a full dispersion map.","i-learn"],
+   ["µMAG benchmarks","The standard problems with reference data shipped alongside.","i-flask"],
+   ["Report an issue","Bug reports and feature requests on the AG Magnonics tracker.","i-ext"]]
+   .forEach(([n,d,i])=>{
+    const b = el("button","fm-panelbox");
+    b.style.cssText="text-align:left;display:flex;gap:var(--fm-space-3);align-items:flex-start";
+    b.innerHTML = `<span style="color:var(--fm-accent);flex:none;margin-top:1px">${ic(i)}</span>
+      <span><span style="display:block;font-size:var(--fm-font-size-sm);font-weight:600;margin-bottom:3px">${n}</span>
+      <span style="display:block;font-size:var(--fm-font-size-xs);color:var(--fm-start-meta);line-height:1.5">${d}</span></span>`;
+    res.appendChild(b);
+  });
+  s3.appendChild(res); frag.appendChild(s3);
+  return frag;
+}
+
+function renderSettings(){
+  const frag = document.createDocumentFragment();
+  const head = el("div","fm-page-head");
+  head.innerHTML = `<div class="fm-page-head__copy"><h1>Settings</h1>
+    <p>What the start screen needs. Everything else lives in the full preferences dialog.</p></div>
+    <div class="fm-page-head__meta"><button class="fm-btn">${ic("i-settings","ic ic-sm")} All settings…</button></div>`;
+  frag.appendChild(head);
+
+  const mk = (title, rows) => {
+    const s = el("section","fm-section");
+    s.appendChild(sectionHead(title));
+    const box = el("div","fm-panelbox");
+    rows.forEach((r,i)=>{
+      const d = el("div","fm-setting");
+      if(i===rows.length-1) d.style.borderBottom="0";
+      d.innerHTML = `<div class="fm-setting__copy">
+          <div class="fm-setting__name">${r[0]}</div><div class="fm-setting__desc">${r[1]}</div></div>`;
+      if(r[2]==="switch"){ const sw=el("div","fm-switch"); sw.setAttribute("aria-checked", r[3]?"true":"false");
+        sw.onclick=()=>{sw.setAttribute("aria-checked", sw.getAttribute("aria-checked")==="true"?"false":"true");}; d.appendChild(sw); }
+      else { const b=el("button","fm-btn fm-btn--sm", r[3]); d.appendChild(b); }
+      box.appendChild(d);
+    });
+    s.appendChild(box); return s;
+  };
+
+  frag.appendChild(mk("Startup",[
+    ["Open the start screen on launch","When off, Fullmag reopens the last project directly.","switch",true],
+    ["Restore interrupted runs","Offer to resume a checkpointed run from the Continue card.","switch",true],
+    ["Scan locations on launch","Rebuild the recent index in the background at startup.","switch",true],
+  ]));
+  frag.appendChild(mk("Projects",[
+    ["Default project location","Where new projects are created.","btn","D:\\sim  ·  Change…"],
+    ["Scanned locations","Folders indexed for the recent list.","btn","3 folders  ·  Edit…"],
+    ["Recent list length","How many projects the start screen remembers.","btn","20 entries"],
+    ["Generate preview thumbnails","Render a thumbnail after each run. Costs a few hundred ms per run.","switch",true],
+  ]));
+  frag.appendChild(mk("Compute",[
+    ["Default backend","Used when a project does not pin a device.","btn","CUDA · RTX 4090"],
+    ["CPU thread count","Threads for the fallback backend.","btn","32"],
+    ["Warn before CPU fallback","Say so before a GPU study silently runs on the CPU.","switch",true],
+  ]));
+  frag.appendChild(mk("Appearance",[
+    ["Theme","Catppuccin Mocha or Latte; follows the OS by default.","btn","System"],
+    ["List density","Row height in the recent list.","btn","Comfortable"],
+    ["Reduce motion","Disable list stagger and progress animation.","switch",false],
+  ]));
+  return frag;
+}
+
+function renderAbout(){
+  const frag = document.createDocumentFragment();
+  const head = el("div","fm-page-head");
+  head.innerHTML = `<div class="fm-page-head__copy"><h1>About Fullmag</h1>
+    <p>Micromagnetic simulation for magnonics — finite-difference and finite-element, on one model.</p></div>`;
+  frag.appendChild(head);
+
+  const s = el("section","fm-section");
+  const g = el("div","fm-about-grid");
+
+  const build = el("div","fm-panelbox");
+  build.innerHTML = `<h3>Build</h3><dl class="fm-kv">
+    <dt>Version</dt><dd>0.9.3-beta</dd>
+    <dt>Commit</dt><dd>a1b2c3d</dd>
+    <dt>Built</dt><dd>28 Sep 2026</dd>
+    <dt>Channel</dt><dd class="fm-kv--ui">Beta</dd>
+    <dt>Archive</dt><dd>.fms schema 1.2</dd>
+    <dt>Platform</dt><dd>Windows 11 · x64</dd></dl>
+    <button class="fm-btn fm-btn--sm" style="margin-top:var(--fm-space-3);width:100%">${ic("i-copy","ic ic-sm")} Copy diagnostics</button>`;
+  g.appendChild(build);
+
+  const stack = el("div","fm-panelbox");
+  stack.innerHTML = `<h3>Runtime</h3><dl class="fm-kv">
+    <dt>Solver core</dt><dd>Rust 1.84 · rayon</dd>
+    <dt>GPU backend</dt><dd>CUDA 12.4 · cuFFT</dd>
+    <dt>Eigensolver</dt><dd>ARPACK 3.9</dd>
+    <dt>Mesher</dt><dd>Gmsh 4.13</dd>
+    <dt>Shell</dt><dd>Tauri 2 · Next.js 16</dd>
+    <dt>Python API</dt><dd>fullmag-py 0.9.3</dd></dl>
+    <button class="fm-btn fm-btn--sm" style="margin-top:var(--fm-space-3);width:100%">${ic("i-ext","ic ic-sm")} Third-party licences</button>`;
+  g.appendChild(stack);
+
+  const team = el("div","fm-panelbox");
+  team.innerHTML = `<h3>Team</h3>` + [MZ,AK,PG].map(a=>`
+    <div class="fm-author">
+      <span class="fm-avatar" style="background:${a.color}">${initials(a.name)}</span>
+      <span class="fm-author__copy"><span class="fm-author__name">${a.name}</span>
+      <span class="fm-author__sub">${a.aff}</span></span>
+    </div>`).join("") +
+    `<p style="font-size:var(--fm-font-size-xs);color:var(--fm-start-meta);line-height:1.6;margin:var(--fm-space-3) 0 0">
+      AG Magnonics, RPTU Kaiserslautern-Landau. Developed with support from the DFG.</p>`;
+  g.appendChild(team);
+
+  const cite = el("div","fm-panelbox");
+  cite.innerHTML = `<h3>Cite Fullmag</h3>
+    <div class="fm-cite"><pre>@software{fullmag2026,
+  title   = {Fullmag: unified FDM/FEM
+             micromagnetics for magnonics},
+  author  = {Zelent, M. and Krysztofik, A.
+             and Gruszecki, P.},
+  year    = {2026},
+  version = {0.9.3},
+  url     = {https://fullmag.org}
+}</pre></div>
+    <button class="fm-btn fm-btn--sm" style="margin-top:var(--fm-space-3);width:100%">${ic("i-copy","ic ic-sm")} Copy BibTeX</button>`;
+  g.appendChild(cite);
+
+  s.appendChild(g); frag.appendChild(s);
+  return frag;
+}
+
+/* ===========================================================================
+   INSPECTOR
+   ======================================================================== */
+function renderInspector(){
+  const host = $("#inspector");
+  host.innerHTML = "";
+
+  if(state.screen!=="loaded" || state.section!=="home"){
+    const hint = {
+      templates:["Pick a template","Select a template to see its model, the expected runtime and the reference it reproduces."],
+      import:   ["Nothing staged","Choose a file and Fullmag reports what maps cleanly and what needs a decision before anything is written."],
+      learn:    ["Learn","Release notes, the keyboard map and links to the documentation."],
+      settings: ["Settings","Changes apply immediately. The full preferences dialog has the rest."],
+      about:    ["About","Build, runtime and citation information."],
+      home:     ["No project selected","Select a project in the list to see its model, authors, history and runs."],
+    }[state.section] || ["No project selected",""];
+    const empty = el("div","fm-empty");
+    empty.style.margin="auto";
+    empty.innerHTML = `<span class="fm-empty__glyph">${ic("i-box","ic ic-lg")}</span>
+      <h2 style="font-size:var(--fm-font-size-sm)">${hint[0]}</h2><p style="font-size:var(--fm-font-size-xs)">${hint[1]}</p>`;
+    host.appendChild(empty);
+    return;
+  }
+
+  const p = byId(state.selected);
+  if(!p){ host.innerHTML=""; return; }
+  const st = STATUS[p.status];
+
+  const scroll = el("div","fm-inspector__scroll");
+
+  // Preview
+  const prev = el("div","fm-preview");
+  prev.innerHTML = `<img src="${THUMBS[p.thumb]}" alt="Last result of ${p.name}">
+    <span class="fm-preview__tag">last result</span>
+    <div class="fm-preview__overlay">
+      <button class="fm-iconbtn" style="color:#fff">${ic("i-play","ic ic-sm")}</button>
+      <div class="fm-preview__scrub"></div>
+      <span class="fm-preview__frame">${p.outputs.frames?`272 / ${p.outputs.frames}`:"no frames"}</span>
+    </div>`;
+  scroll.appendChild(prev);
+
+  // Head
+  const head = el("div","fm-inspector__head");
+  head.innerHTML = `
+    <div class="fm-inspector__title">
+      <h2>${p.name}</h2>
+      <div class="fm-inspector__title-actions">
+        <button class="fm-iconbtn" aria-label="Pin" style="${p.pinned?"color:var(--fm-chart-yellow)":""}">${ic("i-star","ic ic-sm")}</button>
+        <button class="fm-iconbtn" aria-label="More actions">${ic("i-more","ic ic-sm")}</button>
+      </div>
+    </div>
+    <div class="fm-inspector__path">${ic("i-folder","ic ic-sm")}<span>${p.path}</span>
+      <button class="fm-iconbtn" aria-label="Copy path" style="width:20px;height:20px">${ic("i-copy","ic ic-sm")}</button></div>
+    <div class="fm-inspector__chips">
+      <span class="fm-badge fm-badge--${p.solver.toLowerCase()}">${p.solver}</span>
+      <span class="fm-pill" data-status="${p.status}"><span class="fm-pill__dot"></span>${st.label}</span>
+      <span class="fm-tag">rev ${p.revision}</span>
+      <span class="fm-tag">schema ${p.schema}</span>
+      ${p.tags.map(t=>`<span class="fm-tag">#${t}</span>`).join("")}
+    </div>`;
+  scroll.appendChild(head);
+
+  // Context banners
+  if(p.status==="failed"){
+    const b=el("div","fm-banner"); b.dataset.tone="danger"; b.style.margin="0 var(--fm-space-3) var(--fm-space-2)";
+    b.innerHTML = `${ic("i-warn","ic ic-sm")}<span class="fm-banner__body"><strong>Last run failed.</strong> ${p.error}</span>`;
+    scroll.appendChild(b);
+  }
+  if(p.status==="migrate"){
+    const b=el("div","fm-banner"); b.dataset.tone="warning"; b.style.margin="0 var(--fm-space-3) var(--fm-space-2)";
+    b.innerHTML = `${ic("i-refresh","ic ic-sm")}<span class="fm-banner__body">
+      <strong>Archive schema ${p.migrate.from} → ${p.migrate.to}.</strong>
+      Opening migrates a copy; the original file is left untouched.
+      <span style="display:block;margin-top:4px;color:var(--fm-start-meta)">${p.migrate.steps.join(" · ")}</span></span>`;
+    scroll.appendChild(b);
+  }
+  if(p.mode==="read_only"){
+    const b=el("div","fm-banner"); b.dataset.tone="info"; b.style.margin="0 var(--fm-space-3) var(--fm-space-2)";
+    b.innerHTML = `${ic("i-link","ic ic-sm")}<span class="fm-banner__body"><strong>Read-only.</strong> ${p.readonlyReason}</span>`;
+    scroll.appendChild(b);
+  }
+  if(p.status==="running"){
+    const b=el("div","fm-banner"); b.dataset.tone="warning"; b.style.margin="0 var(--fm-space-3) var(--fm-space-2)";
+    b.innerHTML = `${ic("i-activity","ic ic-sm")}<span class="fm-banner__body"><strong>Run in progress — ${p.progress.pct}%.</strong>
+      t = ${p.progress.t} of ${p.progress.of} on ${p.progress.device}; ${p.progress.eta} remaining.</span>`;
+    scroll.appendChild(b);
+  }
+
+  // Tabs
+  const TABS=[["overview","Overview","i-box"],["authors","Authors","i-users"],["history","History","i-history"],["runs","Runs","i-activity"]];
+  const tabs = el("div","fm-tabs");
+  TABS.forEach(([id,label])=>{
+    const b = el("button",null,label);
+    b.setAttribute("role","tab");
+    b.setAttribute("aria-selected", String(state.tab===id));
+    b.onclick=()=>{state.tab=id; renderInspector();};
+    tabs.appendChild(b);
+  });
+  scroll.appendChild(tabs);
+
+  const panel = el("div","fm-tabpanel");
+  panel.setAttribute("role","tabpanel");
+
+  if(state.tab==="overview"){
+    const m=p.model, o=p.outputs;
+    panel.innerHTML = `<dl class="fm-kv">
+      <div class="fm-kv__group">Model</div>
+      <dt>Discretisation</dt><dd>${m.grid}</dd>
+      <dt>Cell / h<sub>max</sub></dt><dd>${m.cell}</dd>
+      <dt>Periodicity</dt><dd>${m.pbc}</dd>
+      <dt>Material</dt><dd class="fm-kv--ui">${m.material}</dd>
+      <dt>M<sub>s</sub></dt><dd>${m.ms}</dd>
+      <dt>A<sub>ex</sub></dt><dd>${m.aex}</dd>
+      <dt>α</dt><dd>${m.alpha}</dd>
+      <dt>Interactions</dt><dd class="fm-kv--ui"><span class="fm-chiplist">${m.interactions.map(i=>`<span class="fm-tag">${i}</span>`).join("")}</span></dd>
+      <div class="fm-kv__group">Execution</div>
+      <dt>Integrator</dt><dd>${m.integrator}</dd>
+      <dt>Tolerance</dt><dd>${m.tol}</dd>
+      <dt>Excitation</dt><dd class="fm-kv--ui">${m.excitation}</dd>
+      <div class="fm-kv__group">Outputs</div>
+      <dt>Frames</dt><dd>${o.frames||"—"}</dd>
+      <dt>Fields</dt><dd class="fm-kv--ui">${o.fields.length?o.fields.join(", "):"—"}</dd>
+      <dt>On disk</dt><dd>${o.size}</dd>
+      <div class="fm-kv__group">Provenance</div>
+      <dt>Created</dt><dd class="fm-kv--ui">${p.created}</dd>
+      <dt>Modified</dt><dd class="fm-kv--ui">${p.modified}</dd>
+      <dt>Revision</dt><dd>${p.revision}</dd>
+      <dt>Made with</dt><dd>Fullmag ${p.appVersion}</dd>
+      <dt>Archive</dt><dd>.fms schema ${p.schema}</dd>
+    </dl>`;
+  }
+
+  if(state.tab==="authors"){
+    panel.innerHTML = p.authors.map(a=>`
+      <div class="fm-author">
+        <span class="fm-avatar" style="background:${a.color}">${initials(a.name)}</span>
+        <span class="fm-author__copy">
+          <span class="fm-author__name">${a.name}</span>
+          <span class="fm-author__sub">${a.aff}</span>
+          ${a.orcid?`<span class="fm-author__sub" style="font-family:var(--fm-font-mono)">ORCID ${a.orcid}</span>`:""}
+        </span>
+        <span class="fm-author__role">${a.role}</span>
+      </div>`).join("");
+    const bib = `@dataset{${p.id.replace(/-/g,"")}2026,
+  title   = {${p.name}},
+  author  = {${p.authors.map(a=>a.name.split(" ").reverse().join(", ")).join(" and ")}},
+  year    = {2026},
+  version = {rev ${p.revision}}${p.doi?`,\n  doi     = {${p.doi}}`:""}
+}`;
+    panel.insertAdjacentHTML("beforeend",
+      `<div class="fm-cite"><pre>${bib}</pre></div>
+       <div style="display:flex;gap:var(--fm-space-2);margin-top:var(--fm-space-2)">
+         <button class="fm-btn fm-btn--sm" style="flex:1">${ic("i-copy","ic ic-sm")} Copy BibTeX</button>
+         ${p.doi?`<button class="fm-btn fm-btn--sm">${ic("i-ext","ic ic-sm")} DOI</button>`:""}
+       </div>`);
+  }
+
+  if(state.tab==="history"){
+    panel.innerHTML = `<div class="fm-timeline">${p.history.map(h=>`
+      <div class="fm-tl" data-kind="${h.kind}">
+        <div class="fm-tl__head">
+          <span class="fm-tl__rev">r${h.rev}</span>
+          <span class="fm-tl__sum">${h.sum}</span>
+          <span class="fm-tl__when">${h.when} · ${h.who}</span>
+        </div>
+        ${h.body.length?`<ul class="fm-tl__body">${h.body.map(x=>`<li>${x}</li>`).join("")}</ul>`:""}
+      </div>`).join("")}</div>
+      <button class="fm-btn fm-btn--sm" style="width:100%;margin-top:var(--fm-space-2)">${ic("i-history","ic ic-sm")} Full history (${p.revision} revisions)</button>`;
+  }
+
+  if(state.tab==="runs"){
+    panel.innerHTML = p.runs.length
+      ? `<table class="fm-table"><thead><tr><th>Run</th><th>Started</th><th>Duration</th><th>Output</th></tr></thead>
+         <tbody>${p.runs.map(r=>`<tr>
+            <td><span class="fm-pill" data-status="${r.status}" style="gap:4px"><span class="fm-pill__dot"></span>${r.id}</span></td>
+            <td>${r.when}</td><td>${r.dur}</td><td>${r.out}</td></tr>`).join("")}</tbody></table>
+         <div style="display:flex;gap:var(--fm-space-2);margin-top:var(--fm-space-3)">
+           <button class="fm-btn fm-btn--sm" style="flex:1">${ic("i-activity","ic ic-sm")} Open results viewer</button>
+           <button class="fm-btn fm-btn--sm">${ic("i-download","ic ic-sm")}</button>
+         </div>`
+      : `<div class="fm-empty" style="padding:var(--fm-space-6) 0">
+           <span class="fm-empty__glyph">${ic("i-activity","ic ic-lg")}</span>
+           <h2 style="font-size:var(--fm-font-size-sm)">No runs yet</h2>
+           <p style="font-size:var(--fm-font-size-xs)">This project has a model but no study has been executed.</p></div>`;
+  }
+
+  scroll.appendChild(panel);
+  host.appendChild(scroll);
+
+  const foot = el("div","fm-inspector__foot");
+  const primary = p.status==="migrate" ? "Migrate &amp; open" : p.status==="running" ? "Open running project" : "Open project";
+  foot.innerHTML = `
+    <div class="fm-btn-group">
+      <button class="fm-btn fm-btn--primary">${primary}</button>
+      <button class="fm-btn fm-btn--primary fm-btn--split" aria-label="More open options">${ic("i-chev-d","ic ic-sm")}</button>
+    </div>
+    <button class="fm-btn" aria-label="Reveal in file manager">${ic("i-ext","ic ic-sm")}</button>`;
+  host.appendChild(foot);
+}
+
+/* ===========================================================================
+   RENDER
+   ======================================================================== */
+function render(){
+  document.documentElement.dataset.theme = state.theme;
+  $("#hdr-theme").innerHTML = ic(state.theme==="dark"?"i-moon":"i-sun","ic ic-sm");
+  renderRail();
+
+  const inner = $("#content-inner");
+  inner.innerHTML = "";
+  if(state.section==="home"){
+    if(state.screen==="loaded")      inner.appendChild(renderHome());
+    else if(state.screen==="first-run") inner.appendChild(renderFirstRun());
+    else if(state.screen==="loading")   inner.appendChild(renderLoading());
+    else                                inner.appendChild(renderErrorState());
+  }
+  else if(state.section==="templates") inner.appendChild(renderTemplates());
+  else if(state.section==="import")    inner.appendChild(renderImport());
+  else if(state.section==="learn")     inner.appendChild(renderLearn());
+  else if(state.section==="settings")  inner.appendChild(renderSettings());
+  else                                 inner.appendChild(renderAbout());
+
+  renderInspector();
+
+  const q = $("#q");
+  if(q){
+    q.oninput = e=>{state.query=e.target.value; render(); const n=$("#q"); if(n){n.focus(); n.setSelectionRange(n.value.length,n.value.length);} };
+    $("#filters").querySelectorAll("button").forEach(b=>b.onclick=()=>{state.filter=b.dataset.f; render();});
+    $("#views").querySelectorAll("button").forEach(b=>b.onclick=()=>{state.view=b.dataset.v; render();});
+  }
+
+  const shown = state.screen==="loaded" ? filteredProjects().length : 0;
+  $("#st-count").textContent = state.screen==="loaded" ? `${PROJECTS.length} projects indexed` : "index unavailable";
+  $("#hdr-session").textContent = state.screen==="loaded" ? "No active session · 1 run paused" : "No active session";
+}
+
+/* Mockup controls */
+$("#mk-theme").onchange = e=>{state.theme=e.target.value; render();};
+$("#mk-state").onchange = e=>{state.screen=e.target.value; state.section="home"; $("#mk-sec").value="home"; render();};
+$("#mk-sec").onchange   = e=>{state.section=e.target.value; render();};
+$("#mk-toggle").onclick = ()=>{
+  const off = document.body.dataset.mk==="off";
+  document.body.dataset.mk = off?"":"off";
+  $("#mk-toggle").textContent = off?"Hide":"Show";
+};
+$("#hdr-theme").onclick = ()=>{state.theme = state.theme==="dark"?"light":"dark"; $("#mk-theme").value=state.theme; render();};
+
+/* Brand mark */
+const MARK = `<svg viewBox="0 0 32 32" style="width:100%;height:100%;display:block" aria-hidden="true">
+  <defs>
+    <linearGradient id="fmA" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="var(--fm-chart-sky)"/><stop offset="1" stop-color="var(--fm-accent)"/>
+    </linearGradient>
+    <linearGradient id="fmB" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="var(--fm-accent-strong)"/><stop offset="1" stop-color="var(--fm-chart-pink)"/>
+    </linearGradient>
+  </defs>
+  <rect width="32" height="32" rx="7" fill="var(--fm-bg-viewport)"/>
+  <circle cx="12.6" cy="16" r="6" fill="none" stroke="url(#fmA)" stroke-width="4.2"/>
+  <circle cx="19.4" cy="16" r="6" fill="none" stroke="url(#fmB)" stroke-width="4.2"/>
+  <path d="M14.4 10.3A6 6 0 0 1 18.3 14.2" fill="none" stroke="url(#fmA)" stroke-width="4.2"/>
+</svg>`;
+$("#brand-logo").innerHTML = MARK;
+$("#rail-logo").innerHTML  = MARK;
+
+render();
+</script>
+</body>
+</html>
