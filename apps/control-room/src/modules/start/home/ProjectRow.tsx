@@ -5,7 +5,7 @@ import { memo, type MouseEvent } from "react";
 
 import { cn } from "@/shared/utils/className";
 
-import { formatBytes, formatOpened } from "../model/recentIndex";
+import { formatBytes, formatOpened, shortenPath } from "../model/recentIndex";
 import type { RecentEntry } from "../model/types";
 import { SolverBadge } from "../ui/SolverBadge";
 import { StatusPill } from "../ui/StatusPill";
@@ -50,24 +50,28 @@ function ProjectRowImpl({
             <Link2 aria-label="Read-only" className="fm-start-row__ro" size={12} />
           ) : null}
         </span>
-        {/* direction: rtl ellipsises from the left so the file name survives. */}
+        {/* Shortened in code rather than with direction: rtl, which reorders the
+            backslashes of a Windows path. The full path stays in the tooltip. */}
         <span className="fm-start-row__path" title={entry.path}>
-          {entry.path}
+          {shortenPath(entry.path, 4)}
         </span>
       </span>
       <SolverBadge solver={entry.solver} />
       <StatusPill status={entry.status} />
       <span className="fm-start-row__size">{formatBytes(entry.sizeBytes)}</span>
       <span className="fm-start-row__opened">{formatOpened(entry.lastOpenedAt)}</span>
+      {/* A pointer shortcut only: inside an option it must not be a second
+          focus stop, and the keyboard path is Ctrl+P on the list. */}
       <button
-        aria-label={entry.pinned ? `Unpin ${entry.name}` : `Pin ${entry.name}`}
-        aria-pressed={entry.pinned ?? false}
+        aria-hidden="true"
         className="fm-start-row__pin"
+        data-pinned={entry.pinned ? "true" : "false"}
         onClick={(event) => {
           event.stopPropagation();
           onTogglePin(entry.projectId, !entry.pinned);
         }}
         tabIndex={-1}
+        title={entry.pinned ? "Unpin (Ctrl+P)" : "Pin (Ctrl+P)"}
         type="button"
       >
         <Star aria-hidden="true" fill={entry.pinned ? "currentColor" : "none"} size={14} />

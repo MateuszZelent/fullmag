@@ -772,10 +772,8 @@
 .fm-start-row__path {
   overflow: hidden;
   color: var(--fm-start-meta);
-  direction: rtl;
   font-family: var(--fm-font-mono);
   font-size: var(--fm-font-size-2xs);
-  text-align: left;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -804,12 +802,12 @@
 
 .fm-start-row:hover .fm-start-row__pin,
 .fm-start-row--selected .fm-start-row__pin,
-.fm-start-row__pin[aria-pressed="true"],
+.fm-start-row__pin[data-pinned="true"],
 .fm-start-row__pin:focus-visible {
   opacity: 1;
 }
 
-.fm-start-row__pin[aria-pressed="true"] {
+.fm-start-row__pin[data-pinned="true"] {
   color: var(--fm-warning);
 }
 
