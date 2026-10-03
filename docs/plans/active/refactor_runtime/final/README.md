@@ -1,5 +1,11 @@
 # Fullmag — finalny audyt i plan refaktoryzacji
 
+Checkpoint P8-44/45: [audyt siedmiu zakończonych execution](p8/44-execution-cleanup-proposal.md)
+i [natywny Windows fixture usuwania samych linków](p8/45-windows-reparse-unlink-fixture.md).
+18 662 cele linków zbadane; dokładne tagi junction/Windows/LX przeszły fixture
+z zachowaniem celów. Niczego z jobów nie usunięto, bramka retencji pozostaje;
+produkcyjny cleanup i build 218 nadal otwarte.
+
 Checkpoint B-04: [właściciel pola wymiany FDM CPU](b/04-fdm-cpu-exchange-owner.md).
 Cztery sygnatury i ciała zachowane; source comparison/Rustfmt/review PASS.
 Przyrost jest późniejszy niż źródło queued buildu 218; runtime i kwalifikacja

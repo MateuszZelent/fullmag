@@ -1,5 +1,12 @@
 # Status realizacji całego planu refaktoryzacji
 
+Checkpoint P8-45, 03.10.2026: natywny Windows fixture potwierdził usunięcie
+samych wpisów junction, Windows symlink i dokładnego WSL/LX tagu,
+z zachowaniem celów. Finalny przebieg PASS/exit 0, bez Docker/WSL
+i bez kompilacji unit tests. [Dowód i ograniczenia](p8/45-windows-reparse-unlink-fixture.md).
+To nie kwalifikuje cleanupu jobów; bramka retencji i wymóg osobnej zgody
+pozostają. Build 218 nadal waiting_for_disk; procenty bez awansu.
+
 Checkpoint B-04, 03.10.2026: cztery istniejące metody exchange Rust FDM CPU
 wydzielono do `fields/exchange.rs`. Sygnatury i ciała identyczne z bazą;
 source comparison, Rustfmt i niezależny review PASS. Obcy reflow rodzica
