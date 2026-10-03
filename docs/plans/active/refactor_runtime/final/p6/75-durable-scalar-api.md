@@ -57,3 +57,20 @@ Results Explorer ani bezpośredniego fetch w komponencie.
 
 Checklistę integracji i odbioru istniejącego panelu zawiera
 [P6-76](76-scalar-frontend-integration-checklist.md).
+
+### Aktualizacja środowiska buildu — 03.10.2026
+
+Build 214 zakończył się `failed`, exit 2, przed kompilacją: brak nightly
+w mapowanym `cache/windows/fdm-cpu/rustup`. Cache FEM CPU ma osobne istniejące
+narzędzia i nie był zmieniany. Uzupełniono wyłącznie FDM CPU przez jawny
+provisioning w przypiętym obrazie workera
+`sha256:8a508319a68c4116da81b745fdd1b084015b665d92b36b2241e1e245b5febf89`,
+z użytkownikiem `65532:65532`; nie uruchamiano ciężkiego buildu poza kolejką.
+Instalacja minimalnego nightly zakończyła się exit 0. Osobny odczyt
+`rustup run nightly rustc --version` z mountem cache readonly: exit 0,
+`rustc 1.101.0-nightly (0abfedbc7 2026-10-02)`.
+
+Build 215 został automatycznie uruchomiony przez istniejący koordynator;
+ostatni odczyt: `running`, bez terminalnego exit code. Nie anulowano,
+nie restartowano i nie powielano tego zadania. Kontrola toolchaina dowodzi
+wyłącznie dostępności kompilatora, nie sukcesu builda ani Windows runtime.
