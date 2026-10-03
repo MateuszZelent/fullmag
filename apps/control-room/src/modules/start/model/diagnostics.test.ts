@@ -8,6 +8,7 @@ const base = {
   userAgent: "UA",
   locale: "pl-PL",
   now: new Date("2026-10-03T12:00:00Z"),
+  build: null,
 };
 
 describe("buildDiagnostics", () => {
@@ -17,6 +18,16 @@ describe("buildDiagnostics", () => {
     expect(text).toContain("Recent index: unavailable");
     expect(text).toContain("Compute: not probed (no host support)");
     expect(text).toContain("Build: not exposed to the renderer");
+  });
+
+  it("reports the host build when there is one", () => {
+    const text = buildDiagnostics({
+      ...base,
+      build: { version: "0.1.0", os: "windows", arch: "x86_64", profile: "release", projectSchema: "s" },
+      index: { kind: "empty" },
+      compute: null,
+    });
+    expect(text).toContain("Build: 0.1.0 (release), windows/x86_64, project schema s");
   });
 
   it("includes index size and the GPU", () => {
