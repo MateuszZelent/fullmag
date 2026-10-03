@@ -1,28 +1,37 @@
+import { cva } from "class-variance-authority";
 import type { ComponentPropsWithoutRef } from "react";
 
 import { cn } from "@/shared/utils/className";
 
 import type { SolverKind } from "../model/types";
 
+const solverBadgeVariants = cva("fm-start-badge", {
+  variants: {
+    solver: {
+      FDM: "fm-start-badge--fdm",
+      FEM: "fm-start-badge--fem",
+    },
+  },
+  defaultVariants: { solver: "FDM" },
+});
+
+const SOLVER_TITLE: Readonly<Record<SolverKind, string>> = {
+  FDM: "Finite difference",
+  FEM: "Finite element",
+};
+
 export interface SolverBadgeProps
   extends Omit<ComponentPropsWithoutRef<"span">, "children"> {
   readonly solver: SolverKind;
 }
 
-/** Prints FDM / FEM — the hue is never the only carrier. */
+/** Prints the solver name so the badge survives without its colour. */
 export function SolverBadge({ className, solver, ...props }: SolverBadgeProps) {
   return (
     <span
-      className={cn(
-        "inline-flex items-center whitespace-nowrap rounded-fm-xs border px-1.5 py-px",
-        "font-fm-ui text-fm-2xs font-semibold uppercase tracking-wider",
-        solver === "FDM"
-          ? "border-fm-solver-fdm text-fm-solver-fdm-text"
-          : "border-fm-solver-fem text-fm-solver-fem-text",
-        className,
-      )}
+      className={cn(solverBadgeVariants({ solver }), className)}
       data-slot="solver-badge"
-      title={solver === "FDM" ? "Finite difference" : "Finite element"}
+      title={SOLVER_TITLE[solver]}
       {...props}
     >
       {solver}

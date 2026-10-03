@@ -1,57 +1,154 @@
-import type { CommandContribution } from "@/kernel/commands/commandTypes";
+import type {
+  CommandContext,
+  CommandContribution,
+  CommandResult,
+} from "@/kernel/commands/commandTypes";
 
-import { setStartSection } from "./startScreenState";
-import type { StartSection } from "./types";
+import {
+  startScreenStore,
+  type StartScreenHost,
+  type StartSection,
+} from "./startScreenState";
+import type { SolverKind } from "./types";
 
-function sectionCommand(
-  section: Exclude<StartSection, "settings" | "about">,
+const NOT_SHOWING = "The start screen is not showing.";
+
+interface StartAction {
+  readonly target: string;
+  readonly input: unknown;
+  readonly createsProblem: boolean;
+}
+
+/** Start actions delegate to existing workspace commands; they never fork them. */
+const START_ACTIONS: Readonly<Record<string, StartAction>> = {
+  "start.new-fdm": {
+    target: "workspace.new-problem",
+    input: { solver: "FDM" satisfies SolverKind },
+    createsProblem: true,
+  },
+  "start.new-fem": {
+    target: "workspace.new-problem",
+    input: { solver: "FEM" satisfies SolverKind },
+    createsProblem: true,
+  },
+  "start.browse": {
+    target: "workspace.open-project",
+    input: undefined,
+    createsProblem: false,
+  },
+};
+
+/**
+ * Shared by the commands (reading the attached host) and by the tiles, which
+ * pass their own host so the very first paint already shows real enablement.
+ */
+export function startActionDisabledReason(
+  commandId: string,
+  host: StartScreenHost | null,
+  context: CommandContext,
+): string | null {
+  if (!host) return NOT_SHOWING;
+  const action = START_ACTIONS[commandId];
+  if (!action) return null;
+  if (action.createsProblem && host.createProblemDisabledReason) {
+    return host.createProblemDisabledReason;
+  }
+  if (host.isEnabled(action.target, context)) return null;
+  return host.disabledReason(action.target, context) ?? "This action is unavailable right now.";
+}
+
+function navigationCommand(
+  id: string,
   title: string,
-  shortcut: string,
+  section: StartSection,
+  shortcut?: string,
 ): CommandContribution {
+  const reason = () => (startScreenStore.getSnapshot().host ? null : NOT_SHOWING);
   return {
-    id: `start.section.${section}`,
-    title: `Start: ${title}`,
-    group: "workspace",
+    id,
+    title,
+    group: "start-navigation",
     category: "Start",
-    scope: "global",
+    // Workspace scope outranks the global File shortcuts (Ctrl+N/O, Ctrl+Shift+N)
+    // only while these commands are enabled, which is only on the start screen.
+    scope: "workspace",
     shortcut,
+    isEnabled: () => reason() === null,
+    disabledReason: reason,
     run: () => {
-      setStartSection(section);
+      const blocked = reason();
+      if (blocked) return { message: blocked, status: "failed" };
+      startScreenStore.setSection(section);
       return { status: "completed" };
     },
   };
 }
 
-/**
- * Commands owned by the start screen. New/Open reuse the existing
- * workspace.new-problem / workspace.open-project commands (and their
- * Ctrl+N / Ctrl+O shortcuts) rather than duplicating them.
- */
-export const START_COMMANDS: CommandContribution[] = [
-  sectionCommand("home", "Home", "Ctrl+1"),
-  sectionCommand("templates", "Templates", "Ctrl+2"),
-  sectionCommand("import", "Import", "Ctrl+3"),
-  sectionCommand("learn", "Learn", "Ctrl+4"),
-  {
-    id: "start.new-fdm",
-    title: "New FDM Simulation",
-    group: "workspace",
+function actionCommand(id: string, title: string, shortcut: string): CommandContribution {
+  const action = START_ACTIONS[id];
+  if (!action) throw new Error(`Unknown start action ${id}.`);
+  const reason = (context: CommandContext) =>
+    startActionDisabledReason(id, startScreenStore.getSnapshot().host, context);
+  return {
+    id,
+    title,
+    group: "start-actions",
     category: "Start",
-    scope: "global",
-    run: (ctx) => {
-      ctx.bus?.emit("workspace:new-problem-requested", { source: "workspace" });
+    scope: "workspace",
+    shortcut,
+    isEnabled: (context) => reason(context) === null,
+    disabledReason: reason,
+    run: (context): CommandResult | Promise<CommandResult> => {
+      const host = startScreenStore.getSnapshot().host;
+      const blocked = reason(context);
+      if (!host || blocked) return { message: blocked ?? NOT_SHOWING, status: "failed" };
+      return host.execute(action.target, { ...context, input: action.input });
+    },
+  };
+}
+
+function listCommand(
+  id: string,
+  title: string,
+  run: () => void,
+  shortcut?: string,
+): CommandContribution {
+  // These act on the recent list, which exists only on the Home section.
+  const reason = () => {
+    const snapshot = startScreenStore.getSnapshot();
+    if (!snapshot.host) return NOT_SHOWING;
+    return snapshot.section === "home" ? null : "Open the Home section first.";
+  };
+  return {
+    id,
+    title,
+    group: "start-list",
+    category: "Start",
+    scope: "workspace",
+    shortcut,
+    isEnabled: () => reason() === null,
+    disabledReason: reason,
+    run: () => {
+      const blocked = reason();
+      if (blocked) return { message: blocked, status: "failed" };
+      run();
       return { status: "completed" };
     },
-  },
-  {
-    id: "start.new-fem",
-    title: "New FEM Simulation",
-    group: "workspace",
-    category: "Start",
-    scope: "global",
-    run: (ctx) => {
-      ctx.bus?.emit("workspace:new-problem-requested", { source: "workspace" });
-      return { status: "completed" };
-    },
-  },
+  };
+}
+
+export const START_COMMANDS: readonly CommandContribution[] = [
+  navigationCommand("start.section.home", "Start: Home", "home", "Ctrl+1"),
+  navigationCommand("start.section.templates", "Start: Templates", "templates", "Ctrl+2"),
+  navigationCommand("start.section.import", "Start: Import", "import", "Ctrl+3"),
+  navigationCommand("start.section.learn", "Start: Learn", "learn", "Ctrl+4"),
+  navigationCommand("start.section.settings", "Start: Settings", "settings", "Ctrl+,"),
+  navigationCommand("start.section.about", "Start: About", "about"),
+  navigationCommand("start.templates", "Browse templates", "templates", "Ctrl+T"),
+  navigationCommand("start.import", "Import model", "import", "Ctrl+I"),
+  actionCommand("start.new-fdm", "New FDM simulation", "Ctrl+N"),
+  actionCommand("start.new-fem", "New FEM simulation", "Ctrl+Shift+N"),
+  actionCommand("start.browse", "Open project…", "Ctrl+O"),
+  listCommand("start.search", "Search recent projects", () => startScreenStore.requestSearchFocus()),
+  listCommand("start.rebuild-index", "Rebuild project index", () => startScreenStore.requestRebuild()),
 ];

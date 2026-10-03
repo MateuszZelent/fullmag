@@ -1,9 +1,7 @@
 /**
- * Types for the start screen, mirroring schema/recent-index.schema.json and
- * schema/project-manifest.schema.json.
- *
- * Reference implementation — intended to live at
- * apps/control-room/src/modules/start/model/types.ts
+ * Start screen types, mirroring docs/design/start-screen/schema/*.schema.json.
+ * Only the shapes the shipped steps render are ported; the recent index and
+ * manifest provenance types arrive with the steps that consume them.
  */
 
 export type SolverKind = "FDM" | "FEM";
@@ -17,6 +15,27 @@ export type ProjectStatus =
   | "missing"
   | "readonly";
 
+export interface GpuInfo {
+  readonly name: string;
+  readonly cudaVersion?: string;
+  readonly vramTotalBytes: number;
+  readonly vramFreeBytes: number;
+  readonly busyWithRun?: string;
+}
+
+export interface ComputeEnvironment {
+  readonly gpus: readonly GpuInfo[];
+  readonly cpuThreads: number;
+  readonly preferredBackend: "cuda" | "cpu";
+  readonly warnings: readonly string[];
+}
+
+/**
+ * `undefined` while a probe is in flight, `null` when this host cannot probe
+ * at all (the browser build, or a desktop host without `compute_probe`).
+ */
+export type ComputeProbeState = ComputeEnvironment | null | undefined;
+
 export type DocumentMode = "read_write" | "read_only";
 
 export type AuthorRole = "creator" | "contributor" | "maintainer";
@@ -29,8 +48,7 @@ export interface Author {
   readonly role: AuthorRole;
 }
 
-/** Denormalised model facts, written on save so the inspector renders without
- *  opening the archive. Treated as a hint: opening re-reads the manifest. */
+/** Denormalised model facts written on save; a hint, re-read on open. */
 export interface ModelSummary {
   readonly discretisation?: string;
   readonly cellSize?: string;
@@ -77,7 +95,7 @@ export interface RunProgress {
   readonly simTimeTotalS?: number;
   readonly framesWritten?: number;
   readonly framesTotal?: number;
-  /** null when no meaningful estimate exists — render nothing, not a guess. */
+  /** null when no meaningful estimate exists: render nothing, not a guess. */
   readonly etaSeconds?: number | null;
 }
 
@@ -87,7 +105,7 @@ export interface ContinueSession {
   readonly checkpointAt: string;
   readonly device?: string;
   readonly progress: RunProgress;
-  /** Computed on THIS machine (build + device), never copied from the file. */
+  /** Computed on this machine, never copied from the file. */
   readonly resumable: boolean;
   readonly notResumableReason?: string;
 }
@@ -107,84 +125,17 @@ export interface RecentIndex {
   readonly entries: readonly RecentEntry[];
 }
 
-/** The index is derived state; any of these is recoverable by rescanning. */
+/**
+ * The index is derived state: every failure here is recoverable by rescanning
+ * and none of them may disable creating or opening a project.
+ */
 export type RecentIndexState =
   | { readonly kind: "loading" }
   | { readonly kind: "ready"; readonly index: RecentIndex }
   | { readonly kind: "empty" }
+  | { readonly kind: "unavailable" }
   | { readonly kind: "error"; readonly message: string };
-
-/* ── History & runs (from the project manifest) ─────────────────────────── */
-
-export type HistoryKind = "edit" | "run" | "migrate" | "import" | "restore";
-
-export interface HistoryEntry {
-  readonly revision: number;
-  readonly at: string;
-  readonly by?: string;
-  readonly kind: HistoryKind;
-  readonly summary: string;
-  readonly changes?: readonly string[];
-  readonly runId?: string;
-  readonly restorable?: boolean;
-}
-
-export type RunStatus = "queued" | "running" | "ready" | "failed" | "cancelled";
-
-export interface RunRecord {
-  readonly runId: string;
-  readonly revision?: number;
-  readonly startedAt: string;
-  readonly finishedAt?: string | null;
-  readonly durationSeconds?: number | null;
-  readonly status: RunStatus;
-  readonly device?: string;
-  readonly backend?: string;
-  readonly outputBytes?: number;
-  readonly frames?: number;
-  readonly error?: string | null;
-}
-
-/* ── Compute environment ────────────────────────────────────────────────── */
-
-export interface GpuInfo {
-  readonly name: string;
-  readonly cudaVersion?: string;
-  readonly vramTotalBytes: number;
-  readonly vramFreeBytes: number;
-  readonly busyWithRun?: string;
-}
-
-export interface ComputeEnvironment {
-  readonly gpus: readonly GpuInfo[];
-  readonly cpuThreads: number;
-  readonly preferredBackend: "cuda" | "cpu";
-  readonly warnings: readonly string[];
-}
-
-/* ── Start screen UI state ──────────────────────────────────────────────── */
-
-export type StartSection =
-  | "home"
-  | "templates"
-  | "import"
-  | "learn"
-  | "settings"
-  | "about";
-
-export type InspectorTab = "overview" | "authors" | "history" | "runs";
 
 export type RecentFilter = "all" | "fdm" | "fem" | "pinned";
 
-export type RecentSort = "lastOpened" | "name" | "created" | "size" | "lastRun";
-
-export interface StartScreenState {
-  readonly section: StartSection;
-  readonly view: "list" | "grid";
-  readonly filter: RecentFilter;
-  readonly sort: RecentSort;
-  readonly query: string;
-  readonly selectedProjectId: string | null;
-  readonly inspectorTab: InspectorTab;
-  readonly inspectorVisible: boolean;
-}
+export type RecentSort = "lastOpened" | "name" | "created" | "size";

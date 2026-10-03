@@ -24,6 +24,7 @@ As of 2026-08-03, `apps/control-room` registers these manifests through `src/mod
 | `transport-footer` | `src/modules/footer` | `panel-bottom` | implemented footer owner; mounts Quick Chart content only in its active tab |
 | `command-palette` | `src/modules/overlay` | `overlay` | implemented as the current overlay module |
 | `status-bar` | `src/modules/status-bar` | `status-bar` | implemented |
+| `start-screen` | `src/modules/start` | `start-screen` | implemented launcher shell (rail, launch tiles, section placeholders); mounted by `WorkspaceShellClient` in the no-session and session-error states only. Design: `docs/design/start-screen/` |
 
 The modules listed in later sections remain the target catalog. A target module that is not in this snapshot is deferred, not silently dropped. Cutover acceptance still depends on the required workflows in `21-cutover-acceptance.md`, not on this snapshot alone.
 
@@ -47,7 +48,7 @@ Core shell modules must not contain physics-specific UI. They render commands, s
 |---|---|---|---|
 | `explorer` | `panel-left` | Unified tree for model, resources, results, jobs, diagnostics entry points. | `ModelTree.tsx`, `features/model-builder`, `features/workspace-graph` |
 | `results-navigator` | `panel-left` | Artifact and result dataset browsing. | `features/analyze`, `features/workspace-graph` |
-| `project-start` | `viewport-main` or `overlay` | Open/recent/example/session start flow. | `components/start-hub` |
+| `project-start` | `viewport-main` or `overlay` | Open/recent/example/session start flow. Superseded by the implemented `start-screen` module, which owns its own body-row slot. | `components/start-hub` |
 
 The explorer is the default left-panel module. Results navigator is a tab in the same panel, not a separate application shell.
 

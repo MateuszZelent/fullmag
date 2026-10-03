@@ -6,7 +6,6 @@ import {
 } from "./SimulationStartupOverlay";
 import { useSessionCollection } from "../resources/useSessionCollection";
 import { useSessionResourceIdentity } from "../resources/useSessionStatus";
-import { StartScreen } from "@/modules/start/StartScreen";
 import { Button } from "@/shared/ui/Button";
 import { WorkspaceRenderProfiler } from "../performance/reactRenderProfiler";
 import { SlotHost } from "./SlotHost";
@@ -30,11 +29,18 @@ export function WorkspaceShellClient() {
     <>
       <SlotHost slotId="app-menu" />
       {sessionState === "no-session" ? (
-        <StartScreen />
+        <div className="fm-start-host" data-state="no-session">
+          <SlotHost slotId="start-screen" />
+        </div>
       ) : sessionState === "error" ? (
         <SessionCollectionError onRetry={sessions.resource.refetch} />
       ) : (
         <SessionCollectionLoading />
+      )}
+      {sessionState === "loading" ? null : (
+        <div className="fm-workspace-overlay-host">
+          <SlotHost slotId="overlay" />
+        </div>
       )}
     </>
   );
@@ -97,7 +103,7 @@ function SessionCollectionLoading() {
 
 function SessionCollectionError({ onRetry }: { readonly onRetry: () => void }) {
   return (
-    <div className="grid min-h-0 flex-1" data-state="session-error">
+    <div className="fm-start-host" data-state="session-error">
       <section
         className="border-b border-fm-border bg-fm-surface px-6 py-3"
         role="alert"
@@ -114,7 +120,7 @@ function SessionCollectionError({ onRetry }: { readonly onRetry: () => void }) {
           <Button type="button" onClick={onRetry}>Retry</Button>
         </div>
       </section>
-      <StartScreen />
+      <SlotHost slotId="start-screen" />
     </div>
   );
 }

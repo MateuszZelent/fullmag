@@ -1,16 +1,17 @@
 /**
- * Pure helpers over the recent index: parse, filter, sort, group.
+ * Pure helpers over the recent index: parse, filter, sort, group, format.
  *
- * Everything here is deliberately free of React and of the Tauri bridge, so it
- * is covered by plain vitest cases — the grouping in particular has edge cases
- * (midnight, DST, a clock that moved backwards) that are painful to reach
- * through the UI.
- *
- * Reference implementation — intended to live at
- * apps/control-room/src/modules/start/model/recentIndex.ts
+ * Free of React and of the host bridge so plain vitest cases cover the parts
+ * that are invisible in a screenshot: local-midnight grouping, DST, a clock
+ * that moved backwards, pinned hoisting and truncated indexes.
  */
 
 import type {
+  Author,
+  ContinueSession,
+  DocumentMode,
+  ModelSummary,
+  ProjectStatus,
   RecentEntry,
   RecentFilter,
   RecentIndex,
@@ -18,116 +19,165 @@ import type {
   RecentSort,
 } from "./types";
 
-/* ── Parsing ────────────────────────────────────────────────────────────── */
+type Raw = Readonly<Record<string, unknown>>;
+
+const STATUSES: readonly ProjectStatus[] = [
+  "ready",
+  "running",
+  "failed",
+  "draft",
+  "migrate",
+  "missing",
+  "readonly",
+];
+
+const isRecord = (value: unknown): value is Raw =>
+  value !== null && typeof value === "object" && !Array.isArray(value);
+
+const optString = (value: unknown): string | undefined =>
+  typeof value === "string" ? value : undefined;
+
+const optNumber = (value: unknown): number | undefined =>
+  typeof value === "number" && Number.isFinite(value) ? value : undefined;
+
+const optStrings = (value: unknown): readonly string[] | undefined =>
+  Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : undefined;
+
+const clamp01 = (n: number) => (Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : 0);
 
 /**
- * Normalise whatever the host handed over. A malformed index is NOT an error
- * worth propagating as a crash: the index is derived state, so the caller is
- * told to rebuild and the user keeps working.
+ * Normalise whatever the host handed over. A malformed index is not a crash:
+ * the caller is told to rebuild and the user keeps working. Entries that lack
+ * an identity are skipped individually, so one bad row never hides the rest.
  */
 export function parseRecentIndex(raw: unknown): RecentIndexState {
-  if (raw == null || typeof raw !== "object") {
+  if (!isRecord(raw)) {
     return { kind: "error", message: "The recent-project index is empty or unreadable." };
   }
-  const obj = raw as Record<string, unknown>;
-  if (obj.format_version !== 1 && obj.formatVersion !== 1) {
+  const version = raw.format_version ?? raw.formatVersion;
+  if (version !== 1) {
     return {
       kind: "error",
-      message: `Unsupported index format ${String(obj.format_version ?? obj.formatVersion)}; expected 1.`,
+      message: `Unsupported index format ${String(version)}; expected 1.`,
     };
   }
-  const entries = obj.entries;
-  if (!Array.isArray(entries)) {
+  if (!Array.isArray(raw.entries)) {
     return { kind: "error", message: "The index has no entries array." };
   }
-  const parsed = entries.flatMap((e) => {
-    const entry = toEntry(e);
-    return entry ? [entry] : [];
-  });
-  if (parsed.length === 0) return { kind: "empty" };
+  const seen = new Set<string>();
+  const entries: RecentEntry[] = [];
+  for (const value of raw.entries) {
+    const entry = toEntry(value);
+    // The list de-duplicates on the stable project id.
+    if (!entry || seen.has(entry.projectId)) continue;
+    seen.add(entry.projectId);
+    entries.push(entry);
+  }
+  if (entries.length === 0) return { kind: "empty" };
 
+  const locations = raw.scanned_locations;
   const index: RecentIndex = {
     formatVersion: 1,
-    generatedAt: String(obj.generated_at ?? obj.generatedAt ?? new Date().toISOString()),
-    entries: parsed,
-    continue: toContinue(obj.continue),
-    scannedLocations: Array.isArray(obj.scanned_locations)
-      ? (obj.scanned_locations as RecentIndex["scannedLocations"])
+    generatedAt: optString(raw.generated_at ?? raw.generatedAt) ?? new Date(0).toISOString(),
+    entries,
+    continue: toContinue(raw.continue),
+    scannedLocations: Array.isArray(locations)
+      ? locations.filter(isRecord).map((l) => ({
+          path: String(l.path ?? ""),
+          recursive: typeof l.recursive === "boolean" ? l.recursive : undefined,
+          lastScannedAt: optString(l.last_scanned_at),
+          reachable: typeof l.reachable === "boolean" ? l.reachable : undefined,
+        }))
       : undefined,
   };
   return { kind: "ready", index };
 }
 
 function toEntry(value: unknown): RecentEntry | null {
-  if (value == null || typeof value !== "object") return null;
-  const e = value as Record<string, any>;
-  if (typeof e.project_id !== "string" || typeof e.name !== "string") return null;
+  if (!isRecord(value)) return null;
+  if (typeof value.project_id !== "string" || typeof value.name !== "string") return null;
+  const status = STATUSES.find((s) => s === value.status) ?? "ready";
+  const mode: DocumentMode | undefined =
+    value.mode === "read_only" || value.mode === "read_write" ? value.mode : undefined;
   return {
-    projectId: e.project_id,
-    name: e.name,
-    path: String(e.path ?? ""),
-    solver: e.solver === "FEM" ? "FEM" : "FDM",
-    status: e.status ?? "ready",
-    lastOpenedAt: String(e.last_opened_at ?? e.modified_at ?? new Date(0).toISOString()),
-    createdAt: e.created_at,
-    modifiedAt: e.modified_at,
-    sizeBytes: typeof e.size_bytes === "number" ? e.size_bytes : undefined,
-    revision: typeof e.revision === "number" ? e.revision : undefined,
-    manifestSchemaVersion: e.manifest_schema_version,
-    createdWithVersion: e.created_with_version,
-    mode: e.mode,
-    modeReason: e.mode_reason,
-    pinned: Boolean(e.pinned),
-    tags: Array.isArray(e.tags) ? e.tags : undefined,
-    thumbnail: e.thumbnail,
-    lastError: e.last_error,
-    summary: e.summary ? toSummary(e.summary) : undefined,
-    authors: Array.isArray(e.authors) ? e.authors : undefined,
+    projectId: value.project_id,
+    name: value.name,
+    path: optString(value.path) ?? "",
+    solver: value.solver === "FEM" ? "FEM" : "FDM",
+    status,
+    lastOpenedAt:
+      optString(value.last_opened_at) ?? optString(value.modified_at) ?? new Date(0).toISOString(),
+    createdAt: optString(value.created_at),
+    modifiedAt: optString(value.modified_at),
+    sizeBytes: optNumber(value.size_bytes),
+    revision: optNumber(value.revision),
+    manifestSchemaVersion: optString(value.manifest_schema_version),
+    createdWithVersion: optString(value.created_with_version),
+    mode,
+    modeReason: optString(value.mode_reason),
+    pinned: value.pinned === true,
+    tags: optStrings(value.tags),
+    thumbnail: optString(value.thumbnail),
+    lastError: optString(value.last_error),
+    summary: isRecord(value.summary) ? toSummary(value.summary) : undefined,
+    authors: Array.isArray(value.authors)
+      ? value.authors.filter(isRecord).map(toAuthor)
+      : undefined,
   };
 }
 
-function toSummary(s: Record<string, any>): RecentEntry["summary"] {
+function toAuthor(a: Raw): Author {
+  const role = a.role === "maintainer" || a.role === "contributor" ? a.role : "creator";
   return {
-    discretisation: s.discretisation,
-    cellSize: s.cell_size,
-    periodicity: s.periodicity,
-    materials: s.materials,
-    ms: s.ms,
-    aex: s.aex,
-    alpha: s.alpha,
-    interactions: s.interactions,
-    integrator: s.integrator,
-    tolerance: s.tolerance,
-    excitation: s.excitation,
-    outputFrames: s.output_frames,
-    outputBytes: s.output_bytes,
-    outputFields: s.output_fields,
+    name: String(a.name ?? ""),
+    email: optString(a.email),
+    affiliation: optString(a.affiliation),
+    orcid: optString(a.orcid),
+    role,
   };
 }
 
-function toContinue(value: unknown): RecentIndex["continue"] {
-  if (value == null || typeof value !== "object") return undefined;
-  const c = value as Record<string, any>;
-  if (typeof c.project_id !== "string" || c.progress == null) return undefined;
+function toSummary(s: Raw): ModelSummary {
   return {
-    projectId: c.project_id,
-    runId: String(c.run_id ?? ""),
-    checkpointAt: String(c.checkpoint_at ?? ""),
-    device: c.device,
-    resumable: c.resumable !== false,
-    notResumableReason: c.not_resumable_reason,
+    discretisation: optString(s.discretisation),
+    cellSize: optString(s.cell_size),
+    periodicity: optString(s.periodicity),
+    materials: optStrings(s.materials),
+    ms: optString(s.ms),
+    aex: optString(s.aex),
+    alpha: optString(s.alpha),
+    interactions: optStrings(s.interactions),
+    integrator: optString(s.integrator),
+    tolerance: optString(s.tolerance),
+    excitation: optString(s.excitation),
+    outputFrames: optNumber(s.output_frames),
+    outputBytes: optNumber(s.output_bytes),
+    outputFields: optStrings(s.output_fields),
+  };
+}
+
+function toContinue(value: unknown): ContinueSession | undefined {
+  if (!isRecord(value) || typeof value.project_id !== "string" || !isRecord(value.progress)) {
+    return undefined;
+  }
+  const p = value.progress;
+  return {
+    projectId: value.project_id,
+    runId: String(value.run_id ?? ""),
+    checkpointAt: String(value.checkpoint_at ?? ""),
+    device: optString(value.device),
+    resumable: value.resumable !== false,
+    notResumableReason: optString(value.not_resumable_reason),
     progress: {
-      fraction: clamp01(Number(c.progress.fraction ?? 0)),
-      simTimeS: c.progress.sim_time_s,
-      simTimeTotalS: c.progress.sim_time_total_s,
-      framesWritten: c.progress.frames_written,
-      framesTotal: c.progress.frames_total,
-      etaSeconds: c.progress.eta_seconds ?? null,
+      fraction: clamp01(Number(p.fraction ?? 0)),
+      simTimeS: optNumber(p.sim_time_s),
+      simTimeTotalS: optNumber(p.sim_time_total_s),
+      framesWritten: optNumber(p.frames_written),
+      framesTotal: optNumber(p.frames_total),
+      etaSeconds: optNumber(p.eta_seconds) ?? null,
     },
   };
 }
-
-const clamp01 = (n: number) => (Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : 0);
 
 /* ── Filtering and sorting ──────────────────────────────────────────────── */
 
@@ -147,28 +197,26 @@ export function filterEntries(
   });
 }
 
-export function sortEntries(entries: readonly RecentEntry[], sort: RecentSort): RecentEntry[] {
-  const out = [...entries];
-  switch (sort) {
-    case "name":
-      // localeCompare so "µMAG" and "Śmigło" land where a human expects them.
-      return out.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
-    case "size":
-      return out.sort((a, b) => (b.sizeBytes ?? 0) - (a.sizeBytes ?? 0));
-    case "created":
-      return out.sort((a, b) => time(b.createdAt) - time(a.createdAt));
-    case "lastRun":
-    case "lastOpened":
-    default:
-      return out.sort((a, b) => time(b.lastOpenedAt) - time(a.lastOpenedAt));
-  }
-}
-
 const time = (iso?: string) => {
   if (!iso) return 0;
   const t = Date.parse(iso);
   return Number.isNaN(t) ? 0 : t;
 };
+
+export function sortEntries(entries: readonly RecentEntry[], sort: RecentSort): RecentEntry[] {
+  const out = [...entries];
+  switch (sort) {
+    case "name":
+      // localeCompare so non-ASCII names land where a human expects them.
+      return out.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+    case "size":
+      return out.sort((a, b) => (b.sizeBytes ?? 0) - (a.sizeBytes ?? 0));
+    case "created":
+      return out.sort((a, b) => time(b.createdAt) - time(a.createdAt));
+    case "lastOpened":
+      return out.sort((a, b) => time(b.lastOpenedAt) - time(a.lastOpenedAt));
+  }
+}
 
 /* ── Grouping ───────────────────────────────────────────────────────────── */
 
@@ -180,55 +228,13 @@ export interface RecentGroup {
   readonly entries: readonly RecentEntry[];
 }
 
-const GROUP_LABELS: Record<RecentGroupId, string> = {
+const GROUP_LABELS: Readonly<Record<RecentGroupId, string>> = {
   pinned: "Pinned",
   today: "Today",
   yesterday: "Yesterday",
   week: "Earlier this week",
   older: "Older",
 };
-
-/**
- * Group by recency relative to `now`.
- *
- * Boundaries are LOCAL calendar days, not 24-hour windows: something opened at
- * 23:50 yesterday is "Yesterday" at 00:10 today, not "Today". Comparing
- * day-start timestamps rather than subtracting fixed millisecond amounts also
- * keeps this correct across a DST change, where a local day is 23 or 25 hours.
- *
- * Pinned entries are hoisted out of their date group entirely — a pinned
- * project is one you want at the top, which is the whole point of pinning it.
- */
-export function groupByRecency(
-  entries: readonly RecentEntry[],
-  now: Date = new Date(),
-): RecentGroup[] {
-  const startOfToday = startOfDay(now);
-  const startOfYesterday = addDays(startOfToday, -1);
-  const startOfWeek = addDays(startOfToday, -6);
-
-  const buckets: Record<RecentGroupId, RecentEntry[]> = {
-    pinned: [], today: [], yesterday: [], week: [], older: [],
-  };
-
-  for (const entry of entries) {
-    if (entry.pinned) {
-      buckets.pinned.push(entry);
-      continue;
-    }
-    const t = time(entry.lastOpenedAt);
-    // A timestamp in the future (clock skew, a file copied from another
-    // machine) sorts as "today" rather than falling through to "older".
-    if (t >= startOfToday.getTime()) buckets.today.push(entry);
-    else if (t >= startOfYesterday.getTime()) buckets.yesterday.push(entry);
-    else if (t >= startOfWeek.getTime()) buckets.week.push(entry);
-    else buckets.older.push(entry);
-  }
-
-  return (Object.keys(buckets) as RecentGroupId[])
-    .filter((id) => buckets[id].length > 0)
-    .map((id) => ({ id, label: GROUP_LABELS[id], entries: buckets[id] }));
-}
 
 function startOfDay(d: Date): Date {
   const out = new Date(d);
@@ -243,6 +249,47 @@ function addDays(d: Date, days: number): Date {
   return out;
 }
 
+/**
+ * Group by recency relative to `now`. Boundaries are local calendar days, not
+ * 24-hour windows: 23:50 yesterday is "Yesterday" at 00:10, and comparing
+ * day-start timestamps stays correct across a DST change. Pinned entries are
+ * hoisted out of their date group. Input order is preserved inside a group.
+ */
+export function groupByRecency(
+  entries: readonly RecentEntry[],
+  now: Date = new Date(),
+): RecentGroup[] {
+  const startOfToday = startOfDay(now);
+  const startOfYesterday = addDays(startOfToday, -1);
+  const startOfWeek = addDays(startOfToday, -6);
+
+  const buckets: Record<RecentGroupId, RecentEntry[]> = {
+    pinned: [],
+    today: [],
+    yesterday: [],
+    week: [],
+    older: [],
+  };
+
+  for (const entry of entries) {
+    if (entry.pinned) {
+      buckets.pinned.push(entry);
+      continue;
+    }
+    const t = time(entry.lastOpenedAt);
+    // A future timestamp (clock skew, a file copied from another machine)
+    // reads as "today" rather than falling through to "older".
+    if (t >= startOfToday.getTime()) buckets.today.push(entry);
+    else if (t >= startOfYesterday.getTime()) buckets.yesterday.push(entry);
+    else if (t >= startOfWeek.getTime()) buckets.week.push(entry);
+    else buckets.older.push(entry);
+  }
+
+  return (Object.keys(buckets) as RecentGroupId[])
+    .filter((id) => buckets[id].length > 0)
+    .map((id) => ({ id, label: GROUP_LABELS[id], entries: buckets[id] }));
+}
+
 /* ── Formatting ─────────────────────────────────────────────────────────── */
 
 export function formatBytes(bytes: number | undefined, locale?: string): string {
@@ -255,7 +302,7 @@ export function formatBytes(bytes: number | undefined, locale?: string): string 
   return `${bytes} B`;
 }
 
-/** Relative inside the week, absolute beyond it — see the copy rules. */
+/** Relative inside the week, absolute beyond it. */
 export function formatOpened(iso: string, now: Date = new Date(), locale?: string): string {
   const t = time(iso);
   if (!t) return "—";

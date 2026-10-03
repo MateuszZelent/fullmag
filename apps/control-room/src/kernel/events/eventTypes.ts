@@ -64,6 +64,8 @@ export interface KernelEventMap {
   };
   "workspace:new-problem-requested": {
     source: "menu" | "shortcut" | "workspace";
+    /** Preselects the discretization; absent keeps the dialog default. */
+    solver?: "FDM" | "FEM";
   };
   "explorer:texture-load-node-requested": {
     objectId: string;

@@ -3,7 +3,7 @@
 import { isProjectWorkspaceCommand } from "../commands/projectWorkspaceCommandPolicy";
 
 import { ChevronDown, Search } from "lucide-react";
-import { useEffect, useMemo, useReducer, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useReducer, useSyncExternalStore, type ReactNode } from "react";
 
 import { useTheme } from "@/design/theme/ThemeProvider";
 import {
@@ -73,7 +73,7 @@ import { DataPreviewDialog } from "./DataPreviewDialog";
 import { MaterialLibraryDialog } from "./MaterialLibraryDialog";
 import { RegistryInspectorDialog } from "./RegistryInspectorDialog";
 import { DiagnosticRecorderDialog } from "./diagnostic-recorder/DiagnosticRecorderDialog";
-import { NewProblemDialog } from "./NewProblemDialog";
+import { NewProblemDialog, useNewProblemRequest } from "./NewProblemDialog";
 
 function subscribeToHydration(): () => void {
   return () => {};
@@ -193,6 +193,46 @@ function HeaderDropdown({
   );
 }
 
+/**
+ * Brand and application menu in one control: the logo opens the menu, so the
+ * header no longer repeats the product name in a second bordered button.
+ */
+function HeaderBrand({
+  children,
+  subtitle,
+}: {
+  readonly children: ReactNode;
+  readonly subtitle: string;
+}) {
+  const identity = (
+    <>
+      <FullmagMark size={20} className="fm-header__logo" />
+      <span className="fm-header__brand-copy">
+        <span className="fm-header__title">Fullmag</span>
+        <span className="fm-header__subtitle">{subtitle}</span>
+      </span>
+    </>
+  );
+  if (APP_DROPDOWN_ITEMS.length === 0) {
+    return <div className="fm-header__brand">{identity}</div>;
+  }
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          aria-label="Application menu"
+          className="fm-header__brand fm-header__brand--trigger"
+          type="button"
+        >
+          {identity}
+          <ChevronDown aria-hidden="true" className="fm-header__brand-chevron" size={12} />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start">{children}</DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 function QuickActionButton({
   action,
   disabled,
@@ -204,6 +244,7 @@ function QuickActionButton({
 }) {
   return (
     <Button
+      aria-label={action.label}
       className="fm-header__quick-action"
       disabled={action.disabled || disabled}
       size="sm"
@@ -380,17 +421,11 @@ function NoSessionAppMenuBar({
 }) {
   const kernel = useKernel();
   const { theme, setTheme } = useTheme();
-  const [newProblemOpen, setNewProblemOpen] = useState(false);
+  const [newProblem, setNewProblemOpen] = useNewProblemRequest();
   const commandContext = createCommandContext("menu", kernel, {
     sourceDetail: "app-menu",
     sessionScopeKey: null,
   });
-  useEffect(
-    () => kernel.bus.on("workspace:new-problem-requested", () => {
-      setNewProblemOpen(true);
-    }),
-    [kernel.bus],
-  );
   const runCommand = (commandId: string, input?: unknown) => {
     if (!isProjectWorkspaceCommand(commandId)) return;
     if (kernel.commands.get(commandId)) {
@@ -408,46 +443,26 @@ function NoSessionAppMenuBar({
 
   return (
     <header className="fm-header">
-      <div className="fm-header__brand">
-        <FullmagMark size={20} className="fm-header__logo" />
-        <div className="fm-header__brand-copy">
-          <span className="fm-header__title">Fullmag</span>
-          <span className="fm-header__subtitle">
-            {state === "no-session"
-              ? "No active session"
-              : state === "loading"
-                ? "Checking sessions"
-                : "Session list unavailable"}
-          </span>
-        </div>
-      </div>
-      {APP_DROPDOWN_ITEMS.length > 0 ? (
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button
-              className="fm-header__app-trigger"
-              size="sm"
-              type="button"
-              variant="secondary"
-            >
-              Fullmag
-              <ChevronDown size={12} aria-hidden="true" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="start">
-            <DropdownMenuLabel>Application</DropdownMenuLabel>
-            {APP_DROPDOWN_ITEMS.map((item) => (
-              <DropdownMenuItem
-                disabled={isCommandDisabled(item.id)}
-                key={item.id}
-                onSelect={() => runCommand(item.id)}
-              >
-                {item.label}
-              </DropdownMenuItem>
-            ))}
-          </DropdownMenuContent>
-        </DropdownMenu>
-      ) : null}
+      <HeaderBrand
+        subtitle={
+          state === "no-session"
+            ? "No active session"
+            : state === "loading"
+              ? "Checking sessions"
+              : "Session list unavailable"
+        }
+      >
+        <DropdownMenuLabel>Application</DropdownMenuLabel>
+        {APP_DROPDOWN_ITEMS.map((item) => (
+          <DropdownMenuItem
+            disabled={isCommandDisabled(item.id)}
+            key={item.id}
+            onSelect={() => runCommand(item.id)}
+          >
+            {item.label}
+          </DropdownMenuItem>
+        ))}
+      </HeaderBrand>
       <nav className="fm-header__nav" aria-label="Main menu">
         {MAIN_MENUS.map((menu) => (
           <HeaderDropdown
@@ -461,13 +476,14 @@ function NoSessionAppMenuBar({
       </nav>
       <button
         className="fm-header__search"
-        disabled
+        disabled={isCommandDisabled("workspace.command-palette")}
         title="Command search (Ctrl+Shift+P)"
         type="button"
         onClick={() => runCommand("workspace.command-palette")}
       >
         <Search size={13} aria-hidden="true" />
-        <span>Command search</span>
+        <span className="fm-header__search-label">Command search</span>
+        <kbd className="fm-header__kbd">Ctrl ⇧ P</kbd>
       </button>
       <div className="fm-header__separator" />
       <div className="fm-header__run-controls" aria-label="Runtime controls">
@@ -494,7 +510,9 @@ function NoSessionAppMenuBar({
       </div>
       <NewProblemDialog
         hasActiveSession={false}
-        open={state === "no-session" && newProblemOpen}
+        initialBackend={newProblem.backend}
+        key={newProblem.key}
+        open={state === "no-session" && newProblem.open}
         onOpenChange={setNewProblemOpen}
       />
     </header>
@@ -522,7 +540,7 @@ function SessionAppMenuBar() {
     appMenuDialogReducer,
     APP_MENU_DIALOG_INITIAL_STATE,
   );
-  const [newProblemOpen, setNewProblemOpen] = useState(false);
+  const [newProblem, setNewProblemOpen] = useNewProblemRequest();
   const setDataPreviewOpen = (open: boolean) =>
     dispatchDialogState({ open, type: "data-preview" });
   const setCommunicationOpen = (open: boolean) =>
@@ -538,9 +556,6 @@ function SessionAppMenuBar() {
       dispatchDialogState({ open: true, type: "thread-manager" });
     });
   }, [kernel.bus]);
-  useEffect(() => kernel.bus.on("workspace:new-problem-requested", () => {
-    setNewProblemOpen(true);
-  }), [kernel.bus]);
   const visualizationSnapshot = useObjectVisualizationSelector((snapshot) =>
     dialogState.registryOpen ? snapshot : EMPTY_OBJECT_VISUALIZATION_SNAPSHOT,
   );
@@ -618,42 +633,19 @@ function SessionAppMenuBar() {
 
   return (
     <header className="fm-header">
-      <div className="fm-header__brand">
-        <FullmagMark size={20} className="fm-header__logo" />
-        <div className="fm-header__brand-copy">
-          <span className="fm-header__title">Fullmag</span>
-          <span className="fm-header__subtitle">{sessionDisplay.subtitle}</span>
-        </div>
-      </div>
-
-      {APP_DROPDOWN_ITEMS.length > 0 ? (
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button
-              className="fm-header__app-trigger"
-              size="sm"
-              type="button"
-              variant="secondary"
-            >
-              Fullmag
-              <ChevronDown size={12} aria-hidden="true" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="start">
-            <DropdownMenuLabel>Application</DropdownMenuLabel>
-            <DropdownMenuSeparator />
-            {APP_DROPDOWN_ITEMS.map((node) => (
-              <MenuNode
-                key={node.id}
-                isCommandActive={isCommandActive}
-                isCommandDisabled={isCommandDisabled}
-                node={node}
-                onCommand={runCommand}
-              />
-            ))}
-          </DropdownMenuContent>
-        </DropdownMenu>
-      ) : null}
+      <HeaderBrand subtitle={sessionDisplay.subtitle}>
+        <DropdownMenuLabel>Application</DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        {APP_DROPDOWN_ITEMS.map((node) => (
+          <MenuNode
+            key={node.id}
+            isCommandActive={isCommandActive}
+            isCommandDisabled={isCommandDisabled}
+            node={node}
+            onCommand={runCommand}
+          />
+        ))}
+      </HeaderBrand>
 
       <nav className="fm-header__nav" aria-label="Main menu">
         {MAIN_MENUS.map((menu) => (
@@ -685,7 +677,8 @@ function SessionAppMenuBar() {
         onClick={() => runCommand("workspace.command-palette")}
       >
         <Search size={13} aria-hidden="true" />
-        <span>Command search</span>
+        <span className="fm-header__search-label">Command search</span>
+        <kbd className="fm-header__kbd">Ctrl ⇧ P</kbd>
       </button>
 
       <button
@@ -753,7 +746,9 @@ function SessionAppMenuBar() {
 
       <NewProblemDialog
         hasActiveSession
-        open={newProblemOpen}
+        initialBackend={newProblem.backend}
+        key={newProblem.key}
+        open={newProblem.open}
         onOpenChange={setNewProblemOpen}
       />
 
