@@ -11,12 +11,17 @@ import {
 import type {
   MaterializedDatasetResource,
   SolutionSetArtifactPageResource,
+  SolutionSetArtifactResource,
   SolutionSetResource,
+  SolutionScalarResource,
 } from "../api/apiTypes";
 
 import {
   SOLUTION_SET_SCHEMA_VERSION,
   materializedDatasetResourceKey,
+  isSolutionScalarArtifact,
+  solutionScalarResourceKey,
+  validateSolutionScalarEnvelope,
   validateMaterializedDatasetEnvelope,
   solutionSetArtifactsResourceKey,
   solutionSetMembersResourceKey,
@@ -221,6 +226,127 @@ describe("durable SolutionSet resource identity", () => {
       validateSolutionSetEnvelope(page, { ...identity, memberId: "other" }),
     ).toThrow();
   });
+
+  it("binds a scalar to the exact historical artifact and preserves decimal u64 values", () => {
+    const data = scalarFixture();
+    const expected = {
+      projectId: data.project_id,
+      runId: data.run_id,
+      solutionSetId: data.solution_set_id,
+      revision: data.revision,
+      memberId: data.member_id,
+      artifactId: data.artifact_id,
+      binding: {
+        manifestDigest: data.manifest_digest,
+        objectRef: data.object_ref,
+        byteLength: data.byte_length,
+      },
+    };
+    expect(validateSolutionScalarEnvelope(data, expected)).toBe(data);
+    expect(solutionScalarResourceKey(expected)).toContain(":scalar");
+    expect(solutionScalarResourceKey(expected)).toContain("9007199254740993");
+    expect(
+      solutionScalarResourceKey(
+        expected,
+        { ...expected.binding, objectRef: "c".repeat(64) },
+      ),
+    ).not.toBe(solutionScalarResourceKey(expected));
+    expect(
+      isSolutionScalarArtifact({
+        artifact_id: data.artifact_id,
+        byte_length: data.byte_length,
+        integrity: "not_verified",
+        kind: "table",
+        object_ref: data.object_ref,
+        schema_id: "fullmag.study.scalar_json@v1",
+        scientific_evidence: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects scalar identity, binding, nonfinite, and noncanonical u64 changes", () => {
+    const data = scalarFixture();
+    const expected = {
+      projectId: data.project_id,
+      runId: data.run_id,
+      solutionSetId: data.solution_set_id,
+      revision: data.revision,
+      memberId: data.member_id,
+      artifactId: data.artifact_id,
+      binding: {
+        manifestDigest: data.manifest_digest,
+        objectRef: data.object_ref,
+        byteLength: data.byte_length,
+      },
+    };
+    for (const [field, value] of Object.entries({
+      project_id: "other-project",
+      run_id: "other-run",
+      solution_set_id: "other-set",
+      revision: "9007199254740992",
+      member_id: "other-member",
+      artifact_id: "other-artifact",
+      manifest_digest: `sha256:${"d".repeat(64)}`,
+      object_ref: "e".repeat(64),
+      byte_length: "129",
+      step: "01",
+      ownership_epoch: "18446744073709551616",
+    })) {
+      expect(() => validateSolutionScalarEnvelope({ ...data, [field]: value }, expected)).toThrow();
+    }
+    expect(() => validateSolutionScalarEnvelope({ ...data, value_si: Number.NaN }, expected)).toThrow();
+    expect(() => validateSolutionScalarEnvelope({ ...data, time_s: Number.POSITIVE_INFINITY }, expected)).toThrow();
+    expect(
+      isSolutionScalarArtifact({
+        ...data,
+        kind: "other",
+      } as unknown as SolutionSetArtifactResource),
+    ).toBe(false);
+  });
+
+  it("fails closed for malformed payloads and validates preserved accepted state", () => {
+    const data = scalarFixture();
+    const expected = {
+      projectId: data.project_id,
+      runId: data.run_id,
+      solutionSetId: data.solution_set_id,
+      revision: data.revision,
+      memberId: data.member_id,
+      artifactId: data.artifact_id,
+      binding: {
+        manifestDigest: data.manifest_digest,
+        objectRef: data.object_ref,
+        byteLength: data.byte_length,
+      },
+    };
+    expect(() =>
+      validateSolutionScalarEnvelope(null as unknown as SolutionScalarResource, expected),
+    ).toThrow();
+    const acceptedState = {
+      accepted_step: "9007199254740996",
+      clock_digest: `sha256:${"3".repeat(64)}`,
+      domain_digest: `sha256:${"4".repeat(64)}`,
+      plan_digest: `sha256:${"5".repeat(64)}`,
+      run_id: data.run_id,
+      stage_id: "stage-1",
+      state_digest: `sha256:${"6".repeat(64)}`,
+    };
+    expect(
+      validateSolutionScalarEnvelope({ ...data, accepted_state: acceptedState }, expected),
+    ).toMatchObject({ accepted_state: acceptedState });
+    expect(() =>
+      validateSolutionScalarEnvelope(
+        { ...data, accepted_state: { ...acceptedState, run_id: "foreign-run" } },
+        expected,
+      ),
+    ).toThrow();
+    expect(() =>
+      validateSolutionScalarEnvelope(
+        { ...data, accepted_state: { ...acceptedState, accepted_step: "01" } },
+        expected,
+      ),
+    ).toThrow();
+  });
 });
 
 function datasetFixture(): MaterializedDatasetResource {
@@ -304,5 +430,44 @@ function datasetFixture(): MaterializedDatasetResource {
         resolution: "quantitative",
       },
     },
+  };
+}
+
+function scalarFixture(): SolutionScalarResource {
+  return {
+    schema_version: "fullmag.analysis.solution_scalar.v1",
+    project_id: "project",
+    run_id: "run",
+    solution_set_id: "set",
+    revision: "9007199254740993",
+    manifest_digest: `sha256:${"a".repeat(64)}`,
+    member_id: "member",
+    task_id: "task",
+    attempt_id: "attempt",
+    ownership_epoch: "9007199254740994",
+    artifact_id: "scalar-artifact",
+    object_ref: "b".repeat(64),
+    byte_length: "128",
+    quantity_id: "total_energy",
+    unit: "J",
+    value_si: -1.25,
+    step: "9007199254740995",
+    time_s: 1.25e-9,
+    integrity: "verified",
+    manifest_state: "closed",
+    execution_status: "succeeded",
+    member_execution_status: "succeeded",
+    scientific_assessment: { status: "unassessed", reason: null, evidence_artifact_count: 0 },
+    member_scientific_assessment: { status: "unassessed", reason: null, evidence_artifact_count: 0 },
+    provenance: {
+      run_spec_digest: `sha256:${"c".repeat(64)}`,
+      model_digest: `sha256:${"d".repeat(64)}`,
+      physics_digest: `sha256:${"e".repeat(64)}`,
+      discretization_digest: `sha256:${"f".repeat(64)}`,
+      resolved_plan_digest: `sha256:${"1".repeat(64)}`,
+      acquisition_digest: `sha256:${"2".repeat(64)}`,
+      seed_digest: null,
+    },
+    accepted_state: null,
   };
 }

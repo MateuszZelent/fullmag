@@ -26289,6 +26289,60 @@
           }
         ]
       },
+      "RuntimeServiceStatusReason": {
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ],
+        "type": "object"
+      },
+      "RuntimeServiceStatusResource": {
+        "description": "Read-only status of the optional native application runtime service.\n\nThe resource intentionally contains no process path, store path, PID, or\nscheduler payload.  Consumers get the bounded state and a machine-readable\nreason while the native observer retains ownership of operational details.",
+        "properties": {
+          "configured": {
+            "type": "boolean"
+          },
+          "reason": {
+            "$ref": "#/components/schemas/RuntimeServiceStatusReason"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/RuntimeServiceStatusState"
+          }
+        },
+        "required": [
+          "schema_version",
+          "configured",
+          "state",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "RuntimeServiceStatusState": {
+        "enum": [
+          "not_configured",
+          "configuration_error",
+          "not_ready",
+          "starting",
+          "ready",
+          "draining",
+          "drained",
+          "failed",
+          "unknown",
+          "observation_unknown"
+        ],
+        "type": "string"
+      },
       "SamplingPeriodPolicyResource": {
         "oneOf": [
           {
@@ -31722,6 +31776,135 @@
           "discretization_digest",
           "resolved_plan_digest",
           "acquisition_digest"
+        ],
+        "type": "object"
+      },
+      "SolutionScalarIntegrityResource": {
+        "description": "CAS verification does not certify the scientific result.",
+        "enum": [
+          "verified"
+        ],
+        "type": "string"
+      },
+      "SolutionScalarResource": {
+        "description": "One verified scalar payload, independent of the active session.",
+        "properties": {
+          "accepted_state": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SolutionAcceptedStateIdResource",
+                "description": "Preserved from the artifact; never inferred from scalar step/time."
+              }
+            ]
+          },
+          "artifact_id": {
+            "type": "string"
+          },
+          "attempt_id": {
+            "type": "string"
+          },
+          "byte_length": {
+            "type": "string"
+          },
+          "execution_status": {
+            "$ref": "#/components/schemas/SolutionExecutionStatusResource"
+          },
+          "integrity": {
+            "$ref": "#/components/schemas/SolutionScalarIntegrityResource"
+          },
+          "manifest_digest": {
+            "type": "string"
+          },
+          "manifest_state": {
+            "$ref": "#/components/schemas/SolutionSetManifestStateResource"
+          },
+          "member_execution_status": {
+            "$ref": "#/components/schemas/SolutionExecutionStatusResource"
+          },
+          "member_id": {
+            "type": "string"
+          },
+          "member_scientific_assessment": {
+            "$ref": "#/components/schemas/SolutionScientificAssessmentResource"
+          },
+          "object_ref": {
+            "type": "string"
+          },
+          "ownership_epoch": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "provenance": {
+            "$ref": "#/components/schemas/SolutionProvenanceResource"
+          },
+          "quantity_id": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "scientific_assessment": {
+            "$ref": "#/components/schemas/SolutionScientificAssessmentResource"
+          },
+          "solution_set_id": {
+            "type": "string"
+          },
+          "step": {
+            "description": "Canonical decimal u64, preserved without browser rounding.",
+            "type": "string"
+          },
+          "task_id": {
+            "type": "string"
+          },
+          "time_s": {
+            "format": "double",
+            "type": "number"
+          },
+          "unit": {
+            "type": "string"
+          },
+          "value_si": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "schema_version",
+          "project_id",
+          "run_id",
+          "solution_set_id",
+          "revision",
+          "manifest_digest",
+          "member_id",
+          "task_id",
+          "attempt_id",
+          "ownership_epoch",
+          "artifact_id",
+          "object_ref",
+          "byte_length",
+          "quantity_id",
+          "unit",
+          "value_si",
+          "step",
+          "time_s",
+          "integrity",
+          "manifest_state",
+          "execution_status",
+          "member_execution_status",
+          "scientific_assessment",
+          "member_scientific_assessment",
+          "provenance"
         ],
         "type": "object"
       },
@@ -39818,6 +40001,89 @@
         ]
       }
     },
+    "/v2/persistence/projects/{project_id}/runs/{run_id}/solution-sets/{solution_set_id}/revisions/{revision}/members/{member_id}/artifacts/{artifact_id}/scalar": {
+      "get": {
+        "operationId": "persistence_get_persistence_projects_project_id_runs_run_id_solution_sets_solution_set_id_revisions_revision_members_member_id_artifacts_artifact_id_scalar",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "solution_set_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Canonical positive decimal u64",
+            "in": "path",
+            "name": "revision",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "member_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "artifact_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SolutionScalarResource"
+                }
+              }
+            },
+            "description": "Verified bounded scalar; scientific assessment remains independent"
+          },
+          "400": {
+            "description": "Invalid identity or revision"
+          },
+          "404": {
+            "description": "Missing run, revision, member or artifact"
+          },
+          "409": {
+            "description": "Foreign owner or incompatible artifact schema"
+          },
+          "500": {
+            "description": "Corrupt, oversized or invalid scalar"
+          }
+        },
+        "tags": [
+          "persistence"
+        ]
+      }
+    },
     "/v2/persistence/projects/{project_id}/runs/{run_id}/tasks/{task_id}/cancellation": {
       "post": {
         "operationId": "persistence_post_persistence_projects_project_id_runs_run_id_tasks_task_id_cancellation",
@@ -39973,6 +40239,29 @@
         "responses": {
           "200": {
             "description": "OpenAPI v2 document"
+          }
+        },
+        "tags": [
+          "platform"
+        ]
+      }
+    },
+    "/v2/platform/runtime-service": {
+      "get": {
+        "operationId": "platform_get_platform_runtime_service",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeServiceStatusResource"
+                }
+              }
+            },
+            "description": "Read-only native application runtime service status"
+          },
+          "304": {
+            "description": "Runtime service status not modified for the supplied ETag"
           }
         },
         "tags": [

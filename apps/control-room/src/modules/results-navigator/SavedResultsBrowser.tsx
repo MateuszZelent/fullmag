@@ -13,6 +13,8 @@ import {
   useSolutionSetDiscoveryResource,
   useSolutionSetMembersResource,
   useSolutionSetResource,
+  isSolutionScalarArtifact,
+  useSolutionScalarResource,
 } from "@/kernel/resources/solutionSetResources";
 import {
   pinnedMaterializedDatasetSelectionRef,
@@ -24,6 +26,7 @@ import type {
   SolutionSetDiscoveryPageResource,
   SolutionSetMemberResource,
   SolutionSetResource,
+  SolutionScalarResource,
 } from "@/kernel/api/apiTypes";
 import { Badge } from "@/shared/ui/Badge";
 import { Button } from "@/shared/ui/Button";
@@ -486,10 +489,17 @@ function SavedMemberArtifacts({
   const materializedArtifacts = (artifacts.data?.items ?? []).filter(
     isMaterializedDatasetArtifact,
   );
+  const scalarArtifacts = (artifacts.data?.items ?? []).filter(
+    isSolutionScalarArtifact,
+  );
   const artifactPageMatchesSolution =
     manifestDigest !== null && artifacts.data?.manifest_digest === manifestDigest;
   const selectedArtifact = materializedArtifacts.find(
     (artifact) => artifact.artifact_id === selectedArtifactId,
+  ) ?? null;
+  const [selectedScalarArtifactId, setSelectedScalarArtifactId] = useState<string | null>(null);
+  const selectedScalarArtifact = scalarArtifacts.find(
+    (artifact) => artifact.artifact_id === selectedScalarArtifactId,
   ) ?? null;
   const metadata = useMaterializedDatasetResource(
     projectId,
@@ -500,6 +510,22 @@ function SavedMemberArtifacts({
     selectedArtifactId,
     { enabled: selectedArtifactId !== null && artifactPageMatchesSolution },
   );
+  const scalar = useSolutionScalarResource(
+    projectId,
+    runId,
+    solution.solution_set_id,
+    solution.revision,
+    memberId,
+    selectedScalarArtifact?.artifact_id,
+    selectedScalarArtifact && artifactPageMatchesSolution && manifestDigest
+      ? {
+          manifestDigest,
+          objectRef: selectedScalarArtifact.object_ref,
+          byteLength: selectedScalarArtifact.byte_length,
+        }
+      : null,
+    { enabled: selectedScalarArtifact !== null && artifactPageMatchesSolution },
+  );
   const metadataMatchesSelection = materializedDatasetMatchesPath(
     metadata.data,
     projectId,
@@ -509,6 +535,7 @@ function SavedMemberArtifacts({
     memberId,
     selectedArtifactId,
   );
+  const scalarError = scalar.error ?? scalar.refreshError;
   const metadataMatchesSelectedArtifact = materializedDatasetMatchesArtifact(
     metadata.data,
     selectedArtifact,
@@ -608,6 +635,7 @@ function SavedMemberArtifacts({
           variant="secondary"
           onClick={() => {
             setSelectedArtifactId(null);
+            setSelectedScalarArtifactId(null);
             setArtifactCursor(artifacts.data?.next_after_artifact_id ?? null);
           }}
         >
@@ -644,6 +672,53 @@ function SavedMemberArtifacts({
           ) : null}
         </div>
       ) : null}
+      <section className="grid min-w-0 gap-2 border-t border-fm-subtle pt-2" aria-label={`Scalar artifacts for member ${memberId}`}>
+        <header className="grid min-w-0 gap-1">
+          <h6 className="m-0 min-w-0 truncate text-fm-xs font-semibold text-fm-primary">
+            Scalar values
+          </h6>
+          <p className="m-0 text-fm-xs text-fm-muted">
+            Read-only values from the selected historical SolutionSet artifact.
+          </p>
+        </header>
+        {artifactPageMatchesSolution && scalarArtifacts.length === 0 ? (
+          <p className="m-0 text-fm-xs text-fm-muted">
+            No scalar artifact on this page.
+          </p>
+        ) : artifactPageMatchesSolution ? (
+          <ul className="m-0 grid min-w-0 list-none gap-1 p-0" aria-label="Scalar artifacts">
+            {scalarArtifacts.map((artifact) => (
+              <li className="grid min-w-0" key={artifact.artifact_id}>
+                <ArtifactButton
+                  artifact={artifact}
+                  selected={selectedScalarArtifactId === artifact.artifact_id}
+                  onSelect={() => setSelectedScalarArtifactId(artifact.artifact_id)}
+                />
+              </li>
+            ))}
+          </ul>
+        ) : null}
+        {selectedScalarArtifactId ? (
+          <div className="grid min-w-0 gap-2" aria-live="polite">
+            {!selectedScalarArtifact ? (
+              <p className="m-0 text-fm-xs text-fm-danger" role="alert">
+                The selected scalar is no longer present on the current artifact page.
+              </p>
+            ) : null}
+            {scalar.status === "loading" && !scalar.data ? (
+              <p className="m-0 text-fm-xs text-fm-muted" role="status">
+                Verifying the selected scalar artifact…
+              </p>
+            ) : null}
+            {scalarError ? (
+              <p className="m-0 text-fm-xs text-fm-danger" role="alert">
+                Scalar unavailable: {scalarError.message}
+              </p>
+            ) : null}
+            {scalar.status === "ready" && !scalarError && scalar.data ? <SolutionScalarDetails data={scalar.data} /> : null}
+          </div>
+        ) : null}
+      </section>
     </section>
   );
 }
@@ -676,6 +751,60 @@ export function isMaterializedDatasetArtifact(
   artifact: SolutionSetArtifactResource,
 ): boolean {
   return artifact.schema_id === MATERIALIZED_DATASET_SCHEMA && artifact.kind === "other";
+}
+
+function SolutionScalarDetails({ data }: { data: SolutionScalarResource }) {
+  const assessment = data.scientific_assessment.reason
+    ? `${data.scientific_assessment.status}: ${data.scientific_assessment.reason}`
+    : data.scientific_assessment.status;
+  const memberAssessment = data.member_scientific_assessment.reason
+    ? `${data.member_scientific_assessment.status}: ${data.member_scientific_assessment.reason}`
+    : data.member_scientific_assessment.status;
+  return (
+    <dl className="m-0 grid min-w-0 gap-1 text-fm-xs">
+      <div className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-x-2">
+        <dt className="text-fm-muted">Quantity</dt>
+        <dd className="m-0 min-w-0 truncate text-fm-primary" title={data.quantity_id}>
+          {data.quantity_id}
+        </dd>
+      </div>
+      <div className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-x-2">
+        <dt className="text-fm-muted">Value</dt>
+        <dd className="m-0 min-w-0 text-fm-primary">{data.value_si} {data.unit}</dd>
+      </div>
+      <div className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-x-2">
+        <dt className="text-fm-muted">Step / time</dt>
+        <dd className="m-0 min-w-0 text-fm-primary">{data.step} / {data.time_s} s</dd>
+      </div>
+      <div className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-x-2">
+        <dt className="text-fm-muted">Integrity</dt>
+        <dd className="m-0 min-w-0 text-fm-primary">{data.integrity} · manifest {data.manifest_state}</dd>
+      </div>
+      <div className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-x-2">
+        <dt className="text-fm-muted">Execution</dt>
+        <dd className="m-0 min-w-0 text-fm-primary">solution {data.execution_status} · member {data.member_execution_status}</dd>
+      </div>
+      <div className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-x-2">
+        <dt className="text-fm-muted">Scientific</dt>
+        <dd className="m-0 min-w-0 text-fm-primary">{assessment}</dd>
+      </div>
+      <div className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-x-2">
+        <dt className="text-fm-muted">Member assessment</dt>
+        <dd className="m-0 min-w-0 text-fm-primary">{memberAssessment}</dd>
+      </div>
+      {data.accepted_state ? (
+        <div className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-x-2">
+          <dt className="text-fm-muted">Accepted state</dt>
+          <dd
+            className="m-0 min-w-0 truncate text-fm-primary"
+            title={data.accepted_state.state_digest}
+          >
+            step {data.accepted_state.accepted_step} · stage {data.accepted_state.stage_id ?? "—"}
+          </dd>
+        </div>
+      ) : null}
+    </dl>
+  );
 }
 
 export function materializedDatasetMatchesArtifact(

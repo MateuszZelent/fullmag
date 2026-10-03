@@ -189,6 +189,7 @@ import {
   PERSISTENCE_PROJECTS_PATH,
   PROJECT_MATERIALIZED_DATASET_PATH,
   PROJECT_MATERIALIZED_DATASET_SLICE_PATH,
+  PROJECT_SOLUTION_SCALAR_PATH,
   PROJECT_SAVED_FIELD_GEOMETRY_PATH,
   PROJECT_SAVED_FIELD_TOPOLOGY_PATH,
   PROJECT_SAVED_FIELD_SUPPORT_PATH,
@@ -469,6 +470,7 @@ import type {
   ProjectRunTaskCancellationResource,
   SolutionSetArtifactPageQuery,
   SolutionSetArtifactPageResource,
+  SolutionScalarResource,
   SolutionSetMemberPageQuery,
   SolutionSetMemberPageResource,
   SolutionSetResource,
@@ -2940,6 +2942,29 @@ export class ControlRoomApi {
       ) =>
         this.requestJson<MaterializedDatasetResource>(
           PROJECT_MATERIALIZED_DATASET_PATH,
+          options,
+          {
+            path: {
+              project_id: assertSolutionSetProjectId(projectId),
+              run_id: assertSolutionSetRunId(runId),
+              solution_set_id: assertSolutionSetLogicalId(solutionSetId),
+              revision: assertSolutionSetRevision(revision),
+              member_id: assertMaterializedDatasetPathId("member id", memberId),
+              artifact_id: assertMaterializedDatasetPathId("artifact id", artifactId),
+            },
+          },
+        ),
+      solutionScalar: (
+        projectId: string,
+        runId: string,
+        solutionSetId: string,
+        revision: SolutionSetRevision,
+        memberId: string,
+        artifactId: string,
+        options?: RequestOptions,
+      ) =>
+        this.requestJson<SolutionScalarResource>(
+          PROJECT_SOLUTION_SCALAR_PATH,
           options,
           {
             path: {

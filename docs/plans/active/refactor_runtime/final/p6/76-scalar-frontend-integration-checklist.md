@@ -3,7 +3,12 @@
 Data: 03.10.2026. Status: audyt źródeł zakończony; integracja i browser
 **NOT VERIFIED**. Ten dokument nie zalicza implementacji P6.
 Baza backendu: `7a209139f13156bbf89fa2a162c281b5ba620e09`.
-Źródła builda 215 i kontrakt odczytu: [P6-75](75-durable-scalar-api.md).
+Kontrakt odczytu: [P6-75](75-durable-scalar-api.md). Build 215 zakończył się
+błędem kompilacji launchera; poprawka P8-39 jest w źródle buildu 218
+`9f7eadb06b7f4e9be3b0fed7b1c9006a4666ea04`. Build 218 jest terminalny `succeeded`/exit `0`; pełny receipt, 120 artefaktów,
+15 wymaganych wyjść oraz 6829 plików kapsuły zweryfikowano. Rzeczywisty eksport
+OpenAPI i jego import z expected commit/snapshot przeszły; typy i paths
+zregenerowano. Dowody: [P8-49](../p8/49-managed-package-openapi-export.md).
 
 ## Istniejący przepływ i zakres
 
@@ -11,15 +16,15 @@ Baza backendu: `7a209139f13156bbf89fa2a162c281b5ba620e09`.
 prowadzi przez projekt → run → SolutionSet revision → member → artifact.
 Wybrany manifest jest sprawdzany przed prezentacją members i artifacts.
 `SavedMemberArtifacts` obsługuje obecnie wyłącznie `materialized_dataset.v1`;
-brakuje odczytu i prezentacji skalarów. Wygenerowany kontrakt nie zawiera
-jeszcze endpointu scalar. Zachowujemy istniejący panel i centralną warstwę
+brakuje odczytu i prezentacji skalarów. Wygenerowany kontrakt zawiera
+już endpoint scalar; facade/resource hook i panel wymagają implementacji. Zachowujemy istniejący panel i centralną warstwę
 resource hooks; nie tworzymy kolejnego drzewa wyników.
 
 ## Kolejność implementacji
 
 | Krok | Miejsce | Dowód odbioru |
 |---|---|---|
-| 1 | Managed build 215 | Terminalny receipt, zgodna tożsamość źródeł i hash binarium API; samo `queued`/`running` nie wystarcza. |
+| 1 | Managed build 218 | Terminalny receipt, zgodna tożsamość źródeł i hash binarium API; samo `queued`/`running` ani sukces pojedynczego etapu nie wystarcza. |
 | 2 | `scripts/generate-openapi-v2.mjs` w Control Room | Raw eksport przez `--print-openapi-v2`, import z expected commit/snapshot, regeneracja typów i paths. Bez ręcznej edycji generated JSON/TS. |
 | 3 | `kernel/api/apiPaths.ts`, `apiTypes.ts`, `ControlRoomApi.ts` | Typowany path, alias `SolutionScalarResource`, metoda `persistence.projects.solutionScalar` z walidacją pełnej tożsamości. |
 | 4 | `kernel/resources/solutionSetResources.ts` | Hook oparty na facade, klucz projektu/run/revision/member/artifact, `abortStaleInflight: true`, brak zależności od bieżącej sesji. |
@@ -74,3 +79,13 @@ Regresje wymagające kompilacji testów pozostają **NOT RUN** do odwołania
 aktualnego zakazu AGENTS.md. Kontrole źródeł, production build i browser
 mają własne bramki; żaden z tych wyników nie zastępuje kwalifikacji fizyki
 ani niezależnego pakietu Windows.
+
+## Checkpoint kontraktu — 03.10.2026
+
+Kroki 1 i 2 mają rzeczywiste dowody PASS. Regeneracja klienta, produkcyjny
+source check baseline i 11 interpretowanych regresji importu przeszły.
+Implementacja facade, hooka i panelu z kroków 3–6 znajduje się w
+[P6-77](77-scalar-frontend-integration.md). Produkcyjny source check i API
+hygiene przeszły po poprawce `refreshError`. Odbiór runtime/browser i regresje
+wymagające kompilacji pozostają otwarte; nie zaliczamy tych kroków jako
+ukończonych wyłącznie na podstawie kontroli źródeł.

@@ -5020,6 +5020,41 @@ describe("ControlRoomApi", () => {
     }]);
   });
 
+  it("reads a pinned historical scalar without using the current session", async () => {
+    const requests: Array<{ method: string | undefined; url: string }> = [];
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url, init) => {
+        requests.push({ method: init?.method, url: String(url) });
+        return jsonResponse({
+          project_id: "project-1",
+          run_id: "run-1",
+          solution_set_id: "set-1",
+          revision: "9007199254740993",
+          member_id: "member-1",
+          artifact_id: "artifact-1",
+          value_si: -1,
+          unit: "J",
+        });
+      },
+    });
+
+    const result = await api.persistence.projects.solutionScalar(
+      "project-1",
+      "run-1",
+      "set-1",
+      "9007199254740993",
+      "member-1",
+      "artifact-1",
+    );
+    expect(result.revision).toBe("9007199254740993");
+    expect(result.value_si).toBe(-1);
+    expect(requests).toEqual([{
+      method: "GET",
+      url: "http://127.0.0.1:8765/v2/persistence/projects/project-1/runs/run-1/solution-sets/set-1/revisions/9007199254740993/members/member-1/artifacts/artifact-1/scalar",
+    }]);
+  });
+
   it("lists durable project runs with an explicit cursor", async () => {
     const requests: Array<{ method: string | undefined; url: string }> = [];
     const api = new ControlRoomApi({

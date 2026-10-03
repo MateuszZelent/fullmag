@@ -10,16 +10,19 @@ import {
   assertSolutionSetRevision,
   assertSolutionSetRunId,
 } from "../api/ControlRoomApi";
+import { isCanonicalU64Decimal } from "../api/fieldQueryIdentity";
 import type {
   MaterializedDatasetResource,
   SolutionSetDiscoveryPageResource,
   SolutionSetDiscoveryPageQuery,
   SolutionSetArtifactPageQuery,
   SolutionSetArtifactPageResource,
+  SolutionSetArtifactResource,
   SolutionSetMemberPageQuery,
   SolutionSetMemberPageResource,
   SolutionSetResource,
   SolutionSetRevision,
+  SolutionScalarResource,
 } from "../api/apiTypes";
 import { useKernel } from "../KernelContext";
 
@@ -40,6 +43,12 @@ export interface SolutionSetArtifactPageResourceOptions
   query?: SolutionSetArtifactPageQuery;
 }
 
+export interface SolutionScalarArtifactBinding {
+  manifestDigest: string;
+  objectRef: string;
+  byteLength: string;
+}
+
 export type SolutionSetRequestIdentity = {
   projectId: string;
   runId: string;
@@ -58,8 +67,28 @@ type SolutionSetIdentity = {
 
 export const SOLUTION_SET_SCHEMA_VERSION =
   "fullmag.analysis.solution_revision.v1" as const;
+export const SOLUTION_SCALAR_SCHEMA_VERSION =
+  "fullmag.analysis.solution_scalar.v1" as const;
+export const SOLUTION_SCALAR_ARTIFACT_SCHEMA =
+  "fullmag.study.scalar_json@v1" as const;
 
 const SOLUTION_SET_MANIFEST_DIGEST_PATTERN = /^sha256:[a-f0-9]{64}$/;
+const SOLUTION_SCALAR_OBJECT_REF_PATTERN = /^[a-f0-9]{64}$/;
+const SOLUTION_SCALAR_BYTE_LIMIT = 64 * 1024;
+const SOLUTION_EXECUTION_STATUSES = new Set([
+  "running",
+  "succeeded",
+  "failed",
+  "cancelled",
+  "interrupted",
+]);
+const SOLUTION_ASSESSMENT_STATUSES = new Set([
+  "converged",
+  "tolerance_not_met",
+  "limit_reached",
+  "invalid",
+  "unassessed",
+]);
 
 const EMPTY_RESOURCE_KEY = "solution-set:none";
 
@@ -202,6 +231,142 @@ export function materializedDatasetResourceKey(
   )}:materialized-dataset`;
 }
 
+export function solutionScalarResourceKey(
+  identity: SolutionSetRequestIdentity & { memberId: string; artifactId: string },
+  binding?: SolutionScalarArtifactBinding | null,
+): string {
+  const base = `${solutionSetResourceKey(
+    identity.projectId,
+    identity.runId,
+    identity.solutionSetId,
+    identity.revision,
+  )}:member:${encodeURIComponent(identity.memberId)}:artifact:${encodeURIComponent(
+    identity.artifactId,
+  )}`;
+  if (!binding) return `${base}:scalar`;
+  return `${base}:binding:${encodeURIComponent(binding.manifestDigest)}:${encodeURIComponent(
+    binding.objectRef,
+  )}:${encodeURIComponent(binding.byteLength)}:scalar`;
+}
+
+export function isSolutionScalarArtifact(
+  artifact: SolutionSetArtifactResource,
+): boolean {
+  return (
+    artifact.kind === "table" &&
+    artifact.schema_id === SOLUTION_SCALAR_ARTIFACT_SCHEMA
+  );
+}
+
+export type SolutionScalarRequestIdentity = SolutionSetRequestIdentity & {
+  memberId: string;
+  artifactId: string;
+  binding: SolutionScalarArtifactBinding;
+};
+
+export function validateSolutionScalarEnvelope(
+  data: SolutionScalarResource,
+  expected: SolutionScalarRequestIdentity,
+): SolutionScalarResource {
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    throw new Error("Solution scalar response does not match the pinned artifact.");
+  }
+  const byteLength = canonicalScalarU64(data.byte_length);
+  const ownershipEpoch = canonicalScalarU64(data.ownership_epoch);
+  const step = canonicalScalarU64(data.step);
+  const revision = canonicalScalarRevision(data.revision);
+  const acceptedStep = data.accepted_state?.accepted_step;
+  const acceptedState = data.accepted_state;
+  const acceptedStateValid =
+    acceptedState === null ||
+    acceptedState === undefined ||
+    (typeof acceptedState === "object" &&
+      acceptedState.run_id === expected.runId &&
+      canonicalScalarU64(acceptedState.accepted_step) !== null &&
+      nonEmptyScalarText(acceptedState.clock_digest) &&
+      nonEmptyScalarText(acceptedState.state_digest) &&
+      nonEmptyScalarText(acceptedState.domain_digest) &&
+      nonEmptyScalarText(acceptedState.plan_digest) &&
+      (acceptedState.stage_id === null ||
+        acceptedState.stage_id === undefined ||
+        nonEmptyScalarText(acceptedState.stage_id)));
+  const provenance = data.provenance as unknown;
+  if (
+    data.schema_version !== SOLUTION_SCALAR_SCHEMA_VERSION ||
+    data.project_id !== expected.projectId ||
+    data.run_id !== expected.runId ||
+    data.solution_set_id !== expected.solutionSetId ||
+    data.revision !== expected.revision ||
+    revision === null ||
+    data.member_id !== expected.memberId ||
+    data.artifact_id !== expected.artifactId ||
+    data.manifest_digest !== expected.binding.manifestDigest ||
+    !SOLUTION_SET_MANIFEST_DIGEST_PATTERN.test(data.manifest_digest) ||
+    !SOLUTION_SCALAR_OBJECT_REF_PATTERN.test(data.object_ref) ||
+    data.object_ref !== expected.binding.objectRef ||
+    byteLength === null ||
+    data.byte_length !== expected.binding.byteLength ||
+    byteLength > BigInt(SOLUTION_SCALAR_BYTE_LIMIT) ||
+    ownershipEpoch === null ||
+    step === null ||
+    !Number.isFinite(data.value_si) ||
+    !Number.isFinite(data.time_s) ||
+    data.integrity !== "verified" ||
+    (data.manifest_state !== "open" && data.manifest_state !== "closed") ||
+    !SOLUTION_EXECUTION_STATUSES.has(data.execution_status) ||
+    !SOLUTION_EXECUTION_STATUSES.has(data.member_execution_status) ||
+    !hasSolutionAssessment(data.scientific_assessment) ||
+    !hasSolutionAssessment(data.member_scientific_assessment) ||
+    !hasSolutionProvenance(provenance) ||
+    !acceptedStateValid ||
+    (acceptedStep !== undefined && canonicalScalarU64(acceptedStep) === null) ||
+    !nonEmptyScalarText(data.task_id) ||
+    !nonEmptyScalarText(data.attempt_id) ||
+    !nonEmptyScalarText(data.quantity_id) ||
+    !nonEmptyScalarText(data.unit)
+  ) {
+    throw new Error("Solution scalar response does not match the pinned artifact.");
+  }
+  return data;
+}
+
+function canonicalScalarU64(value: unknown): bigint | null {
+  if (typeof value !== "string" || !isCanonicalU64Decimal(value)) return null;
+  try {
+    return BigInt(value);
+  } catch {
+    return null;
+  }
+}
+
+function canonicalScalarRevision(value: unknown): bigint | null {
+  const parsed = canonicalScalarU64(value);
+  return parsed === null || parsed === BigInt(0) ? null : parsed;
+}
+
+function nonEmptyScalarText(value: unknown): boolean {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function hasSolutionAssessment(value: unknown): boolean {
+  if (!value || typeof value !== "object") return false;
+  const status = (value as { status?: unknown }).status;
+  return typeof status === "string" && SOLUTION_ASSESSMENT_STATUSES.has(status);
+}
+
+function hasSolutionProvenance(value: unknown): boolean {
+  if (!value || typeof value !== "object") return false;
+  const record = value as Record<string, unknown>;
+  return [
+    "run_spec_digest",
+    "model_digest",
+    "physics_digest",
+    "discretization_digest",
+    "resolved_plan_digest",
+    "acquisition_digest",
+  ].every((key) => nonEmptyScalarText(record[key]));
+}
+
 export function useMaterializedDatasetResource(
   projectId: string | null | undefined,
   runId: string | null | undefined,
@@ -243,6 +408,58 @@ export function useMaterializedDatasetResource(
     load,
     resolveRevision: (data) => data?.manifest_object_ref ?? null,
     resourceKey: identity ? materializedDatasetResourceKey(identity) : EMPTY_RESOURCE_KEY,
+  });
+}
+
+export function useSolutionScalarResource(
+  projectId: string | null | undefined,
+  runId: string | null | undefined,
+  solutionSetId: string | null | undefined,
+  revision: SolutionSetRevision | null | undefined,
+  memberId: string | null | undefined,
+  artifactId: string | null | undefined,
+  binding: SolutionScalarArtifactBinding | null,
+  options: SolutionSetResourceOptions = {},
+): ResourceResult<SolutionScalarResource | null> {
+  const { api } = useKernel();
+  const identity = useMemo(() => {
+    const solution = resolveIdentity(projectId, runId, solutionSetId, revision);
+    const member = resolveMaterializedDatasetPathId(memberId);
+    const artifact = resolveMaterializedDatasetPathId(artifactId);
+    return solution && member && artifact
+      ? { ...solution, memberId: member, artifactId: artifact }
+      : null;
+  }, [projectId, runId, solutionSetId, revision, memberId, artifactId]);
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) => {
+      if (!identity || !binding) return Promise.resolve(null);
+      return api.persistence.projects
+        .solutionScalar(
+          identity.projectId,
+          identity.runId,
+          identity.solutionSetId,
+          identity.revision,
+          identity.memberId,
+          identity.artifactId,
+          { signal },
+        )
+        .then((data) =>
+          validateSolutionScalarEnvelope(data, { ...identity, binding }),
+        );
+    },
+    [api, binding, identity],
+  );
+
+  return useResource<SolutionScalarResource | null>({
+    abortStaleInflight: true,
+    enabled: identity !== null && binding !== null && options.enabled !== false,
+    load,
+    resolveRevision: (data) => data
+      ? `${data.manifest_digest}:${data.object_ref}:${data.byte_length}:${data.ownership_epoch}`
+      : null,
+    resourceKey: identity
+      ? solutionScalarResourceKey(identity, binding)
+      : EMPTY_RESOURCE_KEY,
   });
 }
 

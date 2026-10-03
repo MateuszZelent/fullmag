@@ -852,6 +852,8 @@ export type SolutionSetMemberPageQuery =
   components["schemas"]["SolutionSetMemberPageQuery"];
 export type SolutionSetArtifactPageQuery =
   components["schemas"]["SolutionSetArtifactPageQuery"];
+export type SolutionScalarResource =
+  components["schemas"]["SolutionScalarResource"];
 export type SolutionSetRevision = Extract<SolutionSetResource["revision"], string>;
 export type MaterializedDatasetResource =
   components["schemas"]["MaterializedDatasetResource"];

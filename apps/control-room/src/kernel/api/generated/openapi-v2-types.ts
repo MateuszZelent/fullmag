@@ -260,6 +260,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/persistence/projects/{project_id}/runs/{run_id}/solution-sets/{solution_set_id}/revisions/{revision}/members/{member_id}/artifacts/{artifact_id}/scalar": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["persistence_get_persistence_projects_project_id_runs_run_id_solution_sets_solution_set_id_revisions_revision_members_member_id_artifacts_artifact_id_scalar"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/persistence/projects/{project_id}/runs/{run_id}/tasks/{task_id}/cancellation": {
         parameters: {
             query?: never;
@@ -348,6 +364,22 @@ export interface paths {
             cookie?: never;
         };
         get: operations["platform_get_platform_openapi_json"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/platform/runtime-service": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["platform_get_platform_runtime_service"];
         put?: never;
         post?: never;
         delete?: never;
@@ -10719,6 +10751,25 @@ export interface components {
             /** @enum {string} */
             kind: "command_id";
         };
+        RuntimeServiceStatusReason: {
+            code: string;
+            message: string;
+        };
+        /**
+         * @description Read-only status of the optional native application runtime service.
+         *
+         *     The resource intentionally contains no process path, store path, PID, or
+         *     scheduler payload.  Consumers get the bounded state and a machine-readable
+         *     reason while the native observer retains ownership of operational details.
+         */
+        RuntimeServiceStatusResource: {
+            configured: boolean;
+            reason: components["schemas"]["RuntimeServiceStatusReason"];
+            schema_version: string;
+            state: components["schemas"]["RuntimeServiceStatusState"];
+        };
+        /** @enum {string} */
+        RuntimeServiceStatusState: "not_configured" | "configuration_error" | "not_ready" | "starting" | "ready" | "draining" | "drained" | "failed" | "unknown" | "observation_unknown";
         SamplingPeriodPolicyResource: {
             /** @enum {string} */
             kind: "auto_sinc_cutoff";
@@ -12043,6 +12094,43 @@ export interface components {
             resolved_plan_digest: string;
             run_spec_digest: string;
             seed_digest?: string | null;
+        };
+        /**
+         * @description CAS verification does not certify the scientific result.
+         * @enum {string}
+         */
+        SolutionScalarIntegrityResource: "verified";
+        /** @description One verified scalar payload, independent of the active session. */
+        SolutionScalarResource: {
+            accepted_state?: null | components["schemas"]["SolutionAcceptedStateIdResource"];
+            artifact_id: string;
+            attempt_id: string;
+            byte_length: string;
+            execution_status: components["schemas"]["SolutionExecutionStatusResource"];
+            integrity: components["schemas"]["SolutionScalarIntegrityResource"];
+            manifest_digest: string;
+            manifest_state: components["schemas"]["SolutionSetManifestStateResource"];
+            member_execution_status: components["schemas"]["SolutionExecutionStatusResource"];
+            member_id: string;
+            member_scientific_assessment: components["schemas"]["SolutionScientificAssessmentResource"];
+            object_ref: string;
+            ownership_epoch: string;
+            project_id: string;
+            provenance: components["schemas"]["SolutionProvenanceResource"];
+            quantity_id: string;
+            revision: string;
+            run_id: string;
+            schema_version: string;
+            scientific_assessment: components["schemas"]["SolutionScientificAssessmentResource"];
+            solution_set_id: string;
+            /** @description Canonical decimal u64, preserved without browser rounding. */
+            step: string;
+            task_id: string;
+            /** Format: double */
+            time_s: number;
+            unit: string;
+            /** Format: double */
+            value_si: number;
         };
         SolutionScientificAssessmentResource: {
             /** Format: int64 */
@@ -14633,6 +14721,62 @@ export interface operations {
             };
         };
     };
+    persistence_get_persistence_projects_project_id_runs_run_id_solution_sets_solution_set_id_revisions_revision_members_member_id_artifacts_artifact_id_scalar: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                run_id: string;
+                solution_set_id: string;
+                /** @description Canonical positive decimal u64 */
+                revision: string;
+                member_id: string;
+                artifact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Verified bounded scalar; scientific assessment remains independent */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SolutionScalarResource"];
+                };
+            };
+            /** @description Invalid identity or revision */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing run, revision, member or artifact */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Foreign owner or incompatible artifact schema */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Corrupt, oversized or invalid scalar */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     persistence_post_persistence_projects_project_id_runs_run_id_tasks_task_id_cancellation: {
         parameters: {
             query?: never;
@@ -14783,6 +14927,33 @@ export interface operations {
         responses: {
             /** @description OpenAPI v2 document */
             200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    platform_get_platform_runtime_service: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Read-only native application runtime service status */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RuntimeServiceStatusResource"];
+                };
+            };
+            /** @description Runtime service status not modified for the supplied ETag */
+            304: {
                 headers: {
                     [name: string]: unknown;
                 };

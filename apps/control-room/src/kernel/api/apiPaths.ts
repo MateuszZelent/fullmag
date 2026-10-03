@@ -1046,6 +1046,10 @@ export const PROJECT_MATERIALIZED_DATASET_PATH = openApiV2Path(
   "/v2/persistence/projects/{project_id}/runs/{run_id}/solution-sets/{solution_set_id}/revisions/{revision}/members/{member_id}/artifacts/{artifact_id}/materialized-dataset",
 );
 
+export const PROJECT_SOLUTION_SCALAR_PATH = openApiV2Path(
+  "/v2/persistence/projects/{project_id}/runs/{run_id}/solution-sets/{solution_set_id}/revisions/{revision}/members/{member_id}/artifacts/{artifact_id}/scalar",
+);
+
 export const PROJECT_MATERIALIZED_DATASET_SLICE_PATH = openApiV2Path(
   "/v2/persistence/projects/{project_id}/runs/{run_id}/solution-sets/{solution_set_id}/revisions/{revision}/members/{member_id}/artifacts/{artifact_id}/materialized-dataset/slice",
 );
