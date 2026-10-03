@@ -131,7 +131,19 @@ pub(crate) async fn acquire_workspace_for_restart(
                 ));
             }
 
-            let is_scratch = is_idle_scratch(snapshot, kind, scene_id)?;
+            let trusted_restore =
+                state
+                    .development_restored_authoring
+                    .get()
+                    .is_some_and(|identity| {
+                        identity.matches(
+                            &state.request_scope_instance_id,
+                            &snapshot.session.session_id,
+                            scene_id,
+                            session_epoch,
+                        )
+                    });
+            let is_scratch = is_idle_scratch(snapshot, kind, scene_id, trusted_restore)?;
             let run_id = if is_scratch {
                 None
             } else {
@@ -187,6 +199,7 @@ fn is_idle_scratch(
     snapshot: &SessionStateResponse,
     runtime: RuntimeStatus,
     scene_id: &str,
+    trusted_restore: bool,
 ) -> Result<bool, ApiError> {
     if snapshot.session.status != "awaiting_command" {
         return Ok(false);
@@ -202,8 +215,8 @@ fn is_idle_scratch(
         && snapshot.session.script_path.is_empty()
         && snapshot.stage_execution.is_none()
         && snapshot.live_state.is_none()
-        && scene.scene.source_of_truth == "ui"
-        && snapshot.session.session_id == scene_id;
+        && (scene.scene.source_of_truth == "ui" || trusted_restore)
+        && (snapshot.session.session_id == scene_id || trusted_restore);
     if !is_scratch {
         return Ok(false);
     }
@@ -755,6 +768,50 @@ mod tests {
             "created_at_unix_ms": 1_700_000_000_000_u128
         }))
         .expect("minimal command fixture should deserialize")
+    }
+
+    #[tokio::test]
+    async fn restored_scratch_requires_trusted_identity_and_still_rejects_busy_runtime() {
+        let state = scratch_state().await;
+        let mut snapshot = state.current_live_state.read().await.clone().unwrap();
+        snapshot.scene_document.as_mut().unwrap().scene.id = "stable-model".into();
+        snapshot
+            .scene_document
+            .as_mut()
+            .unwrap()
+            .scene
+            .source_of_truth = "python".into();
+        assert!(!is_idle_scratch(
+            &snapshot,
+            RuntimeStatus::AwaitingCommand,
+            "stable-model",
+            false
+        )
+        .unwrap());
+        assert!(is_idle_scratch(
+            &snapshot,
+            RuntimeStatus::AwaitingCommand,
+            "stable-model",
+            true
+        )
+        .unwrap());
+        snapshot.runtime_status.is_busy = true;
+        assert!(is_idle_scratch(
+            &snapshot,
+            RuntimeStatus::AwaitingCommand,
+            "stable-model",
+            true
+        )
+        .is_err());
+        snapshot.runtime_status.is_busy = false;
+        snapshot.session.script_path = "script.py".into();
+        assert!(!is_idle_scratch(
+            &snapshot,
+            RuntimeStatus::AwaitingCommand,
+            "stable-model",
+            true
+        )
+        .unwrap());
     }
 
     fn tracked_command(

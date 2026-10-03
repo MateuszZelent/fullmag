@@ -108,6 +108,10 @@ pub(crate) enum MeshCommandTarget {
 
 #[derive(Debug, Clone)]
 pub(crate) struct AppState {
+    /// Private pre-listener provenance. HTTP snapshots never carry this marker.
+    pub development_restored_authoring: Arc<std::sync::OnceLock<
+        crate::router_v2::handlers::platform::development_restore_input::RestoredAuthoringIdentity,
+    >>,
     /// Lock order: mutation admission precedes the session-transition lock.
     pub development_admission:
         crate::router_v2::middleware::development_admission::DevelopmentAdmission,

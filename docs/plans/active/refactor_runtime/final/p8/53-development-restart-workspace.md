@@ -6,6 +6,8 @@ Checkpoint backendowej instalacji sceny przed listenerem i jego dowody:
 [P8-53K](53k-prelisten-authoring-restore.md). Nie zamyka pełnego restartu workspace.
 Przekazanie wejścia przez natywny CLI, verified capsule/bundle preparation
 i dowody tego przyrostu: [P8-53L](53l-launcher-authoring-input.md).
+Prywatna tożsamość po restore: [P8-53M](53m-restored-authoring-provenance.md).
+Inventory brakującego globalnego fence: [P8-53N](53n-global-idle-fence-inventory.md).
 
 Jedno `just windows-ui dev` uruchamia HMR frontendu i obserwację backendu.
 Po kompilacji UI pokazuje „Nowy backend gotowy” oraz przycisk restartu.

@@ -433,6 +433,8 @@ def exercise(api: Path, repo: Path, run_root: Path, receipt: dict) -> None:
         code, _, current = get("/v2/sessions/current")
         assert code == 200 and current["session_id"] not in {"old-session-fixture", "stable-model-fixture"}, current
         checks.append("prelisten-fresh-session-identity")
+        assert "development_restored_authoring" not in json.dumps(current), current
+        checks.append("prelisten-private-restore-provenance-is-not-exported")
         code, _, document = get("/v2/sessions/current/model/scene")
         assert code == 200 and document["scene"]["id"] == "stable-model-fixture", document
         assert document["revision"] == 17, document

@@ -17,6 +17,30 @@ const INPUT_ENV: &str = "FULLMAG_DEVELOPMENT_RESTORE_STDIN";
 const SCHEMA: &str = "fullmag.development-prelisten-restore.v1";
 const MAX_INPUT_BYTES: usize = 64 * 1024 * 1024;
 
+/// Set only by successful private startup restore, never deserialized from HTTP.
+#[derive(Debug)]
+pub(crate) struct RestoredAuthoringIdentity {
+    api_instance_id: String,
+    session_id: String,
+    model_id: String,
+    session_epoch: u64,
+}
+
+impl RestoredAuthoringIdentity {
+    pub(crate) fn matches(
+        &self,
+        api_instance_id: &str,
+        session_id: &str,
+        model_id: &str,
+        epoch: u64,
+    ) -> bool {
+        self.api_instance_id == api_instance_id
+            && self.session_id == session_id
+            && self.model_id == model_id
+            && self.session_epoch == epoch
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RestoreInput {
@@ -81,7 +105,43 @@ pub(crate) async fn restore_before_listen(state: &AppState) -> Result<(), String
     if current_state.is_some() || state.current_live_session_epoch.load(Ordering::Acquire) != 0 {
         return Err("development restore requires a fresh API workspace".into());
     }
+    let identity = RestoredAuthoringIdentity {
+        api_instance_id: state.request_scope_instance_id.clone(),
+        session_id: snapshot.session.session_id.clone(),
+        model_id: snapshot
+            .scene_document
+            .as_ref()
+            .expect("restore validated canonical scene")
+            .scene
+            .id
+            .clone(),
+        session_epoch: 1,
+    };
+    state
+        .development_restored_authoring
+        .set(identity)
+        .map_err(|_| "development restore provenance was already installed".to_string())?;
     *current_state = Some(snapshot);
     state.current_live_session_epoch.store(1, Ordering::Release);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn restored_identity_is_bound_to_process_session_model_and_epoch() {
+        let identity = RestoredAuthoringIdentity {
+            api_instance_id: "api-a".into(),
+            session_id: "new-session".into(),
+            model_id: "stable-model".into(),
+            session_epoch: 1,
+        };
+        assert!(identity.matches("api-a", "new-session", "stable-model", 1));
+        assert!(!identity.matches("api-b", "new-session", "stable-model", 1));
+        assert!(!identity.matches("api-a", "other-session", "stable-model", 1));
+        assert!(!identity.matches("api-a", "new-session", "other-model", 1));
+        assert!(!identity.matches("api-a", "new-session", "stable-model", 2));
+    }
 }

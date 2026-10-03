@@ -642,6 +642,7 @@ pub(crate) fn test_app_state() -> Arc<AppState> {
 
     Arc::new(AppState {
         development_admission: Default::default(),
+        development_restored_authoring: Default::default(),
         development_backend: crate::router_v2::handlers::platform::development_backend::DevelopmentBackendConfig::Disabled,
         repo_root: PathBuf::from("."),
         submit_store_root: None,
@@ -2766,6 +2767,7 @@ async fn test_router_with_session_store_state() -> (axum::Router, Arc<AppState>,
 
     let state = Arc::new(AppState {
         development_admission: Default::default(),
+        development_restored_authoring: Default::default(),
         development_backend: crate::router_v2::handlers::platform::development_backend::DevelopmentBackendConfig::Disabled,
         repo_root: repo_root.clone(),
         submit_store_root: Some(repo_root.join("submit-store")),

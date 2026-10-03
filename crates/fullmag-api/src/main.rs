@@ -2441,6 +2441,7 @@ async fn main() {
 
     let state = Arc::new(AppState {
         development_admission: Default::default(),
+        development_restored_authoring: Default::default(),
         development_backend: router_v2::handlers::platform::development_backend::DevelopmentBackendConfig::from_environment(),
         repo_root: repo_root.clone(),
         submit_store_root: run_intent_persistence::configured_submit_store_root(
