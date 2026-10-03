@@ -8,6 +8,7 @@ import { Button } from "@/shared/ui/Button";
 
 import { openLabel, selectBanner } from "../model/bannerModel";
 import type { ContinueSession, InspectorTab, RecentEntry } from "../model/types";
+import { ProjectThumb } from "../ui/ProjectThumb";
 import { SolverBadge } from "../ui/SolverBadge";
 import { StatusPill } from "../ui/StatusPill";
 
@@ -82,6 +83,15 @@ export function ProjectDetails({
 
   return (
     <aside aria-label="Project details" className="fm-start__inspector fm-start-inspector">
+      <div
+        aria-label={entry.thumbnail ? `Last result of ${entry.name}` : undefined}
+        className="fm-start-preview"
+        role={entry.thumbnail ? "img" : undefined}
+      >
+        <span className="fm-start-preview__label">Last result</span>
+        <ProjectThumb eager size="preview" src={entry.thumbnail} status={entry.status} />
+      </div>
+
       <header className="fm-start-inspector__head">
         <div className="fm-start-inspector__title-row">
           <h2 className="fm-start-inspector__name">{entry.name}</h2>

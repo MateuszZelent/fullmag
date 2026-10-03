@@ -1,7 +1,7 @@
 "use client";
 
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { FolderOpen, RefreshCw, Search } from "lucide-react";
+import { FolderOpen, LayoutGrid, List, RefreshCw, Search } from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -15,6 +15,7 @@ import {
 
 import { Button } from "@/shared/ui/Button";
 import { SegmentedControl } from "@/shared/ui/SegmentedControl";
+import { cn } from "@/shared/utils/className";
 
 import { filterEntries, sortEntries } from "../model/recentIndex";
 import { startScreenStore } from "../model/startScreenState";
@@ -22,6 +23,7 @@ import type { RecentEntry, RecentFilter, RecentSort } from "../model/types";
 import type { RecentIndexController } from "../model/useRecentIndex";
 import { SectionHeader } from "../ui/SectionHeader";
 
+import { ProjectCard } from "./ProjectCard";
 import { ProjectRow, rowDomId } from "./ProjectRow";
 import { VIRTUALISE_ABOVE, buildListItems, type RecentListItem } from "./recentListModel";
 
@@ -66,6 +68,7 @@ export function RecentProjects({
 
   const [filter, setFilter] = useState<RecentFilter>("all");
   const [sort, setSort] = useState<RecentSort>("lastOpened");
+  const [view, setView] = useState<"list" | "grid">("list");
   const [query, setQuery] = useState("");
   const [openError, setOpenError] = useState<string | null>(null);
 
@@ -92,7 +95,9 @@ export function RecentProjects({
     () => items.flatMap((item) => (item.kind === "entry" ? [item.entry] : [])),
     [items],
   );
-  const virtualised = selectable.length > VIRTUALISE_ABOVE;
+  // Cards wrap into a grid whose rows the virtualiser cannot size; their images
+  // load lazily and are pinned in a bounded cache instead.
+  const virtualised = view === "list" && selectable.length > VIRTUALISE_ABOVE;
 
   // The selection survives a rebuild only if its project does; otherwise fall
   // back to nothing selected rather than pointing at a row that is gone.
@@ -145,11 +150,21 @@ export function RecentProjects({
   const forgetSelection = recent.forget;
   const onListKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     const current = activeIndex < 0 ? 0 : activeIndex;
+    // In the grid, Up and Down move a whole row of cards.
+    const step = () => (view === "grid" ? gridColumns(listRef.current) : 1);
     switch (event.key) {
       case "ArrowDown":
-        select(Math.min(selectable.length - 1, activeIndex < 0 ? 0 : current + 1));
+        select(Math.min(selectable.length - 1, activeIndex < 0 ? 0 : current + step()));
         break;
       case "ArrowUp":
+        select(Math.max(0, current - step()));
+        break;
+      case "ArrowRight":
+        if (view !== "grid") return;
+        select(Math.min(selectable.length - 1, activeIndex < 0 ? 0 : current + 1));
+        break;
+      case "ArrowLeft":
+        if (view !== "grid") return;
         select(Math.max(0, current - 1));
         break;
       case "Home":
@@ -269,6 +284,26 @@ export function RecentProjects({
               </option>
             ))}
           </select>
+          <div aria-label="View" className="fm-start-viewtoggle" role="group">
+            <button
+              aria-label="List view"
+              aria-pressed={view === "list"}
+              onClick={() => setView("list")}
+              title="List view"
+              type="button"
+            >
+              <List aria-hidden="true" size={14} />
+            </button>
+            <button
+              aria-label="Grid view"
+              aria-pressed={view === "grid"}
+              onClick={() => setView("grid")}
+              title="Grid view"
+              type="button"
+            >
+              <LayoutGrid aria-hidden="true" size={14} />
+            </button>
+          </div>
         </div>
       ) : null}
 
@@ -309,7 +344,11 @@ export function RecentProjects({
         <div
           aria-activedescendant={activeDescendant}
           aria-label="Recent projects"
-          className={virtualised ? "fm-start-list fm-start-list--virtual" : "fm-start-list"}
+          className={cn(
+            "fm-start-list",
+            virtualised && "fm-start-list--virtual",
+            view === "grid" && "fm-start-list--grid",
+          )}
           onKeyDown={onListKeyDown}
           ref={listRef}
           role="listbox"
@@ -326,14 +365,14 @@ export function RecentProjects({
                     key={virtualRow.key}
                     style={{ height: virtualRow.size, transform: `translateY(${virtualRow.start}px)` }}
                   >
-                    {renderItem(item, selectable.length, selectedProjectId, recent, activate)}
+                    {renderItem(item, selectable.length, selectedProjectId, recent, activate, view)}
                   </div>
                 );
               })}
             </div>
           ) : (
             items.map((item) =>
-              renderItem(item, selectable.length, selectedProjectId, recent, activate),
+              renderItem(item, selectable.length, selectedProjectId, recent, activate, view),
             )
           )}
         </div>
@@ -378,6 +417,7 @@ function renderItem(
   selectedProjectId: string | null,
   recent: RecentIndexController,
   activate: (projectId: string) => Promise<void>,
+  view: "list" | "grid",
 ) {
   if (item.kind === "header") {
     return (
@@ -385,6 +425,18 @@ function renderItem(
         {item.label}
         <span className="fm-start-group__count">{item.count}</span>
       </div>
+    );
+  }
+  if (view === "grid") {
+    return (
+      <ProjectCard
+        entry={item.entry}
+        key={item.entry.projectId}
+        onActivate={(projectId) => void activate(projectId)}
+        onSelect={(projectId) => startScreenStore.setSelectedProject(projectId)}
+        position={{ index: item.ordinal, count }}
+        selected={item.entry.projectId === selectedProjectId}
+      />
     );
   }
   return (
@@ -398,6 +450,13 @@ function renderItem(
       selected={item.entry.projectId === selectedProjectId}
     />
   );
+}
+
+/** Cards per row of the rendered grid, read from the browser's own layout. */
+function gridColumns(list: HTMLElement | null): number {
+  if (!list) return 1;
+  const tracks = getComputedStyle(list).gridTemplateColumns.split(" ").filter(Boolean);
+  return Math.max(1, tracks.length);
 }
 
 /** Index of the first row of the next (or previous) date group. */

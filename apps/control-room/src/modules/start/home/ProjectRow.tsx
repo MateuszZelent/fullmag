@@ -7,6 +7,7 @@ import { cn } from "@/shared/utils/className";
 
 import { formatBytes, formatOpened, shortenPath } from "../model/recentIndex";
 import type { RecentEntry } from "../model/types";
+import { ProjectThumb } from "../ui/ProjectThumb";
 import { SolverBadge } from "../ui/SolverBadge";
 import { StatusPill } from "../ui/StatusPill";
 
@@ -43,6 +44,7 @@ function ProjectRowImpl({
       onDoubleClick={() => onActivate(entry.projectId)}
       role="option"
     >
+      <ProjectThumb size="row" src={entry.thumbnail} status={entry.status} />
       <span className="fm-start-row__main">
         <span className="fm-start-row__name">
           <span className="fm-start-row__name-text">{entry.name}</span>
