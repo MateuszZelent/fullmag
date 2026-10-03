@@ -1,5 +1,12 @@
 # Status realizacji całego planu refaktoryzacji
 
+Checkpoint B-03, 03.10.2026: sześć helperów i czternaście metod STT/SOT
+wydzielono do `fields/direct_torques.rs`, zachowując ciała i adapter FEM.
+Source comparison/Rustfmt PASS; test layoutu NOT COMPILED / NOT RUN.
+Review źródeł PASS; osobny odczyt adapterów nie potwierdził podejrzenia
+zamiany argumentów. [Zakres](b/03-fdm-cpu-direct-torques-owner.md).
+Build 217 nadal czeka; procenty bez awansu.
+
 Checkpoint B-02, 03.10.2026: siedem metod pola demagnetyzacji Rust FDM CPU
 ma właściciela `fields/demag.rs`. Porównanie sygnatur i ciał z HEAD oraz
 Rustfmt PASS; kontrakt layoutu dodany, NOT COMPILED / NOT RUN. Build 217

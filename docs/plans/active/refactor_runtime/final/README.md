@@ -32,6 +32,9 @@ dlatego nie podnosi procentów P3/P5.
 
 ## Dokumenty finalne
 
+Checkpoint B-03, 03.10.2026: [właściciel STT/SOT FDM CPU](b/03-fdm-cpu-direct-torques-owner.md).
+Ekstrakcja zachowuje dwadzieścia ciał funkcji i adapter FEM; kwalifikacja pozostaje otwarta.
+
 Checkpoint B-02, 03.10.2026: [właściciel pola demagnetyzacji FDM CPU](b/02-fdm-cpu-demag-owner.md).
 Siedem metod zachowuje sygnatury i ciała; weryfikacja produkcyjna pozostaje otwarta.
 

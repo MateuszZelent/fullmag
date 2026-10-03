@@ -44,6 +44,58 @@ fn fdm_cpu_demagnetizing_field_has_one_realization_owner() {
 }
 
 #[test]
+fn fdm_cpu_direct_torques_keep_their_realization_and_fem_adapter_boundary() {
+    let root = crate_root();
+    let owner = fs::read_to_string(root.join("src/fdm/cpu/fields/direct_torques.rs"))
+        .expect("read direct torque owner");
+    let fields =
+        fs::read_to_string(root.join("src/fdm/cpu/fields.rs")).expect("read field orchestration");
+    assert!(fields.contains("fields/direct_torques.rs") && fields.contains("mod direct_torques;"));
+    for name in [
+        "slonczewski_prefactor",
+        "gilbert_slonczewski_scales",
+        "gilbert_zhang_li_scales",
+        "slonczewski_torque_from_config",
+        "prescribed_sot_scales",
+        "prescribed_sot_torque_from_config",
+        "direct_torques_add_into",
+        "direct_torques_add_into_soa",
+        "zhang_li_mumax3_torque_at_with<F>",
+        "zhang_li_mumax3_torque_at",
+        "zhang_li_mumax3_torque_at_soa",
+        "zhang_li_stt_torque",
+        "slonczewski_stt_torque",
+        "sot_torque",
+        "zhang_li_stt_torque_add_into",
+        "zhang_li_stt_torque_add_into_soa",
+        "slonczewski_stt_torque_add_into",
+        "slonczewski_stt_torque_add_into_soa",
+        "sot_torque_add_into",
+        "sot_torque_add_into_soa",
+    ] {
+        let declaration = format!("fn {name}(");
+        assert_eq!(
+            owner.matches(&declaration).count(),
+            1,
+            "missing or duplicate {name}"
+        );
+        assert!(
+            !fields.contains(&declaration),
+            "orchestration still owns {name}"
+        );
+    }
+    assert!(fields.contains("pub(crate) use direct_torques::{"));
+    let fem = fs::read_to_string(root.join("src/fem.rs")).expect("read FEM reference adapter");
+    for name in [
+        "slonczewski_torque_from_config",
+        "prescribed_sot_torque_from_config",
+    ] {
+        assert!(fields.contains(name), "missing FEM helper reexport {name}");
+        assert!(fem.contains(&format!("crate::fdm::cpu::fields::{name}(")));
+    }
+}
+
+#[test]
 fn fdm_engine_shared_vector_field_has_fdm_owner() {
     let root = crate_root();
     for path in [

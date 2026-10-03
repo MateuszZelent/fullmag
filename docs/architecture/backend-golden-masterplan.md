@@ -98,6 +98,12 @@ FFT/workspace zachowuje dotychczasowego właściciela; energie i obserwable
 pozostają konsumentami tej realizacji. Ta ekstrakcja nie zmienia dispatchu
 `CpuReference` i nie kwalifikuje natywnego backendu CPU/GPU.
 
+`fields/direct_torques.rs` skupia realizacje Zhang–Li, Slonczewski i SOT,
+ich warianty allocating/add-into AoS/SoA oraz dispatcher momentów.
+`fields.rs` zachowuje orkiestrację RHS i reeksport dwóch helperów konfiguracji
+używanych przez FEM reference. Współdzielenie lokalnej algebry nie oznacza
+wspólnego stanu runtime ani zmiany właściciela produkcyjnego FEM.
+
 Profesjonalne kryteria organizacji:
 
 1. Top-level albo pseudo-top-level root backendów ma oznaczać kompilowany kod
