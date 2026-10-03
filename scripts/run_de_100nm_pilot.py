@@ -35,6 +35,7 @@ from validate_de_physical_potential import validate_physical_potential, _extract
 from validate_parallel_execution_report import validate_parallel_execution_report, ValidationError as ParallelReportError
 import de_smoke_model_input as model_input
 from de_signed_state_closure import bind_signed_state_closure
+from de_failed_modal_diagnostic import read_failed_schur_action
 from run_de_ui_model import copy_web
 
 MODEL = "examples/fem_de_film_100nm_numeric_pilot.py"
@@ -1359,12 +1360,16 @@ def validate_schur_action_diagnostic(case_dir):
             (Path(case_dir) / relative_path).read_text(encoding="utf-8")
         )
     except (OSError, UnicodeError, json.JSONDecodeError):
-        return {
-            **report,
-            "status": "unavailable",
-            "validation_status": "unavailable",
-            "reason": "native_solver_diagnostics_missing_or_invalid",
-        }
+        try:
+            payload, evidence = read_failed_schur_action(case_dir)
+            report.update(evidence)
+        except (OSError, ValueError, UnicodeError, RecursionError):
+            return {
+                **report,
+                "status": "unavailable",
+                "validation_status": "unavailable",
+                "reason": "native_solver_diagnostics_missing_or_invalid",
+            }
     if not isinstance(payload, dict):
         return {
             **report,
