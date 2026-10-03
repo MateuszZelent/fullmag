@@ -108,6 +108,9 @@ pub(crate) enum MeshCommandTarget {
 
 #[derive(Debug, Clone)]
 pub(crate) struct AppState {
+    /// Lock order: mutation admission precedes the session-transition lock.
+    pub development_admission:
+        crate::router_v2::middleware::development_admission::DevelopmentAdmission,
     /// Immutable native launcher binding; ordinary API startup leaves it disabled.
     pub development_backend:
         crate::router_v2::handlers::platform::development_backend::DevelopmentBackendConfig,

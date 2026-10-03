@@ -2440,6 +2440,7 @@ async fn main() {
     }
 
     let state = Arc::new(AppState {
+        development_admission: Default::default(),
         development_backend: router_v2::handlers::platform::development_backend::DevelopmentBackendConfig::from_environment(),
         repo_root: repo_root.clone(),
         submit_store_root: run_intent_persistence::configured_submit_store_root(
@@ -2548,6 +2549,10 @@ async fn main() {
 
     let app = maybe_merge_swagger_ui(app)
         .layer(DefaultBodyLimit::max(LOCAL_BRIDGE_BODY_LIMIT_BYTES))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            router_v2::middleware::development_admission::mutation_admission_middleware,
+        ))
         .layer(cors)
         .with_state(state);
 
@@ -3918,6 +3923,8 @@ where
 async fn dequeue_current_live_command(
     State(state): State<Arc<AppState>>,
 ) -> Result<Response, ApiError> {
+    let _permit = state.development_admission.admit().await?;
+    let _transition = state.current_live_session_transition.lock().await;
     let command = take_next_current_control_command_after(&state, 0).await?;
     match command {
         Some(command) => Ok(Json(command).into_response()),
@@ -3982,6 +3989,7 @@ async fn take_current_control_command_for_session(
     after_seq: u64,
     requested_session_id: Option<&str>,
 ) -> Result<Option<SessionCommand>, ApiError> {
+    let _permit = state.development_admission.admit().await?;
     let _transition = state.current_live_session_transition.lock().await;
     if let Some(requested_session_id) = requested_session_id {
         let current_session_id = current_live_session_id(state).await?;

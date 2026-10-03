@@ -53,7 +53,7 @@ def run(repo_root: str) -> int:
                    "build_snapshot_sha256": manifest["source_snapshot_sha256"],
                    "build_commit": manifest["git_commit"],
                    "started_at": storage.now(), "checks": [], "processes": [],
-                   "scope": "native resource observation; no UI, restart, solver or release qualification"}
+                   "scope": "native resource observation and open mutation admission; no UI, freeze, restart, solver or release qualification"}
         storage.atomic_json(receipt_path, receipt)
         code = 1
         try:
@@ -142,11 +142,16 @@ def exercise(api: Path, repo: Path, run_root: Path, receipt: dict) -> None:
             receipt["processes"].append(record)
             base = f"http://127.0.0.1:{port}/v2/platform/"
 
-            def get(path="development-backend", etag=None):
-                request = urllib.request.Request(base + path, headers={"If-None-Match": etag} if etag else {})
+            def get(path="development-backend", etag=None, *, method="GET", payload=None):
+                url = f"http://127.0.0.1:{port}" + path if path.startswith("/") else base + path
+                headers = {"If-None-Match": etag} if etag else {}
+                if payload is not None:
+                    headers["Content-Type"] = "application/json"
+                request = urllib.request.Request(url, method=method, headers=headers,
+                                                 data=json.dumps(payload).encode("utf-8") if payload is not None else None)
                 try:
                     with urllib.request.urlopen(request, timeout=2) as response:
-                        return response.status, response.headers.get("ETag"), json.load(response)
+                        return response.status, response.headers.get("ETag"), None if response.status == 204 else json.load(response)
                 except urllib.error.HTTPError as error:
                     if error.code == 304:
                         return 304, error.headers.get("ETag"), None
@@ -172,7 +177,21 @@ def exercise(api: Path, repo: Path, run_root: Path, receipt: dict) -> None:
                 record["waited"] = True
                 record["log_sha256"] = hashlib.sha256(log_path.read_bytes()).hexdigest()
 
-    with_api("disabled", {}, lambda get: check("non-dev-disabled", get()[2], "disabled", "disabled"))
+    def disabled(get):
+        check("non-dev-disabled", get()[2], "disabled", "disabled")
+        status_code, _, created = get("/v2/sessions", method="POST", payload={
+            "name": "Owned admission fixture", "backend": "fdm", "device": "cpu", "precision": "double",
+        })
+        assert status_code == 201 and created["session_id"], created
+        checks.append("open-admission-creates-scratch-session")
+        status_code, _, current = get("/v2/sessions/current")
+        assert status_code == 200 and current["session_id"] == created["session_id"], current
+        checks.append("read-after-admitted-mutation")
+        status_code, _, _ = get("/v1/internal/live/current/control/wait?timeoutMs=100")
+        assert status_code == 204, status_code
+        checks.append("admitted-empty-control-dequeue")
+
+    with_api("disabled", {}, disabled)
     with_api("partial", {"FULLMAG_DEVELOPMENT_BACKEND_GENERATION": generation}, lambda get: check("partial-configuration", get()[2], "unknown", "configuration_invalid"))
 
     def managed(get):

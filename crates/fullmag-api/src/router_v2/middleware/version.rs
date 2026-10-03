@@ -53,6 +53,11 @@ pub async fn contract_version_middleware(req: Request, next: Next) -> Response {
         )
         .into_response()
     };
+    add_contract_headers(&mut response);
+    response
+}
+
+pub(crate) fn add_contract_headers(response: &mut Response) {
     response.headers_mut().insert(
         INSTANCE_HEADER,
         HeaderValue::from_str(instance_id()).expect("UUID is a valid header value"),
@@ -60,7 +65,6 @@ pub async fn contract_version_middleware(req: Request, next: Next) -> Response {
     if let Ok(value) = HeaderValue::from_str(CONTRACT_VERSION) {
         response.headers_mut().insert(HEADER_NAME, value);
     }
-    response
 }
 
 #[cfg(test)]
