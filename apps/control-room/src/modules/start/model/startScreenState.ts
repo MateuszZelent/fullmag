@@ -25,6 +25,8 @@ export interface StartScreenSnapshot {
   readonly section: StartSection;
   /** Shared with the inspector, which describes the selection without opening it. */
   readonly selectedProjectId: string | null;
+  /** The gallery card shown in the inspector while on Templates. */
+  readonly selectedTemplateId: string | null;
   /** Bumped by palette commands so the mounted list can react without props. */
   readonly searchFocusNonce: number;
   readonly rebuildNonce: number;
@@ -36,6 +38,7 @@ const INITIAL_SNAPSHOT: StartScreenSnapshot = {
   host: null,
   section: "home",
   selectedProjectId: null,
+  selectedTemplateId: null,
   searchFocusNonce: 0,
   rebuildNonce: 0,
 };
@@ -64,6 +67,11 @@ class StartScreenStore {
 
   requestRebuild(): void {
     this.publish({ ...this.snapshot, rebuildNonce: this.snapshot.rebuildNonce + 1 });
+  }
+
+  setSelectedTemplate(selectedTemplateId: string | null): void {
+    if (this.snapshot.selectedTemplateId === selectedTemplateId) return;
+    this.publish({ ...this.snapshot, selectedTemplateId });
   }
 
   setSelectedProject(selectedProjectId: string | null): void {

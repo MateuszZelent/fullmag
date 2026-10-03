@@ -26,6 +26,7 @@ describe("startScreenStore", () => {
       host: null,
       section: "home",
       selectedProjectId: null,
+      selectedTemplateId: null,
       searchFocusNonce: 0,
       rebuildNonce: 0,
     });
@@ -63,6 +64,7 @@ describe("startScreenStore", () => {
       host: null,
       section: "home",
       selectedProjectId: null,
+      selectedTemplateId: null,
       searchFocusNonce: 0,
       rebuildNonce: 0,
     });

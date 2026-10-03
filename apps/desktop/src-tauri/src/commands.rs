@@ -3,7 +3,7 @@ use fullmag_application::{
     DocumentMode, DurabilityGuarantee, FileProjectRepository, ProjectApplication, ProjectSource,
     ProjectTarget, SaveProjectRequest,
 };
-use crate::recent_index;
+use crate::{compute_probe, recent_index};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fs;
@@ -427,6 +427,15 @@ fn recent_project_roots(app: &AppHandle, file: &Path) -> Vec<PathBuf> {
     let mut seen = std::collections::HashSet::new();
     roots.retain(|root| seen.insert(root.clone()));
     roots
+}
+
+/// GPU, CUDA, VRAM and CPU threads for the start screen's rail. Runs off the
+/// async executor because it spawns `nvidia-smi`.
+#[tauri::command]
+pub async fn compute_probe() -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(compute_probe::probe)
+        .await
+        .map_err(|error| format!("compute probe was interrupted: {error}"))
 }
 
 #[tauri::command]

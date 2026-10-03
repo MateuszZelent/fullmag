@@ -1316,6 +1316,29 @@
   margin-top: auto;
 }
 
+/* ── Templates gallery ────────────────────────────────────────────────── */
+
+.fm-start-templates {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(var(--fm-start-card-w), 1fr));
+  gap: var(--fm-space-3);
+}
+
+.fm-start-templates > .fm-start-card {
+  grid-template-rows: auto auto 1fr auto;
+}
+
+.fm-start-template__desc {
+  padding: var(--fm-space-1) var(--fm-space-3) 0;
+  color: var(--fm-start-meta);
+  font-size: var(--fm-font-size-xs);
+  line-height: 1.5;
+}
+
+.fm-start-inspector__footnote {
+  padding: 0 var(--fm-space-4) var(--fm-space-3);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .fm-start *,
   .fm-start *::before,

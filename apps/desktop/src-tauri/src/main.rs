@@ -2,6 +2,7 @@
 
 mod api_sidecar;
 mod commands;
+mod compute_probe;
 mod recent_index;
 
 use api_sidecar::ApiSidecar;
@@ -69,6 +70,7 @@ fn main() {
             commands::open_project_archive_dialog,
             commands::open_project_path,
             commands::open_project_archive_path,
+            commands::compute_probe,
             commands::recent_index_read,
             commands::recent_index_rebuild,
             commands::recent_index_pin,

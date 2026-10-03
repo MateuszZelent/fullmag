@@ -1,9 +1,11 @@
 import { Box, GraduationCap, Import, Info, LayoutGrid, Settings, type LucideIcon } from "lucide-react";
 
 import type { StartSection } from "../model/startScreenState";
-import type { ContinueSession, RecentEntry } from "../model/types";
+import { STUDY_TEMPLATES } from "../model/templates";
+import type { ComputeProbeState, ContinueSession, RecentEntry } from "../model/types";
 
 import { ProjectDetails } from "./ProjectDetails";
+import { TemplateDetails } from "./TemplateDetails";
 
 interface InspectorHint {
   readonly body: string;
@@ -48,6 +50,8 @@ export interface ProjectInspectorProps {
   readonly section: StartSection;
   /** The selected recent project; only the Home section has one. */
   readonly entry: RecentEntry | null;
+  readonly templateId: string | null;
+  readonly compute: ComputeProbeState;
   readonly session?: ContinueSession;
   readonly openDisabledReason: string | null;
   readonly onOpen: (entry: RecentEntry) => Promise<string | null>;
@@ -59,7 +63,17 @@ export interface ProjectInspectorProps {
  * Details of the selected project, or, when there is none, what will appear
  * here for the current section. It is never blank.
  */
-export function ProjectInspector({ section, entry, ...actions }: ProjectInspectorProps) {
+export function ProjectInspector({
+  section,
+  entry,
+  templateId,
+  compute,
+  ...actions
+}: ProjectInspectorProps) {
+  const template = STUDY_TEMPLATES.find((t) => t.id === templateId);
+  if (section === "templates" && template) {
+    return <TemplateDetails compute={compute} key={template.id} template={template} />;
+  }
   if (section === "home" && entry) {
     // Keyed so the tab and the copied flag reset when another project is chosen.
     return <ProjectDetails entry={entry} key={entry.projectId} {...actions} />;
