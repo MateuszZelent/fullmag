@@ -1,5 +1,12 @@
 # Status realizacji całego planu refaktoryzacji
 
+Checkpoint P8-41, 03.10.2026: overlay sond nightly P8-38 wdrożony przez
+kontrolowaną pauzę pustej kolejki i managed replace. Hash rzeczywistego
+entrypointu zgodny, osiem profili obrazu i siedem operatorowych zachowane.
+Kolejka wznowiona i zdrowa; 218 nadal queued/waiting_for_disk.
+[Dowody i granice](p8/41-nightly-probes-deployed.md). Receipt/runtime i
+pełny pakiet nadal NOT VERIFIED; procenty bez awansu.
+
 Checkpoint P8-40, 03.10.2026: build 217 BLOCKED przed kompilacją, poniżej
 8 GiB wolnego na Windows C:/kanonicznym storage. Build 218 queued;
 koordinator zdrowy, waiting_for_disk. Wewnętrzny dysk Dockera ma zapas,

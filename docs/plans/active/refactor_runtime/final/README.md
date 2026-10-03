@@ -32,6 +32,9 @@ dlatego nie podnosi procentów P3/P5.
 
 ## Dokumenty finalne
 
+Checkpoint P8-41: [wdrożone sondy nightly](p8/41-nightly-probes-deployed.md).
+Kolejka zdrowa po kontrolowanej wymianie; pojemność Windows storage nadal blokuje build 218.
+
 Checkpoint B-03, 03.10.2026: [właściciel STT/SOT FDM CPU](b/03-fdm-cpu-direct-torques-owner.md).
 Ekstrakcja zachowuje dwadzieścia ciał funkcji i adapter FEM; kwalifikacja pozostaje otwarta.
 
