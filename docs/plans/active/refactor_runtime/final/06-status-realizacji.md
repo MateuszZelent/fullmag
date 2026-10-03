@@ -1,5 +1,13 @@
 # Status realizacji całego planu refaktoryzacji
 
+Checkpoint P8-48, 03.10.2026: zachowano dokładne kopie dziesięciu plików
+różniących się od kapsuł pięciu starych execution. Hashe oryginałów przed/po
+kopiowaniu i kopii zgodne; dowód w kanonicznym storage.
+[Różnice, kopie i ograniczenia](p8/48-execution-source-preservation.md).
+Nie usunięto danych. Audyt P8-46 nadal ma otwarte uwagi review;
+runner zdrowy, bez aktywnych jobów, waiting_for_disk (7 967 784 960 B wolnego).
+Build/runtime/Windows NOT VERIFIED; procenty bez awansu.
+
 Checkpoint P8-45, 03.10.2026: natywny Windows fixture potwierdził usunięcie
 samych wpisów junction, Windows symlink i dokładnego WSL/LX tagu,
 z zachowaniem celów. Finalny przebieg PASS/exit 0, bez Docker/WSL

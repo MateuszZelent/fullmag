@@ -1,5 +1,9 @@
 # Fullmag — finalny audyt i plan refaktoryzacji
 
+Checkpoint P8-48: [dokładne kopie zmienionych plików execution](p8/48-execution-source-preservation.md).
+Dziesięć kopii i ich hashe zachowano w kanonicznym storage. Nie wykonano
+sprzątania; audyt P8-46 wymaga poprawek po review, build nadal czeka na miejsce.
+
 Checkpoint P8-44/45: [audyt siedmiu zakończonych execution](p8/44-execution-cleanup-proposal.md)
 i [natywny Windows fixture usuwania samych linków](p8/45-windows-reparse-unlink-fixture.md).
 18 662 cele linków zbadane; dokładne tagi junction/Windows/LX przeszły fixture
