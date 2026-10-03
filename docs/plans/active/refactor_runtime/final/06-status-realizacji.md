@@ -1,5 +1,12 @@
 # Status realizacji całego planu refaktoryzacji
 
+Checkpoint P8-40, 03.10.2026: build 217 BLOCKED przed kompilacją, poniżej
+8 GiB wolnego na Windows C:/kanonicznym storage. Build 218 queued;
+koordinator zdrowy, waiting_for_disk. Wewnętrzny dysk Dockera ma zapas,
+więc prune BuildKit nie rozwiązuje potwierdzonej lokalizacji braku miejsca.
+[Diagnoza i następny krok](p8/40-build-217-storage-block.md). Niczego nie
+usunięto; wymagane build/runtime/OpenAPI proof pozostają otwarte.
+
 Checkpoint B-03, 03.10.2026: sześć helperów i czternaście metod STT/SOT
 wydzielono do `fields/direct_torques.rs`, zachowując ciała i adapter FEM.
 Source comparison/Rustfmt PASS; test layoutu NOT COMPILED / NOT RUN.
