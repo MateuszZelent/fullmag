@@ -633,13 +633,23 @@ fn launch_ui(ui: UiCli) -> Result<()> {
     );
     let root = crate::control_room::repo_root();
     let state_root = crate::control_room::runtime_state_root(&root);
-    if std::env::var_os("FULLMAG_RUNTIME_SERVICE_CONFIG").is_some() && !owns_api {
-        bail!("native service attach requires an API owned by this launcher; reused API instance lease is not verified");
-    }
-    let runtime_binding = fullmag_runtime_control::runtime_service_client::ensure_for_application(
+    let mut runtime_binding = fullmag_runtime_control::application_attach::prepare_for_authoring(
         &root, &state_root, crate::control_room::api_port())?;
+    if !owns_api {
+        runtime_binding.disable_automatic_attach(
+            fullmag_runtime_control::application_attach::ApplicationAttachBlockReason::ApiNotOwned,
+        );
+    }
     let mut ui_child = crate::control_room::open_in_tauri(
-        &ready, intent, &runtime_binding.api_instance_id)?;
+        &ready, intent, runtime_binding.api_instance_id())?;
+    // Native startup has an owned observer and cannot delay opening the window.
+    let runtime_attach = match runtime_binding.start() {
+        Ok(attach) => attach,
+        Err(error) => {
+            eprintln!("Native runtime attach unavailable: {error:#}");
+            None
+        }
+    };
     let scratch_runtime = if live_workspace.is_none() {
         let executable = std::env::current_exe().context("failed to resolve fullmag executable")?;
         Some(crate::scratch_runtime::spawn(
@@ -651,6 +661,8 @@ fn launch_ui(ui: UiCli) -> Result<()> {
         None
     };
     let _ = ui_child.wait();
+    // Join the observer before shutting down the API it is pinned to.
+    drop(runtime_attach);
     drop(control_room_guard);
     drop(scratch_runtime);
     Ok(())

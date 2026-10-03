@@ -74,7 +74,14 @@ fn require_api_instance_header(headers: &str) -> Result<String> {
     Ok((*value).to_owned())
 }
 
-fn verify_api_store(port: u16, expected: &Path) -> Result<String> {
+pub(crate) fn verify_api_identity(port: u16) -> Result<String> {
+    let (document, instance) = read_api_document(port)?;
+    let local = fullmag_build_info::identity();
+    require_api_identity(&document, local.git_commit, local.source_snapshot_sha256)?;
+    Ok(instance)
+}
+
+pub(crate) fn verify_api_store(port: u16, expected: &Path) -> Result<String> {
     let (document, instance) = read_api_document(port)?;
     let local = fullmag_build_info::identity();
     require_api_identity(&document, local.git_commit, local.source_snapshot_sha256)?;
@@ -158,7 +165,7 @@ fn require_packaged_installation(executable: &Path, repo_root: &Path) -> Result<
     Ok(())
 }
 
-fn prepare_application_config(
+pub(crate) fn prepare_application_config(
     expected: &Path,
     explicit_path: Option<std::ffi::OsString>,
 ) -> Result<RuntimeServiceConfig> {
@@ -416,17 +423,32 @@ pub fn ensure(config_path: &Path) -> Result<RuntimeServiceOwnerDescriptor> {
 }
 
 fn ensure_config(config: RuntimeServiceConfig) -> Result<RuntimeServiceOwnerDescriptor> {
+    ensure_config_cancellable(config, &std::sync::atomic::AtomicBool::new(false), &|| {
+        Ok(())
+    })
+}
+
+/// Cancellation ends this launcher's observation, never a persistent service.
+/// The callback revalidates the application's API pin before recording a launch.
+pub(crate) fn ensure_config_cancellable(
+    config: RuntimeServiceConfig,
+    cancelled: &std::sync::atomic::AtomicBool,
+    before_launch: &dyn Fn() -> Result<()>,
+) -> Result<RuntimeServiceOwnerDescriptor> {
     use std::process::{Command, Stdio};
+    require_attach_active(cancelled)?;
     if !config.store_root.is_dir() {
         bail!("native service requires an existing initialized session store");
     }
     let gate_deadline = Instant::now() + Duration::from_secs(config.startup_timeout_seconds + 10);
     let gate = loop {
+        require_attach_active(cancelled)?;
         if let Some(gate) = RuntimeServiceLaunchGuard::try_acquire(&config.store_root)? {
             break gate;
         }
         std::thread::sleep(remaining(gate_deadline)?.min(Duration::from_millis(100)));
     };
+    require_attach_active(cancelled)?;
     let mut terminal_owner = false;
     let descriptor_path = checked_path(&config.store_root, RUNTIME_SERVICE_OWNER_DESCRIPTOR_PATH)?;
     match std::fs::symlink_metadata(&descriptor_path) {
@@ -525,6 +547,9 @@ fn ensure_config(config: RuntimeServiceConfig) -> Result<RuntimeServiceOwnerDesc
         }
     }
     // Log/setup failures before this point do not create an uncertain launch intent.
+    require_attach_active(cancelled)?;
+    before_launch()?;
+    require_attach_active(cancelled)?;
     gate.begin(&log_id, terminal_owner)?;
     let mut child = match command.spawn() {
         Ok(child) => child,
@@ -533,9 +558,14 @@ fn ensure_config(config: RuntimeServiceConfig) -> Result<RuntimeServiceOwnerDesc
             return Err(error).context("start native runtime service");
         }
     };
-    gate.publish(&log_id, "spawned", Some(child.id()))?;
+    gate.publish(&log_id, "spawned", Some(child.id())).with_context(|| {
+        format!("native service PID {} spawned but launch publication failed; outcome unknown, no kill or retry", child.id())
+    })?;
     let deadline = Instant::now() + Duration::from_secs(config.startup_timeout_seconds + 10);
     loop {
+        // Keep a spawned intent intact if the authoring window closes. The
+        // service owns accepted work independently of this observer's thread.
+        require_attach_active(cancelled)?;
         if let Some(status) = child
             .try_wait()
             .context("observe native service startup; outcome unknown")?
@@ -561,15 +591,58 @@ fn ensure_config(config: RuntimeServiceConfig) -> Result<RuntimeServiceOwnerDesc
                 bail!("service startup owner PID mismatch; no takeover");
             }
             // Dropping Child closes its handle; it does not kill the service.
-            gate.publish(&log_id, "ready", Some(child.id()))?;
+            gate.publish(&log_id, "ready", Some(child.id())).with_context(|| {
+                format!("native service PID {} observed ready but launch publication failed; outcome unknown, no kill or retry", child.id())
+            })?;
             return Ok(owner);
         }
         std::thread::sleep(remaining(deadline)?.min(Duration::from_millis(100)));
     }
 }
 
+fn require_attach_active(cancelled: &std::sync::atomic::AtomicBool) -> Result<()> {
+    if cancelled.load(std::sync::atomic::Ordering::Acquire) {
+        bail!("native service attach observation cancelled; no service stop requested");
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn cancelled_attach_never_reaches_launch_or_creates_a_store() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("not-created");
+        let config = crate::local_resources::application_service_config(
+            &root,
+            crate::local_resources::LocalCpuCapacity {
+                cpu_millis: 8000,
+                memory_available_bytes: 1024 * 1024 * 1024,
+                storage_available_bytes: 4 * 1024 * 1024 * 1024,
+            },
+        )
+        .unwrap();
+        let reached_launch = AtomicBool::new(false);
+        let result = super::ensure_config_cancellable(config, &AtomicBool::new(true), &|| {
+            reached_launch.store(true, Ordering::Release);
+            Ok(())
+        });
+        assert!(result.is_err());
+        assert!(!reached_launch.load(Ordering::Acquire));
+        assert!(!root.exists());
+    }
+
+    #[test]
+    fn attach_cancellation_is_observed_without_requesting_service_drain() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let cancelled = AtomicBool::new(false);
+        assert!(super::require_attach_active(&cancelled).is_ok());
+        cancelled.store(true, Ordering::Release);
+        let error = super::require_attach_active(&cancelled).unwrap_err();
+        assert!(error.to_string().contains("no service stop requested"));
+    }
+
     #[test]
     fn default_preparation_reuses_the_persisted_resource_snapshot() {
         let directory = tempfile::tempdir().unwrap();

@@ -118,14 +118,29 @@ Usługa używa jednego deadline startup dla wszystkich faz; launcher dodaje
 10 sekund na utworzenie/załadowanie procesu. Timeout zachowuje proces i intent,
 bez kill/restart/takeover. Polecenie wymaga już zainicjalizowanego store.
 
-CLI UI i desktop sidecar używają wspólnego `ensure_for_application` przy
-jawnym FULLMAG_RUNTIME_SERVICE_CONFIG. Root konfiguracji musi odpowiadać
-wspólnemu resolverowi accepted store API; local-live store jest odrzucany.
-Store inicjalizuje się dopiero po porównaniu. UI otwiera się po potwierdzeniu
-start/attach. Guard API/UI nie obejmuje procesu usługi. CLI odmawia reuse API
-przy tej konfiguracji do czasu implementacji handshake tożsamości jego store.
-Brak konfiguracji pozostawia authoring dostępny; domyślne zasoby produktu
-i całościowy cutover execution nadal wymagają implementacji i kwalifikacji.
+CLI UI i desktop sidecar używają read-only `prepare_for_authoring`, który
+sprawdza build/UUID API oraz jego accepted-store binding przy jawnej
+FULLMAG_RUNTIME_SERVICE_CONFIG. Otwierają okno przed `start()` dołączenia.
+Konfiguracja compute jest czytana dopiero w posiadanym wątku dołączenia:
+jej brak, błąd lub niezgodny service store nie zamyka authoringu, nie
+uruchamia obcego store i nie ustanawia gotowości obliczeń. Niezgodność
+samego API pozostaje błędem preflight. Root usługi musi odpowiadać resolverowi
+accepted store API; local-live store jest odrzucany przed inicjalizacją.
+
+Wątek powtarza pin API/store przed zapisem konfiguracji, przed nowym startem
+i po attach. Zamknięcie okna ustawia cancellation i joinuje obserwatora
+przed zakończeniem API. Cancellation jest kooperatywna; nie zabija/drainuje
+usługi, nie usuwa markerów i nie ogłasza terminalnego sukcesu. Proces już
+uruchomiony zachowuje persistent ownership, PID i intent. Błąd/timeout nie
+uruchamia retry ani replacement; API status i log pozostają źródłem obserwacji.
+
+Brak konfiguracji pozostawia authoring bez wątku/store/resource offers.
+Strict `ensure_for_application` pozostaje helperem synchronicznego start/attach,
+poza trasą otwarcia UI. Reuse zgodnego API pozwala na authoring, ale wyłącza automatyczny attach
+(`ApiNotOwned`). Brak poprawnie skonfigurowanego accepted-store wyłącza
+attach (`AcceptedStoreUnavailable`), bez zmiany miejsca danych lub fallbacku.
+Domyślne zasoby produktu, generated diagnostics UI i całościowy cutover
+execution nadal wymagają implementacji i kwalifikacji.
 
 HTTP platform OpenAPI zwraca runtime-only x-fullmag-runtime-store-binding:
 schema_version=runtime_store_binding.v1, kind=accepted_runs i binding SHA-256

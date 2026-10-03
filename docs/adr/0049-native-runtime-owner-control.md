@@ -102,3 +102,23 @@ Procesy są obserwowane z deadline: niepotwierdzony publisher/scheduler pozostaj
 unknown z zachowanym PID i lease, bez automatycznego przejęcia. Częściowo
 opublikowane generacje są odczytywane także po błędzie drugiego publishera.
 Ready preparation jest niezależne od slotu zajętego przez odzyskiwany task.
+
+## Authoring i dołączenie usługi — P8-37
+
+Otwarcie okna wymaga zgodnego API i jego UUID; przy jawnej konfiguracji
+sprawdza również accepted-store binding. Gotowość native runtime jest osobną
+obserwacją. CLI i Tauri otwierają UI przed posiadanym wątkiem dołączenia,
+więc błąd/missing binary/start timeout nie zamyka edycji projektu.
+Ścieżka konfiguracji jest przechwycona raz, a jej parsing i walidacja store
+odbywają się w tle przed jakąkolwiek inicjalizacją lub startem usługi.
+
+Observer thread ma cancellation i join przed teardown API. Zamknięcie UI
+nie wysyła service drain ani kill. Po spawn zachowuje się launch record
+i PID; outcome unknown nie pozwala uruchomić replacement. Pin API/store
+jest powtarzany przed config write, nowym launch i po attach. Jest to nadal
+obserwacja, nie pełny lease; brak runtime proof nie pozwala ogłosić cutover.
+
+Źródła: `application_attach.rs`, `runtime_service_client.rs`, CLI `main.rs`,
+Tauri `api_sidecar.rs` i `main.rs`. Source/parser/review nie zastępują buildu,
+prób fault/shutdown ani Windows bez Docker/WSL. Regresje Rust pozostają
+NOT COMPILED/NOT RUN zgodnie z aktualną instrukcją operatora.

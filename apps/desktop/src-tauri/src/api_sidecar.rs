@@ -18,6 +18,9 @@ pub struct ApiSidecar {
     child: Child,
     port: u16,
     api_instance_id: String,
+    prepared_attach: Option<fullmag_runtime_control::application_attach::PreparedApplicationAttach>,
+    runtime_attach:
+        Option<fullmag_runtime_control::application_attach::BackgroundApplicationAttach>,
 }
 
 impl ApiSidecar {
@@ -74,16 +77,30 @@ impl ApiSidecar {
             child,
             port,
             api_instance_id: String::new(),
+            prepared_attach: None,
+            runtime_attach: None,
         };
         sidecar.wait_healthy()?;
-        let binding = fullmag_runtime_control::runtime_service_client::ensure_for_application(
+        let binding = fullmag_runtime_control::application_attach::prepare_for_authoring(
             &repo_root,
             &state_root,
             port,
         )
-        .map_err(|error| format!("native runtime service attach failed: {error:#}"))?;
-        sidecar.api_instance_id = binding.api_instance_id;
+        .map_err(|error| format!("API authoring binding failed: {error:#}"))?;
+        sidecar.api_instance_id = binding.api_instance_id().to_string();
+        sidecar.prepared_attach = Some(binding);
         Ok(sidecar)
+    }
+
+    /// Called only after the authoring window has been created.
+    pub fn start_runtime_attach(&mut self) {
+        let Some(prepared) = self.prepared_attach.take() else {
+            return;
+        };
+        match prepared.start() {
+            Ok(attach) => self.runtime_attach = attach,
+            Err(error) => eprintln!("Native runtime attach unavailable: {error:#}"),
+        }
     }
 
     pub fn base_url(&self) -> String {
@@ -119,6 +136,8 @@ impl ApiSidecar {
 
 impl Drop for ApiSidecar {
     fn drop(&mut self) {
+        // The observer must finish before its pinned API is terminated.
+        drop(self.runtime_attach.take());
         let _ = self.child.kill();
         let _ = self.child.wait();
     }

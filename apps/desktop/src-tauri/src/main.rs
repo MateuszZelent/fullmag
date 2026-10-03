@@ -55,7 +55,8 @@ fn main() {
                 .center()
                 .build()?;
 
-            if let Some(sidecar) = sidecar {
+            if let Some(mut sidecar) = sidecar {
+                sidecar.start_runtime_attach();
                 app.manage(sidecar);
             }
 

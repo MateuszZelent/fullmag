@@ -1,5 +1,11 @@
 # Status realizacji całego planu refaktoryzacji
 
+Checkpoint P8-37, 03.10.2026: startup source rozdziela read-only API pin
+od background native-service attach. Okno poprzedza dołączenie; observer
+ma cancel/join przed teardown API, bez kill/drain persistent ownera.
+[Zakres](p8/37-authoring-before-runtime-attach.md). Build, generated UI
+i runtime/Windows proof NOT VERIFIED; procenty bez awansu.
+
 Checkpoint P6-75, 03.10.2026: dodano backend przypiętego odczytu skalara
 SolutionSet przez CAS i kanoniczny dekoder aplikacji. Rejestracja OpenAPI
 obejmuje dokładne liczniki i niezależny status naukowy. Źródła nie są
