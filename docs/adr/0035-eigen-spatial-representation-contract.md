@@ -69,3 +69,20 @@ Dokładne punkty wdrożenia do review:
 - Wspólny Study Inspector, study resource hooks i viewport field adapters: representation-aware units/projection, bez osobnego transportu dla 2D.
 
 Status rollback/ryzyka: obecnie tylko dokument proposed; nie zmienia IR/ABI, legalności, runtime ani artefaktów. Publiczny kontrakt i owner nie są zaimplementowane. Źródłowe wprowadzenie selektora może nastąpić dopiero razem z walidacją i prawdziwym guardem unavailable; promocja do supported wymaga produkcyjnego providera i opisanych bramek. Bounded oracle nigdy nie zastępuje tej promocji.
+
+## Rozstrzygnięcia review przed typed descriptor S09
+
+Rama `origin_m/e_u/e_v/axis_unit` jest ramą GEOMETRII przekroju. Nie jest nodalną bazą tangentową magnetyzacji `T_i` z kanonicznych not0830/0831. Ta druga jest niezależnie wyprowadzana lub walidowana względem zaakceptowanego `m0_i`; musi spełniać ortonormalność kolumn i ich prostopadłość do `m0_i`, z osobnym binding equilibrium/mesh. Użycie `e_u/e_v` jako domyślnego `T_i` jest niedozwolone: poprawna baza tangentowa może zawierać składową wzdłuż osi falowodu.
+
+Wszystkie trzy geometryczne osie są wymagane. Wejściowe długości muszą mieścić się w1e-12 od1; dopiero wtedy każdą oś dzieli się przez jej dodatnią długość. Nie akceptować dowolnie przeskalowanej osi, nie wyprowadzać pominiętej osi i nie dokonywać Gram–Schmidta. Requested global KPoint/KPath jest jedynym authoringiem k; signed scalar jest resolved wynikiem, nie drugim niezależnym wejściem.
+
+Provider ma jedną resolved konwencję fazy, istniejący `PhaseConventionIR::ExpMinusIKDotDeltaR`. Nie dodawać drugiego edytowalnego źródła konwencji w reprezentacji. Rekonstrukcja osiowego pola `+ik*phi` wynika z tego samego kontraktu. Nowy request, sample, operator i artifact muszą wiązać tę konwencję; sprzeczne lub nieobsługiwane żądanie jest błędem przed solverem.
+
+Nullspace przy Γ należy kontrolować dla CAŁEGO konformnego scalar mesh (magnetic+air), nie osobno dla każdej wyspy powietrza. Zamknięte powietrze wewnątrz magnetyku pozostaje połączone z domeną skalarną przez ciągły interfejs P1. Nie nakładać na takim interfejsie dodatkowego Dirichleta i nie odrzucać wyspy tylko dlatego, że nie dotyka zewnętrznego air boundary. Dla pierwszego finite-air Dirichlet providera każda geometryczna składowa całej domeny skalarnej musi mieć poprawnie oznaczony zewnętrzny brzeg powietrza z Dirichletem; nie podmieniać tej kontroli na test składowych regionu air. Point-contact, niekonformność i nie-manifold wymagają osobnego odrzucenia, a poprawne współdzielone interface mają dwie przeciwne incydencje.
+
+Przed implementacją typed mesha pozostają wymagane: kompletny wire triangle/edge/half-edge incidence i zamkniętych konturów względem właściciela; jawne mapowanie region/object/material i pokrycie wszystkich elementów; zamknięta strukturalna reprezentacja wszystkich pól i interakcji; osobny wersjonowany fingerprint całego descriptoru2D oraz ramy; geometryczne finite/representability guards. Obecny fingerprint3D i DomainFrameIR nie są zamiennikami.
+
+
+## Podstawa ramy w źródłach
+
+Przyrost `crates/fullmag-ir/src/waveguide_frame.rs` implementuje wyłącznie raw/validated geometry frame i signed-k helper. [Kontrakt helpera](../guides/eigensolve-waveguide-frame-source-contract.md) opisuje jednostki, rzeczywiste metryki i source-only dowody. Publiczny writer0.3, typed StudyIRV04, migration/admission, pełny descriptor i provider nie są przez to włączane. Regresje Rust pozostają niekompilowane; geometria źródłowa nie jest certyfikatem physics/runtime.

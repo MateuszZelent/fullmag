@@ -20,6 +20,7 @@ pub mod selection;
 pub mod spectral_validation;
 pub mod spin_transport;
 pub mod study;
+pub mod waveguide_frame;
 mod validation;
 pub use constraint::*;
 pub use eigen_contract::*;
@@ -41,6 +42,11 @@ pub use selection::*;
 pub use spectral_validation::BlochWavevectorIR;
 pub use spin_transport::*;
 pub use study::*;
+pub use waveguide_frame::{
+    validate_waveguide_frame, CanonicalWaveguideFrameIR, ValidatedWaveguideFrameIR,
+    WaveguideFrameIR, WaveguideFrameValidationError, WaveguideSignedKIR,
+    WAVEGUIDE_GEOMETRY_TOLERANCE,
+};
 use validation::*;
 
 pub const IR_VERSION: &str = "0.3.0";
