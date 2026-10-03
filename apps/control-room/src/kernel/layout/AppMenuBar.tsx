@@ -2,8 +2,8 @@
 
 import { isProjectWorkspaceCommand } from "../commands/projectWorkspaceCommandPolicy";
 
-import { ChevronDown, Search } from "lucide-react";
-import { useEffect, useMemo, useReducer, useSyncExternalStore, type ReactNode } from "react";
+import { House, Search } from "lucide-react";
+import { useEffect, useMemo, useReducer, useSyncExternalStore } from "react";
 
 import { useTheme } from "@/design/theme/ThemeProvider";
 import {
@@ -37,7 +37,10 @@ import {
   DialogTitle,
 } from "@/shared/ui/Dialog";
 import { ThemeSwitcher } from "@/shared/ui/ThemeSwitcher";
-import { ProjectDocumentStatus } from "../persistence/ProjectDocumentStatus";
+import {
+  ProjectDocumentStatus,
+  useProjectDocumentSnapshot,
+} from "../persistence/ProjectDocumentStatus";
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -52,7 +55,6 @@ import {
 } from "@/shared/ui/DropdownMenu";
 
 import {
-  APP_DROPDOWN_ITEMS,
   MAIN_MENUS,
   QUICK_ACTIONS,
   RUN_CONTROLS,
@@ -73,6 +75,7 @@ import { DataPreviewDialog } from "./DataPreviewDialog";
 import { MaterialLibraryDialog } from "./MaterialLibraryDialog";
 import { RegistryInspectorDialog } from "./RegistryInspectorDialog";
 import { DiagnosticRecorderDialog } from "./diagnostic-recorder/DiagnosticRecorderDialog";
+import { useHomeViewOpen } from "./homeView";
 import { NewProblemDialog, useNewProblemRequest } from "./NewProblemDialog";
 
 function subscribeToHydration(): () => void {
@@ -193,43 +196,40 @@ function HeaderDropdown({
   );
 }
 
-/**
- * Brand and application menu in one control: the logo opens the menu, so the
- * header no longer repeats the product name in a second bordered button.
- */
-function HeaderBrand({
-  children,
-  subtitle,
-}: {
-  readonly children: ReactNode;
-  readonly subtitle: string;
-}) {
-  const identity = (
-    <>
+function HeaderBrand({ subtitle }: { readonly subtitle: string }) {
+  return (
+    <div className="fm-header__brand">
       <FullmagMark size={20} className="fm-header__logo" />
       <span className="fm-header__brand-copy">
         <span className="fm-header__title">Fullmag</span>
         <span className="fm-header__subtitle">{subtitle}</span>
       </span>
-    </>
+    </div>
   );
-  if (APP_DROPDOWN_ITEMS.length === 0) {
-    return <div className="fm-header__brand">{identity}</div>;
-  }
+}
+
+/** First entry of the main menu: brings the start screen back over a workspace. */
+function HomeNavItem({
+  active,
+  onCommand,
+}: {
+  readonly active: boolean;
+  readonly onCommand: () => void;
+}) {
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <button
-          aria-label="Application menu"
-          className="fm-header__brand fm-header__brand--trigger"
-          type="button"
-        >
-          {identity}
-          <ChevronDown aria-hidden="true" className="fm-header__brand-chevron" size={12} />
-        </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start">{children}</DropdownMenuContent>
-    </DropdownMenu>
+    <Button
+      aria-current={active ? "page" : undefined}
+      className="fm-header__nav-item"
+      data-active={active ? "true" : undefined}
+      size="sm"
+      title="Home"
+      type="button"
+      variant="ghost"
+      onClick={onCommand}
+    >
+      <House aria-hidden="true" size={14} />
+      Home
+    </Button>
   );
 }
 
@@ -422,6 +422,10 @@ function NoSessionAppMenuBar({
   const kernel = useKernel();
   const { theme, setTheme } = useTheme();
   const [newProblem, setNewProblemOpen] = useNewProblemRequest();
+  const homeOpen = useHomeViewOpen();
+  const project = useProjectDocumentSnapshot();
+  // Without a session the start screen is the page itself, unless a project is open.
+  const homeVisible = project.state !== "ready" || homeOpen;
   const commandContext = createCommandContext("menu", kernel, {
     sourceDetail: "app-menu",
     sessionScopeKey: null,
@@ -451,19 +455,15 @@ function NoSessionAppMenuBar({
               ? "Checking sessions"
               : "Session list unavailable"
         }
-      >
-        <DropdownMenuLabel>Application</DropdownMenuLabel>
-        {APP_DROPDOWN_ITEMS.map((item) => (
-          <DropdownMenuItem
-            disabled={isCommandDisabled(item.id)}
-            key={item.id}
-            onSelect={() => runCommand(item.id)}
-          >
-            {item.label}
-          </DropdownMenuItem>
-        ))}
-      </HeaderBrand>
+      />
       <nav className="fm-header__nav" aria-label="Main menu">
+        <HomeNavItem
+          active={homeVisible}
+          onCommand={() =>
+            // With no project open Home is already the page: return to its front section.
+            runCommand(project.state === "ready" ? "workspace.home" : "start.section.home")
+          }
+        />
         {MAIN_MENUS.map((menu) => (
           <HeaderDropdown
             key={menu.id}
@@ -541,6 +541,7 @@ function SessionAppMenuBar() {
     APP_MENU_DIALOG_INITIAL_STATE,
   );
   const [newProblem, setNewProblemOpen] = useNewProblemRequest();
+  const homeOpen = useHomeViewOpen();
   const setDataPreviewOpen = (open: boolean) =>
     dispatchDialogState({ open, type: "data-preview" });
   const setCommunicationOpen = (open: boolean) =>
@@ -633,21 +634,10 @@ function SessionAppMenuBar() {
 
   return (
     <header className="fm-header">
-      <HeaderBrand subtitle={sessionDisplay.subtitle}>
-        <DropdownMenuLabel>Application</DropdownMenuLabel>
-        <DropdownMenuSeparator />
-        {APP_DROPDOWN_ITEMS.map((node) => (
-          <MenuNode
-            key={node.id}
-            isCommandActive={isCommandActive}
-            isCommandDisabled={isCommandDisabled}
-            node={node}
-            onCommand={runCommand}
-          />
-        ))}
-      </HeaderBrand>
+      <HeaderBrand subtitle={sessionDisplay.subtitle} />
 
       <nav className="fm-header__nav" aria-label="Main menu">
+        <HomeNavItem active={homeOpen} onCommand={() => runCommand("workspace.home")} />
         {MAIN_MENUS.map((menu) => (
           <HeaderDropdown
             key={menu.id}

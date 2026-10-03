@@ -48,6 +48,24 @@
   grid-template-rows: auto minmax(0, 1fr);
 }
 
+/* Home over an open workspace: it takes the rows below the menu while the
+   workspace stays laid out (so canvases keep their size) but unreachable. */
+.fm-home-overlay {
+  position: relative;
+  z-index: var(--fm-z-base);
+  display: grid;
+  grid-column: 1;
+  grid-row: 2 / -1;
+  grid-template-rows: minmax(0, 1fr);
+  min-height: 0;
+  min-width: 0;
+  background: var(--fm-bg-app);
+}
+
+.fm-workspace-shell:has(> .fm-home-overlay) > :not(.fm-header):not(.fm-home-overlay):not(.fm-workspace-overlay-host) {
+  visibility: hidden;
+}
+
 .fm-workspace-body {
   display: flex;
   flex-direction: column;

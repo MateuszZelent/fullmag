@@ -6,6 +6,7 @@ const PROJECT_WORKSPACE_COMMAND_IDS = new Set([
   "workspace.open-project",
   "workspace.save-project",
   "workspace.close-project",
+  "workspace.home",
   "workspace.new-problem",
   "workspace.theme-toggle",
   "workspace.command-palette",

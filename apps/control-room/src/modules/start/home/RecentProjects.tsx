@@ -19,7 +19,7 @@ import { SegmentedControl } from "@/shared/ui/SegmentedControl";
 import { filterEntries, sortEntries } from "../model/recentIndex";
 import { startScreenStore } from "../model/startScreenState";
 import type { RecentEntry, RecentFilter, RecentSort } from "../model/types";
-import { useRecentIndex } from "../model/useRecentIndex";
+import type { RecentIndexController } from "../model/useRecentIndex";
 import { SectionHeader } from "../ui/SectionHeader";
 
 import { ProjectRow, rowDomId } from "./ProjectRow";
@@ -43,6 +43,7 @@ const SORTS: readonly { label: string; value: RecentSort }[] = [
 ];
 
 export interface RecentProjectsProps {
+  readonly recent: RecentIndexController;
   readonly browseDisabledReason: string | null;
   readonly onBrowse: () => void;
   /** Resolves to the reason the project did not open, or null on success. */
@@ -51,12 +52,12 @@ export interface RecentProjectsProps {
 }
 
 export function RecentProjects({
+  recent,
   browseDisabledReason,
   onBrowse,
   onOpen,
   searchRef,
 }: RecentProjectsProps) {
-  const recent = useRecentIndex();
   const { searchFocusNonce, rebuildNonce, selectedProjectId } = useSyncExternalStore(
     startScreenStore.subscribe,
     startScreenStore.getSnapshot,
@@ -375,7 +376,7 @@ function renderItem(
   item: RecentListItem,
   count: number,
   selectedProjectId: string | null,
-  recent: ReturnType<typeof useRecentIndex>,
+  recent: RecentIndexController,
   activate: (projectId: string) => Promise<void>,
 ) {
   if (item.kind === "header") {
