@@ -136,7 +136,22 @@ def _validate_window(window, sample_index, window_position, requested_type,
     )
 
     unsupported = window.get("unsupported_reason")
-    if not isinstance(unsupported, str) or unsupported:
+    if unsupported == "no_positive_frequency_eigenpair_in_window":
+        # Mirror the native exhausted-window distinction, without treating an
+        # empty band as a failed inverse or certifying spectral completeness.
+        if window.get("stop_reason") != "window_exhausted":
+            raise ValueError(f"{name} has an inconsistent exhausted-window status")
+        for field in ("candidate_modes", "positive_frequency_candidates"):
+            _required_integer(window.get(field), f"{name}.{field}", minimum=1)
+        for field in (
+            "frequency_window_candidates", "residual_evaluation_candidates",
+            "residual_rejections", "non_real_rotated_eigenvalues",
+            "eigenpair_evaluation_failures", "mode_vector_failures",
+            "potential_reconstruction_failures",
+        ):
+            if _required_integer(window.get(field), f"{name}.{field}", minimum=0) != 0:
+                raise ValueError(f"{name} exhausted window contains a candidate failure")
+    elif not isinstance(unsupported, str) or unsupported:
         raise ValueError(f"{name} reports a native diagnostic failure")
 
     before_eps = _required_object(
@@ -299,8 +314,11 @@ def validate_shifted_ksp_trial(
         raise ValueError("shifted KSP trial case_dir must be path-like") from None
     diagnostics_path = case_path / "eigen" / "diagnostics" / "solver.v1.json"
     diagnostics = load_solver_diagnostics(diagnostics_path)
-    if diagnostics.get("schema_version") != "solver.v1":
-        raise ValueError("shifted KSP trial requires solver.v1 native diagnostics")
+    schema = _required_string(diagnostics.get("schema_version"), "native.schema_version")
+    if schema not in {
+        "solver.v1", "frequency_domain_modal_solver_diagnostics.v1"
+    }:
+        raise ValueError("shifted KSP trial requires a supported native diagnostics schema")
 
     global_type = _required_string(diagnostics.get("ksp_type"), "global.ksp_type")
     if global_type != requested_type:

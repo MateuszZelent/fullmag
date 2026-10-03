@@ -321,6 +321,56 @@ class ShiftedKspTrialValidatorTests(unittest.TestCase):
                     _write_case(tmp, diagnostics), "k2", "gmres", "1e-9"
                 )
 
+    def test_exhausted_window_still_requires_every_shifted_solve(self):
+        diagnostics = _diagnostics("k-25", method="fgmres")
+        window = diagnostics["sample_solver_diagnostics"][0]["diagnostics"]["subwindows"][0]
+        window.update(unsupported_reason="no_positive_frequency_eigenpair_in_window",
+                      stop_reason="window_exhausted", candidate_modes=12,
+                      positive_frequency_candidates=10, frequency_window_candidates=0,
+                      residual_evaluation_candidates=0, residual_rejections=0,
+                      non_real_rotated_eigenvalues=0, eigenpair_evaluation_failures=0,
+                      mode_vector_failures=0, potential_reconstruction_failures=0)
+        with TemporaryDirectory() as tmp:
+            self.assertEqual(validate_shifted_ksp_trial(
+                _write_case(tmp, diagnostics), "k-25", "fgmres", "1e-9")["status"], "pass")
+        for field in ("frequency_window_candidates", "residual_evaluation_candidates",
+                      "residual_rejections", "non_real_rotated_eigenvalues",
+                      "eigenpair_evaluation_failures", "mode_vector_failures",
+                      "potential_reconstruction_failures"):
+            for value in (1, None, False):
+                with self.subTest(field=field, value=value), TemporaryDirectory() as tmp:
+                    window[field] = value
+                    with self.assertRaises(ValueError):
+                        validate_shifted_ksp_trial(
+                            _write_case(tmp, diagnostics), "k-25", "fgmres", "1e-9")
+                    window[field] = 0
+        window["ksp_true_residual_criterion"]["violation_count"] = 1
+        with TemporaryDirectory() as tmp, self.assertRaisesRegex(ValueError, "criterion"):
+            validate_shifted_ksp_trial(
+                _write_case(tmp, diagnostics), "k-25", "fgmres", "1e-9")
+
+    def test_runtime_native_schema_preserves_all_solve_checks(self):
+        diagnostics = _diagnostics("k-25", method="fgmres")
+        diagnostics["schema_version"] = "frequency_domain_modal_solver_diagnostics.v1"
+        with TemporaryDirectory() as tmp:
+            report = validate_shifted_ksp_trial(
+                _write_case(tmp, diagnostics), "k-25", "fgmres", "1e-9")
+        self.assertEqual(report["status"], "pass")
+        diagnostics["sample_solver_diagnostics"][0]["diagnostics"]["subwindows"][0][
+            "ksp_true_residual_criterion"]["violation_count"] = 1
+        with TemporaryDirectory() as tmp, self.assertRaises(ValueError):
+            validate_shifted_ksp_trial(
+                _write_case(tmp, diagnostics), "k-25", "fgmres", "1e-9")
+
+    def test_unknown_or_missing_native_schema_is_rejected(self):
+        for schema in (None, "future.v9", "eigen_spectrum.v3", [], {}):
+            with self.subTest(schema=schema), TemporaryDirectory() as tmp:
+                diagnostics = _diagnostics(method="fgmres")
+                diagnostics["schema_version"] = schema
+                with self.assertRaisesRegex(ValueError, "schema"):
+                    validate_shifted_ksp_trial(
+                        _write_case(tmp, diagnostics), "k2", "fgmres", "1e-9")
+
     def test_fgmres_accepts_null_breakdown_tolerance(self):
         diagnostics = _diagnostics(method="fgmres")
         with TemporaryDirectory() as tmp:

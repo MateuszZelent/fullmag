@@ -1396,6 +1396,79 @@ def validate_schur_action_diagnostic(case_dir):
             "validation_status": "failed",
             "reason": "native_solver_diagnostics_are_not_an_object",
         }
+    if "floquet_schur_action_diagnostic" in payload:
+        return _validate_schur_action_payload(payload, report)
+    # Successful native exports retain observations in each indexed EPS window.
+    # Do not collapse them into the last window or infer missing measurements.
+    records = payload.get("sample_solver_diagnostics")
+    if not isinstance(records, list) or not records:
+        return _validate_schur_action_payload(payload, report)
+    if payload.get("schema_version") not in (
+        "solver.v1", "frequency_domain_modal_solver_diagnostics.v1"
+    ):
+        return {**report, "status": "failed", "validation_status": "failed",
+                "reason": "unsupported_schur_solver_schema"}
+    observations = []
+    seen_samples = set()
+    for record in records:
+        if not isinstance(record, dict):
+            return {**report, "status": "failed", "validation_status": "failed",
+                    "reason": "invalid_schur_sample_record"}
+        sample_index = record.get("sample_index")
+        sample = record.get("diagnostics")
+        if (type(sample_index) is not int or sample_index < 0
+                or sample_index in seen_samples or not isinstance(sample, dict)):
+            return {**report, "status": "failed", "validation_status": "failed",
+                    "reason": "invalid_schur_sample_identity"}
+        seen_samples.add(sample_index)
+        vector = sample.get("k_vector_rad_m")
+        try:
+            valid_vector = (
+                type(sample.get("k_vector_len")) is int and sample["k_vector_len"] == 3
+                and isinstance(vector, list) and len(vector) == 3
+                and all(type(value) in (int, float) and math.isfinite(value)
+                        for value in vector)
+            )
+        except (OverflowError, ValueError):
+            valid_vector = False
+        if not valid_vector:
+            return {**report, "status": "failed", "validation_status": "failed",
+                    "reason": "invalid_schur_sample_wavevector"}
+        # Gamma uses its own solver and does not execute this Floquet probe.
+        if vector == [0.0, 0.0, 0.0]:
+            continue
+        windows = sample.get("subwindows")
+        if not isinstance(windows, list) or not windows:
+            return {**report, "status": "unavailable", "validation_status": "unavailable",
+                    "reason": "schur_sample_windows_missing"}
+        for position, window in enumerate(windows):
+            if (not isinstance(window, dict) or type(window.get("index")) is not int
+                    or window["index"] != position):
+                return {**report, "status": "failed", "validation_status": "failed",
+                        "reason": "invalid_schur_window_identity"}
+            observation = _validate_schur_action_payload(window, report)
+            observations.append({**observation, "sample_index": sample_index,
+                                 "window_index": position})
+    if not observations:
+        return {**report, "status": "unavailable", "validation_status": "unavailable",
+                "reason": "no_nonzero_k_schur_windows"}
+    if any(item["validation_status"] == "failed" or item["status"] == "failed"
+           for item in observations):
+        status, validation_status = "failed", "failed"
+    elif any(item["status"] == "unavailable" for item in observations):
+        status, validation_status = "unavailable", "unavailable"
+    elif all(item["status"] == "measured" and item["validation_status"] == "pass"
+             for item in observations):
+        status, validation_status = "measured", "pass"
+    else:
+        status, validation_status = "failed", "failed"
+    return {**report, "status": status, "validation_status": validation_status,
+            "reason": "indexed_native_subwindow_observations",
+            "observation_count": len(observations), "observations": observations}
+
+
+def _validate_schur_action_payload(payload, report):
+    """Validate one preserved observation without promoting it to a certificate."""
     native = payload.get("floquet_schur_action_diagnostic")
     if native is None:
         return {

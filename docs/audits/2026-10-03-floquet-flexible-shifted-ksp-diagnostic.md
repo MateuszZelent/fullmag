@@ -39,3 +39,13 @@ Postsolve observer wylicza dla każdego shifted solve normę rzeczywistą z b−
 Agregat jest diagnostic-only: observer nadal zwraca zero i nie zmienia zbieżności KSP/EPS. Konsument jawnej próby wymaga pełnego pokrycia, zerowych violations/unavailable i zgodnego rzeczywistego typu w każdej próbce i podoknie. Stary runtime bez nowego agregatu nie jest akceptowany jako dowód FGMRES. Fizyczny residual1e-8 pozostaje odrębną bramką. Native compilation/runtime oraz 15 punktów nadal NOT VERIFIED.
 
 Źródła: floquet_modal_solver.cpp::capture_last_floquet_shifted_solve; slepc_modal_eigen.hpp::SLEPcTinyGyrotropicModalEigenResult; production_cpu_modal_eigen.cpp::production_window_diagnostics_json; scripts/de_shifted_ksp_trial.py::validate_shifted_ksp_trial; run_de_100nm_pilot.py::execute.
+
+## Wynik ograniczonej próby #222
+
+Build #222 i atestacje CPU przeszły; źródła runtime: f7ecb100648b57fb69fe2de4a932efba02717190, digest19e38280b5da573d6fc193a09c04b6578727ddd149234d755af1beeb725559f8. Bez native unit tests. Punkt DE k=-25rad/µm z L2/t3 i modelem71ba0d18225ffcc83f7f18e676de8dc051e87fd1: f=13.557588586290586GHz, pełny residual1.926591054747952e-10. Wszystkie169 shifted solves z trzech podokien zmierzono: zero violations/unavailable, maximum_tolerance_ratio0.9964145193323742. Demag i rekonstrukcja potencjału oraz identity binding przeszły. Potwierdza to poprawne wykonanie tego przypadku FGMRES; nie dowodzi jeszcze źródła awarii GMRES ani zbieżności/identyfikacji pasma n0.
+
+Pierwotny receipt failed zachowano. Jego konsument oczekiwał innego schematu diagnostyki niż faktyczny frequency_domain_modal_solver_diagnostics.v1 i odrzucał exhausted subwindow bez modów. Konsument teraz rozróżnia pusty zakres dokładnie według natywnych dodatnich EPS/KSP i liczników kandydatów/odrzuceń; nadal sprawdza kryterium każdego inverse solve. Nie traktuje pustego podokna jako dowodu kompletności widma. Schur action jest odczytywany ze wszystkich indeksowanych podokien, bez utraty obserwacji. Regresje:15 consumer +42 driver PASS; unknown schema, candidate failure i wcześniejsze naruszenie solve pozostają odrzucane.
+
+Dowód rewalidacji (osobny, bez nadpisania wyniku): storage/runs/eigensolve-dispersion-plan-20260-c5dfad6d7f548079/scientific-batches/nonzero-k-validation/15418192c13e4a119e6f75d14dde9c88/fgmres-km25-restart8-v2/posthoc-validation-v1.json. Wiąże hashe oryginalnych request/result, artefaktów i konsumentów. Status completed_unqualified; reszta bramek naukowych pozostaje otwarta.
+
+Mapa korekty: scripts/de_shifted_ksp_trial.py::validate_shifted_ksp_trial/_validate_window; production_cpu_modal_eigen.cpp::subwindow_is_clean_empty_window; scripts/run_de_100nm_pilot.py::validate_schur_action_diagnostic/_validate_schur_action_payload.

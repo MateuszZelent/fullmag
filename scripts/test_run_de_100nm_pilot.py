@@ -486,6 +486,53 @@ class PilotTests(unittest.TestCase):
             self.assertEqual(partial_report["status"], "failed")
             self.assertEqual(partial_report["validation_status"], "preserved")
 
+    def test_schur_action_reads_every_indexed_native_window(self):
+        with TemporaryDirectory() as tmp:
+            case = Path(tmp) / "case"
+            diagnostics = case / "eigen/diagnostics"
+            diagnostics.mkdir(parents=True)
+            path = diagnostics / "solver.v1.json"
+            windows = [{"index": index,
+                        "floquet_schur_action_diagnostic": _schur_action_fixture()}
+                       for index in range(3)]
+            payload = {"schema_version": "frequency_domain_modal_solver_diagnostics.v1",
+                       "sample_solver_diagnostics": [{"sample_index": 0, "diagnostics": {
+                           "k_vector_len": 3, "k_vector_rad_m": [0, -25e6, 0], "subwindows": windows}}]}
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            result = pilot.validate_schur_action_diagnostic(case)
+            self.assertEqual(result["validation_status"], "pass")
+            self.assertEqual(result["observation_count"], 3)
+            self.assertEqual([item["window_index"] for item in result["observations"]], [0, 1, 2])
+            self.assertFalse(result["physical_certificate"])
+            del windows[1]["floquet_schur_action_diagnostic"]
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            result = pilot.validate_schur_action_diagnostic(case)
+            self.assertEqual(result["validation_status"], "unavailable")
+            windows[1]["floquet_schur_action_diagnostic"] = _schur_action_fixture(status="failed")
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            self.assertEqual(pilot.validate_schur_action_diagnostic(case)["status"], "failed")
+
+    def test_schur_indexed_identity_rejects_unknown_schema_and_invalid_vectors(self):
+        with TemporaryDirectory() as tmp:
+            case = Path(tmp) / "case"
+            diagnostics = case / "eigen/diagnostics"
+            diagnostics.mkdir(parents=True)
+            path = diagnostics / "solver.v1.json"
+            good_sample = {"k_vector_len": 3, "k_vector_rad_m": [0, -25e6, 0],
+                           "subwindows": [{"index": 0,
+                             "floquet_schur_action_diagnostic": _schur_action_fixture()}]}
+            for schema in (None, [], "unknown.v9"):
+                payload = {"schema_version": schema, "sample_solver_diagnostics": [
+                    {"sample_index": 0, "diagnostics": good_sample}]}
+                path.write_text(json.dumps(payload), encoding="utf-8")
+                self.assertEqual(pilot.validate_schur_action_diagnostic(case)["validation_status"], "failed")
+            for bad_vector in (None, [], [0, 1], [0, True, 0], [0, float("inf"), 0], [0, 10**1000, 0]):
+                payload = {"schema_version": "frequency_domain_modal_solver_diagnostics.v1",
+                           "sample_solver_diagnostics": [{"sample_index": 0, "diagnostics": {
+                               **good_sample, "k_vector_rad_m": bad_vector}}]}
+                path.write_text(json.dumps(payload), encoding="utf-8")
+                self.assertEqual(pilot.validate_schur_action_diagnostic(case)["validation_status"], "failed")
+
     def test_schur_action_diagnostic_exports_unavailable_after_solver_failure(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
