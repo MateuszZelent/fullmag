@@ -66,6 +66,32 @@ zarządzanego launchera nie udostępniają tej komendy.
 Rollback wyłącza komendę zastosowania wersji, pozostawiając kompilację w tle
 i ręczne zamknięcie/uruchomienie. Nie usuwa handoffów, wyników ani cache.
 
+### Podział właścicieli w natywnym Windows
+
+Docelowo Pythonowy manager zachowuje workspace lease i watcher; żywy supervisor CLI
+zachowuje frontend oraz okno desktopowe i wymienia wyłącznie własne dziecko API.
+Ponowne uruchomienie całego launchera nie realizuje tego restartu, ponieważ
+`ControlRoomGuard` zamyka również frontend. Ta integracja pozostaje planned.
+
+Prywatny kanał manager–CLI–API musi wiązać polecenie z ownerem, generacją,
+nonce, starą instancją API i zweryfikowanym kandydatem. Trwały ACK kapsuły
+i globalny idle/drain proof poprzedzają utrwalenie zamkniętego admission oraz
+kontrolowane zamknięcie starego API. Timeout oznacza nieznany wynik, nie zgodę
+na retry albo przejęcie. Release markera wymaga zgodności pełnego rekordu.
+
+API potrzebuje kontrolowanego shutdown wraz z zakończeniem długich obserwacji;
+samo zakończenie listenera nie dowodzi exit procesu. Supervisor musi odczekać
+własny stary proces, sprawdzić brak listenera, przekazać replacementowi zamknięty
+stdin restore i potwierdzić nowe PID/UUID/build oraz model po odtworzeniu.
+Dotychczasowy attach observer i scratch supervisor nie mogą adoptować nowego API
+przez zwykły reconnect; wymagają jawnego zakończenia i nowego przypięcia.
+
+Frontend zachowuje szkice przez kontrolowany handoff. Obecne czyszczenie
+`pendingForms` przy disconnect oraz jednorazowy `apiInstancePin` nie dowodzą
+takiego zachowania. Wyjątek admission dla restartowej komendy nie może uzyskać
+własnego permitu przed `begin_freeze`, ponieważ blokowałby się na samym sobie.
+Publiczna komenda pozostaje wyłączona do wykonania całego tego kontraktu.
+
 Prywatny zapis semantycznego handoffu używa schematu
 `fullmag.development-authoring-handoff.v2`: assety mają ścieżki adresowane
 SHA256 z zachowanym rozszerzeniem źródła. Jest to wymagane przez obecne
