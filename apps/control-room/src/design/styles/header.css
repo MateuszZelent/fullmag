@@ -24,35 +24,6 @@
   -webkit-app-region: no-drag;
 }
 
-/* The brand doubles as the application menu: a quiet button, not a second
-   bordered control repeating the product name. */
-.fm-header__brand--trigger {
-  height: var(--fm-control-height-regular);
-  border: 0;
-  border-radius: var(--fm-radius-sm);
-  background: transparent;
-  color: inherit;
-  cursor: pointer;
-  font: inherit;
-  padding: 0 var(--fm-space-2) 0 var(--fm-space-1);
-  text-align: left;
-  transition: background-color var(--fm-transition-fast);
-}
-
-.fm-header__brand--trigger:hover,
-.fm-header__brand--trigger[data-state="open"] {
-  background: var(--fm-bg-panel-raised);
-}
-
-.fm-header__brand--trigger:focus-visible {
-  outline: none;
-  box-shadow: var(--fm-focus-ring);
-}
-
-.fm-header__brand-chevron {
-  color: var(--fm-text-muted);
-}
-
 .fm-header__logo {
   width: var(--fm-control-height-compact);
   height: var(--fm-control-height-compact);
@@ -95,6 +66,7 @@
 .fm-header__nav-item {
   display: flex;
   align-items: center;
+  gap: var(--fm-space-1);
   height: var(--fm-control-height-compact);
   padding-inline: var(--fm-space-3);
   border: none;
