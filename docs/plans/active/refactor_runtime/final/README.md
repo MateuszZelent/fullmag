@@ -421,3 +421,5 @@ Checkpoint P7-C: [25 — przypięcie native UI do API](p8/25-native-ui-instance-
 Checkpoint P8: [26 — lint i retencja mapy pola](p8/26-frontend-lint-and-frame-retention.md).
 
 Checkpoint P8-C: [27 — trasa workspace w pakiecie](p8/27-native-workspace-package.md).
+
+Checkpoint P8-C: [28 — natywny odczyt zasobów hosta](p8/28-native-capacity-observation.md).
