@@ -5,7 +5,9 @@ wydzielono do `fields/direct_torques.rs`, zachowując ciała i adapter FEM.
 Source comparison/Rustfmt PASS; test layoutu NOT COMPILED / NOT RUN.
 Review źródeł PASS; osobny odczyt adapterów nie potwierdził podejrzenia
 zamiany argumentów. [Zakres](b/03-fdm-cpu-direct-torques-owner.md).
-Build 217 nadal czeka; procenty bez awansu.
+Build 217 nadal czeka; nowy build 218 B-02/B-03 przyjęty jako QUEUED na
+commicie `9f7eadb06b7f4e9be3b0fed7b1c9006a4666ea04`, bez dirty paths.
+Nie ma terminalnego wyniku; procenty bez awansu.
 
 Checkpoint B-02, 03.10.2026: siedem metod pola demagnetyzacji Rust FDM CPU
 ma właściciela `fields/demag.rs`. Porównanie sygnatur i ciał z HEAD oraz

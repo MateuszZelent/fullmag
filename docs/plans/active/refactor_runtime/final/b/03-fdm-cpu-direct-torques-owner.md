@@ -25,7 +25,7 @@ Pozostałe prywatne helpery i metody pozostają prywatne.
 | Rustfmt nowego modułu i layout contract | PASS, exit 0. |
 | Niezależny review źródeł | PASS po uzupełnieniu importów `add` i `scale`; brak pozostałych P0/P1. |
 | Source layout contract | Dodano ownership, brak duplikatów i granicę adaptera FEM; NOT COMPILED / NOT RUN. |
-| Produkcyjny build | NOT VERIFIED dla B-03; queued build 217 obejmuje wcześniejszy commit P8-39. |
+| Produkcyjny build | Build 218 QUEUED, przypięty do B-03; brak terminalnego wyniku. Build 217 obejmuje wcześniejszy commit P8-39. |
 | Runtime i parity | NOT VERIFIED; nie awansowano kwalifikacji FDM/FEM ani procentów planu. |
 
 SHA-256 `direct_torques.rs`:
@@ -39,3 +39,20 @@ w wywołaniach helpera Slonczewskiego przez allocating, add-into AoS/SoA
 i FEM reference. Podejrzenie zamiany argumentów nie zostało potwierdzone.
 Istniejące testy niezależnego oracle i lokalnego materiału pozostają
 w rodzicu bez zmian; ich obecność nie zastępuje wykonania testów.
+
+## Przypięty build produkcyjny
+
+Build 218: `5a2659ca616448fdacd75e16f004e2af`, profil `fdm-cpu-release`,
+operacja `build`. Źródło commit:
+`9f7eadb06b7f4e9be3b0fed7b1c9006a4666ea04`, bez dirty paths.
+Native snapshot:
+`ce7fec0a8446178a03ae18c28128cd85c3c9dbe63c041c8a876f96198fa27097`.
+Capsule digest:
+`bedb167cb41845460cccf9634af8bfc8418f29641e27ac014f14cef05e2c71a8`.
+Capture: `e4621a1fec4f4df1a28fc64a26b0894c`.
+Request key: `b-03-demag-direct-torques-9f7eadb06b7f4e9`.
+
+Przyjęcie do kolejki, exit 0 klienta submit, nie oznacza udanego buildu.
+Po terminalnym wyniku trzeba sprawdzić dokładne źródło, receipt i artefakty.
+Build obejmuje B-02/B-03; nie jest testem runtime ani nauki. Nie zmieniono
+kolejności zadań 216/217 ani wdrożonego obrazu runnera.
