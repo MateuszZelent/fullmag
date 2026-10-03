@@ -96,6 +96,53 @@ fn fdm_cpu_direct_torques_keep_their_realization_and_fem_adapter_boundary() {
 }
 
 #[test]
+fn fdm_cpu_exchange_field_has_one_realization_owner() {
+    let root = crate_root();
+    let owner = fs::read_to_string(root.join("src/fdm/cpu/fields/exchange.rs"))
+        .expect("read FDM CPU exchange-field owner");
+    let fields = fs::read_to_string(root.join("src/fdm/cpu/fields.rs"))
+        .expect("read FDM CPU field orchestration");
+    assert!(fields.contains("fields/exchange.rs") && fields.contains("mod exchange;"));
+
+    for name in [
+        "cell_exchange_field",
+        "exchange_field_from_vectors",
+        "exchange_field_add_into",
+        "exchange_field_add_into_soa",
+    ] {
+        let declaration = format!("fn {name}(");
+        assert_eq!(
+            owner.matches(&declaration).count(),
+            1,
+            "missing or duplicate {name}"
+        );
+        assert!(
+            !fields.contains(&declaration),
+            "field orchestration still owns {name}"
+        );
+    }
+
+    for (path, symbol) in [
+        (
+            "src/fdm/cpu/fields/energy.rs",
+            "exchange_field_add_into_soa",
+        ),
+        (
+            "src/fdm/cpu/fields/observables.rs",
+            "exchange_field_from_vectors",
+        ),
+        ("src/fdm/cpu/integrators.rs", "exchange_field_add_into_soa"),
+        ("src/fdm/shared/problem.rs", "exchange_field_from_vectors"),
+    ] {
+        let source = fs::read_to_string(root.join(path)).expect("read exchange consumer");
+        assert!(
+            source.contains(symbol),
+            "exchange consumer {path} no longer calls {symbol}"
+        );
+    }
+}
+
+#[test]
 fn fdm_engine_shared_vector_field_has_fdm_owner() {
     let root = crate_root();
     for path in [

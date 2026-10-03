@@ -1,5 +1,10 @@
 # Fullmag — finalny audyt i plan refaktoryzacji
 
+Checkpoint B-04: [właściciel pola wymiany FDM CPU](b/04-fdm-cpu-exchange-owner.md).
+Cztery sygnatury i ciała zachowane; source comparison/Rustfmt/review PASS.
+Przyrost jest późniejszy niż źródło queued buildu 218; runtime i kwalifikacja
+pozostają otwarte, bez awansu procentów.
+
 Checkpoint P8-43: [pełny kontrakt pakietu wdrożony do runnera](p8/43-package-contract-runner-overlay.md).
 Siedem interpretowanych regresji obrazu i niezależny review PASS; profile,
 mounty i queued job 218 zachowane. Kolejka zdrowa i wznowiona, build nadal

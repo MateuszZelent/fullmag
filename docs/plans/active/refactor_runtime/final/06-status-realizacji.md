@@ -1,5 +1,12 @@
 # Status realizacji całego planu refaktoryzacji
 
+Checkpoint B-04, 03.10.2026: cztery istniejące metody exchange Rust FDM CPU
+wydzielono do `fields/exchange.rs`. Sygnatury i ciała identyczne z bazą;
+source comparison, Rustfmt i niezależny review PASS. Obcy reflow rodzica
+zachowano poza stagingiem. [Zakres i bramki](b/04-fdm-cpu-exchange-owner.md).
+Build 218 ma wcześniejsze źródło B-03 i nie obejmuje B-04.
+Kompilacja testów NOT RUN; runtime i fizyka NOT VERIFIED; procenty bez awansu.
+
 Checkpoint P8-43, 03.10.2026: pełny kontrakt 15 niepustych release outputów
 wdrożono w rzeczywistym rozszerzonym runnerze przez własną pauzę pustej
 kolejki, managed replace i resume. Siedem interpretowanych regresji obrazu
