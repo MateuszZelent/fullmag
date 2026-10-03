@@ -3,7 +3,9 @@ use fullmag_application::{
     DocumentMode, DurabilityGuarantee, FileProjectRepository, ProjectApplication, ProjectSource,
     ProjectTarget, SaveProjectRequest,
 };
+use crate::recent_index;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager};
@@ -391,6 +393,99 @@ pub async fn save_project_archive(
         }
     };
     save_project_archive_to_target(request, target)
+}
+
+fn recent_index_file(app: &AppHandle) -> Result<PathBuf, String> {
+    app.path()
+        .app_data_dir()
+        .map(|dir| dir.join(recent_index::INDEX_FILE_NAME))
+        .map_err(|error| format!("app data directory is unavailable: {error}"))
+}
+
+/// Locations scanned on rebuild: `FULLMAG_PROJECT_ROOTS` (path-list syntax of
+/// the platform), the roots the last scan used, and `<Documents>/Fullmag`.
+fn recent_project_roots(app: &AppHandle, file: &Path) -> Vec<PathBuf> {
+    let mut roots: Vec<PathBuf> = Vec::new();
+    if let Some(configured) = std::env::var_os("FULLMAG_PROJECT_ROOTS") {
+        roots.extend(std::env::split_paths(&configured));
+    }
+    if let Ok(index) = recent_index::read_index(file) {
+        for location in index
+            .get("scanned_locations")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            if let Some(path) = location.get("path").and_then(Value::as_str) {
+                roots.push(PathBuf::from(path));
+            }
+        }
+    }
+    if let Ok(documents) = app.path().document_dir() {
+        roots.push(documents.join("Fullmag"));
+    }
+    let mut seen = std::collections::HashSet::new();
+    roots.retain(|root| seen.insert(root.clone()));
+    roots
+}
+
+#[tauri::command]
+pub async fn recent_index_read(app: AppHandle) -> Result<Value, String> {
+    recent_index::read_index(&recent_index_file(&app)?)
+}
+
+/// Rescan the project locations. Runs off the async executor: it walks the
+/// file system and opens every archive it finds.
+#[tauri::command]
+pub async fn recent_index_rebuild(app: AppHandle) -> Result<Value, String> {
+    let file = recent_index_file(&app)?;
+    let roots = recent_project_roots(&app, &file);
+    tauri::async_runtime::spawn_blocking(move || {
+        recent_index::rebuild_index(&file, &roots, std::time::SystemTime::now())
+    })
+    .await
+    .map_err(|error| format!("index rebuild was interrupted: {error}"))?
+}
+
+#[tauri::command]
+pub async fn recent_index_pin(
+    app: AppHandle,
+    project_id: String,
+    pinned: bool,
+) -> Result<Value, String> {
+    recent_index::set_pinned(&recent_index_file(&app)?, &project_id, pinned)
+}
+
+/// Removes the row from the list only; the project file is never touched.
+#[tauri::command]
+pub async fn recent_index_forget(app: AppHandle, project_id: String) -> Result<Value, String> {
+    recent_index::forget(&recent_index_file(&app)?, &project_id)
+}
+
+/// Read an archive the index points at and return the validated bytes, the
+/// same way the file dialog does, so the webview never receives a free path.
+#[tauri::command]
+pub async fn open_project_archive_path(
+    app: AppHandle,
+    path: String,
+) -> Result<ProjectOpenArchive, String> {
+    let file_path = PathBuf::from(&path);
+    let (summary, bytes) = read_project_archive(&file_path)?;
+    let file_name = file_path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("fullmag-project.fms")
+        .to_string();
+    // Best effort: a stale index must never stop a project from opening.
+    if let Ok(index_file) = recent_index_file(&app) {
+        let _ = recent_index::touch_opened(&index_file, &file_path, std::time::SystemTime::now());
+    }
+    Ok(ProjectOpenArchive {
+        path: file_path.display().to_string(),
+        file_name,
+        archive_base64: STANDARD.encode(bytes),
+        summary,
+    })
 }
 
 #[tauri::command]

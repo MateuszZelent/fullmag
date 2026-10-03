@@ -2,6 +2,7 @@
 
 mod api_sidecar;
 mod commands;
+mod recent_index;
 
 use api_sidecar::ApiSidecar;
 use commands::AppConfig;
@@ -67,6 +68,11 @@ fn main() {
             commands::open_project_dialog,
             commands::open_project_archive_dialog,
             commands::open_project_path,
+            commands::open_project_archive_path,
+            commands::recent_index_read,
+            commands::recent_index_rebuild,
+            commands::recent_index_pin,
+            commands::recent_index_forget,
             commands::save_project_archive,
             commands::reveal_in_file_manager,
             commands::get_app_config,

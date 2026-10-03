@@ -50,27 +50,53 @@ export const pinRecentProject = (projectId: string, pinned: boolean): Promise<Re
 export const forgetRecentProject = (projectId: string): Promise<RecentIndexState> =>
   call("recent_index_forget", { projectId });
 
+type ArchiveResult =
+  | { readonly ok: true; readonly source: ProjectArchiveSource }
+  | { readonly ok: false; readonly reason: string };
+
+function toSource(opened: HostOpenArchive): ProjectArchiveSource {
+  return {
+    bytes: base64ToBytes(opened.archive_base64),
+    fileName: opened.file_name,
+    hostPath: opened.path,
+  };
+}
+
+async function archiveCommand(
+  command: string,
+  args: Record<string, unknown>,
+  withoutHost: string,
+): Promise<ArchiveResult> {
+  const invoke = tauriInvoke();
+  if (!invoke) return { ok: false, reason: withoutHost };
+  try {
+    return { ok: true, source: toSource(await invoke<HostOpenArchive>(command, args)) };
+  } catch (error) {
+    return { ok: false, reason: describe(error) };
+  }
+}
+
 /**
  * Read an archive the index points at. Returns the reason on failure so the
  * row can say why it did not open instead of doing nothing.
  */
-export async function readProjectArchiveAtPath(
-  path: string,
-): Promise<
-  { readonly ok: true; readonly source: ProjectArchiveSource } | { readonly ok: false; readonly reason: string }
-> {
+export const readProjectArchiveAtPath = (path: string): Promise<ArchiveResult> =>
+  archiveCommand("open_project_archive_path", { path }, "Opening by path needs the desktop app.");
+
+/** Loads the checkpoint's project; the host continues the run once it is open. */
+export const resumeRun = (projectId: string, runId: string): Promise<ArchiveResult> =>
+  archiveCommand("resume_run", { projectId, runId }, "Resuming a run needs the desktop app.");
+
+/** Deletes the checkpoint file and keeps the project. */
+export async function discardCheckpoint(
+  projectId: string,
+  runId: string,
+): Promise<{ readonly ok: true } | { readonly ok: false; readonly reason: string }> {
   const invoke = tauriInvoke();
-  if (!invoke) return { ok: false, reason: "Opening by path needs the desktop app." };
+  if (!invoke) return { ok: false, reason: "Discarding a checkpoint needs the desktop app." };
   try {
-    const opened = await invoke<HostOpenArchive>("open_project_archive_path", { path });
-    return {
-      ok: true,
-      source: {
-        bytes: base64ToBytes(opened.archive_base64),
-        fileName: opened.file_name,
-        hostPath: opened.path,
-      },
-    };
+    await invoke<unknown>("discard_checkpoint", { projectId, runId });
+    return { ok: true };
   } catch (error) {
     return { ok: false, reason: describe(error) };
   }
