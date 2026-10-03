@@ -97,6 +97,12 @@ Po poprawce obsługi `refreshError` kontrola produkcyjnych źródeł przeszła
 ponownie (receipt `3b9f25fc649b499d8c68a4a105f2fb86`).
 Kontrola API hygiene również przeszła
 (receipt `91c54f88bcdd4d7091d9f544825f4b89`).
+React Doctor 0.9.12, `--scope changed --base
+2d1ccb7165878fbfba731c06fa5451b92e0bbd82 --no-score --no-supply-chain`,
+sprawdził 10 zmienionych plików i nie znalazł problemów. Trzy ostrzeżenia
+hooka commita dotyczą wcześniejszych pętli pobierania topology i klonowania
+fixture; potwierdzono ich pochodzenie przez Git blame. Sekwencyjne pobieranie
+ogranicza pamięć i nie zostało zmienione dla samego wyniku skanera.
 Odczyt przez browser/API pozostaje **NOT VERIFIED**.
 Build Linux CPU nie zastępuje dowodu natywnego pakietu Windows ani walidacji
 naukowej skalara.

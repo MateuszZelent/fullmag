@@ -78,6 +78,15 @@ Screenshot zachowano w artefaktach zadania. Produkcyjny source check po
 poprawce Inspectora: PASS (receipt `8d6b8943460d4337a20668dd34ebcdcb`).
 Nie kompilowano testów jednostkowych.
 
+Ponowny `just windows-ui dev 3197` po commitach Inspectora i launchera:
+automatyczna decyzja `false`, hash-verified pakiet użyty bez kompilacji Cargo.
+Browser pokazał pusty ekran Create a simulation. Bieżący frontend i backend
+pozostawiono uruchomione do testów użytkownika; jego receipt pozostaje
+`running` do zamknięcia. Poprzedni terminalny receipt exit 0 zachowano jako
+`windows-runtime/workspace-browser-check-20261003.json` w profilu.
+Poprzednia sesja testowa była niezapisana; ten przebieg nie dowodzi odtworzenia
+projektu lub sesji po restarcie.
+
 Pełny authoring regionów/materiałów, Save/restart, inne porty, instalator,
 natywny FEM Windows i kwalifikacja wydania pozostają **NOT VERIFIED**.
 Zmiana portu istniejącego pakietu dev wymaga przygotowania linku cache dla

@@ -20,6 +20,11 @@ revision 2. Explorer wybrał obiekt i Inspector pokazał committed SceneDocument
 nie wyświetlił modalu niezapisanych zmian. Poprawka dotarła przez HMR do
 działającej aplikacji, bez kompilacji Rust.
 
+Commit poprawki: `27695b458c2c6b66baceb016c256d292fc95dab6`.
+React Doctor 0.9.12: 15 zmienionych plików, brak zgłoszonych problemów.
+Callback capture w nowym harnessie testowym przeniesiono do efektu po
+diagnozie skanera; nie wyłączono reguły.
+
 Produkcja TypeScript noEmit: PASS, receipt
 `8d6b8943460d4337a20668dd34ebcdcb`. Dodano regresje kolejności ACK/selection
 oraz spóźnionego ACK innego właściciela. Testy DOM **NOT COMPILED / NOT RUN**
