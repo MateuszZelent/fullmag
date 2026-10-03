@@ -23,6 +23,8 @@ const PROJECT_WORKSPACE_COMMAND_IDS = new Set([
   "start.new-fdm",
   "start.new-fem",
   "start.browse",
+  "start.search",
+  "start.rebuild-index",
 ]);
 
 export function isProjectWorkspaceCommand(commandId: string): boolean {

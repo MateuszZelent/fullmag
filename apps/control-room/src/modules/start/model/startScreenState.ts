@@ -25,11 +25,20 @@ export interface StartScreenSnapshot {
   readonly section: StartSection;
   /** Shared with the inspector, which describes the selection without opening it. */
   readonly selectedProjectId: string | null;
+  /** Bumped by palette commands so the mounted list can react without props. */
+  readonly searchFocusNonce: number;
+  readonly rebuildNonce: number;
 }
 
 type Listener = () => void;
 
-const INITIAL_SNAPSHOT: StartScreenSnapshot = { host: null, section: "home", selectedProjectId: null };
+const INITIAL_SNAPSHOT: StartScreenSnapshot = {
+  host: null,
+  section: "home",
+  selectedProjectId: null,
+  searchFocusNonce: 0,
+  rebuildNonce: 0,
+};
 
 class StartScreenStore {
   private listeners = new Set<Listener>();
@@ -47,6 +56,14 @@ class StartScreenStore {
   setSection(section: StartSection): void {
     if (this.snapshot.section === section) return;
     this.publish({ ...this.snapshot, section });
+  }
+
+  requestSearchFocus(): void {
+    this.publish({ ...this.snapshot, searchFocusNonce: this.snapshot.searchFocusNonce + 1 });
+  }
+
+  requestRebuild(): void {
+    this.publish({ ...this.snapshot, rebuildNonce: this.snapshot.rebuildNonce + 1 });
   }
 
   setSelectedProject(selectedProjectId: string | null): void {

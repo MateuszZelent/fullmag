@@ -10,8 +10,10 @@ import type { ModuleProps } from "@/kernel/types";
 import { HomeSection } from "./home/HomeSection";
 import { LAUNCH_TILES } from "./home/LaunchTiles";
 import { ProjectInspector } from "./inspector/ProjectInspector";
+import { readProjectArchiveAtPath } from "./model/recentIndexHost";
 import { startActionDisabledReason } from "./model/startCommands";
 import { startScreenStore, type StartScreenHost } from "./model/startScreenState";
+import type { RecentEntry } from "./model/types";
 import { StartRail } from "./rail/StartRail";
 import { SectionPlaceholder } from "./sections/SectionPlaceholder";
 
@@ -69,6 +71,19 @@ export function StartScreen({ kernel }: ModuleProps) {
     void kernel.commands.execute(commandId, context);
   };
 
+  const openRecent = async (entry: RecentEntry): Promise<string | null> => {
+    if (entry.status === "missing") {
+      return `${entry.name} is no longer at ${entry.path}. Rebuild the index or remove it from the list.`;
+    }
+    const archive = await readProjectArchiveAtPath(entry.path);
+    if (!archive.ok) return `Could not open ${entry.name}: ${archive.reason}`;
+    const result = await kernel.commands.execute("workspace.open-project", {
+      ...context,
+      input: archive.source,
+    });
+    return result.status === "failed" ? (result.message ?? `Could not open ${entry.name}.`) : null;
+  };
+
   const initialFocusRef = useRef<HTMLButtonElement>(null);
   const mainRef = useRef<HTMLElement>(null);
   const railRef = useRef<HTMLDivElement>(null);
@@ -98,6 +113,7 @@ export function StartScreen({ kernel }: ModuleProps) {
               browseDisabledReason={browseDisabledReason}
               disabledReasons={disabledReasons}
               initialFocusRef={initialFocusRef}
+              onOpenRecent={openRecent}
               onRunCommand={runCommand}
             />
           ) : (

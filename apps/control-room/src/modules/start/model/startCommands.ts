@@ -107,6 +107,36 @@ function actionCommand(id: string, title: string, shortcut: string): CommandCont
   };
 }
 
+function listCommand(
+  id: string,
+  title: string,
+  run: () => void,
+  shortcut?: string,
+): CommandContribution {
+  // These act on the recent list, which exists only on the Home section.
+  const reason = () => {
+    const snapshot = startScreenStore.getSnapshot();
+    if (!snapshot.host) return NOT_SHOWING;
+    return snapshot.section === "home" ? null : "Open the Home section first.";
+  };
+  return {
+    id,
+    title,
+    group: "start-list",
+    category: "Start",
+    scope: "workspace",
+    shortcut,
+    isEnabled: () => reason() === null,
+    disabledReason: reason,
+    run: () => {
+      const blocked = reason();
+      if (blocked) return { message: blocked, status: "failed" };
+      run();
+      return { status: "completed" };
+    },
+  };
+}
+
 export const START_COMMANDS: readonly CommandContribution[] = [
   navigationCommand("start.section.home", "Start: Home", "home", "Ctrl+1"),
   navigationCommand("start.section.templates", "Start: Templates", "templates", "Ctrl+2"),
@@ -119,4 +149,6 @@ export const START_COMMANDS: readonly CommandContribution[] = [
   actionCommand("start.new-fdm", "New FDM simulation", "Ctrl+N"),
   actionCommand("start.new-fem", "New FEM simulation", "Ctrl+Shift+N"),
   actionCommand("start.browse", "Open project…", "Ctrl+O"),
+  listCommand("start.search", "Search recent projects", () => startScreenStore.requestSearchFocus()),
+  listCommand("start.rebuild-index", "Rebuild project index", () => startScreenStore.requestRebuild()),
 ];
