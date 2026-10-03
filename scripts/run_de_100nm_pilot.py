@@ -601,6 +601,7 @@ def _validate_parallel_probe_inputs(layout, requested_root, mode):
         if artifact.get("schema_version") != schema:
             raise managed.BenchmarkError(f"parallel probe input schema mismatch for {relative}")
         if not isinstance(entry.get("content_sha256"), str) \
+                or not re.fullmatch(r"sha256:[0-9a-f]{64}", entry["content_sha256"]) \
                 or entry.get("content_sha256") != artifact.get("content_sha256"):
             raise managed.BenchmarkError(f"parallel probe content hash binding is invalid for {relative}")
         if relative == "equilibrium_artifact.v7.json":
@@ -633,9 +634,12 @@ def _validate_parallel_probe_inputs(layout, requested_root, mode):
         "sha256": model_sha256,
         "manifest_path": "serial-adaptive-probe-v1/input/input-manifest.json",
         "manifest_sha256": manifest_sha256,
+        # Legacy *_sha256 receipt fields bind raw file bytes, not native content.
         "equilibrium_artifact_sha256": PARALLEL_PROBE_EQUILIBRIUM_SHA256,
+        "equilibrium_artifact_content_sha256": equilibrium_content,
         "equilibrium_artifact_role": "solver_consumed",
         "linearization_state_sha256": PARALLEL_PROBE_LINEARIZATION_SHA256,
+        "linearization_state_content_sha256": observed["linearization_state.v6.json"]["content_sha256"],
         "linearization_state_role": "reference_provenance_only_not_consumed_by_solver",
         "parallel_mode": mode,
         "policy": dict(PARALLEL_PROBE_POLICY),
@@ -1630,8 +1634,10 @@ def execute(context, output, command, model_sha, timeout_seconds=managed.DEFAULT
             "required_memory_bytes": PARALLEL_PROBE_REQUIRED_MEMORY_BYTES,
             "input_manifest_sha256": model_identity.get("manifest_sha256"),
             "equilibrium_artifact_sha256": model_identity.get("equilibrium_artifact_sha256"),
+            "equilibrium_artifact_content_sha256": model_identity.get("equilibrium_artifact_content_sha256"),
             "equilibrium_artifact_role": model_identity.get("equilibrium_artifact_role"),
             "linearization_state_sha256": model_identity.get("linearization_state_sha256"),
+            "linearization_state_content_sha256": model_identity.get("linearization_state_content_sha256"),
             "linearization_state_role": model_identity.get("linearization_state_role"),
         }
     if pilot == SIGNED_FIFTEEN_PILOT:

@@ -24,6 +24,7 @@ from test_de_smoke_parallel_probe import (  # noqa: E402
 )
 from test_validate_parallel_execution_report import _adaptive_report  # noqa: E402
 from validate_serial_adaptive_probe import (  # noqa: E402
+    EvidenceUnavailable,
     MANIFEST_RELATIVE_PATH,
     PILOT,
     REPORT_RELATIVE_PATH,
@@ -70,6 +71,8 @@ def _add_row_and_probe_evidence(case: Path, *, frequency_hz: float = 11.2e9) -> 
     spectrum = json.loads(spectrum_path.read_text(encoding="utf-8"))
     for sample in spectrum["samples"]:
         mode = sample["modes"][0]
+        mode["equilibrium_artifact_sha256"] = "sha256:a76db36f38ab8b3398fb6dcc061e236f08ae1b16dc6b888c1a073aca851cc850"
+        mode["linearization_state_sha256"] = "sha256:" + str(sample["sample_index"] + 1) * 64
         block = mode["block_residuals"]
         block["scope"] = "full_projected_weak_form_and_periodic_seams"
         block["eps_reduced"] = max(block["eps_q"], block["eps_phi"])
@@ -113,8 +116,8 @@ def _write_manifest(case: Path, *, mesh: str = "c" * 64) -> None:
         "mesh_identity": "sha256:" + mesh,
         "operator_input_signature_sha256": "sha256:" + "d" * 64,
         "periodic_mesh_certificate_sha256": "sha256:" + "e" * 64,
-        "equilibrium_artifact_sha256": "sha256:" + "e" * 64,
-        "linearization_state_sha256": "sha256:" + "c" * 64,
+        "equilibrium_artifact_sha256": "sha256:" + "a76db36f38ab8b3398fb6dcc061e236f08ae1b16dc6b888c1a073aca851cc850",
+        "linearization_state_sha256": "sha256:" + "1" * 64,
     }), encoding="utf-8")
 
 
@@ -143,9 +146,11 @@ def _request_and_result(
         "sha256": model_hash,
         "manifest_path": "serial-adaptive-probe-v1/input/input-manifest.json",
         "manifest_sha256": "f" * 64,
-        "equilibrium_artifact_sha256": "e" * 64,
+        "equilibrium_artifact_sha256": "ce9d630b90234933cce60304b5564f543304d587680d08e5793e114be1f655d1",
+        "equilibrium_artifact_content_sha256": "sha256:a76db36f38ab8b3398fb6dcc061e236f08ae1b16dc6b888c1a073aca851cc850",
         "equilibrium_artifact_role": "solver_consumed",
-        "linearization_state_sha256": "c" * 64,
+        "linearization_state_sha256": "c0e5bb847a17b5da0f43b1c0a7ba3303028be44f3dcd926cd3e7e620f242864e",
+        "linearization_state_content_sha256": "sha256:b036435669ac317b84410b3e20516ccb91f52064081f20ba44650d1f68ed641e",
         "linearization_state_role": "reference_provenance_only_not_consumed_by_solver",
         "parallel_mode": mode,
         "policy": policy,
@@ -161,9 +166,11 @@ def _request_and_result(
         "required_cpu_cores": 4,
         "required_memory_bytes": 8 * 1024**3,
         "input_manifest_sha256": "f" * 64,
-        "equilibrium_artifact_sha256": "e" * 64,
+        "equilibrium_artifact_sha256": "ce9d630b90234933cce60304b5564f543304d587680d08e5793e114be1f655d1",
+        "equilibrium_artifact_content_sha256": "sha256:a76db36f38ab8b3398fb6dcc061e236f08ae1b16dc6b888c1a073aca851cc850",
         "equilibrium_artifact_role": "solver_consumed",
-        "linearization_state_sha256": "c" * 64,
+        "linearization_state_sha256": "c0e5bb847a17b5da0f43b1c0a7ba3303028be44f3dcd926cd3e7e620f242864e",
+        "linearization_state_content_sha256": "sha256:b036435669ac317b84410b3e20516ccb91f52064081f20ba44650d1f68ed641e",
         "linearization_state_role": "reference_provenance_only_not_consumed_by_solver",
     }
     shared_source = {
@@ -242,7 +249,7 @@ def _make_batches(tmp: Path, *, adaptive_frequency_hz: float = 11.2e9):
     report = _adaptive_report()["report"]
     report = copy.deepcopy(report)
     for input_item in report["inputs"]:
-        input_item["equilibrium_artifact_sha256"] = "sha256:" + "e" * 64
+        input_item["equilibrium_artifact_sha256"] = "sha256:a76db36f38ab8b3398fb6dcc061e236f08ae1b16dc6b888c1a073aca851cc850"
     report_bytes = (json.dumps(report, separators=(",", ":")) + "\n").encode("utf-8")
     (adaptive_case / REPORT_RELATIVE_PATH).parent.mkdir(parents=True, exist_ok=True)
     (adaptive_case / REPORT_RELATIVE_PATH).write_bytes(report_bytes)
@@ -273,6 +280,73 @@ class SerialAdaptiveProbeTests(unittest.TestCase):
             self.assertEqual(result["concurrency"]["status"], "observed_from_active_count")
             self.assertFalse(result["structural_report"]["serial_process_pool_report"]["present"])
             self.assertEqual(result["science"]["status"], "NOT VERIFIED")
+
+    def test_missing_content_identity_is_unavailable_without_raw_hash_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            serial, adaptive = _make_batches(Path(directory))
+            for root in (serial, adaptive):
+                for name in ("run-request.json", "run-result.json"):
+                    path = root / name
+                    value = json.loads(path.read_text())
+                    for owner in ("parallel_probe", "model_source"):
+                        value[owner].pop("equilibrium_artifact_content_sha256")
+                    path.write_text(json.dumps(value))
+            with self.assertRaisesRegex(EvidenceUnavailable, "content_sha256"):
+                validate_serial_adaptive_probe(serial, adaptive)
+
+    def test_raw_and_content_receipt_bindings_reject_independent_mutations(self) -> None:
+        for key in ("equilibrium_artifact_sha256", "equilibrium_artifact_content_sha256",
+                    "linearization_state_sha256", "linearization_state_content_sha256"):
+            with self.subTest(key=key), tempfile.TemporaryDirectory() as directory:
+                serial, adaptive = _make_batches(Path(directory))
+                for name in ("run-request.json", "run-result.json"):
+                    path = adaptive / name
+                    value = json.loads(path.read_text())
+                    value["model_source"][key] = "f" * 64
+                    path.write_text(json.dumps(value))
+                with self.assertRaisesRegex(ValidationError, "model_source and parallel_probe"):
+                    validate_serial_adaptive_probe(serial, adaptive)
+
+    def test_native_manifest_raw_hash_substitution_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            serial, adaptive = _make_batches(Path(directory))
+            path = adaptive / PILOT / MANIFEST_RELATIVE_PATH
+            value = json.loads(path.read_text())
+            value["equilibrium_artifact_sha256"] = "sha256:ce9d630b90234933cce60304b5564f543304d587680d08e5793e114be1f655d1"
+            path.write_text(json.dumps(value))
+            with self.assertRaisesRegex(ValidationError, "manifest.equilibrium_artifact_sha256"):
+                validate_serial_adaptive_probe(serial, adaptive)
+
+    def test_second_sample_native_state_mutation_fails_parity(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            serial, adaptive = _make_batches(Path(directory))
+            path = adaptive / PILOT / "eigen/spectrum.v3.json"
+            value = json.loads(path.read_text())
+            value["samples"][1]["modes"][0]["linearization_state_sha256"] = "sha256:" + "f" * 64
+            path.write_text(json.dumps(value))
+            with self.assertRaisesRegex(ValidationError, "native_states_by_sample"):
+                validate_serial_adaptive_probe(serial, adaptive)
+
+    def test_missing_native_state_is_not_verified(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            serial, adaptive = _make_batches(Path(directory))
+            path = adaptive / PILOT / "eigen/spectrum.v3.json"
+            value = json.loads(path.read_text())
+            value["samples"][1]["modes"][0].pop("linearization_state_sha256")
+            path.write_text(json.dumps(value))
+            result = validate_serial_adaptive_probe(serial, adaptive)
+            self.assertEqual(result["status"], "not_verified")
+            self.assertIn("linearization_state_sha256", result["structural_report"]["reason"])
+
+    def test_native_report_raw_hash_substitution_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            serial, adaptive = _make_batches(Path(directory))
+            path = adaptive / PILOT / REPORT_RELATIVE_PATH
+            value = json.loads(path.read_text())
+            value["inputs"][0]["equilibrium_artifact_sha256"] = "sha256:ce9d630b90234933cce60304b5564f543304d587680d08e5793e114be1f655d1"
+            path.write_text(json.dumps(value))
+            with self.assertRaisesRegex(ValidationError, "different equilibrium"):
+                validate_serial_adaptive_probe(serial, adaptive)
 
     def test_receipt_must_be_completed_unqualified_zero(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

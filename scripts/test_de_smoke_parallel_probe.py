@@ -440,11 +440,11 @@ class ParallelProbeTests(unittest.TestCase):
             model_data = b"value = 1\n"
             model_sha = hashlib.sha256(model_data).hexdigest()
             (root / "model-input.py").write_bytes(model_data)
-            eq = {"schema_version": "equilibrium_artifact.v7", "content_sha256": "sha256:eq"}
+            eq = {"schema_version": "equilibrium_artifact.v7", "content_sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111"}
             lin = {
                 "schema_version": "LinearizationState.v6",
-                "content_sha256": "sha256:lin",
-                "source_equilibrium_artifact": "sha256:eq",
+                "content_sha256": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+                "source_equilibrium_artifact": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
             }
             eq_bytes = json.dumps(eq, separators=(",", ":")).encode()
             lin_bytes = json.dumps(lin, separators=(",", ":")).encode()
@@ -458,15 +458,15 @@ class ParallelProbeTests(unittest.TestCase):
                         "path": "equilibrium_artifact.v7.json",
                         "schema_version": "equilibrium_artifact.v7",
                         "sha256": hashlib.sha256(eq_bytes).hexdigest(),
-                        "content_sha256": "sha256:eq",
-                        "equilibrium_id": "equilibrium_artifact.v7:eq",
+                        "content_sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+                        "equilibrium_id": "equilibrium_artifact.v7:1111111111111111111111111111111111111111111111111111111111111111",
                     },
                     {
                         "path": "linearization_state.v6.json",
                         "schema_version": "LinearizationState.v6",
                         "sha256": hashlib.sha256(lin_bytes).hexdigest(),
-                        "content_sha256": "sha256:lin",
-                        "linearization_state_id": "LinearizationState.v6:lin",
+                        "content_sha256": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+                        "linearization_state_id": "LinearizationState.v6:2222222222222222222222222222222222222222222222222222222222222222",
                     },
                 ],
                 "copy_policy": "byte-exact copies of already validated metadata; immutable inputs for both policy runs",
@@ -480,9 +480,35 @@ class ParallelProbeTests(unittest.TestCase):
                 data, identity, mounted_input = pilot._validate_parallel_probe_inputs(
                     {"storage_root": storage}, None, "serial"
                 )
+                # Byte mutation fails the raw-file gate before content checks.
+                eq_path = input_dir / "equilibrium_artifact.v7.json"
+                eq_path.write_bytes(eq_bytes + b"\n")
+                with self.assertRaisesRegex(pilot.managed.BenchmarkError, "input hash mismatch"):
+                    pilot._validate_parallel_probe_inputs({"storage_root": storage}, None, "serial")
+                eq_path.write_bytes(eq_bytes)
+                # Even an independently rebound raw digest cannot change the
+                # native identity recorded by the immutable manifest.
+                changed = dict(eq, content_sha256="sha256:" + "3" * 64)
+                changed_bytes = json.dumps(changed, separators=(",", ":")).encode()
+                eq_path.write_bytes(changed_bytes)
+                with patch.object(pilot, "PARALLEL_PROBE_EQUILIBRIUM_SHA256", hashlib.sha256(changed_bytes).hexdigest()):
+                    altered = json.loads(manifest_bytes)
+                    altered["files"][0]["sha256"] = hashlib.sha256(changed_bytes).hexdigest()
+                    altered_bytes = json.dumps(altered, indent=2).encode()
+                    (input_dir / "input-manifest.json").write_bytes(altered_bytes)
+                    with patch.object(pilot, "PARALLEL_PROBE_MANIFEST_SHA256", hashlib.sha256(altered_bytes).hexdigest()):
+                        with self.assertRaisesRegex(pilot.managed.BenchmarkError, "content hash binding"):
+                            pilot._validate_parallel_probe_inputs({"storage_root": storage}, None, "serial")
+                eq_path.write_bytes(eq_bytes)
+                (input_dir / "input-manifest.json").write_bytes(manifest_bytes)
+
             self.assertEqual(data, model_data)
             self.assertEqual(identity["manifest_sha256"], hashlib.sha256(manifest_bytes).hexdigest())
             self.assertEqual(identity["equilibrium_artifact_role"], "solver_consumed")
+            self.assertEqual(identity["equilibrium_artifact_content_sha256"], eq["content_sha256"])
+            self.assertEqual(identity["linearization_state_content_sha256"], lin["content_sha256"])
+            self.assertNotEqual(identity["equilibrium_artifact_sha256"], eq["content_sha256"].removeprefix("sha256:"))
+            self.assertNotEqual(identity["linearization_state_sha256"], lin["content_sha256"].removeprefix("sha256:"))
             self.assertEqual(
                 identity["linearization_state_role"],
                 "reference_provenance_only_not_consumed_by_solver",

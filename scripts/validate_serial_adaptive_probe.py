@@ -190,6 +190,13 @@ def _validate_policy(value: Any, mode: str, label: str) -> dict[str, Any]:
     return dict(value)
 
 
+def _content_identity(value: Mapping[str, Any], field: str, label: str) -> str:
+    """Require explicit native identity; never substitute a raw-file digest."""
+    if value.get(field) is None:
+        raise EvidenceUnavailable(f"{label} is missing explicit {field}")
+    return _digest_prefixed(value[field], f"{label}.{field}")
+
+
 def _validate_model_source(value: Any, mode: str, label: str) -> Mapping[str, Any]:
     if not isinstance(value, Mapping):
         raise ValidationError(f"{label} must be an object")
@@ -219,6 +226,8 @@ def _validate_model_source(value: Any, mode: str, label: str) -> Mapping[str, An
         raise ValidationError(f"{label}.required_cpu_cores is not pinned")
     if type(value["required_memory_bytes"]) is not int or value["required_memory_bytes"] != 8 * 1024**3:
         raise ValidationError(f"{label}.required_memory_bytes is not pinned")
+    for field in ("equilibrium_artifact_content_sha256", "linearization_state_content_sha256"):
+        _content_identity(value, field, label)
     return value
 
 
@@ -241,6 +250,8 @@ def _validate_parallel_probe(value: Any, mode: str, label: str) -> Mapping[str, 
     _string(value.get("equilibrium_artifact_role"), f"{label}.equilibrium_artifact_role")
     _digest(value.get("linearization_state_sha256"), f"{label}.linearization_state_sha256")
     _string(value.get("linearization_state_role"), f"{label}.linearization_state_role")
+    for field in ("equilibrium_artifact_content_sha256", "linearization_state_content_sha256"):
+        _content_identity(value, field, label)
     return value
 
 
@@ -276,6 +287,8 @@ def _load_receipt(root: Path, mode: str) -> dict[str, Any]:
         ("input_manifest_sha256", "manifest_sha256"),
         ("equilibrium_artifact_sha256", "equilibrium_artifact_sha256"),
         ("linearization_state_sha256", "linearization_state_sha256"),
+        ("equilibrium_artifact_content_sha256", "equilibrium_artifact_content_sha256"),
+        ("linearization_state_content_sha256", "linearization_state_content_sha256"),
     ):
         if _digest(probe.get(probe_key), f"{mode}.parallel_probe.{probe_key}") \
                 != _digest(model_source.get(source_key), f"{mode}.model_source.{source_key}"):
@@ -416,19 +429,44 @@ def _manifest_identity(
     # Preserve the legacy scalar field as the first-sample summary binding.
     phase_digest = phase_constraints[0]["phase_constraint_sha256"]
 
-    equilibrium_digest = _digest_prefixed(
-        probe["equilibrium_artifact_sha256"], "parallel_probe.equilibrium_artifact_sha256"
+    equilibrium_digest = _content_identity(
+        probe, "equilibrium_artifact_content_sha256", "parallel_probe"
     )
-    linearization_digest = _digest_prefixed(
-        probe["linearization_state_sha256"], "parallel_probe.linearization_state_sha256"
+    reference_linearization_digest = _content_identity(
+        probe, "linearization_state_content_sha256", "parallel_probe"
     )
-    for key, expected in (
-        ("equilibrium_artifact_sha256", equilibrium_digest),
-        ("linearization_state_sha256", linearization_digest),
-    ):
-        found = _first_named_value(manifest, (key,))
-        if found is not None and _digest_prefixed(found[1], f"manifest.{key}") != expected:
-            raise ValidationError(f"manifest.{key} differs from the pinned model input")
+    found_equilibrium = _first_named_value(manifest, ("equilibrium_artifact_sha256",))
+    if found_equilibrium is None:
+        raise EvidenceUnavailable("manifest has no native equilibrium_artifact_sha256")
+    if _digest_prefixed(found_equilibrium[1], "manifest.equilibrium_artifact_sha256") != equilibrium_digest:
+        raise ValidationError("manifest.equilibrium_artifact_sha256 differs from the pinned model input content")
+    # Reference sidecar provenance is separate from the produced k-dependent state.
+    found_state = _first_named_value(manifest, ("linearization_state_sha256",))
+    if found_state is None:
+        raise EvidenceUnavailable("manifest has no native linearization_state_sha256")
+    linearization_digest = _digest_prefixed(found_state[1], "manifest.linearization_state_sha256")
+    spectrum = _load_json(case_dir / "eigen/spectrum.v3.json", "native sample identities")
+    samples = spectrum.get("samples")
+    if not isinstance(samples, list) or len(samples) != EXPECTED_SAMPLE_COUNT:
+        raise EvidenceUnavailable("spectrum has no complete native per-sample identities")
+    native_states = []
+    for index, sample in enumerate(samples):
+        if not isinstance(sample, Mapping) or sample.get("sample_index") != index \
+                or sample.get("k_vector") != list(PARALLEL_PROBE_VECTORS_RAD_PER_M[index]):
+            raise ValidationError("native state identity sample binding differs from the probe")
+        modes = sample.get("modes")
+        if not isinstance(modes, list) or len(modes) != 1 or not isinstance(modes[0], Mapping):
+            raise EvidenceUnavailable("sample has no native mode state identity")
+        mode = modes[0]
+        native_equilibrium = _content_identity(mode, "equilibrium_artifact_sha256", f"sample[{index}]")
+        native_state = _content_identity(mode, "linearization_state_sha256", f"sample[{index}]")
+        if native_equilibrium != equilibrium_digest:
+            raise ValidationError(f"sample[{index}] native equilibrium differs from the input content")
+        native_states.append({"sample_index": index, "k_vector_rad_per_m": sample["k_vector"],
+                              "equilibrium_artifact_sha256": native_equilibrium,
+                              "linearization_state_sha256": native_state})
+    if native_states[0]["linearization_state_sha256"] != linearization_digest:
+        raise ValidationError("manifest linearization_state_sha256 differs from first sample native identity")
     periodic = _first_named_value(manifest, ("periodic_mesh_certificate_sha256",))
     periodic_digest = (
         _digest_prefixed(periodic[1], "periodic_mesh_certificate_sha256")
@@ -443,6 +481,8 @@ def _manifest_identity(
         "phase_constraints_by_sample": phase_constraints,
         "equilibrium_artifact_sha256": equilibrium_digest,
         "linearization_state_sha256": linearization_digest,
+        "reference_linearization_state_content_sha256": reference_linearization_digest,
+        "native_states_by_sample": native_states,
         "periodic_mesh_certificate_sha256": periodic_digest,
     }
 
@@ -568,8 +608,8 @@ def _report_inputs(value: Mapping[str, Any], probe: Mapping[str, Any]) -> dict[i
     if not isinstance(inputs, list):
         raise ValidationError("parallel execution report has no inputs array")
     result: dict[int, Mapping[str, Any]] = {}
-    expected_equilibrium = _digest_prefixed(
-        probe["equilibrium_artifact_sha256"], "parallel_probe.equilibrium_artifact_sha256"
+    expected_equilibrium = _content_identity(
+        probe, "equilibrium_artifact_content_sha256", "parallel_probe"
     )
     for position, item in enumerate(inputs):
         if not isinstance(item, Mapping):
@@ -723,6 +763,7 @@ def _compare_mesh_identity(serial: Mapping[str, Any], adaptive: Mapping[str, Any
         "mesh_identity", "operator_input_signature_sha256", "phase_constraint_sha256",
         "phase_constraints_by_sample",
         "equilibrium_artifact_sha256", "linearization_state_sha256",
+        "reference_linearization_state_content_sha256", "native_states_by_sample",
         "periodic_mesh_certificate_sha256",
     )
     for field in fields:
