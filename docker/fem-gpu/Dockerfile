@@ -220,6 +220,35 @@ RUN cmake -S /tmp/build/hypre/src -B /tmp/build/hypre/build-cpu -G Ninja \
     cmake --build /tmp/build/hypre/build-cpu -j2 && \
     cmake --install /tmp/build/hypre/build-cpu
 
+# Keep the complete CPU dependency closure separate, including PETSc/SLEPc.
+# A CUDA-free MFEM alone is insufficient when PETSc still links CUDA HYPRE.
+# Separate source trees avoid reusing GPU objects or generated configuration.
+RUN git clone --no-hardlinks /tmp/build/libCEED /tmp/build/libCEED-cpu && \
+    make -C /tmp/build/libCEED-cpu CUDA_DIR= ROCM_DIR= SYCL_DIR= MAGMA_DIR= -j2 && \
+    make -C /tmp/build/libCEED-cpu CUDA_DIR= ROCM_DIR= SYCL_DIR= MAGMA_DIR= \
+      install prefix=/opt/fullmag-mfem-cpu
+
+RUN git clone --no-hardlinks /tmp/build/petsc /tmp/build/petsc-cpu && \
+    cd /tmp/build/petsc-cpu && \
+    python3 ./configure \
+      PETSC_ARCH=arch-linux-cpu \
+      --prefix=/opt/fullmag-mfem-cpu \
+      --with-cc=mpicc --with-cxx=mpicxx --with-fc=mpifort \
+      COPTFLAGS=-O3 CXXOPTFLAGS=-O3 FOPTFLAGS=-O3 \
+      --with-debugging=0 --with-shared-libraries=1 \
+      --with-scalar-type=real --with-precision=double \
+      --with-cuda=0 --with-hip=0 --with-sycl=0 --with-opencl=0 \
+      --with-hypre=1 --with-hypre-dir=/opt/fullmag-mfem-cpu && \
+    make PETSC_DIR=/tmp/build/petsc-cpu PETSC_ARCH=arch-linux-cpu -j2 all && \
+    make PETSC_DIR=/tmp/build/petsc-cpu PETSC_ARCH=arch-linux-cpu install
+
+RUN git clone --no-hardlinks /tmp/build/slepc /tmp/build/slepc-cpu && \
+    cd /tmp/build/slepc-cpu && \
+    PETSC_DIR=/opt/fullmag-mfem-cpu PETSC_ARCH= \
+      python3 ./configure --prefix=/opt/fullmag-mfem-cpu && \
+    make SLEPC_DIR=/tmp/build/slepc-cpu PETSC_DIR=/opt/fullmag-mfem-cpu PETSC_ARCH= -j2 all && \
+    make SLEPC_DIR=/tmp/build/slepc-cpu PETSC_DIR=/opt/fullmag-mfem-cpu PETSC_ARCH= install
+
 # The CPU FEM client is compiled with the host C++ compiler. Keep its MFEM
 # headers and library in a separate, CUDA-free prefix so SparseMatrix has the
 # same layout on both sides of the ABI. The GPU installation above is intact.
@@ -227,7 +256,7 @@ RUN cmake -S /tmp/build/mfem -B /tmp/build/mfem/build-cpu -G Ninja \
       -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_CXX_STANDARD=17 \
       -DCMAKE_INSTALL_PREFIX=/opt/fullmag-mfem-cpu \
-      -DCMAKE_PREFIX_PATH=${INSTALL_PREFIX} \
+      -DCMAKE_PREFIX_PATH=/opt/fullmag-mfem-cpu \
       -DBUILD_SHARED_LIBS=ON \
       -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
       -DMFEM_USE_MPI=YES \
@@ -235,8 +264,8 @@ RUN cmake -S /tmp/build/mfem -B /tmp/build/mfem/build-cpu -G Ninja \
       -DMFEM_USE_METIS=NO \
       -DMFEM_USE_CUDA=NO \
       -DMFEM_USE_CEED=YES \
-      -DCEED_DIR=${INSTALL_PREFIX} \
-            -DHYPRE_DIR=/opt/fullmag-mfem-cpu \
+      -DCEED_DIR=/opt/fullmag-mfem-cpu \
+      -DHYPRE_DIR=/opt/fullmag-mfem-cpu \
       -DMFEM_ENABLE_TESTING=OFF && \
     cmake --build /tmp/build/mfem/build-cpu --target mfem -j2 && \
     cmake --install /tmp/build/mfem/build-cpu

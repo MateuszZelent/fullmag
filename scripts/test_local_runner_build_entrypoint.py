@@ -209,15 +209,60 @@ class BuildEntryPointTests(unittest.TestCase):
         contract = entrypoint._runtime_contract(profile)
         self.assertTrue(profile.runtime_only)
         self.assertEqual(profile.environment["FULLMAG_FEM_NATIVE_CUDA"], "0")
-        self.assertTrue(profile.environment["CMAKE_PREFIX_PATH"].startswith(
-            "/opt/fullmag-mfem-cpu:"
-        ))
-        self.assertTrue(profile.environment["LD_LIBRARY_PATH"].startswith(
-            "/opt/fullmag-mfem-cpu/lib:"
-        ))
+        self.assertEqual(profile.environment["CMAKE_PREFIX_PATH"], "/opt/fullmag-mfem-cpu")
+        self.assertEqual(profile.environment["LD_LIBRARY_PATH"], "/opt/fullmag-mfem-cpu/lib")
+        self.assertEqual(profile.environment["PKG_CONFIG_PATH"],
+                         "/opt/fullmag-mfem-cpu/lib/pkgconfig")
+        self.assertEqual(profile.environment["PETSC_DIR"], "/opt/fullmag-mfem-cpu")
+        self.assertEqual(profile.environment["SLEPC_DIR"], "/opt/fullmag-mfem-cpu")
+        self.assertEqual(profile.environment["PETSC_ARCH"], "")
         self.assertEqual(contract["cmake_options"]["FULLMAG_ENABLE_CUDA"], "OFF")
         self.assertEqual(contract["schema"],
                          "fullmag.fem.cpu.slepc_runtime_contract.v2")
+
+    def _cpu_modal_dependency_fixture(self) -> Path:
+        prefix = self.root / "cpu-modal-stack"
+        for relative in (
+            "include/petscconf.h", "include/ceed.h", "include/slepceps.h",
+            "lib/libpetsc.so", "lib/libslepc.so", "lib/libceed.so",
+            "lib/libHYPRE.so", "lib/libmfem.so",
+            "lib/pkgconfig/PETSc.pc", "lib/pkgconfig/SLEPc.pc",
+        ):
+            path = prefix / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("", encoding="utf-8")
+        (prefix / "include/petscconf.h").write_text(
+            "#define PETSC_USE_REAL_DOUBLE 1\n", encoding="utf-8"
+        )
+        return prefix
+
+    def test_cpu_modal_preflight_rejects_missing_or_gpu_petsc(self) -> None:
+        prefix = self._cpu_modal_dependency_fixture()
+        entrypoint.require_cpu_modal_dependencies(prefix)
+        config = prefix / "include/petscconf.h"
+        for accelerator in ("CUDA", "HIP", "SYCL", "OPENCL"):
+            with self.subTest(accelerator=accelerator):
+                config.write_text("#define PETSC_USE_REAL_DOUBLE 1\n"
+                                  f"#define PETSC_HAVE_{accelerator} 1\n",
+                                  encoding="utf-8")
+                with self.assertRaisesRegex(entrypoint.BuildEntryPointError,
+                                            "accelerator support"):
+                    entrypoint.require_cpu_modal_dependencies(prefix)
+        config.write_text("#define PETSC_USE_REAL_DOUBLE 1\n", encoding="utf-8")
+        (prefix / "lib/libslepc.so").unlink()
+        with self.assertRaisesRegex(entrypoint.BuildEntryPointError, "libslepc"):
+            entrypoint.require_cpu_modal_dependencies(prefix)
+
+    def test_cpu_modal_preflight_rejects_wrong_precision(self) -> None:
+        prefix = self._cpu_modal_dependency_fixture()
+        for config in (
+            "#define PETSC_USE_REAL_SINGLE 1\n",
+            "#define PETSC_USE_REAL_DOUBLE 1\n#define PETSC_USE_COMPLEX 1\n",
+        ):
+            with self.subTest(config=config):
+                (prefix / "include/petscconf.h").write_text(config, encoding="utf-8")
+                with self.assertRaisesRegex(entrypoint.BuildEntryPointError, "real/double"):
+                    entrypoint.require_cpu_modal_dependencies(prefix)
 
     def test_slepc_runtime_profile_runs_only_native_build_and_publishes_identity(self) -> None:
         self.profile = "fem-cpu-slepc-runtime-v1"
@@ -711,6 +756,18 @@ class BuildEntryPointTests(unittest.TestCase):
             ),
             "",
         )
+
+    def test_cpu_modal_attestation_never_preloads_a_cuda_driver(self) -> None:
+        with patch.object(entrypoint, "_cuda_driver_compatibility_paths") as paths, \
+             patch.object(entrypoint, "_preload_cuda_driver_compatibility_libraries") as preload:
+            self.assertEqual(entrypoint._modal_driver_compatibility(True), ((), ()))
+            paths.assert_not_called()
+            preload.assert_not_called()
+            paths.return_value = ("/usr/local/cuda/compat",)
+            preload.return_value = ("/usr/local/cuda/compat/libcuda.so.1",)
+            self.assertEqual(entrypoint._modal_driver_compatibility(False),
+                             (paths.return_value, preload.return_value))
+            preload.assert_called_once_with(paths.return_value)
 
     def test_cuda_driver_compatibility_helper_requires_loadable_soname(self) -> None:
         compatibility = self.root / "cuda" / "compat"
@@ -1253,8 +1310,10 @@ class BuildEntryPointTests(unittest.TestCase):
             ["rustup", "toolchain", "list"], 0,
             "nightly-x86_64-unknown-linux-gnu (default)\n", "")
         with patch.object(entrypoint.shutil, "which", side_effect=lambda name: f"/usr/bin/{name}"), \
-             patch.object(entrypoint.subprocess, "run", return_value=installed) as run:
+             patch.object(entrypoint.subprocess, "run", return_value=installed) as run, \
+             patch.object(entrypoint, "require_cpu_modal_dependencies") as dependencies:
             entrypoint.preflight(entrypoint.profile_for("fem-cpu-slepc-runtime-v2"), release=False)
+            dependencies.assert_called_once_with(Path("/opt/fullmag-mfem-cpu"))
             environment = run.call_args.kwargs.get("env", {})
             self.assertEqual(environment.get("RUSTUP_TOOLCHAIN"), "nightly")
             self.assertEqual(environment.get("RUSTUP_AUTO_INSTALL"), "0")

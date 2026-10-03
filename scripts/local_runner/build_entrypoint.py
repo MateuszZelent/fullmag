@@ -122,6 +122,14 @@ def _preload_cuda_driver_compatibility_libraries(
     return tuple(loaded)
 
 
+def _modal_driver_compatibility(cpu_abi_profile: bool) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """The complete CPU stack must never initialize an accelerator driver."""
+    if cpu_abi_profile:
+        return (), ()
+    paths = _cuda_driver_compatibility_paths()
+    return paths, _preload_cuda_driver_compatibility_libraries(paths)
+
+
 @dataclass(frozen=True)
 class Profile:
     name: str
@@ -240,8 +248,14 @@ PROFILES["fem-cpu-slepc-runtime-v2"] = Profile(
     environment={
         **PROFILES["fem-cpu-slepc-runtime-v1"].environment,
         "FULLMAG_FEM_NATIVE_CUDA": "0",
-        "CMAKE_PREFIX_PATH": "/opt/fullmag-mfem-cpu:/opt/fullmag-deps",
-        "LD_LIBRARY_PATH": "/opt/fullmag-mfem-cpu/lib:/opt/fullmag-deps/lib:/usr/local/cuda/lib64",
+        "CMAKE_PREFIX_PATH": "/opt/fullmag-mfem-cpu",
+        "LD_LIBRARY_PATH": "/opt/fullmag-mfem-cpu/lib",
+        "PKG_CONFIG_PATH": "/opt/fullmag-mfem-cpu/lib/pkgconfig",
+        "CPATH": "/opt/fullmag-mfem-cpu/include",
+        "LIBRARY_PATH": "/opt/fullmag-mfem-cpu/lib",
+        "PETSC_DIR": "/opt/fullmag-mfem-cpu",
+        "PETSC_ARCH": "",
+        "SLEPC_DIR": "/opt/fullmag-mfem-cpu",
     },
     runtime_only=True,
     runtime_contract_schema="fullmag.fem.cpu.slepc_runtime_contract.v2",
@@ -615,6 +629,37 @@ def _require_tool(name: str) -> str:
     return path
 
 
+def require_cpu_modal_dependencies(prefix: Path) -> None:
+    """Reject an older/mixed image before a production build; never load libraries."""
+    expected = (
+        "include/petscconf.h", "include/ceed.h", "include/slepceps.h",
+        "lib/libpetsc.so", "lib/libslepc.so", "lib/libceed.so",
+        "lib/libHYPRE.so", "lib/libmfem.so",
+        "lib/pkgconfig/PETSc.pc", "lib/pkgconfig/SLEPc.pc",
+    )
+    resolved_prefix = prefix.resolve()
+    for relative in expected:
+        path = prefix / relative
+        if not path.is_file() or not path.resolve().is_relative_to(resolved_prefix):
+            raise BuildEntryPointError(
+                "CPU modal dependency stack is missing or escapes its prefix: "
+                + relative + "; provision the complete CPU stack in the pinned image"
+            )
+    config = (prefix / "include/petscconf.h").read_text(encoding="utf-8")
+    for accelerator in ("CUDA", "HIP", "SYCL", "OPENCL"):
+        if re.search(r"^\s*#\s*define\s+PETSC_HAVE_" + accelerator
+                     + r"\b(?:[^\S\n]+1)?(?:[^\S\n]|$)", config, re.MULTILINE):
+            raise BuildEntryPointError(
+                "CPU modal PETSc advertises accelerator support: " + accelerator
+            )
+    if re.search(r"^\s*#\s*define\s+PETSC_USE_COMPLEX\b", config, re.MULTILINE):
+        raise BuildEntryPointError("CPU modal PETSc must use real/double scalars")
+    for macro in ("PETSC_USE_REAL_DOUBLE",):
+        if not re.search(r"^\s*#\s*define\s+" + macro
+                         + r"\s+1\b", config, re.MULTILINE):
+            raise BuildEntryPointError("CPU modal PETSc must use real/double scalars")
+
+
 def preflight(profile: Profile, *, release: bool = True) -> dict[str, str]:
     """Fail before Make if a forced lane would otherwise silently downgrade."""
 
@@ -664,6 +709,8 @@ def preflight(profile: Profile, *, release: bool = True) -> dict[str, str]:
     if profile.needs_cuda_toolchain:
         tools["cmake"] = _require_tool("cmake")
         tools["nvcc"] = _require_tool("nvcc")
+    if profile.name == "fem-cpu-slepc-runtime-v2":
+        require_cpu_modal_dependencies(Path(profile.environment["PETSC_DIR"]))
     return tools
 
 
@@ -1424,9 +1471,8 @@ def _attest_slepc_runtime(
         )
     ):
         raise BuildEntryPointError("MFEM CMake package did not resolve to CPU prefix")
-    compatibility_paths = _cuda_driver_compatibility_paths()
-    preloaded_compatibility_libraries = _preload_cuda_driver_compatibility_libraries(
-        compatibility_paths
+    compatibility_paths, preloaded_compatibility_libraries = _modal_driver_compatibility(
+        cpu_abi_profile
     )
     library_paths = [str(library_directory), *compatibility_paths]
     existing_library_path = probe_environment.get("LD_LIBRARY_PATH")
