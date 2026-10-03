@@ -48,12 +48,28 @@ do klienta. Nie wolno przedstawiać samej przygotowanej konfiguracji jako ready.
 
 ## Otwarta integracja
 
-Domyślny autorun nie jest jeszcze włączony w launcherach UI. Obecne ensure
-przy błędzie kończy startup, a obecny status solvera w Control Room opisuje
-sesję interaktywną, nie usługę accepted execution. Zanim włączymy autorun,
-trzeba udostępnić osobny, prawdziwy status usługi w resource API i UI oraz
-zachować dostęp do edycji/zapisu projektu podczas niedostępności obliczeń.
-Sam log launchera nie spełnia wymagania widocznego stanu dla użytkownika.
+Domyślny autorun nie jest jeszcze włączony w launcherach UI. Aktualizacja
+audytu konsumentów 03.10.2026: CLI i Tauri używają już
+`application_attach::prepare_for_authoring` z [P8-37](37-authoring-before-runtime-attach.md).
+Jawnie skonfigurowane dołączenie rozpoczyna się w tle po otwarciu authoringu;
+błąd tego dołączenia nie kończy startupu UI. Bez
+`FULLMAG_RUNTIME_SERVICE_CONFIG` ścieżka nie tworzy konfiguracji, wątku ani
+procesu usługi. `prepare_packaged_application_service` nadal nie ma
+produkcyjnego konsumenta; samo jego istnienie nie dowodzi inicjalizacji
+zasobów po instalacji.
+
+Osobny zasób `GET /v2/platform/runtime-service` jest zarejestrowany po stronie
+Rust w P8-33. Wygenerowany klient, globalny resource hook i widoczny status
+w Control Room pozostają otwarte; dotychczasowy status solvera opisuje sesję
+interaktywną. Kolejność odbioru: realny eksport OpenAPI → generated klient →
+resource hook niezależny od aktywnej sesji → jawny status usługi w UI →
+domyślna inicjalizacja i attach pakietu w tle po otwarciu authoringu. Każdy
+krok musi zachować edycję i zapis podczas niedostępności obliczeń. Sam log
+launchera nie spełnia wymagania widocznego stanu dla użytkownika.
+
+Ponowny audyt packagingu potwierdził deklarowane programy usługi,
+schedulerów i publisherów w Windows MSI; nie wykazał osobnego brakującego
+pliku pakietu. Nie zastępuje to rzeczywistego Windows build/install/run.
 
 Plan P0–P8, Windows lane qualification oraz odbiór produktu pozostają otwarte.
 Sesji na 3104 nie zatrzymano. Nie zmieniono danych innych zadań.
