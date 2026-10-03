@@ -168,6 +168,21 @@ lecz owner kończy jako failed/unknown, nigdy jako poprawny drained.
 
 ## Eksport i dowody
 
+### Domyślny budżet natywnej aplikacji
+
+Generator w `fullmag-runtime-control::local_resources` przyjmuje zmierzoną
+pojemność hosta i absolutny root. Rezerwuje co najmniej 25% CPU, wolnej RAM
+i miejsca na dysku (zaokrąglenie rezerwy w górę), a resztę dzieli na dwa równe
+sloty compute/preparation (zaokrąglenie w dół). Zerowy komponent slotu odmawia
+konfiguracji. Oferta compute ma kind CPU i zero pamięci GPU; jawne GPU nie
+otrzymuje przez to CPU fallbacku. Są to limity admission, nie OS hard limits.
+Przy jednym logicznym CPU oba sloty mają po 375 cpu_millis; większe żądanie
+pozostaje bez pasującej oferty. Konfiguracja wymaga canonical accepted store
+i stabilnej publikacji przez `for_application` przy przyszłej integracji startu.
+Sam generator nie uruchamia usługi ani nie kwalifikuje lane'u.
+
+### Artefakty i kwalifikacja
+
 Operational lock/descriptor/logs nie zawierają korzeni naukowych CAS i nie są
 pakowane do FMS. Import nie przejmuje katalogu runtime-services i zachowuje
 wymóg pustego staging store. Nie resetuje to żadnej istniejącej sesji.

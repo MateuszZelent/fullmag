@@ -425,3 +425,5 @@ Checkpoint P8-C: [27 — trasa workspace w pakiecie](p8/27-native-workspace-pack
 Checkpoint P8-C: [28 — natywny odczyt zasobów hosta](p8/28-native-capacity-observation.md).
 
 Checkpoint P8-C: [29 — stabilna konfiguracja usługi aplikacji](p8/29-stable-application-service-config.md).
+
+Checkpoint P8-C: [30 — domyślne budżety natywnej usługi](p8/30-native-service-resource-budgets.md).

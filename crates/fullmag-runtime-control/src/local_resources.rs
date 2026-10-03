@@ -1,7 +1,58 @@
 //! Native host capacity observation shared by publishers and application launchers.
 //! A measurement is neither a resource offer nor backend qualification.
 use anyhow::{bail, Context, Result};
+use fullmag_session::{
+    runtime_service::RuntimeServiceConfig, FmsPreparationResourceOffer, FmsResourceBudget,
+    FmsResourceKind, FmsSchedulerResourceOffer,
+};
 use std::path::Path;
+
+pub const APPLICATION_TARGET_ID: &str = "native-local";
+
+/// Allocate two disjoint CPU slots from a measured snapshot, retaining at least
+/// one quarter for the host. These are admission budgets, not OS hard limits.
+pub fn application_service_config(
+    store_root: &Path,
+    capacity: LocalCpuCapacity,
+) -> Result<RuntimeServiceConfig> {
+    let share = |available: u64| {
+        let host_reserve = available / 4 + u64::from(available % 4 != 0);
+        (available - host_reserve) / 2
+    };
+    let budget = FmsResourceBudget {
+        cpu_millis: share(capacity.cpu_millis),
+        memory_bytes: share(capacity.memory_available_bytes),
+        storage_bytes: share(capacity.storage_available_bytes),
+        gpu_memory_bytes: 0,
+    };
+    if budget.cpu_millis == 0 || budget.memory_bytes == 0 || budget.storage_bytes == 0 {
+        bail!("insufficient measured CPU, memory or storage for both native service pools");
+    }
+    let config = RuntimeServiceConfig {
+        schema_version: "runtime_service_config.v1".into(),
+        store_root: store_root.to_path_buf(),
+        target_id: APPLICATION_TARGET_ID.into(),
+        compute_pool_id: "native-local.compute".into(),
+        preparation_pool_id: "native-local.preparation".into(),
+        compute_resources: vec![FmsSchedulerResourceOffer {
+            resource_id: "native-local.compute.cpu".into(),
+            kind: FmsResourceKind::Cpu,
+            budget: budget.clone(),
+        }],
+        preparation_resources: vec![FmsPreparationResourceOffer {
+            resource_id: "native-local.preparation.cpu".into(),
+            budget,
+        }],
+        // Long scientific work is not bounded by the UI startup timeout.
+        worker_timeout_seconds: 31_536_000,
+        preparation_timeout_seconds: 31_536_000,
+        heartbeat_interval_milliseconds: 1000,
+        startup_timeout_seconds: 60,
+        drain_timeout_seconds: 1800,
+    };
+    config.validate()?;
+    Ok(config)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LocalCpuCapacity {
@@ -27,6 +78,76 @@ impl LocalCpuCapacity {
             memory_available_bytes: available_memory_bytes()?,
             storage_available_bytes: available_storage_bytes(storage_path)?,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn capacity(value: u64) -> LocalCpuCapacity {
+        LocalCpuCapacity {
+            cpu_millis: value,
+            memory_available_bytes: value,
+            storage_available_bytes: value,
+        }
+    }
+
+    fn store_root() -> std::path::PathBuf {
+        std::env::current_dir().unwrap().join("session-store")
+    }
+
+    #[test]
+    fn application_pools_share_capacity_and_keep_host_reserve() {
+        for available in [3, 4, 7, 1000, 16_000, u64::MAX] {
+            let config = application_service_config(&store_root(), capacity(available)).unwrap();
+            let compute = &config.compute_resources[0];
+            let preparation = &config.preparation_resources[0];
+            assert_eq!(compute.kind, FmsResourceKind::Cpu);
+            assert_eq!(compute.budget, preparation.budget);
+            assert_ne!(compute.resource_id, preparation.resource_id);
+            assert_ne!(config.compute_pool_id, config.preparation_pool_id);
+            for allocated in [
+                compute.budget.cpu_millis,
+                compute.budget.memory_bytes,
+                compute.budget.storage_bytes,
+            ] {
+                assert!(allocated > 0);
+                let reserved = available - allocated * 2;
+                assert!(reserved >= available / 4 + u64::from(available % 4 != 0));
+            }
+            assert_eq!(compute.budget.gpu_memory_bytes, 0);
+            assert_eq!(config.target_id, APPLICATION_TARGET_ID);
+        }
+    }
+
+    #[test]
+    fn single_core_is_partitioned_without_rounding_up() {
+        let config = application_service_config(&store_root(), capacity(1000)).unwrap();
+        assert_eq!(config.compute_resources[0].budget.cpu_millis, 375);
+        assert_eq!(config.preparation_resources[0].budget.cpu_millis, 375);
+    }
+
+    #[test]
+    fn each_missing_capacity_refuses_resource_publication() {
+        for insufficient in [0, 1, 2] {
+            for measured in [
+                LocalCpuCapacity {
+                    cpu_millis: insufficient,
+                    ..capacity(1000)
+                },
+                LocalCpuCapacity {
+                    memory_available_bytes: insufficient,
+                    ..capacity(1000)
+                },
+                LocalCpuCapacity {
+                    storage_available_bytes: insufficient,
+                    ..capacity(1000)
+                },
+            ] {
+                assert!(application_service_config(&store_root(), measured).is_err());
+            }
+        }
     }
 }
 
