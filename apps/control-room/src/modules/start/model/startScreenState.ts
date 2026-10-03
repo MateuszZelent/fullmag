@@ -23,11 +23,13 @@ export interface StartScreenHost {
 export interface StartScreenSnapshot {
   readonly host: StartScreenHost | null;
   readonly section: StartSection;
+  /** Shared with the inspector, which describes the selection without opening it. */
+  readonly selectedProjectId: string | null;
 }
 
 type Listener = () => void;
 
-const INITIAL_SNAPSHOT: StartScreenSnapshot = { host: null, section: "home" };
+const INITIAL_SNAPSHOT: StartScreenSnapshot = { host: null, section: "home", selectedProjectId: null };
 
 class StartScreenStore {
   private listeners = new Set<Listener>();
@@ -47,6 +49,11 @@ class StartScreenStore {
     this.publish({ ...this.snapshot, section });
   }
 
+  setSelectedProject(selectedProjectId: string | null): void {
+    if (this.snapshot.selectedProjectId === selectedProjectId) return;
+    this.publish({ ...this.snapshot, selectedProjectId });
+  }
+
   /**
    * The returned detach clears only the host it installed, so a remount that
    * attaches before the previous cleanup runs is not undone by that cleanup.
@@ -56,7 +63,7 @@ class StartScreenStore {
   attach(host: StartScreenHost): () => void {
     this.publish({ ...this.snapshot, host });
     return () => {
-      if (this.snapshot.host === host) this.publish({ host: null, section: "home" });
+      if (this.snapshot.host === host) this.publish(INITIAL_SNAPSHOT);
     };
   }
 

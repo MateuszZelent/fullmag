@@ -14,7 +14,7 @@ export interface ProjectArchiveSource {
   readonly hostPath?: string;
 }
 
-type TauriInvoke = <T = unknown>(
+export type TauriInvoke = <T = unknown>(
   command: string,
   args?: Record<string, unknown>,
 ) => Promise<T>;
@@ -329,7 +329,7 @@ export async function pickProjectArchive(): Promise<ProjectArchiveSource | null>
   }
 }
 
-function tauriInvoke(): TauriInvoke | null {
+export function tauriInvoke(): TauriInvoke | null {
   if (typeof window === "undefined") return null;
   return typeof window.__TAURI__?.core?.invoke === "function"
     ? window.__TAURI__.core.invoke

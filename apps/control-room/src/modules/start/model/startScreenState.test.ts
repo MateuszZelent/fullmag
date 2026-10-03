@@ -22,7 +22,7 @@ describe("startScreenStore", () => {
 
     detach();
 
-    expect(startScreenStore.getSnapshot()).toEqual({ host: null, section: "home" });
+    expect(startScreenStore.getSnapshot()).toEqual({ host: null, section: "home", selectedProjectId: null });
   });
 
   it("does not let a stale detach undo a newer attach", () => {
@@ -53,6 +53,6 @@ describe("startScreenStore", () => {
     startScreenStore.attach(fakeHost());
     startScreenStore.setSection("about");
 
-    expect(startScreenStore.getServerSnapshot()).toEqual({ host: null, section: "home" });
+    expect(startScreenStore.getServerSnapshot()).toEqual({ host: null, section: "home", selectedProjectId: null });
   });
 });
