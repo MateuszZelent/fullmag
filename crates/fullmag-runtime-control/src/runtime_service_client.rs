@@ -1,4 +1,5 @@
-//! Read-only native service discovery. Failed observation never starts a service.
+//! Native service discovery and authenticated terminal lifecycle observation.
+//! Failed observation never starts a service or proves a safe workspace restart.
 use anyhow::{bail, Context, Result};
 use fullmag_session::{
     repository_path::checked_path,
@@ -355,6 +356,25 @@ pub(crate) fn probe_with_config(
         identity.git_commit,
         identity.source_snapshot_sha256,
     )?;
+    let nonce = uuid::Uuid::new_v4().to_string();
+    let response = exchange_control(&expected, "status", &nonce, timeout)?;
+    validate_response(
+        &response,
+        &nonce,
+        &expected,
+        target,
+        identity.git_commit,
+        identity.source_snapshot_sha256,
+        config,
+    )
+}
+
+fn exchange_control(
+    expected: &RuntimeServiceOwnerDescriptor,
+    command: &str,
+    nonce: &str,
+    timeout: Duration,
+) -> Result<Vec<u8>> {
     let address: SocketAddr = expected
         .control_address
         .as_deref()
@@ -367,10 +387,9 @@ pub(crate) fn probe_with_config(
     let deadline = Instant::now() + timeout;
     let mut stream = TcpStream::connect_timeout(&address, remaining(deadline)?)
         .context("native service unreachable; outcome unknown, restart refused")?;
-    let nonce = uuid::Uuid::new_v4().to_string();
     let mut request = serde_json::to_vec(&serde_json::json!({
         "schema_version":"runtime_service_control.v1", "owner_token":expected.owner_token,
-        "command":"status", "nonce":nonce,
+        "command":command, "nonce":nonce,
     }))?;
     request.push(b'\n');
     // Recompute the common deadline after every partial write/read.
@@ -406,15 +425,112 @@ pub(crate) fn probe_with_config(
             bail!("native service response exceeds budget");
         }
     }
-    validate_response(
-        &response,
-        &nonce,
-        &expected,
-        target,
+    Ok(response)
+}
+
+/// Request a terminal drain from exactly the already observed service owner.
+///
+/// The caller must first close workspace mutation admission and verify that
+/// authoritative compute/preparation/task state permits lifecycle handoff.
+/// This receipt proves the named owner's drain, not scene persistence, absence
+/// of newly accepted work, release of its process lock, or restart completion.
+/// A timeout/disconnect is an unknown outcome and must never trigger a retry
+/// or be treated as permission to replace a runtime.
+pub fn drain_confirmed(
+    expected: &RuntimeServiceOwnerDescriptor,
+    config: &RuntimeServiceConfig,
+    timeout_seconds: u64,
+) -> Result<RuntimeServiceOwnerDescriptor> {
+    if !(1..=30).contains(&timeout_seconds) {
+        bail!("native service drain timeout must be 1..30 seconds");
+    }
+    let identity = fullmag_build_info::identity();
+    require_ready(
+        expected,
+        &config.target_id,
         identity.git_commit,
         identity.source_snapshot_sha256,
-        config,
-    )
+    )?;
+    let deadline = Instant::now() + Duration::from_secs(timeout_seconds);
+    // Prove the complete configuration and freshly pinned owner before sending
+    // a mutating control frame. A stale expected descriptor is not authority.
+    let observed = probe_with_config(
+        &config.store_root,
+        &config.target_id,
+        remaining(deadline)?,
+        Some(config),
+    )?;
+    if observed.owner_token != expected.owner_token
+        || observed.process_start_token != expected.process_start_token
+        || observed.pid != expected.pid
+        || observed.host != expected.host
+        || observed.control_address != expected.control_address
+        || observed.compute_pool_generation != expected.compute_pool_generation
+        || observed.preparation_pool_generation != expected.preparation_pool_generation
+        || !same_service_children(&observed, expected)
+    {
+        bail!("native service owner changed before drain; no lifecycle request sent");
+    }
+    let nonce = uuid::Uuid::new_v4().to_string();
+    let response = exchange_control(expected, "drain_confirmed", &nonce, remaining(deadline)?)?;
+    validate_drain_response(&response, &nonce, expected, config)
+}
+
+fn validate_drain_response(
+    bytes: &[u8],
+    nonce: &str,
+    expected: &RuntimeServiceOwnerDescriptor,
+    config: &RuntimeServiceConfig,
+) -> Result<RuntimeServiceOwnerDescriptor> {
+    let response: StatusResponse =
+        serde_json::from_slice(bytes).context("decode terminal service drain")?;
+    let owner = &response.owner;
+    validate_descriptor(owner)?;
+    if response.schema_version != "runtime_service_drain.v1"
+        || response.nonce != nonce
+        || response.configuration.as_ref() != Some(config)
+        || owner.state != RuntimeServiceState::Drained
+        || owner.owner_token != expected.owner_token
+        || owner.process_start_token != expected.process_start_token
+        || owner.pid != expected.pid
+        || owner.host != expected.host
+        || owner.target_id != expected.target_id
+        || owner.control_address != expected.control_address
+        || owner.build_commit != expected.build_commit
+        || owner.build_snapshot != expected.build_snapshot
+        || owner.compute_pool_id != expected.compute_pool_id
+        || owner.preparation_pool_id != expected.preparation_pool_id
+        || owner.compute_pool_generation != expected.compute_pool_generation
+        || owner.preparation_pool_generation != expected.preparation_pool_generation
+        || !same_service_children(owner, expected)
+        || owner.children.len() != 2
+        || !["compute", "preparation"].iter().all(|role| {
+            owner
+                .children
+                .iter()
+                .filter(|child| child.role == *role && child.status == "exited_success")
+                .count()
+                == 1
+        })
+    {
+        bail!(
+            "terminal native service drain not proven; lifecycle outcome requires reconciliation"
+        );
+    }
+    Ok(response.owner)
+}
+
+fn same_service_children(
+    a: &RuntimeServiceOwnerDescriptor,
+    b: &RuntimeServiceOwnerDescriptor,
+) -> bool {
+    a.children.len() == 2
+        && b.children.len() == 2
+        && a.children.iter().all(|child| {
+            b.children
+                .iter()
+                .any(|other| child.role == other.role && child.pid == other.pid)
+        })
 }
 
 /// Attach to a compatible service or launch one once. Unknown outcomes are retained.
@@ -821,9 +937,7 @@ mod tests {
         assert!(remaining(Instant::now() - Duration::from_secs(1)).is_err());
     }
 
-    #[test]
-    fn attach_requires_exact_service_configuration() {
-        let expected = owner();
+    fn configuration_fixture() -> RuntimeServiceConfig {
         let budget = fullmag_session::FmsResourceBudget {
             cpu_millis: 1000,
             memory_bytes: 1024,
@@ -852,6 +966,13 @@ mod tests {
             drain_timeout_seconds: 10,
         };
         config.validate().unwrap();
+        config
+    }
+
+    #[test]
+    fn attach_requires_exact_service_configuration() {
+        let expected = owner();
+        let config = configuration_fixture();
         let mut response = serde_json::json!({"schema_version":"runtime_service_status.v1",
             "nonce":"fresh","owner":expected});
         let check = |response: &serde_json::Value| {
@@ -870,5 +991,61 @@ mod tests {
         assert!(check(&response).is_ok());
         response["configuration"]["compute_resources"][0]["budget"]["memory_bytes"] = 2048.into();
         assert!(check(&response).is_err());
+    }
+
+    #[test]
+    fn confirmed_drain_requires_exact_owner_and_terminal_children() {
+        let expected = owner();
+        let config = configuration_fixture();
+        let mut drained = expected.clone();
+        drained.state = RuntimeServiceState::Drained;
+        for child in &mut drained.children {
+            child.status = "exited_success".into();
+        }
+        let baseline = serde_json::json!({"schema_version":"runtime_service_drain.v1",
+            "nonce":"fresh","owner":drained,"configuration":config});
+        let check = |value: &serde_json::Value| {
+            validate_drain_response(
+                &serde_json::to_vec(value).unwrap(),
+                "fresh",
+                &expected,
+                &config,
+            )
+        };
+        assert!(check(&baseline).is_ok());
+        for (pointer, value) in [
+            (
+                "/schema_version",
+                serde_json::json!("runtime_service_status.v1"),
+            ),
+            ("/nonce", serde_json::json!("stale")),
+            ("/owner/state", serde_json::json!("draining")),
+            ("/owner/state", serde_json::json!("unknown")),
+            (
+                "/owner/process_start_token",
+                serde_json::json!(uuid::Uuid::new_v4()),
+            ),
+            ("/owner/compute_pool_generation", serde_json::json!(3)),
+            ("/owner/build_snapshot", serde_json::json!("c".repeat(64))),
+            ("/owner/children/0/pid", serde_json::json!(99)),
+            ("/owner/children/0/status", serde_json::json!("running")),
+            (
+                "/owner/children/0/status",
+                serde_json::json!("exited_failure"),
+            ),
+            ("/owner/children", serde_json::json!([])),
+            (
+                "/configuration/drain_timeout_seconds",
+                serde_json::json!(20),
+            ),
+        ] {
+            let mut changed = baseline.clone();
+            *changed.pointer_mut(pointer).unwrap() = value;
+            assert!(check(&changed).is_err(), "accepted {pointer}");
+        }
+        assert!(
+            validate_drain_response(br#"{"status":"draining"}"#, "fresh", &expected, &config)
+                .is_err()
+        );
     }
 }

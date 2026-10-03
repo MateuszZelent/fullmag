@@ -153,3 +153,10 @@ komend Start Screen, która blokowała aktualny dev frontend błędem 500.
 HMR przywrócił ekran na 3197 bez restartu backendu; przejścia Home/Templates
 oraz kontrole TypeScript/lint/API/React Doctor przeszły. To dowód uruchomienia
 UI, a nie kontrolowanego odtworzenia modelu po restarcie.
+
+[P8-53H](53h-workspace-acquisition-and-confirmed-drain.md) dodaje prywatny
+owner-authenticated terminalny drain obu schedulerów. Własny pusty service
+przeszedł tę granicę, a natywny verifier zakończył 31 sprawdzeń z exit 0.
+Prywatne przejęcie sceny jest nadal w realizacji. Nie jest to jeszcze
+koordynatorem restartu: accepted-work gate, zapis/restore i nowy pin API
+pozostają do podłączenia. `restart_available` nadal jest `false`.

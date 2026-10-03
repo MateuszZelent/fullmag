@@ -79,6 +79,14 @@ sceny przed listenerem ani potwierdzenia nowej instancji API.
 
 ## Weryfikacja
 
+Prywatny `drain_confirmed` rozszerza istniejący kanał service bez zmiany
+kontraktu `drain`: wymaga tokenu ownera i świeżego nonce, a odpowiedź
+`runtime_service_drain.v1` wysyła dopiero po terminalnych receiptach obu
+schedulerów i publikacji descriptoru. Klient sprawdza pełną konfigurację,
+tożsamość ownera/source/pul oraz terminalne PID-y. Ta odpowiedź nie zastępuje
+kontroli accepted work, zapisu authoring ani obserwacji zwolnienia owner locka.
+Publiczna komenda pozostaje wyłączona do podłączenia wszystkich tych granic.
+
 Wymagane są: zgodność generated API, regresje błędnego/starego handoffu,
 odrzucenie aktywnego solve i wyścigu Start, ochrony szkiców i awarii restore,
 a także rzeczywisty przebieg Windows i przeglądarki z niepustą geometrią,

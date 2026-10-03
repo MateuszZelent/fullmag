@@ -465,7 +465,18 @@ struct ControlRequest {
 #[derive(Debug, PartialEq, Eq)]
 enum ControlCommand {
     Drain,
+    ConfirmedDrain { nonce: String },
     Status { nonce: String },
+}
+
+struct DrainConfirmation {
+    stream: tokio::net::TcpStream,
+    nonce: String,
+}
+
+enum ControlObservation {
+    Continue,
+    Drain(Option<DrainConfirmation>),
 }
 
 fn control_command(bytes: &[u8], owner: &str) -> Option<ControlCommand> {
@@ -475,7 +486,7 @@ fn control_command(bytes: &[u8], owner: &str) -> Option<ControlCommand> {
     }
     match request.command.as_str() {
         "drain" if request.nonce.is_none() => Some(ControlCommand::Drain),
-        "status" => {
+        "status" | "drain_confirmed" => {
             let nonce = request.nonce?;
             if nonce.is_empty()
                 || nonce.len() > 128
@@ -485,7 +496,11 @@ fn control_command(bytes: &[u8], owner: &str) -> Option<ControlCommand> {
             {
                 return None;
             }
-            Some(ControlCommand::Status { nonce })
+            Some(if request.command == "status" {
+                ControlCommand::Status { nonce }
+            } else {
+                ControlCommand::ConfirmedDrain { nonce }
+            })
         }
         _ => None,
     }
@@ -500,14 +515,14 @@ async fn drain_requested(
     listener: &TcpListener,
     owner: &RuntimeServiceOwner,
     config: &ServiceConfig,
-) -> Result<bool> {
+) -> Result<ControlObservation> {
     let (mut stream, peer) =
         match tokio::time::timeout(Duration::from_millis(250), listener.accept()).await {
             Ok(result) => result.context("accept service control request")?,
-            Err(_) => return Ok(false),
+            Err(_) => return Ok(ControlObservation::Continue),
         };
     if !peer.ip().is_loopback() {
-        return Ok(false);
+        return Ok(ControlObservation::Continue);
     }
     let parsed = tokio::time::timeout(Duration::from_secs(1), async {
         let mut bytes = Vec::new();
@@ -531,6 +546,15 @@ async fn drain_requested(
         Ok(Ok(bytes)) => control_command(&bytes, owner.owner_token()),
         _ => None,
     };
+    if let Some(ControlCommand::ConfirmedDrain { nonce }) = command {
+        // Keep the authenticated connection until terminal child receipts and
+        // pool observations have been durably published. Admission ACK alone
+        // must never authorize replacing a runtime.
+        return Ok(ControlObservation::Drain(Some(DrainConfirmation {
+            stream,
+            nonce,
+        })));
+    }
     let drain = command == Some(ControlCommand::Drain);
     let response = match command {
         Some(ControlCommand::Drain) => serde_json::json!({"status": "draining"}),
@@ -540,13 +564,18 @@ async fn drain_requested(
             "owner": owner.descriptor(),
             "configuration": config,
         }),
+        Some(ControlCommand::ConfirmedDrain { .. }) => unreachable!(),
         None => serde_json::json!({"status": "rejected"}),
     };
     let mut response = serde_json::to_vec(&response)?;
     response.push(b'\n');
     // A disconnected client must not undo an already authenticated drain.
     let _ = tokio::time::timeout(Duration::from_secs(1), stream.write_all(&response)).await;
-    Ok(drain)
+    Ok(if drain {
+        ControlObservation::Drain(None)
+    } else {
+        ControlObservation::Continue
+    })
 }
 
 fn pools_match(
@@ -632,6 +661,7 @@ fn run() -> Result<()> {
         let mut children = Schedulers::default();
         let mut generations = None;
         let mut unknown_publishers = Vec::new();
+        let mut drain_confirmation = None;
         let work: Result<()> = async {
             let pools = publish_pools(
                 &config,
@@ -677,8 +707,12 @@ fn run() -> Result<()> {
             let mut heartbeat = Instant::now();
             loop {
                 children.poll()?;
-                if drain_requested(&listener, &owner, &config).await? {
-                    break;
+                match drain_requested(&listener, &owner, &config).await? {
+                    ControlObservation::Continue => {}
+                    ControlObservation::Drain(confirmation) => {
+                        drain_confirmation = confirmation;
+                        break;
+                    }
                 }
                 if heartbeat.elapsed() >= Duration::from_secs(1) {
                     let compute = store
@@ -790,6 +824,22 @@ fn run() -> Result<()> {
                 .chain(unknown_publishers)
                 .collect(),
         )?;
+        if let Some(mut confirmation) = drain_confirmation {
+            let mut response = serde_json::to_vec(&serde_json::json!({
+                "schema_version": "runtime_service_drain.v1",
+                "nonce": confirmation.nonce,
+                "owner": owner.descriptor(),
+                "configuration": config,
+            }))?;
+            response.push(b'\n');
+            // Disconnect cannot undo the already authenticated drain. The
+            // caller must reconcile an unknown outcome; it cannot infer idle.
+            let _ = tokio::time::timeout(
+                Duration::from_secs(1),
+                confirmation.stream.write_all(&response),
+            )
+            .await;
+        }
         work?;
         publish_draining?;
         finish?;
@@ -833,6 +883,24 @@ mod tests {
             );
         }
         assert_eq!(control_command(br#"{"schema_version":"runtime_service_control.v1","owner_token":"owner-a","command":"status"}"#, "owner-a"), None);
+    }
+    #[test]
+    fn confirmed_drain_requires_owner_and_fresh_bounded_challenge() {
+        let request = br#"{"schema_version":"runtime_service_control.v1","owner_token":"owner-a","command":"drain_confirmed","nonce":"fresh-123"}"#;
+        assert_eq!(
+            control_command(request, "owner-a"),
+            Some(ControlCommand::ConfirmedDrain {
+                nonce: "fresh-123".into()
+            })
+        );
+        assert_eq!(control_command(request, "owner-b"), None);
+        for nonce in [None, Some(""), Some("invalid space")] {
+            let request = serde_json::json!({"schema_version":"runtime_service_control.v1","owner_token":"owner-a","command":"drain_confirmed","nonce":nonce});
+            assert_eq!(
+                control_command(&serde_json::to_vec(&request).unwrap(), "owner-a"),
+                None
+            );
+        }
     }
     #[test]
     #[cfg(any(windows, target_os = "linux"))]

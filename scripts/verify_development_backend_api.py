@@ -1,4 +1,4 @@
-"""Verify the development resource with an owned, empty native API process."""
+"""Verify development observation and terminal drain in owned empty processes."""
 from __future__ import annotations
 
 import argparse
@@ -53,7 +53,7 @@ def run(repo_root: str) -> int:
                    "build_snapshot_sha256": manifest["source_snapshot_sha256"],
                    "build_commit": manifest["git_commit"],
                    "started_at": storage.now(), "checks": [], "processes": [],
-                   "scope": "native resource observation and open mutation admission; no UI, freeze, restart, solver or release qualification"}
+                   "scope": "native resource observation, open mutation admission and empty-service terminal drain; no workspace freeze, restart, solver or release qualification"}
         storage.atomic_json(receipt_path, receipt)
         code = 1
         try:
@@ -62,6 +62,7 @@ def run(repo_root: str) -> int:
             if binary_hash != manifest["api_binary_sha256"] or hashlib.sha256(source_api.read_bytes()).hexdigest() != binary_hash:
                 raise storage.StorageError("Native API changed while sealing its diagnostic copy")
             exercise(api, repo, run_root, receipt)
+            exercise_service(repo, run_root, manifest, receipt)
             # Use the canonical codegen branch rather than persisting the live
             # endpoint's process-specific accepted-store binding extension.
             export = subprocess.run([str(api), "--print-openapi-v2"], cwd=repo,
@@ -97,6 +98,136 @@ def run(repo_root: str) -> int:
             storage.atomic_json(receipt_path, receipt)
             print(json.dumps({"state": receipt["state"], "exit_code": code, "checks": len(receipt["checks"]), "receipt": str(receipt_path)}))
         return code
+
+
+def exercise_service(repo: Path, run_root: Path, manifest: dict, receipt: dict) -> None:
+    """Exercise only this verifier's initialized empty store and sealed binaries."""
+    from windows.runtime_bundle import BINARY_NAMES
+
+    binaries = run_root / "service-binaries"
+    binaries.mkdir()
+    source_root = Path(manifest["cargo_target_dir"]) / manifest["target_triple"] / manifest["compiler_profile"]
+    for name in BINARY_NAMES:
+        source = storage.validate_path(source_root / name, manifest["cargo_target_dir"], "native service executable")
+        expected = manifest["executable_sha256"][name]
+        shutil.copyfile(source, binaries / name)
+        if (hashlib.sha256(source.read_bytes()).hexdigest() != expected
+                or hashlib.sha256((binaries / name).read_bytes()).hexdigest() != expected):
+            raise storage.StorageError("Native service executable changed while sealing")
+
+    state_root = run_root / "service-state"
+    store = state_root / "local-live/session-store"
+    project = store / "project"
+    project.mkdir(parents=True)
+    # Production CLI initializes the store. The fixture has no accepted runs.
+    (project / "main.py").write_text("# Empty development drain fixture\n", encoding="utf-8")
+    env = {key: os.environ[key] for key in ("SYSTEMROOT", "WINDIR", "PATH", "PATHEXT", "TEMP", "TMP", "COMPUTERNAME", "HOSTNAME") if key in os.environ}
+    env.update(FULLMAG_REPO_ROOT=str(repo), FULLMAG_STATE_ROOT=str(state_root))
+    initialized = subprocess.run([str(binaries / "fullmag.exe"), "session", "save", str(run_root / "empty.fms"), "--profile", "compact"],
+                                 cwd=repo, env=env, capture_output=True, timeout=30,
+                                 creationflags=subprocess.CREATE_NO_WINDOW)
+    (run_root / "service-initialize.log").write_bytes(initialized.stdout + initialized.stderr)
+    if initialized.returncode:
+        raise storage.StorageError("Production CLI could not initialize the empty service fixture")
+    budget = dict(cpu_millis=1000, memory_bytes=1024, storage_bytes=1024, gpu_memory_bytes=0)
+    config = dict(schema_version="runtime_service_config.v1", store_root=str(store), target_id="desktop",
+                  compute_pool_id="compute", preparation_pool_id="prep",
+                  compute_resources=[dict(resource_id="compute.cpu", kind="cpu", budget=budget)],
+                  preparation_resources=[dict(resource_id="prep.cpu", budget=budget)],
+                  worker_timeout_seconds=10, preparation_timeout_seconds=10,
+                  heartbeat_interval_milliseconds=100, startup_timeout_seconds=10, drain_timeout_seconds=10)
+    config_path = run_root / "service-config.json"
+    storage.atomic_json(config_path, config)
+    owner_path = store / "runtime-services/OWNER.json"
+    log_path = run_root / "service.log"
+    with log_path.open("w", encoding="utf-8") as log:
+        child = subprocess.Popen([str(binaries / "fullmag-runtime-service.exe"), "--config", str(config_path)],
+                                 cwd=repo, env=env, stdout=log, stderr=subprocess.STDOUT,
+                                 creationflags=subprocess.CREATE_NO_WINDOW)
+        record = dict(label="empty-resident-service", pid=child.pid, waited=False)
+        receipt["processes"].append(record)
+        owner = None
+
+        def control(command, token, nonce):
+            address, port = owner["control_address"].rsplit(":", 1)
+            if address != "127.0.0.1" or not 0 < int(port) < 65536:
+                raise storage.StorageError("Fixture control address is not IPv4 loopback")
+            frame = dict(schema_version="runtime_service_control.v1", owner_token=token, command=command, nonce=nonce)
+            with socket.create_connection((address, int(port)), timeout=15) as stream:
+                stream.sendall(json.dumps(frame).encode("utf-8") + b"\n")
+                response = bytearray()
+                while b"\n" not in response:
+                    block = stream.recv(4096)
+                    if not block or len(response) + len(block) > 256 * 1024:
+                        raise storage.StorageError("Fixture control response is incomplete or oversized")
+                    response.extend(block)
+                line, trailing = response.split(b"\n", 1)
+                if trailing.strip():
+                    raise storage.StorageError("Fixture control response has trailing data")
+                return json.loads(line)
+
+        try:
+            deadline = time.monotonic() + 20
+            while True:
+                if child.poll() is not None:
+                    raise storage.StorageError("Empty resident service exited before Ready")
+                if owner_path.exists():
+                    owner = json.loads(owner_path.read_text(encoding="utf-8"))
+                    if owner["state"] == "ready":
+                        break
+                if time.monotonic() >= deadline:
+                    raise storage.StorageError("Empty resident service did not publish Ready")
+                time.sleep(0.1)
+            assert owner["pid"] == child.pid
+            assert owner["build_commit"] == manifest["git_commit"]
+            assert owner["build_snapshot"] == manifest["source_snapshot_sha256"]
+            assert len(owner["children"]) == 2 and all(item["status"] == "running" for item in owner["children"])
+            receipt["checks"].append("empty-service-ready-source-identity")
+            denied = control("drain_confirmed", str(uuid.uuid4()), "unauthorized")
+            assert denied.get("status") == "rejected", denied
+            receipt["checks"].append("wrong-owner-cannot-drain-empty-service")
+            denied = control("drain_confirmed", owner["owner_token"], "invalid challenge")
+            assert denied.get("status") == "rejected", denied
+            receipt["checks"].append("invalid-challenge-cannot-drain-empty-service")
+            challenge = uuid.uuid4().hex
+            observed = control("status", owner["owner_token"], challenge)
+            assert observed["nonce"] == challenge and observed["configuration"] == config
+            assert observed["owner"]["state"] == "ready"
+            receipt["checks"].append("rejected-drain-leaves-service-ready")
+            challenge = uuid.uuid4().hex
+            terminal = control("drain_confirmed", owner["owner_token"], challenge)
+            assert terminal["schema_version"] == "runtime_service_drain.v1"
+            assert terminal["nonce"] == challenge and terminal["configuration"] == config
+            drained = terminal["owner"]
+            assert drained["state"] == "drained"
+            for field in ("owner_token", "process_start_token", "pid", "host", "target_id", "control_address",
+                          "build_commit", "build_snapshot", "compute_pool_id", "preparation_pool_id",
+                          "compute_pool_generation", "preparation_pool_generation"):
+                assert drained[field] == owner[field], field
+            assert {(item["role"], item["pid"]) for item in drained["children"]} == {(item["role"], item["pid"]) for item in owner["children"]}
+            assert all(item["status"] == "exited_success" for item in drained["children"])
+            receipt["checks"].append("confirmed-drain-follows-both-terminal-children")
+            assert json.loads(owner_path.read_text(encoding="utf-8"))["state"] == "drained"
+            receipt["checks"].append("terminal-owner-published-before-confirmation")
+        finally:
+            # Never stop an unrelated owner or replace an unknown drain result.
+            # A failed fixture remains recorded; only authenticated graceful drain
+            # is attempted for this exact child and its own store.
+            if child.poll() is None and owner is not None and owner.get("pid") == child.pid:
+                try:
+                    control("drain", owner["owner_token"], None)
+                except (OSError, ValueError, storage.StorageError):
+                    pass
+            try:
+                record["exit_code"] = child.wait(timeout=20)
+                record["waited"] = True
+            except subprocess.TimeoutExpired:
+                record["retained_reason"] = "owned service drain outcome remains unknown"
+                raise
+            record["log_sha256"] = hashlib.sha256(log_path.read_bytes()).hexdigest()
+        if record["exit_code"] != 0:
+            raise storage.StorageError("Empty resident service did not exit successfully")
+        receipt["checks"].append("confirmed-drain-service-process-exited")
 
 
 def exercise(api: Path, repo: Path, run_root: Path, receipt: dict) -> None:
