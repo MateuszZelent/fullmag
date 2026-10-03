@@ -23,6 +23,7 @@ import { startScreenStore, type StartScreenHost } from "./model/startScreenState
 import type { ContinueSession, RecentEntry } from "./model/types";
 import { StartRail } from "./rail/StartRail";
 import { SectionPlaceholder } from "./sections/SectionPlaceholder";
+import { TemplatesSection } from "./sections/TemplatesSection";
 
 const SESSION_UNCONFIRMED =
   "Fullmag could not confirm that no session is running. Retry the session list first.";
@@ -38,7 +39,7 @@ export function StartScreen({ kernel }: ModuleProps) {
   useProjectDocumentSnapshot();
   const recent = useRecentIndex();
   const compute = useComputeProbe();
-  const { section, selectedProjectId } = useSyncExternalStore(
+  const { section, selectedProjectId, selectedTemplateId } = useSyncExternalStore(
     startScreenStore.subscribe,
     startScreenStore.getSnapshot,
     startScreenStore.getServerSnapshot,
@@ -156,12 +157,15 @@ export function StartScreen({ kernel }: ModuleProps) {
               onResumeContinue={resumeContinue}
               onRunCommand={runCommand}
             />
+          ) : section === "templates" ? (
+            <TemplatesSection compute={compute} />
           ) : (
             <SectionPlaceholder section={section} />
           )}
         </div>
       </main>
       <ProjectInspector
+        compute={compute}
         entry={selectedEntry}
         onForget={(projectId) => {
           startScreenStore.setSelectedProject(null);
@@ -171,6 +175,7 @@ export function StartScreen({ kernel }: ModuleProps) {
         onTogglePin={(projectId, pinned) => void recent.pin(projectId, pinned)}
         openDisabledReason={browseDisabledReason}
         section={section}
+        templateId={selectedTemplateId}
         session={recent.state.kind === "ready" ? recent.state.index.continue : undefined}
       />
     </div>
