@@ -258,7 +258,7 @@ def exercise(api: Path, repo: Path, run_root: Path, receipt: dict) -> None:
         assert not any(secret in serialized for secret in (str(fixture_storage), generation, "generation_id", "updated_unix_ms", "status_file", "pid")), body
         checks.append(name)
 
-    def with_api(label, config, callback):
+    def with_api(label, config, callback, *, restore_input=None, reject_startup=False, hold_input_open=False):
         # Only this route's child can be stopped. It never accepts computation.
         with socket.socket() as reservation:
             reservation.bind(("127.0.0.1", 0))
@@ -268,7 +268,9 @@ def exercise(api: Path, repo: Path, run_root: Path, receipt: dict) -> None:
         env.update(config)
         log_path = run_root / (label + ".log")
         with log_path.open("w", encoding="utf-8") as log:
-            child = subprocess.Popen([str(api)], cwd=repo, env=env, stdout=log, stderr=subprocess.STDOUT, creationflags=subprocess.CREATE_NO_WINDOW)
+            child = subprocess.Popen([str(api)], cwd=repo, env=env, stdout=log, stderr=subprocess.STDOUT,
+                                     stdin=subprocess.PIPE if restore_input is not None or hold_input_open else subprocess.DEVNULL,
+                                     creationflags=subprocess.CREATE_NO_WINDOW)
             record = {"label": label, "pid": child.pid, "port": port, "waited": False}
             receipt["processes"].append(record)
             base = f"http://127.0.0.1:{port}/v2/platform/"
@@ -288,6 +290,22 @@ def exercise(api: Path, repo: Path, run_root: Path, receipt: dict) -> None:
                         return 304, error.headers.get("ETag"), None
                     raise
             try:
+                if restore_input is not None:
+                    try:
+                        child.stdin.write(restore_input)
+                        child.stdin.close()
+                    except BrokenPipeError:
+                        if not reject_startup:
+                            raise
+                if reject_startup:
+                    assert child.wait(timeout=15) != 0, label
+                    try:
+                        get()
+                    except urllib.error.URLError:
+                        checks.append(label + "-rejected-before-listener")
+                    else:
+                        raise AssertionError("Invalid restore exposed an API listener")
+                    return
                 deadline = time.monotonic() + 20
                 while True:
                     if child.poll() is not None:
@@ -301,6 +319,11 @@ def exercise(api: Path, repo: Path, run_root: Path, receipt: dict) -> None:
                         time.sleep(0.1)
                 callback(get)
             finally:
+                if child.stdin is not None and not child.stdin.closed:
+                    try:
+                        child.stdin.close()
+                    except BrokenPipeError:
+                        pass
                 if child.poll() is None:
                     record["stop_requested_by_verifier"] = True
                     child.terminate()
@@ -324,6 +347,74 @@ def exercise(api: Path, repo: Path, run_root: Path, receipt: dict) -> None:
 
     with_api("disabled", {}, disabled)
     with_api("partial", {"FULLMAG_DEVELOPMENT_BACKEND_GENERATION": generation}, lambda get: check("partial-configuration", get()[2], "unknown", "configuration_invalid"))
+
+    # This tests the private prelisten consumer, not capsule authenticity or
+    # the manager's complete restart. No previous process/session is stopped.
+    restored_scene = {
+        "version": "scene.v2", "revision": 17,
+        "scene": {"id": "stable-model-fixture", "name": "Restored authoring", "source_of_truth": "ui"},
+        "objects": [{"id": "body-fixture", "name": "Unassigned draft", "material_ref": "",
+                     "geometry": {"geometry_kind": "box", "geometry_params": {"size": [1e-6, 1e-6, 1e-8]}}}],
+        "editor": {"selected_object_id": "body-fixture", "gizmo_mode": "rotate"},
+        "study": {"requested_backend": "auto", "requested_device": "gpu",
+                  "requested_precision": "single", "requested_mode": "extended", "requested_cpu_threads": 3},
+    }
+    restore_envelope = {
+        "schema": "fullmag.development-prelisten-restore.v1",
+        "target_build_id": configured["FULLMAG_DEVELOPMENT_BACKEND_VERSION"],
+        "target_source_sha256": source, "old_session_id": "old-session-fixture",
+        "scene_document": restored_scene,
+    }
+    restore_config = {**configured, "FULLMAG_DEVELOPMENT_RESTORE_STDIN": "1"}
+
+    def restored(get):
+        code, _, current = get("/v2/sessions/current")
+        assert code == 200 and current["session_id"] not in {"old-session-fixture", "stable-model-fixture"}, current
+        checks.append("prelisten-fresh-session-identity")
+        code, _, document = get("/v2/sessions/current/model/scene")
+        assert code == 200 and document["scene"]["id"] == "stable-model-fixture", document
+        assert document["revision"] == 17, document
+        assert document["study"]["requested_device"] == "gpu", document
+        assert document["study"]["requested_backend"] == "auto", document
+        assert document["study"]["requested_precision"] == "single", document
+        assert document["study"]["requested_mode"] == "extended", document
+        assert document["study"]["requested_cpu_threads"] == 3, document
+        checks.append("prelisten-canonical-intent-preserved")
+        assert document["objects"][0]["id"] == "body-fixture", document
+        assert document["objects"][0]["geometry"]["geometry_params"]["size"] == [1e-6, 1e-6, 1e-8], document
+        assert document["editor"]["selected_object_id"] == "body-fixture", document
+        assert document["editor"]["gizmo_mode"] == "rotate", document
+        checks.append("prelisten-incomplete-geometry-and-editor-preserved")
+        code, _, status_body = get("/v2/sessions/current/status")
+        assert code == 200 and status_body["run"] is None, status_body
+        assert status_body["session"]["request_scope_epoch"].endswith(":1"), status_body
+        assert status_body["lifecycle"]["solver"] == "awaiting_command", status_body
+        checks.append("prelisten-new-request-scope-and-idle-state")
+        for path in ("/v2/sessions/current/simulation/runs/current", "/v2/sessions/current/simulation/preparation"):
+            try:
+                get(path)
+            except urllib.error.HTTPError as error:
+                assert error.code == 404, (path, error.code)
+            else:
+                raise AssertionError("Restore unexpectedly retained historical execution")
+        checks.append("prelisten-no-historical-run-or-preparation")
+        document["scene"]["name"] = "Edited restored model"
+        code, _, edited = get("/v2/sessions/current/model/scene", method="PUT", payload=document)
+        assert code == 200 and edited["revision"] == 18, edited
+        assert edited["scene"]["name"] == "Edited restored model", edited
+        checks.append("prelisten-restored-authoring-is-editable")
+
+    with_api("restored", restore_config, restored, restore_input=json.dumps(restore_envelope).encode())
+    for label, config, envelope in (
+        ("restore-nonmanaged", {"FULLMAG_DEVELOPMENT_RESTORE_STDIN": "1"}, restore_envelope),
+        ("restore-wrong-target", restore_config, {**restore_envelope, "target_source_sha256": "b" * 64}),
+        ("restore-invalid-scene", restore_config, {**restore_envelope, "scene_document": {**restored_scene, "version": "unknown"}}),
+    ):
+        with_api(label, config, None, restore_input=json.dumps(envelope).encode(), reject_startup=True)
+    with_api("restore-empty-input", restore_config, None, restore_input=b"", reject_startup=True)
+    with_api("restore-stalled-input", restore_config, None, reject_startup=True, hold_input_open=True)
+    with_api("restore-oversize-input", restore_config, None,
+             restore_input=b" " * (64 * 1024 * 1024 + 1), reject_startup=True)
 
     def managed(get):
         frame()

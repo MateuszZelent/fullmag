@@ -2491,6 +2491,10 @@ async fn main() {
         frozen_spins_previews: Arc::new(RwLock::new(Default::default())),
     });
 
+    router_v2::handlers::platform::development_restore_input::restore_before_listen(state.as_ref())
+        .await
+        .expect("private development authoring restore must succeed before API startup");
+
     let cors = router_v2::middleware::cors::cors_layer();
 
     let app = Router::new()

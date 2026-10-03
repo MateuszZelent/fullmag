@@ -2,6 +2,9 @@
 
 ## Cel zatwierdzony przez użytkownika
 
+Checkpoint backendowej instalacji sceny przed listenerem i jego dowody:
+[P8-53K](53k-prelisten-authoring-restore.md). Nie zamyka pełnego restartu workspace.
+
 Jedno `just windows-ui dev` uruchamia HMR frontendu i obserwację backendu.
 Po kompilacji UI pokazuje „Nowy backend gotowy” oraz przycisk restartu.
 Restart nie może przerwać aktywnej symulacji ani utracić niezapisanych szkiców;
