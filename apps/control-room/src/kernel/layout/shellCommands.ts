@@ -139,6 +139,7 @@ export const SHELL_COMMANDS: CommandContribution[] = [
     scope: "global",
     shortcut: "Ctrl+N",
     run: (ctx) => {
+      const requested = (ctx.input as { solver?: unknown } | null | undefined)?.solver;
       ctx.bus?.emit("workspace:new-problem-requested", {
         source:
           ctx.source === "shortcut"
@@ -146,6 +147,7 @@ export const SHELL_COMMANDS: CommandContribution[] = [
             : ctx.source === "menu"
               ? "menu"
               : "workspace",
+        ...(requested === "FDM" || requested === "FEM" ? { solver: requested } : {}),
       });
       return { status: "completed" };
     },

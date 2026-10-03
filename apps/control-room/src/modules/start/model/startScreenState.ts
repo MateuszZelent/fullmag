@@ -1,0 +1,74 @@
+import type { CommandContext, CommandResult } from "@/kernel/commands/commandTypes";
+
+export type StartSection =
+  | "home"
+  | "templates"
+  | "import"
+  | "learn"
+  | "settings"
+  | "about";
+
+/**
+ * What a mounted start screen lends to its commands. The commands come from
+ * the manifest and stay registered for the whole app lifetime, so they need a
+ * way to reach the kernel registry and to know whether the screen is showing.
+ */
+export interface StartScreenHost {
+  readonly createProblemDisabledReason: string | null;
+  readonly disabledReason: (commandId: string, context: CommandContext) => string | null;
+  readonly execute: (commandId: string, context: CommandContext) => Promise<CommandResult>;
+  readonly isEnabled: (commandId: string, context: CommandContext) => boolean;
+}
+
+export interface StartScreenSnapshot {
+  readonly host: StartScreenHost | null;
+  readonly section: StartSection;
+}
+
+type Listener = () => void;
+
+const INITIAL_SNAPSHOT: StartScreenSnapshot = { host: null, section: "home" };
+
+class StartScreenStore {
+  private listeners = new Set<Listener>();
+  private snapshot = INITIAL_SNAPSHOT;
+
+  getSnapshot = (): StartScreenSnapshot => this.snapshot;
+
+  getServerSnapshot = (): StartScreenSnapshot => INITIAL_SNAPSHOT;
+
+  subscribe = (listener: Listener): (() => void) => {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  };
+
+  setSection(section: StartSection): void {
+    if (this.snapshot.section === section) return;
+    this.publish({ ...this.snapshot, section });
+  }
+
+  /**
+   * The returned detach clears only the host it installed, so a remount that
+   * attaches before the previous cleanup runs is not undone by that cleanup.
+   * Detaching also returns to Home: closing a project should land on the
+   * launcher's front page, not on whichever section was open before.
+   */
+  attach(host: StartScreenHost): () => void {
+    this.publish({ ...this.snapshot, host });
+    return () => {
+      if (this.snapshot.host === host) this.publish({ host: null, section: "home" });
+    };
+  }
+
+  resetForTests(): void {
+    this.snapshot = INITIAL_SNAPSHOT;
+    this.listeners.clear();
+  }
+
+  private publish(next: StartScreenSnapshot): void {
+    this.snapshot = next;
+    for (const listener of this.listeners) listener();
+  }
+}
+
+export const startScreenStore = new StartScreenStore();

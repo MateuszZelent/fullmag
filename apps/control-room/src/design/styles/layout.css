@@ -21,6 +21,20 @@
   height: 100%;
 }
 
+/* No ribbon and no status bar exist without a session, so the start screen
+   owns every row below the menu. The session-error banner stacks above it. */
+.fm-start-host {
+  display: grid;
+  grid-row: 2 / -1;
+  grid-template-rows: minmax(0, 1fr);
+  min-height: 0;
+  min-width: 0;
+}
+
+.fm-start-host[data-state="session-error"] {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
 .fm-workspace-body {
   display: flex;
   flex-direction: column;

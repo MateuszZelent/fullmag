@@ -1,0 +1,197 @@
+/* ============================================================================
+   Fullmag — Start Screen design tokens (additive layer)
+   ----------------------------------------------------------------------------
+   These tokens EXTEND the existing system in
+   apps/control-room/src/design/styles/{tokens.css,theme.css}.
+   Nothing here redefines an existing --fm-* token: the start screen inherits
+   the Catppuccin Mocha/Latte palette, the spacing scale and the control
+   geometry already in use, and only adds what the launcher needs.
+
+   Import order in app/globals.css:
+       @import "../src/design/styles/tokens.css";
+       @import "../src/design/styles/theme.css";
+       @import "./start-screen.tokens.css";     <-- here
+       @import "../src/design/styles/tailwind-theme.css";
+   ========================================================================== */
+
+:root {
+  /* ── Geometry ────────────────────────────────────────────────────────── */
+  --fm-start-rail-width: 232px;          /* left navigation rail            */
+  --fm-start-rail-width-collapsed: 56px; /* icon-only, < 1100px             */
+  --fm-start-inspector-width: 364px;     /* right inspector, resizable      */
+  --fm-start-inspector-min: 320px;
+  --fm-start-inspector-max: 520px;
+  --fm-start-content-max: 1040px;        /* centre column max measure       */
+  --fm-start-gutter: var(--fm-space-6);  /* 24px outer padding              */
+  --fm-start-section-gap: var(--fm-space-8);
+
+  /* ── Project row / card ──────────────────────────────────────────────── */
+  --fm-start-row-height: 52px;           /* list density: comfortable       */
+  --fm-start-row-height-compact: 38px;   /* list density: compact           */
+  --fm-start-thumb-w: 72px;
+  --fm-start-thumb-h: 45px;              /* 16:10                           */
+  --fm-start-card-w: 232px;
+  --fm-start-card-thumb-h: 132px;
+  --fm-start-group-header-height: 26px;
+
+  /* ── Launch tiles (New FDM / New FEM / Template / Import) ────────────── */
+  --fm-start-tile-min-width: 168px;
+  --fm-start-tile-height: 92px;
+
+  /* ── Continue card ───────────────────────────────────────────────────── */
+  --fm-start-continue-thumb-w: 176px;
+  --fm-start-continue-thumb-h: 110px;
+
+  /* ── Inspector ───────────────────────────────────────────────────────── */
+  --fm-start-preview-ratio: 16 / 10;
+  --fm-start-meta-label-width: 104px;    /* key column of the key/value grid */
+  --fm-start-scrubber-height: 22px;
+
+  /* ── Typography additions ────────────────────────────────────────────── */
+  --fm-start-title-size: 22px;           /* "Welcome back, <name>"          */
+  --fm-start-section-size: var(--fm-font-size-xs);  /* section eyebrow 11px */
+  --fm-start-section-tracking: 0.07em;
+
+  /* ── Motion ──────────────────────────────────────────────────────────── */
+  --fm-start-stagger-step: 24ms;         /* list entrance stagger           */
+  --fm-start-skeleton-period: 1400ms;
+}
+
+/* ── Semantic colour aliases ────────────────────────────────────────────
+   Mapped onto existing palette tokens so both themes are covered for free
+   and a palette change in theme.css propagates here automatically.        */
+:root,
+[data-theme="dark"] {
+  --fm-solver-fdm: var(--fm-chart-blue);      /* finite difference  */
+  --fm-solver-fem: var(--fm-chart-mauve);     /* finite element     */
+
+  /* Mark colour — the status dot, the badge border and fill. */
+  --fm-project-ready: var(--fm-success);
+  --fm-project-running: var(--fm-chart-yellow);
+  --fm-project-failed: var(--fm-danger);
+  --fm-project-draft: var(--fm-text-muted);
+  --fm-project-migrate: var(--fm-degraded);   /* schema migration needed */
+  --fm-project-missing: var(--fm-danger);
+  --fm-project-readonly: var(--fm-chart-teal);
+
+  /* Label colour — the word next to the dot, at 11–12 px.
+     On Mocha every palette colour already clears 6:1 against the panel
+     surfaces, so the label is simply the mark colour. See the light block for
+     why they diverge there. */
+  --fm-project-ready-text: var(--fm-project-ready);
+  --fm-project-running-text: var(--fm-project-running);
+  --fm-project-failed-text: var(--fm-project-failed);
+  --fm-project-draft-text: var(--fm-start-meta);   /* --fm-text-muted is 3.36:1 */
+  --fm-project-migrate-text: var(--fm-project-migrate);
+  --fm-project-missing-text: var(--fm-project-missing);
+  --fm-project-readonly-text: var(--fm-project-readonly);
+
+  /* Solver badge label — Mocha's palette clears 4.5:1 as text. */
+  --fm-solver-fdm-text: var(--fm-solver-fdm);
+  --fm-solver-fem-text: var(--fm-solver-fem);
+  --fm-badge-fill: 13%;   /* tint of the mark colour behind the badge label */
+
+  /* Active rail item, and the 10–11 px informational text (path, size, date,
+     shortcut hints). --fm-text-muted measures 2.13:1 against the worst
+     background this screen puts it on (--fm-bg-panel-raised, behind a kbd),
+     so the start screen uses Mocha's subtext0 instead: 4.67:1, still clearly
+     secondary. */
+  --fm-start-nav-active: var(--fm-accent);
+  --fm-start-meta: #a6adc8;              /* Catppuccin Mocha subtext0, 4.67:1 */
+  --fm-start-on-accent: var(--fm-text-inverse);
+
+  /* Thumbnail frame: viewport-dark in both themes, because the thumbnail is
+     a render of the 3D viewport and must not be re-tinted by the UI theme. */
+  --fm-start-thumb-bg: var(--fm-bg-viewport);
+  --fm-start-thumb-border: var(--fm-border-subtle);
+}
+
+[data-theme="light"] {
+  --fm-solver-fdm: var(--fm-chart-blue);
+  --fm-solver-fem: var(--fm-chart-mauve);
+
+  /* Mark colour — unchanged Latte palette, used for the dot and the badge
+     fill, where a 3:1 non-text contrast is the bar and all of these clear it. */
+  --fm-project-ready: var(--fm-success);
+  --fm-project-running: var(--fm-chart-yellow);
+  --fm-project-failed: var(--fm-danger);
+  --fm-project-draft: var(--fm-text-muted);
+  --fm-project-migrate: var(--fm-degraded);
+  --fm-project-missing: var(--fm-danger);
+  --fm-project-readonly: var(--fm-chart-teal);
+
+  /* Label colour — darkened.
+     ──────────────────────────────────────────────────────────────────────
+     Catppuccin Latte is an accent palette, not a text palette. Measured as
+     11–12 px text against the launcher's surfaces (#f7f8fb / #eff1f5 / #e6e9ef)
+     the raw tokens fall well short of WCAG AA 4.5:1:
+
+         --fm-success       #40a02b   2.75:1
+         --fm-chart-yellow  #df8e1d   2.15:1
+         --fm-degraded      #fe640b   2.45:1
+         --fm-chart-teal    #179299   3.08:1
+         --fm-text-muted    #9ca0b0   2.14:1
+
+     These values keep the hue and clear 4.5:1 on all three surfaces. They are
+     scoped to the start screen deliberately: the same problem exists elsewhere
+     in the light theme and deserves a separate, repo-wide decision rather than
+     a quiet override here.
+     ────────────────────────────────────────────────────────────────────── */
+  --fm-project-ready-text: #256b15;     /* 4.51:1 */
+  --fm-project-running-text: #865006;   /* 4.55:1 */
+  --fm-project-failed-text: #ba092f;    /* 4.54:1 */
+  --fm-project-draft-text: #585c71;     /* 4.52:1 */
+  --fm-project-migrate-text: #a13b00;   /* 4.58:1 */
+  --fm-project-missing-text: #ba092f;
+  --fm-project-readonly-text: #09676c;  /* 4.54:1 */
+
+  /* Solver badge label. The badge sits on a 13 %-tint of its own colour, which
+     lowers the effective contrast further than the plain surface does. */
+  --fm-solver-fdm-text: #044ee0;        /* 4.54:1 */
+  --fm-solver-fem-text: #771af0;        /* 4.51:1 */
+  /* A tinted fill drags the label under 4.5:1 once the row is selected, so on
+     Latte the badge is a neutral chip with a coloured border instead. */
+  --fm-badge-fill: 0%;
+
+  /* Active rail item: --fm-accent on --fm-bg-selected is 3.37:1. */
+  --fm-start-nav-active: #044ee0;       /* 4.54:1 on #c4d7f5 */
+
+  /* 10–11 px informational text. Latte's muted is 2.30:1 — unreadable there. */
+  --fm-start-meta: #585c71;             /* 4.52:1 */
+
+  /* Primary button label: --fm-text-inverse (#eff1f5) on --fm-accent is
+     4.34:1; pure white is 4.91:1. */
+  --fm-start-on-accent: #ffffff;
+
+  --fm-start-thumb-bg: #11111b;
+  --fm-start-thumb-border: var(--fm-border-default);
+}
+
+/* ── Tailwind v4 bridge — append to tailwind-theme.css @theme inline ─────
+   Kept here as a comment so the real file stays the single source of truth.
+
+   @theme inline {
+     --color-fm-solver-fdm:     var(--fm-solver-fdm);
+     --color-fm-solver-fem:     var(--fm-solver-fem);
+     --color-fm-project-ready:  var(--fm-project-ready);
+     --color-fm-project-running:var(--fm-project-running);
+     --color-fm-project-failed: var(--fm-project-failed);
+     --color-fm-project-draft:  var(--fm-project-draft);
+     --color-fm-project-migrate:var(--fm-project-migrate);
+     --color-fm-project-ready-text:   var(--fm-project-ready-text);
+     --color-fm-project-running-text: var(--fm-project-running-text);
+     --color-fm-project-failed-text:  var(--fm-project-failed-text);
+     --color-fm-project-draft-text:   var(--fm-project-draft-text);
+     --color-fm-project-migrate-text: var(--fm-project-migrate-text);
+     --color-fm-project-readonly-text:var(--fm-project-readonly-text);
+     --color-fm-start-meta:           var(--fm-start-meta);
+     --color-fm-solver-fdm-text:      var(--fm-solver-fdm-text);
+     --color-fm-solver-fem-text:      var(--fm-solver-fem-text);
+     --color-fm-start-nav-active:     var(--fm-start-nav-active);
+     --color-fm-start-on-accent:      var(--fm-start-on-accent);
+     --spacing-fm-start-rail:      var(--fm-start-rail-width);
+     --spacing-fm-start-inspector: var(--fm-start-inspector-width);
+     --spacing-fm-start-row:       var(--fm-start-row-height);
+     --text-fm-start-title:        var(--fm-start-title-size);
+   }
+   ──────────────────────────────────────────────────────────────────────── */
