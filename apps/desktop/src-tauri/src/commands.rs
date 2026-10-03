@@ -347,10 +347,28 @@ fn save_project_archive_to_target(
         ));
     }
     if opened.view.source_hash != existing_view.source_hash {
-        let candidate = incoming
+        let mut candidate = incoming
             .current_document()
             .cloned()
             .ok_or_else(|| "project archive has no current document".to_string())?;
+        // The save changes the project, so it is recorded. History comes from
+        // the document already on disk: the archive the webview sends back can
+        // predate earlier saves and must not overwrite them. `replace_draft`
+        // advances the revision by one, which is the revision being recorded.
+        let stored = application.current_document().and_then(|document| {
+            document
+                .opaque_documents
+                .iter()
+                .find(|stored| stored.path() == provenance::PROVENANCE_PATH)
+                .cloned()
+        });
+        provenance::stamp_envelope(
+            &mut candidate,
+            stored.as_ref(),
+            &provenance::author_identity(),
+            &recent_index::rfc3339_utc(std::time::SystemTime::now()),
+            existing_view.revision.saturating_add(1),
+        );
         application
             .replace_draft(candidate, existing_view.revision)
             .map_err(|error| error.to_string())?;
