@@ -16,6 +16,7 @@ import {
   readProjectArchiveAtPath,
   resumeRun,
 } from "./model/recentIndexHost";
+import { useComputeProbe } from "./model/useComputeProbe";
 import { useRecentIndex } from "./model/useRecentIndex";
 import { startActionDisabledReason } from "./model/startCommands";
 import { startScreenStore, type StartScreenHost } from "./model/startScreenState";
@@ -36,6 +37,7 @@ export function StartScreen({ kernel }: ModuleProps) {
   // enablement of workspace.open-project.
   useProjectDocumentSnapshot();
   const recent = useRecentIndex();
+  const compute = useComputeProbe();
   const { section, selectedProjectId } = useSyncExternalStore(
     startScreenStore.subscribe,
     startScreenStore.getSnapshot,
@@ -140,7 +142,7 @@ export function StartScreen({ kernel }: ModuleProps) {
 
   return (
     <div className="fm-start" data-section={section}>
-      <StartRail compute={null} onRunCommand={runCommand} ref={railRef} section={section} />
+      <StartRail compute={compute} onRunCommand={runCommand} ref={railRef} section={section} />
       <main className="fm-start__content" id="fm-main-content" ref={mainRef} tabIndex={-1}>
         <div className="fm-start__content-inner">
           {section === "home" ? (
