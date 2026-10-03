@@ -1294,3 +1294,49 @@ API Python, ProblemIR i wire artefaktów nie otrzymują nowych pól ani norm. Im
 | source-modal-interval-norm | crates/fullmag-runner/src/fem/eigen_normalization_metric.rs + checked_mass_quadratic | Outward enclosure rzeczywistych wpisów Q | FEM postprocess | source-only; runtime NOT VERIFIED |
 | source-modal-interval-metric | crates/fullmag-runner/src/fem/eigen_mass_metric.rs + ModalMassMetric | Osobne dense/sparse iteratory bez materializacji | FEM postprocess | source-only; runtime NOT VERIFIED |
 | source-modal-interval-oracle | scripts/test_modal_norm_interval_source.py + class ModalNormIntervalOracleTests | Dokładne rational counterexamples i enclosure | algebraic verification | 9 interpretowanych kontroli PASS; nie jest runtime Rust |
+
+(modal-equilibrium-field-replay-domain)=
+## Replay pola równowagi: dziedzina magnetyczna i airbox
+
+Zmiana dotyczy porównania pola efektywnego zaimportowanego certyfikatu z ponownie obliczonym polem przed złożeniem operatora. Równania LLG/Floquet i ich normalizacja pozostają w tej nocie oraz [0828](0828-fem-frequency-domain-floquet-demag.md). Dyskretne stopnie swobody magnetyzacji istnieją tylko na nośniku materiału magnetycznego. Wartości w pełnowęzłowej tablicy $\mathbf H_{\mathrm{eff},0}$ poza tym nośnikiem są konwencją ekstensji danych: natywny producent może zachować tam pole przyłożone, a referencyjny `FemLlgProblem` zapisuje zera. Tych wartości nie używa się do porównania równań magnetycznych. Nie dotyczy to potencjału magnetostatycznego $\phi_0$, którego równanie i kontrola nadal obejmują cały airbox.
+
+```{math}
+:label: eq-modal-magnetic-field-replay
+\mathcal I_m=\{i:w_i^{(m)}>0\},\qquad
+\epsilon_H=\max_{i\in\mathcal I_m}\max_{\alpha\in\{x,y,z\}}
+\left|H^{\mathrm{stored}}_{\mathrm{eff},0,i\alpha}
+-H^{\mathrm{recomputed}}_{\mathrm{eff},0,i\alpha}\right|
+\le 10^{-8}\ \mathrm{A\,m^{-1}}.
+```
+
+| Symbol | Znaczenie | Jednostka SI |
+|---|---|---|
+| $w_i^{(m)}$ | lumped volume magnetycznych tetraedrów przypisany węzłowi i | $\mathrm{m^3}$ |
+| $\mathcal I_m$ | niepusty zbiór węzłów nośnika magnetycznego | $1$ |
+| $i,\alpha$ | indeks węzła i składowa kartezjańska x, y albo z | $1$ |
+| $H^{\mathrm{stored}}_{\mathrm{eff},0,i\alpha}$ | składowa pola efektywnego w certyfikacie | $\mathrm{A\,m^{-1}}$ |
+| $H^{\mathrm{recomputed}}_{\mathrm{eff},0,i\alpha}$ | odpowiadająca składowa odtworzona z tego samego modelu | $\mathrm{A\,m^{-1}}$ |
+| $\epsilon_H$ | największa różnica na nośniku magnetycznym | $\mathrm{A\,m^{-1}}$ |
+| $\phi_0$ | statyczny potencjał całej domeny | $\mathrm{A}$ |
+
+Przed redukcją zakresu wymagane są zgodne pełne długości obu tablic i wag, skończone składowe wszystkich węzłów, skończone nieujemne wagi i co najmniej jeden węzeł magnetyczny. Niefinity w airboxie również oznacza błędne dane. Tolerancja pola 1e-8A/m nie jest zwiększana; zakłócenie na węźle magnetycznym nadal odrzuca replay. Kontrole m0, h_demag0, phi0, certyfikatu, materiału, fizyki, boundary i signature pozostają bez zmian. Nadal wymagamy zgodnego dyskretnego problemu demag: ta korekta nie usprawiedliwia zamiany periodic Poisson na open/Robin ani interpolacji stanu.
+
+Python `equilibrium_source="artifact"` i `equilibrium_artifact`, ich mapowanie do `study.equilibrium.kind/path`, publiczne API, ProblemIR, urządzenie i requested/resolved provenance nie zmieniają się. Nie wprowadzamy nowego schematu ani akceptacji niecertyfikowanych pól. Zmiana jest kontrolą reprezentacji zaimportowanych tablic w istniejącym shared-domain adapterze, nie nowym operatorem FEM. Koszt O(liczby węzłów), bez nowej macierzy dense; kontrola poprzedza Krylov i nie dodaje transferów hot-loop.
+
+| Realizacja | Zakres i dowód |
+|---|---|
+| FEM CPU | shared-domain import certyfikatu; kod i regresje przygotowane, nowy managed runtime wymagany |
+| FEM GPU | wspólny kontrakt importu; urządzenie/GPU replay NOT VERIFIED |
+| FDM CPU | nie dotyczy tego importera i siatki airboxu; własny owner FDM |
+| FDM GPU | nie dotyczy tego importera; brak cichej zmiany urządzenia |
+
+Przypadek diagnostyczny z #222: certyfikat po poprawnym seed -25rad/µm ma6138 węzłów,396 magnetycznych i5742 airbox-only; H_eff=79577.47154594767A/m w kierunku x we wszystkich węzłach, natomiast m0=0 w airbox-only. Worker -20 odrzucono wcześniej różnicą7.958e4A/m. Jest to dowód rozbieżnej ekstensji tablic; nie dowód sukcesu nowego runtime. Regresje wymagają akceptacji różnej skończonej ekstensji w airboxie, odrzucenia perturbacji magnetic node i nieprawidłowej długości/wagi/niefinity oraz zachowania kontroli pełnego phi0. Kompilacja unit tests jest tymczasowo zabroniona; testy Rust pozostają NOT VERIFIED do odwołania zakazu. Nowy managed runtime-v2 ma sprawdzić rzeczywisty seed/replay i artefakty15 punktów. Parytet, identyfikacja modów, Γ i zbieżności pozostają osobnymi bramkami.
+
+| Source ID | Path + symbol | Odpowiedzialność i ograniczenie |
+|---|---|---|
+| source-modal-field-replay-scope | crates/fullmag-runner/src/fem/eigen_equilibrium.rs + max_vector_field_difference_on_magnetic_nodes | zakres nośnika i fail-closed tablic |
+| source-equilibrium-materialization | crates/fullmag-runner/src/fem/eigen_shared_domain.rs + build_shared_domain_linearization_state | próg epsilon_H i niezmienione phi0/signatures |
+| source-reference-external-field-scope | crates/fullmag-engine/src/fem.rs + external_field_vectors | istniejąca ekstensja referencji przez zero poza nośnikiem |
+| source-modal-field-replay-regression | crates/fullmag-runner/src/fem/eigen_equilibrium.rs + finite_air_extension_does_not_change_magnetic_comparison | sześć przygotowanych regresji; kompilacja testów NOT VERIFIED |
+
+Podstawa: ten sam dyskretny nośnik masy magnetycznej i weak form opisany w rozdziale governing-equations oraz [0828](0828-fem-frequency-domain-floquet-demag.md); źródłem stanu implementacji są powyższe symbole i receipty, nie manual COMSOL. Ta sekcja nie promuje realizacji do validated.

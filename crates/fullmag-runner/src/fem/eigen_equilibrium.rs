@@ -33,15 +33,29 @@ use fullmag_engine::{CubicAnisotropyConfig, UniaxialAnisotropyConfig};
 const FIELD_HANDOFF_ABS_TOL_A_PER_M: f64 = 1.0e-7;
 const FIELD_HANDOFF_REL_TOL: f64 = 1.0e-12;
 
-fn max_vector_field_difference_on_magnetic_nodes(
+pub(super) fn max_vector_field_difference_on_magnetic_nodes(
     left: &[Vector3],
     right: &[Vector3],
     magnetic_node_volumes: &[f64],
 ) -> Option<f64> {
-    if left.len() != right.len() || left.len() != magnetic_node_volumes.len() {
+    if left.len() != right.len()
+        || left.len() != magnetic_node_volumes.len()
+        || left
+            .iter()
+            .chain(right)
+            .flatten()
+            .any(|value| !value.is_finite())
+        || magnetic_node_volumes
+            .iter()
+            .any(|volume| !volume.is_finite() || *volume < 0.0)
+    {
         return None;
     }
-    left.iter()
+    // Field extensions into air-only nodes are representation conventions,
+    // not magnetic degrees of freedom. Validate every input value above,
+    // then compare fields on the magnetic mass support only.
+    let difference = left
+        .iter()
         .zip(right)
         .zip(magnetic_node_volumes)
         .filter(|(_, volume)| **volume > 0.0)
@@ -50,7 +64,8 @@ fn max_vector_field_difference_on_magnetic_nodes(
                 .map(|axis| (left[axis] - right[axis]).abs())
                 .fold(0.0, f64::max)
         })
-        .reduce(f64::max)
+        .reduce(f64::max)?;
+    difference.is_finite().then_some(difference)
 }
 
 fn max_vector_field_amplitude(left: &[Vector3], right: &[Vector3]) -> Option<f64> {
@@ -1103,4 +1118,106 @@ pub(super) fn load_certified_equilibrium_artifact(
 
 fn load_equilibrium_artifact(path: &str, expected_len: usize) -> Result<Vec<Vector3>, RunError> {
     Ok(load_certified_equilibrium_artifact(path, expected_len)?.m0)
+}
+
+#[cfg(test)]
+mod magnetic_field_replay_tests {
+    use super::max_vector_field_difference_on_magnetic_nodes;
+
+    #[test]
+    fn finite_air_extension_does_not_change_magnetic_comparison() {
+        let stored = [[79577.47154594767, 0.0, 0.0]; 3];
+        let replay = [stored[0], [0.0; 3], stored[2]];
+        assert_eq!(
+            max_vector_field_difference_on_magnetic_nodes(&stored, &replay, &[1.0, 0.0, 2.0]),
+            Some(0.0),
+        );
+    }
+
+    #[test]
+    fn every_magnetic_node_and_component_is_compared_without_weight_scaling() {
+        let stored = [[0.0; 3]; 3];
+        let replay = [[0.0, 0.0, 2.0e-8], [79577.0, 0.0, 0.0], [0.0, 3.0e-8, 0.0]];
+        let difference = max_vector_field_difference_on_magnetic_nodes(
+            &stored,
+            &replay,
+            &[1.0e-27, 0.0, 2.0e-27],
+        )
+        .unwrap();
+        assert_eq!(difference, 3.0e-8);
+        assert!(difference > 1.0e-8);
+    }
+
+    #[test]
+    fn mismatched_shapes_and_empty_magnetic_support_fail() {
+        let fields = [[0.0; 3]; 2];
+        assert_eq!(
+            max_vector_field_difference_on_magnetic_nodes(&fields, &fields[..1], &[1.0, 0.0]),
+            None
+        );
+        assert_eq!(
+            max_vector_field_difference_on_magnetic_nodes(&fields, &fields, &[1.0]),
+            None
+        );
+        assert_eq!(
+            max_vector_field_difference_on_magnetic_nodes(&fields, &fields, &[0.0, 0.0]),
+            None
+        );
+        assert_eq!(
+            max_vector_field_difference_on_magnetic_nodes(&[], &[], &[]),
+            None
+        );
+    }
+
+    #[test]
+    fn invalid_magnetic_weights_fail_even_at_air_nodes() {
+        let fields = [[0.0; 3]; 2];
+        for invalid in [-1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert_eq!(
+                max_vector_field_difference_on_magnetic_nodes(&fields, &fields, &[1.0, invalid]),
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn nonfinite_fields_fail_on_both_sides_even_outside_magnetic_support() {
+        let fields = [[0.0; 3]; 2];
+        for node in 0..2 {
+            for axis in 0..3 {
+                for invalid in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+                    let mut malformed = fields;
+                    malformed[node][axis] = invalid;
+                    assert_eq!(
+                        max_vector_field_difference_on_magnetic_nodes(
+                            &malformed,
+                            &fields,
+                            &[1.0, 0.0]
+                        ),
+                        None
+                    );
+                    assert_eq!(
+                        max_vector_field_difference_on_magnetic_nodes(
+                            &fields,
+                            &malformed,
+                            &[1.0, 0.0]
+                        ),
+                        None
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn finite_input_subtraction_overflow_fails() {
+        assert_eq!(
+            max_vector_field_difference_on_magnetic_nodes(
+                &[[f64::MAX, 0.0, 0.0]],
+                &[[-f64::MAX, 0.0, 0.0]],
+                &[1.0],
+            ),
+            None
+        );
+    }
 }

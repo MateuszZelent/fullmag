@@ -10,6 +10,7 @@ use super::eigen_constants::{
 #[cfg(test)]
 use super::eigen_digest::sha256_text;
 use super::eigen_digest::{is_sha256_digest, shared_domain_content_digest};
+use super::eigen_equilibrium::max_vector_field_difference_on_magnetic_nodes;
 use super::eigen_equilibrium_contract::{
     validate_certified_equilibrium_fields, AcceptedFemEigenEquilibriumHandoff,
     AcceptedFemRelaxStageHandoff, LoadedEquilibriumArtifact,
@@ -380,7 +381,11 @@ pub(super) fn build_shared_domain_linearization_state(
         )?;
         compare(
             "h_eff0",
-            max_vector_field_difference(&source_artifact.h_eff0, &observables.effective_field),
+            max_vector_field_difference_on_magnetic_nodes(
+                &source_artifact.h_eff0,
+                &observables.effective_field,
+                &topology.magnetic_node_volumes,
+            ),
             1.0e-8,
         )?;
         compare(

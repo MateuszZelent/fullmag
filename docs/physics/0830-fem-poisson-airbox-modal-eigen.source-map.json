@@ -103,7 +103,23 @@
       "sources": ["source-de-physical-potential-gamma", "source-de-physical-potential-reconstruction", "source-de-physical-potential-validation", "source-de-physical-potential-regression"]
     },
     {"id": "eq-modal-mass-norm-interval", "symbols": ["q", "modal_geometry_mass", "modal_norm_intervals", "modal_volume_l2_scale", "modal_norm_indices", "modal_norm_ranges", "modal_norm_bounds", "complex_operators"], "sources": ["source-modal-interval-norm", "source-modal-interval-metric"]},
-    {"id": "eq-modal-outward-interval-operations", "symbols": ["modal_interval_endpoints", "modal_interval_operations", "modal_interval_neighbors"], "sources": ["source-modal-interval-norm", "source-modal-interval-oracle"]}
+    {"id": "eq-modal-outward-interval-operations", "symbols": ["modal_interval_endpoints", "modal_interval_operations", "modal_interval_neighbors"], "sources": ["source-modal-interval-norm", "source-modal-interval-oracle"]},
+    {
+      "sources": [
+        "source-modal-field-replay-scope",
+        "source-equilibrium-materialization",
+        "source-modal-field-replay-regression"
+      ],
+      "id": "eq-modal-magnetic-field-replay",
+      "symbols": [
+        "magnetic_replay_volume",
+        "magnetic_replay_support",
+        "magnetic_replay_stored_field",
+        "magnetic_replay_recomputed_field",
+        "magnetic_replay_error",
+        "magnetic_replay_indices"
+      ]
+    }
   ],
   "symbols": [
     {"id": "position", "latex": "$\\mathbf r$", "meaning": "spatial position", "si_unit": "$\\mathrm{m}$"},
@@ -172,7 +188,43 @@
     {"id": "modal_norm_indices", "latex": "$i$, $j$", "meaning": "indeksy współczynników", "si_unit": "$1$"},
     {"id": "modal_norm_ranges", "latex": "$I_R$, $I_I$", "meaning": "przedziały części rzeczywistej i urojonej Q", "si_unit": "$\\mathrm{m^3}$"},
     {"id": "modal_norm_bounds", "latex": "$r_-$, $r_+$, $s_-$, $s_+$", "meaning": "granice przedziałów normy", "si_unit": "$\\mathrm{m^3}$"},
-    {"id": "modal_interval_neighbors", "latex": "$\\operatorname{nextDown}$, $\\operatorname{nextUp}$", "meaning": "sąsiednie binary64; jednostka wyniku zgodna z argumentem", "si_unit": "$1$"}
+    {"id": "modal_interval_neighbors", "latex": "$\\operatorname{nextDown}$, $\\operatorname{nextUp}$", "meaning": "sąsiednie binary64; jednostka wyniku zgodna z argumentem", "si_unit": "$1$"},
+    {
+      "id": "magnetic_replay_volume",
+      "latex": "$w_i^{(m)}$",
+      "meaning": "lumped volume magnetycznych tetraedrów przypisany węzłowi i",
+      "si_unit": "$\\mathrm{m^3}$"
+    },
+    {
+      "id": "magnetic_replay_support",
+      "latex": "$\\mathcal I_m$",
+      "meaning": "niepusty zbiór węzłów nośnika magnetycznego",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "magnetic_replay_stored_field",
+      "latex": "$H^{\\mathrm{stored}}_{\\mathrm{eff},0,i\\alpha}$",
+      "meaning": "składowa pola efektywnego w certyfikacie",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "magnetic_replay_recomputed_field",
+      "latex": "$H^{\\mathrm{recomputed}}_{\\mathrm{eff},0,i\\alpha}$",
+      "meaning": "odpowiadająca składowa odtworzona z tego samego modelu",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "magnetic_replay_error",
+      "latex": "$\\epsilon_H$",
+      "meaning": "największa różnica na nośniku magnetycznym",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "magnetic_replay_indices",
+      "latex": "$i,\\alpha$",
+      "meaning": "indeks węzła i składowa kartezjańska x, y albo z",
+      "si_unit": "$1$"
+    }
   ],
   "sources": [
     {
@@ -375,7 +427,25 @@
     {"id": "source-modal-block-normalization", "path": "crates/fullmag-runner/src/fem/eigen_native_result.rs", "symbol": "normalize_complex_block_mode", "responsibility": "Apply the same checked scalar to all magnetic coefficients and return it for coupled potential normalization."},
     {"id": "source-modal-interval-norm", "path": "crates/fullmag-runner/src/fem/eigen_normalization_metric.rs", "symbol": "checked_mass_quadratic", "responsibility": "Compute finite outward-rounded real/imaginary enclosure for actual quadratic-form contributions."},
     {"id": "source-modal-interval-metric", "path": "crates/fullmag-runner/src/fem/eigen_mass_metric.rs", "symbol": "ModalMassMetric", "responsibility": "Keep dense and sparse observation iterators separate and avoid sparse dense materialization."},
-    {"id": "source-modal-interval-oracle", "path": "scripts/test_modal_norm_interval_source.py", "symbol": "class ModalNormIntervalOracleTests", "responsibility": "Compare proposed binary64 enclosures with independent exact Fraction arithmetic; not native runtime."}
+    {"id": "source-modal-interval-oracle", "path": "scripts/test_modal_norm_interval_source.py", "symbol": "class ModalNormIntervalOracleTests", "responsibility": "Compare proposed binary64 enclosures with independent exact Fraction arithmetic; not native runtime."},
+    {
+      "id": "source-modal-field-replay-scope",
+      "path": "crates/fullmag-runner/src/fem/eigen_equilibrium.rs",
+      "symbol": "max_vector_field_difference_on_magnetic_nodes",
+      "responsibility": "Restrict effective-field replay to magnetic support while rejecting malformed or nonfinite full arrays."
+    },
+    {
+      "id": "source-reference-external-field-scope",
+      "path": "crates/fullmag-engine/src/fem.rs",
+      "symbol": "external_field_vectors",
+      "responsibility": "Reference effective-field extension is zero at nonmagnetic nodes."
+    },
+    {
+      "id": "source-modal-field-replay-regression",
+      "path": "crates/fullmag-runner/src/fem/eigen_equilibrium.rs",
+      "symbol": "finite_air_extension_does_not_change_magnetic_comparison",
+      "responsibility": "Six regression cases for support-only comparison and malformed data rejection; unit-test compilation currently prohibited."
+    }
   ],
   "public_api": {
     "parameters": [
