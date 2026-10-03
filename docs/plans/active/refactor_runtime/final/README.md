@@ -433,3 +433,5 @@ Checkpoint P8-C: [31 — inicjalizacja zasobów pakietu i handshake](p8/31-packa
 Checkpoint P8-C: [32 — rzeczywisty odczyt stanu natywnej usługi](p8/32-native-service-status-observer.md).
 
 Checkpoint P8-C: [33 — zasób API natywnej usługi](p8/33-native-service-api-resource.md).
+
+Checkpoint P8-C: [34 — import OpenAPI z przypiętego buildu](p8/34-managed-openapi-import.md).

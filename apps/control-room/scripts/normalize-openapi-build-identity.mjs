@@ -8,6 +8,28 @@ const GENERATED_IDENTITY = Object.freeze({
   worktree_state: "generated-artifact",
 });
 
+// Check the raw export before normalization removes its source identity.
+// Artifact receipt/hash verification remains the responsibility of the caller.
+export function validateManagedOpenApiIdentity(document, expectedCommit, expectedSnapshot) {
+  if (!/^[a-f0-9]{40}$/.test(expectedCommit ?? "")) {
+    throw new TypeError("Expected commit must be exactly 40 lowercase hexadecimal characters");
+  }
+  if (!/^[a-f0-9]{64}$/.test(expectedSnapshot ?? "")) {
+    throw new TypeError("Expected snapshot must be a lowercase SHA-256 identifier");
+  }
+  const identity = document?.["x-fullmag-build-identity"];
+  if (!identity || typeof identity !== "object" || Array.isArray(identity)) {
+    throw new TypeError("Managed OpenAPI export is missing build identity");
+  }
+  if (identity.git_commit !== expectedCommit ||
+      identity.source_snapshot_sha256 !== expectedSnapshot ||
+      identity.worktree_state !== "clean" ||
+      typeof identity.built_at_utc !== "string" ||
+      !Number.isFinite(Date.parse(identity.built_at_utc))) {
+    throw new TypeError("Managed OpenAPI export does not match the expected clean source identity");
+  }
+}
+
 export function normalizeOpenApiBuildIdentity(document) {
   const identity = document?.["x-fullmag-build-identity"];
   if (!identity || typeof identity !== "object" || Array.isArray(identity)) {
