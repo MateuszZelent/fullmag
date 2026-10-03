@@ -1,5 +1,14 @@
 # Status realizacji całego planu refaktoryzacji
 
+Checkpoint 03.10.2026: build 212 succeeded/exit 0, 122 hashes i 291 673 111 B
+PASS na historycznym commicie 75ab6fe. Aktualny pakiet wymaga nowszego
+fullmag-runtime-service, którego 212 nie zawiera. Nowy API statusu zapisano
+w P8-33, a importer i 11 interpretowanych kontroli w P8-34/35; źródłowe
+review/lint PASS nie dowodzą endpointu ani UI. Build 214 queued; runner
+jawnie wstrzymany przez Mateusza, trwa drain zadania 213. Nie wznowiono
+kolejki bez decyzji. [Dokładny zakres](p8/36-historical-build-and-runner-pause.md).
+Procenty nie są automatycznie podnoszone; cały P0–P8 pozostaje aktywny.
+
 Checkpoint 02.10.2026: managed Linux FEM CPU build 210 ma terminalny
 SUCCEEDED/exit 0. Zweryfikowano 122 artifact hashes, 291 682 519 B,
 niezmienną kapsułę i gotowy pakiet ośmiu binariów dla accepted FEM CPU

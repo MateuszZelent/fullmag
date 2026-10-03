@@ -35,3 +35,26 @@ kapsuły i pełnej walidacji artefaktów. Ten build kompiluje kod produkcyjny,
 nie unit tests. Dowód pozostanie przypięty do powyższego SHA, także po
 dopisaniu tego raportu. Nie zastępuje natywnego Windows/MSI ani solvera,
 archive, nauki i browser/WebGL. Sesja 3104 pozostaje zachowana.
+
+## Odbiór 03.10.2026 — historyczny zakres
+
+Koordynator opublikował terminalny succeeded/exit 0. Kontener zakończył się
+03:02:19 UTC, OOMKilled=false. Zweryfikowano trusted hashes, zgodność
+coordinator/context/build receipt, przypięty commit/snapshot oraz wszystkie
+122 artefakty (291 673 111 B). Wymagania artefaktów porównano z kontraktem
+źródeł dokładnego commita 75ab6fe, bez modyfikowania bieżącego walidatora.
+verify_source potwierdził także niezmienny digest kapsuły oraz dokładny commit.
+
+Build receipt SHA-256:
+`ed3836536cae4e0184f3bebc58e081075c01e309998e709a683a5288edd371c4`.
+Coordinator receipt SHA-256:
+`a665816693141beb1217e9a7fd87c70e2381a0782a508c7b4720dd18d4bdd0f3`.
+Pinned image:
+`sha256:e9b8ec88b9a9ea09a6cd5e3ad3945fcabd269541f1cdd24ffafd3dff3925399d`.
+
+Aktualny validate_build_receipt odrzuca ten starszy pakiet z powodu braku
+`bin/fullmag-runtime-service`, dodanego po przypiętym commicie. Jest to
+historyczny build PASS, ale aktualny kontrakt produktu NOT VERIFIED.
+Nie osłabiono wymagań nowego produktu i nie podłączono starego pakietu jako
+odbioru P8-33 API statusu. Nowy kod API jest przypięty w buildzie 214.
+Nie jest to runtime/solver/Windows/browser ani kwalifikacja naukowa.
