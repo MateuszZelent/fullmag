@@ -128,8 +128,18 @@ windows-setup:
     powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "{{repo_root}}/scripts/windows/setup_fullmag.ps1" -InstallMissing
 
 # Build a missing/stale native package, then open the empty authoring workspace.
-windows-ui frontend="dev" web_port="3197" build="auto":
-    powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "{{repo_root}}/scripts/windows/run_fullmag.ps1" -BuildMode "{{build}}" -Frontend "{{frontend}}" -RunMode workspace -WebPort "{{web_port}}"
+windows-ui frontend="dev" web_port="3197" build="auto" backend_profile="auto":
+    powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "{{repo_root}}/scripts/windows/run_fullmag.ps1" -BuildMode "{{build}}" -Frontend "{{frontend}}" -BackendProfile "{{backend_profile}}" -RunMode workspace -WebPort "{{web_port}}"
+
+# Build the native workspace without starting the UI. The fixed storage action
+# owns preflight, the native heavy slot and the terminal receipt.
+windows-workspace-build backend_profile="dev" frontend="dev" web_port="3197" build="auto":
+    powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "{{repo_root}}/scripts/windows/run_fullmag.ps1" -BuildMode "{{build}}" -Frontend "{{frontend}}" -BackendProfile "{{backend_profile}}" -RunMode workspace -WebPort "{{web_port}}" -BuildOnly
+
+# Watch native backend inputs and build a new dev binary after edits. The
+# active workspace remains untouched until the user saves and restarts it.
+windows-backend-dev web_port="3197":
+    @{{storage_python}} "{{repo_root}}/scripts/windows/watch_backend.py" --repo-root "{{repo_root}}" --web-port "{{web_port}}"
 
 windows-build backend="fdm" device="cpu" frontend="dev" skip_local_changes="false":
     backend="{{backend}}"; device="{{device}}"; frontend="{{frontend}}"; skip_local_changes="{{skip_local_changes}}"; \

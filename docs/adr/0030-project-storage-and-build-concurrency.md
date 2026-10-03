@@ -92,6 +92,16 @@ checkoutu tylko z powodu samej izolacji.
 
 ### Build, cache i równoległość
 
+Rozszerzenie natywnego workspace Windows (P8-52): działające EXE mogą pochodzić
+z zapieczętowanej kopii w resolverowym runtime root. Publikacja i kontrola
+wszystkich hashy odbywają się pod blokadą worktree. Dopiero handshake własnego
+launchera zwalnia tę blokadę; osobna blokada runtime pozostaje do końca procesu.
+Mutowalne targety nadal wymagają dotychczasowej blokady. Watcher buduje nowe
+EXE, ale nie restartuje sesji ani nie deklaruje odtworzenia niezapisanych
+szkiców. Kopia EXE nie stanowi izolacji naukowego runu od edytowalnego Python
+DSL i zależności frontendu. Wycofanie: wyłączyć watcher i wrócić do jawnego
+release; zachować opublikowane kopie i dowody zamiast kasować aktywne dane.
+
 Profil builda powinien rozróżniać platformę, toolchain, debug/release, funkcje,
 rodzinę backendu, urządzenie, precyzję i zależności ABI. Obecny resolver używa
 jawnej nazwy profilu i nie wylicza automatycznie pełnego fingerprintu ABI;

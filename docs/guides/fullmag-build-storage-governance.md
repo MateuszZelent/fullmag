@@ -156,6 +156,17 @@ działaniem i zapisuje użyty ref bazowy w rejestrze.
 
 ## Profile buildów i ponowne użycie
 
+Natywny workspace Windows rozdziela `windows-native-fdm-cpu-dev`
+(Cargo `backend-dev`) i `windows-native-fdm-cpu` (Cargo `release`).
+Zamknięta trasa może uruchomić workspace z zapieczętowanej kopii EXE pod
+`runtimes/<worktree-id>/native-bundles/`. Do jej zweryfikowanej publikacji
+obowiązuje blokada worktree; potem runtime utrzymuje osobną blokadę
+`<worktree-id>.native-runtime.lock`, a kolejne buildy ponownie uzyskują zwykłą
+blokadę worktree. Status runtime to `native-workspace-status.json`; nie
+nadpisuje statusu równoległego buildu. Jest to kopia developerskich EXE,
+nie instalator ani gwarancja izolacji aktywnego solvera od zmian zależności
+Python/frontend. Watcher nie restartuje sesji.
+
 `profile-id` opisuje zgodny zestaw platformy/architektury, toolchainu, trybu
 debug/release, backendu, feature flags, ABI i zależności. Nie jest skrótem
 brancha ani jednorazowego procesu.

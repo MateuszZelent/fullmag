@@ -219,7 +219,7 @@ pub(crate) struct UiCli {
     pub mode: Option<ModeArg>,
     #[arg(long, value_enum)]
     pub precision: Option<PrecisionArg>,
-    /// Use web dev server instead of static assets
+    /// Use the frontend dev server with hot updates instead of static assets
     #[arg(long, default_value_t = false)]
     pub dev: bool,
     #[arg(

@@ -50,3 +50,11 @@ def test_new_backend_input_invalidates_identity_but_ignored_output_does_not(repo
     assert identity.fingerprint(repo)["sha256"] == previous
     (repo / "crates/example/new.rs").write_text("new input")
     assert identity.fingerprint(repo)["sha256"] != previous
+
+
+def test_dependency_only_edits_invalidate_backend_and_frozen_dependencies(repo):
+    backend = identity.fingerprint(repo)["sha256"]
+    dependencies = identity.fingerprint(repo, identity.DEPENDENCY_INPUTS)["sha256"]
+    (repo / "pnpm-lock.yaml").write_text("new dependency identity")
+    assert identity.fingerprint(repo)["sha256"] != backend
+    assert identity.fingerprint(repo, identity.DEPENDENCY_INPUTS)["sha256"] != dependencies

@@ -1,5 +1,18 @@
 # Fullmag — finalny audyt i plan refaktoryzacji
 
+Checkpoint P8-52/53, 03.10.2026: [przyrostowy backend Windows](p8/52-native-backend-dev.md)
+ma rzeczywiste buildy exit 0: pierwszy profil 600,11 s, bez zmian 10,50 s,
+przebudowa po zmianie 140,27 s; automatyczny build przy działającym edytorze
+102,72 s. Test w przeglądarce potwierdził identyczny model, niezmienione
+procesy/API UUID oraz działający WebGL. Własna sesja testowa zakończyła się
+exit 0 z potwierdzonym cleanupem; ponowny start użył nowych EXE bez Cargo,
+zsynchronizował metadane Python i uruchomił watcher. Automatyczne odtworzenie
+modelu pozostaje niewykonane. Użytkownik zatwierdził docelowy
+[restart w workspace](p8/53-development-restart-workspace.md): jawne zastosowanie
+nowej wersji, ochrona szkiców, odtworzenie edytowalnego modelu i blokada aktywnej
+symulacji. Kontrakt [ADR 0050](../../../../adr/0050-development-backend-restart.md)
+jest przyjęty; sam restart pozostaje planned/NOT VERIFIED. Procenty bez awansu.
+
 Checkpoint P8-50/51 i P6-78, 03.10.2026: natywny build Windows utworzył
 wersjonowane CLI/API/UI, pusty workspace i zapis zmienionej geometrii
 sprawdzono w przeglądarce na 3197. Cały własny przebieg zakończył się kodem 0;

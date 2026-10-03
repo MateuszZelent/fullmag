@@ -9,6 +9,10 @@ INPUTS = ("Cargo.toml", "Cargo.lock", "rust-toolchain.toml", ".cargo", "crates",
           "backends", "native", "apps/desktop/src-tauri", "scripts/windows",
           "scripts/fullmag_storage.py", "scripts/build_version.py", "scripts/rust",
           "packages/fullmag-py")
+DEPENDENCY_INPUTS = ("packages/fullmag-py", "package.json", "pnpm-lock.yaml",
+                     "pnpm-workspace.yaml", "apps/control-room/package.json",
+                     ".npmrc", "rust-toolchain.toml")
+INPUTS += DEPENDENCY_INPUTS
 
 
 def fingerprint(repo, inputs=INPUTS):
@@ -31,6 +35,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--repo-root", required=True)
     parser.add_argument("--frontend", action="store_true")
+    parser.add_argument("--dependencies", action="store_true")
     args = parser.parse_args()
-    inputs = ("apps/control-room", "package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml") if args.frontend else INPUTS
+    inputs = DEPENDENCY_INPUTS if args.dependencies else ("apps/control-room", "package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml") if args.frontend else INPUTS
     print(json.dumps(fingerprint(args.repo_root, inputs)))
