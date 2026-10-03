@@ -8,7 +8,8 @@ FULLMAG_DE_SMOKE_TARGET_FREQUENCY_GHZ at one single-k point; this is a
 selected-only diagnostic and cannot certify a complete frequency window or a
 dispersion curve. FULLMAG_DE_SMOKE_SAMPLING=five selects
 all five prescribed points; signed-eleven selects Gamma and five pairs of
-positive/negative ky, one mode per point. References are evaluated after the native solve;
+positive/negative ky, one mode per point. signed-fifteen selects the prescribed
+signed DE path from -25 to +25 rad/um, one mode per point. References are evaluated after the native solve;
 this fixture does not select an analytic solver or claim qualification.
 """
 from __future__ import annotations
@@ -19,7 +20,10 @@ import fullmag as fm
 
 SAMPLING = os.environ.get("FULLMAG_DE_SMOKE_SAMPLING", "two")
 _SINGLE_K_NAMES = {f"{prefix}k{k}" for prefix in ("", "bv-") for k in range(-25, 26)}
-_PATH_NAMES = {"two", "five", "positive-six", "bv-positive-six", "positive-26", "bv-positive-26", "signed-eleven"}
+_PATH_NAMES = {
+    "two", "five", "positive-six", "bv-positive-six", "positive-26",
+    "bv-positive-26", "signed-eleven", "signed-fifteen",
+}
 if SAMPLING not in _SINGLE_K_NAMES | _PATH_NAMES:
     raise ValueError(f"Unsupported FULLMAG_DE_SMOKE_SAMPLING: {SAMPLING}")
 _single_k_name = SAMPLING.removeprefix("bv-")
@@ -29,6 +33,8 @@ KY = ((float(_single_k_name[1:]) * 1e6,) if IS_SINGLE else
       (2e6, 5e6, 10e6, 15e6, 20e6, 25e6) if SAMPLING in ("positive-six", "bv-positive-six") else
       (0.0, 2e6) if SAMPLING == "two" else
       (0.0, 1e6, 2e6, 3e6, 5e6) if SAMPLING == "five" else
+      (-25e6, -20e6, -15e6, -10e6, -7e6, -5e6, -2e6, 0.0,
+       2e6, 5e6, 7e6, 10e6, 15e6, 20e6, 25e6) if SAMPLING == "signed-fifteen" else
       (-3e6, -2e6, -1.5e6, -1e6, -0.5e6, 0.0,
        0.5e6, 1e6, 1.5e6, 2e6, 3e6))
 REQUESTED_MODE_COUNT = 4 if SAMPLING in ("two", "five") else 1
@@ -36,7 +42,9 @@ IS_BV = SAMPLING.startswith("bv-")
 IS_GAMMA_SINGLE = IS_SINGLE and KY[0] == 0.0
 K_VECTORS = [(k, 0.0, 0.0) if IS_BV else (0.0, k, 0.0) for k in KY]
 FREQUENCY_MIN_HZ = 12e9 if SAMPLING in ("k25", "k-25") else 8.5e9
-FREQUENCY_MAX_HZ = 16e9 if (SAMPLING in ("k25", "k-25", "positive-six", "positive-26") or (IS_SINGLE and not IS_BV and abs(KY[0]) >= 15e6)) else 12e9
+FREQUENCY_MAX_HZ = 16e9 if (SAMPLING in (
+    "k25", "k-25", "positive-six", "positive-26", "signed-fifteen"
+) or (IS_SINGLE and not IS_BV and abs(KY[0]) >= 15e6)) else 12e9
 MODAL_TARGET = os.environ.get("FULLMAG_DE_SMOKE_MODAL_TARGET", "frequency_window")
 if MODAL_TARGET not in {"frequency_window", "nearest"}:
     raise ValueError(
@@ -124,10 +132,26 @@ if _THICKNESS_LAYERS_TEXT not in ("3", "6", "9"):
     raise ValueError("Unsupported FULLMAG_DE_SMOKE_THICKNESS_LAYERS")
 THICKNESS_LAYERS = int(_THICKNESS_LAYERS_TEXT)
 
+_PARALLEL_MODE = os.environ.get("FULLMAG_DE_SMOKE_PARALLEL_MODE", "serial")
+try:
+    PARALLEL_EXECUTION = fm.ParallelExecutionPolicy(
+        mode=_PARALLEL_MODE,
+        max_cpu_percent=90.0,
+        max_memory_percent=80.0,
+        memory_reserve_bytes=1_073_741_824,
+        max_workers=None,
+        threads_per_worker=1,
+    )
+except (TypeError, ValueError) as exc:
+    raise ValueError(
+        "FULLMAG_DE_SMOKE_PARALLEL_MODE must be 'serial' or 'adaptive'"
+    ) from exc
+
 
 study = fm.study("de-smoke-10nm-numeric")
 study.engine("fem")
 study.device("cpu", precision="double")
+study.parallel_execution(PARALLEL_EXECUTION)
 study.mode("strict")
 study.interactive(False)
 study.wait_for_solve(True)
