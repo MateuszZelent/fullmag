@@ -3,7 +3,7 @@ use fullmag_application::{
     DocumentMode, DurabilityGuarantee, FileProjectRepository, ProjectApplication, ProjectSource,
     ProjectTarget, SaveProjectRequest,
 };
-use crate::{compute_probe, recent_index};
+use crate::{compute_probe, provenance, recent_index};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fs;
@@ -427,6 +427,23 @@ fn recent_project_roots(app: &AppHandle, file: &Path) -> Vec<PathBuf> {
     let mut seen = std::collections::HashSet::new();
     roots.retain(|root| seen.insert(root.clone()));
     roots
+}
+
+/// Who the user is, for the start screen's greeting: git config, then the OS user.
+#[tauri::command]
+pub async fn author_identity() -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(provenance::author_identity)
+        .await
+        .map_err(|error| format!("identity lookup was interrupted: {error}"))
+}
+
+/// Authors, citation, history and runs of the archive at `path`, read lazily
+/// when the inspector opens a provenance tab.
+#[tauri::command]
+pub async fn project_provenance_read(path: String) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || provenance::read_from_archive(Path::new(&path)))
+        .await
+        .map_err(|error| format!("provenance read was interrupted: {error}"))?
 }
 
 /// GPU, CUDA, VRAM and CPU threads for the start screen's rail. Runs off the
