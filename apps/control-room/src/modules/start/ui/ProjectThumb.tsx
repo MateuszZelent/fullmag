@@ -11,7 +11,7 @@ export interface ProjectThumbProps {
   readonly status: ProjectStatus;
   /** Rows load lazily; the inspector preview is what the user is looking at. */
   readonly eager?: boolean;
-  readonly size: "row" | "card" | "preview";
+  readonly size: "row" | "card" | "preview" | "continue";
 }
 
 function Placeholder({ missing }: { readonly missing: boolean }) {

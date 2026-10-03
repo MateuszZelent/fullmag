@@ -11,11 +11,15 @@ import type { ModuleProps } from "@/kernel/types";
 import { HomeSection } from "./home/HomeSection";
 import { LAUNCH_TILES } from "./home/LaunchTiles";
 import { ProjectInspector } from "./inspector/ProjectInspector";
-import { readProjectArchiveAtPath } from "./model/recentIndexHost";
+import {
+  discardCheckpoint,
+  readProjectArchiveAtPath,
+  resumeRun,
+} from "./model/recentIndexHost";
 import { useRecentIndex } from "./model/useRecentIndex";
 import { startActionDisabledReason } from "./model/startCommands";
 import { startScreenStore, type StartScreenHost } from "./model/startScreenState";
-import type { RecentEntry } from "./model/types";
+import type { ContinueSession, RecentEntry } from "./model/types";
 import { StartRail } from "./rail/StartRail";
 import { SectionPlaceholder } from "./sections/SectionPlaceholder";
 
@@ -79,18 +83,35 @@ export function StartScreen({ kernel }: ModuleProps) {
     });
   };
 
-  const openRecent = async (entry: RecentEntry): Promise<string | null> => {
-    if (entry.status === "missing") {
-      return `${entry.name} is no longer at ${entry.path}. Rebuild the index or remove it from the list.`;
-    }
-    const archive = await readProjectArchiveAtPath(entry.path);
-    if (!archive.ok) return `Could not open ${entry.name}: ${archive.reason}`;
+  const openArchive = async (
+    archive: Awaited<ReturnType<typeof readProjectArchiveAtPath>>,
+    failure: string,
+  ): Promise<string | null> => {
+    if (!archive.ok) return `${failure}: ${archive.reason}`;
     const result = await kernel.commands.execute("workspace.open-project", {
       ...context,
       input: archive.source,
     });
     if (result.status === "completed") homeView.close();
-    return result.status === "failed" ? (result.message ?? `Could not open ${entry.name}.`) : null;
+    return result.status === "failed" ? (result.message ?? `${failure}.`) : null;
+  };
+
+  const openRecent = async (entry: RecentEntry): Promise<string | null> => {
+    if (entry.status === "missing") {
+      return `${entry.name} is no longer at ${entry.path}. Rebuild the index or remove it from the list.`;
+    }
+    const archive = await readProjectArchiveAtPath(entry.path);
+    return openArchive(archive, `Could not open ${entry.name}`);
+  };
+
+  const resumeContinue = async (session: ContinueSession, entry: RecentEntry) =>
+    openArchive(await resumeRun(session.projectId, session.runId), `Could not resume ${entry.name}`);
+
+  const discardContinue = async (session: ContinueSession): Promise<string | null> => {
+    const result = await discardCheckpoint(session.projectId, session.runId);
+    if (!result.ok) return `Could not discard the checkpoint: ${result.reason}`;
+    await recent.refresh();
+    return null;
   };
 
   const selectedEntry =
@@ -128,7 +149,9 @@ export function StartScreen({ kernel }: ModuleProps) {
               disabledReasons={disabledReasons}
               initialFocusRef={initialFocusRef}
               recent={recent}
+              onDiscardContinue={discardContinue}
               onOpenRecent={openRecent}
+              onResumeContinue={resumeContinue}
               onRunCommand={runCommand}
             />
           ) : (
