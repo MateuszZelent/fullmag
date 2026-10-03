@@ -267,6 +267,32 @@ def exercise_service(repo: Path, run_root: Path, manifest: dict, receipt: dict) 
             assert not (store / "development/ADMISSION-FENCE.json").exists()
             receipt["checks"].append("orphan-empty-catalog-refuses-idle-drain")
             orphan_path.unlink()  # Only the disposable catalog created above.
+            # These durable ownership fixtures have no catalog/specification to
+            # dispatch. Resources deliberately lie outside both configured pools:
+            # checking just the resident service's offers would miss them.
+            lease_common = dict(resource_id="outside-pool", budget=budget,
+                run_id="idle-fence-lease", task_id="fixture-task", lease_token="fixture-lease",
+                state="active", acquired_at="2026-10-03T00:00:00Z",
+                heartbeat_at="2026-10-03T00:00:00Z", heartbeat_sequence=0)
+            for family, document in (
+                ("resource_leases", dict(**lease_common, schema_version="resource_lease.v1",
+                    kind="cpu", attempt_id="fixture-attempt", ownership_epoch=1)),
+                ("preparation_resource_leases", dict(**lease_common,
+                    schema_version="preparation_resource_lease.v1",
+                    preparation_attempt_id="fixture-preparation")),
+            ):
+                lease_path = store / "runs/idle-fence-lease" / family / "outside-pool/fixture-lease.json"
+                lease_path.parent.mkdir(parents=True)
+                storage.atomic_json(lease_path, document)
+                denied = control("drain_idle_confirmed", owner["owner_token"], uuid.uuid4().hex)
+                assert denied == {"status": "rejected", "reason": "idle_not_proven"}, denied
+                assert control("status", owner["owner_token"], uuid.uuid4().hex)["owner"]["state"] == "ready"
+                assert not (store / "development/ADMISSION-FENCE.json").exists()
+                receipt["checks"].append(family + "-outside-pool-refuses-idle-drain")
+                # Keep the document to prove that terminal lease history does
+                # not prevent the eventual idle drain. No process owns it.
+                storage.atomic_json(lease_path, {**document, "state": "released",
+                    "released_at": "2026-10-03T00:01:00Z"})
             fence_path = store / "development/ADMISSION-FENCE.json"
             fence_path.parent.mkdir(exist_ok=True)
             # Only this verifier's empty store is modified. Unknown persisted

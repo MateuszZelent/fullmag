@@ -1,5 +1,11 @@
 # Status realizacji całego planu refaktoryzacji
 
+Checkpoint P8-53O/P, 03.10.2026: trwały admission fence i idle drain mają
+produkcyjny dowód procesu; [recovery preparation](p8/53p-preparation-recovery-pool-scope.md)
+nie przejmuje leases spoza aktualnej puli. Końcowy build Windows i 55 sprawdzeń
+API/service przeszły. Pełny manager restartu, ochrona szkiców, nowe przypięcie
+API i fault gates pozostają otwarte. Procenty etapów bez awansu.
+
 Checkpoint P8-52/53, 03.10.2026: [przyrostowy backend Windows](p8/52-native-backend-dev.md)
 ma rzeczywiste buildy exit 0: pierwszy profil 600,11 s, bez zmian 10,50 s,
 przebudowa po zmianie 140,27 s; automatyczny build przy działającym edytorze

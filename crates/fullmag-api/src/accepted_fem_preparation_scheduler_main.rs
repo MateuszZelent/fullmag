@@ -245,11 +245,20 @@ fn run_scheduler(args: SchedulerArgs, shutdown_requested: Arc<AtomicBool>) -> Re
             break;
         }
 
-        if args.owner_control && !owner_ready {
-            if let Some(pool) =
-                retry_store_writer_busy(|| store.read_preparation_resource_pool(&args.pool_id))?
-            {
-                validate_pool_progress(observed_pool.as_ref(), &pool, &active)?;
+        // New recovery is scoped to the current pool. Already owned handles in
+        // `active` continue draining even after an offer is withdrawn.
+        // Serialize membership and lease adoption with pool/lease publication.
+        // Supervisors start in separate threads; never wait for them here.
+        let recovery_transaction = retry_store_writer_busy(|| store.write_transaction())?;
+        let current_pool =
+            retry_store_writer_busy(|| store.read_preparation_resource_pool(&args.pool_id))?;
+        if let Some(pool) = &current_pool {
+            validate_pool_progress(observed_pool.as_ref(), pool, &active)?;
+            for offer in &pool.resources {
+                observed_resource_ids.insert(offer.resource_id.clone());
+            }
+            observed_pool = Some(pool.clone());
+            if args.owner_control && !owner_ready {
                 scheduler_owner_control::announce(
                     "ready",
                     "preparation",
@@ -258,11 +267,29 @@ fn run_scheduler(args: SchedulerArgs, shutdown_requested: Arc<AtomicBool>) -> Re
                 )?;
                 owner_ready = true;
             }
+        } else if observed_pool.is_some() {
+            bail!("preparation resource pool disappeared after publication");
         }
         let durable_active =
             retry_store_writer_busy(|| store.list_active_preparation_resource_leases())?;
         let mut started_any = false;
         for lease in durable_active {
+            if active.contains_key(&lease.resource_id) {
+                continue;
+            }
+            let Some(offer) = current_pool.as_ref().and_then(|pool| {
+                pool.resources
+                    .iter()
+                    .find(|offer| offer.resource_id == lease.resource_id)
+            }) else {
+                // A cold-start lease for a withdrawn resource has no durable
+                // pool provenance. Retain it for explicit recovery; never infer
+                // ownership from finding it in the shared accepted store.
+                continue;
+            };
+            if offer.budget != lease.budget {
+                bail!("preparation recovery resource budget differs from its observed pool");
+            }
             if active.len() >= args.max_concurrency
                 || args
                     .max_tasks
@@ -270,10 +297,6 @@ fn run_scheduler(args: SchedulerArgs, shutdown_requested: Arc<AtomicBool>) -> Re
             {
                 break;
             }
-            if active.contains_key(&lease.resource_id) {
-                continue;
-            }
-            observed_resource_ids.insert(lease.resource_id.clone());
             let resource_id = lease.resource_id.clone();
             active.insert(
                 resource_id,
@@ -292,6 +315,7 @@ fn run_scheduler(args: SchedulerArgs, shutdown_requested: Arc<AtomicBool>) -> Re
             );
             started_any = true;
         }
+        drop(recovery_transaction);
 
         if !draining
             && active.len() < args.max_concurrency
@@ -299,16 +323,7 @@ fn run_scheduler(args: SchedulerArgs, shutdown_requested: Arc<AtomicBool>) -> Re
                 .max_tasks
                 .map_or(true, |limit| completed.len() + active.len() < limit)
         {
-            let pool =
-                retry_store_writer_busy(|| store.read_preparation_resource_pool(&args.pool_id))?;
-            if let Some(pool) = pool {
-                validate_pool_progress(observed_pool.as_ref(), &pool, &active)?;
-                observed_resource_ids.extend(
-                    pool.resources
-                        .iter()
-                        .map(|resource| resource.resource_id.clone()),
-                );
-                observed_pool = Some(pool.clone());
+            if let Some(pool) = current_pool {
                 let candidates = preparation_candidates(&store, next_run_id.as_deref())?;
                 let checkpoint_run_ids = distinct_run_ids(&candidates);
                 for offer in &pool.resources {
