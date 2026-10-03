@@ -22,6 +22,7 @@ import { startActionDisabledReason } from "./model/startCommands";
 import { startScreenStore, type StartScreenHost } from "./model/startScreenState";
 import type { ContinueSession, RecentEntry } from "./model/types";
 import { StartRail } from "./rail/StartRail";
+import { StartStatusBar } from "./ui/StartStatusBar";
 import { AboutSection } from "./sections/AboutSection";
 import { ImportSection } from "./sections/ImportSection";
 import { LearnSection } from "./sections/LearnSection";
@@ -193,6 +194,7 @@ export function StartScreen({ kernel }: ModuleProps) {
         templateId={selectedTemplateId}
         session={recent.state.kind === "ready" ? recent.state.index.continue : undefined}
       />
+      <StartStatusBar compute={compute} index={recent.state} />
     </div>
   );
 }
