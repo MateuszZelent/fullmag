@@ -231,6 +231,9 @@ pub(crate) struct UiCli {
 
 #[derive(Subcommand)]
 pub(crate) enum RuntimeCommand {
+    /// Internal managed diagnostic for the native CLI owner protocol.
+    #[command(hide = true)]
+    VerifyDevelopmentApiOwner,
     /// Internal operator-level start/attach for an explicitly selected store.
     #[command(hide = true)]
     ServiceEnsure {

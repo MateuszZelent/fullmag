@@ -60,7 +60,7 @@ def run(repo_root: str) -> int:
                    "build_snapshot_sha256": manifest["source_snapshot_sha256"],
                    "build_commit": manifest["git_commit"],
                    "started_at": storage.now(), "checks": [], "processes": [],
-                   "scope": "native resource observation, private owner-authorized authoring acquisition and admission freeze/abort/disconnect, empty-service terminal drain; no process replacement, full workspace restart, solver or release qualification"}
+                   "scope": "native resource observation, private owner-authorized authoring acquisition and admission freeze/abort/disconnect, production CLI owner client in owned empty API, empty-service terminal drain; no process replacement, full workspace restart, solver or release qualification"}
         storage.atomic_json(receipt_path, receipt)
         code = 1
         try:
@@ -95,6 +95,7 @@ def run(repo_root: str) -> int:
             if binary_hash != manifest["api_binary_sha256"] or hashlib.sha256(source_api.read_bytes()).hexdigest() != binary_hash:
                 raise storage.StorageError("Native API changed while sealing its diagnostic copy")
             exercise(api, repo, run_root, receipt)
+            exercise_cli_owner(repo, run_root, manifest, receipt, api.parent)
             exercise_service(repo, run_root, manifest, receipt, api.parent)
             # Use the canonical codegen branch rather than persisting the live
             # endpoint's process-specific accepted-store binding extension.
@@ -132,6 +133,58 @@ def run(repo_root: str) -> int:
             storage.atomic_json(receipt_path, receipt)
             print(json.dumps({"state": receipt["state"], "exit_code": code, "checks": len(receipt["checks"]), "receipt": str(receipt_path)}))
         return code
+
+
+def exercise_cli_owner(repo: Path, run_root: Path, manifest: dict, receipt: dict, binaries: Path) -> None:
+    """Exercise the production native CLI client in its own empty API child."""
+    fixture = run_root / "cli-owner-fixture"
+    state = fixture / "state"
+    state.mkdir(parents=True)
+    store = fixture / "storage"
+    store.mkdir()
+    worktree = "fixture-cli-owner"
+    generation = uuid.uuid4().hex
+    status = store / "builds" / worktree / "windows-native-fdm-cpu-dev/backend-watch-status.json"
+    status.parent.mkdir(parents=True)
+    storage.atomic_json(status, dict(schema="fullmag.backend-watch.v2", generation_id=generation,
+        worktree_id=worktree, state="waiting", source_sha256=manifest["backend_source_sha256"],
+        revision=1, updated_unix_ms=int(time.time() * 1000)))
+    with socket.socket() as reservation:
+        reservation.bind(("127.0.0.1", 0))
+        port = reservation.getsockname()[1]
+    env = {key: os.environ[key] for key in ("SYSTEMROOT", "WINDIR", "PATH", "PATHEXT", "TEMP", "TMP", "COMPUTERNAME") if key in os.environ}
+    env.update(FULLMAG_REPO_ROOT=str(repo), FULLMAG_STATE_ROOT=str(state), FULLMAG_API_PORT=str(port),
+        FULLMAG_DEVELOPMENT_OWNER_PROBE="1", FULLMAG_NATIVE_RUNTIME_ACTIVE="1",
+        FULLMAG_STORAGE_PROFILE="windows-native-fdm-cpu-dev", FULLMAG_PROJECT_STORAGE_ROOT=str(store),
+        FULLMAG_WORKTREE_ID=worktree, FULLMAG_DEVELOPMENT_BACKEND_GENERATION=generation,
+        FULLMAG_DEVELOPMENT_BACKEND_STATUS_FILE=str(status),
+        FULLMAG_DEVELOPMENT_BACKEND_SOURCE=manifest["backend_source_sha256"],
+        FULLMAG_DEVELOPMENT_BACKEND_VERSION=manifest["build_version"]["product_version"])
+    log_path = fixture / "cli.log"
+    with log_path.open("w", encoding="utf-8") as log:
+        child = subprocess.Popen([str(binaries / "fullmag.exe"), "runtime", "verify-development-api-owner"],
+            cwd=repo, env=env, stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+            creationflags=subprocess.CREATE_NO_WINDOW)
+        record = {"label":"cli-owner-client", "pid":child.pid, "waited":False}
+        receipt["processes"].append(record)
+        try:
+            code = child.wait(timeout=50)
+            record.update(waited=True, exit_code=code)
+        finally:
+            if child.poll() is None:
+                # This fixture owns the CLI and its API process tree.
+                subprocess.run(["taskkill", "/PID", str(child.pid), "/T", "/F"],
+                    capture_output=True, check=False, creationflags=subprocess.CREATE_NO_WINDOW)
+                record.update(waited=True, exit_code=child.wait(timeout=10))
+    if code != 0:
+        raise storage.StorageError(f"Native CLI owner client failed; see {log_path}")
+    frames = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines() if line.startswith('{')]
+    assert len(frames) == 1, frames
+    result = frames[0]
+    assert result["schema"] == "fullmag.development-cli-owner-check.v1" and result["api_waited"] is True
+    receipt["processes"].append(dict(label="cli-owned-api", pid=result["api_pid"],
+        waited=True, exit_code=result["api_exit_code"]))
+    receipt["checks"].extend("cli-owner-" + name for name in result["checks"])
 
 
 def exercise_service(repo: Path, run_root: Path, manifest: dict, receipt: dict, binaries: Path) -> None:

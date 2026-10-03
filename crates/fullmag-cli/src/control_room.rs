@@ -777,6 +777,7 @@ pub(crate) struct ControlPlaneReady {
     pub web_port: u16,
     pub api_child: Option<std::process::Child>,
     pub frontend_child: Option<std::process::Child>,
+    pub development_owner: Option<crate::development_api_owner::OwnerLaunch>,
 }
 
 fn control_room_node_program(root: &Path, dev_mode: bool) -> Option<PathBuf> {
@@ -896,6 +897,7 @@ pub(crate) fn bootstrap_control_plane(
             })
             .unwrap_or(false);
 
+    let mut development_owner = None;
     let api_child = if api_port() != 0 && api_bridge_is_ready(api_port()) {
         if restore_from_stdin {
             bail!("private development restore requires a newly owned API; refusing API reuse");
@@ -906,6 +908,10 @@ pub(crate) fn bootstrap_control_plane(
         );
         None
     } else {
+        development_owner = crate::development_api_owner::OwnerLaunch::from_environment(
+            dev_mode,
+            live_workspace.is_some(),
+        )?;
         terminal_logger().emit(
             TerminalLogSource::Api,
             format!("starting fullmag-api on :{} ...", api_port()),
@@ -936,6 +942,7 @@ pub(crate) fn bootstrap_control_plane(
             external_control_room_available,
             stream_api_logs_to_terminal,
             restore_from_stdin,
+            development_owner.as_ref().map(|owner| owner.token()),
         )?));
         wait_for_api_ready(
             api_port(),
@@ -1080,6 +1087,7 @@ pub(crate) fn bootstrap_control_plane(
             web_port,
             api_child: api_child.map(|child| child.release().0),
             frontend_child: frontend_child.map(|child| child.release().0),
+            development_owner,
         });
     }
 
@@ -1097,6 +1105,7 @@ pub(crate) fn bootstrap_control_plane(
             web_port,
             api_child: api_child.map(|child| child.release().0),
             frontend_child: None,
+            development_owner,
         });
     }
 
@@ -2086,6 +2095,7 @@ pub(crate) fn spawn_fullmag_api(
     disable_static_control_room: bool,
     stream_logs_to_terminal: bool,
     restore_from_stdin: bool,
+    development_owner_token: Option<&str>,
 ) -> Result<std::process::Child> {
     let packaged_root = packaged_install_root(self_exe);
     let runtime_root = packaged_root.clone().unwrap_or_else(|| root.to_path_buf());
@@ -2137,6 +2147,7 @@ pub(crate) fn spawn_fullmag_api(
             .env("FULLMAG_REPO_ROOT", &runtime_root)
             .env("FULLMAG_STATE_ROOT", &state_root)
             .env("FULLMAG_WEB_STATIC_DIR", &web_static_dir)
+            .env_remove("FULLMAG_DEVELOPMENT_OWNER_TOKEN")
             // The manager supplies bounded, verified input and closes its pipe.
             // API validation and its deadline remain authoritative; the CLI
             // must not consume or transform the canonical scene on the way.
@@ -2145,6 +2156,9 @@ pub(crate) fn spawn_fullmag_api(
             } else {
                 Stdio::null()
             });
+        if let Some(token) = development_owner_token {
+            command.env("FULLMAG_DEVELOPMENT_OWNER_TOKEN", token);
+        }
         if stream_logs_to_terminal {
             command.stdout(Stdio::piped()).stderr(Stdio::piped());
         } else {
@@ -2334,6 +2348,145 @@ fn wait_for_api_ready(port: u16, child: &mut std::process::Child, timeout: Durat
         }
         std::thread::sleep(Duration::from_millis(100));
     }
+}
+
+/// Managed diagnostic only: own an empty API, exercise the production CLI
+/// owner client, and wait for that child. Never opens a frontend or desktop.
+pub(crate) fn verify_development_api_owner() -> Result<()> {
+    if std::env::var("FULLMAG_DEVELOPMENT_OWNER_PROBE").as_deref() != Ok("1") {
+        bail!("development API owner verification requires an explicit managed fixture");
+    }
+    init_api_port()?;
+    let launch = crate::development_api_owner::OwnerLaunch::from_environment(true, false)?
+        .context("development API owner verification requires managed dev configuration")?;
+    if crate::development_api_owner::OwnerLaunch::from_environment(false, false)?.is_some()
+        || crate::development_api_owner::OwnerLaunch::from_environment(true, true)?.is_some()
+    {
+        bail!("development owner must be disabled for static and scripted workspaces");
+    }
+    let root = repo_root();
+    let state_root = runtime_state_root(&root);
+    let log_path = fullmag_session::repository_path::checked_path(
+        &state_root,
+        &format!("owner-probe-{}.log", uuid::Uuid::new_v4().simple()),
+    )?;
+    let log = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(log_path)?;
+    let error_log = log.try_clone()?;
+    let mut child = BootstrapProcessGuard::new(ChildProcess(spawn_fullmag_api(
+        &root,
+        &std::env::current_exe()?,
+        log,
+        error_log,
+        true,
+        false,
+        false,
+        Some(launch.token()),
+    )?));
+    wait_for_api_ready(
+        api_port(),
+        &mut child.process_mut().0,
+        Duration::from_secs(30),
+    )?;
+    let client = reqwest::blocking::Client::builder()
+        .no_proxy()
+        .timeout(Duration::from_secs(5))
+        .build()?;
+    let url = format!("http://127.0.0.1:{}", api_port());
+    let response = client
+        .get(format!("{url}/v2/platform/development-backend"))
+        .send()?
+        .error_for_status()?;
+    let instance = response
+        .headers()
+        .get("x-fullmag-api-instance")
+        .context("owned API v2 resource lacks an instance pin")?
+        .to_str()?
+        .to_owned();
+    let pid = child.process_mut().0.id();
+    if launch
+        .confirm(pid.wrapping_add(1), api_port(), &instance)
+        .is_ok()
+    {
+        bail!("development owner accepted a different child PID");
+    }
+    let foreign = crate::development_api_owner::OwnerLaunch::from_environment(true, false)?
+        .context("managed fixture lost its owner configuration")?;
+    if foreign.confirm(pid, api_port(), &instance).is_ok() {
+        bail!("development owner accepted a different token");
+    }
+    let owner = launch.confirm(pid, api_port(), &instance)?;
+    if owner.acquire("invalid").is_ok() {
+        bail!("development owner accepted an invalid acquisition nonce");
+    }
+    let acquisition = owner.acquire(&uuid::Uuid::new_v4().to_string())?;
+    if acquisition.workspace() != &serde_json::json!({"state":"no_session", "session_epoch":0}) {
+        bail!("development owner fixture is not an empty API");
+    }
+    let create = serde_json::json!({"name":"CLI owner fixture", "backend":"fdm",
+                                  "device":"cpu", "precision":"double"});
+    let frozen = client
+        .post(format!("{url}/v2/sessions"))
+        .json(&create)
+        .send()?;
+    if frozen.status().as_u16() != 409 {
+        bail!("development owner acquisition did not freeze mutation admission");
+    }
+    acquisition.abort()?;
+    if client
+        .post(format!("{url}/v2/sessions"))
+        .json(&create)
+        .send()?
+        .status()
+        .as_u16()
+        != 201
+    {
+        bail!("development owner abort did not reopen mutation admission");
+    }
+    let scene: serde_json::Value = client
+        .get(format!("{url}/v2/sessions/current/model/scene"))
+        .send()?
+        .error_for_status()?
+        .json()?;
+    let acquisition = owner.acquire(&uuid::Uuid::new_v4().to_string())?;
+    if acquisition.workspace().get("scene_document") != Some(&scene) {
+        bail!("development owner did not preserve the canonical authoring scene");
+    }
+    drop(acquisition);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let response = client
+            .put(format!("{url}/v2/sessions/current/model/scene"))
+            .json(&scene)
+            .send()?;
+        if response.status().is_success() {
+            break;
+        }
+        if response.status().as_u16() != 409 || Instant::now() >= deadline {
+            bail!("development owner disconnect did not reopen mutation admission");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    // Only this fixture child is terminated; successful wait is recorded.
+    let mut process = child.release().0;
+    terminate_child_process(&mut process);
+    let terminal = process
+        .wait()
+        .context("failed to wait for the owned API fixture")?;
+    println!(
+        "{}",
+        serde_json::json!({
+            "schema":"fullmag.development-cli-owner-check.v1", "api_pid":pid,
+            "api_instance_id":instance, "api_waited":true,
+            "api_exit_code":terminal.code(), "checks":["owned-api-discovery",
+            "static-script-owner-disabled", "foreign-child-refused", "foreign-token-refused",
+            "invalid-acquisition-nonce-refused", "empty-authoring-acquired", "http-admission-frozen",
+            "abort-reopened-admission", "canonical-scene-acquired", "disconnect-reopened-admission"]
+        })
+    );
+    Ok(())
 }
 
 pub(crate) fn which_opener() -> Result<String> {

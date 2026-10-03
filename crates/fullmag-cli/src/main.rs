@@ -12,6 +12,7 @@ mod command_bridge;
 mod communication_policy;
 mod control_room;
 mod dev_smoke;
+mod development_api_owner;
 mod diagnostics;
 mod feature_flags;
 mod formatting;
@@ -89,6 +90,9 @@ fn main() -> Result<()> {
             source_artifact_id,
         }) => {
             saved_fem_snapshot_gate::verify(&store, &source, &source_artifact_id)?;
+        }
+        Command::Runtime(RuntimeCommand::VerifyDevelopmentApiOwner) => {
+            control_room::verify_development_api_owner()?;
         }
         Command::Doctor => {
             println!("fullmag status");
@@ -627,6 +631,7 @@ fn launch_ui(ui: UiCli) -> Result<()> {
         live_workspace.as_ref(),
     )?;
     let owns_api = ready.api_child.is_some();
+    let owned_api_pid = ready.api_child.as_ref().map(std::process::Child::id);
     let control_room_guard = crate::control_room::ControlRoomGuard::active(
         ready.web_port,
         ready.api_child.take(),
@@ -635,14 +640,25 @@ fn launch_ui(ui: UiCli) -> Result<()> {
     let root = crate::control_room::repo_root();
     let state_root = crate::control_room::runtime_state_root(&root);
     let mut runtime_binding = fullmag_runtime_control::application_attach::prepare_for_authoring(
-        &root, &state_root, crate::control_room::api_port())?;
+        &root,
+        &state_root,
+        crate::control_room::api_port(),
+    )?;
+    let development_owner = match ready.development_owner.take() {
+        Some(owner) => Some(owner.confirm(
+            owned_api_pid.context("development owner requires an owned API child")?,
+            ready.api_port,
+            runtime_binding.api_instance_id(),
+        )?),
+        None => None,
+    };
     if !owns_api {
         runtime_binding.disable_automatic_attach(
             fullmag_runtime_control::application_attach::ApplicationAttachBlockReason::ApiNotOwned,
         );
     }
-    let mut ui_child = crate::control_room::open_in_tauri(
-        &ready, intent, runtime_binding.api_instance_id())?;
+    let mut ui_child =
+        crate::control_room::open_in_tauri(&ready, intent, runtime_binding.api_instance_id())?;
     // Native startup has an owned observer and cannot delay opening the window.
     let runtime_attach = match runtime_binding.start() {
         Ok(attach) => attach,
@@ -664,8 +680,9 @@ fn launch_ui(ui: UiCli) -> Result<()> {
     let _ = ui_child.wait();
     // Join the observer before shutting down the API it is pinned to.
     drop(runtime_attach);
-    drop(control_room_guard);
     drop(scratch_runtime);
+    drop(development_owner);
+    drop(control_room_guard);
     Ok(())
 }
 

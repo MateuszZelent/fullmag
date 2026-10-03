@@ -1,5 +1,11 @@
 # Status realizacji całego planu refaktoryzacji
 
+Checkpoint P8-53S, 04.10.2026: [owner natywnego launchera](p8/53s-native-launcher-owner.md).
+CLI nadaje token własnemu początkowemu API i potwierdza jego identity przed
+Tauri. Build i 89 sprawdzeń runtime przeszły, w tym rzeczywisty klient CLI
+acquire/abort/disconnect. Wszystkie 18 procesów testowych zakończone. Pełny
+restart, ACK kapsuły, shutdown i odtworzenie UI nadal otwarte; procenty bez awansu.
+
 Checkpoint P8-53R, 04.10.2026: [niezawodność natywnego dev](p8/53r-native-development-reliability.md).
 Build Windows, 79 sprawdzeń runtime i 45 interpretowanych sprawdzeń przeszły.
 Zamknięto odrzucanie body HTTP, rozbieżne UUID i chwilowy WRITER busy w drain.

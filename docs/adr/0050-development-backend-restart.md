@@ -123,6 +123,13 @@ awaria częściowej publikacji nie jest gotowością. Zmiana ogranicza mnożenie
 reguł zapory związanych z pełną ścieżką EXE, bez zmiany ustawień systemu.
 Nie jest to mechanizm podmiany plików działającego workspace ani hot restartu.
 
+Natywny CLI generuje token początkowego ownera tylko dla własnego managed dev
+API bez skryptu; frontend nie dostaje tych credentials. Discovery musi zgadzać
+się z własnym PID, przypiętym HTTP UUID i skompilowanym bundle CLI/API.
+Acquire/abort mają ograniczenia czasu i rozmiaru oraz weryfikację canonical
+sceny. Ten klient nie daje jeszcze commit/shutdown. Replacement wymaga osobnego
+bindingu do zweryfikowanego kandydata, gdy persistent CLI zachowuje stary build.
+
 Prywatny `drain_confirmed` rozszerza istniejący kanał service bez zmiany
 kontraktu `drain`: wymaga tokenu ownera i świeżego nonce, a odpowiedź
 `runtime_service_drain.v1` wysyła dopiero po terminalnych receiptach obu
