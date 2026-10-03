@@ -79,4 +79,27 @@
   /* Named line heights — enables leading-fm-control, leading-fm-tight */
   --leading-fm-control: var(--fm-line-height-control);
   --leading-fm-tight: var(--fm-line-height-tight);
+  /* Start screen - semantic aliases from start-screen.tokens.css */
+  --color-fm-solver-fdm: var(--fm-solver-fdm);
+  --color-fm-solver-fem: var(--fm-solver-fem);
+  --color-fm-project-ready: var(--fm-project-ready);
+  --color-fm-project-running: var(--fm-project-running);
+  --color-fm-project-failed: var(--fm-project-failed);
+  --color-fm-project-draft: var(--fm-project-draft);
+  --color-fm-project-migrate: var(--fm-project-migrate);
+  --color-fm-project-ready-text: var(--fm-project-ready-text);
+  --color-fm-project-running-text: var(--fm-project-running-text);
+  --color-fm-project-failed-text: var(--fm-project-failed-text);
+  --color-fm-project-draft-text: var(--fm-project-draft-text);
+  --color-fm-project-migrate-text: var(--fm-project-migrate-text);
+  --color-fm-project-readonly-text: var(--fm-project-readonly-text);
+  --color-fm-start-meta: var(--fm-start-meta);
+  --color-fm-solver-fdm-text: var(--fm-solver-fdm-text);
+  --color-fm-solver-fem-text: var(--fm-solver-fem-text);
+  --color-fm-start-nav-active: var(--fm-start-nav-active);
+  --color-fm-start-on-accent: var(--fm-start-on-accent);
+  --spacing-fm-start-rail: var(--fm-start-rail-width);
+  --spacing-fm-start-inspector: var(--fm-start-inspector-width);
+  --spacing-fm-start-row: var(--fm-start-row-height);
+  --text-fm-start-title: var(--fm-start-title-size);
 }

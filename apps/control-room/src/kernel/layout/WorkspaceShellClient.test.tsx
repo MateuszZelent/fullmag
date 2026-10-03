@@ -16,20 +16,27 @@ import {
 import type { KernelApi } from "../types";
 
 import { LayoutController } from "./LayoutController";
+import { SHELL_COMMANDS } from "./shellCommands";
 import {
   findElements,
   installSimulationPreparationTestDom,
   type TestElement,
 } from "./simulationPreparationTestDom.test-support";
 import { WorkspaceShellClient } from "./WorkspaceShellClient";
+import { startScreenManifest } from "@/modules/start/manifest";
+import { startScreenStore } from "@/modules/start/model/startScreenState";
+import { StartScreen } from "@/modules/start/StartScreen";
+
+const LAUNCH_TILE_NAMES = ["FDM simulation", "FEM simulation", "From template", "Import"];
 
 afterEach(() => {
   resetSharedResourceRuntimeStoreForTests();
+  startScreenStore.resetForTests();
   vi.restoreAllMocks();
 });
 
 describe("WorkspaceShellClient session collection gate", () => {
-  it("keeps the AppMenu slot and EmptyWorkspace after a confirmed empty response", async () => {
+  it("keeps the AppMenu slot and mounts the start screen after a confirmed empty response", async () => {
     const list = vi.fn(async () => ({ schema_version: "2.0.0", sessions: [] }));
     const currentStatus = vi.fn();
     const { container, dispose } = await mountWorkspace(makeKernel(list, currentStatus));
@@ -37,8 +44,12 @@ describe("WorkspaceShellClient session collection gate", () => {
     try {
       await settle();
       expect(findByAttribute(container, "data-slot-id", "app-menu")).toBeTruthy();
-      expect(container.textContent).toContain("Create a simulation");
+      expect(findByAttribute(container, "data-slot-id", "start-screen")).toBeTruthy();
+      expect(container.textContent).toContain("Welcome to Fullmag");
       expect(findByAttribute(container, "data-state", "no-session")).toBeTruthy();
+      for (const name of LAUNCH_TILE_NAMES) expect(container.textContent).toContain(name);
+      expect(launchTile(container, "start.new-fdm")?.getAttribute("disabled")).toBeNull();
+      expect(container.textContent).not.toContain("Save project");
       expect(currentStatus).not.toHaveBeenCalled();
     } finally {
       await dispose();
@@ -55,14 +66,14 @@ describe("WorkspaceShellClient session collection gate", () => {
     try {
       expect(findByAttribute(container, "data-state", "session-loading")).toBeTruthy();
       expect(container.textContent).toContain("Checking for sessions");
-      expect(container.textContent).not.toContain("Create a simulation");
+      expect(container.textContent).not.toContain("Welcome to Fullmag");
       expect(currentStatus).not.toHaveBeenCalled();
     } finally {
       await dispose();
     }
   });
 
-  it("renders transport failure separately from confirmed absence", async () => {
+  it("renders transport failure separately from confirmed absence, with the launcher below it", async () => {
     const currentStatus = vi.fn();
     const { container, dispose } = await mountWorkspace(
       makeKernel(vi.fn(async () => { throw new Error("network unavailable"); }), currentStatus),
@@ -72,10 +83,15 @@ describe("WorkspaceShellClient session collection gate", () => {
       await settle();
       expect(findByAttribute(container, "data-state", "session-error")).toBeTruthy();
       expect(container.textContent).toContain("Session list unavailable");
-      expect(container.textContent).toContain("Create a simulation");
-      expect(container.textContent).toContain("New project");
-      expect(container.textContent).toContain("Open project");
       expect(container.textContent).toContain("Project files remain available independently");
+      expect(findByAttribute(container, "data-slot-id", "start-screen")).toBeTruthy();
+      for (const name of LAUNCH_TILE_NAMES) expect(container.textContent).toContain(name);
+      // Creating a problem needs confirmed absence of a session; the tile says why.
+      expect(launchTile(container, "start.new-fdm")?.getAttribute("disabled")).not.toBeNull();
+      expect(container.textContent).toContain("could not confirm that no session is running");
+      expect(launchTile(container, "start.templates")?.getAttribute("disabled")).toBeNull();
+      expect(launchTile(container, "start.import")?.getAttribute("disabled")).toBeNull();
+      expect(container.textContent).toContain("Browse…");
       expect(currentStatus).not.toHaveBeenCalled();
     } finally {
       await dispose();
@@ -126,13 +142,18 @@ function makeKernel(
   currentStatus: () => Promise<unknown>,
 ): KernelApi {
   const bus = new EventBus<KernelEventMap>();
+  const commands = new CommandRegistry();
+  const modules = new ModuleRegistry();
+  modules.register({ ...startScreenManifest, component: async () => ({ default: StartScreen }) });
+  for (const command of SHELL_COMMANDS) commands.register(command);
+  for (const command of startScreenManifest.contributes?.commands ?? []) commands.register(command);
   return {
     api: { sessions: { list, current: { status: currentStatus } } },
     bus,
-    commands: new CommandRegistry(),
+    commands,
     diagnosticRecorder: new DiagnosticRecorderController({ config: { enabled: false } }),
     layout: new LayoutController(bus),
-    modules: new ModuleRegistry(),
+    modules,
     resources: new ResourceInvalidationController(bus),
   } as unknown as KernelApi;
 }
@@ -178,6 +199,10 @@ function findByAttribute(
     container,
     (element) => element.getAttribute(name) === value,
   )[0] ?? null;
+}
+
+function launchTile(container: TestElement, commandId: string): TestElement | null {
+  return findByAttribute(container, "data-command-id", commandId);
 }
 
 function deferred<T>() {

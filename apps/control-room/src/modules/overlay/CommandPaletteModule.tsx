@@ -4,6 +4,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import { createCommandContext } from "@/kernel/commands/commandContext";
+import { isProjectWorkspaceCommand } from "@/kernel/commands/projectWorkspaceCommandPolicy";
 import type { CommandActiveResource } from "@/kernel/commands/commandTypes";
 import type {
   CommandContext,
@@ -16,6 +17,8 @@ import {
   useCommandDetailResource,
   useStudyRuntimeCommandResourceData,
 } from "@/kernel/resources/studyRuntimeResources";
+import { useSessionCollection } from "@/kernel/resources/useSessionCollection";
+import { useSessionResourceIdentity } from "@/kernel/resources/useSessionStatus";
 import type { ModuleProps } from "@/kernel/types";
 import { useVisualizationStateResource } from "@/kernel/visualization/useVisualizationStateResource";
 import { CommandDetailDialog } from "@/shared/runtime/CommandDetailDialog";
@@ -77,6 +80,18 @@ export function paletteCommandResourceData(
     ...runtimeResourceData,
     [VISUALIZATION_STATE_PATH]: visualizationState,
   };
+}
+
+/** Mirrors the no-session menu bar: creating a problem needs confirmed absence. */
+export function projectWorkspacePaletteCommands(
+  commands: readonly CommandContribution[],
+  canCreateProblem: boolean,
+): CommandContribution[] {
+  return commands.filter(
+    (command) =>
+      isProjectWorkspaceCommand(command.id) &&
+      (canCreateProblem || command.id !== "workspace.new-problem"),
+  );
 }
 
 function groupCommands(
@@ -227,6 +242,9 @@ export default function CommandPaletteModule({ kernel }: ModuleProps) {
     query,
     setQuery,
   } = useCommandPalette();
+  const sessions = useSessionCollection();
+  const identity = useSessionResourceIdentity();
+  const hasSession = sessions.state === "ready" && identity !== null;
   const commandVersion = useSyncExternalStore(
     (listener) => kernel.commands.subscribe(listener),
     () => kernel.commands.getVersion(),
@@ -248,6 +266,19 @@ export default function CommandPaletteModule({ kernel }: ModuleProps) {
     });
   }, [close, kernel.bus]);
 
+  if (!hasSession) {
+    return isOpen ? (
+      <ProjectWorkspaceCommandPalette
+        canCreateProblem={sessions.state === "no-session"}
+        close={close}
+        commands={commands}
+        kernel={kernel}
+        query={query}
+        setQuery={setQuery}
+      />
+    ) : null;
+  }
+
   return (
     <>
       {isOpen ? (
@@ -262,6 +293,49 @@ export default function CommandPaletteModule({ kernel }: ModuleProps) {
       <MeshBuildDialog kernel={kernel} />
       <NotificationsSurface bus={kernel.bus} />
     </>
+  );
+}
+
+function ProjectWorkspaceCommandPalette({
+  canCreateProblem,
+  close,
+  commands,
+  kernel,
+  query,
+  setQuery,
+}: {
+  canCreateProblem: boolean;
+  close: () => void;
+  commands: readonly CommandContribution[];
+  kernel: ModuleProps["kernel"];
+  query: string;
+  setQuery: (query: string) => void;
+}) {
+  const commandContext = useMemo(
+    () =>
+      createCommandContext("palette", kernel, {
+        sessionScopeKey: null,
+        sourceDetail: "command-palette",
+      }),
+    [kernel],
+  );
+  const available = useMemo(
+    () => projectWorkspacePaletteCommands(commands, canCreateProblem),
+    [canCreateProblem, commands],
+  );
+
+  return (
+    <CommandPaletteView
+      commandContext={commandContext}
+      commands={available}
+      isOpen
+      query={query}
+      onClose={close}
+      onExecute={(commandId) => {
+        void executePaletteCommand(kernel.commands, commandId, commandContext);
+      }}
+      onQueryChange={setQuery}
+    />
   );
 }
 

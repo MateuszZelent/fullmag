@@ -25,6 +25,28 @@ async function loadPlaywright() {
   }
 }
 
+async function openFileMenuItem(page, label) {
+  await page.getByRole("button", { name: "File", exact: true }).click();
+  // Radix includes the shortcut in the accessible name (`Save ProjectCtrl+S`),
+  // so the label is matched as a prefix rather than exactly.
+  const item = page.getByRole("menuitem", { name: new RegExp(`^${label}`) }).last();
+  await item.waitFor({ state: "visible", timeout: 10_000 });
+  return item;
+}
+
+async function fileMenuItemDisabled(page, label) {
+  const item = await openFileMenuItem(page, label);
+  const disabled = (await item.getAttribute("data-disabled")) !== null
+    || (await item.getAttribute("aria-disabled")) === "true";
+  await page.keyboard.press("Escape");
+  return disabled;
+}
+
+async function clickFileCommand(page, label) {
+  const item = await openFileMenuItem(page, label);
+  await item.click();
+}
+
 const playwright = await loadPlaywright();
 if (!playwright?.chromium) {
   console.error("Project lifecycle smoke requires Playwright or @playwright/test.");
@@ -34,6 +56,8 @@ if (!playwright?.chromium) {
 await mkdir(outputDir, { recursive: true });
 const browser = await playwright.chromium.launch({ headless: true });
 const page = await browser.newPage({ acceptDownloads: true });
+// File > New Project asks for a name; accepting the default keeps the download name stable.
+page.on("dialog", (dialog) => dialog.accept(dialog.defaultValue()));
 const requests = [];
 const forbiddenRuntimeRequests = [];
 let openedArchiveBase64 = archiveBase64;
@@ -101,18 +125,30 @@ try {
   await page.goto(workspaceUrl, { waitUntil: "domcontentloaded", timeout: 60_000 });
 
   const status = page.locator('[data-project-document-state]').first();
-  const newProject = page.getByRole("button", { name: "New project", exact: true });
-  const openProject = page.getByRole("button", { name: "Open project", exact: true });
-  const saveProject = page.getByRole("button", { name: "Save project", exact: true });
-  await newProject.waitFor({ state: "visible", timeout: 30_000 });
-  assert(await saveProject.isDisabled(), "Save project must be disabled before New project.");
+  const startScreen = page.locator('[data-slot-id="start-screen"]');
+  await startScreen.locator('[data-command-id="start.new-fdm"]').waitFor({ state: "visible", timeout: 30_000 });
+  for (const commandId of ["start.new-fdm", "start.new-fem", "start.templates", "start.import"]) {
+    const tile = startScreen.locator(`[data-command-id="${commandId}"]`);
+    assert((await tile.count()) === 1, `Start screen launch tile ${commandId} is missing.`);
+  }
+  assert(
+    (await startScreen.getByRole("button", { name: /save project/i }).count()) === 0,
+    "The start screen must not offer Save Project without a session.",
+  );
+  assert(
+    await fileMenuItemDisabled(page, "Save Project"),
+    "Save Project must be disabled before New Project.",
+  );
 
-  await newProject.click();
+  await clickFileCommand(page, "New Project");
   await waitForStatus(page, status, "Untitled project · unsaved");
-  assert(!(await saveProject.isDisabled()), "Save project did not enable after New project.");
+  assert(
+    !(await fileMenuItemDisabled(page, "Save Project")),
+    "Save Project did not enable after New Project.",
+  );
 
   const firstDownloadPromise = page.waitForEvent("download");
-  await saveProject.click();
+  await clickFileCommand(page, "Save Project");
   const firstDownload = await firstDownloadPromise;
   assert(
     firstDownload.suggestedFilename() === "untitled-project.fms",
@@ -120,7 +156,7 @@ try {
   );
 
   const fileChooserPromise = page.waitForEvent("filechooser");
-  await openProject.click();
+  await startScreen.locator('[data-command-id="start.browse"]').click({ timeout: 10_000 });
   const fileChooser = await fileChooserPromise;
   await fileChooser.setFiles({
     name: "roundtrip.fms",
@@ -131,7 +167,7 @@ try {
   assert(openedArchiveBase64 === archiveBase64, "Open did not transport the selected archive bytes.");
 
   const secondDownloadPromise = page.waitForEvent("download");
-  await saveProject.click();
+  await clickFileCommand(page, "Save Project");
   const secondDownload = await secondDownloadPromise;
   assert(
     secondDownload.suggestedFilename() === "roundtrip.fms",

@@ -3,7 +3,7 @@
 import { isProjectWorkspaceCommand } from "../commands/projectWorkspaceCommandPolicy";
 
 import { ChevronDown, Search } from "lucide-react";
-import { useEffect, useMemo, useReducer, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useReducer, useSyncExternalStore } from "react";
 
 import { useTheme } from "@/design/theme/ThemeProvider";
 import {
@@ -73,7 +73,7 @@ import { DataPreviewDialog } from "./DataPreviewDialog";
 import { MaterialLibraryDialog } from "./MaterialLibraryDialog";
 import { RegistryInspectorDialog } from "./RegistryInspectorDialog";
 import { DiagnosticRecorderDialog } from "./diagnostic-recorder/DiagnosticRecorderDialog";
-import { NewProblemDialog } from "./NewProblemDialog";
+import { NewProblemDialog, useNewProblemRequest } from "./NewProblemDialog";
 
 function subscribeToHydration(): () => void {
   return () => {};
@@ -380,17 +380,11 @@ function NoSessionAppMenuBar({
 }) {
   const kernel = useKernel();
   const { theme, setTheme } = useTheme();
-  const [newProblemOpen, setNewProblemOpen] = useState(false);
+  const [newProblem, setNewProblemOpen] = useNewProblemRequest();
   const commandContext = createCommandContext("menu", kernel, {
     sourceDetail: "app-menu",
     sessionScopeKey: null,
   });
-  useEffect(
-    () => kernel.bus.on("workspace:new-problem-requested", () => {
-      setNewProblemOpen(true);
-    }),
-    [kernel.bus],
-  );
   const runCommand = (commandId: string, input?: unknown) => {
     if (!isProjectWorkspaceCommand(commandId)) return;
     if (kernel.commands.get(commandId)) {
@@ -461,7 +455,7 @@ function NoSessionAppMenuBar({
       </nav>
       <button
         className="fm-header__search"
-        disabled
+        disabled={isCommandDisabled("workspace.command-palette")}
         title="Command search (Ctrl+Shift+P)"
         type="button"
         onClick={() => runCommand("workspace.command-palette")}
@@ -494,7 +488,9 @@ function NoSessionAppMenuBar({
       </div>
       <NewProblemDialog
         hasActiveSession={false}
-        open={state === "no-session" && newProblemOpen}
+        initialBackend={newProblem.backend}
+        key={newProblem.key}
+        open={state === "no-session" && newProblem.open}
         onOpenChange={setNewProblemOpen}
       />
     </header>
@@ -522,7 +518,7 @@ function SessionAppMenuBar() {
     appMenuDialogReducer,
     APP_MENU_DIALOG_INITIAL_STATE,
   );
-  const [newProblemOpen, setNewProblemOpen] = useState(false);
+  const [newProblem, setNewProblemOpen] = useNewProblemRequest();
   const setDataPreviewOpen = (open: boolean) =>
     dispatchDialogState({ open, type: "data-preview" });
   const setCommunicationOpen = (open: boolean) =>
@@ -538,9 +534,6 @@ function SessionAppMenuBar() {
       dispatchDialogState({ open: true, type: "thread-manager" });
     });
   }, [kernel.bus]);
-  useEffect(() => kernel.bus.on("workspace:new-problem-requested", () => {
-    setNewProblemOpen(true);
-  }), [kernel.bus]);
   const visualizationSnapshot = useObjectVisualizationSelector((snapshot) =>
     dialogState.registryOpen ? snapshot : EMPTY_OBJECT_VISUALIZATION_SNAPSHOT,
   );
@@ -753,7 +746,9 @@ function SessionAppMenuBar() {
 
       <NewProblemDialog
         hasActiveSession
-        open={newProblemOpen}
+        initialBackend={newProblem.backend}
+        key={newProblem.key}
+        open={newProblem.open}
         onOpenChange={setNewProblemOpen}
       />
 

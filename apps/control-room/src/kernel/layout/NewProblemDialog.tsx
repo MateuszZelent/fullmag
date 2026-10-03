@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 
 import {
   MODEL_SCENE_PATH,
@@ -24,19 +24,48 @@ import {
 import { Input } from "@/shared/ui/Input";
 import { SegmentedControl } from "@/shared/ui/SegmentedControl";
 
-type Backend = "fdm" | "fem";
+export type NewProblemBackend = "fdm" | "fem";
+
+export interface NewProblemRequest {
+  readonly backend?: NewProblemBackend;
+  /** Changes on every request, so the dialog remounts with fresh defaults. */
+  readonly key: number;
+  readonly open: boolean;
+}
+
+export function useNewProblemRequest(): readonly [NewProblemRequest, (open: boolean) => void] {
+  const kernel = useKernel();
+  const [request, setRequest] = useState<NewProblemRequest>({ key: 0, open: false });
+  useEffect(
+    () =>
+      kernel.bus.on("workspace:new-problem-requested", ({ solver }) => {
+        setRequest((current) => ({
+          backend: solver === "FEM" ? "fem" : solver === "FDM" ? "fdm" : undefined,
+          key: current.key + 1,
+          open: true,
+        }));
+      }),
+    [kernel.bus],
+  );
+  const setOpen = useCallback((open: boolean) => {
+    setRequest((current) => (current.open === open ? current : { ...current, open }));
+  }, []);
+  return [request, setOpen] as const;
+}
 
 export function NewProblemDialog({
   hasActiveSession,
+  initialBackend = "fdm",
   onOpenChange,
   open,
 }: {
   readonly hasActiveSession: boolean;
+  readonly initialBackend?: NewProblemBackend;
   readonly onOpenChange: (open: boolean) => void;
   readonly open: boolean;
 }) {
   const kernel = useKernel();
-  const [backend, setBackend] = useState<Backend>("fdm");
+  const [backend, setBackend] = useState<NewProblemBackend>(initialBackend);
   const [name, setName] = useState("Untitled problem");
   const [replaceConfirmed, setReplaceConfirmed] = useState(false);
   const [pending, setPending] = useState(false);
