@@ -8,7 +8,9 @@
 //! simply one that predates provenance tracking, which is reported as such.
 //! Nothing writes the document yet; this module only reads and normalises it.
 
-use fullmag_application::{FileProjectRepository, ProjectRepository, ProjectSource};
+use fullmag_application::{
+    FileProjectRepository, OpaqueDocument, ProjectEnvelope, ProjectRepository, ProjectSource,
+};
 use serde_json::{json, Map, Value};
 use std::path::Path;
 use std::process::Command;
@@ -159,6 +161,116 @@ pub fn read_from_archive(path: &Path) -> Result<Value, String> {
     }
 }
 
+/// Append one save to a provenance document and return the new bytes.
+///
+/// `previous` is the document already stored in the target file, which is the
+/// source of truth for history: the archive a webview sends back can predate
+/// earlier saves and must never overwrite them. History is append-only. The
+/// person saving is added to `authors` if absent (the first author of a record
+/// is the creator, later ones contributors) and credited on the entry. The
+/// summary only says what is known, that a revision was saved. Unknown fields
+/// of the existing document are preserved. A previous document that is not a
+/// JSON object is an error, so the caller can leave it untouched.
+pub fn record_save(
+    previous: Option<&[u8]>,
+    identity: &Value,
+    at: &str,
+    revision: u64,
+) -> Result<Vec<u8>, String> {
+    let mut root: Value = match previous {
+        Some(bytes) => {
+            let parsed: Value = serde_json::from_slice(bytes)
+                .map_err(|error| format!("existing provenance is not valid JSON ({error})"))?;
+            if !parsed.is_object() {
+                return Err("existing provenance is not a JSON object".into());
+            }
+            parsed
+        }
+        None => json!({}),
+    };
+    let object = root
+        .as_object_mut()
+        .ok_or_else(|| "provenance root is not an object".to_string())?;
+
+    let name = identity
+        .get("name")
+        .and_then(Value::as_str)
+        .filter(|n| !n.is_empty());
+
+    if let Some(name) = name {
+        let authors = object
+            .entry("authors")
+            .or_insert_with(|| Value::Array(Vec::new()));
+        let list = authors
+            .as_array_mut()
+            .ok_or_else(|| "existing provenance authors is not an array".to_string())?;
+        let known = list
+            .iter()
+            .any(|a| a.get("name").and_then(Value::as_str) == Some(name));
+        if !known {
+            let role = if list.is_empty() { "creator" } else { "contributor" };
+            let mut author = Map::new();
+            author.insert("name".into(), Value::String(name.to_string()));
+            author.insert("role".into(), Value::String(role.to_string()));
+            if let Some(email) = identity
+                .get("email")
+                .and_then(Value::as_str)
+                .filter(|e| !e.is_empty())
+            {
+                author.insert("email".into(), Value::String(email.to_string()));
+            }
+            list.push(Value::Object(author));
+        }
+    }
+
+    let history = object
+        .entry("history")
+        .or_insert_with(|| Value::Array(Vec::new()));
+    let list = history
+        .as_array_mut()
+        .ok_or_else(|| "existing provenance history is not an array".to_string())?;
+    let mut entry = Map::new();
+    entry.insert("revision".into(), json!(revision));
+    entry.insert("at".into(), Value::String(at.to_string()));
+    entry.insert("kind".into(), Value::String("edit".into()));
+    entry.insert(
+        "summary".into(),
+        Value::String(format!("Saved revision {revision}")),
+    );
+    if let Some(name) = name {
+        entry.insert("by".into(), Value::String(name.to_string()));
+    }
+    list.push(Value::Object(entry));
+
+    serde_json::to_vec_pretty(&root).map_err(|error| error.to_string())
+}
+
+/// Stamp a candidate envelope with the provenance of the save that is about to
+/// publish it. When the stored document cannot be extended, it is carried over
+/// byte for byte instead, so a damaged record is never destroyed by a save.
+pub fn stamp_envelope(
+    candidate: &mut ProjectEnvelope,
+    stored: Option<&OpaqueDocument>,
+    identity: &Value,
+    at: &str,
+    revision: u64,
+) {
+    let bytes = match record_save(stored.map(OpaqueDocument::bytes), identity, at, revision) {
+        Ok(bytes) => bytes,
+        Err(_) => match stored {
+            Some(document) => document.bytes().to_vec(),
+            None => return,
+        },
+    };
+    let Ok(document) = OpaqueDocument::new(PROVENANCE_PATH, bytes) else {
+        return;
+    };
+    candidate
+        .opaque_documents
+        .retain(|existing| existing.path() != PROVENANCE_PATH);
+    candidate.opaque_documents.push(document);
+}
+
 fn git_config(key: &str) -> Option<String> {
     let output = Command::new("git").args(["config", "--get", key]).output().ok()?;
     if !output.status.success() {
@@ -227,6 +339,58 @@ mod tests {
         assert_eq!(parsed["history"][0]["changes"], json!(["z"]));
         assert_eq!(parsed["runs"].as_array().unwrap().len(), 1);
         assert_eq!(parsed["runs"][0]["frames"], 12);
+    }
+
+    #[test]
+    fn the_first_save_creates_the_record_with_a_creator() {
+        let identity = json!({"name": "Anna", "email": "a@x.org"});
+        let bytes = record_save(None, &identity, "2026-10-04T10:00:00Z", 3).unwrap();
+        let parsed = parse_provenance(&bytes).unwrap();
+        assert_eq!(parsed["authors"][0]["name"], "Anna");
+        assert_eq!(parsed["authors"][0]["role"], "creator");
+        assert_eq!(parsed["authors"][0]["email"], "a@x.org");
+        assert_eq!(parsed["history"][0]["revision"], 3);
+        assert_eq!(parsed["history"][0]["by"], "Anna");
+        assert_eq!(parsed["history"][0]["summary"], "Saved revision 3");
+    }
+
+    #[test]
+    fn later_saves_append_and_add_new_people_as_contributors() {
+        let first = record_save(None, &json!({"name": "Anna"}), "t1", 1).unwrap();
+        let second = record_save(Some(&first), &json!({"name": "Jan"}), "t2", 2).unwrap();
+        let third = record_save(Some(&second), &json!({"name": "Jan"}), "t3", 3).unwrap();
+        let parsed = parse_provenance(&third).unwrap();
+        assert_eq!(parsed["authors"].as_array().unwrap().len(), 2);
+        assert_eq!(parsed["authors"][1]["role"], "contributor");
+        assert_eq!(parsed["history"].as_array().unwrap().len(), 3);
+        assert_eq!(parsed["history"][0]["revision"], 1);
+    }
+
+    #[test]
+    fn unknown_fields_and_runs_survive_a_save() {
+        let before = json!({"citation": {"doi": "10.1/x"}, "runs": [
+            {"run_id": "r-1", "started_at": "t", "status": "ready"}
+        ], "note": "kept"});
+        let bytes = record_save(Some(before.to_string().as_bytes()), &json!({}), "t", 2).unwrap();
+        let raw: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(raw["note"], "kept");
+        assert_eq!(raw["citation"]["doi"], "10.1/x");
+        assert_eq!(raw["runs"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn an_unknown_user_adds_a_history_entry_but_no_author() {
+        let bytes = record_save(None, &json!({"name": null}), "t", 1).unwrap();
+        let parsed = parse_provenance(&bytes).unwrap();
+        assert_eq!(parsed["authors"], json!([]));
+        assert!(parsed["history"][0].get("by").is_none());
+    }
+
+    #[test]
+    fn a_damaged_previous_record_is_an_error_so_it_can_be_left_alone() {
+        assert!(record_save(Some(b"{ nope"), &json!({}), "t", 1).is_err());
+        assert!(record_save(Some(b"[1,2]"), &json!({}), "t", 1).is_err());
+        assert!(record_save(Some(br#"{"history": 5}"#), &json!({}), "t", 1).is_err());
     }
 
     #[test]
