@@ -10,7 +10,7 @@ const CONTRACT_VERSION: &str = "1.0.0";
 const HEADER_NAME: &str = "x-api-contract-version";
 const INSTANCE_HEADER: &str = "x-fullmag-api-instance";
 
-fn instance_id() -> &'static str {
+pub(crate) fn instance_id() -> &'static str {
     static INSTANCE: OnceLock<String> = OnceLock::new();
     INSTANCE.get_or_init(|| uuid::Uuid::new_v4().to_string())
 }

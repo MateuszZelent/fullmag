@@ -11,10 +11,11 @@ use std::sync::{
 
 use axum::{
     extract::State,
-    http::{HeaderValue, Method},
+    http::{header::CONNECTION, HeaderValue, Method, Version},
     middleware::Next,
     response::{IntoResponse, Response},
 };
+use futures_core::Stream;
 use tokio::sync::{OwnedRwLockReadGuard, OwnedRwLockWriteGuard, RwLock};
 
 use crate::{error::ApiError, types::AppState};
@@ -124,7 +125,35 @@ pub(crate) async fn mutation_admission_middleware(
                 // Rejection precedes the route's middleware; retain the same
                 // instance/contract/correlation headers as other API errors.
                 let request_id = super::request_id::resolve_request_id(request.headers());
+                let http1 = matches!(request.version(), Version::HTTP_10 | Version::HTTP_11);
+                // Dropping an unread HTTP/1 body can reset the connection on
+                // Windows before the client receives the structured conflict.
+                // Discard frames without buffering or acquiring a mutation
+                // permit, bounded by the API body limit and a short deadline.
+                let drained = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                    let mut body = request.into_body().into_data_stream();
+                    let mut remaining = crate::LOCAL_BRIDGE_BODY_LIMIT_BYTES;
+                    while let Some(frame) =
+                        std::future::poll_fn(|cx| std::pin::Pin::new(&mut body).poll_next(cx)).await
+                    {
+                        let Ok(bytes) = frame else {
+                            return false;
+                        };
+                        if bytes.len() > remaining {
+                            return false;
+                        }
+                        remaining -= bytes.len();
+                    }
+                    true
+                })
+                .await
+                .unwrap_or(false);
                 let mut response = error.into_response();
+                if !drained && http1 {
+                    response
+                        .headers_mut()
+                        .insert(CONNECTION, HeaderValue::from_static("close"));
+                }
                 super::version::add_contract_headers(&mut response);
                 if let Ok(value) = HeaderValue::from_str(&request_id) {
                     response.headers_mut().insert("x-request-id", value);

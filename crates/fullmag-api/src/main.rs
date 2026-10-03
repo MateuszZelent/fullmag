@@ -2456,7 +2456,7 @@ async fn main() {
         current_command_journal_revision: Arc::new(AtomicU64::new(0)),
         current_live_state: Arc::new(RwLock::new(None)),
         current_live_session_transition: Arc::new(Mutex::new(())),
-        request_scope_instance_id: uuid::Uuid::new_v4().to_string(),
+        request_scope_instance_id: router_v2::middleware::version::instance_id().to_string(),
         current_live_session_epoch: Arc::new(AtomicU64::new(0)),
         #[cfg(test)]
         current_live_realtime_before_send_hook: Arc::new(Mutex::new(None)),

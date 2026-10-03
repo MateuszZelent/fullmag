@@ -225,10 +225,14 @@ def validate_ready(path, layout, nonce, child_pid, profile):
     if path.is_symlink():
         raise StorageError("Native runtime handshake must be a regular file")
     value = json.loads(Path(path).read_text(encoding="utf-8-sig"))
-    if (value.get("schema") != "fullmag.native-runtime-ready.v1" or
+    if (value.get("schema") != "fullmag.native-runtime-ready.v2" or
             value.get("nonce") != nonce or value.get("launcher_pid") != child_pid):
         raise StorageError("Native runtime handshake does not belong to this launcher")
     bundle, _ = validate_bundle(value["bundle_root"], layout["runtime_root"], profile)
+    from windows.stable_launch import validate_launch_copy
+    launch = validate_launch_copy(layout["repo_root"], value["bundle_root"], profile, nonce)
+    if value.get("launch_root") != launch["launch_root"]:
+        raise StorageError("Native runtime launch path does not match its verified executable view")
     return bundle, value["bundle_root"]
 
 
@@ -246,6 +250,7 @@ def run_sealed_runtime(layout, command, env, profile):
         "repo_root": layout["repo_root"],
         "pid": os.getpid(),
         "manager_pid": os.getpid(),
+        "launch_nonce": nonce,
         "launcher_pid": None,
         "watcher_pid": None,
         "launcher_waited": False,
@@ -290,6 +295,7 @@ def run_sealed_runtime(layout, command, env, profile):
                         bundle, bundle_root = validate_ready(ready, layout, nonce, child.pid, profile)
                         sealed = True
                         state.update(state="running", bundle_root=bundle_root,
+                                     launch_root=str(runtime / "native-launch" / profile),
                                      build_lease="released_after_sealing", source=bundle.get("source"))
                         atomic_json(status, state)
                         break

@@ -19,9 +19,27 @@ def layout(tmp_path):
             "repo_root": str(tmp_path), "worktree_id": "fixture", "profile": "windows-native-fdm-cpu-dev"}
 
 
+@pytest.fixture(autouse=True)
+def launch_view_stub(layout, monkeypatch):
+    # These lease transition fixtures isolate publication behind its contract.
+    from windows import stable_launch
+    monkeypatch.setattr(stable_launch, "validate_launch_copy", lambda *args: {
+        "launch_root": str(Path(layout["runtime_root"]) / "native-launch/dev")})
+
+
+def test_ready_rejects_unverified_launch_path(layout, monkeypatch):
+    path = Path(layout["runtime_root"]) / "ready.json"
+    path.write_text(json.dumps({"schema": "fullmag.native-runtime-ready.v2",
+        "nonce": "expected", "launcher_pid": 12, "bundle_root": "fixture",
+        "launch_root": "foreign"}))
+    monkeypatch.setattr(lease, "validate_bundle", lambda *args: ({"source": {}}, {}))
+    with pytest.raises(StorageError, match="does not match"):
+        lease.validate_ready(path, layout, "expected", 12, "dev")
+
+
 def test_ready_rejects_wrong_launcher_before_bundle_validation(layout, monkeypatch):
     path = Path(layout["runtime_root"]) / "ready.json"
-    path.write_text(json.dumps({"schema": "fullmag.native-runtime-ready.v1", "nonce": "other", "launcher_pid": 12}))
+    path.write_text(json.dumps({"schema": "fullmag.native-runtime-ready.v2", "nonce": "other", "launcher_pid": 12}))
     monkeypatch.setattr(lease, "validate_bundle", lambda *args: pytest.fail("Unowned bundle inspected"))
     with pytest.raises(StorageError, match="does not belong"):
         lease.validate_ready(path, layout, "expected", 12, "dev")
@@ -41,9 +59,9 @@ def test_build_lock_released_only_after_validated_handshake(layout, monkeypatch)
         def __init__(self, command, cwd, env):
             events.append("launcher started")
             Path(env["FULLMAG_NATIVE_RUNTIME_READY_FILE"]).write_text(json.dumps({
-                "schema": "fullmag.native-runtime-ready.v1",
+                "schema": "fullmag.native-runtime-ready.v2",
                 "nonce": env["FULLMAG_NATIVE_RUNTIME_NONCE"], "launcher_pid": self.pid,
-                "bundle_root": str(Path(layout["runtime_root"]) / "native-bundles" / "fixture")}))
+                "launch_root": str(Path(layout["runtime_root"]) / "native-launch/dev"), "bundle_root": str(Path(layout["runtime_root"]) / "native-bundles" / "fixture")}))
         def poll(self):
             return None
         def wait(self):
@@ -88,7 +106,7 @@ def test_no_success_receipt_when_launcher_does_not_seal(layout, monkeypatch):
 def test_active_dependency_change_is_rejected_before_build(layout, monkeypatch):
     monkeypatch.setattr(lease, "validate_bundle", lambda *args: ({"source": {"dependency_source_sha256": "old"}}, {}))
     monkeypatch.setattr(lease, "fingerprint", lambda *args: {"sha256": "changed"})
-    active = {"source": {"compiler_profile": "backend-dev"}, "bundle_root": "fixture"}
+    active = {"source": {"compiler_profile": "backend-dev"}, "launch_root": str(Path(layout["runtime_root"]) / "native-launch/dev"), "bundle_root": "fixture"}
     with pytest.raises(StorageError, match="save and close"):
         lease.assert_frozen_dependencies(layout, active)
     monkeypatch.setattr(lease, "fingerprint", lambda *args: {"sha256": "old"})
@@ -107,8 +125,8 @@ def test_dev_starts_owned_watcher_after_sealing_and_requests_stop_on_exit(layout
                 self.stop = Path(command[command.index("--stop-file") + 1])
             else:
                 Path(env["FULLMAG_NATIVE_RUNTIME_READY_FILE"]).write_text(json.dumps({
-                    "schema": "fullmag.native-runtime-ready.v1", "nonce": env["FULLMAG_NATIVE_RUNTIME_NONCE"],
-                    "launcher_pid": self.pid, "bundle_root": "fixture"}))
+                    "schema": "fullmag.native-runtime-ready.v2", "nonce": env["FULLMAG_NATIVE_RUNTIME_NONCE"],
+                    "launcher_pid": self.pid, "launch_root": str(Path(layout["runtime_root"]) / "native-launch/dev"), "bundle_root": "fixture"}))
         def poll(self):
             return None
         def wait(self):
@@ -149,7 +167,7 @@ def test_dead_manager_with_nonterminal_status_blocks_new_build(layout, monkeypat
     status = Path(layout["runtime_root"]) / "native-workspace-status.json"
     status.write_text(json.dumps({
         "state": "running", "pid": 12, "manager_pid": 12, "worktree_id": layout["worktree_id"],
-        "repo_root": layout["repo_root"], "bundle_root": "unknown", "launcher_pid": 13,
+        "repo_root": layout["repo_root"], "launch_root": str(Path(layout["runtime_root"]) / "native-launch/dev"), "bundle_root": "unknown", "launcher_pid": 13,
     }))
     monkeypatch.setattr(lease, "process_alive", lambda _pid: False)
 
@@ -207,10 +225,10 @@ def test_nonzero_watcher_exit_keeps_runtime_unknown(layout, monkeypatch):
                 self.stop = Path(command[command.index("--stop-file") + 1])
             else:
                 Path(env["FULLMAG_NATIVE_RUNTIME_READY_FILE"]).write_text(json.dumps({
-                    "schema": "fullmag.native-runtime-ready.v1",
+                    "schema": "fullmag.native-runtime-ready.v2",
                     "nonce": env["FULLMAG_NATIVE_RUNTIME_NONCE"],
                     "launcher_pid": self.pid,
-                    "bundle_root": "fixture",
+                    "launch_root": str(Path(layout["runtime_root"]) / "native-launch/dev"), "bundle_root": "fixture",
                 }))
 
         def poll(self):
@@ -444,8 +462,8 @@ def test_controlled_exception_persists_unknown_owner_and_drains_watcher(layout, 
                 self.stop = Path(command[command.index("--stop-file") + 1])
             else:
                 Path(env["FULLMAG_NATIVE_RUNTIME_READY_FILE"]).write_text(json.dumps({
-                    "schema": "fullmag.native-runtime-ready.v1", "nonce": env["FULLMAG_NATIVE_RUNTIME_NONCE"],
-                    "launcher_pid": self.pid, "bundle_root": "fixture"}))
+                    "schema": "fullmag.native-runtime-ready.v2", "nonce": env["FULLMAG_NATIVE_RUNTIME_NONCE"],
+                    "launcher_pid": self.pid, "launch_root": str(Path(layout["runtime_root"]) / "native-launch/dev"), "bundle_root": "fixture"}))
 
         def poll(self):
             return None

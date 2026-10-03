@@ -1,5 +1,12 @@
 # Status realizacji całego planu refaktoryzacji
 
+Checkpoint P8-53R, 04.10.2026: [niezawodność natywnego dev](p8/53r-native-development-reliability.md).
+Build Windows, 79 sprawdzeń runtime i 45 interpretowanych sprawdzeń przeszły.
+Zamknięto odrzucanie body HTTP, rozbieżne UUID i chwilowy WRITER busy w drain.
+Dodano stałe ścieżki EXE bez zmiany zapory. Pełny świeży start i jednorazowa
+zgoda zapory pozostają NOT VERIFIED; sesja 3197 zachowana. Manager pełnego
+restartu pozostaje otwarty, procenty etapów bez awansu.
+
 Checkpoint P8-53Q, 04.10.2026: [kanał przejęcia authoring](p8/53q-private-owner-acquisition.md)
 jest podłączony do produkcyjnego API. Build Windows i 69 sprawdzeń runtime
 przeszły: tożsamość ownera, kanoniczna scena, freeze, abort i rozłączenie.

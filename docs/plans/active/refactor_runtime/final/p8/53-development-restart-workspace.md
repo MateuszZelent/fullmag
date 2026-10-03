@@ -11,6 +11,7 @@ Inventory brakującego globalnego fence: [P8-53N](53n-global-idle-fence-inventor
 Implementacja durable admission fence i dowód idle drain: [P8-53O](53o-durable-admission-fence.md).
 Recovery preparation ograniczone do własnej puli: [P8-53P](53p-preparation-recovery-pool-scope.md).
 Prywatny kanał przejęcia authoring i dowód freeze/abort: [P8-53Q](53q-private-owner-acquisition.md).
+Body HTTP, wspólne UUID, retry idle fence i stałe ścieżki świeżego startu: [P8-53R](53r-native-development-reliability.md).
 
 Jedno `just windows-ui dev` uruchamia HMR frontendu i obserwację backendu.
 Po kompilacji UI pokazuje „Nowy backend gotowy” oraz przycisk restartu.

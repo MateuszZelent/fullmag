@@ -555,7 +555,9 @@ async fn drain_requested(
         // Acquisition checks all accepted work and leases and publishes its
         // durable admission fence under one writer transaction. The writer is
         // released before waiting for scheduler exit/checkpoint publication.
-        match store.acquire_development_idle_fence(owner.owner_token(), nonce) {
+        match fullmag_runtime_control::retry_store_writer_busy(|| {
+            store.acquire_development_idle_fence(owner.owner_token(), nonce)
+        }) {
             Ok(fence) => {
                 return Ok(ControlObservation::Drain(Some(DrainConfirmation {
                     stream,

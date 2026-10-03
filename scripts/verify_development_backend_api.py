@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import http.client
 import json
+import msvcrt
 import os
 from pathlib import Path
 import shutil
@@ -11,6 +13,7 @@ import socket
 import subprocess
 import sys
 import time
+import threading
 import traceback
 import urllib.error
 import urllib.request
@@ -44,13 +47,16 @@ def run(repo_root: str) -> int:
         source_api = storage.validate_path(manifest["api_binary"], native["build_root"], "verified native API")
         run_root = storage.validate_path(Path(layout["build_root"]) / "checks" / uuid.uuid4().hex, layout["build_storage_root"], "native API checks")
         run_root.mkdir(parents=True, exist_ok=False)
-        api = run_root / "fullmag-api.exe"
+        from windows.runtime_bundle import _check_path_chain, _require_directory, _require_regular_file
+        raw_api = Path(layout["build_root"]) / "runtime-bin/fullmag-api.exe"
+        _check_path_chain(raw_api, "stable fixture API", allow_missing=True)
+        api = storage.validate_path(raw_api, layout["build_root"], "stable fixture API")
         receipt_path = run_root / "receipt.json"
         receipt = {"schema": "fullmag.development-backend-api-checks.v1", "state": "running",
                    "head": storage.git(repo, "rev-parse", "HEAD"), "task_id": owner["task_id"],
                    "owner": owner["owner"], "source_sha256": source_before,
                    "verified_build_id": verified["ready_build_id"], "api_sha256": manifest["api_binary_sha256"],
-                   "verifier_sha256": verifier_hash,
+                   "verifier_sha256": verifier_hash, "stable_executable_root": str(api.parent),
                    "build_snapshot_sha256": manifest["source_snapshot_sha256"],
                    "build_commit": manifest["git_commit"],
                    "started_at": storage.now(), "checks": [], "processes": [],
@@ -58,12 +64,38 @@ def run(repo_root: str) -> int:
         storage.atomic_json(receipt_path, receipt)
         code = 1
         try:
-            shutil.copyfile(source_api, api)
+            from windows.runtime_bundle import BINARY_NAMES
+            archive = run_root / "service-binaries"
+            staging = run_root / "runtime-stage"
+            archive.mkdir()
+            staging.mkdir()
+            api.parent.mkdir(exist_ok=True)
+            _require_directory(api.parent, "stable fixture executable directory")
+            if any(path.name not in BINARY_NAMES for path in api.parent.iterdir()):
+                raise storage.StorageError("Stable fixture executable directory contains unknown entries")
+            for existing in api.parent.iterdir():
+                _require_regular_file(existing, "existing stable fixture executable", nonempty=True)
+            source_bin = Path(manifest["cargo_target_dir"]) / manifest["target_triple"] / manifest["compiler_profile"]
+            for name in BINARY_NAMES:
+                _require_regular_file(source_bin / name, "verified fixture executable", nonempty=True)
+                source = storage.validate_path(source_bin / name, native["build_root"], "verified fixture executable")
+                expected = manifest["executable_sha256"][name]
+                shutil.copyfile(source, archive / name)
+                if hashlib.sha256(source.read_bytes()).hexdigest() != expected or hashlib.sha256((archive / name).read_bytes()).hexdigest() != expected:
+                    raise storage.StorageError("Fixture executable changed while sealing its archive")
+                shutil.copyfile(archive / name, staging / name)
+                _check_path_chain(api.parent / name, "stable fixture executable", allow_missing=True)
+                destination = storage.validate_path(api.parent / name, layout["build_root"], "stable fixture executable")
+                # Windows refuses replacement of an active EXE. Never stop a
+                # process to make room; the route holds its managed build lock.
+                os.replace(staging / name, destination)
+                if hashlib.sha256(destination.read_bytes()).hexdigest() != expected:
+                    raise storage.StorageError("Stable fixture executable publication failed verification")
             binary_hash = hashlib.sha256(api.read_bytes()).hexdigest()
             if binary_hash != manifest["api_binary_sha256"] or hashlib.sha256(source_api.read_bytes()).hexdigest() != binary_hash:
                 raise storage.StorageError("Native API changed while sealing its diagnostic copy")
             exercise(api, repo, run_root, receipt)
-            exercise_service(repo, run_root, manifest, receipt)
+            exercise_service(repo, run_root, manifest, receipt, api.parent)
             # Use the canonical codegen branch rather than persisting the live
             # endpoint's process-specific accepted-store binding extension.
             export = subprocess.run([str(api), "--print-openapi-v2"], cwd=repo,
@@ -102,19 +134,13 @@ def run(repo_root: str) -> int:
         return code
 
 
-def exercise_service(repo: Path, run_root: Path, manifest: dict, receipt: dict) -> None:
+def exercise_service(repo: Path, run_root: Path, manifest: dict, receipt: dict, binaries: Path) -> None:
     """Exercise only this verifier's initialized empty store and sealed binaries."""
     from windows.runtime_bundle import BINARY_NAMES
 
-    binaries = run_root / "service-binaries"
-    binaries.mkdir()
-    source_root = Path(manifest["cargo_target_dir"]) / manifest["target_triple"] / manifest["compiler_profile"]
     for name in BINARY_NAMES:
-        source = storage.validate_path(source_root / name, manifest["cargo_target_dir"], "native service executable")
         expected = manifest["executable_sha256"][name]
-        shutil.copyfile(source, binaries / name)
-        if (hashlib.sha256(source.read_bytes()).hexdigest() != expected
-                or hashlib.sha256((binaries / name).read_bytes()).hexdigest() != expected):
+        if hashlib.sha256((binaries / name).read_bytes()).hexdigest() != expected:
             raise storage.StorageError("Native service executable changed while sealing")
 
     state_root = run_root / "service-state"
@@ -307,8 +333,34 @@ def exercise_service(repo: Path, run_root: Path, manifest: dict, receipt: dict) 
             receipt["checks"].append("unknown-fence-refuses-idle-drain-without-stopping-service")
             fence_path.unlink()  # Remove only the disposable marker created above.
             challenge = uuid.uuid4().hex
-            terminal = control("drain_idle_confirmed", owner["owner_token"], challenge)
-            assert terminal["schema_version"] == "runtime_service_idle_drain.v1"
+            # Hold the existing native descriptor, never replace its inode or
+            # owner metadata. A short competing writer must be retried by the
+            # service; an unknown/busy authoring store must still fail closed.
+            with (store / "WRITER.lock").open("r+b", buffering=0) as descriptor:
+                deadline = time.monotonic() + 5
+                while True:
+                    try:
+                        descriptor.seek(0)
+                        msvcrt.locking(descriptor.fileno(), msvcrt.LK_NBLCK, 1)
+                        break
+                    except OSError:
+                        assert time.monotonic() < deadline
+                        time.sleep(0.02)
+                def release_writer():
+                    time.sleep(0.3)
+                    descriptor.seek(0)
+                    msvcrt.locking(descriptor.fileno(), msvcrt.LK_UNLCK, 1)
+                release = threading.Thread(target=release_writer)
+                started = time.monotonic()
+                release.start()
+                try:
+                    terminal = control("drain_idle_confirmed", owner["owner_token"], challenge)
+                finally:
+                    release.join(timeout=2)
+                    assert not release.is_alive()
+                assert terminal.get("schema_version") == "runtime_service_idle_drain.v1", terminal
+                assert time.monotonic() - started >= 0.25
+            receipt["checks"].append("idle-drain-retries-native-writer-contention-before-fencing")
             assert terminal["nonce"] == challenge and terminal["configuration"] == config
             fence = terminal["admission_fence"]
             assert fence["schema"] == "fullmag.development-admission-fence.v1"
@@ -543,6 +595,9 @@ def exercise(api: Path, repo: Path, run_root: Path, receipt: dict) -> None:
         if expected_scene is not None:
             code, _, canonical = get("/v2/sessions/current/model/scene")
             assert code == 200
+            code, _, observed_status = get("/v2/sessions/current/status")
+            assert code == 200 and observed_status["session"]["request_scope_epoch"] == owner["api_instance_id"] + ":1"
+            checks.append("private-owner-http-pin-and-restored-request-scope-share-instance")
 
         frame = dict(schema="fullmag.development-api-control.v1", owner_token=owner_token,
                      api_instance_id=owner["api_instance_id"], nonce=str(uuid.uuid4()), command="acquire")
@@ -555,13 +610,57 @@ def exercise(api: Path, repo: Path, run_root: Path, receipt: dict) -> None:
 
         def assert_mutation_frozen():
             try:
-                # No request body: verify admission's 409 independently of
-                # HTTP transport handling of an unread rejected body.
-                get("/v2/sessions", method="POST")
+                get("/v2/sessions", method="POST", payload={"name": "Must not be created",
+                    "backend": "fdm", "device": "cpu", "precision": "double"})
             except urllib.error.HTTPError as error:
                 assert error.code == 409, error.code
+                assert json.load(error)["code"] == "development_restart_in_progress"
             else:
                 raise AssertionError("Private acquisition did not freeze mutation admission")
+
+        def rejected_body_transport():
+            body = json.dumps({"name": "Rejected transport fixture", "backend": "fdm",
+                "device": "cpu", "precision": "double", "padding": "x" * 65536}).encode()
+            for framing in ("content-length", "chunked"):
+                connection = http.client.HTTPConnection("127.0.0.1", get.api_port, timeout=5)
+                try:
+                    payload = body if framing == "content-length" else [body[:50], body[50:]]
+                    connection.request("POST", "/v2/sessions", body=payload,
+                        headers={"Content-Type": "application/json", "X-Request-ID": "frozen-transport"},
+                        encode_chunked=framing == "chunked")
+                    response = connection.getresponse()
+                    assert response.status == 409 and not response.will_close
+                    assert response.getheader("x-request-id") == "frozen-transport"
+                    assert response.getheader("x-fullmag-api-instance") == owner["api_instance_id"]
+                    assert response.getheader("x-api-contract-version")
+                    assert json.loads(response.read())["code"] == "development_restart_in_progress"
+                    retained_socket = connection.sock
+                    assert retained_socket is not None
+                    connection.request("GET", "/healthz")
+                    observed = connection.getresponse()
+                    assert observed.status == 200
+                    observed.read()
+                    assert connection.sock is retained_socket
+                finally:
+                    connection.close()
+                checks.append("frozen-" + framing + "-body-returns-409-and-retains-connection")
+            for partial_body in (b"", b"x"):
+                connection = http.client.HTTPConnection("127.0.0.1", get.api_port, timeout=5)
+                try:
+                    connection.putrequest("POST", "/v2/sessions")
+                    connection.putheader("Content-Length", "32")
+                    connection.endheaders()
+                    started = time.monotonic()
+                    if partial_body:
+                        connection.send(partial_body)  # Never complete the declared body.
+                    response = connection.getresponse()
+                    assert response.status == 409 and response.will_close
+                    assert response.getheader("Connection") == "close"
+                    assert json.loads(response.read())["code"] == "development_restart_in_progress"
+                    assert 1.5 <= time.monotonic() - started < 5
+                finally:
+                    connection.close()
+                checks.append("frozen-" + ("partial" if partial_body else "stalled") + "-body-is-bounded-and-closes-connection")
 
         with connect() as stream:
             acquired = exchange(stream, frame)
@@ -583,6 +682,7 @@ def exercise(api: Path, repo: Path, run_root: Path, receipt: dict) -> None:
             time.sleep(2.2)  # Prove the held guard exceeds the initial frame timeout.
             assert_mutation_frozen()
             checks.append("private-acquisition-remains-frozen-beyond-initial-frame-timeout")
+            rejected_body_transport()
             abort = exchange(stream, {**frame, "command": "abort"})
             assert abort["schema"] == "fullmag.development-api-abort.v1" and abort["nonce"] == frame["nonce"]
         checks.append("private-acquisition-freezes-and-abort-reopens-admission")

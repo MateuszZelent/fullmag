@@ -512,6 +512,9 @@ function Publish-NativeWorkspaceRuntime {
       [string]$sealedBundle.source.build_version.product_version -ne [string]$manifest.build_version.product_version) {
     throw "Sealed native runtime identity does not match the validated build manifest"
   }
+  $launchOutput = (& python (Join-Path $PSScriptRoot "stable_launch.py") --repo-root $RepoRoot --bundle-root ([string]$bundle.bundle_root) --profile $SelectedBackendProfile 2>&1 | Out-String)
+  if ($LASTEXITCODE -ne 0) { throw "Stable native runtime publication failed: $launchOutput" }
+  $launch = $launchOutput | ConvertFrom-Json
   if ($SelectedBackendProfile -eq "dev" -and $Frontend -eq "dev") {
     $statusPath = Assert-FullmagStoragePath -Layout $StorageLayout -Path (Join-Path $BuildRoot "backend-watch-status.json") -Label "development backend status" -Parent $BuildRoot
     $backendSource = [string]$sealedBundle.source.backend_source_sha256
@@ -525,13 +528,15 @@ function Publish-NativeWorkspaceRuntime {
     $env:FULLMAG_DEVELOPMENT_BACKEND_VERSION = $productVersion
   }
   Write-JsonAtomic -Path $readyPath -Value ([ordered]@{
-    schema = "fullmag.native-runtime-ready.v1"
+    schema = "fullmag.native-runtime-ready.v2"
     nonce = $env:FULLMAG_NATIVE_RUNTIME_NONCE
     launcher_pid = $PID
     bundle_root = [string]$bundle.bundle_root
+    launch_root = [string]$launch.launch_root
   })
   Write-Host "Native runtime copy: $($bundle.bundle_root)"
-  return [string]$bundle.fullmag_exe
+  Write-Host "Native executable path: $($launch.fullmag_exe)"
+  return [string]$launch.fullmag_exe
 }
 
 function Test-WindowsWorkspaceBuildRequired {

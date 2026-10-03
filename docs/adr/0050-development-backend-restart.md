@@ -105,6 +105,24 @@ sceny przed listenerem ani potwierdzenia nowej instancji API.
 
 ## Weryfikacja
 
+Natywny API używa jednego procesowego UUID dla nagłówka
+`x-fullmag-api-instance`, prefiksu `request_scope_epoch`, prywatnego discovery
+ownera i acquisition. Licznik epoki sesji pozostaje osobny. Nie przenosimy
+tożsamości ze starego procesu ani nie zmieniamy historycznych receiptów.
+Manager nie może utożsamiać listenera i modelu na podstawie dwóch niezależnie
+generowanych UUID. Odrzucenie mutacji podczas freeze odczytuje i odrzuca body
+strumieniowo, z ograniczeniem czasu/rozmiaru, przed dostarczeniem 409;
+niedokończone żądanie zamyka połączenie HTTP/1, bez dopuszczenia mutacji.
+
+Świeży natywny start publikuje sprawdzone kopie EXE pod stałą ścieżką
+`runtime_root/native-launch/<dev|release>/bin`, zachowując immutable bundle
+UUID. Publikacja wymaga istniejącego runtime lease i statusu `starting`
+z pasującym profilem, nonce, checkoutem oraz właścicielem procesu. Manifest
+i `ready.v2` potwierdzają kompletny zestaw przed zwolnieniem build lease;
+awaria częściowej publikacji nie jest gotowością. Zmiana ogranicza mnożenie
+reguł zapory związanych z pełną ścieżką EXE, bez zmiany ustawień systemu.
+Nie jest to mechanizm podmiany plików działającego workspace ani hot restartu.
+
 Prywatny `drain_confirmed` rozszerza istniejący kanał service bez zmiany
 kontraktu `drain`: wymaga tokenu ownera i świeżego nonce, a odpowiedź
 `runtime_service_drain.v1` wysyła dopiero po terminalnych receiptach obu

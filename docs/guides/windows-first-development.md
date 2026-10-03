@@ -197,6 +197,17 @@ project storage and keep Cargo outputs in that profile's build directory.
 
 ## Commands
 
+### Okno zapory przy uruchamianiu Windows
+
+Zapora przypisuje zgodę do pełnej ścieżki programu. Natywny launcher świeżego
+workspace publikuje sprawdzone EXE pod stałą ścieżką profilu
+`runtime_root/native-launch/dev/bin` lub `native-launch/release/bin`.
+Kopie UUID nadal służą do weryfikacji pochodzenia. Pierwsze uruchomienie nowej
+ścieżki może wymagać zgody; dev i release są odrębne. Launcher nie zmienia
+reguł zapory. Dla lokalnej pracy na localhost sieć publiczna nie jest potrzebna.
+
+Dowody i ograniczenia: [P8-53R](../plans/active/refactor_runtime/final/p8/53r-native-development-reliability.md).
+
 ```powershell
 just windows-doctor
 just windows-build fdm cpu dev
