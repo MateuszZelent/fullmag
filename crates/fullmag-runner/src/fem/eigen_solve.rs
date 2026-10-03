@@ -1,3 +1,4 @@
+use super::eigen_normalization_metric::{checked_mass_quadratic, MassQuadraticEvaluation};
 use super::eigen_math::frequency_from_eigenvalue;
 use super::eigen_progress::{emit_fem_eigen_progress, FemEigenProgress, FemEigenProgressCallback};
 use super::eigen_types::NativeBlochFloquetDensePayload;
@@ -754,7 +755,7 @@ fn normalize_real_mode(
 
 pub(super) fn checked_complex_normalization_scale(
     vector: &[Complex64],
-    quadratic: Option<Complex64>,
+    quadratic: Option<MassQuadraticEvaluation>,
     normalization: &EigenNormalizationIR,
 ) -> Result<f64, RunError> {
     if vector.is_empty()
@@ -771,10 +772,13 @@ pub(super) fn checked_complex_normalization_scale(
             let value = quadratic.ok_or_else(|| RunError {
                 message: "unit_l2 normalization requires the physical mass norm".into(),
             })?;
-            if !value.re.is_finite() || !value.im.is_finite() || value.re <= 0.0 {
+            if !value.value.re.is_finite() || !value.value.im.is_finite() || value.value.re <= 0.0 {
                 return Err(RunError { message: "unit_l2 normalization requires a positive finite mass norm; underflow is not replaced by a floor".into() });
             }
-            value.re.sqrt()
+            if value.real.lower <= 0.0 || !value.imaginary.contains_zero() {
+                return Err(RunError { message: format!("unit_l2 mass norm is not roundoff-compatible with a positive real norm: real=[{}, {}], imag=[{}, {}], terms={}", value.real.lower, value.real.upper, value.imaginary.lower, value.imaginary.upper, value.terms) });
+            }
+            value.value.re.sqrt()
         }
         EigenNormalizationIR::UnitMaxAmplitude => vector
             .iter()
@@ -823,7 +827,11 @@ pub(super) fn normalize_complex_mode_and_scale(
         });
     }
     let quadratic = match normalization {
-        EigenNormalizationIR::UnitL2 => Some(complex_mass_norm(mass, vector)),
+        EigenNormalizationIR::UnitL2 => Some(checked_mass_quadratic(
+            mass.iter().enumerate().flat_map(|(row, entries)| {
+                entries.iter().enumerate().map(move |(col, &weight)| (vector[row], weight, vector[col]))
+            }),
+        )?),
         EigenNormalizationIR::UnitMaxAmplitude => None,
     };
     let scale = checked_complex_normalization_scale(vector, quadratic, normalization)?;

@@ -28,6 +28,7 @@ pub(crate) mod eigen_equilibrium_contract;
 pub(crate) mod eigen_execution;
 pub(crate) mod eigen_execution_resolution;
 pub(crate) mod eigen_mass_metric;
+pub(crate) mod eigen_normalization_metric;
 pub(crate) mod eigen_math;
 pub(crate) mod eigen_native_artifacts;
 mod eigen_nonshared_domain;

@@ -1235,3 +1235,62 @@ Właściciele źródłowi: `crates/fullmag-runner/src/fem/eigen_solve.rs` + `nor
 |---|---|---|---|---|
 | source-modal-common-normalization | crates/fullmag-runner/src/fem/eigen_solve.rs + normalize_complex_mode_and_scale | Jedna sprawdzona skala q/potencjału, bez floor | FEM postprocess CPU/GPU | source-only; runtime NOT VERIFIED |
 | source-modal-block-normalization | crates/fullmag-runner/src/fem/eigen_native_result.rs + normalize_complex_block_mode | Atomowe zastosowanie skali i zwrócenie jej dla certyfikatu | FEM postprocess CPU/GPU | source-only; runtime NOT VERIFIED |
+
+(modal-mass-norm-outward-interval)=
+## Kontrola rzeczywistej normy modalnej przez przedziały — 2026-10-03
+
+Dla bieżącej geometrycznej metryki masy pełnego 3D (nie gyroscopic B) sprawdzamy rzeczywistą normę kwadratową konkretnego modu:
+
+```{math}
+:label: eq-modal-mass-norm-interval
+\begin{aligned}
+Q &= q^\dagger M_g q
+   =\sum_{i,j}\overline{q_i}(M_g)_{ij}q_j,
+&[Q]&=\mathrm{m^3},\\
+\operatorname{Re}Q&\in I_R=[r_-,r_+],
+&\operatorname{Im}Q&\in I_I=[s_-,s_+],\\
+r_-&>0,\qquad 0\in I_I,
+&s_{L2}&=\sqrt{\operatorname{Re}Q_{\mathrm{fl}}}>0.
+\end{aligned}
+```
+
+$Q_{\mathrm{fl}}$ jest wartością bezpośredniej sumy wkładów w binary64, liczoną w tych samych jawnych operacjach skalarnych co enclosure. Historyczna obserwacja `complex_mass_norm`, która grupuje sumy wierszami, nie wyznacza tej skali i pozostaje osobną ścieżką obserwacji. Stored finite coefficients traktowane są jako dokładne wejścia analizy roundoff; błąd samego assembly i poprawność macierzy operatora mają osobne bramki. Zgodność pojedynczego Q z rzeczywistą dodatnią normą NIE dowodzi globalnej Hermitowskości ani dodatniej określoności M_g. Nie zastępować tym kontroli operatora ani convergence.
+
+Przedziały obu części Q powstają podczas przejścia przez rzeczywiste wkłady, włącznie z powtórzonymi wpisami sparse. Każdy wynik podstawowego dodawania, odejmowania lub mnożenia rozszerza się na zewnątrz do sąsiednich binary64, bez arbitralnego relative epsilon:
+
+```{math}
+:label: eq-modal-outward-interval-operations
+\begin{aligned}
+[a,b]\oplus[c,d]
+ &= [\operatorname{nextDown}(a+c),\operatorname{nextUp}(b+d)],\\
+[a,b]\ominus[c,d]
+ &= [\operatorname{nextDown}(a-d),\operatorname{nextUp}(b-c)],\\
+[a,b]\otimes[c,d]
+ &= [\operatorname{nextDown}(\min\{ac,ad,bc,bd\}),
+     \operatorname{nextUp}(\max\{ac,ad,bc,bd\})].
+\end{aligned}
+```
+
+Dokładne strukturalne zero jest zachowane: iloczyn z dokładnym zerowym przedziałem i dodawanie dokładnego zera nie wymagają rozszerzenia. Działania zespolone są rozwinięte na powyższe działania rzeczywiste. Granice finite wymagają braku overflow; niefinitywne wejścia/granice są błędem. Gradual underflow binary64 musi działać: przed ewaluacją wykonuje się kontrolę runtime z black-box wejściami, która odrzuca FTZ/DAZ. Nie stosujemy fast-math ani zmiany trybu FPU. Real interval zawierający zero oznacza niepewną dodatniość, nie poprawną normę. Imaginary interval nieobejmujący zera oznacza istotnie zespoloną normę i błąd przed normalizacją. Pozostają wcześniejsze guardy dodatniej skali oraz overflow q/potencjału.
+
+| Token | Znaczenie | Jednostka SI |
+|---|---|---|
+| $M_g$ | geometryczna metryka masy pełnego 3D | $\mathrm{m^3}$ |
+| $Q$, $Q_{\mathrm{fl}}$ | dokładna i obliczona norma kwadratowa raw shape | $\mathrm{m^3}$ |
+| $s_{L2}$ | wspólna skala raw shape full3D | $\mathrm{m^{3/2}}$ |
+| $a$, $b$, $c$, $d$ | końce lokalnych przedziałów; wymiar zależy od operandu | $1\ \text{lub}\ \mathrm{m^3}$ |
+| $\oplus$, $\ominus$, $\otimes$ | outward-rounded operacje przedziałowe | $1$ |
+| $i$, $j$ | indeksy współczynników | $1$ |
+| $I_R$, $I_I$ | przedziały części rzeczywistej i urojonej Q | $\mathrm{m^3}$ |
+| $r_-$, $r_+$, $s_-$, $s_+$ | granice przedziałów normy | $\mathrm{m^3}$ |
+| $\operatorname{nextDown}$, $\operatorname{nextUp}$ | sąsiednie binary64; jednostka wyniku zgodna z argumentem | $1$ |
+
+API Python, ProblemIR i wire artefaktów nie otrzymują nowych pól ani norm. Implementacja jest postprocessem normy, nie nowym właścicielem FEM. Dense koszt pozostaje O(n²); sparse koszt wynosi O(liczby rzeczywistych wpisów), a dodatkowa pamięć O(1). Nie materializować macierzy dense z liczby DOF. Kontrola zwiększa koszt normalizacji; pomiar runtime i wydajności pozostaje otwarty. Nie wykonuje się w hot loop Krylova ani przez dotychczasowe quadratic_form używane do innych obserwacji.
+
+Źródła: `eigen_normalization_metric.rs` + `checked_mass_quadratic`, `eigen_mass_metric.rs` + `ModalMassMetric::normalization_quadratic_form`, `eigen_solve.rs` + `checked_complex_normalization_scale`. Kontrole metody porównują enclosure z dokładną arytmetyką Fraction; native regressions i cały JSON consumer wymagają osobnego managed runtime. Podstawa sąsiednich liczb: [Rust f64 next_up/next_down](https://doc.rust-lang.org/std/primitive.f64.html#method.next_up). Jest to wyprowadzenie przedziałowe Fullmaga, nie twierdzenie o algorytmie COMSOL.
+
+| Source ID | Path + symbol | Odpowiedzialność | Lane | Dowód |
+|---|---|---|---|---|
+| source-modal-interval-norm | crates/fullmag-runner/src/fem/eigen_normalization_metric.rs + checked_mass_quadratic | Outward enclosure rzeczywistych wpisów Q | FEM postprocess | source-only; runtime NOT VERIFIED |
+| source-modal-interval-metric | crates/fullmag-runner/src/fem/eigen_mass_metric.rs + ModalMassMetric | Osobne dense/sparse iteratory bez materializacji | FEM postprocess | source-only; runtime NOT VERIFIED |
+| source-modal-interval-oracle | scripts/test_modal_norm_interval_source.py + class ModalNormIntervalOracleTests | Dokładne rational counterexamples i enclosure | algebraic verification | 9 interpretowanych kontroli PASS; nie jest runtime Rust |

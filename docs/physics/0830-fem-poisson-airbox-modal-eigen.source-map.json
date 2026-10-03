@@ -101,7 +101,9 @@
       "id": "eq-poisson-airbox-p1-gradient-roundoff",
       "symbols": ["potential", "gradient", "demag_field", "forward_error_bound", "machine_epsilon", "gamma_n"],
       "sources": ["source-de-physical-potential-gamma", "source-de-physical-potential-reconstruction", "source-de-physical-potential-validation", "source-de-physical-potential-regression"]
-    }
+    },
+    {"id": "eq-modal-mass-norm-interval", "symbols": ["q", "modal_geometry_mass", "modal_norm_intervals", "modal_volume_l2_scale", "modal_norm_indices", "modal_norm_ranges", "modal_norm_bounds", "complex_operators"], "sources": ["source-modal-interval-norm", "source-modal-interval-metric"]},
+    {"id": "eq-modal-outward-interval-operations", "symbols": ["modal_interval_endpoints", "modal_interval_operations", "modal_interval_neighbors"], "sources": ["source-modal-interval-norm", "source-modal-interval-oracle"]}
   ],
   "symbols": [
     {"id": "position", "latex": "$\\mathbf r$", "meaning": "spatial position", "si_unit": "$\\mathrm{m}$"},
@@ -161,7 +163,16 @@
     {"id": "component_participation_tolerance", "latex": "$\\varepsilon_{\\mathrm{sum}}$, $\\varepsilon_{\\mathrm{mach}}$", "meaning": "participation-sum tolerance and float64 machine epsilon", "si_unit": "$1$"},
     {"id": "machine_epsilon", "latex": "$u=2^{-53}$", "meaning": "IEEE-754 binary64 unit roundoff", "si_unit": "$1$"},
     {"id": "gamma_n", "latex": "$\\gamma_n=nu/(1-nu)$", "meaning": "standard finite-operation forward-error factor", "si_unit": "$1$"},
-    {"id": "forward_error_bound", "latex": "$B_{e,a}$", "meaning": "local P1 gradient reconstruction roundoff bound", "si_unit": "$\\mathrm{A\\,m^{-1}}$"}
+    {"id": "forward_error_bound", "latex": "$B_{e,a}$", "meaning": "local P1 gradient reconstruction roundoff bound", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "modal_geometry_mass", "latex": "$M_g$", "meaning": "geometryczna metryka masy pełnego 3D", "si_unit": "$\\mathrm{m^3}$"},
+    {"id": "modal_norm_intervals", "latex": "$Q$, $Q_{\\mathrm{fl}}$", "meaning": "dokładna i obliczona norma kwadratowa raw shape", "si_unit": "$\\mathrm{m^3}$"},
+    {"id": "modal_volume_l2_scale", "latex": "$s_{L2}$", "meaning": "wspólna skala raw shape full3D", "si_unit": "$\\mathrm{m^{3/2}}$"},
+    {"id": "modal_interval_endpoints", "latex": "$a$, $b$, $c$, $d$", "meaning": "końce lokalnych przedziałów; wymiar zależy od operandu", "si_unit": "$1\\ \\text{lub}\\ \\mathrm{m^3}$"},
+    {"id": "modal_interval_operations", "latex": "$\\oplus$, $\\ominus$, $\\otimes$", "meaning": "outward-rounded operacje przedziałowe", "si_unit": "$1$"},
+    {"id": "modal_norm_indices", "latex": "$i$, $j$", "meaning": "indeksy współczynników", "si_unit": "$1$"},
+    {"id": "modal_norm_ranges", "latex": "$I_R$, $I_I$", "meaning": "przedziały części rzeczywistej i urojonej Q", "si_unit": "$\\mathrm{m^3}$"},
+    {"id": "modal_norm_bounds", "latex": "$r_-$, $r_+$, $s_-$, $s_+$", "meaning": "granice przedziałów normy", "si_unit": "$\\mathrm{m^3}$"},
+    {"id": "modal_interval_neighbors", "latex": "$\\operatorname{nextDown}$, $\\operatorname{nextUp}$", "meaning": "sąsiednie binary64; jednostka wyniku zgodna z argumentem", "si_unit": "$1$"}
   ],
   "sources": [
     {
@@ -361,7 +372,10 @@
       "responsibility": "Check an analytically known affine potential on a cancellation-prone Tet4 and reject a field perturbation outside the local roundoff envelope."
     },
     {"id": "source-modal-common-normalization", "path": "crates/fullmag-runner/src/fem/eigen_solve.rs", "symbol": "normalize_complex_mode_and_scale", "responsibility": "Compute one checked physical mass scale for magnetic coefficients and potential certificate; reject invalid normalization."},
-    {"id": "source-modal-block-normalization", "path": "crates/fullmag-runner/src/fem/eigen_native_result.rs", "symbol": "normalize_complex_block_mode", "responsibility": "Apply the same checked scalar to all magnetic coefficients and return it for coupled potential normalization."}
+    {"id": "source-modal-block-normalization", "path": "crates/fullmag-runner/src/fem/eigen_native_result.rs", "symbol": "normalize_complex_block_mode", "responsibility": "Apply the same checked scalar to all magnetic coefficients and return it for coupled potential normalization."},
+    {"id": "source-modal-interval-norm", "path": "crates/fullmag-runner/src/fem/eigen_normalization_metric.rs", "symbol": "checked_mass_quadratic", "responsibility": "Compute finite outward-rounded real/imaginary enclosure for actual quadratic-form contributions."},
+    {"id": "source-modal-interval-metric", "path": "crates/fullmag-runner/src/fem/eigen_mass_metric.rs", "symbol": "ModalMassMetric", "responsibility": "Keep dense and sparse observation iterators separate and avoid sparse dense materialization."},
+    {"id": "source-modal-interval-oracle", "path": "scripts/test_modal_norm_interval_source.py", "symbol": "class ModalNormIntervalOracleTests", "responsibility": "Compare proposed binary64 enclosures with independent exact Fraction arithmetic; not native runtime."}
   ],
   "public_api": {
     "parameters": [

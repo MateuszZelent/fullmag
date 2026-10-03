@@ -1,6 +1,7 @@
 //! Consistent P1 mass metric for modal post-processing without dense matrices.
 //! This is the same observation/normalization metric as the dense reference,
 //! not an eigensolver or an alternative native FEM assembly owner.
+use super::eigen_normalization_metric::{checked_mass_quadratic, MassQuadraticEvaluation};
 use crate::types::RunError;
 use fullmag_engine::fem::MeshTopology;
 use fullmag_engine::periodic::constraints::PeriodicDofMap;
@@ -144,9 +145,18 @@ pub(super) fn validate_shared_domain_phase_anchors(
 pub(super) trait ModalMassMetric {
     fn nrows(&self) -> usize;
     fn quadratic_form(&self, vector: &[Complex64]) -> Complex64;
+    fn normalization_quadratic_form(&self, vector: &[Complex64]) -> Result<MassQuadraticEvaluation, RunError>;
 }
 
 impl ModalMassMetric for DMatrix<f64> {
+    fn normalization_quadratic_form(&self, vector: &[Complex64]) -> Result<MassQuadraticEvaluation, RunError> {
+        if self.nrows() != vector.len() || self.ncols() != vector.len() {
+            return Err(RunError { message: "modal normalization requires a square mass metric matching the vector".into() });
+        }
+        checked_mass_quadratic((0..self.nrows()).flat_map(|row| {
+            (0..self.ncols()).map(move |col| (vector[row], Complex64::new(self[(row, col)], 0.0), vector[col]))
+        }))
+    }
     fn nrows(&self) -> usize {
         self.nrows()
     }
@@ -247,6 +257,16 @@ impl SharedDomainSparseMass {
 }
 
 impl ModalMassMetric for SharedDomainSparseMass {
+    fn normalization_quadratic_form(&self, vector: &[Complex64]) -> Result<MassQuadraticEvaluation, RunError> {
+        if self.class_count.checked_mul(2) != Some(vector.len())
+            || self.entries.iter().any(|&(row, col, _)| row >= self.class_count || col >= self.class_count) {
+            return Err(RunError { message: "modal sparse normalization metric dimensions or indices are invalid".into() });
+        }
+        checked_mass_quadratic(self.entries.iter().flat_map(|&(row, col, weight)| [
+            (vector[row], weight, vector[col]),
+            (vector[row + self.class_count], weight, vector[col + self.class_count]),
+        ]))
+    }
     fn nrows(&self) -> usize {
         2 * self.class_count
     }

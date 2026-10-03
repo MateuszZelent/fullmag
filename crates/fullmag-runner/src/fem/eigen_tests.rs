@@ -9517,3 +9517,45 @@ fn coupled_potential_normalization_rejects_overflow_after_scaling() {
     let normalized = normalize_complex_vector_with_scale(&valid, 1.0e-20).unwrap();
     assert!(normalized[0].re.is_finite() && normalized[0].im.is_finite());
 }
+
+
+#[test]
+fn complex_modal_norm_interval_rejects_meaningful_imaginary_mass() {
+    let q = [Complex64::new(1.0, 0.0)];
+    let mass = vec![vec![Complex64::new(1.0, 1.0e-3)]];
+    assert!(super::eigen_solve::normalize_complex_mode_and_scale(
+        &q, &mass, &EigenNormalizationIR::UnitL2).is_err());
+}
+
+#[test]
+fn complex_modal_norm_interval_accepts_small_positive_subnormal_without_a_floor() {
+    let q = [Complex64::new(1.0, 0.0)];
+    let norm = f64::MIN_POSITIVE * 0.5;
+    let mass = vec![vec![Complex64::new(norm, 0.0)]];
+    let (_, scale) = super::eigen_solve::normalize_complex_mode_and_scale(
+        &q, &mass, &EigenNormalizationIR::UnitL2).unwrap();
+    assert_eq!(scale, norm.sqrt());
+}
+
+#[test]
+fn complex_modal_norm_interval_rejects_uncertain_positive_cancellation() {
+    let q = [Complex64::new(1.0, 0.0), Complex64::new(1.0, 0.0)];
+    let mass = vec![
+        vec![Complex64::new(1.0e16, 0.0), Complex64::new(-1.0e16, 0.0)],
+        vec![Complex64::new(-1.0e16, 0.0), Complex64::new(1.0e16 + 2.0, 0.0)],
+    ];
+    // The exact stored-input quadratic is positive, but cancellation leaves
+    // its sign uncertified by the outward enclosure. No floor or guessed epsilon.
+    assert!(super::eigen_solve::normalize_complex_mode_and_scale(
+        &q, &mass, &EigenNormalizationIR::UnitL2).is_err());
+}
+
+#[test]
+fn complex_modal_norm_interval_rejects_rectangular_metric_atomically() {
+    let mut q = vec![Complex64::new(1.0, 1.0)];
+    let before = q.clone();
+    let metric = DMatrix::<f64>::from_row_slice(1, 2, &[1.0, 0.0]);
+    assert!(super::eigen_native_result::normalize_complex_block_mode(
+        &mut q, &metric, EigenNormalizationIR::UnitL2).is_err());
+    assert_eq!(q, before);
+}

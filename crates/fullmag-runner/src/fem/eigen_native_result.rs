@@ -1389,7 +1389,7 @@ pub(super) fn normalize_complex_block_mode(
         });
     }
     let quadratic = match normalization {
-        EigenNormalizationIR::UnitL2 => Some(mass.quadratic_form(vector)),
+        EigenNormalizationIR::UnitL2 => Some(mass.normalization_quadratic_form(vector)?),
         EigenNormalizationIR::UnitMaxAmplitude => None,
     };
     let scale = checked_complex_normalization_scale(vector, quadratic, &normalization)?;
