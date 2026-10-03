@@ -29,6 +29,7 @@ interface LocalDraft {
   id: string;
   draft: SolvedDriveDraft;
   dirtyKeys: Array<keyof SolvedDriveDraft>;
+  editedAgainst: Partial<SolvedDriveDraft>;
 }
 
 interface RevisionConflict {
@@ -46,7 +47,12 @@ export function SolvedAntennaDriveEditor({ driveId, scene, status, refetch }: Pr
   const [pending, setPending] = useState(false);
   const [conflictState, setConflictState] = useState<RevisionConflict | null>(null);
   const [feedbackState, setFeedbackState] = useState<{ id: string; message: string } | null>(null);
-  const draft = local?.id === driveId ? local.draft : initial;
+  const draft = local?.id === driveId && initial
+    ? {
+        ...initial,
+        ...Object.fromEntries(local.dirtyKeys.map((key) => [key, local.draft[key]])),
+      } as SolvedDriveDraft
+    : initial;
   const revision = scene?.revision;
   const runStageIds = antennaRunStageIds(scene);
   const conflict = conflictState?.id === driveId ? conflictState : null;
@@ -63,9 +69,13 @@ export function SolvedAntennaDriveEditor({ driveId, scene, status, refetch }: Pr
   const feedback = conflict?.phase === "rebased" && conflictPhase === "conflict"
     ? "Scene changed again after rebase. Refetch and rebase the draft before saving."
     : feedbackState?.id === driveId ? feedbackState.message : null;
-  const canSave = status === "ready" && validRevision && !pending &&
-    (!conflict || conflictPhase === "rebased");
   const dirtyKeySet = new Set(local?.id === driveId ? local.dirtyKeys : []);
+  const locallyConflictingKeys = local?.id === driveId && initial
+    ? local.dirtyKeys.filter((key) =>
+        local.editedAgainst[key] !== initial[key] && local.draft[key] !== initial[key])
+    : [];
+  const canSave = status === "ready" && validRevision && !pending &&
+    locallyConflictingKeys.length === 0 && (!conflict || conflictPhase === "rebased");
   const comparisonKeys = conflict && initial
     ? (Object.keys(draft ?? initial) as Array<keyof SolvedDriveDraft>).filter((key) =>
         dirtyKeySet.has(key) || initial[key] !== conflict.baseDraft[key])
@@ -75,11 +85,18 @@ export function SolvedAntennaDriveEditor({ driveId, scene, status, refetch }: Pr
   if (!drive || !draft) return null;
 
   function update(patch: Partial<SolvedDriveDraft>) {
+    const patchKeys = Object.keys(patch) as Array<keyof SolvedDriveDraft>;
+    const editedAgainst = local?.id === driveId ? { ...local.editedAgainst } : {};
+    for (const key of patchKeys) {
+      if (!dirtyKeySet.has(key) || local?.draft[key] === initial?.[key]) {
+        Object.assign(editedAgainst, { [key]: initial?.[key] });
+      }
+    }
     setLocal({
       id: driveId,
       draft: { ...draft!, ...patch },
-      dirtyKeys: [...new Set([...(local?.id === driveId ? local.dirtyKeys : []),
-        ...Object.keys(patch) as Array<keyof SolvedDriveDraft>])],
+      dirtyKeys: [...new Set([...(local?.id === driveId ? local.dirtyKeys : []), ...patchKeys])],
+      editedAgainst,
     });
     setFeedbackState(null);
   }
@@ -94,9 +111,22 @@ export function SolvedAntennaDriveEditor({ driveId, scene, status, refetch }: Pr
   function rebaseDraft() {
     if (!initial || !local || local.id !== driveId || conflictPhase !== "refetched" || !validRevision || typeof revision !== "number") return;
     const edited = Object.fromEntries(local.dirtyKeys.map((key) => [key, local.draft[key]])) as Partial<SolvedDriveDraft>;
-    setLocal({ ...local, draft: { ...initial, ...edited } });
+    setLocal({
+      ...local,
+      draft: { ...initial, ...edited },
+      editedAgainst: Object.fromEntries(local.dirtyKeys.map((key) => [key, initial[key]])),
+    });
     setConflictState({ ...conflict!, baseRevision: revision, baseDraft: initial, phase: "rebased" });
     setFeedbackState({ id: driveId, message: "Draft rebased onto the latest scene. Review and retry Save." });
+  }
+
+  function rebaseLocalDraft() {
+    if (!initial || !local || local.id !== driveId) return;
+    setLocal({
+      ...local,
+      draft: { ...initial, ...Object.fromEntries(local.dirtyKeys.map((key) => [key, local.draft[key]])) },
+      editedAgainst: Object.fromEntries(local.dirtyKeys.map((key) => [key, initial[key]])),
+    });
   }
 
   async function save() {
@@ -172,6 +202,13 @@ export function SolvedAntennaDriveEditor({ driveId, scene, status, refetch }: Pr
         <FormField label="Stage IDs" hint="Only Run stages in the current study can be activated." value={draft.stageIds} onChange={(event) => update({ stageIds: event.currentTarget.value })} />
       </> : null}
       {feedback ? <FeedbackBanner kind={feedback === "Antenna drive committed." ? "success" : "error"} message={feedback} /> : null}
+      {locallyConflictingKeys.length > 0 && !conflict ? <InspectorGroup title="Concurrent drive edit" badge="review required">
+        {locallyConflictingKeys.map((key) => <div key={key}>
+          <FieldRow label={`Server ${key}`} value={initial?.[key] ?? ""} />
+          <FieldRow label={`Draft ${key}`} value={draft[key]} />
+        </div>)}
+        <Button type="button" onClick={rebaseLocalDraft}>Rebase Draft</Button>
+      </InspectorGroup> : null}
       {conflict ? <InspectorGroup title="Revision conflict" badge={conflictPhase}>
         <FieldRow label="Conflict base revision" value={String(conflict.baseRevision)} />
         <FieldRow label="Server revision" value={validRevision ? String(revision) : "unavailable"} />

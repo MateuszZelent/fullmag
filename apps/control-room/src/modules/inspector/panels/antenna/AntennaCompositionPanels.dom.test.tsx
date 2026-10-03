@@ -289,6 +289,96 @@ describe("AntennaCompositionPanel runtime results", () => {
     }
   });
 
+  it("preserves only edited drive fields on refresh and blocks a same-field overwrite", async () => {
+    mocks.scene.data = {
+      revision: 7,
+      solved_antenna_drives: [
+        { id: "drive-1", name: "RF", peak_current_a: 1, port_mode_id: "port-1", projection_ref: "projection-1", time_origin: "stage_local", waveform: { kind: "constant" }, activation: { kind: "all_time_evolution" } },
+        { id: "drive-2", name: "Other", peak_current_a: 2, port_mode_id: "port-2", projection_ref: "projection-2", time_origin: "stage_local", waveform: { kind: "constant" }, activation: { kind: "all_time_evolution" } },
+      ],
+    } as SceneResource;
+    mocks.commitTransaction.mockResolvedValue({ scene_revision: 9 });
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    const find = (tag: string, label: string): TestElement => {
+      const found: TestElement[] = [];
+      const visit = (node: TestNode) => {
+        if (node instanceof TestElement && node.tagName === tag &&
+          (node.getAttribute("aria-label") === label || node.textContent.includes(label))) found.push(node);
+        node.childNodes.forEach(visit);
+      };
+      visit(container);
+      if (!found[0]) throw new Error(`Missing ${label}`);
+      return found[0];
+    };
+    const editPeak = async (value: string) => {
+      const input = find("INPUT", "Peak current");
+      Object.getOwnPropertyDescriptor(TestElement.prototype, "value")?.set?.call(input, value);
+      await act(async () => input.dispatchEvent(new TestEvent("input", { bubbles: true })));
+      return input;
+    };
+    try {
+      await act(async () => root.render(<AntennaCompositionPanel kind="drive" selection={driveSelection()} />));
+      const input = await editPeak("3");
+      input.focus();
+      const panelRoot = container.firstChild;
+      mocks.scene.data = {
+        ...mocks.scene.data!, revision: 8,
+        solved_antenna_drives: [
+          { ...mocks.scene.data!.solved_antenna_drives![0], waveform: { kind: "sinusoidal", frequency_hz: 1e9, phase_rad: 0.7, offset: 0.2 } },
+          { ...mocks.scene.data!.solved_antenna_drives![1], peak_current_a: 4 },
+        ],
+      } as SceneResource;
+      await act(async () => root.render(<AntennaCompositionPanel kind="drive" selection={driveSelection()} />));
+      expect(container.firstChild).toBe(panelRoot);
+      expect(find("INPUT", "Peak current")).toBe(input);
+      expect(dom.document.activeElement).toBe(input);
+      expect(input.value).toBe("3");
+      expect(find("INPUT", "Frequency").disabled).toBe(false);
+      await act(async () => find("BUTTON", "Save drive").dispatchEvent(new TestEvent("click", { bubbles: true })));
+      expect(mocks.commitTransaction).toHaveBeenCalledWith({
+        base_revision: 8, kind: "merge_patch",
+        merge_patch: { solved_antenna_drives: [
+          expect.objectContaining({ id: "drive-1", peak_current_a: 3, waveform: { kind: "sinusoidal", frequency_hz: 1e9, phase_rad: 0.7, offset: 0.2 } }),
+          expect.objectContaining({ id: "drive-2", peak_current_a: 4 }),
+        ] },
+      });
+
+      mocks.scene.data = {
+        ...mocks.scene.data!, revision: 9,
+        solved_antenna_drives: [{ ...mocks.scene.data!.solved_antenna_drives![0], peak_current_a: 3 }, mocks.scene.data!.solved_antenna_drives![1]],
+      } as SceneResource;
+      await act(async () => root.render(<AntennaCompositionPanel kind="drive" selection={driveSelection()} />));
+      const secondInput = await editPeak("5");
+      mocks.scene.data = {
+        ...mocks.scene.data!, revision: 10,
+        solved_antenna_drives: [{ ...mocks.scene.data!.solved_antenna_drives![0], peak_current_a: 4 }, mocks.scene.data!.solved_antenna_drives![1]],
+      } as SceneResource;
+      await act(async () => root.render(<AntennaCompositionPanel kind="drive" selection={driveSelection()} />));
+      expect(find("INPUT", "Peak current")).toBe(secondInput);
+      expect(secondInput.value).toBe("5");
+      expect(container.textContent).toContain("Server peakCurrentA4");
+      expect(container.textContent).toContain("Draft peakCurrentA5");
+      expect(find("BUTTON", "Save drive").disabled).toBe(true);
+      await act(async () => find("BUTTON", "Save drive").dispatchEvent(new TestEvent("click", { bubbles: true })));
+      expect(mocks.commitTransaction).toHaveBeenCalledTimes(1);
+      await act(async () => find("BUTTON", "Rebase Draft").dispatchEvent(new TestEvent("click", { bubbles: true })));
+      expect(find("BUTTON", "Save drive").disabled).toBe(false);
+      await act(async () => find("BUTTON", "Save drive").dispatchEvent(new TestEvent("click", { bubbles: true })));
+      expect(mocks.commitTransaction).toHaveBeenNthCalledWith(2, expect.objectContaining({
+        base_revision: 10,
+        merge_patch: { solved_antenna_drives: [
+          expect.objectContaining({ id: "drive-1", peak_current_a: 5 }),
+          expect.objectContaining({ id: "drive-2", peak_current_a: 4 }),
+        ] },
+      }));
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
   it("keeps the drive draft and blocks another save after a scene revision conflict", async () => {
     mocks.scene.data = {
       revision: 4,
