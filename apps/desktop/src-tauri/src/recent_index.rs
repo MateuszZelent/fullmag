@@ -8,6 +8,7 @@
 //!
 //! Schema: `docs/design/start-screen/schema/recent-index.schema.json`.
 
+use crate::provenance;
 use fullmag_application::{ProjectRepository, ProjectSource};
 use fullmag_application::FileProjectRepository;
 use serde_json::{json, Map, Value};
@@ -314,6 +315,17 @@ pub fn entry_from_file(path: &Path, previous: Option<&Value>) -> Value {
                 "solver".into(),
                 Value::String(solver_from_scene(definition.scene.value()).into()),
             );
+            let authors = opened
+                .envelope
+                .opaque_documents
+                .iter()
+                .find(|document| document.path() == provenance::PROVENANCE_PATH)
+                .and_then(|document| provenance::parse_provenance(document.bytes()).ok())
+                .and_then(|value| value.get("authors").and_then(Value::as_array).cloned())
+                .unwrap_or_default();
+            if !authors.is_empty() {
+                entry.insert("authors".into(), Value::Array(authors));
+            }
             if let Some(summary) = summary_from_scene(definition.scene.value()) {
                 entry.insert("summary".into(), summary);
             }
