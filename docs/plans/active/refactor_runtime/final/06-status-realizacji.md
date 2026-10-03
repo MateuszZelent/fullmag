@@ -1,5 +1,13 @@
 # Status realizacji całego planu refaktoryzacji
 
+Checkpoint B-07, 03.10.2026: pięć istniejących metod magnetoelastycznych
+Rust FDM CPU wydzielono do `fields/magnetoelastic.rs`. Niezależne porównanie
+pełnych sygnatur i ciał, pozostałego rodzica i fused loop PASS; review bez P0/P1.
+Rejestracja `magnetoelastic_terms` zachowuje wspólny import naukowego modułu
+bez kolizji namespace. [Zakres i bramki](b/07-fdm-cpu-magnetoelastic-owner.md).
+Kompilacja testu NOT RUN, runtime i nauka NOT VERIFIED; procenty bez awansu.
+Build 218 jest przypięty do B-03 i nie obejmuje B-04–B-07.
+
 Checkpoint B-06, 03.10.2026: 23 istniejące metody DMI Rust FDM CPU wydzielono
 do `fields/dmi.rs`. Niezależne porównanie sygnatur i ciał oraz całego pozostałego
 rodzica PASS. Cztery przypadkowo przeniesione metody spoza DMI przywrócono;

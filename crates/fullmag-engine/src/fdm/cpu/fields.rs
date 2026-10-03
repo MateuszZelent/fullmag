@@ -28,6 +28,8 @@ mod exchange;
 mod anisotropy;
 #[path = "fields/dmi.rs"]
 mod dmi;
+#[path = "fields/magnetoelastic.rs"]
+mod magnetoelastic_terms;
 #[path = "fields/demag.rs"]
 mod demag;
 #[path = "fields/energy.rs"]
@@ -159,70 +161,6 @@ impl ExchangeLlgProblem {
         let mut field = self.external_field_vectors();
         self.oersted_field_add_into_at_time(&mut field, time_seconds);
         field
-    }
-
-    pub(crate) fn magnetoelastic_field(&self, magnetization: &[Vector3]) -> Vec<Vector3> {
-        match &self.terms.magnetoelastic {
-            Some(config) => magnetoelastic::h_mel_field(
-                magnetization,
-                &config.strain,
-                &config.params,
-                self.active_mask.as_deref(),
-            ),
-            None => zero_vectors(self.grid.cell_count()),
-        }
-    }
-
-    pub(crate) fn magnetoelastic_energy(&self, magnetization: &[Vector3]) -> f64 {
-        match &self.terms.magnetoelastic {
-            Some(config) => {
-                let cell_volume = self.cell_size.dx * self.cell_size.dy * self.cell_size.dz;
-                magnetoelastic::e_mel_total(
-                    magnetization,
-                    &config.strain,
-                    &config.params,
-                    cell_volume,
-                    self.active_mask.as_deref(),
-                )
-            }
-            None => 0.0,
-        }
-    }
-
-    pub(crate) fn magnetoelastic_energy_soa(&self, magnetization: &VectorFieldSoA) -> f64 {
-        let config = match &self.terms.magnetoelastic {
-            Some(config) => config,
-            None => return 0.0,
-        };
-        let n = magnetization.len();
-        let cell_volume = self.cell_size.volume();
-
-        let compute_cell = |i: usize, strain: &magnetoelastic::StrainVoigt| {
-            if self.is_active(i) {
-                magnetoelastic::e_mel_density_single(
-                    [magnetization.x[i], magnetization.y[i], magnetization.z[i]],
-                    strain,
-                    &config.params,
-                )
-            } else {
-                0.0
-            }
-        };
-
-        let sum: f64 = match &config.strain {
-            magnetoelastic::PrescribedStrainField::Uniform(strain) => {
-                (0..n).map(|i| compute_cell(i, strain)).sum()
-            }
-            magnetoelastic::PrescribedStrainField::PerCell(strain) => {
-                assert_eq!(
-                    strain.len(),
-                    n,
-                    "strain field length must match magnetization"
-                );
-                (0..n).map(|i| compute_cell(i, &strain[i])).sum()
-            }
-        };
-        sum * cell_volume
     }
 
     // ===================================================================
@@ -380,51 +318,6 @@ impl ExchangeLlgProblem {
             h_eff.x[i] += sigma * r1 * theta1.cos();
             h_eff.y[i] += sigma * r1 * theta1.sin();
             h_eff.z[i] += sigma * r2 * theta2.cos();
-        }
-    }
-
-    pub(crate) fn magnetoelastic_field_add_into_soa(
-        &self,
-        magnetization: &VectorFieldSoA,
-        h_eff: &mut VectorFieldSoA,
-    ) {
-        let config = match &self.terms.magnetoelastic {
-            Some(config) => config,
-            None => return,
-        };
-        let n = magnetization.len();
-
-        let add_cell =
-            |i: usize, strain: &magnetoelastic::StrainVoigt, h_eff: &mut VectorFieldSoA| {
-                if !self.is_active(i) {
-                    return;
-                }
-                let h = magnetoelastic::h_mel_single(
-                    [magnetization.x[i], magnetization.y[i], magnetization.z[i]],
-                    strain,
-                    &config.params,
-                );
-                h_eff.x[i] += h[0];
-                h_eff.y[i] += h[1];
-                h_eff.z[i] += h[2];
-            };
-
-        match &config.strain {
-            magnetoelastic::PrescribedStrainField::Uniform(strain) => {
-                for i in 0..n {
-                    add_cell(i, strain, h_eff);
-                }
-            }
-            magnetoelastic::PrescribedStrainField::PerCell(strain) => {
-                assert_eq!(
-                    strain.len(),
-                    n,
-                    "strain field length must match magnetization"
-                );
-                for (i, cell_strain) in strain.iter().enumerate() {
-                    add_cell(i, cell_strain, h_eff);
-                }
-            }
         }
     }
 
@@ -677,22 +570,6 @@ impl ExchangeLlgProblem {
         self.direct_torques_add_into(magnetization, out);
         if let Some(frozen) = &self.frozen_spins {
             frozen.mask_final_rhs(&mut out[..n]);
-        }
-    }
-
-    pub(crate) fn magnetoelastic_field_add_into(
-        &self,
-        magnetization: &[Vector3],
-        h_eff: &mut [Vector3],
-    ) {
-        if let Some(ref config) = self.terms.magnetoelastic {
-            magnetoelastic::h_mel_field_add_into(
-                magnetization,
-                &config.strain,
-                &config.params,
-                self.active_mask.as_deref(),
-                h_eff,
-            );
         }
     }
 

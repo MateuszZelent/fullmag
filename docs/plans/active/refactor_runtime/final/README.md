@@ -1,5 +1,10 @@
 # Fullmag — finalny audyt i plan refaktoryzacji
 
+Checkpoint B-07: [właściciel magnetoelastyczności FDM CPU](b/07-fdm-cpu-magnetoelastic-owner.md).
+Pięć metod zachowuje sygnatury i ciała; fused loop i wspólny moduł naukowy
+pozostają bez zmian. Source comparison i niezależny review PASS.
+Build 218 nie obejmuje późniejszych zmian B-04–B-07; runtime pozostaje otwarty.
+
 Checkpoint B-06: [właściciel DMI FDM CPU](b/06-fdm-cpu-dmi-owner.md).
 23 metody zachowują sygnatury i ciała; cztery metody spoza DMI oraz fused loop
 pozostają w rodzicu. Source comparison PASS; runtime i kwalifikacja otwarte.

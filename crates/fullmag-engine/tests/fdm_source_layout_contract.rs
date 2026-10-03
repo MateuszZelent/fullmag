@@ -297,6 +297,65 @@ fn fdm_cpu_dmi_has_one_realization_owner() {
 }
 
 #[test]
+fn fdm_cpu_magnetoelastic_has_one_realization_owner() {
+    let root = crate_root();
+    let owner = fs::read_to_string(root.join("src/fdm/cpu/fields/magnetoelastic.rs"))
+        .expect("read FDM CPU magnetoelastic owner");
+    let fields = fs::read_to_string(root.join("src/fdm/cpu/fields.rs"))
+        .expect("read FDM CPU field orchestration");
+    assert!(
+        fields.contains("fields/magnetoelastic.rs") && fields.contains("mod magnetoelastic_terms;"),
+        "FDM fields owner must include its dedicated magnetoelastic module"
+    );
+    assert!(
+        fields.contains("use crate::magnetoelastic;"),
+        "the parent magnetoelastic namespace import must remain available"
+    );
+
+    for declaration in [
+        "fn magnetoelastic_field(",
+        "fn magnetoelastic_energy(",
+        "fn magnetoelastic_energy_soa(",
+        "fn magnetoelastic_field_add_into_soa(",
+        "fn magnetoelastic_field_add_into(",
+    ] {
+        assert_eq!(
+            owner.matches(declaration).count(),
+            1,
+            "missing or duplicate {declaration}"
+        );
+        assert!(
+            !fields.contains(declaration),
+            "field orchestration still owns {declaration}"
+        );
+    }
+
+    assert!(
+        fields.contains("fused_local_terms_add_into")
+            && !owner.contains("fused_local_terms_add_into"),
+        "the fused local-term loop must remain outside the magnetoelastic owner"
+    );
+
+    for (path, symbol) in [
+        ("src/fdm/cpu/fields/energy.rs", "magnetoelastic_energy_soa"),
+        ("src/fdm/cpu/fields/energy.rs", "magnetoelastic_energy"),
+        ("src/fdm/cpu/fields/observables.rs", "magnetoelastic_field"),
+        ("src/fdm/cpu/fields/observables.rs", "magnetoelastic_energy"),
+        (
+            "src/fdm/cpu/integrators.rs",
+            "magnetoelastic_field_add_into_soa",
+        ),
+        ("src/fdm/cpu/fields.rs", "magnetoelastic_field_add_into"),
+    ] {
+        let source = fs::read_to_string(root.join(path)).expect("read magnetoelastic consumer");
+        assert!(
+            source.contains(symbol),
+            "magnetoelastic consumer {path} no longer calls {symbol}"
+        );
+    }
+}
+
+#[test]
 fn fdm_engine_shared_vector_field_has_fdm_owner() {
     let root = crate_root();
     for path in [
