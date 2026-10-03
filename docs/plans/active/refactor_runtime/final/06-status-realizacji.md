@@ -1,5 +1,12 @@
 # Status realizacji całego planu refaktoryzacji
 
+Checkpoint B-05, 03.10.2026: sześć metod anizotropii Rust FDM CPU wydzielono
+do `fields/anisotropy.rs`. Niezależne porównanie wszystkich sygnatur i ciał
+z bazą PASS; rodzic zawiera jedynie wiring/usunięcia i zachowany obcy reflow.
+[Zakres, helper energii i bramki](b/05-fdm-cpu-anisotropy-owner.md).
+Fused loop i lane selection bez zmiany. Build 218 nie obejmuje B-05;
+kompilacja testów NOT RUN, runtime/fizyka NOT VERIFIED; procenty bez awansu.
+
 Checkpoint P8-48, 03.10.2026: zachowano dokładne kopie dziesięciu plików
 różniących się od kapsuł pięciu starych execution. Hashe oryginałów przed/po
 kopiowaniu i kopii zgodne; dowód w kanonicznym storage.

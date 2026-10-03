@@ -143,6 +143,70 @@ fn fdm_cpu_exchange_field_has_one_realization_owner() {
 }
 
 #[test]
+fn fdm_cpu_anisotropy_has_one_realization_owner() {
+    let root = crate_root();
+    let owner = fs::read_to_string(root.join("src/fdm/cpu/fields/anisotropy.rs"))
+        .expect("read FDM CPU anisotropy owner");
+    let fields = fs::read_to_string(root.join("src/fdm/cpu/fields.rs"))
+        .expect("read FDM CPU field orchestration");
+    assert!(
+        fields.contains("fields/anisotropy.rs") && fields.contains("mod anisotropy;"),
+        "FDM fields owner must include its dedicated anisotropy module"
+    );
+
+    for name in [
+        "anisotropy_field_components",
+        "anisotropy_field",
+        "anisotropy_energy",
+        "anisotropy_energy_from_soa",
+        "anisotropy_field_add_into_soa",
+        "anisotropy_field_add_into",
+    ] {
+        let declaration = format!("fn {name}(");
+        assert_eq!(
+            owner.matches(&declaration).count(),
+            1,
+            "missing or duplicate {name}"
+        );
+        assert!(
+            !fields.contains(&declaration),
+            "field orchestration still owns {name}"
+        );
+    }
+
+    assert!(
+        fields.contains("fn anisotropy_energy_density_for_magnetization(")
+            && !owner.contains("fn anisotropy_energy_density_for_magnetization("),
+        "the private shared energy helper must keep its existing fields.rs owner"
+    );
+    assert!(
+        fields.contains("fused_local_terms_add_into")
+            && !owner.contains("fused_local_terms_add_into"),
+        "the fused local-term loop must remain outside the anisotropy owner"
+    );
+
+    for (path, symbol) in [
+        ("src/fdm/cpu/fields/energy.rs", "anisotropy_energy_from_soa"),
+        ("src/fdm/cpu/fields/energy.rs", "anisotropy_energy"),
+        ("src/fdm/cpu/fields/observables.rs", "anisotropy_field"),
+        ("src/fdm/cpu/fields/observables.rs", "anisotropy_energy"),
+        (
+            "src/fdm/cpu/integrators.rs",
+            "anisotropy_field_add_into_soa",
+        ),
+        ("src/fdm/cpu/integrators.rs", "anisotropy_energy_from_soa"),
+        ("src/lib.rs", "anisotropy_field"),
+        ("src/lib.rs", "anisotropy_energy"),
+    ] {
+        let source = fs::read_to_string(root.join(path)).expect("read anisotropy consumer");
+        assert!(
+            source.contains(symbol),
+            "anisotropy consumer {path} no longer calls {symbol}"
+        );
+    }
+}
+
+#[test]
 fn fdm_engine_shared_vector_field_has_fdm_owner() {
     let root = crate_root();
     for path in [

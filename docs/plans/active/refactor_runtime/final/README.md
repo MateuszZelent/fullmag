@@ -1,5 +1,9 @@
 # Fullmag — finalny audyt i plan refaktoryzacji
 
+Checkpoint B-05: [właściciel anizotropii FDM CPU](b/05-fdm-cpu-anisotropy-owner.md).
+Sześć metod zachowuje sygnatury i ciała; wspólny helper energii i fused loop
+pozostają przy dotychczasowych konsumentach. Runtime i kwalifikacja otwarte.
+
 Checkpoint P8-48: [dokładne kopie zmienionych plików execution](p8/48-execution-source-preservation.md).
 Dziesięć kopii i ich hashe zachowano w kanonicznym storage. Nie wykonano
 sprzątania; audyt P8-46 wymaga poprawek po review, build nadal czeka na miejsce.
