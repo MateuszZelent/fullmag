@@ -31,6 +31,24 @@ Scheduler compute ma max-concurrency=1, max-tasks=0 i brak automatycznych retry;
 preparation ma osobny max-concurrency=1. Dostępność wykonania pozostaje określona
 przez istniejący planner/worker; deklaracja GPU nie daje cichego fallbacku CPU.
 
+## Stabilna konfiguracja aplikacji
+
+Źródłowy `RuntimeServiceConfig::for_application` inicjalizuje raz albo
+odczytuje `runtime-services/APPLICATION.json`. Launch guard poprzedza writer
+lease, zgodnie z kolejnością service-ensure. Zajęty guard blokuje operację;
+nie uprawnia do takeover ani restartu. Istniejący plik przechodzi ten sam
+bounded reader i walidator oraz musi należeć do dokładnie wskazanego store
+i targetu. Factory nie jest wtedy wywoływane, więc konfiguracja nie zmienia
+się od chwilowo wolnej pamięci przy ponownym otwarciu UI.
+
+Uszkodzona konfiguracja pozostaje zachowana. Brak konfiguracji z istniejącym
+OWNER.lock, OWNER.json albo LAUNCH.json wymaga jawnej konfiguracji lub recovery.
+Sam LAUNCH.lock jest trwałą blokadą tworzoną przez guard, nie zapisem intentu.
+Nowy kandydat jest walidowany przed atomic publication w operacyjnym namespace.
+Bezpośredni proces usługi poza service-ensure nie jest objęty tą serializacją.
+Generator ofert i podłączenie tej metody do domyślnego packaged startup
+pozostają do implementacji; runtime konkurencji i awarii jest NOT VERIFIED.
+
 ## Własność i kolejność
 
 Jedna blokada runtime-services/OWNER.lock obejmuje cały store. Jest stabilnym

@@ -423,3 +423,5 @@ Checkpoint P8: [26 — lint i retencja mapy pola](p8/26-frontend-lint-and-frame-
 Checkpoint P8-C: [27 — trasa workspace w pakiecie](p8/27-native-workspace-package.md).
 
 Checkpoint P8-C: [28 — natywny odczyt zasobów hosta](p8/28-native-capacity-observation.md).
+
+Checkpoint P8-C: [29 — stabilna konfiguracja usługi aplikacji](p8/29-stable-application-service-config.md).

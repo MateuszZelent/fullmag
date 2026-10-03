@@ -934,6 +934,60 @@ mod launch_tests {
 }
 
 impl RuntimeServiceConfig {
+    /// Load the stable application configuration or initialize it once.
+    /// The factory observes capacity only on first initialization, under the
+    /// store writer lease. Corrupt or orphaned state never authorizes replacement.
+    pub fn for_application(
+        store: &SessionStore,
+        target_id: &str,
+        initialize: impl FnOnce() -> Result<Self>,
+    ) -> Result<Self> {
+        validate_store_id(target_id)?;
+        // Use the same lock order as service startup: launch gate, then writer.
+        let _launch = RuntimeServiceLaunchGuard::try_acquire(store.root())?
+            .context("application runtime configuration launch guard is busy")?;
+        let _writer = store.write_transaction()?;
+        let path = checked_path(store.root(), "runtime-services/APPLICATION.json")?;
+        match std::fs::symlink_metadata(&path) {
+            Ok(_) => {
+                let config = Self::read(&path)?;
+                config.require_application_binding(store, target_id)?;
+                return Ok(config);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error).context("observe application runtime configuration"),
+        }
+        for record in [
+            RUNTIME_SERVICE_OWNER_LOCK_PATH,
+            RUNTIME_SERVICE_OWNER_DESCRIPTOR_PATH,
+            "runtime-services/LAUNCH.json",
+        ] {
+            let record = checked_path(store.root(), record)?;
+            match std::fs::symlink_metadata(record) {
+                Ok(_) => bail!("runtime service already has an owner or launch record without application configuration; explicit configuration or recovery required"),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error).context("observe existing runtime service before configuration"),
+            }
+        }
+        let config = initialize()?;
+        config.validate()?;
+        config.require_application_binding(store, target_id)?;
+        let bytes = serde_json::to_vec(&config)?;
+        if bytes.len() > 65536 {
+            bail!("service config exceeds budget");
+        }
+        let path = create_parent(store.root(), "runtime-services/APPLICATION.json")?;
+        crate::durability::atomic_write_owner(&path, &bytes)?;
+        Ok(config)
+    }
+
+    fn require_application_binding(&self, store: &SessionStore, target_id: &str) -> Result<()> {
+        if self.store_root != store.root() || self.target_id != target_id {
+            bail!("application service configuration belongs to another store or target");
+        }
+        Ok(())
+    }
+
     /// Read a bounded configuration through the same path guard as the store.
     pub fn read(path: &Path) -> Result<Self> {
         if !path.is_absolute()
@@ -1040,5 +1094,130 @@ impl RuntimeServiceConfig {
             bail!("service timeouts must be positive; startup timeout must not exceed 300 seconds");
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod application_configuration_tests {
+    use super::*;
+    use crate::{FmsResourceBudget, FmsResourceKind};
+
+    fn config(store: &SessionStore) -> RuntimeServiceConfig {
+        let budget = FmsResourceBudget {
+            cpu_millis: 1000,
+            memory_bytes: 1024,
+            gpu_memory_bytes: 0,
+            storage_bytes: 1024,
+        };
+        RuntimeServiceConfig {
+            schema_version: "runtime_service_config.v1".into(),
+            store_root: store.root().to_path_buf(),
+            target_id: "desktop".into(),
+            compute_pool_id: "compute".into(),
+            preparation_pool_id: "preparation".into(),
+            compute_resources: vec![FmsSchedulerResourceOffer {
+                resource_id: "compute.cpu".into(),
+                kind: FmsResourceKind::Cpu,
+                budget: budget.clone(),
+            }],
+            preparation_resources: vec![FmsPreparationResourceOffer {
+                resource_id: "preparation.cpu".into(),
+                budget,
+            }],
+            worker_timeout_seconds: 10,
+            preparation_timeout_seconds: 10,
+            heartbeat_interval_milliseconds: 100,
+            startup_timeout_seconds: 10,
+            drain_timeout_seconds: 10,
+        }
+    }
+
+    #[test]
+    fn concurrent_launch_gate_refuses_configuration_without_calling_factory() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(directory.path()).unwrap();
+        let _launch = RuntimeServiceLaunchGuard::try_acquire(store.root())
+            .unwrap()
+            .unwrap();
+        assert!(
+            RuntimeServiceConfig::for_application(&store, "desktop", || {
+                panic!("another launch must finish before configuration initialization")
+            })
+            .is_err()
+        );
+        assert!(!store
+            .root()
+            .join("runtime-services/APPLICATION.json")
+            .exists());
+    }
+
+    #[test]
+    fn application_reuses_saved_budgets_without_observing_capacity_again() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(directory.path()).unwrap();
+        let first = RuntimeServiceConfig::for_application(&store, "desktop", || Ok(config(&store)))
+            .unwrap();
+        let next = RuntimeServiceConfig::for_application(&store, "desktop", || {
+            panic!("saved configuration must not resample volatile capacity")
+        })
+        .unwrap();
+        assert_eq!(first, next);
+        assert!(RuntimeServiceConfig::for_application(&store, "other", || {
+            panic!("wrong target must not initialize another configuration")
+        })
+        .is_err());
+    }
+
+    #[test]
+    fn corrupt_configuration_is_preserved_and_never_regenerated() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(directory.path()).unwrap();
+        let path = create_parent(store.root(), "runtime-services/APPLICATION.json").unwrap();
+        std::fs::write(&path, b"corrupt").unwrap();
+        assert!(
+            RuntimeServiceConfig::for_application(&store, "desktop", || {
+                panic!("corrupt configuration must not authorize reinitialization")
+            })
+            .is_err()
+        );
+        assert_eq!(std::fs::read(path).unwrap(), b"corrupt");
+    }
+
+    #[test]
+    fn orphaned_service_records_do_not_authorize_default_configuration() {
+        for name in [
+            RUNTIME_SERVICE_OWNER_LOCK_PATH,
+            RUNTIME_SERVICE_OWNER_DESCRIPTOR_PATH,
+            "runtime-services/LAUNCH.json",
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let store = SessionStore::open(directory.path()).unwrap();
+            std::fs::write(create_parent(store.root(), name).unwrap(), b"unknown").unwrap();
+            assert!(
+                RuntimeServiceConfig::for_application(&store, "desktop", || {
+                    panic!("existing service records require explicit configuration or recovery")
+                })
+                .is_err()
+            );
+            assert!(!store
+                .root()
+                .join("runtime-services/APPLICATION.json")
+                .exists());
+        }
+    }
+
+    #[test]
+    fn wrong_store_candidate_is_rejected_before_publication() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(directory.path()).unwrap();
+        let mut candidate = config(&store);
+        candidate.store_root = store.root().join("another-store");
+        assert!(
+            RuntimeServiceConfig::for_application(&store, "desktop", || Ok(candidate)).is_err()
+        );
+        assert!(!store
+            .root()
+            .join("runtime-services/APPLICATION.json")
+            .exists());
     }
 }
