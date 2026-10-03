@@ -83,8 +83,23 @@ kompilację i separację EXE. Niniejszy krok dodaje pełny lifecycle w UI.
 | Restore i nowy pin | Launcher, CLI/desktop, API-instance bootstrap, kernel hydration | Ten sam model/regiony/materialy; odtworzony viewport/UI; świeży UUID, bez stale adoption |
 | Fault gates | Przebieg Windows i browser | Aktywny solve blokuje; błąd buildu/restore nie gubi kopii; drugi klient/owner nie przejmuje |
 
-## Stan
+## Stan — 03.10.2026
 
-Rozpoznanie źródeł i kontrakt przygotowane. Implementacja P8-53 jeszcze nie
-wykonana. P8-52 jest w weryfikacji rzeczywistego buildu. Nie zwiększamy procentu
-całego planu na podstawie tego dokumentu.
+P8-53 jest w realizacji. Dostępna jest wewnętrzna warstwa zapisu i odczytu
+handoffu authoring w `scripts/windows/development_handoff.py`: pełny JSON sceny,
+osobne dane edytora/workspace/dokumentu projektu, binding API/session/epoch/
+generation/source/target build, hashe snapshotu i składników, kopiowane assety
+oraz atomowy receipt `staged` → `restored` albo `failed`.
+
+Recepta `just verify-windows-development-handoff` przeszła 19 interpretowanych
+regresji, bez skipów i kompilacji testów. Receipt `bb21349eb99040399881e2cf8e6b2ec5`
+ma exit 0 i ten sam hash źródeł przed/po:
+`17b16140caf92f9ba64e564ed72be2e358bc4ff4da3af3121a29dfbbe12de259`.
+Szczegóły zakresu są w [checkpointcie handoffu](53a-authoring-handoff-persistence.md).
+
+Prymityw nie jest jeszcze konsumentem API ani launchera. Wymaga przekazania
+wszystkich referencji do plików przez semantycznego właściciela sceny.
+Nie zatrzymuje procesów i nie dowodzi odtworzenia workspace w nowym API.
+Pozostają: zasób/komenda v2, admission/drain, kontrola szkiców, restore przed
+listen, nowy pin oraz rzeczywisty przebieg Windows/browser. Nie zwiększamy
+procentu całego planu na podstawie samego zapisu handoffu.

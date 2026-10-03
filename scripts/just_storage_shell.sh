@@ -92,6 +92,16 @@ case "${recipe}" in
     # Invoke only this checkout's helper, never the supplied recipe text.
     exec "${python_cmd}" "${script_dir}/export_runner_openapi.py" --repo-root "${repo_root}" --job-id "${BASH_REMATCH[1]}" --expected-commit "${BASH_REMATCH[2]}"
     ;;
+  *"scripts/verify_development_handoff.py"*)
+    handoff_check_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_development_handoff.py" --repo-root "[^"]+"$'
+    if [[ ! "${recipe}" =~ ${handoff_check_pattern} ]]; then
+      echo "[fullmag just] invalid development handoff check recipe" >&2
+      exit 2
+    fi
+    # This fixed interpreted route owns preflight, its worktree lease and
+    # terminal evidence; it does not prepare or migrate compatibility links.
+    exec "${python_cmd}" "${script_dir}/verify_development_handoff.py" --repo-root "${repo_root}"
+    ;;
 esac
 
 # Read-only listing/help recipes must not create a storage marker or any

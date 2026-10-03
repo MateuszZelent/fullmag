@@ -141,6 +141,10 @@ windows-workspace-build backend_profile="dev" frontend="dev" web_port="3197" bui
 windows-backend-dev web_port="3197":
     @{{storage_python}} "{{repo_root}}/scripts/windows/watch_backend.py" --repo-root "{{repo_root}}" --web-port "{{web_port}}"
 
+# Fixed interpreted checks for development handoff persistence, without Cargo.
+verify-windows-development-handoff:
+    @{{storage_python}} "{{repo_root}}/scripts/verify_development_handoff.py" --repo-root "{{repo_root}}"
+
 windows-build backend="fdm" device="cpu" frontend="dev" skip_local_changes="false":
     backend="{{backend}}"; device="{{device}}"; frontend="{{frontend}}"; skip_local_changes="{{skip_local_changes}}"; \
     case "$backend" in backend=*) backend="${backend#backend=}" ;; --backend=*) backend="${backend#--backend=}" ;; esac; \
