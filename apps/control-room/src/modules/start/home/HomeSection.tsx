@@ -32,6 +32,8 @@ function useToday(): string {
 
 export interface HomeSectionProps {
   readonly recent: RecentIndexController;
+  /** From the host (git config, then the OS user); null keeps the greeting generic. */
+  readonly name: string | null;
   readonly browseDisabledReason: string | null;
   readonly disabledReasons: Readonly<Record<string, string | null>>;
   readonly initialFocusRef?: Ref<HTMLButtonElement>;
@@ -46,6 +48,7 @@ export function HomeSection({
   disabledReasons,
   initialFocusRef,
   recent,
+  name,
   onOpenRecent,
   onResumeContinue,
   onDiscardContinue,
@@ -72,7 +75,7 @@ export function HomeSection({
     <>
       <div className="fm-start-page-head">
         <div className="fm-start-page-head__copy">
-          <h1>Welcome to Fullmag</h1>
+          <h1>{name ? `Welcome back, ${name}` : "Welcome to Fullmag"}</h1>
           <p>{homeSubline(recent.state)}</p>
         </div>
         {today ? <div className="fm-start-page-head__meta">{today}</div> : null}

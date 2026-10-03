@@ -7,6 +7,7 @@ import { tauriInvoke } from "@/kernel/persistence/ProjectDocumentController";
 import { Button } from "@/shared/ui/Button";
 
 import { openLabel, selectBanner } from "../model/bannerModel";
+import { readProvenance, type ProvenanceState } from "../model/provenance";
 import type { ContinueSession, InspectorTab, RecentEntry } from "../model/types";
 import { ProjectThumb } from "../ui/ProjectThumb";
 import { SolverBadge } from "../ui/SolverBadge";
@@ -14,6 +15,7 @@ import { StatusPill } from "../ui/StatusPill";
 
 import { ContextBanner } from "./ContextBanner";
 import { InspectorOverview } from "./InspectorOverview";
+import { AuthorsPanel, HistoryPanel, RunsPanel } from "./ProvenancePanels";
 
 const TABS: readonly { readonly id: InspectorTab; readonly label: string }[] = [
   { id: "overview", label: "Overview" },
@@ -25,12 +27,19 @@ const TABS: readonly { readonly id: InspectorTab; readonly label: string }[] = [
 const subscribeNever = () => () => undefined;
 const serverInvoke = () => null;
 
-/** Until the manifest carries provenance (a later step) these tabs say so. */
-const PENDING_COPY: Readonly<Record<Exclude<InspectorTab, "overview">, string>> = {
-  authors: "No authors are recorded for this project yet.",
-  history: "No history is recorded for this project yet.",
-  runs: "No runs are recorded for this project yet.",
-};
+function provenanceNote(state: ProvenanceState): string {
+  switch (state.kind) {
+    case "loading":
+    case "idle":
+      return "Reading the project…";
+    case "unavailable":
+      return "Authors, history and runs are read by the desktop app.";
+    case "error":
+      return `Could not read the project record: ${state.message}`;
+    case "ready":
+      return "";
+  }
+}
 
 export interface ProjectDetailsProps {
   readonly entry: RecentEntry;
@@ -53,12 +62,22 @@ export function ProjectDetails({
   const [tab, setTab] = useState<InspectorTab>("overview");
   const [copied, setCopied] = useState(false);
   const [openError, setOpenError] = useState<string | null>(null);
+  const [provenance, setProvenance] = useState<ProvenanceState>({ kind: "idle" });
   const baseId = useId();
   const banner = selectBanner({ entry, session });
   const missing = entry.status === "missing";
   // Hydration starts with the same disabled desktop action as server rendering.
   // The fixed host bridge becomes available in React's client snapshot phase.
   const invoke = useSyncExternalStore(subscribeNever, tauriInvoke, serverInvoke);
+
+  // Provenance is read from the archive only when a tab that needs it opens.
+  const selectTab = (next: InspectorTab) => {
+    setTab(next);
+    if (next !== "overview" && provenance.kind === "idle") {
+      setProvenance({ kind: "loading" });
+      void readProvenance(entry.path).then(setProvenance);
+    }
+  };
 
   const copyPath = () => {
     void navigator.clipboard?.writeText(entry.path).then(() => {
@@ -82,7 +101,7 @@ export function ProjectDetails({
     event.preventDefault();
     const target = TABS[next];
     if (!target) return;
-    setTab(target.id);
+    selectTab(target.id);
     document.getElementById(`${baseId}-tab-${target.id}`)?.focus();
   };
 
@@ -156,7 +175,7 @@ export function ProjectDetails({
             className="fm-start-tab"
             id={`${baseId}-tab-${item.id}`}
             key={item.id}
-            onClick={() => setTab(item.id)}
+            onClick={() => selectTab(item.id)}
             onKeyDown={(event) => onTabKeyDown(event, index)}
             role="tab"
             tabIndex={tab === item.id ? 0 : -1}
@@ -175,8 +194,16 @@ export function ProjectDetails({
       >
         {tab === "overview" ? (
           <InspectorOverview summary={entry.summary} />
+        ) : provenance.kind === "ready" ? (
+          tab === "authors" ? (
+            <AuthorsPanel entry={entry} provenance={provenance.provenance} />
+          ) : tab === "history" ? (
+            <HistoryPanel provenance={provenance.provenance} />
+          ) : (
+            <RunsPanel provenance={provenance.provenance} />
+          )
         ) : (
-          <p className="fm-start-inspector__note">{PENDING_COPY[tab]}</p>
+          <p className="fm-start-inspector__note">{provenanceNote(provenance)}</p>
         )}
       </div>
 
