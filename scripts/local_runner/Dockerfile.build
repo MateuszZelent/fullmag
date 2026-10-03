@@ -62,11 +62,11 @@ RUN if [ "$CPU_MFEM_ONLY" = "1" ]; then \
       git -C /tmp/fullmag-runner-slepc-src fetch --depth 1 origin 4c754d7d3ae067837670828a304512798334fb3a && \
       git -C /tmp/fullmag-runner-slepc-src checkout --detach FETCH_HEAD && \
       test "$(git -C /tmp/fullmag-runner-slepc-src rev-parse HEAD)" = "4c754d7d3ae067837670828a304512798334fb3a" && \
-      cd /tmp/fullmag-runner-slepc-src && \
-      SLEPC_DIR=/tmp/fullmag-runner-slepc-src PETSC_DIR=/opt/fullmag-mfem-cpu PETSC_ARCH= \
+      cd /tmp/fullmag-runner-slepc-src && unset PETSC_ARCH && \
+      SLEPC_DIR=/tmp/fullmag-runner-slepc-src PETSC_DIR=/opt/fullmag-mfem-cpu \
         python3 ./configure --prefix=/opt/fullmag-mfem-cpu && \
-      make SLEPC_DIR=/tmp/fullmag-runner-slepc-src PETSC_DIR=/opt/fullmag-mfem-cpu PETSC_ARCH= -j2 all && \
-      make SLEPC_DIR=/tmp/fullmag-runner-slepc-src PETSC_DIR=/opt/fullmag-mfem-cpu PETSC_ARCH= install && \
+      make SLEPC_DIR=/tmp/fullmag-runner-slepc-src PETSC_DIR=/opt/fullmag-mfem-cpu -j2 all && \
+      make SLEPC_DIR=/tmp/fullmag-runner-slepc-src PETSC_DIR=/opt/fullmag-mfem-cpu install && \
       cd / && rm -rf /tmp/fullmag-runner-slepc-src; \
     elif [ "$CPU_MFEM_ONLY" != "0" ]; then exit 2; fi
 RUN if [ "$CPU_MFEM_ONLY" = "1" ]; then \

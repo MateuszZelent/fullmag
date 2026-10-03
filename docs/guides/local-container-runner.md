@@ -40,6 +40,32 @@ Obraz workera powstaje z istniejącego, świadomie wybranego obrazu toolchaina:
 `just runner-build-image <lokalny-tag-toolchaina>`; sprawdź jego immutable ID,
 a następnie `just runner-configure-build fem-cpu-release sha256:<image-id-workera>`.
 Sama obecność profilu w katalogu nie oznacza konfiguracji obrazu ani walidacji.
+
+Dla pełnego stosu modalnego CPU z `CPU_MFEM_ONLY=1` recepta musi mieć sieć
+na pobranie przypiętych źródeł i pakietów, np.
+`just runner-build-image <zweryfikowany-lokalny-tag> <nowy-tag-workera> 1 default`.
+W Docker BuildKit wartość `bridge` nie jest poprawną opcją build network.
+Sprawdź immutable ID tagu bazowego przed wywołaniem; surowy image ID
+`sha256:...` w `FROM` może zostać zinterpretowany jako nazwa repozytorium,
+więc użyj osobnego lokalnego aliasu przypiętego do tego sprawdzonego obrazu.
+Nie zastępuje to kontroli końcowego immutable ID workera.
+
+Przy prefix-based PETSc/SLEPc usuń odziedziczone `PETSC_ARCH` przed
+konfiguracją SLEPc i nie przekazuj `PETSC_ARCH=` jako argumentu poleceń
+`make` SLEPc. Własny build PETSc nadal jawnie używa `PETSC_ARCH=arch-linux-cpu`.
+Configure wybiera tymczasowy katalog `installed-arch-...`; command-line
+pusta wartość nadpisuje ten wybór i powoduje brak `slepcrules`/`slepcconf.h`.
+Procedura wynika z [instrukcji SLEPc](https://slepc.upv.es/release/documentation/manual/intro.html#prefix-based-installation).
+Nie zmienia to kontraktu uruchomieniowego: po instalacji API używa jawnego
+prefixu CPU, a attestacja weryfikuje rzeczywiste pliki i konfigurację bibliotek.
+
+Zaufany executor pochodzi z obrazu koordynatora, nie z kapsuły workera.
+Po zmianie środowiska runtime-v2 lub walidacji receiptów aktualizuj oba obrazy
+w pustym, zapauzowanym slocie. Przed wymianą porównaj źródła wdrożonego
+executora; zachowaj działającą obsługę pozostałych profili i atestowanych
+ograniczonych instancji managed browser. Nie przenoś kodu nieznanego
+pochodzenia ani lokalnych sekretów. Po wdrożeniu sprawdź health, profile,
+źródła executora i stan kolejki, a następnie jawnie wznów FIFO.
 Aktualnie konfigurowana trasa to FEM CPU; FEM GPU/FDM CPU wymagają osobnych dowodów.
 
 Z wybranego, zarejestrowanego worktree:
@@ -113,7 +139,7 @@ runtime-only jest powiązane hashami. Sam receipt pozostaje `NOT VERIFIED` i nie
 jest dowodem CTest ani kwalifikacji fizycznej.
 
 Profil `fem-cpu-slepc-runtime-v2` oddziela ABI trasy CPU: obraz zawiera drugi
-MFEM v4.9 zbudowany bez CUDA pod `/opt/fullmag-mfem-cpu`, a natywny klient FEM
+MFEM v4.10 zbudowany bez CUDA pod `/opt/fullmag-mfem-cpu`, a natywny klient FEM
 jest kompilowany z `FULLMAG_ENABLE_CUDA=OFF`. Trusted receipt wymaga zarówno
 `MFEM_DIR` z tego prefiksu w cache CMake, jak i rzeczywistego `libmfem.so`
 rozwiązanego przez loader z tego samego prefiksu; zapisuje ścieżkę i hash
