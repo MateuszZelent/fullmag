@@ -212,6 +212,11 @@ export type GeometryRealizationResource =
 export type GeometryValidationResource =
   components["schemas"]["GeometryValidationResource"];
 export type HealthResource = components["schemas"]["HealthResponse"];
+export type DevelopmentBackendResource = components["schemas"]["DevelopmentBackendResource"];
+export type DevelopmentRestartRequest =
+  components["schemas"]["DevelopmentRestartRequest"];
+export type DevelopmentRestartResource =
+  components["schemas"]["DevelopmentRestartResource"];
 export type ImportSessionAssetRequest =
   components["schemas"]["ImportSessionAssetRequest"];
 export type SessionAssetImportResponse =
@@ -501,6 +506,10 @@ export type SolverEnergyHistoryResource =
   components["schemas"]["SolverEnergyHistoryResource"];
 export type SimulationPreparationResource =
   components["schemas"]["SimulationPreparationResource"];
+export type LivePreparationMaterializationRequest =
+  components["schemas"]["LivePreparationMaterializationRequest"];
+export type LivePreparationMaterializationResource =
+  components["schemas"]["LivePreparationMaterializationResource"];
 export type SolverStatusResource = components["schemas"]["SolverStatusResource"];
 export type StageExecutionResource =
   components["schemas"]["StageExecutionResource"];
@@ -547,7 +556,7 @@ export type StudyRuntimePatchRequest =
 export type StudyRuntimeResource =
   components["schemas"]["StudyRuntimeResource"];
 export type AuthoringTransactionRequest =
-  | { kind: "replace_scene"; scene: JsonObject }
+  | { base_revision?: number | null; kind: "replace_scene"; scene: JsonObject }
   | (BaseAuthoringTransaction & {
       kind: "merge_patch";
       merge_patch: JsonObject;
@@ -822,6 +831,60 @@ export type SessionImportInspectRequest =
   components["schemas"]["SessionImportInspectRequest"];
 export type SessionImportInspectResponse =
   components["schemas"]["SessionImportInspectResponse"];
+export type ProjectCreateRequest =
+  components["schemas"]["ProjectCreateRequest"];
+export type ProjectArchiveRequest =
+  components["schemas"]["ProjectArchiveRequest"];
+export type ProjectAuthoringUpdateRequest =
+  components["schemas"]["ProjectAuthoringUpdateRequest"];
+export type ProjectDocumentResource =
+  components["schemas"]["ProjectDocumentResource"];
+export type ProjectRunSubmitRequest =
+  components["schemas"]["ProjectRunSubmitRequest"];
+export type ProjectRunSubmitResource =
+  components["schemas"]["ProjectRunSubmitResource"];
+export type ProjectRunMaterializationResource =
+  components["schemas"]["ProjectRunMaterializationResource"];
+export type ProjectRunResource = components["schemas"]["ProjectRunResource"];
+export type ProjectRunListQuery = components["schemas"]["ProjectRunListQuery"];
+export type ProjectRunListResource = components["schemas"]["ProjectRunListResource"];
+export type ProjectRunTaskCancellationRequest =
+  components["schemas"]["ProjectRunTaskCancellationRequest"];
+export type ProjectRunTaskCancellationResource =
+  components["schemas"]["ProjectRunTaskCancellationResource"];
+export type SolutionSetDiscoveryPageResource =
+  components["schemas"]["SolutionSetDiscoveryPageResource"];
+export type SolutionSetDiscoveryPageQuery =
+  components["schemas"]["SolutionSetDiscoveryPageQuery"];
+export type SolutionSetResource =
+  components["schemas"]["SolutionSetResource"];
+export type SolutionSetMemberResource =
+  components["schemas"]["SolutionSetMemberResource"];
+export type SolutionSetArtifactResource =
+  components["schemas"]["SolutionSetArtifactResource"];
+export type SolutionSetMemberPageResource =
+  components["schemas"]["SolutionSetMemberPageResource"];
+export type SolutionSetArtifactPageResource =
+  components["schemas"]["SolutionSetArtifactPageResource"];
+export type SolutionSetMemberPageQuery =
+  components["schemas"]["SolutionSetMemberPageQuery"];
+export type SolutionSetArtifactPageQuery =
+  components["schemas"]["SolutionSetArtifactPageQuery"];
+export type SolutionScalarResource =
+  components["schemas"]["SolutionScalarResource"];
+export type SolutionSetRevision = Extract<SolutionSetResource["revision"], string>;
+export type MaterializedDatasetResource =
+  components["schemas"]["MaterializedDatasetResource"];
+export type MaterializedDatasetSliceEnvelopeResource =
+  components["schemas"]["MaterializedDatasetSliceEnvelopeResource"];
+export type SavedFieldGeometryResource =
+  components["schemas"]["SavedFieldGeometryResource"];
+export type ObservationFrameListQuery =
+  components["schemas"]["ObservationFrameListQuery"];
+export type ObservationFrameListResource =
+  components["schemas"]["ObservationFrameListResource"];
+export type ObservationFrameResource =
+  components["schemas"]["ObservationFrameResource"];
 type GeneratedStructuredCommandRequest =
   components["schemas"]["StructuredCommandRequest"];
 type RuntimeCommandIntent = components["schemas"]["RuntimeCommandIntent"];
@@ -846,6 +909,7 @@ export type UniversePatchRequest = components["schemas"]["UniversePatchRequest"]
 export type UniverseResource = components["schemas"]["UniverseResource"];
 export type VisualizationStatePatch =
   components["schemas"]["VisualizationStatePatch"];
+export type DisplaySelection = components["schemas"]["DisplaySelection"];
 export type VisualizationStateResource =
   components["schemas"]["VisualizationStateResource"];
 export type ModeCompositionDatasetPatch =
@@ -905,6 +969,7 @@ export interface FieldVectorResponseMetadata {
   domainGenerationId: string | null;
   encoding: string | null;
   fieldIndexing: string | null;
+  fieldGenerationId?: string | null;
   fieldRevision: string | null;
   identityIssues: FieldVectorIdentityIssue[];
   meshTopologyHash: string | null;
@@ -914,6 +979,9 @@ export interface FieldVectorResponseMetadata {
   quantityId: string | null;
   scopeId: string | null;
   scopeKind: string | null;
+  sourceId?: string | null;
+  sourceKind?: string | null;
+  sourceRevision?: string | null;
   snapshotId: string | null;
   stageId?: string | null;
   phaseRad?: number | null;
@@ -954,10 +1022,18 @@ export type BinaryResourceResult<TData, TMetadata = unknown> =
     };
 
 export interface RequestOptions {
+  /**
+   * Canonical session=<encoded-id>&epoch=<encoded-epoch> identity used for
+   * coalescing and the x-fullmag-session-scope HTTP precondition header.
+   * It is never serialized into URLs.
+   */
+  sessionScopeKey?: string;
   signal?: AbortSignal;
 }
 
 export interface BinaryRequestOptions extends RequestOptions {
+  /** Optional hard body cap enforced while reading, before binary decoding. */
+  maxResponseBytes?: number;
   etag?: string | null;
   range?: string | null;
 }

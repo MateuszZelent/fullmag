@@ -48,12 +48,14 @@ use fullmag_runner::{DisplayFieldComponent, DisplayViewMode as RunnerDisplayView
 pub async fn get_display(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<DisplaySelection>, ApiError> {
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let _transition = state.current_live_session_transition.lock().await;
+    crate::validate_current_live_request_context(&state, &request_context).await?;
     let selection = state.current_display_selection.read().await;
     let presentation = state.current_display_presentation.read().await;
-    Ok(Json(build_display_selection_response(
-        &selection,
-        &presentation,
-    )))
+    let response = build_display_selection_response(&selection, &presentation);
+    crate::validate_current_live_request_context(&state, &request_context).await?;
+    Ok(Json(response))
 }
 
 #[utoipa::path(
@@ -68,14 +70,16 @@ pub async fn get_display(
 pub async fn get_visualization_state(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<VisualizationStateResource>, ApiError> {
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let _transition = state.current_live_session_transition.lock().await;
+    crate::validate_current_live_request_context(&state, &request_context).await?;
     let selection = state.current_display_selection.read().await;
     let presentation = state.current_display_presentation.read().await;
     let live_snapshot = state.current_live_state.read().await;
-    Ok(Json(build_visualization_state_response(
-        &selection,
-        &presentation,
-        live_snapshot.as_ref(),
-    )))
+    let response =
+        build_visualization_state_response(&selection, &presentation, live_snapshot.as_ref());
+    crate::validate_current_live_request_context(&state, &request_context).await?;
+    Ok(Json(response))
 }
 
 #[utoipa::path(
@@ -89,13 +93,18 @@ pub async fn get_visualization_state(
 pub async fn get_visualization_client_acks(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<VisualizationClientAckResource>, ApiError> {
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let _transition = state.current_live_session_transition.lock().await;
+    crate::validate_current_live_request_context(&state, &request_context).await?;
     let entries = state.current_visualization_client_acks.read().await;
-    Ok(Json(VisualizationClientAckResource {
+    let response = VisualizationClientAckResource {
         revision: state
             .current_visualization_client_ack_revision
             .load(Ordering::Relaxed),
         entries: entries.values().cloned().collect(),
-    }))
+    };
+    crate::validate_current_live_request_context(&state, &request_context).await?;
+    Ok(Json(response))
 }
 
 #[utoipa::path(
@@ -112,6 +121,9 @@ pub async fn post_visualization_client_ack(
     State(state): State<Arc<AppState>>,
     Json(request): Json<VisualizationClientAckRequest>,
 ) -> Result<Json<VisualizationClientAckEntry>, ApiError> {
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let _transition = state.current_live_session_transition.lock().await;
+    crate::validate_current_live_request_context(&state, &request_context).await?;
     let entry = build_visualization_client_ack_entry(&request)?;
     {
         let mut entries = state.current_visualization_client_acks.write().await;
@@ -128,6 +140,7 @@ pub async fn post_visualization_client_ack(
         .fetch_add(1, Ordering::Relaxed)
         .saturating_add(1);
     emit_visualization_client_ack_realtime_change(&state, ack_revision).await?;
+    crate::validate_current_live_request_context(&state, &request_context).await?;
     Ok(Json(entry))
 }
 
@@ -145,15 +158,17 @@ pub async fn replace_display(
     State(state): State<Arc<AppState>>,
     Json(replacement): Json<DisplaySelection>,
 ) -> Result<Json<DisplaySelection>, ApiError> {
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let _transition = state.current_live_session_transition.lock().await;
+    crate::validate_current_live_request_context(&state, &request_context).await?;
     apply_display_replace(&state, replacement).await?;
     let display_revision = synchronize_observation_quantities(&state).await?;
     emit_display_realtime_change(&state, display_revision).await?;
     let selection = state.current_display_selection.read().await;
     let presentation = state.current_display_presentation.read().await;
-    Ok(Json(build_display_selection_response(
-        &selection,
-        &presentation,
-    )))
+    let response = build_display_selection_response(&selection, &presentation);
+    crate::validate_current_live_request_context(&state, &request_context).await?;
+    Ok(Json(response))
 }
 
 #[utoipa::path(
@@ -170,6 +185,9 @@ pub async fn replace_visualization_state(
     State(state): State<Arc<AppState>>,
     Json(replacement): Json<VisualizationStateResource>,
 ) -> Result<Json<VisualizationStateResource>, ApiError> {
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let _transition = state.current_live_session_transition.lock().await;
+    crate::validate_current_live_request_context(&state, &request_context).await?;
     validate_camera_state(&replacement.camera)?;
     validate_planar_visualization_state(&replacement.planar)?;
     validate_planar_target_override_identities(&state, &replacement.planar.target_overrides)
@@ -202,11 +220,10 @@ pub async fn replace_visualization_state(
     let selection = state.current_display_selection.read().await;
     let presentation = state.current_display_presentation.read().await;
     let live_snapshot = state.current_live_state.read().await;
-    Ok(Json(build_visualization_state_response(
-        &selection,
-        &presentation,
-        live_snapshot.as_ref(),
-    )))
+    let response =
+        build_visualization_state_response(&selection, &presentation, live_snapshot.as_ref());
+    crate::validate_current_live_request_context(&state, &request_context).await?;
+    Ok(Json(response))
 }
 
 #[utoipa::path(
@@ -223,7 +240,11 @@ pub async fn patch_display(
     State(state): State<Arc<AppState>>,
     Json(update): Json<DisplayPatch>,
 ) -> Result<Json<DisplaySelection>, ApiError> {
-    let response = apply_display_patch(state, update).await?;
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let _transition = state.current_live_session_transition.lock().await;
+    crate::validate_current_live_request_context(&state, &request_context).await?;
+    let response = apply_display_patch(state.clone(), update).await?;
+    crate::validate_current_live_request_context(&state, &request_context).await?;
     Ok(Json(response))
 }
 
@@ -241,6 +262,9 @@ pub async fn patch_visualization_state(
     State(state): State<Arc<AppState>>,
     Json(update): Json<VisualizationStatePatch>,
 ) -> Result<Json<VisualizationStateResource>, ApiError> {
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let _transition = state.current_live_session_transition.lock().await;
+    crate::validate_current_live_request_context(&state, &request_context).await?;
     validate_visualization_state_patch(&update)?;
     if let Some(planar) = &update.planar {
         if let Some(target_overrides) = &planar.target_overrides {
@@ -266,11 +290,10 @@ pub async fn patch_visualization_state(
     let selection = state.current_display_selection.read().await;
     let presentation = state.current_display_presentation.read().await;
     let live_snapshot = state.current_live_state.read().await;
-    Ok(Json(build_visualization_state_response(
-        &selection,
-        &presentation,
-        live_snapshot.as_ref(),
-    )))
+    let response =
+        build_visualization_state_response(&selection, &presentation, live_snapshot.as_ref());
+    crate::validate_current_live_request_context(&state, &request_context).await?;
+    Ok(Json(response))
 }
 
 async fn apply_display_replace(
@@ -2141,11 +2164,8 @@ async fn synchronize_observation_quantities(state: &Arc<AppState>) -> Result<u64
     let mut selection = state.current_display_selection.write().await;
     let presentation = state.current_display_presentation.read().await;
     let live_snapshot = state.current_live_state.read().await;
-    let visualization = build_visualization_state_response(
-        &selection,
-        &presentation,
-        live_snapshot.as_ref(),
-    );
+    let visualization =
+        build_visualization_state_response(&selection, &presentation, live_snapshot.as_ref());
     let observation_quantities = observation_quantities_for_visualization_state(&visualization);
     apply_observation_quantities(&mut selection, observation_quantities);
     Ok(selection.revision)
@@ -2186,9 +2206,7 @@ fn observation_quantities_for_visualization_state(
     canonical.observation_quantities
 }
 
-fn target_requests_spatial_observation(
-    settings: &VisualizationResolvedTargetSettings,
-) -> bool {
+fn target_requests_spatial_observation(settings: &VisualizationResolvedTargetSettings) -> bool {
     settings.visible
         && ((settings.surface_visible
             && !matches!(settings.surface_color_source, SurfaceColorSource::Solid))
@@ -2196,8 +2214,7 @@ fn target_requests_spatial_observation(
 }
 
 const MAX_VISUALIZATION_RESTORE_WARNINGS: usize = 16;
-const AIRBOX_OVERRIDE_ORDERING_WARNING: &str =
-    "visualization_override_migration_ambiguous_airbox_ordering: persisted Airbox aliases lack per-entry revision/timestamp evidence; canonical identity was retained when unambiguous and conflicting legacy entries were dropped";
+const AIRBOX_OVERRIDE_ORDERING_WARNING: &str = "visualization_override_migration_ambiguous_airbox_ordering: persisted Airbox aliases lack per-entry revision/timestamp evidence; canonical identity was retained when unambiguous and conflicting legacy entries were dropped";
 
 #[derive(Debug, Clone)]
 pub(crate) struct CanonicalizedVisualizationOverrides {

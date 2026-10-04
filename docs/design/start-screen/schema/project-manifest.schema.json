@@ -1,0 +1,223 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fullmag.org/schema/project-manifest-1.2.json",
+  "title": "Fullmag project manifest (.fms → manifest.json)",
+  "description": "The start-screen-relevant surface of the project manifest inside a .fms archive. This document specifies ONLY the metadata the launcher needs — identity, provenance, authorship, history and run records. Model, mesh, materials and study definitions keep their existing schemas and are referenced here by file, not redefined. Field names follow the snake_case convention of the existing OpenAPI contract (ProjectDocumentResource).",
+  "type": "object",
+  "required": ["schema_version", "project_id", "name", "created", "modified", "revision"],
+  "properties": {
+    "schema_version": {
+      "description": "Manifest schema. The app migrates 1.0 and 1.1 on open, writing a migrated copy and leaving the source file untouched. A manifest newer than the running build is refused with a clear message rather than guessed at.",
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+$",
+      "const": "1.2"
+    },
+    "project_id": { "type": "string", "format": "uuid" },
+    "name": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "description": { "type": "string", "maxLength": 2000 },
+    "tags": { "type": "array", "items": { "type": "string", "maxLength": 32 }, "maxItems": 12 },
+
+    "created": { "$ref": "#/$defs/stamp" },
+    "modified": { "$ref": "#/$defs/stamp" },
+    "revision": {
+      "description": "Monotonic, incremented on every persisted change. Mirrors ProjectDocumentResource.revision.",
+      "type": "integer",
+      "minimum": 0
+    },
+    "source_hash": {
+      "description": "Hash of the archive bytes at the last save; used to detect out-of-band edits.",
+      "type": ["string", "null"]
+    },
+
+    "created_with": { "$ref": "#/$defs/build_stamp" },
+    "modified_with": { "$ref": "#/$defs/build_stamp" },
+
+    "authors": {
+      "description": "Ordered. The first creator is the one shown when the inspector has room for a single name.",
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/author" }
+    },
+
+    "citation": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "doi": { "type": "string" },
+        "url": { "type": "string", "format": "uri" },
+        "preferred_bibtex": {
+          "description": "Overrides the BibTeX the inspector generates from authors + name + revision. Set when the project is tied to a published dataset.",
+          "type": "string"
+        },
+        "license": { "type": "string", "examples": ["CC-BY-4.0", "MIT", "proprietary"] }
+      }
+    },
+
+    "solver": {
+      "type": "object",
+      "required": ["kind"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "enum": ["FDM", "FEM"] },
+        "integrator": { "type": "string" },
+        "tolerance": { "type": "number", "exclusiveMinimum": 0 },
+        "preferred_device": {
+          "description": "Pins execution to a backend. When the machine cannot provide it, the start screen warns before the run rather than falling back silently.",
+          "type": ["string", "null"],
+          "examples": ["cuda", "cpu", null]
+        }
+      }
+    },
+
+    "model_ref": {
+      "description": "Paths inside the archive. The launcher does not parse these; it only reports that they exist and how large they are.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "geometry": { "type": "string" },
+        "mesh": { "type": "string" },
+        "materials": { "type": "string" },
+        "studies": { "type": "string" }
+      }
+    },
+
+    "summary": {
+      "description": "Human-readable denormalisation of the model, written on save so the inspector can render the Overview tab without loading the model. Same shape as recent-index model_summary.",
+      "$ref": "https://fullmag.org/schema/recent-index-1.0.json#/$defs/model_summary"
+    },
+
+    "preview": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "thumbnail": { "type": "string", "description": "Path inside the archive, 16:10, PNG." },
+        "generated_at": { "type": "string", "format": "date-time" },
+        "generated_from_run": { "type": "string" },
+        "frame_count": { "type": "integer", "minimum": 0 },
+        "colouring": {
+          "description": "How the magnetisation was mapped to colour, so a thumbnail is never read with the wrong convention.",
+          "type": "string",
+          "examples": ["hsl-sphere", "mz-diverging", "field-magnitude"]
+        }
+      }
+    },
+
+    "history": {
+      "description": "Append-only. The inspector shows the most recent entries and offers a per-entry restore; the full list stays in the archive.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/history_entry" }
+    },
+
+    "runs": {
+      "description": "One record per execution. Run outputs live in their own directories; this is the index over them.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/run" }
+    },
+
+    "migration": {
+      "description": "Present when the manifest was written by an older build and needs upgrading. Mirrors ProjectMigrationResource.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "from_version": { "type": "string" },
+        "to_version": { "type": "string" },
+        "steps": { "type": "array", "items": { "type": "string" } },
+        "lossless": {
+          "description": "False when the migration drops information. The start screen then says so before writing the migrated copy.",
+          "type": "boolean"
+        }
+      }
+    }
+  },
+
+  "$defs": {
+    "stamp": {
+      "type": "object",
+      "required": ["at"],
+      "additionalProperties": false,
+      "properties": {
+        "at": { "type": "string", "format": "date-time" },
+        "by": { "type": "string", "description": "Author name as recorded in authors[]." }
+      }
+    },
+    "build_stamp": {
+      "type": "object",
+      "required": ["app", "version"],
+      "additionalProperties": false,
+      "properties": {
+        "app": { "type": "string", "const": "Fullmag" },
+        "version": { "type": "string", "examples": ["0.9.3-beta"] },
+        "commit": { "type": "string" },
+        "platform": { "type": "string", "examples": ["windows-x64", "linux-x64"] }
+      }
+    },
+    "author": {
+      "type": "object",
+      "required": ["name", "role"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "affiliation": { "type": "string" },
+        "orcid": { "type": "string", "pattern": "^\\d{4}-\\d{4}-\\d{4}-\\d{3}[\\dX]$" },
+        "role": { "enum": ["creator", "contributor", "maintainer"] }
+      }
+    },
+    "history_entry": {
+      "type": "object",
+      "required": ["revision", "at", "kind", "summary"],
+      "additionalProperties": false,
+      "properties": {
+        "revision": { "type": "integer", "minimum": 0 },
+        "at": { "type": "string", "format": "date-time" },
+        "by": { "type": "string" },
+        "kind": {
+          "description": "Drives the timeline marker colour: edit = accent, run = success, migrate = degraded, import = info.",
+          "enum": ["edit", "run", "migrate", "import", "restore"]
+        },
+        "summary": { "type": "string", "maxLength": 160 },
+        "changes": {
+          "description": "Specific, verifiable lines — \"cell z 10 → 5 nm\", not \"updated the mesh\".",
+          "type": "array",
+          "items": { "type": "string", "maxLength": 200 },
+          "maxItems": 20
+        },
+        "run_id": { "type": "string" },
+        "restorable": { "type": "boolean", "default": true }
+      }
+    },
+    "run": {
+      "type": "object",
+      "required": ["run_id", "started_at", "status"],
+      "additionalProperties": false,
+      "properties": {
+        "run_id": { "type": "string", "examples": ["r-0042"] },
+        "revision": { "type": "integer", "minimum": 0, "description": "Project revision this run was executed from." },
+        "started_at": { "type": "string", "format": "date-time" },
+        "finished_at": { "type": ["string", "null"], "format": "date-time" },
+        "duration_seconds": { "type": ["number", "null"], "minimum": 0 },
+        "status": { "enum": ["queued", "running", "ready", "failed", "cancelled"] },
+        "device": { "type": "string", "examples": ["RTX 4090", "CPU ×32"] },
+        "backend": { "type": "string", "examples": ["cuda-12.4", "cpu-rayon"] },
+        "output_dir": { "type": "string" },
+        "output_bytes": { "type": "integer", "minimum": 0 },
+        "frames": { "type": "integer", "minimum": 0 },
+        "error": {
+          "description": "One sentence, user-facing, cause first. Surfaced verbatim in the inspector banner, so it is written for a physicist, not for a log.",
+          "type": ["string", "null"],
+          "maxLength": 400
+        },
+        "checkpoint": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "properties": {
+            "path": { "type": "string" },
+            "at": { "type": "string", "format": "date-time" },
+            "sim_time_s": { "type": "number" },
+            "resumable": { "type": "boolean" }
+          }
+        }
+      }
+    }
+  }
+}

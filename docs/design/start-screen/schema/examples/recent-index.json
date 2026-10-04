@@ -1,0 +1,126 @@
+{
+  "format_version": 1,
+  "generated_at": "2026-10-03T12:04:11Z",
+  "scanned_locations": [
+    { "path": "D:\\sim", "recursive": true, "last_scanned_at": "2026-10-03T12:00:02Z", "reachable": true },
+    { "path": "E:\\shared\\magnonics", "recursive": true, "last_scanned_at": "2026-10-03T12:00:04Z", "reachable": true },
+    { "path": "\\\\nas-magnonics\\projects", "recursive": false, "last_scanned_at": "2026-10-03T12:00:19Z", "reachable": true }
+  ],
+  "continue": {
+    "project_id": "7b1f0c2e-9a44-4d1b-8f52-2c9e0a7d1101",
+    "run_id": "r-0042",
+    "checkpoint_at": "2026-10-03T12:04:02Z",
+    "checkpoint_path": "runs/r-0042/checkpoint-00256.fmck",
+    "device": "RTX 4090",
+    "progress": {
+      "fraction": 0.64,
+      "sim_time_s": 3.2e-9,
+      "sim_time_total_s": 5.0e-9,
+      "frames_written": 256,
+      "frames_total": 400,
+      "eta_seconds": 720
+    },
+    "resumable": true
+  },
+  "entries": [
+    {
+      "project_id": "7b1f0c2e-9a44-4d1b-8f52-2c9e0a7d1101",
+      "name": "YIG waveguide — spin-wave dispersion",
+      "path": "D:\\sim\\magnonics\\yig-waveguide-dispersion.fms",
+      "solver": "FDM",
+      "status": "running",
+      "last_opened_at": "2026-10-03T12:04:02Z",
+      "created_at": "2026-09-12T08:41:00Z",
+      "modified_at": "2026-10-03T12:04:02Z",
+      "size_bytes": 1420000000,
+      "revision": 42,
+      "manifest_schema_version": "1.2",
+      "created_with_version": "0.9.3-beta",
+      "mode": "read_write",
+      "pinned": true,
+      "tags": ["magnonics", "dispersion", "YIG"],
+      "thumbnail": "thumbs/7b1f0c2e.png",
+      "thumbnail_generated_at": "2026-10-02T09:53:00Z",
+      "summary": {
+        "discretisation": "512 × 512 × 8",
+        "cell_size": "2.0 × 2.0 × 5.0 nm",
+        "periodicity": "x",
+        "materials": ["YIG"],
+        "ms": "140 kA/m",
+        "aex": "3.65 pJ/m",
+        "alpha": "2.0e-4",
+        "interactions": ["exchange", "demag", "Zeeman", "Gilbert"],
+        "integrator": "RK45 (adaptive)",
+        "tolerance": "1e-6",
+        "excitation": "sinc, fc = 20 GHz",
+        "output_frames": 400,
+        "output_bytes": 1420000000,
+        "output_fields": ["m", "H_eff", "energy"]
+      },
+      "authors": [
+        { "name": "Mateusz Zelent", "email": "mateusz.zelent@rptu.de", "affiliation": "AG Magnonics, RPTU Kaiserslautern-Landau", "orcid": "0000-0002-1234-1234", "role": "creator" },
+        { "name": "A. Krysztofik", "affiliation": "AG Magnonics, RPTU", "role": "contributor" }
+      ]
+    },
+    {
+      "project_id": "1c84a0d7-3e55-4a20-b0c9-77e2b4a51002",
+      "name": "µMAG Standard Problem #4",
+      "path": "D:\\sim\\validation\\umag-sp4.fms",
+      "solver": "FDM",
+      "status": "readonly",
+      "last_opened_at": "2026-10-02T11:02:00Z",
+      "size_bytes": 42000000,
+      "revision": 9,
+      "manifest_schema_version": "1.2",
+      "mode": "read_only",
+      "mode_reason": "Reference benchmark — shipped with Fullmag",
+      "pinned": false,
+      "tags": ["validation", "benchmark", "µMAG"],
+      "thumbnail": "thumbs/1c84a0d7.png"
+    },
+    {
+      "project_id": "9f23d410-77bc-41e8-9a3d-0d61f2c73003",
+      "name": "Py nanodot — broadband FMR sweep",
+      "path": "D:\\sim\\fmr\\py-nanodot-fmr.fms",
+      "solver": "FDM",
+      "status": "failed",
+      "last_opened_at": "2026-10-01T15:33:00Z",
+      "size_bytes": 260000000,
+      "revision": 27,
+      "manifest_schema_version": "1.2",
+      "mode": "read_write",
+      "tags": ["FMR", "Py", "sweep"],
+      "last_error": "Run r-0027 diverged at t = 0.41 ns — |m| drift 4.2e-2 exceeded the 1e-3 tolerance. Likely cause: Δt too large for α = 0.001.",
+      "thumbnail": "thumbs/9f23d410.png"
+    },
+    {
+      "project_id": "4a07e1b9-62d0-4f77-83aa-5be9c1d84004",
+      "name": "Py layer with hole — FEM mesh study",
+      "path": "D:\\sim\\meshing\\py-layer-with-hole.fms",
+      "solver": "FEM",
+      "status": "migrate",
+      "last_opened_at": "2026-08-02T10:02:00Z",
+      "size_bytes": 94000000,
+      "revision": 14,
+      "manifest_schema_version": "1.0",
+      "created_with_version": "0.7.2",
+      "mode": "read_write",
+      "tags": ["meshing", "FEM", "convergence"],
+      "thumbnail": "thumbs/4a07e1b9.png"
+    },
+    {
+      "project_id": "c5d8f332-1b09-4c6a-91ef-3a7d50e95005",
+      "name": "Vortex core gyration — Py disc",
+      "path": "\\\\nas-magnonics\\projects\\vortex-gyration.fms",
+      "solver": "FEM",
+      "status": "missing",
+      "last_opened_at": "2026-09-18T09:14:00Z",
+      "size_bytes": 190000000,
+      "revision": 77,
+      "manifest_schema_version": "1.1",
+      "mode": "read_only",
+      "mode_reason": "Shared network location — opened read-only",
+      "tags": ["vortex", "gyration", "shared"]
+    }
+  ]
+}

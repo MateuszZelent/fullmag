@@ -176,6 +176,13 @@ from .model import (
     Selection,
     SelectionDefinition,
     SelectionScalar,
+    ParameterDefinition,
+    ParameterExpression,
+    ParameterLibrary,
+    ParameterValue,
+    ComponentDefinition,
+    ModelDefinition,
+    PhysicsConfiguration,
     SlabAverage,
     SaveDispersion,
     SaveEigenDiagnostics,
@@ -259,6 +266,7 @@ from .meshing import (
 
 # ── Flat scripting API (mumax-style) ──────────────────────
 from .world import (
+    ExecutionContext,
     B_demag,
     B_eff,
     B_exch,
@@ -298,6 +306,7 @@ from .world import (
     domain_mesh,
     frozen_magnetic_submesh,
     name,
+    parameter,
     engine,
     exchange,
     disable_exchange,
@@ -345,6 +354,7 @@ from .world import (
     relax,
     relax_stage,
     reset,
+    execution_context,
     run_while,
     eigenmodes,
     eigenmodes_stage,
@@ -373,6 +383,14 @@ mesh = _MeshNamespace()
 
 __all__ = [
     "AbsorbingBoundaryLayer",
+    "ExecutionContext",
+    "ParameterDefinition",
+    "ParameterExpression",
+    "ParameterLibrary",
+    "ParameterValue",
+    "ComponentDefinition",
+    "ModelDefinition",
+    "PhysicsConfiguration",
     # Class-based API
     "BackendTarget",
     "mesh",
@@ -640,6 +658,7 @@ __all__ = [
     "domain_mesh",
     "frozen_magnetic_submesh",
     "name",
+    "parameter",
     "engine",
     "exchange",
     "disable_exchange",
@@ -683,6 +702,7 @@ __all__ = [
     "frequency_response",
     "frequency_response_stage",
     "save_state_stage",
+    "execution_context",
     "minimize",
     "Minimize",
     "relax",

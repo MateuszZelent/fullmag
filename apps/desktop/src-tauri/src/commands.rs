@@ -1,8 +1,17 @@
+use base64::{engine::general_purpose::STANDARD, Engine as _};
+use fullmag_application::{
+    DocumentMode, DurabilityGuarantee, FileProjectRepository, ProjectApplication, ProjectSource,
+    ProjectTarget, SaveProjectRequest,
+};
+use crate::{compute_probe, provenance, recent_index};
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager};
 use tauri_plugin_dialog::DialogExt;
+
+const MAX_PROJECT_ARCHIVE_BYTES: u64 = 64 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
@@ -16,6 +25,53 @@ pub struct PickedTextFile {
     pub path: String,
     pub name: String,
     pub text: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectOpenSummary {
+    pub path: String,
+    pub project_id: String,
+    pub schema_version: String,
+    pub revision: u64,
+    pub dirty: bool,
+    pub mode: String,
+    pub read_only_reason: Option<String>,
+    pub source_hash: Option<String>,
+    pub migrated: bool,
+    pub can_write: bool,
+    pub warnings: Vec<String>,
+    pub preserved_paths: Vec<String>,
+    pub runtime: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectOpenArchive {
+    pub path: String,
+    pub file_name: String,
+    pub archive_base64: String,
+    pub summary: ProjectOpenSummary,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ProjectSaveRequest {
+    pub archive_base64: String,
+    pub display_name: String,
+    pub target_path: Option<String>,
+    pub expected_project_id: Option<String>,
+    pub expected_revision: Option<u64>,
+    pub client_intent_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectSaveSummary {
+    pub path: String,
+    pub project_id: String,
+    pub revision: u64,
+    pub save_as: bool,
+    pub durability: String,
+    pub data_file_synced: bool,
+    pub parent_directory_synced: bool,
+    pub power_loss_qualified: bool,
 }
 
 #[tauri::command]
@@ -48,6 +104,444 @@ pub async fn open_file_dialog(app: AppHandle) -> Result<Option<PickedTextFile>, 
         name,
         text,
     }))
+}
+
+fn summary_from_view(path: &Path, view: fullmag_application::DocumentView) -> ProjectOpenSummary {
+    let (mode, read_only_reason) = match view.mode {
+        DocumentMode::ReadWrite => ("read_write".to_string(), None),
+        DocumentMode::ReadOnly { reason } => ("read_only".to_string(), Some(reason)),
+    };
+    ProjectOpenSummary {
+        path: path.display().to_string(),
+        project_id: view.project_id.as_str().to_string(),
+        schema_version: view.schema_version,
+        revision: view.revision,
+        dirty: view.dirty,
+        mode,
+        read_only_reason,
+        source_hash: view.source_hash,
+        migrated: view.migration.migrated,
+        can_write: view.migration.can_write,
+        warnings: view.migration.warnings,
+        preserved_paths: view.migration.preserved_paths,
+        runtime: "untouched".into(),
+    }
+}
+
+fn open_project_file(path: PathBuf) -> Result<ProjectOpenSummary, String> {
+    let mut application = ProjectApplication::new(FileProjectRepository::new());
+    let opened = application
+        .open(ProjectSource::Path(path.clone()))
+        .map_err(|error| error.to_string())?;
+    Ok(summary_from_view(&path, opened.view))
+}
+
+fn read_project_archive(path: &Path) -> Result<(ProjectOpenSummary, Vec<u8>), String> {
+    // Validate the selected path through the repository adapter first.  This
+    // rejects symlink/reparse-point chains before the bytes are handed to the
+    // webview, while the second read preserves the original archive bytes for
+    // a byte-faithful host Save.
+    let summary = open_project_file(path.to_path_buf())?;
+    let metadata = fs::metadata(path)
+        .map_err(|error| format!("failed to inspect {}: {error}", path.display()))?;
+    if !metadata.is_file() {
+        return Err(format!(
+            "project path is not a regular file: {}",
+            path.display()
+        ));
+    }
+    if metadata.len() > MAX_PROJECT_ARCHIVE_BYTES {
+        return Err(format!(
+            "project archive exceeds {MAX_PROJECT_ARCHIVE_BYTES} byte limit"
+        ));
+    }
+    let bytes =
+        fs::read(path).map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+    Ok((summary, bytes))
+}
+
+/// Open a project definition through the same application/repository boundary
+/// used by the CLI.  It never restores a runtime session or starts a solve.
+#[tauri::command]
+pub async fn open_project_path(path: String) -> Result<ProjectOpenSummary, String> {
+    open_project_file(PathBuf::from(path))
+}
+
+#[tauri::command]
+pub async fn open_project_dialog(app: AppHandle) -> Result<Option<ProjectOpenSummary>, String> {
+    let result = app
+        .dialog()
+        .file()
+        .add_filter("Fullmag project", &["fms"])
+        .blocking_pick_file();
+    let Some(path) = result else {
+        return Ok(None);
+    };
+    let file_path = path
+        .into_path()
+        .map_err(|_| "selected project path is not available on this platform".to_string())?;
+    open_project_file(file_path).map(Some)
+}
+
+/// Open a project through the host file dialog and return the validated bytes
+/// to the webview.  The path is retained only as a host-owned Save target; the
+/// browser API never receives an arbitrary filesystem path.
+#[tauri::command]
+pub async fn open_project_archive_dialog(
+    app: AppHandle,
+) -> Result<Option<ProjectOpenArchive>, String> {
+    let result = app
+        .dialog()
+        .file()
+        .add_filter("Fullmag project", &["fms"])
+        .blocking_pick_file();
+    let Some(path) = result else {
+        return Ok(None);
+    };
+    let file_path = path
+        .into_path()
+        .map_err(|_| "selected project path is not available on this platform".to_string())?;
+    let (summary, bytes) = read_project_archive(&file_path)?;
+    let file_name = file_path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("fullmag-project.fms")
+        .to_string();
+    Ok(Some(ProjectOpenArchive {
+        path: file_path.display().to_string(),
+        file_name,
+        archive_base64: STANDARD.encode(bytes),
+        summary,
+    }))
+}
+
+fn decode_project_archive(request: &ProjectSaveRequest) -> Result<Vec<u8>, String> {
+    if request.display_name.trim().is_empty() {
+        return Err("project archive display_name must not be empty".into());
+    }
+    let bytes = STANDARD
+        .decode(request.archive_base64.as_bytes())
+        .map_err(|error| format!("invalid_project_archive_encoding: {error}"))?;
+    if bytes.is_empty() {
+        return Err("project archive must not be empty".into());
+    }
+    if bytes.len() as u64 > MAX_PROJECT_ARCHIVE_BYTES {
+        return Err(format!(
+            "project archive exceeds {MAX_PROJECT_ARCHIVE_BYTES} byte limit"
+        ));
+    }
+    Ok(bytes)
+}
+
+fn save_summary(receipt: fullmag_application::SaveReceipt) -> ProjectSaveSummary {
+    let (durability, data_file_synced, parent_directory_synced, power_loss_qualified) =
+        match receipt.durability {
+            DurabilityGuarantee::FilesystemSynced {
+                data_file_synced,
+                parent_directory_synced,
+                power_loss_qualified,
+            } => (
+                "filesystem_synced".to_string(),
+                data_file_synced,
+                parent_directory_synced,
+                power_loss_qualified,
+            ),
+            DurabilityGuarantee::MemoryOnly => ("memory_only".to_string(), false, false, false),
+            DurabilityGuarantee::Unspecified => ("unspecified".to_string(), false, false, false),
+        };
+    ProjectSaveSummary {
+        path: receipt.target.path().display().to_string(),
+        project_id: receipt.project_id.as_str().to_string(),
+        revision: receipt.revision,
+        save_as: receipt.save_as,
+        durability,
+        data_file_synced,
+        parent_directory_synced,
+        power_loss_qualified,
+    }
+}
+
+fn save_project_archive_to_target(
+    request: ProjectSaveRequest,
+    target: PathBuf,
+) -> Result<ProjectSaveSummary, String> {
+    let bytes = decode_project_archive(&request)?;
+    let mut incoming = ProjectApplication::new(FileProjectRepository::new());
+    let opened = incoming
+        .open(ProjectSource::Bytes {
+            display_name: request.display_name.clone(),
+            bytes,
+        })
+        .map_err(|error| error.to_string())?;
+    if !opened.view.mode.is_writable() || !opened.view.migration.can_write {
+        return Err(opened
+            .view
+            .migration
+            .warnings
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "project is read-only and cannot be saved".into()));
+    }
+
+    let existing = match fs::symlink_metadata(&target) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() {
+                return Err(format!(
+                    "project target may not be a symlink: {}",
+                    target.display()
+                ));
+            }
+            true
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(error) => {
+            return Err(format!(
+                "reading project target {}: {error}",
+                target.display()
+            ))
+        }
+    };
+
+    if !existing {
+        let receipt = incoming
+            .save_detached(
+                ProjectTarget::Path(target),
+                request.client_intent_id.clone(),
+            )
+            .map_err(|error| error.to_string())?;
+        return Ok(save_summary(receipt));
+    }
+
+    let mut application = ProjectApplication::new(FileProjectRepository::new());
+    let opened_existing = application
+        .open(ProjectSource::Path(target.clone()))
+        .map_err(|error| error.to_string())?;
+    let existing_view = opened_existing.view;
+    if let Some(expected_project_id) = request.expected_project_id.as_deref() {
+        if expected_project_id != existing_view.project_id.as_str() {
+            return Err(format!(
+                "project identity conflict: expected {expected_project_id}, found {}",
+                existing_view.project_id.as_str()
+            ));
+        }
+    }
+    if let Some(expected_revision) = request.expected_revision {
+        if expected_revision != existing_view.revision {
+            return Err(format!(
+                "project revision conflict: expected {expected_revision}, found {}",
+                existing_view.revision
+            ));
+        }
+    }
+    if opened.view.project_id != existing_view.project_id {
+        return Err("project identity conflict between archive and target".into());
+    }
+    let incoming_base_revision = opened
+        .view
+        .persisted_revision
+        .unwrap_or(opened.view.revision);
+    if incoming_base_revision != existing_view.revision {
+        return Err(format!(
+            "project archive is based on revision {incoming_base_revision}, but target is revision {}",
+            existing_view.revision
+        ));
+    }
+    if opened.view.source_hash != existing_view.source_hash {
+        let mut candidate = incoming
+            .current_document()
+            .cloned()
+            .ok_or_else(|| "project archive has no current document".to_string())?;
+        // The save changes the project, so it is recorded. History comes from
+        // the document already on disk: the archive the webview sends back can
+        // predate earlier saves and must not overwrite them. `replace_draft`
+        // advances the revision by one, which is the revision being recorded.
+        let stored = application.current_document().and_then(|document| {
+            document
+                .opaque_documents
+                .iter()
+                .find(|stored| stored.path() == provenance::PROVENANCE_PATH)
+                .cloned()
+        });
+        provenance::stamp_envelope(
+            &mut candidate,
+            stored.as_ref(),
+            &provenance::author_identity(),
+            &recent_index::rfc3339_utc(std::time::SystemTime::now()),
+            existing_view.revision.saturating_add(1),
+        );
+        application
+            .replace_draft(candidate, existing_view.revision)
+            .map_err(|error| error.to_string())?;
+    }
+    let receipt = application
+        .save(SaveProjectRequest {
+            target: None,
+            expected_revision: Some(existing_view.revision),
+            client_intent_id: request.client_intent_id,
+        })
+        .map_err(|error| error.to_string())?;
+    Ok(save_summary(receipt))
+}
+
+/// Persist a validated project archive through the same application and file
+/// repository used by CLI/Python.  The dialog is host-owned when no target is
+/// supplied; an existing target is revision- and identity-checked before it is
+/// replaced.
+#[tauri::command]
+pub async fn save_project_archive(
+    app: AppHandle,
+    request: ProjectSaveRequest,
+) -> Result<ProjectSaveSummary, String> {
+    let target = match request.target_path.clone() {
+        Some(path) if !path.trim().is_empty() => PathBuf::from(path),
+        Some(_) => return Err("project target path must not be empty".into()),
+        None => {
+            let result = app
+                .dialog()
+                .file()
+                .add_filter("Fullmag project", &["fms"])
+                .set_file_name(request.display_name.clone())
+                .blocking_save_file();
+            let Some(path) = result else {
+                return Err("project save cancelled".into());
+            };
+            path.into_path().map_err(|_| {
+                "selected project path is not available on this platform".to_string()
+            })?
+        }
+    };
+    save_project_archive_to_target(request, target)
+}
+
+fn recent_index_file(app: &AppHandle) -> Result<PathBuf, String> {
+    app.path()
+        .app_data_dir()
+        .map(|dir| dir.join(recent_index::INDEX_FILE_NAME))
+        .map_err(|error| format!("app data directory is unavailable: {error}"))
+}
+
+/// Locations scanned on rebuild: `FULLMAG_PROJECT_ROOTS` (path-list syntax of
+/// the platform), the roots the last scan used, and `<Documents>/Fullmag`.
+fn recent_project_roots(app: &AppHandle, file: &Path) -> Vec<PathBuf> {
+    let mut roots: Vec<PathBuf> = Vec::new();
+    if let Some(configured) = std::env::var_os("FULLMAG_PROJECT_ROOTS") {
+        roots.extend(std::env::split_paths(&configured));
+    }
+    if let Ok(index) = recent_index::read_index(file) {
+        for location in index
+            .get("scanned_locations")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            if let Some(path) = location.get("path").and_then(Value::as_str) {
+                roots.push(PathBuf::from(path));
+            }
+        }
+    }
+    if let Ok(documents) = app.path().document_dir() {
+        roots.push(documents.join("Fullmag"));
+    }
+    let mut seen = std::collections::HashSet::new();
+    roots.retain(|root| seen.insert(root.clone()));
+    roots
+}
+
+/// What this desktop build is, for the About page and bug reports.
+#[tauri::command]
+pub fn app_build_info() -> Value {
+    json!({
+        "version": env!("CARGO_PKG_VERSION"),
+        "os": std::env::consts::OS,
+        "arch": std::env::consts::ARCH,
+        "profile": if cfg!(debug_assertions) { "debug" } else { "release" },
+        "project_schema": fullmag_application::CURRENT_PROJECT_SCHEMA,
+    })
+}
+
+/// Who the user is, for the start screen's greeting: git config, then the OS user.
+#[tauri::command]
+pub async fn author_identity() -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(provenance::author_identity)
+        .await
+        .map_err(|error| format!("identity lookup was interrupted: {error}"))
+}
+
+/// Authors, citation, history and runs of the archive at `path`, read lazily
+/// when the inspector opens a provenance tab.
+#[tauri::command]
+pub async fn project_provenance_read(path: String) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || provenance::read_from_archive(Path::new(&path)))
+        .await
+        .map_err(|error| format!("provenance read was interrupted: {error}"))?
+}
+
+/// GPU, CUDA, VRAM and CPU threads for the start screen's rail. Runs off the
+/// async executor because it spawns `nvidia-smi`.
+#[tauri::command]
+pub async fn compute_probe() -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(compute_probe::probe)
+        .await
+        .map_err(|error| format!("compute probe was interrupted: {error}"))
+}
+
+#[tauri::command]
+pub async fn recent_index_read(app: AppHandle) -> Result<Value, String> {
+    recent_index::read_index(&recent_index_file(&app)?)
+}
+
+/// Rescan the project locations. Runs off the async executor: it walks the
+/// file system and opens every archive it finds.
+#[tauri::command]
+pub async fn recent_index_rebuild(app: AppHandle) -> Result<Value, String> {
+    let file = recent_index_file(&app)?;
+    let roots = recent_project_roots(&app, &file);
+    tauri::async_runtime::spawn_blocking(move || {
+        recent_index::rebuild_index(&file, &roots, std::time::SystemTime::now())
+    })
+    .await
+    .map_err(|error| format!("index rebuild was interrupted: {error}"))?
+}
+
+#[tauri::command]
+pub async fn recent_index_pin(
+    app: AppHandle,
+    project_id: String,
+    pinned: bool,
+) -> Result<Value, String> {
+    recent_index::set_pinned(&recent_index_file(&app)?, &project_id, pinned)
+}
+
+/// Removes the row from the list only; the project file is never touched.
+#[tauri::command]
+pub async fn recent_index_forget(app: AppHandle, project_id: String) -> Result<Value, String> {
+    recent_index::forget(&recent_index_file(&app)?, &project_id)
+}
+
+/// Read an archive the index points at and return the validated bytes, the
+/// same way the file dialog does, so the webview never receives a free path.
+#[tauri::command]
+pub async fn open_project_archive_path(
+    app: AppHandle,
+    path: String,
+) -> Result<ProjectOpenArchive, String> {
+    let file_path = PathBuf::from(&path);
+    let (summary, bytes) = read_project_archive(&file_path)?;
+    let file_name = file_path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("fullmag-project.fms")
+        .to_string();
+    // Best effort: a stale index must never stop a project from opening.
+    if let Ok(index_file) = recent_index_file(&app) {
+        let _ = recent_index::touch_opened(&index_file, &file_path, std::time::SystemTime::now());
+    }
+    Ok(ProjectOpenArchive {
+        path: file_path.display().to_string(),
+        file_name,
+        archive_base64: STANDARD.encode(bytes),
+        summary,
+    })
 }
 
 #[tauri::command]
@@ -89,4 +583,167 @@ pub async fn reveal_in_file_manager(path: String) -> Result<(), String> {
 #[tauri::command]
 pub fn get_app_config(app: AppHandle) -> AppConfig {
     app.state::<AppConfig>().inner().clone()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{save_project_archive_to_target, ProjectSaveRequest};
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
+    use fullmag_application::{FileProjectRepository, ProjectEnvelope, ProjectId};
+    use tempfile::tempdir;
+
+    fn request(archive_base64: String, target_path: String) -> ProjectSaveRequest {
+        ProjectSaveRequest {
+            archive_base64,
+            display_name: "desktop.fms".into(),
+            target_path: Some(target_path),
+            expected_project_id: None,
+            expected_revision: None,
+            client_intent_id: Some("test-desktop-save".into()),
+        }
+    }
+
+    #[test]
+    fn detached_host_save_uses_the_application_writer_and_reports_sync() {
+        let directory = tempdir().unwrap();
+        let target = directory.path().join("desktop.fms");
+        let envelope =
+            ProjectEnvelope::blank(ProjectId::parse("project-desktop").unwrap(), "Desktop")
+                .unwrap();
+        let archive = FileProjectRepository::new()
+            .encode_archive(&envelope)
+            .unwrap();
+        let result = save_project_archive_to_target(
+            request(STANDARD.encode(archive), target.display().to_string()),
+            target.clone(),
+        )
+        .unwrap();
+
+        assert!(target.is_file());
+        assert_eq!(result.project_id, "project-desktop");
+        assert_eq!(result.revision, 0);
+        assert_eq!(result.durability, "filesystem_synced");
+        assert!(result.data_file_synced);
+        assert!(!result.power_loss_qualified);
+    }
+
+    #[test]
+    fn host_save_rejects_a_stale_existing_target_before_publication() {
+        let directory = tempdir().unwrap();
+        let target = directory.path().join("desktop.fms");
+        let repository = FileProjectRepository::new();
+        let envelope =
+            ProjectEnvelope::blank(ProjectId::parse("project-desktop").unwrap(), "Desktop")
+                .unwrap();
+        let archive = repository.encode_archive(&envelope).unwrap();
+        let first = request(
+            STANDARD.encode(archive.clone()),
+            target.display().to_string(),
+        );
+        save_project_archive_to_target(first, target.clone()).unwrap();
+
+        let mut stale = request(STANDARD.encode(archive), target.display().to_string());
+        stale.expected_project_id = Some("project-desktop".into());
+        stale.expected_revision = Some(99);
+        let error = save_project_archive_to_target(stale, target).unwrap_err();
+        assert!(error.contains("revision conflict"));
+    }
+
+    #[test]
+    fn host_save_replaces_an_existing_target_and_reports_the_new_revision() {
+        let directory = tempdir().unwrap();
+        let target = directory.path().join("desktop.fms");
+        let repository = FileProjectRepository::new();
+        let envelope =
+            ProjectEnvelope::blank(ProjectId::parse("project-desktop").unwrap(), "Desktop")
+                .unwrap();
+        let archive = repository.encode_archive(&envelope).unwrap();
+        save_project_archive_to_target(
+            request(STANDARD.encode(archive), target.display().to_string()),
+            target.clone(),
+        )
+        .unwrap();
+
+        let mut updated =
+            ProjectEnvelope::blank(ProjectId::parse("project-desktop").unwrap(), "Updated")
+                .unwrap();
+        updated.rewrite_known_fields().unwrap();
+        let updated_archive = repository.encode_archive(&updated).unwrap();
+        let mut update_request = request(
+            STANDARD.encode(updated_archive),
+            target.display().to_string(),
+        );
+        update_request.expected_project_id = Some("project-desktop".into());
+        update_request.expected_revision = Some(0);
+
+        let result = save_project_archive_to_target(update_request, target).unwrap();
+        assert_eq!(result.project_id, "project-desktop");
+        assert_eq!(result.revision, 1);
+    }
+
+    #[test]
+    fn changed_saves_append_history_taken_from_the_file_on_disk() {
+        let directory = tempdir().unwrap();
+        let target = directory.path().join("history.fms");
+        let repository = FileProjectRepository::new();
+        let id = || ProjectId::parse("project-history").unwrap();
+
+        let first = ProjectEnvelope::blank(id(), "First").unwrap();
+        save_project_archive_to_target(
+            request(
+                STANDARD.encode(repository.encode_archive(&first).unwrap()),
+                target.display().to_string(),
+            ),
+            target.clone(),
+        )
+        .unwrap();
+        // A new file records nothing: it has no earlier state to differ from.
+        assert!(crate::provenance::read_from_archive(&target).unwrap()["history"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+
+        let mut second = ProjectEnvelope::blank(id(), "Second").unwrap();
+        second.rewrite_known_fields().unwrap();
+        let mut save = request(
+            STANDARD.encode(repository.encode_archive(&second).unwrap()),
+            target.display().to_string(),
+        );
+        save.expected_project_id = Some("project-history".into());
+        save.expected_revision = Some(0);
+        assert_eq!(
+            save_project_archive_to_target(save, target.clone())
+                .unwrap()
+                .revision,
+            1
+        );
+
+        // The archive a webview holds after that save predates it: it carries no
+        // provenance. The history on disk must survive the next save anyway.
+        let mut third = ProjectEnvelope::blank(id(), "Third").unwrap();
+        third.definition.revision = 1;
+        third.rewrite_known_fields().unwrap();
+        let mut save = request(
+            STANDARD.encode(repository.encode_archive(&third).unwrap()),
+            target.display().to_string(),
+        );
+        save.expected_project_id = Some("project-history".into());
+        save.expected_revision = Some(1);
+        assert_eq!(
+            save_project_archive_to_target(save, target.clone())
+                .unwrap()
+                .revision,
+            2
+        );
+
+        let provenance = crate::provenance::read_from_archive(&target).unwrap();
+        let revisions: Vec<u64> = provenance["history"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| entry["revision"].as_u64().unwrap())
+            .collect();
+        assert_eq!(revisions, vec![1, 2]);
+        assert_eq!(provenance["history"][0]["summary"], "Saved revision 1");
+    }
 }

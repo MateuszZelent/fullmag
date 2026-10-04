@@ -61,6 +61,7 @@ from fullmag.model.mechanics import (
     MechanicalLoad,
 )
 from fullmag.model.physics_scope import build_physics_graph
+from fullmag.model.parameters import ParameterLibrary
 from fullmag.model.outputs import (
     SaveDispersion,
     SaveField,
@@ -2413,12 +2414,25 @@ class Problem:
     mechanical_loads: Sequence[MechanicalLoad] = ()
     selections: Sequence[SelectionDefinition] = ()
     magnetization_constraints: Sequence[FrozenSpins] = ()
+    # Optional versioned authoring parameter library.  It is lowered as
+    # authoring metadata only; solver code continues to consume resolved SI
+    # values through the existing material/physics contracts.
+    parameters: ParameterLibrary | None = None
 
     # Periodic boundary conditions (per-axis, for FDM)
     pbc: FdmPbc | tuple[bool, bool, bool] | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "name", require_non_empty(self.name, "name"))
+        if self.parameters is not None:
+            if not isinstance(self.parameters, ParameterLibrary):
+                raise TypeError("Problem.parameters must be a ParameterLibrary or None")
+            # Construction is the authoring → Problem boundary.  Resolve now
+            # so unknown references, cycles and display-dimension conflicts
+            # fail before any runtime or meshing path can consume this object.
+            parameter_snapshot = ParameterLibrary.from_ir(self.parameters.to_ir())
+            parameter_snapshot.resolve_all()
+            object.__setattr__(self, "parameters", parameter_snapshot)
         roles = {
             require_non_empty(str(name), "auxiliary_geometry_roles.name"): require_non_empty(
                 str(role), "auxiliary_geometry_roles.role"
@@ -2847,6 +2861,11 @@ class Problem:
                 "seeds": [],
             },
             "geometry": {"entries": [geometry.to_ir() for geometry in geometries]},
+            **(
+                {"parameters": self.parameters.to_ir()}
+                if self.parameters is not None
+                else {}
+            ),
             "geometry_assets": geometry_assets,
             "regions": [region.to_ir() for region in regions],
             "object_regions": [
@@ -2918,6 +2937,18 @@ class Problem:
         if physics_objects:
             result["physics_objects"] = physics_objects
         return result
+
+    def to_model_definition(self, *, model_id: str | None = None) -> "ModelDefinition":
+        """Return the read-only authoring projection for this problem.
+
+        The projection is an authoring/document boundary only.  It does not
+        materialize meshes, select a runtime, or create a second mutable
+        problem state.
+        """
+
+        from fullmag.model.authoring import ModelDefinition
+
+        return ModelDefinition.from_problem(self, model_id=model_id)
 
     def _collect_magnetization_constraints(self) -> tuple[FrozenSpins, ...]:
         collected: list[FrozenSpins] = list(self.magnetization_constraints)

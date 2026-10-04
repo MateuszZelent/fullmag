@@ -23,7 +23,9 @@ describe("useVisualizationClientAcksResource", () => {
     expect(VISUALIZATION_CLIENT_ACKS_RESOURCE_KEY).toBe(
       VISUALIZATION_CLIENT_ACKS_PATH,
     );
-    expect(source).toContain("api.visualization.acks({ signal })");
+    expect(source).toContain(
+      "api.visualization.acks({ sessionScopeKey, signal })",
+    );
     expect(source).not.toContain(["fetch", "("].join(""));
     expect(source).not.toContain(['"', "/", "v2", "/"].join(""));
   });

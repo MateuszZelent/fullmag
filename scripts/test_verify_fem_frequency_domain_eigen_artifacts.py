@@ -2301,15 +2301,68 @@ def test_validator_rejects_missing_spectrum_mode_count(tmp_path: Path) -> None:
     assert "spectrum.mode_count" in (result.stderr + result.stdout)
 
 
-def test_validator_rejects_missing_spectrum_mode_field_resource_key(
+def test_validator_accepts_spectrum_mode_identity_without_transport_key(
     tmp_path: Path,
 ) -> None:
     write_eigen_fixture(tmp_path, omit_spectrum_mode_field_resource_key=True)
+    result = run_validator(tmp_path)
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_validator_accepts_durable_modal_bundle_without_persisted_transport(tmp_path: Path) -> None:
+    write_eigen_fixture(tmp_path)
+
+    def strip_transport(value: object) -> None:
+        if isinstance(value, dict):
+            value.pop("mode_field_resource_key", None)
+            for child in value.values():
+                strip_transport(child)
+        elif isinstance(value, list):
+            for child in value:
+                strip_transport(child)
+
+    for path in (tmp_path / "eigen").rglob("*.json"):
+        payload = json.loads(path.read_text())
+        before = json.dumps(payload)
+        strip_transport(payload)
+        if json.dumps(payload) != before:
+            path.write_text(json.dumps(payload))
+    csv_path = tmp_path / "eigen" / "dispersion.csv"
+    lines = csv_path.read_text().splitlines()
+    columns = {"mode_field_resource_key"}
+    header = lines[0]
+    new_header, _ = drop_csv_columns(header, lines[1], columns)
+    csv_path.write_text("\n".join([new_header] + [
+        drop_csv_columns(header, row, columns)[1] for row in lines[1:]
+    ]))
+    manifest_path = tmp_path / "frequency_domain" / "manifest.v1.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["resources"]["mode_field_resources"] = []
+    manifest_path.write_text(json.dumps(manifest))
+    artifact = write_typed_field_sweep_fixture(tmp_path)
+    strip_transport(artifact)
+    artifact["content_sha256"] = typed_artifact_self_digest(artifact)
+    artifact["revision"] = artifact["content_sha256"]
+    (tmp_path / "eigen" / "field_sweep.v1.json").write_text(json.dumps(artifact))
+    manifest = json.loads(manifest_path.read_text())
+    manifest["resources"]["field_sweep_resource_key"] = None
+    manifest_path.write_text(json.dumps(manifest))
 
     result = run_validator(tmp_path)
+    assert result.returncode == 0, result.stderr + result.stdout
 
+
+def test_validator_rejects_spectrum_transport_key_without_field_identity(
+    tmp_path: Path,
+) -> None:
+    write_eigen_fixture(tmp_path)
+    path = tmp_path / "eigen" / "spectrum.v2.json"
+    spectrum = json.loads(path.read_text())
+    del spectrum["samples"][0]["modes"][0]["mode_field_id"]
+    path.write_text(json.dumps(spectrum))
+    result = run_validator(tmp_path)
     assert result.returncode != 0
-    assert "mode.mode_field_resource_key" in (result.stderr + result.stdout)
+    assert "mode.mode_field_id" in result.stderr + result.stdout
 
 
 def test_validator_rejects_manifest_mode_resource_mismatch(tmp_path: Path) -> None:
@@ -6412,7 +6465,29 @@ def test_validator_rejects_declared_bias_field_sweep_missing_artifact_file(
     assert "field_sweep.v1.json" in (result.stderr + result.stdout)
 
 
-def test_validator_rejects_declared_bias_field_sweep_missing_resource_key(
+def test_validator_accepts_durable_bias_field_sweep_without_transport_keys(
+    tmp_path: Path,
+) -> None:
+    write_eigen_fixture(tmp_path)
+    artifact = write_typed_field_sweep_fixture(tmp_path)
+    declare_bias_field_sweep(tmp_path)
+    manifest_path = tmp_path / "frequency_domain" / "manifest.v1.json"
+    manifest = json.loads(manifest_path.read_text())
+    del manifest["resources"]["field_sweep_resource_key"]
+    manifest_path.write_text(json.dumps(manifest))
+    for sample in artifact["samples"]:
+        for mode in sample["modes"]:
+            mode.pop("mode_field_resource_key", None)
+    artifact["content_sha256"] = typed_artifact_self_digest(artifact)
+    artifact["revision"] = artifact["content_sha256"]
+    (tmp_path / "eigen" / "field_sweep.v1.json").write_text(json.dumps(artifact))
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_validator_rejects_declared_bias_field_sweep_invalid_legacy_resource_key(
     tmp_path: Path,
 ) -> None:
     write_eigen_fixture(tmp_path)
@@ -6420,7 +6495,7 @@ def test_validator_rejects_declared_bias_field_sweep_missing_resource_key(
     declare_bias_field_sweep(tmp_path)
     manifest_path = tmp_path / "frequency_domain" / "manifest.v1.json"
     manifest = json.loads(manifest_path.read_text())
-    del manifest["resources"]["field_sweep_resource_key"]
+    manifest["resources"]["field_sweep_resource_key"] = "/wrong/resource"
     manifest_path.write_text(json.dumps(manifest))
 
     result = run_validator(tmp_path)
@@ -6582,3 +6657,68 @@ def test_validator_rejects_typed_field_sweep_path_escape(tmp_path: Path) -> None
 
     assert result.returncode != 0
     assert "field_sweep.cross_artifact_refs[1].artifact" in (result.stderr + result.stdout)
+
+
+def validate_field_sweep_envelope_fixture(root: Path, artifact: dict) -> None:
+    from scripts.verify_fem_frequency_domain_eigen_artifacts import validate_typed_modal_field_sweep
+
+    artifact["content_sha256"] = typed_artifact_self_digest(artifact)
+    artifact["revision"] = artifact["content_sha256"]
+    (root / "eigen" / "field_sweep.v1.json").write_text(json.dumps(artifact))
+    spectrum = json.loads((root / "eigen" / "spectrum.v2.json").read_text())
+    summary = spectrum["samples"][0]["modes"][0]
+    known = {(0, 0): (
+        summary["frequency_hz"], summary["frequency_real_hz"],
+        summary["frequency_imag_hz"], summary["angular_frequency_rad_per_s"],
+    )}
+    manifest = json.loads((root / "frequency_domain" / "manifest.v1.json").read_text())
+    validate_typed_modal_field_sweep(root, manifest, {}, known, {(0, 0): summary}, {(0, 0): 0})
+
+
+def test_field_sweep_envelope_accepts_spectrum_only_without_mode_metadata(tmp_path: Path) -> None:
+    write_eigen_fixture(tmp_path)
+    spectrum_path = tmp_path / "eigen" / "spectrum.v2.json"
+    spectrum = json.loads(spectrum_path.read_text())
+    summary = spectrum["samples"][0]["modes"][0]
+    summary.pop("mode_field_id")
+    summary.pop("mode_field_resource_key")
+    spectrum_path.write_text(json.dumps(spectrum))
+    artifact = write_typed_field_sweep_fixture(tmp_path)
+    mode = artifact["samples"][0]["modes"][0]
+    for name in ["mode_field_id", "mode_field_resource_key", "mode_artifact_path"]:
+        mode.pop(name, None)
+    mode["field_status"] = "spectrum-only"
+    mode["residual_relative_l2"] = None
+    (tmp_path / "eigen" / "modes" / "sample_0000" / "mode_0000.json").unlink()
+    validate_field_sweep_envelope_fixture(tmp_path, artifact)
+    for name in ["mode_field_id", "mode_field_resource_key", "mode_artifact_path"]:
+        mode[name] = "orphan-reference"
+        with unittest.TestCase().assertRaisesRegex(SystemExit, name):
+            validate_field_sweep_envelope_fixture(tmp_path, artifact)
+        mode.pop(name)
+    mode["field_status"] = "ready"
+    with unittest.TestCase().assertRaisesRegex(SystemExit, "mode_field_id"):
+        validate_field_sweep_envelope_fixture(tmp_path, artifact)
+    mode["mode_field_id"] = "analysis:eigen:sample-0000:mode-0000"
+    with unittest.TestCase().assertRaisesRegex(SystemExit, "source_mode_field_id"):
+        validate_field_sweep_envelope_fixture(tmp_path, artifact)
+    mode.pop("mode_field_id")
+    mode["field_status"] = "spectrum-only"
+    mode["residual_relative_l2"] = -1.0
+    with unittest.TestCase().assertRaisesRegex(SystemExit, "residual_relative_l2"):
+        validate_field_sweep_envelope_fixture(tmp_path, artifact)
+    mode["residual_relative_l2"] = None
+    mode["source_revision"] = "sha256:" + "f" * 64
+    with unittest.TestCase().assertRaisesRegex(SystemExit, "mode.*source_revision"):
+        validate_field_sweep_envelope_fixture(tmp_path, artifact)
+
+
+def test_field_sweep_envelope_rejects_complete_downgrade_of_visualizable_mode(tmp_path: Path) -> None:
+    write_eigen_fixture(tmp_path)
+    artifact = write_typed_field_sweep_fixture(tmp_path)
+    mode = artifact["samples"][0]["modes"][0]
+    for name in ["mode_field_id", "mode_field_resource_key", "mode_artifact_path"]:
+        mode.pop(name, None)
+    mode["field_status"] = "spectrum-only"
+    with unittest.TestCase().assertRaisesRegex(SystemExit, "every visualizable spectrum mode"):
+        validate_field_sweep_envelope_fixture(tmp_path, artifact)

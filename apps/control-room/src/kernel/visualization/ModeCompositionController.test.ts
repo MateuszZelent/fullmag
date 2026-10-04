@@ -169,6 +169,35 @@ describe("ModeCompositionController", () => {
     });
   });
 
+  it("drops the active resource and cancels pending mutations when the session scope changes", async () => {
+    let resolvePatch: ((value: ModeCompositionResource) => void) | undefined;
+    const client: ModeCompositionMutationClient = {
+      getActiveModeComposition: vi.fn(),
+      patchActiveModeComposition: vi.fn(
+        () =>
+          new Promise<ModeCompositionResource>((resolve) => {
+            resolvePatch = resolve;
+          }),
+      ),
+    };
+    const controller = new ModeCompositionController(client);
+    controller.acceptResource(composition(0));
+    const pending = controller.assign(layer("object:a", "mode-a"));
+
+    await vi.waitFor(() => expect(resolvePatch).toBeTypeOf("function"));
+    controller.resetForSession("session-2\u0000epoch-1");
+    resolvePatch?.(composition(1, { layers: [layer("object:a", "mode-a")] }));
+
+    await expect(pending).rejects.toMatchObject({
+      reasonCode: "mode_composition_lifecycle_reset",
+    });
+    expect(controller.getSnapshot()).toMatchObject({
+      pending_target_ids: [],
+      resource: null,
+      status: "idle",
+    });
+  });
+
   it("retries a revision conflict only when the refetched target is unchanged", async () => {
     const expected = composition(3, { layers: [layer("object:a", "mode-a")] });
     const client: ModeCompositionMutationClient = {

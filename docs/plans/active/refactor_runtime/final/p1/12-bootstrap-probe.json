@@ -1,0 +1,14 @@
+{
+  "schema": "fullmag.browser-bootstrap-probe.v1",
+  "container_id": "ad29ee2f84e75ad09e9b2bddacb9ce193fe3d30541f0ed9392a6c2a5e2169489",
+  "launcher_sha256": "a53d9df479f5e56145ca3a335b812b49fa20ce25e06fbabc5a71dd1cce1f1a9d",
+  "probe_root": "/state/bootstrap-probe-1a1738b9d7d843e79a7eaf9370e143b8",
+  "first_bootstrap_exit": 0,
+  "repeated_bootstrap_exit": 0,
+  "conflicting_source_link_exit": 2,
+  "workspace_symlink_exit": 2,
+  "repository_symlink_exit": 2,
+  "api_restarted": false,
+  "user_session_mutated": false,
+  "qualification": "NOT VERIFIED"
+}

@@ -15,6 +15,7 @@ import type {
 } from "../api/apiTypes";
 import { useKernel } from "../KernelContext";
 
+import { useSessionScopedResourceKey } from "./useSessionScopedResourceKey";
 import { useResource } from "./useResource";
 
 const FROZEN_MASK_HEADER_BYTES = 64;
@@ -73,16 +74,17 @@ export function useFrozenSpinsCollectionResource(
 ) {
   const { api } = useKernel();
   const baseKey = frozenSpinsCollectionResourceKey();
+  const { resourceKey, sessionIdentity } = useSessionScopedResourceKey(baseKey);
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
-      api.model.frozenSpins.list({ signal }),
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
+      api.model.frozenSpins.list({ sessionScopeKey, signal }),
     [api],
   );
   return useResource<FrozenSpinsCollectionResource | null>({
-    enabled: options.enabled,
+    enabled: options.enabled && sessionIdentity !== null,
     load,
     resolveRevision: frozenSpinsRevision,
-    resourceKey: baseKey,
+    resourceKey,
   });
 }
 
@@ -92,16 +94,20 @@ export function useFrozenSpinsDefinitionResource(
 ) {
   const { api } = useKernel();
   const baseKey = frozenSpinsDefinitionResourceKey(constraintId);
+  const { resourceKey, sessionIdentity } = useSessionScopedResourceKey(baseKey);
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
-      api.model.frozenSpins.get(constraintId, { signal }),
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
+      api.model.frozenSpins.get(constraintId, { sessionScopeKey, signal }),
     [api, constraintId],
   );
   return useResource<FrozenSpinsDefinitionResource | null>({
-    enabled: options.enabled !== false && constraintId.length > 0,
+    enabled:
+      options.enabled !== false &&
+      constraintId.length > 0 &&
+      sessionIdentity !== null,
     load,
     resolveRevision: frozenSpinsRevision,
-    resourceKey: baseKey,
+    resourceKey,
   });
 }
 
@@ -111,9 +117,11 @@ export function useFrozenSpinsMaskResource(
 ) {
   const { api } = useKernel();
   const baseKey = frozenSpinsMaskResourceKey(maskId);
+  const { resourceKey, sessionIdentity } = useSessionScopedResourceKey(baseKey);
   const load = useCallback(
-    async ({ signal }: { signal: AbortSignal }) => {
+    async ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) => {
       const response = await api.model.frozenSpins.resolvedMask(maskId, {
+        sessionScopeKey,
         signal,
       });
       return response.status === "ready"
@@ -123,10 +131,11 @@ export function useFrozenSpinsMaskResource(
     [api, maskId],
   );
   return useResource<DecodedFrozenSpinsMask | null>({
-    enabled: options.enabled !== false && maskId.length > 0,
+    enabled:
+      options.enabled !== false && maskId.length > 0 && sessionIdentity !== null,
     load,
     resolveRevision: (mask) => mask?.maskSha256 ?? null,
-    resourceKey: baseKey,
+    resourceKey,
   });
 }
 
@@ -136,21 +145,27 @@ export function useFrozenSpinsPreviewResource(
 ) {
   const { api } = useKernel();
   const baseKey = frozenSpinsPreviewResourceKey(previewId);
+  const { resourceKey, sessionIdentity } = useSessionScopedResourceKey(baseKey);
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
-      api.model.frozenSpins.getPreview(previewId, { signal }),
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
+      api.model.frozenSpins.getPreview(previewId, { sessionScopeKey, signal }),
     [api, previewId],
   );
   return useResource<FrozenSpinsPreviewResponse | null>({
-    enabled: options.enabled !== false && previewId.length > 0,
+    enabled:
+      options.enabled !== false && previewId.length > 0 && sessionIdentity !== null,
     load,
     resolveRevision: (preview) => preview?.revision ?? null,
-    resourceKey: baseKey,
+    resourceKey,
   });
 }
 
 export function useFrozenSpinsActivePreviewId(): string | null {
-  const revision = useResourceRevision(FROZEN_SPINS_ACTIVE_PREVIEW_RESOURCE_KEY);
+  const { resourceKey, sessionIdentity } = useSessionScopedResourceKey(
+    FROZEN_SPINS_ACTIVE_PREVIEW_RESOURCE_KEY,
+  );
+  const revision = useResourceRevision(resourceKey);
+  if (!sessionIdentity) return null;
   return typeof revision === "string" && revision.length > 0 ? revision : null;
 }
 

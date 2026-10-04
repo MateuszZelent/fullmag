@@ -1,10 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import { MODEL_PLANAR_MONITORS_PATH } from "@/kernel/api/apiPaths";
+import { runAuthoringMutationWithHistory } from "@/kernel/authoring/authoringHistoryMutation";
 import { useKernel } from "@/kernel/KernelContext";
+import { sessionRequestScopeKey } from "@/kernel/resources/sessionResourceIdentity";
 import { usePlanarMonitorsResource } from "@/kernel/resources/planarMonitorResources";
+import { useSessionResourceIdentity } from "@/kernel/resources/useSessionStatus";
 import { useVisualizationStateResource } from "@/kernel/visualization/useVisualizationStateResource";
 import {
   discardPlanarMonitorDraft,
@@ -26,6 +29,7 @@ import { usePlanarMonitorDefinitionAvailability } from "./usePlanarMonitorDefini
 
 export function PlanarMonitorDraftInspectorPanel() {
   const kernel = useKernel();
+  const sessionScopeKey = sessionRequestScopeKey(useSessionResourceIdentity());
   const definitionAvailability = usePlanarMonitorDefinitionAvailability();
   const monitors = usePlanarMonitorsResource();
   const visualizationState = useVisualizationStateResource();
@@ -34,7 +38,26 @@ export function PlanarMonitorDraftInspectorPanel() {
   );
   const [feedback, setFeedback] = useState<string | null>(null);
   const [conflict, setConflict] = useState(false);
-  const [pending, setPending] = useState(false);
+  const [pendingOperation, setPendingOperation] = useState<{
+    id: number;
+    sessionScopeKey: string;
+  } | null>(null);
+  const nextPendingOperationId = useRef(0);
+  const pending = pendingOperation?.sessionScopeKey === sessionScopeKey;
+
+  function createHistoryMutationContext() {
+    const operationSessionScopeKey = sessionScopeKey;
+    const historyGeneration = kernel.authoringHistory?.getGeneration?.();
+    return {
+      api: kernel.api,
+      authoringHistory: kernel.authoringHistory,
+      sessionScopeKey: operationSessionScopeKey,
+      isCurrentSessionScope: () =>
+        kernel.commands.getSessionScopeKey() === operationSessionScopeKey &&
+        (historyGeneration === undefined ||
+          kernel.authoringHistory?.getGeneration?.() === historyGeneration),
+    };
+  }
 
   if (!draft) {
     return <MeshResourceEmpty label="No editable planar monitor draft." />;
@@ -49,7 +72,16 @@ export function PlanarMonitorDraftInspectorPanel() {
       setFeedback("Planar visualization state is unavailable.");
       return;
     }
-    setPending(true);
+    const historyContext = createHistoryMutationContext();
+    if (!historyContext.sessionScopeKey) {
+      setFeedback("Session identity is not ready. Try again after it loads.");
+      return;
+    }
+    const operationId = ++nextPendingOperationId.current;
+    setPendingOperation({
+      id: operationId,
+      sessionScopeKey: historyContext.sessionScopeKey,
+    });
     setFeedback(null);
     setConflict(false);
     try {
@@ -60,11 +92,27 @@ export function PlanarMonitorDraftInspectorPanel() {
       const identity = hasIdentityCollision
         ? planarMonitorIdentityForCreate(draft.monitor.name, existing)
         : { id: draft.monitor.id, name: draft.monitor.name };
-      const request = planarMonitorCreateRequestFromDraft(
-        { ...draft, monitor: { ...draft.monitor, ...identity } },
-        monitors.data?.scene_revision ?? 0,
+      const draftWithIdentity = {
+        ...draft,
+        monitor: { ...draft.monitor, ...identity },
+      };
+      const created = await runAuthoringMutationWithHistory(
+        historyContext,
+        "Create planar monitor",
+        async ({ baseRevision }) => {
+          const commitRevision = baseRevision ?? monitors.data?.scene_revision;
+          if (typeof commitRevision !== "number" || !Number.isFinite(commitRevision)) {
+            throw new Error(
+              "The canonical scene revision is unavailable. Refetch the scene before applying.",
+            );
+          }
+          return kernel.api.model.planarMonitors.create(
+            planarMonitorCreateRequestFromDraft(draftWithIdentity, commitRevision),
+            { sessionScopeKey: historyContext.sessionScopeKey! },
+          );
+        },
       );
-      const created = await kernel.api.model.planarMonitors.create(request);
+      if (historyContext.isCurrentSessionScope() === false) return;
       const monitor = created.monitor;
       discardPlanarMonitorDraft();
       kernel.visualizationSync.queuePatch({
@@ -95,6 +143,7 @@ export function PlanarMonitorDraftInspectorPanel() {
       kernel.layout.setFocusedSlot("viewport-main");
       kernel.layout.setPanelVisible("right", true);
     } catch (error) {
+      if (historyContext.isCurrentSessionScope() === false) return;
       const revisionConflict = isPlanarMonitorRevisionConflict(error);
       setConflict(revisionConflict);
       setFeedback(
@@ -105,7 +154,9 @@ export function PlanarMonitorDraftInspectorPanel() {
             : "Planar monitor commit failed. Reload the scene and retry.",
       );
     } finally {
-      setPending(false);
+      setPendingOperation((current) =>
+        current?.id === operationId ? null : current,
+      );
     }
   };
 

@@ -697,7 +697,10 @@ fn deferred_mesh_failure_stage(
         .get("last_build_error")
         .and_then(serde_json::Value::as_str)
         .filter(|error| !error.trim().is_empty())?;
-    let payload = workspace.get("last_build_summary")?;
+    let payload = workspace
+        .get("last_build_attempt")
+        .filter(|value| value.is_object())
+        .or_else(|| workspace.get("last_build_summary"))?;
     match payload.get("phase").and_then(serde_json::Value::as_str) {
         Some("preparing_domain" | "meshing" | "postprocessing") => {}
         _ => return None,
@@ -4554,27 +4557,30 @@ fn overlay_mesh_workspace(
                 value
             }),
     );
+    let effective_airbox_target = overlay
+        .effective_airbox_target
+        .clone()
+        .or_else(|| obj.get("effective_airbox_target").cloned())
+        .unwrap_or(serde_json::Value::Null);
     obj.insert(
         "effective_airbox_target".to_string(),
-        overlay
-            .effective_airbox_target
-            .clone()
-            .unwrap_or(serde_json::Value::Null),
+        effective_airbox_target,
     );
+    let effective_per_object_targets = overlay
+        .effective_per_object_targets
+        .clone()
+        .or_else(|| obj.get("effective_per_object_targets").cloned())
+        .unwrap_or(serde_json::Value::Null);
     obj.insert(
         "effective_per_object_targets".to_string(),
-        overlay
-            .effective_per_object_targets
-            .clone()
-            .unwrap_or(serde_json::Value::Null),
+        effective_per_object_targets,
     );
-    obj.insert(
-        "last_build_summary".to_string(),
-        overlay
-            .last_build_summary
-            .clone()
-            .unwrap_or(serde_json::Value::Null),
-    );
+    let last_build_summary = overlay
+        .last_build_summary
+        .clone()
+        .or_else(|| obj.get("last_build_summary").cloned())
+        .unwrap_or(serde_json::Value::Null);
+    obj.insert("last_build_summary".to_string(), last_build_summary);
     obj.insert(
         "last_build_error".to_string(),
         overlay
@@ -4663,6 +4669,9 @@ fn scripted_stage_execution_state(
             mesh_topology_fingerprint: None,
             mesh_revision: None,
             started_at_unix_ms: None,
+            applied_step: None,
+            applied_time_seconds: None,
+            segment_id: None,
             completed_at_unix_ms: None,
             reason: None,
             converged: false,
@@ -4855,6 +4864,9 @@ fn stage_record(index: usize, kind: Option<&str>) -> CurrentLiveStageExecutionRe
         mesh_topology_fingerprint: None,
         mesh_revision: None,
         started_at_unix_ms: None,
+        applied_step: None,
+        applied_time_seconds: None,
+        segment_id: None,
         completed_at_unix_ms: None,
         reason: None,
         converged: false,
@@ -4880,6 +4892,24 @@ fn stage_record(index: usize, kind: Option<&str>) -> CurrentLiveStageExecutionRe
         current_settle_step_index: None,
         current_settle_step_kind: None,
         current_settle_step_method: None,
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct CommandApplicationBoundary {
+    applied_step: u64,
+    applied_time_seconds: f64,
+    segment_id: String,
+}
+
+impl CommandApplicationBoundary {
+    fn new(run_id: &str, command_id: &str, applied_step: u64, applied_time_seconds: f64) -> Self {
+        let time_bits = applied_time_seconds.to_bits();
+        Self {
+            applied_step,
+            applied_time_seconds,
+            segment_id: format!("segment:{run_id}:{command_id}:{applied_step}:{time_bits:016x}"),
+        }
     }
 }
 
@@ -4919,6 +4949,7 @@ impl ActiveSequenceState {
         command_id: &str,
         started_at_unix_ms: u128,
         artifact_ref: Option<String>,
+        application_boundary: Option<&CommandApplicationBoundary>,
     ) {
         let current_index = self.current_stage_index();
         if current_index >= self.stages.len() {
@@ -4929,6 +4960,10 @@ impl ActiveSequenceState {
         record.status = "running".to_string();
         record.command_id = Some(command_id.to_string());
         record.started_at_unix_ms = Some(millis_to_u64(started_at_unix_ms));
+        record.applied_step = application_boundary.map(|boundary| boundary.applied_step);
+        record.applied_time_seconds =
+            application_boundary.map(|boundary| boundary.applied_time_seconds);
+        record.segment_id = application_boundary.map(|boundary| boundary.segment_id.clone());
         record.completed_at_unix_ms = None;
         record.progress_percent = Some(5.0);
         record.progress_label = Some("starting".to_string());
@@ -5034,6 +5069,9 @@ impl ActiveSequenceState {
                 mesh_topology_fingerprint: previous.mesh_topology_fingerprint,
                 mesh_revision: previous.mesh_revision,
                 started_at_unix_ms: previous.started_at_unix_ms,
+                applied_step: previous.applied_step,
+                applied_time_seconds: previous.applied_time_seconds,
+                segment_id: previous.segment_id,
                 completed_at_unix_ms: completed_at_unix_ms
                     .map(millis_to_u64)
                     .or(previous.completed_at_unix_ms),
@@ -6223,10 +6261,7 @@ fn print_script_summary(summary: &ScriptRunSummary) {
         println!("- final_E_dmi: {:.6e} J", final_e_dmi);
     }
     if let Some(final_e_rotated_dmi) = summary.final_e_rotated_dmi {
-        println!(
-            "- final_E_rotated_dmi: {:.6e} J",
-            final_e_rotated_dmi
-        );
+        println!("- final_E_rotated_dmi: {:.6e} J", final_e_rotated_dmi);
     }
     if let Some(final_e_total) = summary.final_e_total {
         println!("- final_E_total: {:.6e} J", final_e_total);
@@ -7836,9 +7871,28 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
     // The bridge ignores this script-backed session and only attaches a fresh
     // runtime after the browser explicitly replaces it with a runnable scene.
     let _scratch_runtime = if !args.headless {
-        std::env::current_exe().ok().map(|executable| {
-            crate::scratch_runtime::spawn(api_port(), executable, Some(session_id.clone()))
-        })
+        std::env::current_exe()
+            .ok()
+            .map(|executable| {
+                fullmag_runtime_control::application_attach::prepare_for_authoring(
+                    &crate::control_room::repo_root(),
+                    &crate::control_room::runtime_state_root(&crate::control_room::repo_root()),
+                    api_port(),
+                )
+                .map(|binding| {
+                    crate::scratch_runtime::spawn(
+                        api_port(),
+                        executable,
+                        Some(session_id.clone()),
+                        binding.api_instance_id().to_owned(),
+                    )
+                })
+                .map_err(|error| {
+                    eprintln!("[fullmag] scratch observer identity unavailable: {error:#}")
+                })
+                .ok()
+            })
+            .flatten()
     } else {
         None
     };
@@ -9309,7 +9363,8 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                             command_stage.entrypoint_kind = stages[0].entrypoint_kind.clone();
                             command_stage.ir.problem_meta.entrypoint_kind =
                                 stages[0].ir.problem_meta.entrypoint_kind.clone();
-                            command_stage.incoming_transition = stages[0].incoming_transition.clone();
+                            command_stage.incoming_transition =
+                                stages[0].incoming_transition.clone();
                         }
                         stages[0] = command_stage;
                         stage_execution_plans[0] = command_plan.clone();
@@ -11321,6 +11376,12 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     .get("sampling_resolution"),
             )?;
             let running_at_unix_ms = unix_time_millis()?;
+            let application_boundary = CommandApplicationBoundary::new(
+                &run_id,
+                &command.command_id,
+                step_offset,
+                time_offset,
+            );
             let stage_fem_mesh_asset = fullmag_runner::StageFemMeshAsset::build_from_backend_plan(
                 &execution_plan.backend_plan,
             );
@@ -11340,6 +11401,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     &command.command_id,
                     running_at_unix_ms,
                     Some(current_stage_artifact_dir.display().to_string()),
+                    Some(&application_boundary),
                 );
                 sequence.mark_current_fem_mesh_identity(stage_fem_mesh_asset.as_ref());
             }
@@ -12544,16 +12606,11 @@ pub(crate) fn prepare_live_workspace_for_ui(
 #[cfg(test)]
 mod tests {
     use super::{
-        accepted_relax_handoff_for_eigen_stage,
-        accepted_relax_handoff_from_completed_stage,
-        adaptive_remesh_backend_legality_reason,
-        adaptive_remesh_legality_reason,
-        apply_current_fem_overrides,
-        apply_initial_magnetization_state_override,
-        apply_live_step_update_to_workspace_state,
-        apply_remeshed_problem_snapshot_to_stages,
-        apply_scene_discretization_patch,
-        apply_stage_heartbeat_progress,
+        accepted_relax_handoff_for_eigen_stage, accepted_relax_handoff_from_completed_stage,
+        adaptive_remesh_backend_legality_reason, adaptive_remesh_legality_reason,
+        apply_current_fem_overrides, apply_initial_magnetization_state_override,
+        apply_live_step_update_to_workspace_state, apply_remeshed_problem_snapshot_to_stages,
+        apply_scene_discretization_patch, apply_stage_heartbeat_progress,
         apply_terminal_live_step_update_to_workspace_state,
         attach_initial_magnetization_state_override_metadata,
         attach_region_realization_revisions,
@@ -12591,7 +12648,8 @@ mod tests {
         wait_for_solve_prompt, wait_for_solve_should_block, wait_for_solve_supported,
         write_antenna_stage_output_catalog_ready, write_antenna_stage_output_catalog_terminal,
         write_antenna_stage_output_catalog_with_hook,
-        write_sampling_resolution_stage_record, ActiveSequenceState, ContinuationStageSource,
+        write_sampling_resolution_stage_record, ActiveSequenceState, CommandApplicationBoundary,
+        ContinuationStageSource,
         LiveProgressCadence, LoadedInitialMagnetizationState, RuntimeCommandPrecondition,
         SceneProblemPatch, StageProgressHeartbeat, WaitForSolveCommandAction,
         FEM_FREQUENCY_RESPONSE_PROGRESS_KEY, LIVE_PROGRESS_PUBLISH_INTERVAL,
@@ -13186,8 +13244,8 @@ mod tests {
         assert_eq!(stages[0].ir, stages_before[0].ir);
         assert_eq!(plans, plans_before);
 
-        let initial_plan = fullmag_plan::plan(&stages[0].ir)
-            .expect("bootstrap problem should plan");
+        let initial_plan =
+            fullmag_plan::plan(&stages[0].ir).expect("bootstrap problem should plan");
         let prepared = prepare_remesh_stage_transaction(
             &stages,
             &[initial_plan],
@@ -13999,6 +14057,10 @@ mod tests {
             let workspace = serde_json::json!({
                 "last_build_error": "raw mesher failure",
                 "last_build_summary": {
+                    "build_id": "mesh:last-good",
+                    "status": "completed"
+                },
+                "last_build_attempt": {
                     "phase": phase,
                     "message": "Shared-domain mesh build failed"
                 }
@@ -14007,6 +14069,19 @@ mod tests {
             assert_eq!(
                 deferred_mesh_failure_stage(Some(&workspace)),
                 Some(stage_id)
+            );
+
+            let legacy_workspace = serde_json::json!({
+                "last_build_error": "raw mesher failure",
+                "last_build_summary": {
+                    "phase": phase,
+                    "message": "Shared-domain mesh build failed"
+                }
+            });
+            assert_eq!(
+                deferred_mesh_failure_stage(Some(&legacy_workspace)),
+                Some(stage_id),
+                "legacy failure summaries remain readable"
             );
         }
     }
@@ -14992,6 +15067,75 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn mesh_build_overlay_keeps_last_successful_artifact_during_new_attempt() {
+        let last_success = serde_json::json!({
+            "build_id": "mesh:previous-success",
+            "status": "completed",
+            "source_scene_revision": 12
+        });
+        let airbox_target = serde_json::json!({ "hmax": "5e-9" });
+        let per_object_targets = serde_json::json!({
+            "film": { "hmax": "2e-9" }
+        });
+        let mut workspace = serde_json::json!({
+            "last_build_summary": last_success,
+            "effective_airbox_target": airbox_target,
+            "effective_per_object_targets": per_object_targets,
+            "last_build_error": "an earlier build failed"
+        });
+        let mut overlay = super::CurrentMeshBuildOverlay {
+            active_build: Some(serde_json::json!({ "build_id": "mesh:next-attempt" })),
+            effective_airbox_target: None,
+            effective_per_object_targets: None,
+            last_build_summary: None,
+            last_build_error: None,
+            active_phase: Some("meshing".to_string()),
+            progress_percent: None,
+            progress_label: None,
+            attempt_index: None,
+            algorithm_3d: None,
+            attempt_status: None,
+            attempt_failure_reason: None,
+            next_algorithm_3d: None,
+            progress_kind: None,
+            last_recoverable_attempt: None,
+            phase_started_at: Instant::now(),
+            phase_durations_ms: Vec::new(),
+            failed: false,
+        };
+
+        super::overlay_mesh_workspace(&mut workspace, &overlay);
+
+        assert_eq!(
+            workspace["last_build_summary"]["build_id"],
+            "mesh:previous-success"
+        );
+        assert_eq!(workspace["effective_airbox_target"], airbox_target);
+        assert_eq!(
+            workspace["effective_per_object_targets"],
+            per_object_targets
+        );
+        assert!(workspace["last_build_error"].is_null());
+        assert_eq!(workspace["active_build"]["build_id"], "mesh:next-attempt");
+
+        overlay.active_build = None;
+        overlay.effective_airbox_target = Some(serde_json::Value::Null);
+        overlay.effective_per_object_targets = Some(serde_json::Value::Null);
+        overlay.last_build_summary = Some(serde_json::json!({
+            "build_id": "mesh:next-success",
+            "status": "completed"
+        }));
+        super::overlay_mesh_workspace(&mut workspace, &overlay);
+
+        assert_eq!(
+            workspace["last_build_summary"]["build_id"],
+            "mesh:next-success"
+        );
+        assert!(workspace["effective_airbox_target"].is_null());
+        assert!(workspace["effective_per_object_targets"].is_null());
     }
 
     #[test]
@@ -16336,13 +16480,35 @@ mod tests {
     }
 
     #[test]
+    fn active_sequence_records_the_exact_application_boundary_and_segment() {
+        let mut sequence = ActiveSequenceState::single_current();
+        let boundary = CommandApplicationBoundary::new("run-7", "cmd-hot-apply", 42, 2.5e-12);
+
+        sequence.mark_current_started("cmd-hot-apply", 1_700_000_000_000, None, Some(&boundary));
+        sequence.mark_current("completed", None, Some(1_700_000_001_000), None);
+
+        let stage = sequence
+            .completed_stage_execution("awaiting_command")
+            .stages
+            .into_iter()
+            .next()
+            .expect("stage record should be present");
+        assert_eq!(stage.applied_step, Some(42));
+        assert_eq!(stage.applied_time_seconds, Some(2.5e-12));
+        assert_eq!(
+            stage.segment_id.as_deref(),
+            Some("segment:run-7:cmd-hot-apply:42:3d85fd7fe1796495")
+        );
+    }
+
+    #[test]
     fn active_sequence_tracks_pause_checkpoint_and_resume_ref() {
         let mut sequence = ActiveSequenceState::new(vec![SequenceStage::Run {
             until_seconds: 1e-9,
             max_steps: Some(100),
         }]);
 
-        sequence.mark_current_started("cmd-stage-0", 1_700_000_000_000, None);
+        sequence.mark_current_started("cmd-stage-0", 1_700_000_000_000, None, None);
         sequence.mark_current(
             "paused",
             None,
@@ -16354,7 +16520,7 @@ mod tests {
             Some("runs/run-1/checkpoints/cp-000042/common_state.json".to_string()),
         );
         sequence.mark_current_resume_from_checkpoint("cp-000042");
-        sequence.mark_current_started("cmd-stage-0", 1_700_000_001_000, None);
+        sequence.mark_current_started("cmd-stage-0", 1_700_000_001_000, None, None);
 
         let stage = sequence
             .stage_execution(Some("run"), "running")
@@ -16423,7 +16589,7 @@ mod tests {
         }]);
 
         sequence.mark_current_materialized_kind("flat_hysteresis");
-        sequence.mark_current_started("cmd-stage-0", 1_700_000_000_000, None);
+        sequence.mark_current_started("cmd-stage-0", 1_700_000_000_000, None, None);
         sequence.mark_current("completed", None, Some(1_700_000_001_000), None);
 
         let execution = sequence.completed_stage_execution("awaiting_command");
@@ -16528,7 +16694,7 @@ mod tests {
         let sequence = active_sequence
             .as_mut()
             .expect("active sequence should be present");
-        sequence.mark_current_started("cmd-solve", 1_700_000_000_000, None);
+        sequence.mark_current_started("cmd-solve", 1_700_000_000_000, None, None);
         sequence.mark_current("paused", None, None, None);
 
         let execution =
@@ -17264,7 +17430,7 @@ mod tests {
         assert_eq!(scripted.stages[0].mesh_revision, None);
 
         let mut interactive = ActiveSequenceState::single_current();
-        interactive.mark_current_started("cmd-interactive", 1_700_000_000_000, None);
+        interactive.mark_current_started("cmd-interactive", 1_700_000_000_000, None, None);
         interactive.mark_current_fem_mesh_identity(Some(&asset));
         let interactive_execution = interactive.stage_execution(Some("relax"), "running");
         assert_eq!(
@@ -17889,7 +18055,7 @@ mod tests {
     #[test]
     fn active_sequence_preserves_completed_relaxation_metric_and_identity() {
         let mut state = ActiveSequenceState::single_current();
-        state.mark_current_started("cmd-relax", 1_700_000_000_000, None);
+        state.mark_current_started("cmd-relax", 1_700_000_000_000, None, None);
         let completion = fullmag_ir::StageCompletionIR {
             status: "completed".into(),
             converged: true,

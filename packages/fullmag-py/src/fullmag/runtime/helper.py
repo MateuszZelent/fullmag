@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import copy
-import hashlib
 import json
 import os
 import sys
@@ -11,12 +10,14 @@ from typing import Sequence
 
 from fullmag._progress import emit_progress
 from fullmag.model import BackendTarget, ExecutionMode, ExecutionPrecision
+from fullmag.model.canonical import canonical_json_sha256
 from fullmag.runtime.loader import apply_ir_runtime_device_selection, load_problem_from_script
 from fullmag.runtime.scene_document import (
     build_builder_from_scene_document,
     build_scene_document_from_builder,
     builder_overrides_from_scene_document,
 )
+from fullmag.runtime.scene_document_ir import scene_document_to_problem_ir
 from fullmag.runtime.script_builder import (
     export_builder_draft,
     render_scene_document_as_script,
@@ -28,12 +29,7 @@ def _write_executed_problem_ir_identity(problem_ir: dict[str, object]) -> None:
     output = os.environ.get("FULLMAG_BENCH_EXECUTED_PROBLEM_IR_SHA256_FILE")
     if output is None:
         return
-    canonical_bytes = json.dumps(
-        problem_ir,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
-    problem_ir_sha256 = hashlib.sha256(canonical_bytes).hexdigest()
+    problem_ir_sha256 = canonical_json_sha256(problem_ir)
     path = Path(output)
     temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     temporary.write_text(problem_ir_sha256 + "\n", encoding="ascii")
@@ -165,6 +161,17 @@ def build_parser() -> argparse.ArgumentParser:
     render_scene.add_argument("--scene-json", required=True, help="Path to SceneDocument JSON.")
     render_scene.add_argument("--output", required=True, help="Atomic output path for the Python script.")
 
+    export_scene_ir = subparsers.add_parser(
+        "export-scene-ir",
+        help="Lower a SceneDocument through the canonical Python DSL and print ProblemIR.",
+    )
+    export_scene_ir.add_argument("--scene-json", required=True, help="Path to SceneDocument JSON.")
+    export_scene_ir.add_argument("--backend", choices=[target.value for target in BackendTarget], required=True)
+    export_scene_ir.add_argument("--device", choices=["auto", "cpu", "gpu"], required=True)
+    export_scene_ir.add_argument("--precision", choices=[precision.value for precision in ExecutionPrecision], required=True)
+    export_scene_ir.add_argument("--mode", choices=[mode.value for mode in ExecutionMode], required=True)
+    export_scene_ir.add_argument("--asset-root", help="Project-owned root for resolving imported geometry sources.")
+
     read_state = subparsers.add_parser(
         "read-magnetization-state",
         help="Load a magnetization state file and print canonical JSON values.",
@@ -197,6 +204,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         source = script_path.read_text(encoding="utf-8")
         compile(source, str(script_path), "exec")
         print(json.dumps({"status": "ok", "script": str(script_path.resolve())}))
+        return 0
+
+    if args.command == "export-scene-ir":
+        emit_progress("Lowering SceneDocument through the canonical Python DSL")
+        scene_document = json.loads(Path(args.scene_json).read_text(encoding="utf-8"))
+        problem_ir = scene_document_to_problem_ir(
+            scene_document,
+            requested_backend=args.backend,
+            requested_device=args.device,
+            requested_precision=args.precision,
+            requested_mode=args.mode,
+            source_root=args.asset_root,
+        )
+        _write_json(problem_ir)
+        emit_progress("SceneDocument ProblemIR export completed")
         return 0
 
     if args.command in {"export-ir", "export-run-config"}:
@@ -352,7 +374,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         temporary_path = output_path.with_name(
             f".{output_path.name}.{os.getpid()}.tmp"
         )
-        temporary_path.write_text(source, encoding="utf-8")
+        source_bytes = source.encode("utf-8")
+        temporary_path.write_bytes(source_bytes)
         os.replace(temporary_path, output_path)
         print(
             json.dumps(
@@ -361,7 +384,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "source_kind": "scene_document",
                     "entrypoint_kind": "flat_workspace",
                     "written": True,
-                    "bytes_written": len(source.encode("utf-8")),
+                    "bytes_written": len(source_bytes),
                 }
             )
         )

@@ -36,6 +36,7 @@ struct FemMeshRuntimeState {
     std::vector<uint64_t> facet_global_ordinals;
     std::vector<uint32_t> facet_markers;
     std::vector<uint32_t> periodic_node_pairs;
+    std::vector<uint32_t> periodic_boundary_pair_markers;
     std::vector<uint32_t> periodic_reduced_node;
     std::vector<uint32_t> periodic_representative_nodes;
     uint32_t periodic_reduced_node_count = 0;
@@ -46,6 +47,16 @@ struct FemMeshRuntimeState {
     std::vector<uint8_t> magnetic_node_mask;
     std::vector<double> node_volumes;
 };
+
+/*
+ * Validate and copy a canonical mesh descriptor without creating a Context,
+ * periodic reduction, runtime device, or solver fields. The FEM preparation
+ * producer and the full solver import share this descriptor boundary.
+ */
+bool import_mesh_descriptor(
+    const fullmag_fem_mesh_desc &descriptor,
+    FemMeshRuntimeState &mesh,
+    std::string &error);
 
 struct LocalEntityTopology {
     const uint8_t *offsets = nullptr;

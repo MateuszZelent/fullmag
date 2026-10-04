@@ -1,4 +1,4 @@
-//! Asset import endpoint under the canonical v1 contract.
+//! Asset import endpoint under the canonical v2 contract.
 
 use std::sync::Arc;
 
@@ -22,6 +22,7 @@ pub async fn import_asset(
     State(state): State<Arc<AppState>>,
     Json(req): Json<ImportSessionAssetRequest>,
 ) -> Result<Json<SessionAssetImportResponse>, ApiError> {
-    let response = crate::import_asset_for_current_workspace(&state, req).await?;
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let response = crate::import_asset_for_current_workspace(&state, &request_context, req).await?;
     Ok(Json(response))
 }

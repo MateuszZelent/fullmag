@@ -472,7 +472,7 @@ def run_fullmag_nf_reference(
     (output_dir / "request.json").write_text(json.dumps(request, indent=2, sort_keys=True, allow_nan=False) + "\n", encoding="utf-8")
     command = [
         str(binary),
-        "run-json",
+        "run-problem-json-direct",
         str(ir_path),
         "--until",
         "1e-15",

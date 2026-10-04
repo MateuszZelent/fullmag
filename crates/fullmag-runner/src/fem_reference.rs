@@ -1492,10 +1492,7 @@ pub(crate) fn observe_state(
         .terms
         .rotated_interfacial_dmi
         .is_some_and(|d| d != 0.0);
-    let has_bulk_dmi = problem
-        .terms
-        .bulk_dmi
-        .is_some_and(|d| d != 0.0);
+    let has_bulk_dmi = problem.terms.bulk_dmi.is_some_and(|d| d != 0.0);
     let rotated_dmi_field = if has_rotated_dmi {
         problem.rotated_interfacial_dmi_field_from_vectors(&observables.magnetization)
     } else {
@@ -2650,8 +2647,8 @@ mod tests {
 
         let (problem, state) = build_problem_and_state(&plan)
             .expect("FEM DMI problem should build for observable separation");
-        let observables = observe_state(&problem, &state, &[])
-            .expect("FEM DMI observables should be separable");
+        let observables =
+            observe_state(&problem, &state, &[]).expect("FEM DMI observables should be separable");
         assert!(
             observables
                 .dmi_field
@@ -2759,11 +2756,14 @@ mod tests {
         let mut plan = make_test_plan(false);
         plan.rotated_interfacial_dmi = Some(3e-3);
 
-        let error = crate::fem::equilibrium_identity::EquilibriumIdentitySignaturesV1::from_relax_plan(
-            &plan,
-        )
-        .expect_err("an equilibrium identity must not omit rotated-DMI physics");
-        assert!(error.message.contains("equilibrium_identity_scope_unsupported"));
+        let error =
+            crate::fem::equilibrium_identity::EquilibriumIdentitySignaturesV1::from_relax_plan(
+                &plan,
+            )
+            .expect_err("an equilibrium identity must not omit rotated-DMI physics");
+        assert!(error
+            .message
+            .contains("equilibrium_identity_scope_unsupported"));
         assert!(error.message.contains("DMI data"));
     }
 
@@ -2846,12 +2846,9 @@ mod tests {
             [1.0, 0.0, 0.0],
         ];
 
-        let fields = snapshot_vector_fields(
-            &plan,
-            &["eden_dmi"],
-            &crate::LivePreviewRequest::default(),
-        )
-        .expect("FEM rotated-DMI energy-density preview should succeed");
+        let fields =
+            snapshot_vector_fields(&plan, &["eden_dmi"], &crate::LivePreviewRequest::default())
+                .expect("FEM rotated-DMI energy-density preview should succeed");
         let dmi = fields
             .iter()
             .find(|field| field.quantity == "eden_dmi")

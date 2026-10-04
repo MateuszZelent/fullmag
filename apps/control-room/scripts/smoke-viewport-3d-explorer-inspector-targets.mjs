@@ -364,6 +364,19 @@ async function installFixtureConfig(page) {
 }
 
 async function installFixtureApi(page, fixture) {
+  await page.route("**/v2/sessions", async (route) => {
+    await fulfillJson(route, {
+      schema_version: "session_list.v1",
+      sessions: [
+        {
+          current: true,
+          name: fixture.status.session.name,
+          session_id: fixture.status.session.session_id,
+          status: "active",
+        },
+      ],
+    });
+  });
   await page.route("**/v2/sessions/current/**", async (route) => {
     const request = route.request();
     const requestUrl = new URL(request.url());

@@ -240,7 +240,7 @@ describe("SimulationStartupOverlay", () => {
     ).toMatchObject({ isVisible: false, kind: "hidden" });
   });
 
-  it("renders an accessible modal-style status panel", () => {
+  it("renders an accessible blocking modal-style status panel", () => {
     const html = renderToStaticMarkup(
       <SimulationStartupOverlayView
         state={resolveSimulationStartupOverlayState(
@@ -249,12 +249,16 @@ describe("SimulationStartupOverlay", () => {
       />,
     );
 
+    expect(html).toContain('data-interaction-state="blocked"');
+    expect(html).toContain('role="dialog"');
+    expect(html).toContain('aria-modal="true"');
     expect(html).toContain('role="status"');
     expect(html).toContain("Compiling simulation");
     expect(html).toContain("Compiling the model");
+    expect(html).toContain("Simulation controls will be available");
   });
 
-  it("does not mount workspace slots while startup overlay is visible", () => {
+  it("retains the previous initial gate until the workspace has mounted", () => {
     const html = renderToStaticMarkup(
       <KernelContext.Provider value={startupGateKernel()}>
         <WorkspaceStartupGateView
@@ -272,6 +276,30 @@ describe("SimulationStartupOverlay", () => {
     );
 
     expect(html).toContain("Preparing simulation");
+    expect(html).not.toContain("viewport-main");
+  });
+
+  it("keeps one fallback diagnostics slot available before the workspace mounts", () => {
+    const kernel = startupGateKernel();
+    kernel.layout.openBottomPanel("diagnostics");
+    const html = renderToStaticMarkup(
+      <KernelContext.Provider value={kernel}>
+        <WorkspaceStartupGateView
+          state={resolveSimulationStartupOverlayState({
+            data: null,
+            error: new Error("no active local live workspace"),
+            refetch,
+            revision: null,
+            status: "error",
+          })}
+        >
+          <div data-slot-id="viewport-main">Viewport module</div>
+        </WorkspaceStartupGateView>
+      </KernelContext.Provider>,
+    );
+
+    expect(html.match(/data-slot-id="panel-bottom"/g)).toHaveLength(1);
+    expect(html).toContain('data-startup-diagnostics="visible"');
     expect(html).not.toContain("viewport-main");
   });
 
@@ -350,6 +378,35 @@ describe("SimulationStartupOverlay", () => {
     expect(orderedLabels).toEqual([...orderedLabels].sort((left, right) => left - right));
   });
 
+  it("renders accepted preparation provenance without inventing it", () => {
+    const planFingerprint = `sha256:${"a".repeat(64)}`;
+    const model = resolveSimulationPreparationViewModel(
+      preparationResult(
+        preparationResource({
+          receipt: {
+            payload_sha256: "b".repeat(64),
+            plan_fingerprint: planFingerprint,
+            preparation_id: "prep-accepted",
+            run_id: "run-accepted",
+            schema_version: "preparation_receipt.v1",
+          },
+        }),
+      ),
+      statusResource({ solver: { state: "bootstrapping" } }),
+      18_700,
+    );
+    const html = renderToStaticMarkup(
+      <SimulationStartupOverlayView state={model} />,
+    );
+
+    expect(html).toContain('data-preparation-receipt="accepted"');
+    expect(html).toContain("prep-accepted");
+    expect(html).toContain("run-accepted");
+    expect(html).toContain("preparation_receipt.v1");
+    expect(html).toContain(planFingerprint);
+    expect(html).toContain("b".repeat(64));
+  });
+
   it("renders an active Gmsh attempt as indeterminate without a fabricated percent", () => {
     const resource = preparationResource();
     resource.stages = resource.stages.map((stage) =>
@@ -390,7 +447,7 @@ describe("SimulationStartupOverlay", () => {
     expect(html.match(/aria-live="off"/g)).toHaveLength(1);
   });
 
-  it("keeps failure controls mounted instead of revealing workspace slots", () => {
+  it("keeps failure controls visible during the initial gated failure", () => {
     const failed = preparationResource({
       active_stage_id: null,
       failure: {

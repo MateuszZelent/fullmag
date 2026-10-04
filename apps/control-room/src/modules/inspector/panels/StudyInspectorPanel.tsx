@@ -12,10 +12,11 @@ import {
   Square,
   Upload,
 } from "lucide-react";
-import { useCallback, useEffect, useReducer, type ReactNode } from "react";
+import { useCallback, useEffect, useReducer, useRef, type ReactNode } from "react";
 
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import { runFdmGridRefreshOperation } from "@/kernel/authoring/geometryLifecycleCommandContributions";
+import { runAuthoringMutationWithHistory } from "@/kernel/authoring/authoringHistoryMutation";
 import {
   MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
   MESHING_PERIODIC_PAIRS_PATH,
@@ -71,8 +72,10 @@ import {
   useSceneResource,
 } from "@/kernel/resources/geometryLifecycleResources";
 import { useKernel } from "@/kernel/KernelContext";
+import { sessionRequestScopeKey } from "@/kernel/resources/sessionResourceIdentity";
 import {
   SESSION_STATUS_RESOURCE_KEY,
+  useSessionResourceIdentity,
   useSessionStatusSelector,
 } from "@/kernel/resources/useSessionStatus";
 import type { ActiveLaneCapabilitySnapshot } from "@/kernel/resources/useActiveLaneCapabilities";
@@ -93,6 +96,7 @@ import { FieldRow } from "../primitives/FieldRow";
 import { FeedbackBanner } from "../primitives/FeedbackBanner";
 import { FormField } from "../primitives/FormField";
 import { InspectorGroup } from "../primitives/InspectorGroup";
+import { ProjectRunsSection } from "./ProjectRunsSection";
 
 import {
   buildStudyGlobalMergePatch,
@@ -659,10 +663,20 @@ export function useStudyInspectorPanelController(
   selection: InspectorPanelProps["selection"],
 ) {
   const kernel = useKernel();
+  const sessionScopeKey = sessionRequestScopeKey(useSessionResourceIdentity());
   const [state, dispatch] = useReducer(
     studyInspectorPanelReducer,
     STUDY_INSPECTOR_INITIAL_STATE,
   );
+  const importInspectionGeneration = useRef(0);
+  const importScopeRef = useRef(sessionScopeKey);
+  useEffect(() => {
+    if (importScopeRef.current === sessionScopeKey) return;
+    importScopeRef.current = sessionScopeKey;
+    importInspectionGeneration.current += 1;
+    dispatch({ type: "prepareImportFile", fileName: null });
+    dispatch({ type: "setImportDialogOpen", open: false });
+  }, [sessionScopeKey]);
   const runtimeStatus = useSessionStatusSelector(
     selectStudyInspectorRuntimeStatus,
     { isEqual: studyInspectorRuntimeStatusEquals },
@@ -812,12 +826,25 @@ export function useStudyInspectorPanelController(
       [PERSISTENCE_CHECKPOINTS_PATH]: checkpointCatalog.data,
       [SIMULATION_RUN_CURRENT_PATH]: currentRun.data,
     },
+    sessionScopeKey,
     sourceDetail: "study",
   });
+  const createAuthoringMutationContext = () => {
+    const historyGeneration = kernel.authoringHistory?.getGeneration?.();
+    return {
+      ...commandContext,
+      isCurrentSessionScope: () =>
+        commandContext.isCurrentSessionScope?.() !== false &&
+        (historyGeneration === undefined ||
+          kernel.authoringHistory?.getGeneration?.() === historyGeneration),
+    };
+  };
   const runCommand = (commandId: string, input?: unknown) => {
     void kernel.commands.execute(commandId, commandContext, input);
   };
   const inspectImportFile = async (file: File | null) => {
+    const generation = ++importInspectionGeneration.current;
+    const scopeAtSelection = sessionScopeKey;
     dispatch({
       type: "prepareImportFile",
       fileName: file?.name ?? null,
@@ -826,15 +853,27 @@ export function useStudyInspectorPanelController(
 
     try {
       const fmsBase64 = await readFileAsBase64(file);
+      if (
+        generation !== importInspectionGeneration.current ||
+        scopeAtSelection !== importScopeRef.current
+      ) return;
       const inspection = await kernel.api.persistence.imports.inspect({
         fms_base64: fmsBase64,
       });
+      if (
+        generation !== importInspectionGeneration.current ||
+        scopeAtSelection !== importScopeRef.current
+      ) return;
       dispatch({
         type: "importInspectSuccess",
         fmsBase64,
         inspection: inspection.inspection,
       });
     } catch (error) {
+      if (
+        generation !== importInspectionGeneration.current ||
+        scopeAtSelection !== importScopeRef.current
+      ) return;
       dispatch({
         type: "importInspectFailure",
         message:
@@ -899,14 +938,18 @@ export function useStudyInspectorPanelController(
       return false;
     }
 
+    const mutationContext = createAuthoringMutationContext();
     dispatch({ type: "setAuthoringBusy", busy: true });
     try {
-      const response = await kernel.api.model.commitTransaction(
-        buildStudyStagesMergePatch(
-          state.stageDrafts,
-          baseRevision,
+      const response = await runAuthoringMutationWithHistory(
+        mutationContext,
+        "Edit study stages",
+        () => kernel.api.model.commitTransaction(
+          buildStudyStagesMergePatch(state.stageDrafts, baseRevision),
+          sessionScopeKey ? { sessionScopeKey } : undefined,
         ),
       );
+      if (mutationContext.isCurrentSessionScope() === false) return false;
       const revision = response.scene_revision;
       kernel.resources.invalidate(MODEL_SCENE_PATH, revision);
       kernel.resources.invalidate(MODEL_READINESS_PATH, revision);
@@ -925,6 +968,7 @@ export function useStudyInspectorPanelController(
       dispatch({ type: "acceptStageDrafts" });
       return true;
     } catch (error) {
+      if (mutationContext.isCurrentSessionScope() === false) return false;
       if (
         error instanceof ControlRoomApiError &&
         (error.status === 409 ||
@@ -994,14 +1038,21 @@ export function useStudyInspectorPanelController(
       return false;
     }
 
+    const mutationContext = createAuthoringMutationContext();
     dispatch({ type: "setAuthoringBusy", busy: true });
     try {
-      const response = await kernel.api.model.commitTransaction(
-        buildStudyGlobalMergePatch(state.globalDraft, {
-          baseRevision,
-          sessionDiscretization: runtimeStatus?.domain.discretization,
-        }),
+      const response = await runAuthoringMutationWithHistory(
+        mutationContext,
+        "Edit global study settings",
+        () => kernel.api.model.commitTransaction(
+          buildStudyGlobalMergePatch(state.globalDraft, {
+            baseRevision,
+            sessionDiscretization: runtimeStatus?.domain.discretization,
+          }),
+          sessionScopeKey ? { sessionScopeKey } : undefined,
+        ),
       );
+      if (mutationContext.isCurrentSessionScope() === false) return false;
       const revision = response.scene_revision;
       kernel.resources.invalidate(MODEL_SCENE_PATH, revision);
       kernel.resources.invalidate(MODEL_READINESS_PATH, revision);
@@ -1045,6 +1096,7 @@ export function useStudyInspectorPanelController(
           }`;
         }
       }
+      if (mutationContext.isCurrentSessionScope() === false) return false;
       dispatch({
         type: "setAuthoringFeedback",
         scope: "global",
@@ -1056,6 +1108,7 @@ export function useStudyInspectorPanelController(
       dispatch({ type: "acceptGlobalDraft" });
       return true;
     } catch (error) {
+      if (mutationContext.isCurrentSessionScope() === false) return false;
       if (
         error instanceof ControlRoomApiError &&
         (error.status === 409 ||
@@ -1198,6 +1251,7 @@ export function StudyInspectorPanel({ selection }: InspectorPanelProps) {
     state.authoringBusy ? "Study changes are being saved." : undefined,
     applyInspectorDraft,
     resetInspectorDraft,
+    { historyMode: "mutation-owned" },
   );
 
   return (
@@ -1221,6 +1275,8 @@ export function StudyInspectorPanel({ selection }: InspectorPanelProps) {
             solverStatus.data?.step_index ?? currentRun.data?.total_steps ?? "n/a"
           }
         />
+
+        <ProjectRunsSection />
 
         <StudySelectedStageSection
           model={model}

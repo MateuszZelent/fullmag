@@ -1,0 +1,1512 @@
+{
+  "events": [
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.36",
+      "url": "http://localhost:3124/v2/sessions",
+      "post": "{\"backend\":\"fdm\",\"device\":\"cpu\",\"name\":\"Startup 200 FDM\",\"precision\":\"double\",\"replace_current\":false}"
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.36",
+      "url": "http://localhost:3124/v2/sessions",
+      "status": 201
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.37",
+      "url": "http://localhost:3124/v2/sessions"
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.37",
+      "url": "http://localhost:3124/v2/sessions",
+      "status": 200
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.38",
+      "url": "http://localhost:3124/v2/sessions/current/status"
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.38",
+      "url": "http://localhost:3124/v2/sessions/current/status",
+      "status": 200
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.66",
+      "url": "http://localhost:3124/v2/sessions/current/simulation/preparation",
+      "scope": "session=session-18dab5a984c39a8f00000007&epoch=session-18dab5a984c39a8f00000007%401790943541517&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A1"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.67",
+      "url": "http://localhost:3124/v2/sessions/current/model/geometry/validation",
+      "scope": "session=session-18dab5a984c39a8f00000007&epoch=session-18dab5a984c39a8f00000007%401790943541517&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A1"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.68",
+      "url": "http://localhost:3124/v2/sessions/current/model/readiness",
+      "scope": "session=session-18dab5a984c39a8f00000007&epoch=session-18dab5a984c39a8f00000007%401790943541517&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A1"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.69",
+      "url": "http://localhost:3124/v2/sessions/current/simulation/solver/status",
+      "scope": "session=session-18dab5a984c39a8f00000007&epoch=session-18dab5a984c39a8f00000007%401790943541517&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A1"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.70",
+      "url": "http://localhost:3124/v2/sessions/current/visualization/state",
+      "scope": "session=session-18dab5a984c39a8f00000007&epoch=session-18dab5a984c39a8f00000007%401790943541517&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A1"
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.66",
+      "url": "http://localhost:3124/v2/sessions/current/simulation/preparation",
+      "status": 404
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.67",
+      "url": "http://localhost:3124/v2/sessions/current/model/geometry/validation",
+      "status": 200
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.69",
+      "url": "http://localhost:3124/v2/sessions/current/simulation/solver/status",
+      "status": 200
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.68",
+      "url": "http://localhost:3124/v2/sessions/current/model/readiness",
+      "status": 200
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.70",
+      "url": "http://localhost:3124/v2/sessions/current/visualization/state",
+      "status": 200
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.71",
+      "url": "http://localhost:3124/v2/sessions/current/model/physics-graph",
+      "scope": "session=session-18dab5a984c39a8f00000007&epoch=session-18dab5a984c39a8f00000007%401790943541517&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A1"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.72",
+      "url": "http://localhost:3124/v2/sessions/current/model/current-transports",
+      "scope": "session=session-18dab5a984c39a8f00000007&epoch=session-18dab5a984c39a8f00000007%401790943541517&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A1"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.73",
+      "url": "http://localhost:3124/v2/sessions"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.74",
+      "url": "http://localhost:3124/v2/sessions/current/model/geometry/validation",
+      "scope": "session=session-18dab5a984c39a8f00000007&epoch=session-18dab5a984c39a8f00000007%401790943541517&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A1"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.75",
+      "url": "http://localhost:3124/v2/sessions/current/model/geometry/capabilities",
+      "scope": "session=session-18dab5a984c39a8f00000007&epoch=session-18dab5a984c39a8f00000007%401790943541517&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A1"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.76",
+      "url": "http://localhost:3124/v2/sessions/current/meshing/capabilities",
+      "scope": "session=session-18dab5a984c39a8f00000007&epoch=session-18dab5a984c39a8f00000007%401790943541517&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A1"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.77",
+      "url": "http://localhost:3124/v2/sessions/current/meshing/semantics",
+      "scope": "session=session-18dab5a984c39a8f00000007&epoch=session-18dab5a984c39a8f00000007%401790943541517&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A1"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.78",
+      "url": "http://localhost:3124/v2/sessions/current/persistence/checkpoints",
+      "scope": "session=session-18dab5a984c39a8f00000007&epoch=session-18dab5a984c39a8f00000007%401790943541517&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A1"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.79",
+      "url": "http://localhost:3124/v2/sessions/current/model/planar-monitors",
+      "scope": "session=session-18dab5a984c39a8f00000007&epoch=session-18dab5a984c39a8f00000007%401790943541517&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A1"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.80",
+      "url": "http://localhost:3124/v2/sessions/current/model/frozen-spins",
+      "scope": "session=session-18dab5a984c39a8f00000007&epoch=session-18dab5a984c39a8f00000007%401790943541517&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A1"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.81",
+      "url": "http://localhost:3124/v2/sessions/current/model/scene",
+      "scope": "session=session-18dab5a984c39a8f00000007&epoch=session-18dab5a984c39a8f00000007%401790943541517&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A1"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.82",
+      "url": "http://localhost:3124/v2/sessions/current/data/domain/meta",
+      "scope": "session=session-18dab5a984c39a8f00000007&epoch=session-18dab5a984c39a8f00000007%401790943541517&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A1"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.83",
+      "url": "http://localhost:3124/v2/sessions/current/data/domain/fdm-multilayer-layout",
+      "scope": "session=session-18dab5a984c39a8f00000007&epoch=session-18dab5a984c39a8f00000007%401790943541517&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A1"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.84",
+      "url": "http://localhost:3124/v2/sessions/current/model/regions",
+      "scope": "session=session-18dab5a984c39a8f00000007&epoch=session-18dab5a984c39a8f00000007%401790943541517&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A1"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.85",
+      "url": "http://localhost:3124/v2/sessions/current/model/material-fields",
+      "scope": "session=session-18dab5a984c39a8f00000007&epoch=session-18dab5a984c39a8f00000007%401790943541517&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A1"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.86",
+      "url": "http://localhost:3124/v2/sessions/current/model/couplings",
+      "scope": "session=session-18dab5a984c39a8f00000007&epoch=session-18dab5a984c39a8f00000007%401790943541517&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A1"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.87",
+      "url": "http://localhost:3124/v2/sessions/current/visualization/mode-compositions/active",
+      "scope": "session=session-18dab5a984c39a8f00000007&epoch=session-18dab5a984c39a8f00000007%401790943541517&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A1"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.88",
+      "url": "http://localhost:3124/v2/sessions/current/model/universe"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.89",
+      "url": "http://localhost:3124/v2/sessions/current/meshing/meshes/shared-domain/manifest"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.90",
+      "url": "http://localhost:3124/v2/sessions/current/data/domain/topology"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.91",
+      "url": "http://localhost:3124/v2/sessions/current/data/scalars?columns=step%2Ctime%2Cmx%2Cmy%2Cmz%2Ce_total&limit=1&tail=true",
+      "scope": "session=session-18dab5a984c39a8f00000007&epoch=session-18dab5a984c39a8f00000007%401790943541517&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A1"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.92",
+      "url": "http://localhost:3124/v2/sessions/current/simulation/stages/execution",
+      "scope": "session=session-18dab5a984c39a8f00000007&epoch=session-18dab5a984c39a8f00000007%401790943541517&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A1"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.93",
+      "url": "http://localhost:3124/v2/sessions/current/simulation/runs/current",
+      "scope": "session=session-18dab5a984c39a8f00000007&epoch=session-18dab5a984c39a8f00000007%401790943541517&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A1"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.94",
+      "url": "http://localhost:3124/v2/sessions/current/meshing/builds/current",
+      "scope": "session=session-18dab5a984c39a8f00000007&epoch=session-18dab5a984c39a8f00000007%401790943541517&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A1"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.95",
+      "url": "http://localhost:3124/v2/sessions/current/simulation/solver/status",
+      "scope": "session=session-18dab5a984c39a8f00000007&epoch=session-18dab5a984c39a8f00000007%401790943541517&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A1"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.96",
+      "url": "http://localhost:3124/v2/sessions/current/model/readiness",
+      "scope": "session=session-18dab5a984c39a8f00000007&epoch=session-18dab5a984c39a8f00000007%401790943541517&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A1"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.97",
+      "url": "http://localhost:3124/v2/sessions/current/visualization/state",
+      "scope": "session=session-18dab5a984c39a8f00000007&epoch=session-18dab5a984c39a8f00000007%401790943541517&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A1"
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.71",
+      "url": "http://localhost:3124/v2/sessions/current/model/physics-graph",
+      "status": 200
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.72",
+      "url": "http://localhost:3124/v2/sessions/current/model/current-transports",
+      "status": 200
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.73",
+      "url": "http://localhost:3124/v2/sessions",
+      "status": 200
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.74",
+      "url": "http://localhost:3124/v2/sessions/current/model/geometry/validation",
+      "status": 200
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.75",
+      "url": "http://localhost:3124/v2/sessions/current/model/geometry/capabilities",
+      "status": 200
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.76",
+      "url": "http://localhost:3124/v2/sessions/current/meshing/capabilities",
+      "status": 200
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.77",
+      "url": "http://localhost:3124/v2/sessions/current/meshing/semantics",
+      "status": 200
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.78",
+      "url": "http://localhost:3124/v2/sessions/current/persistence/checkpoints",
+      "status": 500
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.79",
+      "url": "http://localhost:3124/v2/sessions/current/model/planar-monitors",
+      "status": 200
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.80",
+      "url": "http://localhost:3124/v2/sessions/current/model/frozen-spins",
+      "status": 200
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.81",
+      "url": "http://localhost:3124/v2/sessions/current/model/scene",
+      "status": 200
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.82",
+      "url": "http://localhost:3124/v2/sessions/current/data/domain/meta",
+      "status": 200
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.83",
+      "url": "http://localhost:3124/v2/sessions/current/data/domain/fdm-multilayer-layout",
+      "status": 200
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.84",
+      "url": "http://localhost:3124/v2/sessions/current/model/regions",
+      "status": 200
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.85",
+      "url": "http://localhost:3124/v2/sessions/current/model/material-fields",
+      "status": 200
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.86",
+      "url": "http://localhost:3124/v2/sessions/current/model/couplings",
+      "status": 200
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.87",
+      "url": "http://localhost:3124/v2/sessions/current/visualization/mode-compositions/active",
+      "status": 200
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.88",
+      "url": "http://localhost:3124/v2/sessions/current/model/universe",
+      "status": 200
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.89",
+      "url": "http://localhost:3124/v2/sessions/current/meshing/meshes/shared-domain/manifest",
+      "status": 204
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.90",
+      "url": "http://localhost:3124/v2/sessions/current/data/domain/topology",
+      "status": 204
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.91",
+      "url": "http://localhost:3124/v2/sessions/current/data/scalars?columns=step%2Ctime%2Cmx%2Cmy%2Cmz%2Ce_total&limit=1&tail=true",
+      "status": 200
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.92",
+      "url": "http://localhost:3124/v2/sessions/current/simulation/stages/execution",
+      "status": 204
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.93",
+      "url": "http://localhost:3124/v2/sessions/current/simulation/runs/current",
+      "status": 404
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.94",
+      "url": "http://localhost:3124/v2/sessions/current/meshing/builds/current",
+      "status": 200
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.95",
+      "url": "http://localhost:3124/v2/sessions/current/simulation/solver/status",
+      "status": 200
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.96",
+      "url": "http://localhost:3124/v2/sessions/current/model/readiness",
+      "status": 200
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.97",
+      "url": "http://localhost:3124/v2/sessions/current/visualization/state",
+      "status": 200
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.98",
+      "url": "http://localhost:3124/v2/sessions/current/data/fields",
+      "scope": "session=session-18dab5a984c39a8f00000007&epoch=session-18dab5a984c39a8f00000007%401790943541517&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A1"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.99",
+      "url": "http://localhost:3124/v2/sessions/current/data/quantities",
+      "scope": "session=session-18dab5a984c39a8f00000007&epoch=session-18dab5a984c39a8f00000007%401790943541517&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A1"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.100",
+      "url": "http://localhost:3124/v2/sessions/current/data/fdm-region-memberships",
+      "scope": "session=session-18dab5a984c39a8f00000007&epoch=session-18dab5a984c39a8f00000007%401790943541517&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A1"
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.98",
+      "url": "http://localhost:3124/v2/sessions/current/data/fields",
+      "status": 200
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.99",
+      "url": "http://localhost:3124/v2/sessions/current/data/quantities",
+      "status": 200
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.100",
+      "url": "http://localhost:3124/v2/sessions/current/data/fdm-region-memberships",
+      "status": 204
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.101",
+      "url": "http://localhost:3124/v2/sessions/current/simulation/preparation",
+      "scope": "session=session-18dab5a984c39a8f00000007&epoch=session-18dab5a984c39a8f00000007%401790943541517&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A1"
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.101",
+      "url": "http://localhost:3124/v2/sessions/current/simulation/preparation",
+      "status": 404
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.102",
+      "url": "http://localhost:3124/v2/sessions/current/simulation/preparation",
+      "scope": "session=session-18dab5a984c39a8f00000007&epoch=session-18dab5a984c39a8f00000007%401790943541517&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A1"
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.102",
+      "url": "http://localhost:3124/v2/sessions/current/simulation/preparation",
+      "status": 404
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.103",
+      "url": "http://localhost:3124/v2/sessions/current/status"
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.103",
+      "url": "http://localhost:3124/v2/sessions/current/status",
+      "status": 200
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.104",
+      "url": "http://localhost:3124/v2/sessions/current/visualization/client-acks",
+      "scope": "session=session-18dab5a984c39a8f00000007&epoch=session-18dab5a984c39a8f00000007%401790943541517&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A1",
+      "post": "{\"client_id\":\"browser-c67acd79-81df-402b-897f-74bde8b7294d\",\"client_label\":\"control-room\",\"viewport_id\":\"viewport-main\",\"revision\":0,\"status\":\"failed\",\"effective_render_mode\":\"surface\",\"error\":\"visualization render adoption timed out\"}"
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.104",
+      "url": "http://localhost:3124/v2/sessions/current/visualization/client-acks",
+      "status": 200
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.105",
+      "url": "http://localhost:3124/v2/sessions",
+      "post": "{\"backend\":\"fem\",\"device\":\"cpu\",\"name\":\"Startup 200 FEM\",\"precision\":\"double\",\"replace_current\":true}"
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.105",
+      "url": "http://localhost:3124/v2/sessions",
+      "status": 201
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.106",
+      "url": "http://localhost:3124/v2/sessions/current/status"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.107",
+      "url": "http://localhost:3124/v2/sessions"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.108",
+      "url": "http://localhost:3124/v2/sessions/current/model/geometry/validation",
+      "scope": "session=session-18dab5a984c39a8f00000007&epoch=session-18dab5a984c39a8f00000007%401790943541517&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A1"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.109",
+      "url": "http://localhost:3124/v2/sessions/current/model/readiness",
+      "scope": "session=session-18dab5a984c39a8f00000007&epoch=session-18dab5a984c39a8f00000007%401790943541517&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A1"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.110",
+      "url": "http://localhost:3124/v2/sessions/current/simulation/solver/status",
+      "scope": "session=session-18dab5a984c39a8f00000007&epoch=session-18dab5a984c39a8f00000007%401790943541517&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A1"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.111",
+      "url": "http://localhost:3124/v2/sessions/current/visualization/state",
+      "scope": "session=session-18dab5a984c39a8f00000007&epoch=session-18dab5a984c39a8f00000007%401790943541517&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A1"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.112",
+      "url": "http://localhost:3124/v2/sessions/current/model/geometry/capabilities",
+      "scope": "session=session-18dab5a984c39a8f00000007&epoch=session-18dab5a984c39a8f00000007%401790943541517&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A1"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.113",
+      "url": "http://localhost:3124/v2/sessions/current/meshing/capabilities",
+      "scope": "session=session-18dab5a984c39a8f00000007&epoch=session-18dab5a984c39a8f00000007%401790943541517&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A1"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.114",
+      "url": "http://localhost:3124/v2/sessions/current/meshing/semantics",
+      "scope": "session=session-18dab5a984c39a8f00000007&epoch=session-18dab5a984c39a8f00000007%401790943541517&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A1"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.115",
+      "url": "http://localhost:3124/v2/sessions/current/model/planar-monitors",
+      "scope": "session=session-18dab5a984c39a8f00000007&epoch=session-18dab5a984c39a8f00000007%401790943541517&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A1"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.116",
+      "url": "http://localhost:3124/v2/sessions/current/model/frozen-spins",
+      "scope": "session=session-18dab5a984c39a8f00000007&epoch=session-18dab5a984c39a8f00000007%401790943541517&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A1"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.117",
+      "url": "http://localhost:3124/v2/sessions/current/model/scene",
+      "scope": "session=session-18dab5a984c39a8f00000007&epoch=session-18dab5a984c39a8f00000007%401790943541517&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A1"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.118",
+      "url": "http://localhost:3124/v2/sessions/current/data/domain/meta",
+      "scope": "session=session-18dab5a984c39a8f00000007&epoch=session-18dab5a984c39a8f00000007%401790943541517&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A1"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.119",
+      "url": "http://localhost:3124/v2/sessions/current/data/domain/fdm-multilayer-layout",
+      "scope": "session=session-18dab5a984c39a8f00000007&epoch=session-18dab5a984c39a8f00000007%401790943541517&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A1"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.120",
+      "url": "http://localhost:3124/v2/sessions/current/model/regions",
+      "scope": "session=session-18dab5a984c39a8f00000007&epoch=session-18dab5a984c39a8f00000007%401790943541517&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A1"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.121",
+      "url": "http://localhost:3124/v2/sessions/current/model/material-fields",
+      "scope": "session=session-18dab5a984c39a8f00000007&epoch=session-18dab5a984c39a8f00000007%401790943541517&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A1"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.122",
+      "url": "http://localhost:3124/v2/sessions/current/model/couplings",
+      "scope": "session=session-18dab5a984c39a8f00000007&epoch=session-18dab5a984c39a8f00000007%401790943541517&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A1"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.123",
+      "url": "http://localhost:3124/v2/sessions/current/model/universe"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.124",
+      "url": "http://localhost:3124/v2/sessions/current/meshing/meshes/shared-domain/manifest"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.125",
+      "url": "http://localhost:3124/v2/sessions/current/data/domain/topology"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.126",
+      "url": "http://localhost:3124/v2/sessions/current/data/fields",
+      "scope": "session=session-18dab5a984c39a8f00000007&epoch=session-18dab5a984c39a8f00000007%401790943541517&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A1"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.127",
+      "url": "http://localhost:3124/v2/sessions/current/data/quantities",
+      "scope": "session=session-18dab5a984c39a8f00000007&epoch=session-18dab5a984c39a8f00000007%401790943541517&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A1"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.128",
+      "url": "http://localhost:3124/v2/sessions/current/data/scalars?columns=step%2Ctime%2Cmx%2Cmy%2Cmz%2Ce_total&limit=1&tail=true",
+      "scope": "session=session-18dab5a984c39a8f00000007&epoch=session-18dab5a984c39a8f00000007%401790943541517&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A1"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.129",
+      "url": "http://localhost:3124/v2/sessions/current/simulation/stages/execution",
+      "scope": "session=session-18dab5a984c39a8f00000007&epoch=session-18dab5a984c39a8f00000007%401790943541517&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A1"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.130",
+      "url": "http://localhost:3124/v2/sessions/current/simulation/runs/current",
+      "scope": "session=session-18dab5a984c39a8f00000007&epoch=session-18dab5a984c39a8f00000007%401790943541517&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A1"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.131",
+      "url": "http://localhost:3124/v2/sessions/current/meshing/builds/current",
+      "scope": "session=session-18dab5a984c39a8f00000007&epoch=session-18dab5a984c39a8f00000007%401790943541517&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A1"
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.106",
+      "url": "http://localhost:3124/v2/sessions/current/status",
+      "status": 200
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.107",
+      "url": "http://localhost:3124/v2/sessions",
+      "status": 200
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.108",
+      "url": "http://localhost:3124/v2/sessions/current/model/geometry/validation",
+      "status": 409
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.109",
+      "url": "http://localhost:3124/v2/sessions/current/model/readiness",
+      "status": 409
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.111",
+      "url": "http://localhost:3124/v2/sessions/current/visualization/state",
+      "status": 409
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.110",
+      "url": "http://localhost:3124/v2/sessions/current/simulation/solver/status",
+      "status": 409
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.112",
+      "url": "http://localhost:3124/v2/sessions/current/model/geometry/capabilities",
+      "status": 409
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.113",
+      "url": "http://localhost:3124/v2/sessions/current/meshing/capabilities",
+      "status": 409
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.114",
+      "url": "http://localhost:3124/v2/sessions/current/meshing/semantics",
+      "status": 409
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.115",
+      "url": "http://localhost:3124/v2/sessions/current/model/planar-monitors",
+      "status": 409
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.116",
+      "url": "http://localhost:3124/v2/sessions/current/model/frozen-spins",
+      "status": 409
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.117",
+      "url": "http://localhost:3124/v2/sessions/current/model/scene",
+      "status": 409
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.118",
+      "url": "http://localhost:3124/v2/sessions/current/data/domain/meta",
+      "status": 409
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.119",
+      "url": "http://localhost:3124/v2/sessions/current/data/domain/fdm-multilayer-layout",
+      "status": 409
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.120",
+      "url": "http://localhost:3124/v2/sessions/current/model/regions",
+      "status": 409
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.121",
+      "url": "http://localhost:3124/v2/sessions/current/model/material-fields",
+      "status": 409
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.122",
+      "url": "http://localhost:3124/v2/sessions/current/model/couplings",
+      "status": 409
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.123",
+      "url": "http://localhost:3124/v2/sessions/current/model/universe",
+      "status": 200
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.124",
+      "url": "http://localhost:3124/v2/sessions/current/meshing/meshes/shared-domain/manifest",
+      "status": 204
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.125",
+      "url": "http://localhost:3124/v2/sessions/current/data/domain/topology",
+      "status": 204
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.127",
+      "url": "http://localhost:3124/v2/sessions/current/data/quantities",
+      "status": 409
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.126",
+      "url": "http://localhost:3124/v2/sessions/current/data/fields",
+      "status": 409
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.129",
+      "url": "http://localhost:3124/v2/sessions/current/simulation/stages/execution",
+      "status": 409
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.128",
+      "url": "http://localhost:3124/v2/sessions/current/data/scalars?columns=step%2Ctime%2Cmx%2Cmy%2Cmz%2Ce_total&limit=1&tail=true",
+      "status": 409
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.130",
+      "url": "http://localhost:3124/v2/sessions/current/simulation/runs/current",
+      "status": 409
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.131",
+      "url": "http://localhost:3124/v2/sessions/current/meshing/builds/current",
+      "status": 409
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.135",
+      "url": "http://localhost:3124/v2/sessions/current/simulation/preparation",
+      "scope": "session=session-18dab5b0f597007900000007&epoch=session-18dab5b0f597007900000007%401790943573472&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A2"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.136",
+      "url": "http://localhost:3124/v2/sessions/current/model/geometry/validation",
+      "scope": "session=session-18dab5b0f597007900000007&epoch=session-18dab5b0f597007900000007%401790943573472&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A2"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.137",
+      "url": "http://localhost:3124/v2/sessions/current/model/readiness",
+      "scope": "session=session-18dab5b0f597007900000007&epoch=session-18dab5b0f597007900000007%401790943573472&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A2"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.138",
+      "url": "http://localhost:3124/v2/sessions/current/simulation/solver/status",
+      "scope": "session=session-18dab5b0f597007900000007&epoch=session-18dab5b0f597007900000007%401790943573472&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A2"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.139",
+      "url": "http://localhost:3124/v2/sessions/current/visualization/state",
+      "scope": "session=session-18dab5b0f597007900000007&epoch=session-18dab5b0f597007900000007%401790943573472&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A2"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.140",
+      "url": "http://localhost:3124/v2/sessions/current/model/geometry/capabilities",
+      "scope": "session=session-18dab5b0f597007900000007&epoch=session-18dab5b0f597007900000007%401790943573472&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A2"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.141",
+      "url": "http://localhost:3124/v2/sessions/current/meshing/capabilities",
+      "scope": "session=session-18dab5b0f597007900000007&epoch=session-18dab5b0f597007900000007%401790943573472&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A2"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.142",
+      "url": "http://localhost:3124/v2/sessions/current/meshing/semantics",
+      "scope": "session=session-18dab5b0f597007900000007&epoch=session-18dab5b0f597007900000007%401790943573472&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A2"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.143",
+      "url": "http://localhost:3124/v2/sessions/current/persistence/checkpoints",
+      "scope": "session=session-18dab5b0f597007900000007&epoch=session-18dab5b0f597007900000007%401790943573472&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A2"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.144",
+      "url": "http://localhost:3124/v2/sessions/current/simulation/runs/current",
+      "scope": "session=session-18dab5b0f597007900000007&epoch=session-18dab5b0f597007900000007%401790943573472&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A2"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.145",
+      "url": "http://localhost:3124/v2/sessions/current/meshing/meshes/shared-domain/manifest",
+      "scope": "session=session-18dab5b0f597007900000007&epoch=session-18dab5b0f597007900000007%401790943573472&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A2"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.146",
+      "url": "http://localhost:3124/v2/sessions/current/meshing/builds/current",
+      "scope": "session=session-18dab5b0f597007900000007&epoch=session-18dab5b0f597007900000007%401790943573472&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A2"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.147",
+      "url": "http://localhost:3124/v2/sessions/current/model/planar-monitors",
+      "scope": "session=session-18dab5b0f597007900000007&epoch=session-18dab5b0f597007900000007%401790943573472&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A2"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.148",
+      "url": "http://localhost:3124/v2/sessions/current/model/frozen-spins",
+      "scope": "session=session-18dab5b0f597007900000007&epoch=session-18dab5b0f597007900000007%401790943573472&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A2"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.149",
+      "url": "http://localhost:3124/v2/sessions/current/model/scene",
+      "scope": "session=session-18dab5b0f597007900000007&epoch=session-18dab5b0f597007900000007%401790943573472&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A2"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.150",
+      "url": "http://localhost:3124/v2/sessions/current/data/domain/meta",
+      "scope": "session=session-18dab5b0f597007900000007&epoch=session-18dab5b0f597007900000007%401790943573472&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A2"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.151",
+      "url": "http://localhost:3124/v2/sessions/current/meshing/policies/universe",
+      "scope": "session=session-18dab5b0f597007900000007&epoch=session-18dab5b0f597007900000007%401790943573472&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A2"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.152",
+      "url": "http://localhost:3124/v2/sessions/current/model/regions",
+      "scope": "session=session-18dab5b0f597007900000007&epoch=session-18dab5b0f597007900000007%401790943573472&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A2"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.153",
+      "url": "http://localhost:3124/v2/sessions/current/model/material-fields",
+      "scope": "session=session-18dab5b0f597007900000007&epoch=session-18dab5b0f597007900000007%401790943573472&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A2"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.154",
+      "url": "http://localhost:3124/v2/sessions/current/model/couplings",
+      "scope": "session=session-18dab5b0f597007900000007&epoch=session-18dab5b0f597007900000007%401790943573472&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A2"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.155",
+      "url": "http://localhost:3124/v2/sessions/current/model/physics-graph",
+      "scope": "session=session-18dab5b0f597007900000007&epoch=session-18dab5b0f597007900000007%401790943573472&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A2"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.156",
+      "url": "http://localhost:3124/v2/sessions/current/model/current-transports",
+      "scope": "session=session-18dab5b0f597007900000007&epoch=session-18dab5b0f597007900000007%401790943573472&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A2"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.157",
+      "url": "http://localhost:3124/v2/sessions/current/visualization/mode-compositions/active",
+      "scope": "session=session-18dab5b0f597007900000007&epoch=session-18dab5b0f597007900000007%401790943573472&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A2"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.158",
+      "url": "http://localhost:3124/v2/sessions/current/model/universe"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.159",
+      "url": "http://localhost:3124/v2/sessions/current/data/domain/topology"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.160",
+      "url": "http://localhost:3124/v2/sessions/current/data/scalars?columns=step%2Ctime%2Cmx%2Cmy%2Cmz%2Ce_total&limit=1&tail=true",
+      "scope": "session=session-18dab5b0f597007900000007&epoch=session-18dab5b0f597007900000007%401790943573472&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A2"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.161",
+      "url": "http://localhost:3124/v2/sessions/current/simulation/stages/execution",
+      "scope": "session=session-18dab5b0f597007900000007&epoch=session-18dab5b0f597007900000007%401790943573472&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A2"
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.135",
+      "url": "http://localhost:3124/v2/sessions/current/simulation/preparation",
+      "status": 404
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.136",
+      "url": "http://localhost:3124/v2/sessions/current/model/geometry/validation",
+      "status": 200
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.137",
+      "url": "http://localhost:3124/v2/sessions/current/model/readiness",
+      "status": 200
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.138",
+      "url": "http://localhost:3124/v2/sessions/current/simulation/solver/status",
+      "status": 200
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.139",
+      "url": "http://localhost:3124/v2/sessions/current/visualization/state",
+      "status": 200
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.140",
+      "url": "http://localhost:3124/v2/sessions/current/model/geometry/capabilities",
+      "status": 200
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.141",
+      "url": "http://localhost:3124/v2/sessions/current/meshing/capabilities",
+      "status": 200
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.142",
+      "url": "http://localhost:3124/v2/sessions/current/meshing/semantics",
+      "status": 200
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.144",
+      "url": "http://localhost:3124/v2/sessions/current/simulation/runs/current",
+      "status": 404
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.148",
+      "url": "http://localhost:3124/v2/sessions/current/model/frozen-spins",
+      "status": 200
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.143",
+      "url": "http://localhost:3124/v2/sessions/current/persistence/checkpoints",
+      "status": 500
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.146",
+      "url": "http://localhost:3124/v2/sessions/current/meshing/builds/current",
+      "status": 200
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.147",
+      "url": "http://localhost:3124/v2/sessions/current/model/planar-monitors",
+      "status": 200
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.145",
+      "url": "http://localhost:3124/v2/sessions/current/meshing/meshes/shared-domain/manifest",
+      "status": 204
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.149",
+      "url": "http://localhost:3124/v2/sessions/current/model/scene",
+      "status": 200
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.150",
+      "url": "http://localhost:3124/v2/sessions/current/data/domain/meta",
+      "status": 200
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.151",
+      "url": "http://localhost:3124/v2/sessions/current/meshing/policies/universe",
+      "status": 200
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.152",
+      "url": "http://localhost:3124/v2/sessions/current/model/regions",
+      "status": 200
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.153",
+      "url": "http://localhost:3124/v2/sessions/current/model/material-fields",
+      "status": 200
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.154",
+      "url": "http://localhost:3124/v2/sessions/current/model/couplings",
+      "status": 200
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.155",
+      "url": "http://localhost:3124/v2/sessions/current/model/physics-graph",
+      "status": 200
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.156",
+      "url": "http://localhost:3124/v2/sessions/current/model/current-transports",
+      "status": 200
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.157",
+      "url": "http://localhost:3124/v2/sessions/current/visualization/mode-compositions/active",
+      "status": 200
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.158",
+      "url": "http://localhost:3124/v2/sessions/current/model/universe",
+      "status": 200
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.159",
+      "url": "http://localhost:3124/v2/sessions/current/data/domain/topology",
+      "status": 204
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.161",
+      "url": "http://localhost:3124/v2/sessions/current/simulation/stages/execution",
+      "status": 204
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.160",
+      "url": "http://localhost:3124/v2/sessions/current/data/scalars?columns=step%2Ctime%2Cmx%2Cmy%2Cmz%2Ce_total&limit=1&tail=true",
+      "status": 200
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.162",
+      "url": "http://localhost:3124/v2/sessions"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.163",
+      "url": "http://localhost:3124/v2/sessions/current/simulation/preparation",
+      "scope": "session=session-18dab5b0f597007900000007&epoch=session-18dab5b0f597007900000007%401790943573472&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A2"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.164",
+      "url": "http://localhost:3124/v2/sessions/current/model/geometry/validation",
+      "scope": "session=session-18dab5b0f597007900000007&epoch=session-18dab5b0f597007900000007%401790943573472&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A2"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.165",
+      "url": "http://localhost:3124/v2/sessions/current/model/readiness",
+      "scope": "session=session-18dab5b0f597007900000007&epoch=session-18dab5b0f597007900000007%401790943573472&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A2"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.166",
+      "url": "http://localhost:3124/v2/sessions/current/simulation/solver/status",
+      "scope": "session=session-18dab5b0f597007900000007&epoch=session-18dab5b0f597007900000007%401790943573472&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A2"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.167",
+      "url": "http://localhost:3124/v2/sessions/current/model/planar-monitors",
+      "scope": "session=session-18dab5b0f597007900000007&epoch=session-18dab5b0f597007900000007%401790943573472&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A2"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.168",
+      "url": "http://localhost:3124/v2/sessions/current/meshing/meshes/shared-domain/manifest"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.169",
+      "url": "http://localhost:3124/v2/sessions/current/data/domain/topology"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.170",
+      "url": "http://localhost:3124/v2/sessions/current/simulation/stages/execution",
+      "scope": "session=session-18dab5b0f597007900000007&epoch=session-18dab5b0f597007900000007%401790943573472&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A2"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.171",
+      "url": "http://localhost:3124/v2/sessions/current/visualization/state",
+      "scope": "session=session-18dab5b0f597007900000007&epoch=session-18dab5b0f597007900000007%401790943573472&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A2"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.172",
+      "url": "http://localhost:3124/v2/sessions/current/model/geometry/capabilities",
+      "scope": "session=session-18dab5b0f597007900000007&epoch=session-18dab5b0f597007900000007%401790943573472&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A2"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.173",
+      "url": "http://localhost:3124/v2/sessions/current/meshing/capabilities",
+      "scope": "session=session-18dab5b0f597007900000007&epoch=session-18dab5b0f597007900000007%401790943573472&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A2"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.174",
+      "url": "http://localhost:3124/v2/sessions/current/meshing/semantics",
+      "scope": "session=session-18dab5b0f597007900000007&epoch=session-18dab5b0f597007900000007%401790943573472&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A2"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.175",
+      "url": "http://localhost:3124/v2/sessions/current/simulation/runs/current",
+      "scope": "session=session-18dab5b0f597007900000007&epoch=session-18dab5b0f597007900000007%401790943573472&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A2"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.176",
+      "url": "http://localhost:3124/v2/sessions/current/model/frozen-spins",
+      "scope": "session=session-18dab5b0f597007900000007&epoch=session-18dab5b0f597007900000007%401790943573472&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A2"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.177",
+      "url": "http://localhost:3124/v2/sessions/current/persistence/checkpoints",
+      "scope": "session=session-18dab5b0f597007900000007&epoch=session-18dab5b0f597007900000007%401790943573472&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A2"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.178",
+      "url": "http://localhost:3124/v2/sessions/current/meshing/builds/current",
+      "scope": "session=session-18dab5b0f597007900000007&epoch=session-18dab5b0f597007900000007%401790943573472&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A2"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.179",
+      "url": "http://localhost:3124/v2/sessions/current/model/scene",
+      "scope": "session=session-18dab5b0f597007900000007&epoch=session-18dab5b0f597007900000007%401790943573472&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A2"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.180",
+      "url": "http://localhost:3124/v2/sessions/current/data/domain/meta"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.181",
+      "url": "http://localhost:3124/v2/sessions/current/meshing/policies/universe",
+      "scope": "session=session-18dab5b0f597007900000007&epoch=session-18dab5b0f597007900000007%401790943573472&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A2"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.182",
+      "url": "http://localhost:3124/v2/sessions/current/model/regions",
+      "scope": "session=session-18dab5b0f597007900000007&epoch=session-18dab5b0f597007900000007%401790943573472&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A2"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.183",
+      "url": "http://localhost:3124/v2/sessions/current/model/material-fields",
+      "scope": "session=session-18dab5b0f597007900000007&epoch=session-18dab5b0f597007900000007%401790943573472&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A2"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.184",
+      "url": "http://localhost:3124/v2/sessions/current/model/couplings",
+      "scope": "session=session-18dab5b0f597007900000007&epoch=session-18dab5b0f597007900000007%401790943573472&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A2"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.185",
+      "url": "http://localhost:3124/v2/sessions/current/model/universe"
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.162",
+      "url": "http://localhost:3124/v2/sessions",
+      "status": 200
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.163",
+      "url": "http://localhost:3124/v2/sessions/current/simulation/preparation",
+      "status": 404
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.164",
+      "url": "http://localhost:3124/v2/sessions/current/model/geometry/validation",
+      "status": 200
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.165",
+      "url": "http://localhost:3124/v2/sessions/current/model/readiness",
+      "status": 200
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.166",
+      "url": "http://localhost:3124/v2/sessions/current/simulation/solver/status",
+      "status": 200
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.167",
+      "url": "http://localhost:3124/v2/sessions/current/model/planar-monitors",
+      "status": 200
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.168",
+      "url": "http://localhost:3124/v2/sessions/current/meshing/meshes/shared-domain/manifest",
+      "status": 204
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.169",
+      "url": "http://localhost:3124/v2/sessions/current/data/domain/topology",
+      "status": 204
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.170",
+      "url": "http://localhost:3124/v2/sessions/current/simulation/stages/execution",
+      "status": 204
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.171",
+      "url": "http://localhost:3124/v2/sessions/current/visualization/state",
+      "status": 200
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.172",
+      "url": "http://localhost:3124/v2/sessions/current/model/geometry/capabilities",
+      "status": 200
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.174",
+      "url": "http://localhost:3124/v2/sessions/current/meshing/semantics",
+      "status": 200
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.173",
+      "url": "http://localhost:3124/v2/sessions/current/meshing/capabilities",
+      "status": 200
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.175",
+      "url": "http://localhost:3124/v2/sessions/current/simulation/runs/current",
+      "status": 404
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.186",
+      "url": "http://localhost:3124/v2/sessions/current/data/domain/fdm-multilayer-layout",
+      "scope": "session=session-18dab5b0f597007900000007&epoch=session-18dab5b0f597007900000007%401790943573472&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A2"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.187",
+      "url": "http://localhost:3124/v2/sessions/current/data/fields",
+      "scope": "session=session-18dab5b0f597007900000007&epoch=session-18dab5b0f597007900000007%401790943573472&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A2"
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.188",
+      "url": "http://localhost:3124/v2/sessions/current/data/quantities",
+      "scope": "session=session-18dab5b0f597007900000007&epoch=session-18dab5b0f597007900000007%401790943573472&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A2"
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.176",
+      "url": "http://localhost:3124/v2/sessions/current/model/frozen-spins",
+      "status": 200
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.178",
+      "url": "http://localhost:3124/v2/sessions/current/meshing/builds/current",
+      "status": 200
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.177",
+      "url": "http://localhost:3124/v2/sessions/current/persistence/checkpoints",
+      "status": 500
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.179",
+      "url": "http://localhost:3124/v2/sessions/current/model/scene",
+      "status": 200
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.180",
+      "url": "http://localhost:3124/v2/sessions/current/data/domain/meta",
+      "status": 200
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.181",
+      "url": "http://localhost:3124/v2/sessions/current/meshing/policies/universe",
+      "status": 200
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.182",
+      "url": "http://localhost:3124/v2/sessions/current/model/regions",
+      "status": 200
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.183",
+      "url": "http://localhost:3124/v2/sessions/current/model/material-fields",
+      "status": 200
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.184",
+      "url": "http://localhost:3124/v2/sessions/current/model/couplings",
+      "status": 200
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.185",
+      "url": "http://localhost:3124/v2/sessions/current/model/universe",
+      "status": 200
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.186",
+      "url": "http://localhost:3124/v2/sessions/current/data/domain/fdm-multilayer-layout",
+      "status": 200
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.187",
+      "url": "http://localhost:3124/v2/sessions/current/data/fields",
+      "status": 200
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.188",
+      "url": "http://localhost:3124/v2/sessions/current/data/quantities",
+      "status": 200
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.189",
+      "url": "http://localhost:3124/v2/sessions/current/data/fdm-region-memberships",
+      "scope": "session=session-18dab5b0f597007900000007&epoch=session-18dab5b0f597007900000007%401790943573472&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A2"
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.189",
+      "url": "http://localhost:3124/v2/sessions/current/data/fdm-region-memberships",
+      "status": 204
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.190",
+      "url": "http://localhost:3124/v2/sessions/current/data/scalars?columns=step%2Ctime%2Cmx%2Cmy%2Cmz%2Ce_total&limit=1&tail=true",
+      "scope": "session=session-18dab5b0f597007900000007&epoch=session-18dab5b0f597007900000007%401790943573472&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A2"
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.190",
+      "url": "http://localhost:3124/v2/sessions/current/data/scalars?columns=step%2Ctime%2Cmx%2Cmy%2Cmz%2Ce_total&limit=1&tail=true",
+      "status": 200
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.191",
+      "url": "http://localhost:3124/v2/sessions/current/status"
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.191",
+      "url": "http://localhost:3124/v2/sessions/current/status",
+      "status": 200
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "id": "188424.192",
+      "url": "http://localhost:3124/v2/sessions/current/visualization/client-acks",
+      "scope": "session=session-18dab5b0f597007900000007&epoch=session-18dab5b0f597007900000007%401790943573472&request_scope_epoch=228e419a-1d80-4dbb-8e23-ebc48878eb78%3A2",
+      "post": "{\"client_id\":\"browser-c67acd79-81df-402b-897f-74bde8b7294d\",\"client_label\":\"control-room\",\"viewport_id\":\"viewport-main\",\"revision\":0,\"status\":\"failed\",\"effective_render_mode\":\"surface\",\"error\":\"visualization render adoption timed out\"}"
+    },
+    {
+      "method": "Network.responseReceived",
+      "id": "188424.192",
+      "url": "http://localhost:3124/v2/sessions/current/visualization/client-acks",
+      "status": 200
+    }
+  ],
+  "truncated": false,
+  "hasMore": false
+}

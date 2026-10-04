@@ -9231,11 +9231,12 @@ fn multilayer_planner_rejects_abi_v2_pair_payload_above_memory_budget() {
     );
     let error = plan(&ir)
         .expect_err("full ABI v2 pair payload must fail planner admission before allocation");
-    assert!(error.reasons.iter().any(|reason| reason
-        .contains("admission_model=cuda_abi_v2_pair_payload")
-        && reason.contains("multilayer_convolution aggregate memory budget exceeded")
-        && reason.contains("kernel_bytes=12884902656")
-        && reason.contains("estimated_bytes=12952421120")));
+    assert!(error.reasons.iter().any(|reason| {
+        reason.contains("admission_model=cuda_abi_v2_pair_payload")
+            && reason.contains("multilayer_convolution aggregate memory budget exceeded")
+            && reason.contains("kernel_bytes=12884902656")
+            && reason.contains("estimated_bytes=12952421120")
+    }));
 }
 
 #[test]

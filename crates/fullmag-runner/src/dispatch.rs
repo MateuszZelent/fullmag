@@ -434,7 +434,7 @@ fn magnetic_markers_from_mesh_parts(plan: &FemPlanIR) -> BTreeSet<u32> {
     markers
 }
 
-fn normalized_runtime_element_markers(plan: &FemPlanIR) -> Result<Vec<u32>, RunError> {
+pub(crate) fn normalized_runtime_element_markers(plan: &FemPlanIR) -> Result<Vec<u32>, RunError> {
     let markers = &plan.mesh.element_markers;
     if markers.len() != plan.mesh.cell_count() {
         return Err(RunError {
@@ -5654,10 +5654,7 @@ mod tests {
             std::env::remove_var("FULLMAG_FEM_EXECUTION");
         }
 
-        let result = validate_all_in_gpu_fem_runtime_contract(
-            "all_in_gpu_legacy_sparse",
-            &rk_plan,
-        );
+        let result = validate_all_in_gpu_fem_runtime_contract("all_in_gpu_legacy_sparse", &rk_plan);
 
         unsafe {
             std::env::remove_var("FULLMAG_FEM_ALL_IN_GPU");

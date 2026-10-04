@@ -54,7 +54,7 @@ describe("viewport 3D field revision refetch", () => {
         if (new URL(requestUrl).pathname === SESSION_STATUS_PATH) {
           return jsonResponse({
             resources: {},
-            session: { session_epoch: sessionEpoch, session_id: "session-1" },
+            session: { session_epoch: sessionEpoch, session_id: "session-1", request_scope_epoch: `test-api:${sessionEpoch}` },
           });
         }
         if (requestUrl.includes("/data/fields/H_demag/samples/vector")) {
@@ -121,6 +121,7 @@ describe("viewport 3D field revision refetch", () => {
             resources: {},
             session: {
               session_epoch: "session-1@1700000000000",
+              request_scope_epoch: "test-api:1",
               session_id: "session-1",
             },
           });

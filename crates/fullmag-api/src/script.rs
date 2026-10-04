@@ -7,11 +7,24 @@ use fullmag_authoring::{
     ScriptBuilderState,
 };
 use serde_json::Value;
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
-use std::process::Command as ProcessCommand;
+use std::process::{Child, Command as ProcessCommand, Output, Stdio};
 use std::sync::Arc;
+use std::thread;
+use std::time::{Duration, Instant};
+
+const BOUNDED_PYTHON_HELPER_TIMEOUT: Duration = Duration::from_secs(30);
+const BOUNDED_PYTHON_HELPER_POLL_INTERVAL: Duration = Duration::from_millis(20);
+const BOUNDED_PYTHON_HELPER_LOG_LIMIT: u64 = 1024 * 1024;
 
 pub(crate) fn repo_root() -> PathBuf {
+    if let Some(root) = std::env::current_exe().ok().and_then(|executable| {
+        fullmag_runtime_control::python_runtime::packaged_windows_root(&executable)
+    }) {
+        return root;
+    }
     if let Some(root) = std::env::var_os("FULLMAG_REPO_ROOT") {
         return PathBuf::from(root);
     }
@@ -26,11 +39,21 @@ pub(crate) fn repo_root() -> PathBuf {
 /// Resolve the writable per-user state root supplied by the launcher.  A
 /// packaged install may live below Program Files, so generated live-workspace
 /// files and mesh caches must not be placed next to the read-only binaries.
-pub(crate) fn state_root(repo_root: &Path) -> PathBuf {
-    std::env::var_os("FULLMAG_STATE_ROOT")
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| repo_root.join(".fullmag"))
+pub(crate) fn state_root(repo_root: &Path) -> Result<PathBuf, ApiError> {
+    if let Some(configured) = fullmag_runtime_control::python_runtime::validated_state_override(
+        std::env::var_os("FULLMAG_STATE_ROOT").map(PathBuf::from),
+    )
+    .map_err(|error| ApiError::internal(error.to_string()))?
+    {
+        return Ok(configured);
+    }
+    fullmag_runtime_control::python_runtime::packaged_windows_state_root(repo_root)
+        .map(|root| root.unwrap_or_else(|| repo_root.join(".fullmag")))
+        .map_err(|error| {
+            ApiError::internal(format!(
+                "Windows package state directory unavailable: {error}"
+            ))
+        })
 }
 
 pub(crate) async fn sync_current_live_script_with_request(
@@ -236,9 +259,53 @@ pub(crate) fn render_scene_document_via_python_helper(
     output_path: &Path,
     scene_document: &SceneDocument,
 ) -> Result<ScriptSyncResponse, ApiError> {
+    render_scene_document_via_python_helper_with_policy(
+        repo_root,
+        workspace_root,
+        output_path,
+        scene_document,
+        PythonHelperOutputPolicy::Capture,
+    )
+}
+
+/// Render an authoring document through the Python helper with bounded,
+/// file-backed process output.  The authoring endpoint owns the private
+/// workspace, so the helper cannot leave an unbounded `Command::output`
+/// buffer on the API worker.
+pub(crate) fn render_scene_document_via_python_helper_bounded(
+    repo_root: &Path,
+    workspace_root: &Path,
+    output_path: &Path,
+    scene_document: &SceneDocument,
+) -> Result<ScriptSyncResponse, ApiError> {
+    render_scene_document_via_python_helper_with_policy(
+        repo_root,
+        workspace_root,
+        output_path,
+        scene_document,
+        PythonHelperOutputPolicy::Bounded { workspace_root },
+    )
+}
+
+struct TemporaryFileGuard(PathBuf);
+
+impl Drop for TemporaryFileGuard {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.0);
+    }
+}
+
+fn render_scene_document_via_python_helper_with_policy(
+    repo_root: &Path,
+    workspace_root: &Path,
+    output_path: &Path,
+    scene_document: &SceneDocument,
+    policy: PythonHelperOutputPolicy<'_>,
+) -> Result<ScriptSyncResponse, ApiError> {
     std::fs::create_dir_all(workspace_root)
         .map_err(|error| ApiError::internal(format!("failed to prepare workspace: {}", error)))?;
     let scene_path = workspace_root.join(format!("scene-export-{}.json", uuid_v4_hex()));
+    let _scene_guard = TemporaryFileGuard(scene_path.clone());
     let scene_body = serde_json::to_string_pretty(scene_document).map_err(|error| {
         ApiError::internal(format!("failed to serialize SceneDocument: {}", error))
     })?;
@@ -254,8 +321,7 @@ pub(crate) fn render_scene_document_via_python_helper(
         "--output".to_string(),
         output_path.display().to_string(),
     ];
-    let output = run_python_helper(repo_root, &helper_args);
-    let _ = std::fs::remove_file(&scene_path);
+    let output = run_python_helper_with_policy(repo_root, &helper_args, policy);
     let output = output?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -300,6 +366,79 @@ pub(crate) fn load_scene_document_state(
     })
 }
 
+pub(crate) fn scene_document_to_problem_ir(
+    repo_root: &Path,
+    workspace_root: &Path,
+    scene_document: &SceneDocument,
+    requested_execution: &fullmag_application::RequestedExecution,
+) -> Result<fullmag_ir::ProblemIR, ApiError> {
+    requested_execution
+        .validate()
+        .map_err(|error| ApiError::bad_request(error.to_string()))?;
+    if !matches!(requested_execution.backend.as_str(), "auto" | "fdm") {
+        return Err(ApiError::bad_request(
+            "current live preparation materialization supports requested backend 'fdm' or 'auto'",
+        ));
+    }
+    scene_document_problem_projection(scene_document)
+        .map_err(|error| ApiError::bad_request(error.message))?;
+    std::fs::create_dir_all(workspace_root)
+        .map_err(|error| ApiError::internal(format!("failed to prepare workspace: {error}")))?;
+
+    let scene_path = workspace_root.join(format!("preparation-scene-{}.json", uuid_v4_hex()));
+    let scene_body = serde_json::to_vec(scene_document).map_err(|error| {
+        ApiError::internal(format!(
+            "failed to serialize preparation SceneDocument: {error}"
+        ))
+    })?;
+    if let Err(error) = std::fs::write(&scene_path, scene_body) {
+        let _ = std::fs::remove_file(&scene_path);
+        return Err(ApiError::internal(format!(
+            "failed to persist preparation SceneDocument: {error}"
+        )));
+    }
+
+    let helper_args = vec![
+        "-m".to_string(),
+        "fullmag.runtime.helper".to_string(),
+        "export-scene-ir".to_string(),
+        "--scene-json".to_string(),
+        scene_path.display().to_string(),
+        "--backend".to_string(),
+        requested_execution.backend.clone(),
+        "--device".to_string(),
+        requested_execution.device.clone(),
+        "--precision".to_string(),
+        requested_execution.precision.clone(),
+        "--mode".to_string(),
+        requested_execution.mode.clone(),
+        "--asset-root".to_string(),
+        workspace_root.display().to_string(),
+    ];
+    let output = run_python_helper(repo_root, &helper_args);
+    let _ = std::fs::remove_file(&scene_path);
+    let output = output?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(ApiError::bad_request(format!(
+            "SceneDocument could not be lowered to ProblemIR: {}",
+            stderr.trim()
+        )));
+    }
+
+    let problem: fullmag_ir::ProblemIR =
+        serde_json::from_slice(&output.stdout).map_err(|error| {
+            ApiError::internal(format!("failed to decode generated ProblemIR: {error}"))
+        })?;
+    problem.validate().map_err(|errors| {
+        ApiError::internal(format!(
+            "canonical SceneDocument lowering produced invalid ProblemIR: {}",
+            errors.join("; ")
+        ))
+    })?;
+    Ok(problem)
+}
+
 pub(crate) fn scene_document_builder_projection(
     scene_document: &SceneDocument,
 ) -> Result<ScriptBuilderState, ApiError> {
@@ -314,15 +453,16 @@ pub(crate) fn scene_document_overrides(scene_document: &SceneDocument) -> Result
 }
 
 pub(crate) fn python_executable(repo_root: &Path) -> String {
+    let real_root = python_workspace_root(repo_root);
+    if let Some(candidate) =
+        fullmag_runtime_control::python_runtime::packaged_windows_python(&real_root)
+    {
+        return candidate.display().to_string();
+    }
     if let Ok(preferred) = std::env::var("FULLMAG_PYTHON") {
         return preferred;
     }
-    let real_root = if repo_root.join("packages/fullmag-py/src/fullmag").exists() {
-        repo_root
-    } else {
-        &self::repo_root()
-    };
-    if let Some(candidate) = python_path_candidates(real_root)
+    if let Some(candidate) = python_path_candidates(&real_root)
         .into_iter()
         .find(|candidate| candidate.is_file())
     {
@@ -331,18 +471,56 @@ pub(crate) fn python_executable(repo_root: &Path) -> String {
     "python3".to_string()
 }
 
-pub(crate) fn run_python_helper(
-    repo_root: &Path,
-    args: &[String],
-) -> Result<std::process::Output, ApiError> {
-    let real_root = if repo_root.join("packages/fullmag-py/src/fullmag").exists() {
-        repo_root.to_path_buf()
+pub(crate) fn python_workspace_root(root: &Path) -> PathBuf {
+    if root.join("packages/fullmag-py/src/fullmag").exists()
+        || fullmag_runtime_control::python_runtime::packaged_windows_python(root).is_some()
+    {
+        root.to_path_buf()
     } else {
         self::repo_root()
-    };
-    let mut candidates = Vec::new();
+    }
+}
 
-    if let Ok(preferred) = std::env::var("FULLMAG_PYTHON") {
+pub(crate) fn configure_python_command(
+    root: &Path,
+    command: &mut ProcessCommand,
+) -> Result<(), ApiError> {
+    let root = python_workspace_root(root);
+    if fullmag_runtime_control::python_runtime::packaged_windows_python(&root).is_some() {
+        fullmag_runtime_control::python_runtime::configure_packaged_python(command, &root)
+            .map_err(|error| {
+                ApiError::internal(format!(
+                    "bundled Python runtime is incomplete or invalid: {error}"
+                ))
+            })?;
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy)]
+enum PythonHelperOutputPolicy<'a> {
+    Capture,
+    Bounded { workspace_root: &'a Path },
+}
+
+pub(crate) fn run_python_helper(repo_root: &Path, args: &[String]) -> Result<Output, ApiError> {
+    run_python_helper_with_policy(repo_root, args, PythonHelperOutputPolicy::Capture)
+}
+
+fn run_python_helper_with_policy(
+    repo_root: &Path,
+    args: &[String],
+    policy: PythonHelperOutputPolicy<'_>,
+) -> Result<Output, ApiError> {
+    let real_root = python_workspace_root(repo_root);
+    let mut candidates = Vec::new();
+    let bundled_python =
+        fullmag_runtime_control::python_runtime::packaged_windows_python(&real_root);
+    let uses_bundle = bundled_python.is_some();
+
+    if let Some(bundled_python) = bundled_python {
+        candidates.push(bundled_python.display().to_string());
+    } else if let Ok(preferred) = std::env::var("FULLMAG_PYTHON") {
         candidates.push(preferred);
     } else {
         for candidate in python_path_candidates(&real_root) {
@@ -352,7 +530,7 @@ pub(crate) fn run_python_helper(
         }
     }
     for fallback in ["python3", "python"] {
-        if !candidates.iter().any(|candidate| candidate == fallback) {
+        if !uses_bundle && !candidates.iter().any(|candidate| candidate == fallback) {
             candidates.push(fallback.to_string());
         }
     }
@@ -360,7 +538,7 @@ pub(crate) fn run_python_helper(
     let pythonpath = real_root.join("packages").join("fullmag-py").join("src");
     let packaged_site_packages = real_root.join("python").join("site-packages");
     let python_extension_root = real_root.join(".fullmag").join("local");
-    let fem_mesh_cache_dir = state_root(&real_root)
+    let fem_mesh_cache_dir = state_root(&real_root)?
         .join("local")
         .join("cache")
         .join("fem_mesh_assets");
@@ -369,6 +547,7 @@ pub(crate) fn run_python_helper(
 
     for candidate in candidates {
         let mut command = ProcessCommand::new(&candidate);
+        configure_python_command(&real_root, &mut command)?;
         command.args(args);
         command.env("PYTHONUNBUFFERED", "1");
         command.env("FULLMAG_FEM_MESH_CACHE_DIR", &fem_mesh_cache_dir);
@@ -387,17 +566,28 @@ pub(crate) fn run_python_helper(
                 python_paths.push(existing.clone());
             }
         }
-        if !python_paths.is_empty() {
+        if !uses_bundle && !python_paths.is_empty() {
             command.env(
                 "PYTHONPATH",
                 python_paths.join(if cfg!(windows) { ";" } else { ":" }),
             );
         }
 
-        match command.output() {
-            Ok(output) => return Ok(output),
-            Err(error) => {
-                last_error = Some(format!("{}: {}", candidate, error));
+        match policy {
+            PythonHelperOutputPolicy::Capture => match command.output() {
+                Ok(output) => return Ok(output),
+                Err(error) => {
+                    last_error = Some(format!("{}: {}", candidate, error));
+                }
+            },
+            PythonHelperOutputPolicy::Bounded { workspace_root } => {
+                match run_bounded_python_helper(command, workspace_root) {
+                    Ok(output) => return Ok(output),
+                    Err(BoundedHelperError::Spawn(error)) => {
+                        last_error = Some(format!("{}: {}", candidate, error));
+                    }
+                    Err(BoundedHelperError::Started(error)) => return Err(error),
+                }
             }
         }
     }
@@ -406,6 +596,224 @@ pub(crate) fn run_python_helper(
         "failed to spawn python helper ({})",
         last_error.unwrap_or_else(|| "unknown error".to_string())
     )))
+}
+
+enum BoundedHelperError {
+    Spawn(io::Error),
+    Started(ApiError),
+}
+
+struct BoundedHelperLogGuard {
+    stdout_path: PathBuf,
+    stderr_path: PathBuf,
+}
+
+impl Drop for BoundedHelperLogGuard {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.stdout_path);
+        let _ = fs::remove_file(&self.stderr_path);
+    }
+}
+
+fn run_bounded_python_helper(
+    mut command: ProcessCommand,
+    workspace_root: &Path,
+) -> Result<Output, BoundedHelperError> {
+    let (stdout, stderr, logs) = match create_bounded_helper_logs(workspace_root) {
+        Ok(logs) => logs,
+        Err(error) => return Err(BoundedHelperError::Started(error)),
+    };
+    let stdout_path = logs.stdout_path.clone();
+    let stderr_path = logs.stderr_path.clone();
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(stdout))
+        .stderr(Stdio::from(stderr));
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(error) => return Err(BoundedHelperError::Spawn(error)),
+    };
+    let deadline = Instant::now() + BOUNDED_PYTHON_HELPER_TIMEOUT;
+    let status = loop {
+        if let Err(error) = bounded_helper_log_size(&stdout_path, &stderr_path) {
+            let cleanup = stop_bounded_helper(&mut child);
+            return Err(BoundedHelperError::Started(combine_bounded_error(
+                "Python helper log inspection failed",
+                error,
+                cleanup,
+            )));
+        }
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {
+                let now = Instant::now();
+                if now >= deadline {
+                    let cleanup = stop_bounded_helper(&mut child);
+                    return Err(BoundedHelperError::Started(
+                        bounded_helper_failure_with_cleanup(
+                            "Python helper exceeded the 30 second deadline",
+                            cleanup,
+                        ),
+                    ));
+                }
+                let remaining = deadline.saturating_duration_since(now);
+                thread::sleep(std::cmp::min(
+                    BOUNDED_PYTHON_HELPER_POLL_INTERVAL,
+                    remaining,
+                ));
+            }
+            Err(error) => {
+                let cleanup = stop_bounded_helper(&mut child);
+                return Err(BoundedHelperError::Started(combine_bounded_error(
+                    "Python helper status polling failed",
+                    error,
+                    cleanup,
+                )));
+            }
+        }
+    };
+    if let Err(error) = bounded_helper_log_size(&stdout_path, &stderr_path) {
+        return Err(BoundedHelperError::Started(ApiError::internal(format!(
+            "Python helper log inspection failed after exit: {error}"
+        ))));
+    }
+    let stdout = match read_bounded_helper_log(&stdout_path) {
+        Ok(bytes) => bytes,
+        Err(error) => return Err(BoundedHelperError::Started(error)),
+    };
+    let stderr = match read_bounded_helper_log(&stderr_path) {
+        Ok(bytes) => bytes,
+        Err(error) => return Err(BoundedHelperError::Started(error)),
+    };
+    drop(logs);
+    Ok(Output {
+        status,
+        stdout,
+        stderr,
+    })
+}
+
+fn create_bounded_helper_logs(
+    workspace_root: &Path,
+) -> Result<(File, File, BoundedHelperLogGuard), ApiError> {
+    let stdout_path = workspace_root.join(format!("python-helper-{}-stdout.log", uuid_v4_hex()));
+    let stderr_path = workspace_root.join(format!("python-helper-{}-stderr.log", uuid_v4_hex()));
+    let stdout = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&stdout_path)
+        .map_err(|error| {
+            ApiError::internal(format!(
+                "failed to create bounded Python helper stdout log: {error}"
+            ))
+        })?;
+    let stderr = match OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&stderr_path)
+    {
+        Ok(file) => file,
+        Err(error) => {
+            let _ = fs::remove_file(&stdout_path);
+            return Err(ApiError::internal(format!(
+                "failed to create bounded Python helper stderr log: {error}"
+            )));
+        }
+    };
+    Ok((
+        stdout,
+        stderr,
+        BoundedHelperLogGuard {
+            stdout_path,
+            stderr_path,
+        },
+    ))
+}
+
+fn bounded_helper_log_size(stdout_path: &Path, stderr_path: &Path) -> Result<u64, ApiError> {
+    let stdout_size = bounded_helper_log_metadata(stdout_path, "stdout")?;
+    let stderr_size = bounded_helper_log_metadata(stderr_path, "stderr")?;
+    let combined = stdout_size
+        .checked_add(stderr_size)
+        .ok_or_else(|| ApiError::internal("Python helper log size overflow"))?;
+    if combined > BOUNDED_PYTHON_HELPER_LOG_LIMIT {
+        return Err(ApiError::internal(format!(
+            "Python helper output exceeded the {} byte combined log limit",
+            BOUNDED_PYTHON_HELPER_LOG_LIMIT
+        )));
+    }
+    Ok(combined)
+}
+
+fn bounded_helper_log_metadata(path: &Path, stream: &str) -> Result<u64, ApiError> {
+    let metadata = fs::symlink_metadata(path).map_err(|error| {
+        ApiError::internal(format!(
+            "failed to inspect bounded Python helper {stream} log: {error}"
+        ))
+    })?;
+    if !metadata.file_type().is_file() {
+        return Err(ApiError::internal(format!(
+            "bounded Python helper {stream} log is not a regular file"
+        )));
+    }
+    Ok(metadata.len())
+}
+
+fn read_bounded_helper_log(path: &Path) -> Result<Vec<u8>, ApiError> {
+    bounded_helper_log_metadata(path, "captured")?;
+    let mut file = File::open(path).map_err(|error| {
+        ApiError::internal(format!("failed to read bounded Python helper log: {error}"))
+    })?;
+    let mut bytes = Vec::new();
+    file.take(BOUNDED_PYTHON_HELPER_LOG_LIMIT + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| {
+            ApiError::internal(format!("failed to read Python helper log: {error}"))
+        })?;
+    if bytes.len() as u64 > BOUNDED_PYTHON_HELPER_LOG_LIMIT {
+        return Err(ApiError::internal(
+            "Python helper log exceeded the bounded read limit",
+        ));
+    }
+    Ok(bytes)
+}
+
+fn stop_bounded_helper(child: &mut Child) -> Result<(), String> {
+    let kill_error = match child.kill() {
+        Ok(()) => None,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(error) => Some(format!("kill failed: {error}")),
+    };
+    let wait_error = child
+        .wait()
+        .err()
+        .map(|error| format!("wait failed: {error}"));
+    match (kill_error, wait_error) {
+        (None, None) => Ok(()),
+        (Some(kill), None) => Err(kill),
+        (None, Some(wait)) => Err(wait),
+        (Some(kill), Some(wait)) => Err(format!("{kill}; {wait}")),
+    }
+}
+
+fn bounded_helper_failure_with_cleanup(message: &str, cleanup: Result<(), String>) -> ApiError {
+    match cleanup {
+        Ok(()) => ApiError::internal(message),
+        Err(cleanup) => ApiError::internal(format!("{message}; process cleanup failed: {cleanup}")),
+    }
+}
+
+fn combine_bounded_error<E: std::fmt::Display>(
+    message: &str,
+    error: E,
+    cleanup: Result<(), String>,
+) -> ApiError {
+    match cleanup {
+        Ok(()) => ApiError::internal(format!("{message}: {error}")),
+        Err(cleanup) => ApiError::internal(format!(
+            "{message}: {error}; process cleanup failed: {cleanup}"
+        )),
+    }
 }
 
 fn python_path_candidates(repo_root: &Path) -> Vec<PathBuf> {

@@ -93,6 +93,20 @@ closed. A proxy must use a distinct metric ID and must not be labeled SICN,
 gamma, or volume. A histogram or percentile never replaces the per-element
 gate that produced it.
 
+FEM preparation keeps native MFEM Jacobian evidence separate from upstream
+mesher provenance. A current `mfem_mesh_source_binding.v1` producer binds the
+canonical input mesh and realized MFEM topology to a versioned
+`fem_mesh_source_evidence.v1` record. That record hashes the build report when
+present and always fingerprints the per-domain quality map, including its
+marker/count coverage. A missing report is serialized as absent and an empty
+quality map remains an empty-evidence state; neither is interpreted as mesh
+acceptance. A degraded report, non-finite or internally inconsistent summary,
+or marker/count mismatch fails closed. These lineage checks make the source
+evidence refer to the same mesh; they do not replace the topology-specific
+quality thresholds and production acceptance gates in note 0105. Historical
+`mfem_mesh_space_evidence.v1` receipts remain readable without this source
+record, while newly materialized FEM receipts require it.
+
 (fmmq-v2-contract)=
 ### FMMQ v2 and v1 compatibility exit
 
@@ -164,8 +178,9 @@ V04 artifact is declared canonical; it never writes both models.
 2. Lower the exact size algebra and zone eligibility into one deterministic
    field plan; report every selected, clipped, unavailable, degraded, and
    rejected source.
-3. Bind topology, exact-layer, growth, and quality evidence to immutable mesh
-   identity.
+3. Bind topology, exact-layer, growth, upstream build report, per-domain
+   quality, and native quality evidence to immutable mesh identity while
+   preserving each metric's distinct producer and acceptance rule.
 4. Implement FMMQ v2 producer, API, codecs, generated types, and UI consumers
    before promoting mixed quality visualization.
 5. Add golden V04 migration and round-trip tests before the one writer cutover.

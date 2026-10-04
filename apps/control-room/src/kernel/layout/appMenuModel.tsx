@@ -2,6 +2,7 @@ import {
   BookOpen,
   Box,
   Braces,
+  Check,
   Command,
   Cpu,
   Database,
@@ -9,12 +10,13 @@ import {
   FilePlus2,
   Gauge,
   HelpCircle,
-  Info,
   LayoutDashboard,
+  Layers3,
   ListChecks,
   Pause,
   Play,
   Redo2,
+  RotateCcw,
   Save,
   Search,
   Settings,
@@ -24,6 +26,7 @@ import {
   Timer,
   Undo2,
   Upload,
+  X,
 } from "lucide-react";
 import type { ReactNode } from "react";
 
@@ -48,9 +51,6 @@ const HIDDEN_PLACEHOLDER_COMMAND_IDS = new Set([
   "workspace.preferences",
   "workspace.docs",
   "workspace.about",
-  "workspace.save-sync",
-  "workspace.undo",
-  "workspace.redo",
   "workspace.view-2d",
   "execution.fdm-cpu",
   "execution.fdm-gpu",
@@ -58,9 +58,6 @@ const HIDDEN_PLACEHOLDER_COMMAND_IDS = new Set([
   "workspace.diagnostics",
   "workspace.api-console",
   "workspace.script-view",
-  "workspace.search-docs",
-  "workspace.reference",
-  "workspace.about-help",
 ]);
 
 function hidePlaceholderMenuNodes(nodes: AppMenuNode[]): AppMenuNode[] {
@@ -76,21 +73,17 @@ function hidePlaceholderMenuNodes(nodes: AppMenuNode[]): AppMenuNode[] {
   });
 }
 
-const APP_DROPDOWN_ITEM_DEFINITIONS: AppMenuNode[] = [
-  { id: "workspace.theme-toggle", label: "Toggle Theme", icon: <Settings size={14} /> },
-  { id: "workspace.preferences", label: "Preferences", icon: <Settings size={14} /> },
-  { id: "workspace.docs", label: "Physics Documentation", icon: <BookOpen size={14} /> },
-  { id: "workspace.about", label: "About Fullmag", icon: <Info size={14} /> },
-];
-
 const MAIN_MENU_DEFINITIONS: AppMenuNode[] = [
   {
     id: "file",
     label: "File",
     children: [
       { id: "workspace.new-problem", label: "New Problem", icon: <FilePlus2 size={14} />, shortcut: "Ctrl+N" },
-      { id: "study.import-state", label: "Import .fms State", icon: <Upload size={14} />, shortcut: "Ctrl+O" },
-      { id: "workspace.save-sync", label: "Save / Sync", icon: <Save size={14} />, shortcut: "Ctrl+S" },
+      { id: "workspace.new-project", label: "New Project", icon: <FilePlus2 size={14} />, shortcut: "Ctrl+Shift+N" },
+      { id: "workspace.open-project", label: "Open Project", icon: <Upload size={14} />, shortcut: "Ctrl+O" },
+      { id: "study.import-state", label: "Restore Runtime State", icon: <Upload size={14} />, shortcut: "Ctrl+Shift+O" },
+      { id: "workspace.save-project", label: "Save Project", icon: <Save size={14} />, shortcut: "Ctrl+S" },
+      { id: "workspace.close-project", label: "Close Project", icon: <X size={14} />, shortcut: "Ctrl+W" },
       { id: "workspace.export-python", label: "Export Python DSL", icon: <FileCode2 size={14} /> },
     ],
   },
@@ -98,6 +91,8 @@ const MAIN_MENU_DEFINITIONS: AppMenuNode[] = [
     id: "edit",
     label: "Edit",
     children: [
+      { id: "workspace.apply-inspector", label: "Apply Inspector Changes", icon: <Check size={14} />, shortcut: "Ctrl+Shift+Enter" },
+      { id: "workspace.reset-inspector", label: "Reset Inspector Changes", icon: <RotateCcw size={14} /> },
       { id: "workspace.undo", label: "Undo", icon: <Undo2 size={14} />, shortcut: "Ctrl+Z" },
       { id: "workspace.redo", label: "Redo", icon: <Redo2 size={14} />, shortcut: "Ctrl+Y" },
       { id: "workspace.command-palette", label: "Command Palette", icon: <Command size={14} />, shortcut: "Ctrl+Shift+P" },
@@ -125,6 +120,7 @@ const MAIN_MENU_DEFINITIONS: AppMenuNode[] = [
     id: "simulation",
     label: "Simulation",
     children: [
+      { id: "study.prepare-live", label: "Prepare Live Study", icon: <Layers3 size={14} /> },
       { id: "study.run", label: "Compute Study", icon: <Play size={14} />, shortcut: "F5" },
       { id: "study.pause", label: "Pause", icon: <Pause size={14} /> },
       { id: "study.resume", label: "Resume", icon: <Play size={14} /> },
@@ -169,14 +165,11 @@ const MAIN_MENU_DEFINITIONS: AppMenuNode[] = [
 ];
 
 const QUICK_ACTION_DEFINITIONS: HeaderQuickAction[] = [
-  { id: "workspace.save-sync", label: "Save / Sync", icon: <Save size={14} /> },
+  { id: "workspace.save-project", label: "Save Project", icon: <Save size={14} /> },
+  { id: "workspace.apply-inspector", label: "Apply Inspector", icon: <Check size={14} /> },
   { id: "workspace.undo", label: "Undo", icon: <Undo2 size={14} /> },
   { id: "workspace.redo", label: "Redo", icon: <Redo2 size={14} /> },
 ];
-
-export const APP_DROPDOWN_ITEMS: AppMenuNode[] = hidePlaceholderMenuNodes(
-  APP_DROPDOWN_ITEM_DEFINITIONS,
-);
 
 export const MAIN_MENUS: AppMenuNode[] = hidePlaceholderMenuNodes(
   MAIN_MENU_DEFINITIONS,

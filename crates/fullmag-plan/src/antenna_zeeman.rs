@@ -143,9 +143,10 @@ fn find_geometry<'a>(problem: &'a ProblemIR, object: &str) -> Option<&'a Geometr
 
 fn geometry_contains_point(entry: &GeometryEntryIR, point: [f64; 3]) -> Result<bool, String> {
     match entry {
-        GeometryEntryIR::Box { size, .. } => Ok((0..3).all(|axis| {
-            point[axis] >= -0.5 * size[axis] && point[axis] <= 0.5 * size[axis]
-        })),
+        GeometryEntryIR::Box { size, .. } => {
+            Ok((0..3)
+                .all(|axis| point[axis] >= -0.5 * size[axis] && point[axis] <= 0.5 * size[axis]))
+        }
         GeometryEntryIR::Cylinder {
             radius,
             height,
@@ -158,16 +159,13 @@ fn geometry_contains_point(entry: &GeometryEntryIR, point: [f64; 3]) -> Result<b
             }
             let unit = [axis[0] / norm, axis[1] / norm, axis[2] / norm];
             let axial = point[0] * unit[0] + point[1] * unit[1] + point[2] * unit[2];
-            let radial_sq = point[0] * point[0]
-                + point[1] * point[1]
-                + point[2] * point[2]
-                - axial * axial;
+            let radial_sq =
+                point[0] * point[0] + point[1] * point[1] + point[2] * point[2] - axial * axial;
             Ok(radial_sq <= radius * radius && axial.abs() <= 0.5 * height)
         }
-        GeometryEntryIR::Translate { base, by, .. } => geometry_contains_point(
-            base,
-            [point[0] - by[0], point[1] - by[1], point[2] - by[2]],
-        ),
+        GeometryEntryIR::Translate { base, by, .. } => {
+            geometry_contains_point(base, [point[0] - by[0], point[1] - by[1], point[2] - by[2]])
+        }
         GeometryEntryIR::Difference { base, tool, .. } => {
             Ok(geometry_contains_point(base, point)? && !geometry_contains_point(tool, point)?)
         }

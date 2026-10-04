@@ -206,6 +206,35 @@ oznacza failure nawet wtedy, gdy Docker zwrócił exit code 0.
 
 ## Jeszcze niekwalifikowane elementy
 
+### Przeglądarka z gotowego pakietu CPU
+
+`just run-managed-browser <pełny-job-id> <pełny-commit> 3104` uruchamia
+backend API i statyczny Control Room z terminalnego, udanego pakietu
+`fem-cpu-release`. Nie kompiluje, nie instaluje zależności i nie uruchamia
+solvera. Wymaga zachowanej kapsuły źródeł, kompletnych artefaktów i lokalnego
+obrazu o digestcie zgodnym z receiptem buildu.
+
+Launcher ponownie sprawdza kapsułę, trusted documents, wymagane artefakty,
+startup stamp i rzeczywiste mounty/port kontenera. Źródła oraz pakiet pozostają
+read-only. Świeży katalog stanu w storage zawiera również prywatny widok repo
+z linkami do źródeł oraz zwykłym katalogiem `.fullmag`, który jest również
+`FULLMAG_STATE_ROOT`. Sam katalog repozytorium sesji nie może być symlinkiem.
+Launcher odrzuca typ filesystemu nieobsługiwany przez writer sesji. Bind
+Windows widziany jako 9p nie kwalifikuje checkpointów; wymaga osobno
+zatwierdzonego adaptera trwałego storage. Samo zdrowe API nie wystarcza.
+Kontener korzysta z UID/GID 65532, limitów 4 CPU,
+2 GiB RAM i 128 procesów, bez podwyższonych uprawnień.
+
+UI i API są dostępne wyłącznie przez loopback, domyślnie
+`http://localhost:3104/workspace`. Receipt wskazuje dokładny container ID,
+katalog danych i plik Compose. Pozostają zachowane także po błędzie obserwacji;
+nie uruchamiaj ponownie bez sprawdzenia poprzedniego kontenera. Zatrzymanie
+właściwego kontenera nie wymaga usuwania danych. Osobny browser smoke musi
+potwierdzić działanie UI; zdrowe `/healthz` nie jest kwalifikacją solvera,
+fizyki ani wydania.
+
+### Pozostałe ograniczenia
+
 - Build/uruchomienie Fullmaga z prywatnej kopii kapsuły i jawnego execution context.
 - Wspólne leases obejmujące istniejące launchery i ich kontenery po crashu procesu hosta.
 - Adapter trwałego storage Desktop, dowód ext4/backing, limity i restart.

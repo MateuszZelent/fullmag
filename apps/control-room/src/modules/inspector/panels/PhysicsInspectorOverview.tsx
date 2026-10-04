@@ -53,6 +53,7 @@ function PhysicsInspectorEditSessionBridge({
     session.lockReason,
     session.apply,
     session.reset,
+    { historyMode: "mutation-owned" },
   );
   return null;
 }

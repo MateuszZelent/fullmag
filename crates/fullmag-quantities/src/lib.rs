@@ -14,27 +14,69 @@
 //! - **ZP-03**: separate physics from solver diagnostics.
 //! - **ZP-05**: UI never guesses quantity metadata.
 
+pub mod accepted_state;
 pub mod catalog;
+pub mod dataset;
+pub mod dataset_difference;
+pub mod dataset_slice;
 pub mod descriptor;
 pub mod eval;
+pub mod fem_state_field;
+pub mod fem_state_snapshot_receipt;
+pub mod fem_local_node_map;
+pub mod fem_native_indexed_geometry;
 pub mod id;
 pub mod provider;
 pub mod reduction;
 pub mod registry;
 pub mod schema_version;
+pub mod solution_set;
 pub mod step_data;
 pub mod transport;
 
+pub use accepted_state::{
+    accepted_state_digests, is_canonical_sha256, AcceptedPrimaryCarrier, AcceptedStateDigests,
+    AcceptedStateGeneration, AcceptedStateId, AcceptedStateIdentityError, AcceptedStateRef,
+    ObservationClock,
+};
 pub use catalog::{
     all_quantity_ids, cached_preview_quantity_ids, field_materialization_quantity_ids,
     interactive_preview_quantity_ids, quantity_catalog, quantity_spec, quantity_specs,
     quantity_unit,
+};
+pub use dataset::{
+    validate_field_compatibility, validate_field_projection_receipt, ActiveSupportDescriptor,
+    ApproximationPolicy, ComplexEncoding, DatasetAvailability, DatasetAxis, DatasetAxisCoordinate,
+    DatasetAxisKind, DatasetAxisSelection, DatasetBranch, DatasetContractError, DatasetDefinition,
+    DatasetDefinitionRef, DatasetEvaluationPolicy, DatasetFieldDescriptor, DatasetFieldRef,
+    DatasetItem, DatasetItemRef, DatasetSample, DatasetSource, DatasetStatus, DatasetTransform,
+    DerivedOperator, DerivedValueDefinition, DerivedValuePurpose, EvaluationPrecision,
+    FieldAxisDescriptor, FieldFrameDescriptor, FieldFrameKind, FieldLayoutIdentity,
+    FieldNormalization, FieldProjection, FieldProjectionReceipt, FieldResolution,
+    FieldSampleLocation, FieldValueRepresentation, FunctionSpaceDescriptor, FunctionSpaceOrdering,
+    HarmonicConvention, IntegrationMeasure, MaterializedDataset, MaterializedDatasetRef,
+    ModalAmplitudeSemantics, ModalFieldSemantics, ModalNormalizationDescriptor,
+    ModalNormalizationKind, ModalReconstructionRule, PlotDefinition, PlotKind, PlotSource,
+    ProjectionErrorMetric, ProjectionErrorMetricKind, ProjectionErrorValueKind, ProjectionMethod,
+    SelectionReference, UnavailableAction, UnavailableDataPolicy, DATASET_CONTRACT_SCHEMA_VERSION,
+};
+pub use dataset_slice::{
+    DatasetByteOrder, DatasetFieldSlice, DatasetFieldSliceRequest, DatasetNumericPrecision,
+    DatasetNumericValues, DatasetSliceError, DatasetSlicePart, DatasetSlicePlane,
+    DecodedDatasetFieldSlice, DecodedDatasetSlicePlane, DATASET_SLICE_SCHEMA_VERSION,
+    MAX_DATASET_SLICE_BYTES, MAX_DATASET_SLICE_ELEMENTS, MAX_DATASET_SLICE_PARTS,
 };
 pub use descriptor::{NormalizationHint, QuantityDomain, QuantityLocation, QuantitySpec};
 pub use eval::{eval_global_scalar, reduce_scalars, reduce_vector_field, QuantityValue};
 pub use id::{normalize_quantity_id, QuantityId, QuantityIdError};
 pub use reduction::QuantityReduction;
 pub use schema_version::SCHEMA_VERSION;
+pub use solution_set::{
+    ScientificAssessment, ScientificAssessmentStatus, SolutionArtifactCoverage,
+    SolutionArtifactKind, SolutionArtifactRef, SolutionCoverageState, SolutionExecutionStatus,
+    SolutionMember, SolutionSegmentRef, SolutionSet, SolutionSetError, SolutionSetManifestState,
+    SolutionSetProvenance, SOLUTION_SET_SCHEMA_VERSION,
+};
 pub use step_data::{
     EndpointCacheTelemetry, FemMaterialFieldLocation, FemRepresentationReceipt,
     FemStateRepresentation, GlobalQuantityRow, StepDiagnostics,

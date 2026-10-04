@@ -3,7 +3,6 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
-  APP_DROPDOWN_ITEMS,
   MAIN_MENUS,
   QUICK_ACTIONS,
   type AppMenuNode,
@@ -23,13 +22,13 @@ describe("AppMenuBar CSS contract", () => {
     expect(headerCss).toContain(".fm-header__title");
     expect(headerCss).toContain(".fm-header__nav");
     expect(headerCss).toContain(".fm-header__nav-item");
-    expect(headerCss).toContain(".fm-header__app-trigger");
     expect(headerCss).toContain(".fm-header__quick-actions");
     expect(headerCss).toContain(".fm-header__search");
     expect(headerCss).toContain(".fm-header__run-controls");
     expect(headerCss).toContain(".fm-header__action-btn");
     expect(headerCss).toContain(".fm-header__session-indicator");
     expect(headerCss).toContain(".fm-header__session-dot");
+    expect(headerCss).toContain(".fm-header__project-status");
     expect(headerCss).toContain("-webkit-app-region: drag");
   });
 
@@ -61,7 +60,6 @@ describe("app menu command model", () => {
       }
     }
     const exposedIds = [
-      ...flattenMenuIds(APP_DROPDOWN_ITEMS),
       ...flattenMenuIds(MAIN_MENUS),
       ...QUICK_ACTIONS.map((action) => action.id),
     ].filter((id) => placeholderIds.has(id));
@@ -69,19 +67,37 @@ describe("app menu command model", () => {
     expect(exposedIds).toEqual([]);
   });
 
-  it("routes File/Open to the .fms import command instead of a dead placeholder", () => {
+  it("keeps project Open separate from runtime state restore", () => {
     const fileMenu = MAIN_MENUS.find((menu) => menu.id === "file");
+    expect(fileMenu?.children?.some((item) => item.id === "workspace.new-project")).toBe(true);
     const openItem = fileMenu?.children?.find(
       (item) => item.shortcut === "Ctrl+O",
     );
 
     expect(openItem).toMatchObject({
-      id: "study.import-state",
-      label: "Import .fms State",
+      id: "workspace.open-project",
+      label: "Open Project",
     });
     expect(
       SHELL_COMMANDS.some((command) => command.id === "workspace.open-project"),
-    ).toBe(false);
+    ).toBe(true);
+    const restoreItem = fileMenu?.children?.find(
+      (item) => item.id === "study.import-state",
+    );
+    expect(restoreItem).toMatchObject({
+      label: "Restore Runtime State",
+      shortcut: "Ctrl+Shift+O",
+    });
+  });
+
+  it("exposes Live preparation as a distinct Simulation menu command", () => {
+    const simulationMenu = MAIN_MENUS.find((menu) => menu.id === "simulation");
+    expect(simulationMenu?.children).toContainEqual(
+      expect.objectContaining({
+        id: "study.prepare-live",
+        label: "Prepare Live Study",
+      }),
+    );
   });
 
   it("exposes the solver profiler toggle from the Tools menu", () => {

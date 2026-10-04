@@ -6,9 +6,7 @@ use crate::fem::execution_receipt::{
     FemGpuPerformanceSnapshotValidationError, FEM_GPU_PERFORMANCE_SNAPSHOT_ABI_V1,
     FEM_GPU_PERFORMANCE_SNAPSHOT_V1_SIZE,
 };
-use crate::types::{
-    FemBemDemagProvenance, FemGpuExecutionClass, FemGpuExecutionReceipt, RunError,
-};
+use crate::types::{FemBemDemagProvenance, FemGpuExecutionClass, FemGpuExecutionReceipt, RunError};
 
 use std::ffi::CStr;
 
@@ -285,10 +283,7 @@ impl NativeFemDemagFemBemProvenance {
             return Ok(None);
         }
 
-        fn bounded_string(
-            bytes: &[std::ffi::c_char],
-            label: &str,
-        ) -> Result<String, RunError> {
+        fn bounded_string(bytes: &[std::ffi::c_char], label: &str) -> Result<String, RunError> {
             let Some(end) = bytes.iter().position(|byte| *byte == 0) else {
                 return Err(receipt_error(&format!(
                     "demag_fem_bem_provenance_{label}_not_terminated"
@@ -308,12 +303,19 @@ impl NativeFemDemagFemBemProvenance {
         }
 
         let operator_mode = bounded_string(&raw.operator_mode, "operator_mode")?;
-        if !matches!(operator_mode.as_str(), "hierarchical_h2" | "device_hypre_fem_bem") {
-            return Err(receipt_error("demag_fem_bem_provenance_unknown_operator_mode"));
+        if !matches!(
+            operator_mode.as_str(),
+            "hierarchical_h2" | "device_hypre_fem_bem"
+        ) {
+            return Err(receipt_error(
+                "demag_fem_bem_provenance_unknown_operator_mode",
+            ));
         }
         let operator_fingerprint = bounded_string(&raw.operator_fingerprint, "fingerprint")?;
         if !Self::is_sha256_fingerprint(&operator_fingerprint) {
-            return Err(receipt_error("demag_fem_bem_provenance_fingerprint_not_sha256"));
+            return Err(receipt_error(
+                "demag_fem_bem_provenance_fingerprint_not_sha256",
+            ));
         }
         if raw.boundary_node_count == 0
             || raw.boundary_triangle_count == 0
@@ -867,8 +869,7 @@ mod tests {
 
         ffi::fullmag_fem_demag_fem_bem_provenance_v1 {
             abi_version: ffi::FULLMAG_FEM_DEMAG_FEM_BEM_PROVENANCE_V1_ABI_VERSION,
-            struct_size: std::mem::size_of::<ffi::fullmag_fem_demag_fem_bem_provenance_v1>()
-                as u32,
+            struct_size: std::mem::size_of::<ffi::fullmag_fem_demag_fem_bem_provenance_v1>() as u32,
             available: 1,
             reserved: 0,
             operator_mode: text("hierarchical_h2"),

@@ -6,6 +6,11 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # ── Optional CUDA ──
 option(FULLMAG_ENABLE_CUDA "Build CUDA FDM backend" ON)
+option(FULLMAG_ENABLE_FEM_GPU "Build FEM GPU backend sources" ON)
+option(FULLMAG_USE_MFEM_STACK "Build FEM backend against MFEM/libCEED/hypre" OFF)
+option(FULLMAG_FEM_REQUIRE_GPU "Fail configuration unless FEM GPU can be built" OFF)
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/RequireFemGpu.cmake")
+fullmag_require_fem_gpu_configuration()
 set(FULLMAG_EXTERNAL_FDM_LIB_DIR "" CACHE PATH "Use an externally built fullmag_fdm instead of building backends/fdm")
 set(FULLMAG_BACKENDS_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../backends" CACHE PATH "Root containing Fullmag compiled backend sources")
 
@@ -25,6 +30,9 @@ if(FULLMAG_ENABLE_CUDA)
         set(CMAKE_CUDA_STANDARD_REQUIRED ON)
         message(STATUS "CUDA enabled: ${CMAKE_CUDA_COMPILER_VERSION}")
     else()
+        if(FULLMAG_FEM_REQUIRE_GPU)
+            message(FATAL_ERROR "Required FEM GPU has no CUDA compiler; refusing a CPU-only build")
+        endif()
         message(WARNING "CUDA requested but no compiler found — disabling")
         set(FULLMAG_ENABLE_CUDA OFF)
     endif()
@@ -39,20 +47,8 @@ if(NOT EXISTS "${FULLMAG_BACKENDS_ROOT}/fem/CMakeLists.txt")
 endif()
 
 if(FULLMAG_EXTERNAL_FDM_LIB_DIR)
-    if(EXISTS "${FULLMAG_EXTERNAL_FDM_LIB_DIR}/libfullmag_fdm.so")
-        set(FULLMAG_EXTERNAL_FDM_LIB "${FULLMAG_EXTERNAL_FDM_LIB_DIR}/libfullmag_fdm.so")
-    elseif(EXISTS "${FULLMAG_EXTERNAL_FDM_LIB_DIR}/libfullmag_fdm.so.0")
-        set(FULLMAG_EXTERNAL_FDM_LIB "${FULLMAG_EXTERNAL_FDM_LIB_DIR}/libfullmag_fdm.so.0")
-    else()
-        message(FATAL_ERROR "FULLMAG_EXTERNAL_FDM_LIB_DIR does not contain libfullmag_fdm.so or libfullmag_fdm.so.0")
-    endif()
-
-    add_library(fullmag_fdm SHARED IMPORTED GLOBAL)
-    set_target_properties(fullmag_fdm PROPERTIES
-        IMPORTED_LOCATION "${FULLMAG_EXTERNAL_FDM_LIB}"
-        IMPORTED_NO_SONAME FALSE
-        INTERFACE_INCLUDE_DIRECTORIES "${CMAKE_SOURCE_DIR}/include"
-    )
+    include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/ImportFullmagFdm.cmake")
+    fullmag_import_external_fdm("${FULLMAG_EXTERNAL_FDM_LIB_DIR}" "${CMAKE_SOURCE_DIR}/include")
 else()
     add_subdirectory("${FULLMAG_BACKENDS_ROOT}/fdm" "${CMAKE_BINARY_DIR}/backends/fdm")
 endif()

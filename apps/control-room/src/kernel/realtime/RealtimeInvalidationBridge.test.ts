@@ -29,6 +29,7 @@ import {
   DATA_ANTENNA_SOURCE_SPECTRUM_PATH,
   DATA_ARTIFACTS_PATH,
   DATA_DOMAIN_TOPOLOGY_PATH,
+  SESSIONS_PATH,
   DATA_FIELD_AVAILABILITY_PATH,
   DATA_FDM_REGION_MEMBERSHIP_BINARY_PATH,
   DATA_FDM_REGION_MEMBERSHIPS_PATH,
@@ -73,6 +74,7 @@ import {
   MODEL_REGION_DIAGNOSTICS_PATH,
   MODEL_REGIONS_PATH,
   MODEL_SCENE_PATH,
+  SESSION_CURRENT_PATH,
   SIMULATION_COMMANDS_PATH,
   SIMULATION_OBJECT_METRICS_PATH,
   SIMULATION_PREPARATION_PATH,
@@ -86,6 +88,7 @@ import {
   SIMULATION_STAGE_HYSTERESIS_SATURATION_PATH,
   SIMULATION_STAGE_HYSTERESIS_SETTLE_PIPELINE_PATH,
   SIMULATION_STAGES_EXECUTION_PATH,
+  SESSION_STATUS_PATH,
   VISUALIZATION_CLIENT_ACKS_PATH,
   VISUALIZATION_STATE_PATH,
 } from "../api/apiPaths";
@@ -100,6 +103,53 @@ function dependentRevision(resourceKey: string, revision: string | number): stri
 }
 
 describe("RealtimeInvalidationBridge", () => {
+  it("forces HTTP session resources to refetch after a socket reconnect", () => {
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const bridge = new RealtimeInvalidationBridge(resources);
+
+    bridge.handleReconnect();
+
+    expect(resources.getRevision("session:status")).toEqual(
+      expect.stringMatching(/^realtime:reconnect:/),
+    );
+    expect(resources.getRevision(SESSION_STATUS_PATH)).toEqual(
+      expect.stringMatching(/^realtime:reconnect:/),
+    );
+  });
+
+  it("reconciles active-run resources through the session prefix after reconnect", () => {
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const bridge = new RealtimeInvalidationBridge(resources);
+    const activeRunResources = [
+      SIMULATION_RUN_CURRENT_PATH,
+      SIMULATION_STAGES_EXECUTION_PATH,
+      SIMULATION_SOLVER_STATUS_PATH,
+      SIMULATION_COMMANDS_PATH,
+    ];
+    const listeners = activeRunResources.map(() => vi.fn());
+
+    activeRunResources.forEach((resourceKey, index) => {
+      resources.subscribe(resourceKey, listeners[index]!);
+    });
+
+    bridge.handleReconnect();
+
+    const revisions = activeRunResources.map((resourceKey) =>
+      resources.getRevision(resourceKey),
+    );
+    expect(revisions).toHaveLength(activeRunResources.length);
+    expect(revisions.every((revision) =>
+      typeof revision === "string" && revision.startsWith("realtime:reconnect:"),
+    )).toBe(true);
+    listeners.forEach((listener) => {
+      expect(listener).toHaveBeenCalledTimes(1);
+      expect(listener.mock.calls[0]?.[0]).toEqual(revisions[0]);
+    });
+    expect(resources.getRevision(SESSION_CURRENT_PATH)).toBeNull();
+  });
+
   it("invalidates CPU and GPU diagnostic resources exactly", () => {
     const bus = new EventBus<KernelEventMap>();
     const resources = new ResourceInvalidationController(bus);
@@ -655,6 +705,7 @@ describe("RealtimeInvalidationBridge", () => {
     ).toBe(true);
 
     expect(resources.getRevision("session:status")).toBe("session:session-new:2");
+    expect(resources.getRevision(SESSIONS_PATH)).toBe("session:session-new:2");
     expect(resources.getRevision(SIMULATION_COMMANDS_PATH)).toBe(
       "session:session-new:2",
     );

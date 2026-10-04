@@ -3100,7 +3100,10 @@ impl NativeFdmBackend {
                 quantity,
                 ready: None,
                 torque_inputs: Some(Box::new((
-                    magnetization, effective_field, self.damping, self.precession_enabled,
+                    magnetization,
+                    effective_field,
+                    self.damping,
+                    self.precession_enabled,
                 ))),
             });
         }
@@ -3663,17 +3666,29 @@ impl NativeFdmPreviewSnapshot {
             let (mut magnetization, mut effective_field, damping, precession) = *inputs;
             let m = decode_snapshot_vectors(magnetization.ensure_ready()?)?;
             let h = decode_snapshot_vectors(effective_field.ensure_ready()?)?;
-            let expected_cells = self.plan.original_grid.iter().map(|n| *n as usize).product::<usize>();
+            let expected_cells = self
+                .plan
+                .original_grid
+                .iter()
+                .map(|n| *n as usize)
+                .product::<usize>();
             if m.len() != h.len() || m.len() != expected_cells {
-                return Err(RunError { message: "torque snapshot input sizes differ".into() });
+                return Err(RunError {
+                    message: "torque snapshot input sizes differ".into(),
+                });
             }
             let torque = compute_torque_field(&m, &h, damping, precession);
             let sampled = crate::preview::resample_grid_vectors(&torque, &self.plan);
-            let data = sampled.iter().flatten().flat_map(|v| v.to_ne_bytes()).collect();
+            let data = sampled
+                .iter()
+                .flatten()
+                .flat_map(|v| v.to_ne_bytes())
+                .collect();
             self.ready = Some(NativeFieldSnapshotReady {
                 data,
                 info: NativeFieldSnapshotInfo {
-                    cell_count: sampled.len(), component_count: 3,
+                    cell_count: sampled.len(),
+                    component_count: 3,
                     scalar_bytes: std::mem::size_of::<f64>(),
                     scalar_type: NativeFieldSnapshotScalarType::F64,
                 },
@@ -3900,12 +3915,17 @@ mod torque_preview_snapshot_tests {
 
     fn captured(name: &str, values: [f64; 3]) -> NativeFdmFieldSnapshot {
         NativeFdmFieldSnapshot {
-            handle: std::ptr::null_mut(), name: name.into(), step: 7,
-            time: 1e-12, solver_dt: 1e-13,
+            handle: std::ptr::null_mut(),
+            name: name.into(),
+            step: 7,
+            time: 1e-12,
+            solver_dt: 1e-13,
             ready: Some(NativeFieldSnapshotReady {
                 data: values.iter().flat_map(|v| v.to_ne_bytes()).collect(),
                 info: NativeFieldSnapshotInfo {
-                    cell_count: 1, component_count: 3, scalar_bytes: 8,
+                    cell_count: 1,
+                    component_count: 3,
+                    scalar_bytes: 8,
                     scalar_type: NativeFieldSnapshotScalarType::F64,
                 },
             }),
@@ -3914,13 +3934,21 @@ mod torque_preview_snapshot_tests {
 
     #[test]
     fn torque_preview_derives_captured_inputs_in_tesla() {
-        let request = LivePreviewRequest { quantity: "torque".into(), ..Default::default() };
+        let request = LivePreviewRequest {
+            quantity: "torque".into(),
+            ..Default::default()
+        };
         let snapshot = NativeFdmPreviewSnapshot {
-            handle: std::ptr::null_mut(), plan: plan_grid_preview(&request, [1, 1, 1]),
-            request, quantity: "torque".into(), ready: None,
+            handle: std::ptr::null_mut(),
+            plan: plan_grid_preview(&request, [1, 1, 1]),
+            request,
+            quantity: "torque".into(),
+            ready: None,
             torque_inputs: Some(Box::new((
                 captured("m", [1.0, 0.0, 0.0]),
-                captured("H_eff", [0.0, 1.0 / crate::MU0, 0.0]), 0.5, true,
+                captured("H_eff", [0.0, 1.0 / crate::MU0, 0.0]),
+                0.5,
+                true,
             ))),
         };
         let field = snapshot.into_live_preview_field(None).unwrap();
@@ -3935,19 +3963,27 @@ mod torque_preview_snapshot_tests {
 fn decode_snapshot_vectors(ready: &NativeFieldSnapshotReady) -> Result<Vec<[f64; 3]>, RunError> {
     validate_native_snapshot_payload("torque input", ready.info, ready.data.len())?;
     if ready.info.component_count != 3 {
-        return Err(RunError { message: "torque snapshot requires vector inputs".into() });
+        return Err(RunError {
+            message: "torque snapshot requires vector inputs".into(),
+        });
     }
-    Ok(ready.data.chunks_exact(3 * ready.info.scalar_bytes).map(|cell| {
-        std::array::from_fn(|component| {
-            let offset = component * ready.info.scalar_bytes;
-            match ready.info.scalar_type {
-                NativeFieldSnapshotScalarType::F32 =>
-                    f32::from_ne_bytes(cell[offset..offset + 4].try_into().unwrap()) as f64,
-                NativeFieldSnapshotScalarType::F64 =>
-                    f64::from_ne_bytes(cell[offset..offset + 8].try_into().unwrap()),
-            }
+    Ok(ready
+        .data
+        .chunks_exact(3 * ready.info.scalar_bytes)
+        .map(|cell| {
+            std::array::from_fn(|component| {
+                let offset = component * ready.info.scalar_bytes;
+                match ready.info.scalar_type {
+                    NativeFieldSnapshotScalarType::F32 => {
+                        f32::from_ne_bytes(cell[offset..offset + 4].try_into().unwrap()) as f64
+                    }
+                    NativeFieldSnapshotScalarType::F64 => {
+                        f64::from_ne_bytes(cell[offset..offset + 8].try_into().unwrap())
+                    }
+                }
+            })
         })
-    }).collect())
+        .collect())
 }
 
 #[cfg(feature = "cuda")]

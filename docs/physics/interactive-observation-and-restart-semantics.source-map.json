@@ -1,7 +1,7 @@
 {
   "document": {"path": "docs/physics/interactive-observation-and-restart-semantics.md"},
   "backend_matrix": [
-    {"solver": "FDM", "device": "CPU", "status": "unqualified", "reason": "Persistent observation and generic ExactResume have no runtime receipt; coupled M3 alone has bounded checkpoint digest and restart unit/integration proof."},
+    {"solver": "FDM", "device": "CPU", "status": "unqualified", "reason": "Simple FDM CPU has a source-checked CAS observation descriptor and adapter, but no managed runtime receipt; generic ExactResume remains unqualified and coupled M3 alone has bounded checkpoint digest and restart unit/integration proof."},
     {"solver": "FDM", "device": "GPU", "status": "unqualified", "reason": "No persistent-observation runtime receipt."},
     {"solver": "FEM", "device": "CPU", "status": "unqualified", "reason": "No persistent-observation runtime receipt."},
     {"solver": "FEM", "device": "GPU", "status": "unqualified", "reason": "No persistent-observation runtime receipt."}
@@ -52,6 +52,10 @@
     {"id": "fdm-cpu-coupled-heun-commit", "path": "crates/fullmag-runner/src/fdm/cpu/reference.rs", "symbol": "execute_coupled_heun_trial", "responsibility": "Commit transport workflow, magnetization, and thermal interval as one coupled Heun transaction.", "evidence_status": "unit_integration_proof"},
     {"id": "fdm-cpu-engine-error-codes", "path": "crates/fullmag-engine/src/fdm/shared/types.rs", "symbol": "EngineErrorCode", "responsibility": "Define stable engine failure reasons, including distinct NaN and infinity codes.", "evidence_status": "unit_integration_proof"},
     {"id": "fdm-cpu-runner-error-code-propagation", "path": "crates/fullmag-runner/src/fdm/cpu/reference.rs", "symbol": "engine_run_error", "responsibility": "Carry an engine reason code into the runner failure record without parsing diagnostic text.", "evidence_status": "unit_integration_proof"},
+    {"id": "fdm-cpu-observation-source-descriptor", "path": "crates/fullmag-session/src/types.rs", "symbol": "FmsObservationSourceDescriptor", "responsibility": "Define and validate the immutable CAS-backed observation source descriptor in study output manifest v3.", "evidence_status": "source_check_pass"},
+    {"id": "fdm-cpu-observation-source-publication", "path": "crates/fullmag-runtime-control/src/study.rs", "symbol": "validate_observation_source_payload", "responsibility": "Validate clock, primary-carrier digest, terminal magnetization codec, grid and source identity before fenced publication and during completion.", "evidence_status": "source_check_pass"},
+    {"id": "fdm-cpu-observation-source-worker", "path": "crates/fullmag-api/src/accepted_study_worker.rs", "symbol": "collect_fdm_cpu_observation_source", "responsibility": "Build an isolated ObservationRuntime, persist source carriers in CAS and recover them without depending on declared study output ports.", "evidence_status": "source_check_pass_test_not_run"},
+    {"id": "fdm-cpu-historical-observation-loader", "path": "crates/fullmag-runtime-control/src/study.rs", "symbol": "load_study_observation_runtime", "responsibility": "Resolve the exact succeeded attempt, manifest and CAS carriers for an AcceptedStateRef before reconstructing an isolated historical evaluator.", "evidence_status": "source_check_pass_test_not_run"},
     {"id": "table-autosave-api", "path": "packages/fullmag-py/src/fullmag/model/study.py", "symbol": "class TableAutosave", "responsibility": "Validate and lower the public scalar-table autosave policy."},
     {"id": "field-autosave-api", "path": "packages/fullmag-py/src/fullmag/model/study.py", "symbol": "class FieldAutosave", "responsibility": "Validate and lower the public field autosave policy."},
     {"id": "stage-autosave-api", "path": "packages/fullmag-py/src/fullmag/model/study.py", "symbol": "class StageAutosave", "responsibility": "Validate and lower the public stage autosave policy."}

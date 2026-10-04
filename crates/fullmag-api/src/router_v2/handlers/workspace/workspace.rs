@@ -23,7 +23,9 @@ use crate::types::AppState;
 pub async fn get_workspace_selection(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<WorkspaceSelectionResource>, ApiError> {
-    ensure_active_live_workspace(&state).await?;
+    let context = crate::capture_current_live_request_context(&state).await?;
+    let _transition = state.current_live_session_transition.lock().await;
+    crate::validate_current_live_request_context(&state, &context).await?;
     Ok(Json(state.current_workspace_selection.read().await.clone()))
 }
 
@@ -41,7 +43,9 @@ pub async fn replace_workspace_selection(
     State(state): State<Arc<AppState>>,
     Json(replacement): Json<WorkspaceSelectionReplaceRequest>,
 ) -> Result<Json<WorkspaceSelectionResource>, ApiError> {
-    ensure_active_live_workspace(&state).await?;
+    let context = crate::capture_current_live_request_context(&state).await?;
+    let _transition = state.current_live_session_transition.lock().await;
+    crate::validate_current_live_request_context(&state, &context).await?;
     let mut selection = state.current_workspace_selection.write().await;
     let changed = selection.selected_node_id != replacement.selected_node_id
         || selection.selected_object_id != replacement.selected_object_id
@@ -56,7 +60,7 @@ pub async fn replace_workspace_selection(
     let workspace_revision = response.revision;
     drop(selection);
     if changed {
-        emit_workspace_realtime_change(&state, workspace_revision).await?;
+        emit_workspace_realtime_change_locked(&state, workspace_revision, &context).await?;
     }
     Ok(Json(response))
 }
@@ -73,7 +77,9 @@ pub async fn replace_workspace_selection(
 pub async fn get_workspace_active_node(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<WorkspaceActiveNodeResource>, ApiError> {
-    ensure_active_live_workspace(&state).await?;
+    let context = crate::capture_current_live_request_context(&state).await?;
+    let _transition = state.current_live_session_transition.lock().await;
+    crate::validate_current_live_request_context(&state, &context).await?;
     let selection = state.current_workspace_selection.read().await;
     Ok(Json(WorkspaceActiveNodeResource {
         revision: selection.revision,
@@ -95,7 +101,9 @@ pub async fn replace_workspace_active_node(
     State(state): State<Arc<AppState>>,
     Json(replacement): Json<WorkspaceActiveNodeReplaceRequest>,
 ) -> Result<Json<WorkspaceActiveNodeResource>, ApiError> {
-    ensure_active_live_workspace(&state).await?;
+    let context = crate::capture_current_live_request_context(&state).await?;
+    let _transition = state.current_live_session_transition.lock().await;
+    crate::validate_current_live_request_context(&state, &context).await?;
     let mut selection = state.current_workspace_selection.write().await;
     let changed = selection.selected_node_id != replacement.node_id;
     if changed {
@@ -109,7 +117,7 @@ pub async fn replace_workspace_active_node(
     let workspace_revision = response.revision;
     drop(selection);
     if changed {
-        emit_workspace_realtime_change(&state, workspace_revision).await?;
+        emit_workspace_realtime_change_locked(&state, workspace_revision, &context).await?;
     }
     Ok(Json(response))
 }
@@ -126,7 +134,9 @@ pub async fn replace_workspace_active_node(
 pub async fn get_workspace_ribbon(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<WorkspaceRibbonResource>, ApiError> {
-    ensure_active_live_workspace(&state).await?;
+    let context = crate::capture_current_live_request_context(&state).await?;
+    let _transition = state.current_live_session_transition.lock().await;
+    crate::validate_current_live_request_context(&state, &context).await?;
     Ok(Json(state.current_workspace_ribbon.read().await.clone()))
 }
 
@@ -144,7 +154,9 @@ pub async fn replace_workspace_ribbon(
     State(state): State<Arc<AppState>>,
     Json(replacement): Json<WorkspaceRibbonReplaceRequest>,
 ) -> Result<Json<WorkspaceRibbonResource>, ApiError> {
-    ensure_active_live_workspace(&state).await?;
+    let context = crate::capture_current_live_request_context(&state).await?;
+    let _transition = state.current_live_session_transition.lock().await;
+    crate::validate_current_live_request_context(&state, &context).await?;
     let mut ribbon = state.current_workspace_ribbon.write().await;
     let changed = ribbon.workspace_mode != replacement.workspace_mode
         || ribbon.active_core_tab != replacement.active_core_tab
@@ -159,7 +171,7 @@ pub async fn replace_workspace_ribbon(
     let workspace_revision = response.revision;
     drop(ribbon);
     if changed {
-        emit_workspace_realtime_change(&state, workspace_revision).await?;
+        emit_workspace_realtime_change_locked(&state, workspace_revision, &context).await?;
     }
     Ok(Json(response))
 }
@@ -176,7 +188,9 @@ pub async fn replace_workspace_ribbon(
 pub async fn get_workspace_layout(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<WorkspaceLayoutResource>, ApiError> {
-    ensure_active_live_workspace(&state).await?;
+    let context = crate::capture_current_live_request_context(&state).await?;
+    let _transition = state.current_live_session_transition.lock().await;
+    crate::validate_current_live_request_context(&state, &context).await?;
     Ok(Json(state.current_workspace_layout.read().await.clone()))
 }
 
@@ -194,7 +208,9 @@ pub async fn replace_workspace_layout(
     State(state): State<Arc<AppState>>,
     Json(replacement): Json<WorkspaceLayoutReplaceRequest>,
 ) -> Result<Json<WorkspaceLayoutResource>, ApiError> {
-    ensure_active_live_workspace(&state).await?;
+    let context = crate::capture_current_live_request_context(&state).await?;
+    let _transition = state.current_live_session_transition.lock().await;
+    crate::validate_current_live_request_context(&state, &context).await?;
     let mut layout = state.current_workspace_layout.write().await;
     let changed = layout.current_stage != replacement.current_stage
         || layout.stage_layouts != replacement.stage_layouts
@@ -209,34 +225,35 @@ pub async fn replace_workspace_layout(
     let workspace_revision = response.revision;
     drop(layout);
     if changed {
-        emit_workspace_realtime_change(&state, workspace_revision).await?;
+        emit_workspace_realtime_change_locked(&state, workspace_revision, &context).await?;
     }
     Ok(Json(response))
 }
 
-async fn ensure_active_live_workspace(state: &AppState) -> Result<(), ApiError> {
-    if state.current_live_state.read().await.is_none() {
-        return Err(ApiError::not_found("no active local live workspace"));
-    }
-    Ok(())
-}
-
-async fn emit_workspace_realtime_change(
+async fn emit_workspace_realtime_change_locked(
     state: &Arc<AppState>,
     workspace_revision: u64,
+    context: &crate::types::CurrentLiveRequestContext,
 ) -> Result<(), ApiError> {
     if workspace_revision == 0 {
         return Ok(());
     }
-    if let Some(snapshot) = state.current_live_state.read().await.as_ref().cloned() {
-        let realtime_state = crate::current_live_realtime_state_from_snapshot(
-            state,
-            &snapshot,
-            state.current_display_selection.read().await.revision,
-        )
-        .await;
-        crate::publish_current_live_realtime_batch_changed(state, &realtime_state, false, 0)
-            .await?;
-    }
+    let Some(snapshot) = state.current_live_state.read().await.as_ref().cloned() else {
+        return Err(ApiError::not_found("no active local live workspace"));
+    };
+    crate::ensure_current_live_request_context(
+        &snapshot,
+        context,
+        state
+            .current_live_session_epoch
+            .load(std::sync::atomic::Ordering::Acquire),
+    )?;
+    let realtime_state = crate::current_live_realtime_state_from_snapshot(
+        state,
+        &snapshot,
+        state.current_display_selection.read().await.revision,
+    )
+    .await;
+    crate::publish_current_live_realtime_batch_changed(state, &realtime_state, false, 0).await?;
     Ok(())
 }

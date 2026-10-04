@@ -23,7 +23,7 @@ describe("footerManifest", () => {
       "utf8",
     );
 
-    for (const tab of ["logs", "telemetry", "diagnostics", "engine", "mesh", "quick-chart"]) {
+    for (const tab of ["logs", "telemetry", "diagnostics", "engine", "operations", "problems", "quick-chart"]) {
       expect(source).toContain(`TabsTrigger value="${tab}"`);
       expect(source).toContain(`activeTab === "${tab}"`);
     }

@@ -22,6 +22,9 @@ import { resetSharedResourceRuntimeStoreForTests } from "../resources/ResourceRu
 import type { KernelApi } from "../types";
 import { appMenuManifest } from "@/modules/app-menu/manifest";
 import AppMenuModule from "@/modules/app-menu/AppMenuModule";
+import { startScreenManifest } from "@/modules/start/manifest";
+import { startScreenStore } from "@/modules/start/model/startScreenState";
+import { StartScreen } from "@/modules/start/StartScreen";
 
 import { LayoutController } from "./LayoutController";
 import {
@@ -98,6 +101,7 @@ vi.mock("@/shared/ui/DropdownMenu", () => {
 
 afterEach(() => {
   resetSharedResourceRuntimeStoreForTests();
+  startScreenStore.resetForTests();
   vi.restoreAllMocks();
 });
 
@@ -106,7 +110,9 @@ describe("confirmed-empty New Problem entry wiring", () => {
     const mounted = await mountConfirmedEmptyWorkspace();
     try {
       await settle();
-      expect(mounted.container.textContent).toContain("Create a simulation");
+      expect(mounted.container.textContent).toContain("Welcome to Fullmag");
+      // Saving is meaningless without a session, so the launcher offers no save.
+      expect(mounted.container.textContent).not.toContain("Save project");
       expect(mounted.body.textContent).toContain("File");
       expect(findDialogs(mounted.body)).toHaveLength(0);
 
@@ -161,6 +167,50 @@ describe("confirmed-empty New Problem entry wiring", () => {
       await mounted.dispose();
     }
   });
+
+  it.each([
+    ["start.new-fdm", "fdm"],
+    ["start.new-fem", "fem"],
+  ])("opens the dialog from the %s launch tile with %s preselected", async (commandId, backend) => {
+    const mounted = await mountConfirmedEmptyWorkspace();
+    try {
+      await settle();
+      const tile = findElement(
+        mounted.body,
+        (element) => element.getAttribute("data-command-id") === commandId,
+        `${commandId} tile`,
+      );
+      await act(async () => tile.click());
+      await settle();
+
+      expect(findDialogs(mounted.body)).toHaveLength(1);
+      expect(checkedDiscretization(mounted.body)).toBe(backend);
+    } finally {
+      await mounted.dispose();
+    }
+  });
+
+  it("opens the dialog on FEM through Ctrl+Shift+N while the start screen is showing", async () => {
+    const mounted = await mountConfirmedEmptyWorkspace();
+    try {
+      await settle();
+      let handled = false;
+      await act(async () => {
+        handled = dispatchShortcutCommand(
+          mounted.kernel.commands,
+          { ctrlKey: true, key: "N", preventDefault: vi.fn(), shiftKey: true },
+          createCommandContext("shortcut", mounted.kernel, { sessionScopeKey: null }),
+        );
+      });
+      await settle();
+
+      expect(handled).toBe(true);
+      expect(findDialogs(mounted.body)).toHaveLength(1);
+      expect(checkedDiscretization(mounted.body)).toBe("fem");
+    } finally {
+      await mounted.dispose();
+    }
+  });
 });
 
 async function mountConfirmedEmptyWorkspace(): Promise<{
@@ -197,11 +247,13 @@ function makeKernel(): KernelApi {
   const commands = new CommandRegistry();
   commands.attach(bus);
   for (const command of SHELL_COMMANDS) commands.register(command);
+  for (const command of startScreenManifest.contributes?.commands ?? []) commands.register(command);
   const modules = new ModuleRegistry();
   modules.register({
     ...appMenuManifest,
     component: async () => ({ default: AppMenuModule }),
   });
+  modules.register({ ...startScreenManifest, component: async () => ({ default: StartScreen }) });
   return {
     api: {
       sessions: {
@@ -225,6 +277,16 @@ function findButton(root: TestElement, text: string): TestElement {
     (element) => element.tagName === "BUTTON" && element.textContent.trim() === text,
     `${text} button`,
   );
+}
+
+function checkedDiscretization(root: TestElement): string | null {
+  const group = findElement(
+    root,
+    (element) => element.getAttribute("aria-label") === "Discretization",
+    "Discretization control",
+  );
+  return findElements(group, (element) => element.getAttribute("aria-checked") === "true")[0]
+    ?.getAttribute("data-value") ?? null;
 }
 
 function findMenuItem(root: TestElement, text: string): TestElement {

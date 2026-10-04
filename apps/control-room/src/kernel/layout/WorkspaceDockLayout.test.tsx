@@ -25,6 +25,7 @@ import { VisualizationDebugController } from "../visualization/VisualizationDebu
 import { VisualizationRegistrySyncController } from "../visualization/VisualizationRegistrySyncController";
 
 import { LayoutController } from "./LayoutController";
+import { WorkspaceStartupInteractionContext } from "./SimulationStartupOverlay";
 import { WorkspaceDockLayout } from "./WorkspaceDockLayout";
 
 function TestModule() {
@@ -103,5 +104,39 @@ describe("WorkspaceDockLayout", () => {
     expect(html).toContain("data-dock-hydration-pending=\"true\"");
     expect(html).toContain("data-slot-id=\"viewport-main\"");
     expect(html).toContain("data-slot-id=\"viewport-aux\"");
+  });
+
+  it("inerts underlying dock panels while startup blocks interaction", () => {
+    const html = renderToStaticMarkup(
+      <KernelContext.Provider value={makeKernel()}>
+        <WorkspaceStartupInteractionContext.Provider value>
+          <WorkspaceDockLayout />
+        </WorkspaceStartupInteractionContext.Provider>
+      </KernelContext.Provider>,
+    );
+
+    expect(html).toContain("inert");
+    expect(html).not.toContain('data-startup-diagnostics="visible"');
+  });
+
+  it("lifts the existing diagnostics panel without mounting a second slot", () => {
+    const kernel = makeKernel();
+    kernel.layout.openBottomPanel("diagnostics");
+
+    const html = renderToStaticMarkup(
+      <KernelContext.Provider value={kernel}>
+        <WorkspaceStartupInteractionContext.Provider value>
+          <WorkspaceDockLayout />
+        </WorkspaceStartupInteractionContext.Provider>
+      </KernelContext.Provider>,
+    );
+
+    expect(html).toContain('data-startup-diagnostics="visible"');
+    expect(html.match(/data-slot-id="panel-bottom"/g)).toHaveLength(1);
+    const bottomPanelTag = html.match(
+      /<div[^>]*class="fm-workspace-bottom-panel"[^>]*>/,
+    )?.[0];
+    expect(bottomPanelTag).toContain('data-startup-diagnostics="visible"');
+    expect(bottomPanelTag).not.toContain("inert");
   });
 });

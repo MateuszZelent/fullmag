@@ -130,6 +130,15 @@ impl RuntimeRegistry {
                             worker_path.display()
                         )),
                     )
+                } else if manifest.family == "fem-cpu-native"
+                    && engine.backend.eq_ignore_ascii_case("fem")
+                    && engine.device.eq_ignore_ascii_case("cpu")
+                    && !native_fem::is_cpu_available()
+                {
+                    (
+                        EngineAvailabilityStatus::MissingLibrary,
+                        Some("Native FEM CPU support is unavailable in this runtime".to_string()),
+                    )
                 } else if engine.device.eq_ignore_ascii_case("gpu")
                     && !gpu_available_for_backend(&engine.backend)
                 {
@@ -394,5 +403,46 @@ mod tests {
             matrix.engines[0].status,
             EngineAvailabilityStatus::Available | EngineAvailabilityStatus::MissingDriver
         ));
+    }
+
+    #[test]
+    #[cfg(not(feature = "fem-native"))]
+    fn native_fem_cpu_manifest_cannot_resolve_without_native_support() {
+        let temp = TempDirGuard::new();
+        let pack = temp.path.join("fem-cpu-native");
+        fs::create_dir_all(&pack).expect("create runtime pack");
+        fs::write(pack.join("worker"), b"worker path fixture").expect("write worker");
+        fs::write(
+            pack.join("manifest.json"),
+            r#"{"family":"fem-cpu-native","version":"0.1.0","worker":"worker",
+                "engines":[{"backend":"fem","device":"cpu","precision":"double"}]}"#,
+        )
+        .expect("write manifest");
+        let registry = RuntimeRegistry::discover(&temp.path);
+        assert_eq!(
+            registry.capability_matrix().engines[0].status,
+            EngineAvailabilityStatus::MissingLibrary
+        );
+        assert!(registry.resolve("fem", "cpu", "double").is_none());
+    }
+
+    #[test]
+    fn reference_fem_eigen_family_does_not_require_native_time_domain_support() {
+        let temp = TempDirGuard::new();
+        let pack = temp.path.join("fem-eigen-cpu-baseline");
+        fs::create_dir_all(&pack).expect("create runtime pack");
+        fs::write(pack.join("worker"), b"worker path fixture").expect("write worker");
+        fs::write(
+            pack.join("manifest.json"),
+            r#"{"family":"fem-eigen-cpu-baseline","version":"0.1.0","worker":"worker",
+                "engines":[{"backend":"fem","device":"cpu","precision":"double"}]}"#,
+        )
+        .expect("write manifest");
+        let registry = RuntimeRegistry::discover(&temp.path);
+        assert_eq!(
+            registry.capability_matrix().engines[0].status,
+            EngineAvailabilityStatus::Available
+        );
+        assert!(registry.resolve("fem", "cpu", "double").is_some());
     }
 }

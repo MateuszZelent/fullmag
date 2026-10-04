@@ -1,12 +1,24 @@
-name: windows-msi-container
+name: windows-msi-native
 
 on:
   workflow_dispatch:
+    inputs:
+      fem_mode:
+        description: Native FEM assembly scope; none is diagnostic FDM-only
+        type: choice
+        default: cpu
+        options: [cpu, gpu, none]
+      cuda:
+        description: Include CUDA FDM; required for FEM gpu
+        type: boolean
+        default: false
   push:
     branches: [master, main]
     paths:
       - "apps/desktop/**"
       - "crates/**"
+      - "native/**"
+      - "backends/**"
       - "packages/**"
       - "scripts/windows/**"
       - "docker/windows-msi/**"
@@ -17,23 +29,48 @@ on:
 
 jobs:
   build-windows-msi:
-    runs-on: [self-hosted, windows, x64, docker]
+    runs-on: [self-hosted, windows, x64, fullmag-native-msvc-wix]
+    concurrency:
+      group: fullmag-windows-msi-native
+      cancel-in-progress: false
+    env:
+      FULLMAG_PROJECT_STORAGE_ROOT: ${{ vars.FULLMAG_WINDOWS_CI_STORAGE_ROOT }}
+      FULLMAG_WINDOWS_MSI_FEM: ${{ inputs.fem_mode || 'cpu' }}
+      FULLMAG_WINDOWS_MSI_CUDA: ${{ inputs.cuda && '1' || '0' }}
+      FULLMAG_FEM_DEPENDENCY_PREFIX: ${{ vars.FULLMAG_WINDOWS_FEM_CPU_PREFIX }}
+      FULLMAG_WINDOWS_FEM_GPU_PREFIX: ${{ vars.FULLMAG_WINDOWS_FEM_GPU_PREFIX }}
+      FULLMAG_WINDOWS_NODE_RUNTIME_ROOT: ${{ vars.FULLMAG_WINDOWS_NODE_RUNTIME_ROOT }}
+      FULLMAG_WINDOWS_PYTHON_RUNTIME_ROOT: ${{ vars.FULLMAG_WINDOWS_PYTHON_RUNTIME_ROOT }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Build MSI inside Windows container
+      - name: Validate operator storage configuration
         shell: powershell
-        run: .\scripts\windows\build_installer_windows_container.ps1
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:FULLMAG_PROJECT_STORAGE_ROOT)) {
+            throw "Configure FULLMAG_WINDOWS_CI_STORAGE_ROOT and register its project marker before enrolling the native Windows runner."
+          }
+
+      - name: Build native Windows MSI
+        id: package
+        shell: powershell
+        run: |
+          if ($env:FULLMAG_WINDOWS_MSI_FEM -eq "gpu") {
+            $env:FULLMAG_FEM_DEPENDENCY_PREFIX = $env:FULLMAG_WINDOWS_FEM_GPU_PREFIX
+          }
+          .\scripts\windows\build_windows_msi.ps1
 
       - name: Upload MSI artifact
         uses: actions/upload-artifact@v7
         with:
           name: fullmag-windows-msi
-          path: .fullmag\dist\fullmag.msi
+          path: ${{ steps.package.outputs.msi_path }}
+          if-no-files-found: error
 
       - name: Upload Windows stage manifest
         uses: actions/upload-artifact@v7
         with:
           name: fullmag-windows-msi-manifest
-          path: .fullmag\dist\windows-msi-manifest.json
+          path: ${{ steps.package.outputs.manifest_path }}
+          if-no-files-found: error

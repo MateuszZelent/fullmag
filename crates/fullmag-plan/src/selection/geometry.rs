@@ -329,9 +329,9 @@ fn node_from_geometry_entry(entry: &GeometryEntryIR) -> Result<GeometryNode, Sel
             return Err(SelectionError::new(
                 "selection_imported_solid_unqualified",
                 format!(
-                "geometry '{name}' is imported and has no qualified analytic occupancy evaluator"
-            ),
-            ))
+                    "geometry '{name}' is imported and has no qualified analytic occupancy evaluator"
+                ),
+            ));
         }
         other => {
             return Err(SelectionError::new(
@@ -340,7 +340,7 @@ fn node_from_geometry_entry(entry: &GeometryEntryIR) -> Result<GeometryNode, Sel
                     "geometry '{}' uses an unsupported analytic predicate variant",
                     other.name()
                 ),
-            ))
+            ));
         }
     };
     validate_node(&node)?;

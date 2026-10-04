@@ -47,8 +47,22 @@ check_runpath_contains() {
 require_file "$BUNDLE_ROOT/bin/fullmag"
 require_file "$BUNDLE_ROOT/bin/fullmag-bin"
 require_file "$BUNDLE_ROOT/bin/fullmag-api"
+require_file "$BUNDLE_ROOT/bin/fullmag-api-accepted-worker"
+require_file "$BUNDLE_ROOT/bin/fullmag-api-accepted-supervisor"
+require_file "$BUNDLE_ROOT/bin/fullmag-api-accepted-scheduler"
+require_file "$BUNDLE_ROOT/bin/fullmag-runtime-service"
+require_file "$BUNDLE_ROOT/bin/fullmag-api-resource-pool"
+require_file "$BUNDLE_ROOT/bin/fullmag-api-accepted-fem-preparer"
+require_file "$BUNDLE_ROOT/bin/fullmag-api-accepted-fem-preparation-supervisor"
+require_file "$BUNDLE_ROOT/bin/fullmag-api-accepted-fem-preparation-scheduler"
+require_file "$BUNDLE_ROOT/bin/fullmag-api-preparation-resource-pool"
+require_file "$BUNDLE_ROOT/bin/fullmag-api-preparation-retry"
 require_file "$BUNDLE_ROOT/lib/libfullmag_fdm.so.0"
 require_file "$BUNDLE_ROOT/web/index.html"
+require_file "$BUNDLE_ROOT/web/workspace/index.html"
+require_file "$BUNDLE_ROOT/web/dev-server.mjs"
+require_file "$BUNDLE_ROOT/web/scripts/dev-server-public-origin.mjs"
+require_file "$BUNDLE_ROOT/web/scripts/resolve-pnpm-invocation.mjs"
 require_file "$BUNDLE_ROOT/python/bin/python"
 require_file "$BUNDLE_ROOT/python/bin/python3"
 require_file "$BUNDLE_ROOT/packages/fullmag-py/src/fullmag/__init__.py"
@@ -57,11 +71,31 @@ require_file "$BUNDLE_ROOT/share/version.json"
 
 check_no_missing_ldd "$BUNDLE_ROOT/bin/fullmag-bin"
 check_no_missing_ldd "$BUNDLE_ROOT/bin/fullmag-api"
+check_no_missing_ldd "$BUNDLE_ROOT/bin/fullmag-api-accepted-worker"
+check_no_missing_ldd "$BUNDLE_ROOT/bin/fullmag-api-accepted-supervisor"
+check_no_missing_ldd "$BUNDLE_ROOT/bin/fullmag-api-accepted-scheduler"
+check_no_missing_ldd "$BUNDLE_ROOT/bin/fullmag-runtime-service"
+check_no_missing_ldd "$BUNDLE_ROOT/bin/fullmag-api-resource-pool"
+check_no_missing_ldd "$BUNDLE_ROOT/bin/fullmag-api-accepted-fem-preparer"
+check_no_missing_ldd "$BUNDLE_ROOT/bin/fullmag-api-accepted-fem-preparation-supervisor"
+check_no_missing_ldd "$BUNDLE_ROOT/bin/fullmag-api-accepted-fem-preparation-scheduler"
+check_no_missing_ldd "$BUNDLE_ROOT/bin/fullmag-api-preparation-resource-pool"
+check_no_missing_ldd "$BUNDLE_ROOT/bin/fullmag-api-preparation-retry"
 check_no_missing_ldd "$BUNDLE_ROOT/lib/libfullmag_fdm.so.0"
 check_no_missing_ldd "$BUNDLE_ROOT/python/bin/python"
 
 check_runpath_contains "$BUNDLE_ROOT/bin/fullmag-bin" '$ORIGIN/../lib'
 check_runpath_contains "$BUNDLE_ROOT/bin/fullmag-api" '$ORIGIN/../lib'
+check_runpath_contains "$BUNDLE_ROOT/bin/fullmag-api-accepted-worker" '$ORIGIN/../lib'
+check_runpath_contains "$BUNDLE_ROOT/bin/fullmag-api-accepted-supervisor" '$ORIGIN/../lib'
+check_runpath_contains "$BUNDLE_ROOT/bin/fullmag-api-accepted-scheduler" '$ORIGIN/../lib'
+check_runpath_contains "$BUNDLE_ROOT/bin/fullmag-runtime-service" '$ORIGIN/../lib'
+check_runpath_contains "$BUNDLE_ROOT/bin/fullmag-api-resource-pool" '$ORIGIN/../lib'
+check_runpath_contains "$BUNDLE_ROOT/bin/fullmag-api-accepted-fem-preparer" '$ORIGIN/../lib'
+check_runpath_contains "$BUNDLE_ROOT/bin/fullmag-api-accepted-fem-preparation-supervisor" '$ORIGIN/../lib'
+check_runpath_contains "$BUNDLE_ROOT/bin/fullmag-api-accepted-fem-preparation-scheduler" '$ORIGIN/../lib'
+check_runpath_contains "$BUNDLE_ROOT/bin/fullmag-api-preparation-resource-pool" '$ORIGIN/../lib'
+check_runpath_contains "$BUNDLE_ROOT/bin/fullmag-api-preparation-retry" '$ORIGIN/../lib'
 check_runpath_contains "$BUNDLE_ROOT/lib/libfullmag_fdm.so.0" '$ORIGIN'
 
 if [[ -x "$BUNDLE_ROOT/runtimes/fdm-cuda/bin/fullmag-fdm-cuda-bin" ]]; then

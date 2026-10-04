@@ -98,6 +98,7 @@ const solverRuntime = {
 
 const mocks = vi.hoisted(() => ({
   activatePreview: vi.fn(),
+  authoringHistory: undefined as { record: ReturnType<typeof vi.fn> } | undefined,
   clear: vi.fn(),
   createPreview: vi.fn(),
   delete: vi.fn(),
@@ -108,6 +109,9 @@ const mocks = vi.hoisted(() => ({
   queueVisualizationPatch: vi.fn(),
   refetchFieldMeta: vi.fn(),
   refetchSolverStatus: vi.fn(),
+  sessionEpoch: "epoch-a",
+  sessionId: "session-a",
+  scene: vi.fn(),
   setActiveViewportMainModule: vi.fn(),
   setFocusedSlot: vi.fn(),
   solverStatusData: null as unknown,
@@ -127,8 +131,10 @@ vi.mock("@/kernel/KernelContext", () => ({
           delete: mocks.delete,
           patch: mocks.patch,
         },
+        scene: mocks.scene,
       },
     },
+    authoringHistory: mocks.authoringHistory,
     resources: { invalidate: mocks.invalidate },
     selection: { clear: mocks.clear },
     layout: {
@@ -167,9 +173,24 @@ vi.mock("@/kernel/resources/frozenSpinsResources", () => ({
   useFrozenSpinsDefinitionResource: () => mocks.definitionResource,
 }));
 
+vi.mock("@/kernel/resources/useSessionScopedResourceKey", () => ({
+  useSessionScopedResourceKey: (unscopedResourceKey: string) => ({
+    resourceKey:
+      `session=${mocks.sessionId}&epoch=${mocks.sessionEpoch}|${unscopedResourceKey}`,
+    sessionIdentity: {
+      sessionEpoch: mocks.sessionEpoch,
+      sessionId: mocks.sessionId,
+    },
+  }),
+}));
+
 describe("FrozenSpinsInspectorPanel", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.authoringHistory = undefined;
+    mocks.scene.mockReset();
+    mocks.sessionEpoch = "epoch-a";
+    mocks.sessionId = "session-a";
     mocks.activatePreview.mockResolvedValue(activationReceipt);
     mocks.flushVisualization.mockResolvedValue(undefined);
     mocks.solverStatusData = null;
@@ -375,6 +396,116 @@ describe("FrozenSpinsInspectorPanel", () => {
         "preview-1",
       );
       expect(container.textContent).toContain("25.00%");
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("forwards the active session scope to every Frozen Spins write", async () => {
+    const sessionScopeKey = "session=session-a&epoch=epoch-a";
+    mocks.delete.mockResolvedValueOnce({ revision: 9 });
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => root.render(
+        <FrozenSpinsEditor
+          definition={definitionFixture()}
+          objectId="film"
+          regionId={null}
+          revision={7}
+          sessionScopeKey={sessionScopeKey}
+        />,
+      ));
+      await act(async () => findButton(container, "Apply").click());
+      await act(async () => findButton(container, "Preview mask").click());
+      await act(async () => findButton(container, "Commit preview").click());
+      await act(async () => findButton(container, "Delete").click());
+
+      expect(mocks.patch).toHaveBeenCalledWith(
+        "pin-edge",
+        expect.objectContaining({ expected_revision: 7 }),
+        { sessionScopeKey },
+      );
+      expect(mocks.createPreview).toHaveBeenCalledWith(
+        expect.objectContaining({ expected_revision: 8 }),
+        { sessionScopeKey },
+      );
+      expect(mocks.activatePreview).toHaveBeenCalledWith(
+        "preview-1",
+        expect.objectContaining({ expected_revision: 8 }),
+        { sessionScopeKey },
+      );
+      expect(mocks.delete).toHaveBeenCalledWith(
+        "pin-edge",
+        expect.objectContaining({ expected_revision: 8 }),
+        { sessionScopeKey },
+      );
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("ignores a late write ACK after the editor is unmounted", async () => {
+    let resolvePatch!: (value: unknown) => void;
+    mocks.patch.mockReturnValueOnce(new Promise((resolve) => { resolvePatch = resolve; }));
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => root.render(
+        <FrozenSpinsEditor
+          definition={definitionFixture()}
+          objectId="film"
+          regionId={null}
+          revision={7}
+        />,
+      ));
+      await act(async () => findButton(container, "Apply").click());
+      await act(async () => root.unmount());
+      await act(async () => resolvePatch({
+        definition: definitionFixture(),
+        revision: 8,
+      }));
+
+      expect(mocks.invalidate).not.toHaveBeenCalled();
+      expect(mocks.clear).not.toHaveBeenCalled();
+    } finally {
+      dom.restore();
+    }
+  });
+
+  it("records an authored Apply after the Frozen Spins ACK advances the scene", async () => {
+    const record = vi.fn();
+    mocks.authoringHistory = { record };
+    const before = { objects: [], revision: 7 };
+    const after = { objects: [], revision: 8 };
+    mocks.scene.mockResolvedValueOnce(before).mockResolvedValueOnce(after);
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => root.render(
+        <FrozenSpinsEditor
+          definition={definitionFixture()}
+          objectId="film"
+          regionId={null}
+          revision={7}
+        />,
+      ));
+      await act(async () => findButton(container, "Apply").click());
+
+      expect(mocks.patch).toHaveBeenCalledWith("pin-edge", expect.objectContaining({
+        expected_revision: 7,
+      }));
+      expect(record).toHaveBeenCalledWith(expect.objectContaining({
+        before,
+        after,
+        committedRevision: 8,
+        label: "Update Frozen Spins definition",
+      }));
     } finally {
       await act(async () => root.unmount());
       dom.restore();
@@ -742,6 +873,61 @@ describe("FrozenSpinsInspectorPanel", () => {
           (element) => element.getAttribute("data-frozen-spins-inspector-id") !== null,
         ),
       ).toHaveLength(0);
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("does not retain the same constraint draft after the session changes", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    const selection = {
+      kind: "object.frozen-spins",
+      label: "Frozen Spins",
+      moduleSource: "explorer",
+      nodeId: "model:object:film:frozen-spins:pin-edge",
+      objectId: "film",
+      ref: {
+        constraintId: "pin-edge",
+        kind: "object.frozen-spins",
+        nodeId: "model:object:film:frozen-spins:pin-edge",
+        objectId: "film",
+        type: "frozen-spins",
+      },
+    } as const;
+    try {
+      mocks.definitionResource = {
+        data: {
+          definition: { ...definitionFixture(), name: "Session A" },
+          revision: 7,
+        },
+        error: null,
+      };
+      await act(async () => root.render(<FrozenSpinsInspectorPanel selection={selection} />));
+      expect(findByAttribute(container, "aria-label", "Name").value).toBe("Session A");
+
+      mocks.sessionId = "session-b";
+      mocks.definitionResource = { data: null, error: null };
+      await act(async () => root.render(<FrozenSpinsInspectorPanel selection={selection} />));
+      expect(container.textContent).toContain("Loading Frozen Spins definition");
+      expect(
+        findElements(
+          container,
+          (element) => element.getAttribute("data-frozen-spins-inspector-id") !== null,
+        ),
+      ).toHaveLength(0);
+
+      mocks.definitionResource = {
+        data: {
+          definition: { ...definitionFixture(), name: "Session B" },
+          revision: 9,
+        },
+        error: null,
+      };
+      await act(async () => root.render(<FrozenSpinsInspectorPanel selection={selection} />));
+      expect(findByAttribute(container, "aria-label", "Name").value).toBe("Session B");
     } finally {
       await act(async () => root.unmount());
       dom.restore();

@@ -1174,7 +1174,9 @@ fn idle_observation_quantities(display_selection: &CurrentDisplaySelection) -> V
     // Older control-plane payloads have no demand list. Keep their selected
     // spatial quantity working without eagerly materializing the whole catalog.
     if demand.observation_quantities.is_empty() {
-        demand.observation_quantities.push(display_selection.selection.quantity.clone());
+        demand
+            .observation_quantities
+            .push(display_selection.selection.quantity.clone());
     }
     demand.canonicalize_observation_quantities();
     demand.observation_quantities
@@ -1231,8 +1233,11 @@ mod tests {
     fn idle_observation_demand_is_canonical_and_not_eager() {
         let mut display = fullmag_runner::DisplaySelectionState::default();
         display.observation_quantities = vec![
-            "h_demag".into(), "H_demag".into(), "eden_total".into(),
-            "E_total".into(), "unknown".into(),
+            "h_demag".into(),
+            "H_demag".into(),
+            "eden_total".into(),
+            "E_total".into(),
+            "unknown".into(),
         ];
         assert_eq!(
             super::idle_observation_quantities(&display),

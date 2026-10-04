@@ -219,3 +219,27 @@ kompatybilnością odczytu dla starszych artefaktów i może zostać usunięty p
 wycofaniu i aktualizacji testów migracyjnych. Nowe produkty wymagają nowej
 wartości kontraktu, osobnych węzłów i testu fail-closed; nie wolno dopisywać
 ich do unii modal/response bez aktualizacji tej specyfikacji.
+
+
+## Integralność odczytu katalogu datasetów
+
+Adapter `analysis/results/runs/{run_id}/datasets` wiąże każdą rewizję źródła
+z dokładnymi bajtami użytymi do dekodowania. Field sweep, spectrum v3/v2,
+response sweep, gamma i DSF korzystają z pojedynczego odczytu: SHA-256 oraz
+JSON powstają z tego samego bufora. Podmiana ścieżki po odczycie nie może
+połączyć hashów wcześniejszego pliku z projekcją późniejszego. Deklarowane
+`source_revision` pozostaje provenance producenta; nie zastępuje hasha w
+`source_artifacts.revision` ani jego udziału w `dataset_revision`.
+
+Dotychczasowy adapter JSON przyjmuje najwyżej 64 MiB surowych bajtów na
+artefakt. Odczyt sprawdza dodatkowy bajt, więc nie polega na wcześniejszym
+rozmiarze pliku. Przekroczenie kończy żądanie błędem HTTP 500
+`RESULT_ARTIFACT_BYTE_LIMIT`; nie publikuje obciętego ani zastępczego datasetu.
+Niepoprawny JSON i błąd I/O również przerywają publikację zasobu. Duże wyniki
+wymagają migracji do bounded binary data plane; limit surowego wejścia nie
+jest kwalifikacją szczytowego RAM po parsowaniu i tworzeniu indeksu.
+
+Ten odczyt nie stanowi atomowej migawki wielu plików ani gwarancji kompletnej
+publikacji producenta podczas zapisu in-place. Walidacja kontekstu sesji,
+walidatory produktu, status jakości i bramka publikacji manifestu pozostają
+odrębnymi wymaganiami. Kształty OpenAPI i generated client nie zmieniają się.

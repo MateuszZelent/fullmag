@@ -378,10 +378,10 @@ const geometryTab: RibbonTabContent = {
       subtitle: "Build & validate",
       tone: "neutral",
       actions: [
-        { id: "builder-build-geometry", icon: icon(Hammer),      label: "Geometry Synced", disabled: true, iconColor: "text-emerald-400" },
+        { id: "builder-build-geometry", icon: icon(Hammer),      label: "Build Geometry", iconColor: "text-emerald-400" },
         { id: "geometry.commit-object-draft", icon: icon(Save),  label: "Apply Draft",                  iconColor: "text-emerald-400" },
         { id: "mesh.build-selected",    icon: icon(Grid3X3),     label: "Build Mesh",                   iconColor: "text-amber-400" },
-        { id: "builder-validate",       icon: icon(CheckCircle), label: "Validate",      disabled: true, iconColor: "text-emerald-400" },
+        { id: "builder-validate",       icon: icon(CheckCircle), label: "Validate",                   iconColor: "text-emerald-400" },
       ],
     },
     // ── Focus ────────────────────────────────────────────────────────────
@@ -531,6 +531,7 @@ const meshTab: RibbonTabContent = {
       subtitle: "mesh",
       tone: "compute",
       actions: [
+        { id: "grid.build-fdm", icon: icon(Grid3X3), label: "Build Grid", accent: true, iconColor: C.green, tooltip: "Rebuild the structured FDM grid from the committed scene" },
         { id: "mesh.build-selected", icon: icon(RefreshCw),  label: "Build",      accent: true, splitButton: true, iconColor: C.green, menu: [...statusMenu("mesh-build-status", "Mesh state", "Not built", "warning"), separator("mesh-build-sep"), ...menu("mesh-build", "Build scope", ["Selected object", "All objects", "Universe mesh", "Shared solver mesh"])] },
         { id: "mesh.build-shared-domain", icon: icon(Zap),   label: "Build All",  splitButton: true, iconColor: C.yellow, menu: menu("mesh-build-all", "Build all", ["FDM mesh", "FEM shared domain", "Quality report"]) },
         { id: "mesh-stats",     icon: icon(BarChart3),  label: "Statistics",               iconColor: C.peach },
@@ -643,12 +644,13 @@ const studyTab: RibbonTabContent = {
       actions: [
         { id: "study.compute-fields", icon: icon(Activity), label: "Compute Fields", iconColor: C.sapphire, tooltip: "Evaluate active fields for the current magnetization" },
         { id: "study.compute-energies", icon: icon(Sigma), label: "Compute Energies", iconColor: C.lavender, tooltip: "Evaluate current energies without changing magnetization" },
+        { id: "study.prepare-live", icon: icon(Layers3), label: "Prepare", iconColor: C.blue, tooltip: "Materialize the current Live scene preparation receipt without starting the solver" },
         { id: "study.run",   icon: icon(Play,        { fill: "currentColor" }), label: "Compute", shortcut: "F5", accent: true, iconColor: C.green, tooltip: "Submit the study solve command" },
         { id: "study.pause", icon: icon(Pause,       { fill: "currentColor" }), label: "Pause",                  iconColor: C.yellow },
         { id: "study.resume",icon: icon(Play,        { fill: "currentColor" }), label: "Resume",                 iconColor: C.green },
         { id: "study.save-checkpoint", icon: icon(Save), label: "Save Checkpoint", iconColor: C.blue },
         { id: "study.restore-checkpoint", icon: icon(RotateCcw), label: "Restore", iconColor: C.lavender },
-        { id: "study.import-state", icon: icon(Upload), label: "Import State", iconColor: C.lavender },
+        { id: "study.import-state", icon: icon(Upload), label: "Restore Runtime State", iconColor: C.lavender },
         { id: "study.export-state", icon: icon(Download), label: "Export State", iconColor: C.sapphire },
         { id: "study.discard-paused-state", icon: icon(Scissors), label: "Discard", iconColor: C.red },
         { id: "study.stop",  icon: icon(Square,      { fill: "currentColor" }), label: "Stop",                   iconColor: C.red },
@@ -1158,16 +1160,66 @@ function meshBuildStatus(context: RibbonBuildContext): {
   return { label: "not built", tone: "warning" };
 }
 
+function meshLastGoodProvenance(context: RibbonBuildContext): {
+  artifact: string;
+  sourceSceneRevision: string;
+  geometryRealizationRevision: string;
+} {
+  const lastSuccess = asRecord(context.meshBuildLatest?.last_success);
+  const artifact = [
+    lastSuccess?.mesh_id,
+    lastSuccess?.generation_id,
+    lastSuccess?.artifact,
+    lastSuccess?.build_id,
+  ].find((value) => typeof value === "string" && value.trim().length > 0);
+  const sourceSceneRevision =
+    context.meshBuildLatest?.source_scene_revision ??
+    lastSuccess?.source_scene_revision;
+  const geometryRealizationRevision =
+    context.meshBuildLatest?.geometry_realization_revision ??
+    lastSuccess?.geometry_realization_revision;
+
+  return {
+    artifact: typeof artifact === "string" ? artifact : "none",
+    sourceSceneRevision:
+      sourceSceneRevision === undefined || sourceSceneRevision === null
+        ? "unknown"
+        : String(sourceSceneRevision),
+    geometryRealizationRevision:
+      geometryRealizationRevision === undefined ||
+      geometryRealizationRevision === null
+        ? "unknown"
+        : String(geometryRealizationRevision),
+  };
+}
+
 function buildNonFemMeshTabContent(
   content: RibbonTabContent,
+  discretization: string | null,
 ): RibbonTabContent {
   const overviewLabel = "Open mesh overview";
   const viewGroup = content.groups.find((group) => group.id === "mesh-view");
   if (!viewGroup) return { ...content, groups: [] };
 
+  const buildGroup = content.groups.find((group) => group.id === "build");
+  const buildGridAction = buildGroup?.actions.find(
+    (action) => action.id === "grid.build-fdm",
+  );
+  const fdmBuildGroups =
+    discretization === "fdm" && buildGroup && buildGridAction
+      ? [
+          {
+            ...buildGroup,
+            subtitle: "structured grid",
+            actions: [buildGridAction],
+          },
+        ]
+      : [];
+
   return {
     ...content,
     groups: [
+      ...fdmBuildGroups,
       {
         ...viewGroup,
         title: "Mesh",
@@ -1205,10 +1257,11 @@ function buildMeshTabContent(
 ): RibbonTabContent {
   const discretization = ribbonDiscretization(context);
   if (discretization !== "fem") {
-    return buildNonFemMeshTabContent(content);
+    return buildNonFemMeshTabContent(content, discretization);
   }
 
   const status = meshBuildStatus(context);
+  const lastGood = meshLastGoodProvenance(context);
   const summary = asRecord(context.meshSummary?.mesh_summary);
   const solverMesh = context.meshSemantics?.solver_mesh;
   const nodeCount = summary?.node_count;
@@ -1219,10 +1272,13 @@ function buildMeshTabContent(
     ...content,
     groups: content.groups.map((group) => {
       if (group.id === "build") {
+        const actions = group.actions.filter(
+          (action) => action.id !== "grid.build-fdm",
+        );
         return {
           ...group,
           subtitle: status.label,
-          actions: group.actions.map((action) => {
+          actions: actions.map((action) => {
             if (action.id === "mesh.build-selected") {
               return {
                 ...action,
@@ -1252,6 +1308,25 @@ function buildMeshTabContent(
                     id: "mesh-build-status:elements",
                     label: "Elements",
                     value: String(elementCount ?? "unknown"),
+                  },
+                  {
+                    type: "status",
+                    id: "mesh-build-status:last-good",
+                    label: "Last good artifact",
+                    value: lastGood.artifact,
+                    tone: lastGood.artifact === "none" ? "warning" : "success",
+                  },
+                  {
+                    type: "status",
+                    id: "mesh-build-status:source-scene",
+                    label: "Source scene revision",
+                    value: lastGood.sourceSceneRevision,
+                  },
+                  {
+                    type: "status",
+                    id: "mesh-build-status:geometry-realization",
+                    label: "Geometry realization",
+                    value: lastGood.geometryRealizationRevision,
                   },
                   separator("mesh-build-status:sep"),
                   {

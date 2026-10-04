@@ -2,6 +2,9 @@
 
 mod api_sidecar;
 mod commands;
+mod compute_probe;
+mod provenance;
+mod recent_index;
 
 use api_sidecar::ApiSidecar;
 use commands::AppConfig;
@@ -32,12 +35,13 @@ fn main() {
                 let sidecar =
                     ApiSidecar::start().map_err(|e| Box::<dyn std::error::Error>::from(e))?;
                 let base = sidecar.base_url();
+                let ui_url = sidecar.ui_url();
                 app.manage(AppConfig {
                     api_base: base.clone(),
-                    ui_url: base.clone(),
+                    ui_url: ui_url.clone(),
                     launch_intent: launch_intent.clone(),
                 });
-                (base, Some(sidecar))
+                (ui_url, Some(sidecar))
             };
 
             let parsed_url: url::Url = url.parse().map_err(|error| {
@@ -54,7 +58,8 @@ fn main() {
                 .center()
                 .build()?;
 
-            if let Some(sidecar) = sidecar {
+            if let Some(mut sidecar) = sidecar {
+                sidecar.start_runtime_attach();
                 app.manage(sidecar);
             }
 
@@ -62,6 +67,19 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::open_file_dialog,
+            commands::open_project_dialog,
+            commands::open_project_archive_dialog,
+            commands::open_project_path,
+            commands::open_project_archive_path,
+            commands::app_build_info,
+            commands::author_identity,
+            commands::compute_probe,
+            commands::project_provenance_read,
+            commands::recent_index_read,
+            commands::recent_index_rebuild,
+            commands::recent_index_pin,
+            commands::recent_index_forget,
+            commands::save_project_archive,
             commands::reveal_in_file_manager,
             commands::get_app_config,
         ])

@@ -36,6 +36,7 @@ import {
   resolveViewport3DQuantityFieldVectorResourceRequests,
   resolveViewport3DQuantityFieldVectorResourceKeys,
   synchronizeViewport3DSessionIdentity,
+  validateViewport3DObservationFrameMagnetization,
   resolveViewport3DFieldVectorIdentityMatch,
   viewport3DFieldVectorMatchesRequestIdentity,
   viewport3DFieldMetaResourceMatchesQuantity,
@@ -58,6 +59,10 @@ const airboxFieldCatalog = {
   ],
   revision: 3,
 } as FieldCatalogResource;
+
+function fieldVectorResourceKey(query: string): string {
+  return `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "m")}?${query}`;
+}
 
 function fieldResponseMetadata(
   overrides: Partial<FieldVectorResponseMetadata> = {},
@@ -83,6 +88,37 @@ function fieldResponseMetadata(
 }
 
 describe("viewport3dResources", () => {
+  it("accepts only magnetization payloads from the exact observation frame", () => {
+    const field: DecodedFieldVector = {
+      dtype: "float64",
+      grid: [1, 1, 1],
+      nComp: 3,
+      pointCount: 1,
+      quantityId: "m",
+      sourceId: "frame-7",
+      sourceKind: "observation_frame",
+      sourceRevision: "accepted-12",
+      valueCount: 3,
+      values: new Float64Array([1, 0, 0]),
+    };
+
+    expect(() =>
+      validateViewport3DObservationFrameMagnetization(field, "frame-7"),
+    ).not.toThrow();
+    expect(() =>
+      validateViewport3DObservationFrameMagnetization(
+        { ...field, sourceId: "frame-8" },
+        "frame-7",
+      ),
+    ).toThrow(/returned field source frame-8/);
+    expect(() =>
+      validateViewport3DObservationFrameMagnetization(
+        { ...field, sourceKind: "live" },
+        "frame-7",
+      ),
+    ).toThrow(/returned field source kind live/);
+  });
+
   it("purges session caches and stale inflight work synchronously before resource reads", () => {
     const source = readFileSync(viewport3dResourcesSourceUrl, "utf8");
     const hookStart = source.indexOf("function useViewport3DSessionIdentity()");
@@ -103,6 +139,7 @@ describe("viewport3dResources", () => {
     const adopted = vi.fn();
     synchronizeViewport3DSessionIdentity({
       sessionEpoch: "session-old@1000",
+      requestScopeEpoch: "test-api:1",
       sessionId: "session-old",
     });
 
@@ -134,6 +171,7 @@ describe("viewport3dResources", () => {
 
     synchronizeViewport3DSessionIdentity({
       sessionEpoch: "session-new@2000",
+      requestScopeEpoch: "test-api:2",
       sessionId: "session-new",
     });
 
@@ -141,6 +179,15 @@ describe("viewport3dResources", () => {
     expect(decoded).not.toHaveBeenCalled();
     expect(adopted).not.toHaveBeenCalled();
     expect(cache.stats()).toEqual({ byteLength: 0, entryCount: 0 });
+  });
+
+  it("advances the viewport generation for a reopened session with unchanged scientific epoch", () => {
+    const identity = {
+      sessionEpoch: "session-1@1000", sessionId: "session-1", requestScopeEpoch: "api:1",
+    };
+    synchronizeViewport3DSessionIdentity(identity);
+    expect(synchronizeViewport3DSessionIdentity({ ...identity, requestScopeEpoch: "api:2" }))
+      .toBe(true);
   });
 
   it("rejects a late old-session completion even when the transport ignores abort", async () => {
@@ -154,6 +201,7 @@ describe("viewport3dResources", () => {
     const adopted = vi.fn();
     synchronizeViewport3DSessionIdentity({
       sessionEpoch: "session-old@1000",
+      requestScopeEpoch: "test-api:1",
       sessionId: "session-old",
     });
     const pending = loadCachedBinaryResource(
@@ -168,6 +216,7 @@ describe("viewport3dResources", () => {
 
     synchronizeViewport3DSessionIdentity({
       sessionEpoch: "session-new@2000",
+      requestScopeEpoch: "test-api:2",
       sessionId: "session-new",
     });
     resolveResponse({
@@ -606,7 +655,7 @@ describe("viewport3dResources", () => {
       },
       etag: '"m-1"',
       resourceKey:
-        "/v2/sessions/current/data/fields/m?scope_kind=part&scope_id=part-1&component=full&expected_generation_id=gen-1&expected_carrier_revision=top-1&snapshot_id=snap-1&stage_id=stage-1&phase_rad=0&view=slice-x",
+        fieldVectorResourceKey("scope_kind=part&scope_id=part-1&component=full&expected_generation_id=gen-1&expected_carrier_revision=top-1&snapshot_id=snap-1&stage_id=stage-1&phase_rad=0&view=slice-x"),
       responseMetadata: fieldResponseMetadata({
         component: "full",
         domainGenerationId: "gen-1",
@@ -690,7 +739,7 @@ describe("viewport3dResources", () => {
     const numericEnvelope: Viewport3DFieldVectorEnvelope = {
       ...baseEnvelope,
       resourceKey:
-        "/v2/sessions/current/data/fields/m?scope_kind=part&scope_id=part-1&component=full&expected_generation_id=gen-1&expected_carrier_revision=top-1&snapshot_id=1&stage_id=2&phase_rad=0&view=1",
+        fieldVectorResourceKey("scope_kind=part&scope_id=part-1&component=full&expected_generation_id=gen-1&expected_carrier_revision=top-1&snapshot_id=1&stage_id=2&phase_rad=0&view=1"),
       responseMetadata: fieldResponseMetadata({
         ...baseEnvelope.responseMetadata,
         snapshotId: "1",
@@ -742,7 +791,7 @@ describe("viewport3dResources", () => {
       },
       etag: '"m-frame-a"',
       resourceKey:
-        "/v2/sessions/current/data/fields/m?scope_kind=part&scope_id=part-1&component=full&expected_generation_id=gen-1&expected_carrier_revision=top-1",
+        fieldVectorResourceKey("scope_kind=part&scope_id=part-1&component=full&expected_generation_id=gen-1&expected_carrier_revision=top-1"),
       responseMetadata: fieldResponseMetadata({
         component: "full",
         domainGenerationId: "gen-1",

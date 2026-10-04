@@ -26,6 +26,10 @@ storage-info:
 storage-inventory:
     @{{storage_python}} "{{repo_root}}/scripts/fullmag_storage.py" inventory --repo-root "{{repo_root}}" --format json
 
+# Launch an already successful managed CPU release; never build or install.
+run-managed-browser job_id commit port="3104":
+    @{{storage_python}} "{{repo_root}}/scripts/run_managed_browser.py" --repo-root "{{repo_root}}" --job-id {{job_id}} --commit {{commit}} --port {{port}}
+
 storage-prepare:
     @{{storage_python}} "{{repo_root}}/scripts/fullmag_storage.py" prepare-links --repo-root "{{repo_root}}" --compat --frontend
 
@@ -122,6 +126,48 @@ windows-doctor:
 
 windows-setup:
     powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "{{repo_root}}/scripts/windows/setup_fullmag.ps1" -InstallMissing
+
+# Build a missing/stale native package, then open the empty authoring workspace.
+windows-ui frontend="dev" web_port="3197" build="auto" backend_profile="auto":
+    powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "{{repo_root}}/scripts/windows/run_fullmag.ps1" -BuildMode "{{build}}" -Frontend "{{frontend}}" -BackendProfile "{{backend_profile}}" -RunMode workspace -WebPort "{{web_port}}"
+
+# Build the native workspace without starting the UI. The fixed storage action
+# owns preflight, the native heavy slot and the terminal receipt.
+windows-workspace-build backend_profile="dev" frontend="dev" web_port="3197" build="auto":
+    powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "{{repo_root}}/scripts/windows/run_fullmag.ps1" -BuildMode "{{build}}" -Frontend "{{frontend}}" -BackendProfile "{{backend_profile}}" -RunMode workspace -WebPort "{{web_port}}" -BuildOnly
+
+# Recover a stale native workspace owner only after Windows process/listener checks.
+windows-runtime-recover port="3197":
+    @{{storage_python}} "{{repo_root}}/scripts/windows/recover_runtime.py" --repo-root "{{repo_root}}" --web-port "{{port}}"
+
+# Watch native backend inputs and build a new dev binary after edits. The
+# active workspace remains untouched until the user saves and restarts it.
+windows-backend-dev web_port="3197":
+    @{{storage_python}} "{{repo_root}}/scripts/windows/watch_backend.py" --repo-root "{{repo_root}}" --web-port "{{web_port}}"
+
+# Fixed interpreted checks for development handoff persistence, without Cargo.
+verify-windows-development-handoff:
+    @{{storage_python}} "{{repo_root}}/scripts/verify_development_handoff.py" --repo-root "{{repo_root}}"
+
+# Observe the development resource in an owned empty API; no unit compilation.
+verify-windows-development-backend-api cross_build_bundle="":
+    @{{storage_python}} "{{repo_root}}/scripts/verify_development_backend_api.py" --repo-root "{{repo_root}}" --cross-build-bundle "{{cross_build_bundle}}"
+
+# Native observer protocol proof; no unit-test compilation or user-session restart.
+verify-windows-development-observer-pause:
+    @{{storage_python}} "{{repo_root}}/scripts/verify_development_backend_api.py" --repo-root "{{repo_root}}" --observer-pause-only
+
+# Owned empty/scene consumer proof; never restarts a user's workspace.
+verify-windows-development-restart-consumer:
+    @{{storage_python}} "{{repo_root}}/scripts/verify_development_backend_api.py" --repo-root "{{repo_root}}" --restart-consumer-only
+
+# Native request transport proof; no unit-test compilation or user-session restart.
+verify-windows-development-restart-transport:
+    @{{storage_python}} "{{repo_root}}/scripts/verify_development_backend_api.py" --repo-root "{{repo_root}}" --restart-transport-only
+
+# Observe actual runtime-free project archives without compiling unit tests.
+verify-windows-project-document:
+    @{{storage_python}} "{{repo_root}}/scripts/verify_development_backend_api.py" --repo-root "{{repo_root}}" --project-document-only
 
 windows-build backend="fdm" device="cpu" frontend="dev" skip_local_changes="false":
     backend="{{backend}}"; device="{{device}}"; frontend="{{frontend}}"; skip_local_changes="{{skip_local_changes}}"; \
@@ -222,6 +268,217 @@ package target="fullmag":
 check:
     cargo +nightly check --locked --workspace --exclude fullmag-desktop
 
+# Source-only persistence check: does not compile unit/integration tests or solvers.
+check-session-persistence:
+    cargo check --locked -p fullmag-session --lib
+
+# Source-only API check for application/session adapters; excludes test targets.
+check-api-source:
+    {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --route api-source-check --repo-root "{{repo_root}}"
+
+# Source-only production CLI check; excludes unit tests and native solvers.
+check-cli-source:
+    {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --route cli-source-check --repo-root "{{repo_root}}"
+
+# Cold archive integrity gate; config names exact managed build and saved source.
+verify-saved-fem-archive-roundtrip:
+    {{storage_python}} "{{repo_root}}/scripts/verify_saved_fem_archive_roundtrip.py" --repo-root "{{repo_root}}"
+
+# Source check for truthful local resource capacity discovery and publication.
+check-api-resource-pool:
+    {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --route api-resource-pool-check --repo-root "{{repo_root}}"
+
+# Probe host CPU, RAM, storage and optional NVIDIA capacity without publishing.
+verify-api-resource-pool-discovery-smoke:
+    {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --route api-resource-pool-discovery-smoke --repo-root "{{repo_root}}"
+
+# Run the durable coordinator/runtime-control regression suite through the
+# canonical project storage route.
+verify-runtime-control:
+    {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --route runtime-control-tests --repo-root "{{repo_root}}"
+
+# Source check for the one-shot accepted-run worker process binary.
+check-api-accepted-worker:
+    {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --route api-accepted-worker-check --repo-root "{{repo_root}}"
+
+# Compile and run the isolated supervisor slot/process reconciliation regressions.
+verify-api-accepted-supervisor:
+    {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --route api-accepted-supervisor-tests --repo-root "{{repo_root}}"
+
+# Build both accepted-runtime binaries and run the durable subprocess E2E.
+verify-api-accepted-supervisor-e2e:
+    {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --route api-accepted-supervisor-e2e --repo-root "{{repo_root}}"
+
+verify-api-accepted-supervisor-cancel-e2e:
+    {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --route api-accepted-supervisor-cancel-e2e --repo-root "{{repo_root}}"
+
+verify-api-accepted-supervisor-prestart-cancel-e2e:
+    {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --route api-accepted-supervisor-prestart-cancel-e2e --repo-root "{{repo_root}}"
+
+verify-api-accepted-supervisor-automatic-retry-e2e:
+    {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --route api-accepted-supervisor-automatic-retry-e2e --repo-root "{{repo_root}}"
+
+verify-api-accepted-supervisor-retry-recovery-e2e:
+    {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --route api-accepted-supervisor-retry-recovery-e2e --repo-root "{{repo_root}}"
+
+verify-api-accepted-supervisor-process-exit-recovery-e2e:
+    {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --route api-accepted-supervisor-process-exit-recovery-e2e --repo-root "{{repo_root}}"
+
+verify-api-accepted-scheduler-e2e:
+    {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --route api-accepted-scheduler-e2e --repo-root "{{repo_root}}"
+
+verify-api-accepted-scheduler-pool-e2e:
+    {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --route api-accepted-scheduler-pool-e2e --repo-root "{{repo_root}}"
+
+verify-api-accepted-scheduler-discovery-e2e:
+    {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --route api-accepted-scheduler-discovery-e2e --repo-root "{{repo_root}}"
+
+verify-api-accepted-scheduler-persistent-cursor-e2e:
+    {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --route api-accepted-scheduler-persistent-cursor-e2e --repo-root "{{repo_root}}"
+
+verify-api-accepted-scheduler-parallel-resources-e2e:
+    {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --route api-accepted-scheduler-parallel-resources-e2e --repo-root "{{repo_root}}"
+
+verify-api-accepted-scheduler-resource-pool-e2e:
+    {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --route api-accepted-scheduler-resource-pool-e2e --repo-root "{{repo_root}}"
+
+verify-api-accepted-scheduler-dynamic-resource-pool-e2e:
+    {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --route api-accepted-scheduler-dynamic-resource-pool-e2e --repo-root "{{repo_root}}"
+
+verify-api-accepted-scheduler-resident-discovery-e2e:
+    {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --route api-accepted-scheduler-resident-discovery-e2e --repo-root "{{repo_root}}"
+
+verify-api-accepted-scheduler-resident-drain-e2e:
+    {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --route api-accepted-scheduler-resident-drain-e2e --repo-root "{{repo_root}}"
+
+verify-api-accepted-scheduler-retry-e2e:
+    {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --route api-accepted-scheduler-retry-e2e --repo-root "{{repo_root}}"
+
+# Run the narrowly scoped API preparation materialization route regressions.
+verify-api-preparation:
+    {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --route api-preparation-tests --repo-root "{{repo_root}}"
+
+# Run runtime-free project document and durable Submit HTTP regressions.
+verify-api-project-runs:
+    {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --route api-project-run-tests --repo-root "{{repo_root}}"
+
+# Run current-session recovery isolation HTTP regressions.
+verify-api-recovery:
+    {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --route api-recovery-tests --repo-root "{{repo_root}}"
+
+# Run the SceneResource preservation contract through the API source test route.
+verify-api-scene-resource:
+    {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --route api-scene-resource-tests --repo-root "{{repo_root}}"
+
+# Run the SceneDocument-to-builder preservation contract in fullmag-authoring.
+verify-authoring-contracts:
+    {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --route authoring-contract-tests --repo-root "{{repo_root}}"
+
+# Run the SceneDocument-to-builder preservation contract in fullmag-authoring.
+verify-authoring-scene-adapter:
+    {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --route authoring-scene-adapter-tests --repo-root "{{repo_root}}"
+
+# Managed OpenAPI source generation; the emitted JSON remains a versioned
+# frontend artifact, while all Cargo output stays under canonical storage.
+generate-api-openapi:
+    {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --route api-openapi-codegen --repo-root "{{repo_root}}"
+
+# Read-only diagnostic export from a terminal, verified BuildRunner package.
+# This route builds nothing; the helper validates paths and records its result.
+export-runner-openapi job_id expected_commit:
+    {{storage_python}} "{{repo_root}}/scripts/export_runner_openapi.py" --repo-root "{{repo_root}}" --job-id "{{job_id}}" --expected-commit "{{expected_commit}}"
+
+# Lightweight generated client and production source checks; no unit builds.
+generate-control-room-client:
+    {{storage_python}} "{{repo_root}}/scripts/verify_control_room_sources.py" --route generate-client --repo-root "{{repo_root}}"
+
+check-control-room-production-source:
+    {{storage_python}} "{{repo_root}}/scripts/verify_control_room_sources.py" --route production-source --repo-root "{{repo_root}}"
+
+# Interpreted Node contract checks in isolated managed fixtures; no unit builds.
+verify-control-room-openapi-import:
+    {{storage_python}} "{{repo_root}}/scripts/verify_control_room_sources.py" --route openapi-import-check --repo-root "{{repo_root}}"
+
+check-control-room-api-hygiene:
+    {{storage_python}} "{{repo_root}}/scripts/verify_control_room_sources.py" --route api-hygiene --repo-root "{{repo_root}}"
+
+verify-control-room-development-restart:
+    {{storage_python}} "{{repo_root}}/scripts/verify_control_room_sources.py" --route development-restart-check --repo-root "{{repo_root}}"
+
+verify-control-room-resource-client-cache:
+    {{storage_python}} "{{repo_root}}/scripts/verify_control_room_sources.py" --route resource-client-cache-check --repo-root "{{repo_root}}"
+
+# Actual browser interaction on an isolated managed frontend source snapshot.
+# Responses are fixtures; this is neither a backend runtime nor a solver gate.
+verify-pinned-dataset-browser:
+    {{storage_python}} "{{repo_root}}/scripts/verify_pinned_dataset_browser.py" --repo-root "{{repo_root}}"
+
+# Production project controller in an isolated Next browser fixture; no unit builds.
+verify-project-document-handoff-browser:
+    {{storage_python}} "{{repo_root}}/scripts/verify_pinned_dataset_browser.py" --repo-root "{{repo_root}}" --port 3251 --scenario project-document-handoff
+
+lint-control-room-source:
+    {{storage_python}} "{{repo_root}}/scripts/verify_control_room_sources.py" --route lint --repo-root "{{repo_root}}"
+
+doctor-control-room-source:
+    {{storage_python}} "{{repo_root}}/scripts/verify_control_room_sources.py" --route react-doctor --repo-root "{{repo_root}}"
+
+
+# Run only after the operator has allowed compilation of these regression tests.
+verify-session-persistence:
+    {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --repo-root "{{repo_root}}"
+
+# Source-only application crate check; uses the dedicated canonical-storage
+# route and does not compile unit/integration tests.
+check-project-application:
+    {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --route project-application-check --repo-root "{{repo_root}}"
+
+# Reserved for explicit test permission; kept separate from the source check.
+verify-project-application:
+    {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --route project-application-test --repo-root "{{repo_root}}"
+
+# Managed compile check for the shared CLI, Python and desktop Open entrypoints.
+check-project-entrypoints:
+    {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --route project-entrypoint-check --repo-root "{{repo_root}}"
+
+# Managed runtime-free API smoke with source identity, bounded HTTP scope and
+# controlled process-restart project reconnect.
+verify-project-run-restart:
+    {{storage_python}} "{{repo_root}}/scripts/verify_project_api_runtime.py" --include-project-run --repo-root "{{repo_root}}"
+
+verify-project-api-runtime:
+    {{storage_python}} "{{repo_root}}/scripts/verify_project_api_runtime.py" --repo-root "{{repo_root}}"
+
+# Managed production-process proof for local capacity discovery, durable pool
+# publication, scheduler admission, worker execution, and exact lease release.
+verify-api-resource-discovery-runtime:
+    {{storage_python}} "{{repo_root}}/scripts/verify_resource_discovery_runtime.py" --repo-root "{{repo_root}}"
+
+# Managed production-process proof for immutable accepted-run FEM preparation,
+# its dedicated Meshing lease, native mesh/space receipt, and lease release.
+verify-api-accepted-fem-preparation-runtime:
+    docker compose run --rm --no-deps fem-cpu bash -lc 'set -euo pipefail; cd /workspace; route_root="${FULLMAG_BUILD_ROOT:-/workspace/.fullmag-build}/accepted-fem-preparation-runtime"; python3 scripts/verify_accepted_fem_preparation_runtime.py --repo-root /workspace --build-root "$route_root/build" --output-root "$route_root/evidence"'
+
+verify-api-accepted-fdm-gpu-runtime:
+    {{storage_python}} "{{repo_root}}/scripts/verify_accepted_fdm_gpu_runtime.py" --repo-root "{{repo_root}}"
+
+# Managed realtime transport smoke with an empty scratch session.  This checks
+# the websocket handshake and after_seq reconnect without starting a solver.
+verify-project-realtime-runtime:
+    {{storage_python}} "{{repo_root}}/scripts/verify_project_api_runtime.py" --include-websocket --repo-root "{{repo_root}}"
+
+# Managed active-run runtime smoke with source identity and reconnect continuity.
+verify-project-active-run-runtime:
+    {{storage_python}} "{{repo_root}}/scripts/verify_project_active_run_runtime.py" --repo-root "{{repo_root}}"
+
+# Managed runtime-free CLI smoke for the shared project Open entrypoint.
+verify-project-entrypoint-runtime:
+    {{storage_python}} "{{repo_root}}/scripts/verify_project_entrypoint_runtime.py" --repo-root "{{repo_root}}"
+
+# Managed runtime-free Python binding smoke for the shared project Open entrypoint.
+verify-project-python-runtime:
+    {{storage_python}} "{{repo_root}}/scripts/verify_project_python_runtime.py" --repo-root "{{repo_root}}"
+
 test:
     cargo +nightly test --locked --workspace --exclude fullmag-desktop
 
@@ -301,9 +558,9 @@ verify-fem-meshing-production:
     bash scripts/verify_fem_meshing_production.sh
 
 verify-fem-mixed-p1-capability-contract:
-    python3 scripts/validate_mixed_p1_capability_contract.py
-    python3 -m unittest scripts.test_validate_mixed_p1_capability_contract
-    cargo test --locked -p fullmag-runner --no-default-features capabilities::tests::
+    {{storage_python}} scripts/validate_mixed_p1_capability_contract.py
+    {{storage_python}} -m unittest scripts.test_validate_mixed_p1_capability_contract
+    {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --route fem-capability-contract --repo-root "{{repo_root}}"
 
 verify-fem-mixed-prism-airbox-runtime:
     just ensure-managed-fem-runtime
@@ -3795,6 +4052,9 @@ verify-fem-preparation-clock-contract:
 
 verify-fem-preparation-api-contract:
     docker compose --profile fem-gpu run --rm --no-deps fem-gpu bash -lc 'FULLMAG_USE_MFEM_STACK=ON cargo +nightly test -p fullmag-api router_v2::tests::simulation_preparation_preserves_backward_clock_adjustment_evidence -- --exact --nocapture'
+
+verify-fem-mesh-space-preparation-contract:
+    COMPOSE_PROJECT_NAME="$(bash scripts/resolve_fullmag_compose_project.sh)" docker compose run --rm --no-deps fem-cpu bash -lc 'set -euo pipefail; cd /workspace; build_root="${FULLMAG_BUILD_ROOT:-/workspace/.fullmag-build}/fem-mesh-space-preparation"; build_dir="$build_root/native"; cargo_target="$build_root/cargo-target"; mkdir -p "$build_root"; cmake -S native -B "$build_dir" -DFULLMAG_ENABLE_CUDA=OFF -DFULLMAG_ENABLE_FEM_GPU=OFF -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=OFF; cmake --build "$build_dir" --target fem_mesh_space_preparation_contract; ctest --test-dir "$build_dir/backends/fem" --output-on-failure --no-tests=error -R "^fem_mesh_space_preparation_contract$"; FULLMAG_FEM_LIB_DIR="$build_dir/backends/fem" LD_LIBRARY_PATH="$build_dir/backends/fem:/opt/fullmag-deps/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" CARGO_TARGET_DIR="$cargo_target" CARGO_INCREMENTAL=0 cargo +nightly test -p fullmag-runner --features fem-native native_fem::mesh_preparation::tests::runner_preparation_exercises_native_mesh_space_abi -- --exact --nocapture'
 
 verify-fem-preview-callback-source-contract:
     docker compose --profile fem-gpu run --rm --no-deps fem-gpu bash -lc 'FULLMAG_USE_MFEM_STACK=ON cargo +nightly test -p fullmag-runner --features fem-gpu tests::fem_preview_materialization_stays_outside_callback_deadline -- --exact --nocapture'

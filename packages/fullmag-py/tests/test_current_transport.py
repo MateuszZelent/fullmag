@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import textwrap
 import unittest
 from dataclasses import replace
@@ -38,6 +39,55 @@ def _base_problem(**kwargs) -> fm.Problem:
 
 
 class CurrentTransportTests(unittest.TestCase):
+    def test_scene_transport_decoder_rejects_unknown_typed_nested_fields(self) -> None:
+        region = fm.RegionRef("layer")
+        transport = fm.CurrentTransport(
+            name="charge",
+            model="ohmic_poisson",
+            domain=[region],
+            materials=[
+                fm.ChargeTransportMaterialAssignment(
+                    region,
+                    fm.ChargeTransportMaterial(sigma_Spm=5.8e7),
+                )
+            ],
+            boundaries=[
+                fm.VoltageElectrode(
+                    "drive",
+                    [fm.SurfaceRef("layer", "x_max", (1.0, 0.0, 0.0))],
+                    potential_V=0.1,
+                )
+            ],
+            gauge=fm.ChargePotentialGauge("dirichlet_reference"),
+            solver=fm.ChargeSolverPolicy(),
+        )
+        base_payload = transport.to_ir()
+        base_payload["time_envelope"] = {"kind": "constant", "value": 1.0}
+        nested_paths = (
+            ("domain", 0),
+            ("materials", 0),
+            ("materials", 0, "material"),
+            ("boundaries", 0),
+            ("boundaries", 0, "surfaces", 0),
+            ("solver",),
+            ("solver", "linear"),
+            ("time_envelope",),
+        )
+
+        for path in nested_paths:
+            with self.subTest(path=path):
+                invalid_payload = copy.deepcopy(base_payload)
+                nested = invalid_payload
+                for segment in path:
+                    nested = nested[segment]
+                nested["future_policy"] = "new"
+                with self.assertRaisesRegex(
+                    ValueError, "has unsupported fields: future_policy"
+                ):
+                    build_scene_document_from_builder(
+                        {"revision": 1, "current_modules": [invalid_payload]}
+                    )
+
     def _closed_current_view(self) -> fm.ConservativeCurrentView:
         identity = fm.ConservativeCurrentIdentity(
             source_module_id="drive",
@@ -118,6 +168,17 @@ class CurrentTransportTests(unittest.TestCase):
         rebuilt = eval(rendered[1], {"fm": fm})
         self.assertEqual(rebuilt.to_ir(), transport.to_ir())
         entry = transport.to_ir()
+        invalid_entry = copy.deepcopy(entry)
+        invalid_view = invalid_entry["conservative_current_view"]
+        invalid_view["identity"]["future_policy"] = "new"
+        with self.assertRaisesRegex(
+            ValueError,
+            r"current_transport\.conservative_current_view\.identity has unsupported fields: future_policy",
+        ):
+            build_scene_document_from_builder(
+                {"revision": 1, "geometries": [], "current_modules": [invalid_entry]}
+            )
+
         scene = build_scene_document_from_builder(
             {"revision": 1, "geometries": [], "current_modules": [entry]}
         )

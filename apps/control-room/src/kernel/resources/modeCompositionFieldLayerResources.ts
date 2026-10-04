@@ -16,6 +16,8 @@ import {
   type ModeCompositionFieldLayerSnapshotMap,
   type ModeCompositionFieldLayerTopologyIdentity,
 } from "../visualization/ModeCompositionFieldLayerController";
+import { sessionResourceIdentityKey } from "./sessionResourceIdentity";
+import { useSessionResourceIdentity } from "./useSessionStatus";
 
 export type {
   ModeCompositionFieldLayerFailureReason,
@@ -44,6 +46,10 @@ export function useModeCompositionFieldLayerResources({
   topologyByTarget,
 }: UseModeCompositionFieldLayerResourcesOptions): ModeCompositionFieldLayerSnapshotMap {
   const { api } = useKernel();
+  const sessionIdentity = useSessionResourceIdentity();
+  const sessionScope = sessionIdentity
+    ? sessionResourceIdentityKey(sessionIdentity)
+    : null;
   const [controller] = useState(() => new ModeCompositionFieldLayerController());
   const stableTopology = useStableTopologyByTarget(topologyByTarget);
   const loaders = useMemo<ModeCompositionFieldLayerLoaders>(() => ({
@@ -59,6 +65,7 @@ export function useModeCompositionFieldLayerResources({
         return Promise.reject(new Error("Mode layer does not expose canonical metadata indices."));
       }
       return api.analysis.frequencyDomain.eigenModeFieldMeta(sampleIndex, modeIndex, {
+        sessionScopeKey: sessionScope ?? undefined,
         signal,
       });
     },
@@ -71,7 +78,7 @@ export function useModeCompositionFieldLayerResources({
           scope_kind: "object",
           view: "complex",
         },
-        { etag, signal },
+        { etag, sessionScopeKey: sessionScope ?? undefined, signal },
       );
       if (result.status !== "ready") {
         throw new Error(`Object-scoped mode field returned '${result.status}'.`);
@@ -84,7 +91,7 @@ export function useModeCompositionFieldLayerResources({
         fieldRevision: result.responseMetadata.fieldRevision,
       };
     },
-  }), [api]);
+  }), [api, sessionScope]);
   const subscribe = useCallback(
     (listener: () => void) => controller.subscribe(listener),
     [controller],
@@ -93,13 +100,13 @@ export function useModeCompositionFieldLayerResources({
   const snapshots = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 
   useEffect(() => {
-    if (!enabled || !composition) {
+    if (!enabled || !composition || !sessionScope) {
       controller.clear();
       return;
     }
-    void controller.activate(composition, stableTopology, loaders);
+    void controller.activate(composition, stableTopology, loaders, sessionScope);
     return () => controller.clear();
-  }, [composition, controller, enabled, loaders, stableTopology]);
+  }, [composition, controller, enabled, loaders, sessionScope, stableTopology]);
 
   return snapshots;
 }

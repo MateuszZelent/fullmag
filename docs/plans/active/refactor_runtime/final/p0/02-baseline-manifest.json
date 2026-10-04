@@ -1,0 +1,397 @@
+{
+  "schema": "fullmag.refactor_runtime.p0e.baseline_manifest.v1",
+  "inventory_date": "2026-09-20",
+  "scope": "P0-E: preservation of fixtures and receipts, source identity, and pre-measurement baseline rules",
+  "execution_policy": {
+    "builds_run": false,
+    "tests_or_compilation_run": false,
+    "runtime_jobs_run": false,
+    "gc_run": false,
+    "measurement_status": "NOT_RUN",
+    "reason": "Read-only baseline inventory; the current user instruction forbids new builds, test compilation, runtime jobs, and GC."
+  },
+  "source_checkout": {
+    "repo_root": "C:/git/fullmag/fullmag",
+    "branch": "master",
+    "head": "14c8e73a6f3c55f4fc080835a6156f2a4db8f111",
+    "worktree_state": "dirty",
+    "dirty_paths": [
+      "external_solvers/3",
+      "external_solvers/amumax",
+      "external_solvers/oommf",
+      "docs/plans/active/refactor_runtime/final/",
+      "docs/plans/active/refactor_runtime/raport_claude/"
+    ],
+    "source_snapshot_sha256": null,
+    "source_snapshot_status": "NOT_CAPTURED",
+    "source_snapshot_reason": "This inventory does not create a clean or immutable source snapshot. Any later runtime receipt must carry its own fullmag-build-info identity and dirty-state/diff evidence."
+  },
+  "fixtures": [
+    {
+      "id": "P0E-FIX-FEM-BOX500-V1",
+      "path": "examples/assets/fem_performance/box500_airbox_exchange_demag_v1.fixture.json",
+      "file_sha256": "66b7134acf264ebfc1614ee8d4d62a69940489e1be876387d83a68c729236792",
+      "bytes": 972,
+      "embedded_schema": "fullmag.fem_gpu.performance_fixture.v1",
+      "embedded_problem_ir_sha256": "403afa1214681d3317e23b14f4095dfea6141197cea813655c07d24104fbcc08",
+      "embedded_solver_mesh_sha256": "9c410c3b02cc86d3a832b923f13b5f9b0ec18c4be2babda148697c6dbc9c105a",
+      "embedded_solver_mesh_signature": "20a1851a39da191c61cf50006e72c4b977fa31a5a4cdf2dee1e037e93640d431",
+      "role": "preserve_reference",
+      "golden_status": "NOT_GOLDEN",
+      "runtime_status": "NOT_RUN",
+      "reason": "The fixture identity is present, but no current receipt was executed in this audit and the checkout is dirty."
+    },
+    {
+      "id": "P0E-FIX-FEM-BOX500-V2",
+      "path": "examples/assets/fem_performance/box500_airbox_exchange_demag_v2.fixture.json",
+      "file_sha256": "d40522cc13b255afa5dda7a09cf2aeb591eec02ae4c0629d38b283a047a2f591",
+      "bytes": 1115,
+      "embedded_schema": "fullmag.fem_gpu.performance_fixture.v2",
+      "embedded_problem_ir_sha256": "a4899bc99b9f3ba931d519842b7a12055e7c7f3b9f1a9d60b1ef7895ae3c579c",
+      "embedded_solver_mesh_sha256": "fee246d5b227e2ac202aafab017277c3f1cda67366c712180e67f9b4c0c8ce1a",
+      "embedded_solver_mesh_signature": "348986a75d339351d67b40b956fec7a34b9a46259ba63b5084d0454853ff85dd",
+      "role": "preserve_reference",
+      "golden_status": "NOT_GOLDEN",
+      "runtime_status": "NOT_RUN",
+      "reason": "The v2 fixture is a source input for the fixture suite; it has no fresh receipt in this audit."
+    },
+    {
+      "id": "P0E-FIX-FEM-BOX500-SUITE-V2",
+      "path": "examples/assets/fem_performance/amg_qualification_suite_v2.json",
+      "file_sha256": "a6c011245043889d0cdbc56566a580b523daef4d9d98303ce9f16ac7b383fd5",
+      "bytes": 2185,
+      "embedded_schema": "fullmag.fem_gpu.performance_fixture_suite.v2",
+      "embedded_fixture_count": 3,
+      "role": "preserve_reference",
+      "golden_status": "NOT_GOLDEN",
+      "runtime_status": "NOT_RUN",
+      "reason": "The suite records fixture and mesh identities; it is not a runtime result."
+    },
+    {
+      "id": "P0E-FIX-FDM-SP4-DERIVED",
+      "path": "tests/standard_problems/mumag/sp4/fdm/multilayer_convolution/thresholds.v1.json",
+      "file_sha256": "9d8046f2866e5720f29937b35f4f07cae9a93dc7a37fc6c36a43259327d02458",
+      "bytes": 1402,
+      "embedded_schema": "fdm_multilayer_thresholds.v1",
+      "qualification_scope": "SP4-derived, not canonical SP4 qualification",
+      "role": "preserve_reference",
+      "golden_status": "REFERENCE_ONLY",
+      "runtime_status": "NOT_RUN",
+      "reason": "The file explicitly limits its scope; it must not be promoted to canonical SP4 or cross-lane production qualification."
+    },
+    {
+      "id": "P0E-FIX-SINC-LAYER-SCRIPTS",
+      "paths": [
+        {
+          "path": "tests/fem_fdm_mumax3_sinc_layer/fullmag_case.py",
+          "sha256": "0925b068dc70e8c2b1b6b67b6fa5e768e415783f780e0ef4c9a23b2de7990a08",
+          "bytes": 8718
+        },
+        {
+          "path": "tests/fem_fdm_mumax3_sinc_layer/fdm_case.py",
+          "sha256": "985ad8f166ddf0cffaab37d54666eb69246c527a2649187ed38b4650cbda5103",
+          "bytes": 339
+        },
+        {
+          "path": "tests/fem_fdm_mumax3_sinc_layer/fdm_gpu_case.py",
+          "sha256": "817ac7a79336f096d1548fd3692858dc25282d0382ad446c75a39cfc604969fa",
+          "bytes": 376
+        },
+        {
+          "path": "tests/fem_fdm_mumax3_sinc_layer/fem_case.py",
+          "sha256": "8c15281668ca9037db29247aaeb2a683ae30adf719a7f1789371da97c21daf7b",
+          "bytes": 428
+        },
+        {
+          "path": "tests/fem_fdm_mumax3_sinc_layer/fem_cpu_case.py",
+          "sha256": "7bec132cf0c99315f30149cd41b50bcd86793a4d999511ad20a03c169ede12a6",
+          "bytes": 424
+        },
+        {
+          "path": "tests/fem_fdm_mumax3_sinc_layer/fem_gpu_case.py",
+          "sha256": "5b0db0175eaa17438c4b1837cf6e897225bd222908963db90886fa5e9f1be1ae",
+          "bytes": 432
+        },
+        {
+          "path": "tests/fem_fdm_mumax3_sinc_layer/fem_fk_cpu_case.py",
+          "sha256": "3eb14233ce052ad3925ff62bc0a6ebc519ad0c94df6a025e58c3dde1026a8ad4",
+          "bytes": 436
+        },
+        {
+          "path": "tests/fem_fdm_mumax3_sinc_layer/fem_fk_gpu_case.py",
+          "sha256": "51e9d559f9c2fb8fedd67242abfce5dc8a8559c933a319a90cb759b276ac1acf",
+          "bytes": 618
+        },
+        {
+          "path": "tests/fem_fdm_mumax3_sinc_layer/fdm_relax_case.py",
+          "sha256": "c60ce55873d2a6078e064e708e74c111f2eb23d1bb4da61fe37619a80fe826fa",
+          "bytes": 1837
+        },
+        {
+          "path": "tests/fem_fdm_mumax3_sinc_layer/mumax3_case.mx3",
+          "sha256": "eb134cb3f39de9acc9d2a8b8432938b8314bf8c0e7f4a5a983eb3ac8501c0a1a",
+          "bytes": 964
+        },
+        {
+          "path": "tests/fem_fdm_mumax3_sinc_layer/mumax3_relax_case.mx3",
+          "sha256": "97d2780a71a859b28678cdf878cc661187466166cff5b2d0c9a69abd2abffb52",
+          "bytes": 523
+        }
+      ],
+      "role": "preserve_reference",
+      "golden_status": "NOT_GOLDEN",
+      "runtime_status": "NOT_RUN",
+      "reason": "The scripts cover several lanes and comparison fixtures, but no single receipt proves their current production parity."
+    }
+  ],
+  "receipts_and_reports": [
+    {
+      "id": "P0E-RECEIPT-SINC-FDM-GPU",
+      "path": "tests/fem_fdm_mumax3_sinc_layer/results/current/fdm_gpu/qualification.json",
+      "file_sha256": "75bbe276ba98e4151a323c7160a7ca662c82e3e6465c88e5f287f37d19520211",
+      "bytes": 676,
+      "receipt_schema": "LLG-TD-QUALIFICATION-V1",
+      "recorded_status": "not_evaluated",
+      "recorded_validation_state": "unvalidated",
+      "recorded_lane": "fdm/cuda/double",
+      "golden_status": "REJECTED_AS_GOLDEN",
+      "runtime_status": "NOT_VERIFIED",
+      "reason": "The receipt itself says scientific qualification is produced by a dedicated gate and artifact creation is not validation evidence."
+    },
+    {
+      "id": "P0E-RECEIPT-SINC-FDM-GPU-DIAGNOSTIC-RETRY",
+      "path": "tests/fem_fdm_mumax3_sinc_layer/results/current/fdm_gpu_dt50fs_diagnostic_retry/qualification.json",
+      "file_sha256": "75bbe276ba98e4151a323c7160a7ca662c82e3e6465c88e5f287f37d19520211",
+      "bytes": 676,
+      "receipt_schema": "LLG-TD-QUALIFICATION-V1",
+      "recorded_status": "not_evaluated",
+      "recorded_validation_state": "unvalidated",
+      "golden_status": "REJECTED_AS_GOLDEN",
+      "runtime_status": "NOT_VERIFIED",
+      "reason": "The identical receipt hash is not independent evidence; the diagnostic-retry directory does not upgrade its status."
+    },
+    {
+      "id": "P0E-HIST-K0-S00",
+      "path": "docs/audits/2026-09-10-fem-k0-s00-baseline-and-evidence.ledger.json",
+      "file_sha256": "e0711b39d5d47ca82050dc94bae627f7b53d888e8b4395f5af44b0a4cc1a4284",
+      "bytes": 12105,
+      "recorded_scope": "S00: baseline, preservation and selective recovery decisions only",
+      "historical_base_commit": "1620d2762d99b58cddcfc93f7eb505b84dfbf178",
+      "historical_build_commit": "4c7897f218eb0c32612db1f43a844502a316b4f6",
+      "historical_source_snapshot_sha256": "e5679faa14d8f6fc5010aef436c117aad52194e02caab50f3411d49ae5a8fd3a",
+      "historical_worktree_state": "dirty",
+      "recorded_numeric_reference": {
+        "kittel_points": 15,
+        "max_relative_error": 5.194679480952314e-14
+      },
+      "recorded_incompleteness": [
+        "validation_state=unvalidated",
+        "spectrum_completeness=selected_only",
+        "window_complete=false",
+        "fit_status=partial"
+      ],
+      "golden_status": "HISTORICAL_REFERENCE_ONLY",
+      "runtime_status": "EXECUTED_ON_HISTORICAL_BUNDLE",
+      "reason": "The ledger is useful for preservation and negative evidence, but its source identity is not current master and it does not close the production K0 qualification."
+    },
+    {
+      "id": "P0E-HIST-FEM-GPU-DOC-MANIFEST",
+      "path": "docs/performance/fem-gpu-performance-remediation-2026-09-01/fem-gpu-performance-remediation-2026-09-01/manifest.json",
+      "file_sha256": "4aa1d19026aca991e038104a7d13f2202ce000603f42277e8fada34d57697b55",
+      "bytes": 2474,
+      "verified_commit": "c3f49db708868f3649a3e894416d230269718920",
+      "verification_scope": "source_contracts_and_justfile_only",
+      "recorded_managed_gpu_runtime": "NOT VERIFIED",
+      "golden_status": "HISTORICAL_REFERENCE_ONLY",
+      "runtime_status": "NOT_VERIFIED",
+      "reason": "The manifest explicitly limits verification to source contracts and justfile; it contains no managed GPU runtime receipt."
+    },
+    {
+      "id": "P0E-FEM-CPU-BASELINE-DOC",
+      "path": "docs/performance/fem_cpu_baselines.md",
+      "file_sha256": "4c9000cf6f97e1fc6705b2f14fe0f4f8f75ec3c25b93915cbd876af69a5e4d9c",
+      "bytes": 3836,
+      "recorded_status": "accepted baseline CSV open",
+      "golden_status": "NO_ACCEPTED_BASELINE",
+      "runtime_status": "NOT_VERIFIED",
+      "reason": "The document states that no accepted CPU baseline CSV is committed; machine-local generated reports are not portable production baselines."
+    }
+  ],
+  "measurement_harnesses": [
+    {
+      "id": "P0E-HARNESS-FULLMAG-BENCH",
+      "paths": [
+        {
+          "path": "crates/fullmag-bench/src/main.rs",
+          "sha256": "82be0d2d4d9942383bc34739ea6c51227a914090b10a8fbdd21c9d1efdb1c836",
+          "bytes": 18979
+        },
+        {
+          "path": "crates/fullmag-bench/src/production_fdm_cpu.rs",
+          "sha256": "c0bf5336ecb86f213bc05ddeba90c2f8827935857860d66b91f68bd9ec53c360",
+          "bytes": 36221
+        },
+        {
+          "path": "crates/fullmag-bench/qualification/fdm_cpu_production_thresholds.v1.json",
+          "sha256": "646d8205364c23dfd985cc10c8f9b0746f961879b788762411b4c1c12d104fd1",
+          "bytes": 726
+        },
+        {
+          "path": "crates/fullmag-bench/qualification/frozen_spins_performance_thresholds.v1.json",
+          "sha256": "79b2e312065ad684d818206701f91dabcbe7c9d34d883606de92b318c6577988",
+          "bytes": 3250
+        }
+      ],
+      "source_anchors": [
+        "production_fdm_cpu.rs::run_from_args @151",
+        "production_fdm_cpu.rs::required_environment @255",
+        "production_fdm_cpu.rs::qualification-summary.json write @220"
+      ],
+      "contract_observation": "The harness requires FULLMAG_BENCH_COMMIT and FULLMAG_BENCH_BUILD_ID and emits a qualification summary, but no repository-managed just target references fullmag-bench in the current justfile.",
+      "route_status": "SOURCE_ONLY_NOT_APPROVED_AS_QUALIFICATION_ROUTE",
+      "runtime_status": "NOT_RUN"
+    },
+    {
+      "id": "P0E-HARNESS-FULLMAG-BUILD-INFO",
+      "paths": [
+        {
+          "path": "crates/fullmag-build-info/src/lib.rs",
+          "sha256": "8e4f166f64d59edfea4565447fe7e844418fd60c16725d3502e112edfcb5a8b44",
+          "bytes": 2238
+        },
+        {
+          "path": "crates/fullmag-build-info/build.rs",
+          "sha256": "1ecf47d0d6cc37c085635657783cbaacf6b6d3021363953aa4215319ea6280d4",
+          "bytes": 5415
+        }
+      ],
+      "required_identity_fields": [
+        "built_at_utc",
+        "git_commit",
+        "worktree_state",
+        "source_snapshot_sha256"
+      ],
+      "source_anchors": [
+        "src/lib.rs::BuildIdentity @2-6",
+        "src/lib.rs::identity @20-26",
+        "build.rs::environment validation @38-64"
+      ],
+      "route_status": "IDENTITY_PREREQUISITE",
+      "runtime_status": "NOT_RUN"
+    }
+  ],
+  "approved_measurement_routes": [
+    {
+      "route": "just verify-fem-performance-fixture-v2",
+      "justfile_line": 4490,
+      "fixture_inputs": [
+        "examples/assets/fem_performance/box500_airbox_exchange_demag_v2.fixture.json",
+        "examples/assets/fem_performance/amg_qualification_suite_v2.json"
+      ],
+      "output_family": ".fullmag/reports/fem-performance-fixture-v2/",
+      "purpose": "fixture identity and managed CPU execution contract",
+      "status": "NOT_RUN",
+      "reason": "The route includes a managed build/runtime and was not invoked in this read-only audit."
+    },
+    {
+      "route": "just capture-fem-gpu-pre-remediation-performance-baseline",
+      "justfile_line": 4713,
+      "fixture_inputs": [
+        "examples/assets/fem_performance/box500_airbox_exchange_demag_v1.fixture.json",
+        "benchmarks/fem-gpu/accepted/rtx4080-sm89/environment.json"
+      ],
+      "output_family": ".fullmag/reports/fullmag_fem_gpu_pre_remediation_performance_baseline.*",
+      "purpose": "pre-remediation reference only",
+      "status": "NOT_RUN",
+      "reason": "No new managed GPU job was authorized for this baseline inventory; pre-remediation data must not become the post-refactor golden baseline."
+    },
+    {
+      "route": "just verify-fem-gpu-performance-regression",
+      "justfile_line": 4524,
+      "fixture_inputs": [
+        "examples/assets/fem_performance/box500_airbox_exchange_demag_v1.fixture.json",
+        "benchmarks/fem-gpu/accepted/rtx4080-sm89/environment.json",
+        "benchmarks/fem-gpu/accepted/rtx4080-sm89/benchmark.csv"
+      ],
+      "output_family": ".fullmag/reports/fem_gpu_performance_regression.*",
+      "purpose": "same-environment GPU regression comparison",
+      "status": "NOT_RUN",
+      "reason": "The route requires managed GPU identity and a matching accepted environment; no current receipt was produced."
+    },
+    {
+      "route": "just verify-fem-relaxation-production-benchmark",
+      "justfile_line": 4220,
+      "output_family": ".fullmag/reports/fullmag_relaxation_production_benchmark.*",
+      "purpose": "managed FEM relaxation production benchmark",
+      "status": "NOT_RUN",
+      "reason": "No build/runtime job was run; the future receipt must record source/build identity, fixture, host, lane, device, precision, repeats, and p50/p95."
+    },
+    {
+      "route": "just verify-fem-gpu-demag-performance-benchmark",
+      "justfile_line": 4753,
+      "output_family": ".fullmag/reports/fullmag_fem_gpu_demag_performance_benchmark.*",
+      "purpose": "managed FEM GPU demag timing and parity",
+      "status": "NOT_RUN",
+      "reason": "No build/runtime job was run; route-specific defaults are not measurements until a receipt is captured."
+    },
+    {
+      "route": "just verify-fem-fk-sinc-layer-validator",
+      "justfile_line": 1865,
+      "fixture_inputs": ["tests/fem_fdm_mumax3_sinc_layer/"],
+      "purpose": "Fredkin-Koehler sinc-layer validation route",
+      "status": "NOT_RUN",
+      "reason": "No runtime validator was invoked. Existing scenario files remain references only."
+    },
+    {
+      "route": "just run-scratch-authoring-fdm-browser-smoke",
+      "justfile_line": 5105,
+      "purpose": "frontend authoring/browser smoke",
+      "status": "NOT_RUN",
+      "reason": "No browser session or frontend runtime was started."
+    },
+    {
+      "route": "just verify-scratch-authoring-browser-matrix",
+      "justfile_line": 5113,
+      "purpose": "frontend FDM/FEM authoring browser matrix",
+      "status": "NOT_RUN",
+      "reason": "The matrix is a future browser gate; no browser proof is implied by source inspection."
+    },
+    {
+      "route": "just verify-managed-fem-runtime-source-provenance",
+      "justfile_line": 5996,
+      "purpose": "runtime source provenance prerequisite, not a performance measurement",
+      "status": "NOT_RUN",
+      "reason": "No managed runtime was inspected or rebuilt in this audit."
+    }
+  ],
+  "threshold_sources": [
+    {
+      "path": "crates/fullmag-bench/qualification/fdm_cpu_production_thresholds.v1.json",
+      "sha256": "646d8205364c23dfd985cc10c8f9b0746f961879b788762411b4c1c12d104fd1",
+      "policy_status": "approved",
+      "minimum_repetitions": 20,
+      "timing_ratio": {"median_max": 1.15, "p95_max": 1.25},
+      "interpretation": "Existing FDM CPU comparison policy; no current measurement was captured."
+    },
+    {
+      "path": "crates/fullmag-bench/qualification/frozen_spins_performance_thresholds.v1.json",
+      "sha256": "79b2e312065ad684d818206701f91dabcbe7c9d34d883606de92b318c6577988",
+      "policy_status": "provisional_engineering_gate",
+      "owner_approval_status": "draft_pending_owner_approval",
+      "minimum_repetitions": 5,
+      "interpretation": "Reference policy only; it cannot be promoted to a production golden threshold without owner approval and receipts."
+    },
+    {
+      "path": "docs/performance/fem_cpu_baselines.md",
+      "sha256": "4c9000cf6f97e1fc6705b2f14fe0f4f8f75ec3c25b93915cbd876af69a5e4d9c",
+      "policy_status": "accepted_baseline_open",
+      "interpretation": "The document explicitly says no accepted CPU baseline CSV is committed; machine-local reports are not portable baselines."
+    },
+    {
+      "path": "tests/standard_problems/mumag/sp4/fdm/multilayer_convolution/thresholds.v1.json",
+      "sha256": "9d8046f2866e5720f29937b35f4f07cae9a93dc7a37fc6c36a43259327d02458",
+      "policy_status": "reference_scope_only",
+      "interpretation": "The declared SP4-derived scope is not canonical SP4 qualification."
+    }
+  ]
+}

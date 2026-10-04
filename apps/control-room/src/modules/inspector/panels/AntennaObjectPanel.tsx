@@ -2,7 +2,10 @@ import { useMemo, useState } from "react";
 
 import { MODEL_READINESS_PATH, MODEL_SCENE_PATH } from "@/kernel/api/apiPaths";
 import type { JsonObject, RegionalFieldDriveResource } from "@/kernel/api/apiTypes";
+import { runAuthoringMutationWithHistory } from "@/kernel/authoring/authoringHistoryMutation";
 import { useKernel } from "@/kernel/KernelContext";
+import { sessionRequestScopeKey } from "@/kernel/resources/sessionResourceIdentity";
+import { useSessionResourceIdentity } from "@/kernel/resources/useSessionStatus";
 import { useSceneResource } from "@/kernel/resources/geometryLifecycleResources";
 import { Button } from "@/shared/ui/Button";
 
@@ -70,7 +73,8 @@ function invalidateSceneResource(
 }
 
 export function AntennaObjectPanel({ selection }: InspectorPanelProps) {
-  const { api, resources } = useKernel();
+  const { api, authoringHistory, resources } = useKernel();
+  const sessionScopeKey = sessionRequestScopeKey(useSessionResourceIdentity());
   const scene = useSceneResource();
   const model = resolveAntennaObjectPanelModel(selection, scene.data);
   const baseDraft = useMemo(
@@ -144,10 +148,16 @@ export function AntennaObjectPanel({ selection }: InspectorPanelProps) {
     }
     setPending(true);
     try {
-      const response =
+      const response = await runAuthoringMutationWithHistory(
+        { api, authoringHistory, sessionScopeKey },
         model.mode === "canonical"
-          ? await saveCanonicalDrive(baseRevision)
-          : await migrateLegacyDrive(baseRevision);
+          ? `Update antenna drive ${model.objectId}`
+          : `Migrate antenna drive ${model.objectId}`,
+        async () =>
+          model.mode === "canonical"
+            ? saveCanonicalDrive(baseRevision)
+            : migrateLegacyDrive(baseRevision),
+      );
       invalidateSceneResource(resources, response.scene_revision);
       setRevisionConflictState(null);
       setFeedback({ kind: "success", message: model.mode === "legacy" ? "Legacy source migrated to a regional field drive." : "Antenna field drive committed." });
@@ -207,10 +217,14 @@ export function AntennaObjectPanel({ selection }: InspectorPanelProps) {
     const patch = buildAntennaCanonicalFieldDrive(selection, scene.data, draft);
     if (patch.error || !patch.drive) throw new Error(patch.error ?? "Invalid antenna drive draft.");
     const drive = patch.drive as unknown as RegionalFieldDriveResource;
-    return api.model.replaceFieldDrive(drive.id, {
-      base_revision: baseRevisionValue,
-      drive,
-    });
+    return api.model.replaceFieldDrive(
+      drive.id,
+      {
+        base_revision: baseRevisionValue,
+        drive,
+      },
+      sessionScopeKey ? { sessionScopeKey } : undefined,
+    );
   }
 
   async function migrateLegacyDrive(baseRevisionValue: number) {
@@ -223,7 +237,7 @@ export function AntennaObjectPanel({ selection }: InspectorPanelProps) {
         field_drives: { drives: patch.drives as JsonObject[] },
         current_modules: { modules: patch.modules as JsonObject[] },
       },
-    });
+    }, sessionScopeKey ? { sessionScopeKey } : undefined);
   }
 
   return (

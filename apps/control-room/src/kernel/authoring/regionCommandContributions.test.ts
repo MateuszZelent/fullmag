@@ -56,6 +56,36 @@ function selectCoupling(selection: SelectionController): void {
 }
 
 describe("REGION_COMMANDS", () => {
+  it.each([
+    ["regions.delete", "deleteObjectRegion"],
+    ["couplings.delete", "deleteCoupling"],
+  ])("does not clear the new selection after a late %s ACK", async (commandId, method) => {
+    const registry = registryWithRegionCommands();
+    const selection = new SelectionController(new EventBus<KernelEventMap>());
+    if (commandId.startsWith("regions.")) selectRegion(selection);
+    else selectCoupling(selection);
+    let current = true;
+    const invalidate = vi.fn();
+    let newSelection: ReturnType<SelectionController["get"]>;
+    const mutation = vi.fn(async () => {
+      current = false;
+      selectRegion(selection);
+      newSelection = selection.get();
+      return {};
+    });
+    const result = await registry.execute(commandId, {
+      source: "test",
+      api: { model: { [method]: mutation } } as never,
+      selection,
+      resources: { invalidate } as never,
+      isCurrentSessionScope: () => current,
+    });
+    expect(mutation).toHaveBeenCalledOnce();
+    expect(result.status).toBe("cancelled");
+    expect(selection.get()).toBe(newSelection!);
+    expect(invalidate).not.toHaveBeenCalled();
+  });
+
   it("duplicates and deletes the selected authored region through the model facade", async () => {
     const registry = registryWithRegionCommands();
     const selection = new SelectionController(new EventBus<KernelEventMap>());
@@ -76,6 +106,37 @@ describe("REGION_COMMANDS", () => {
 
     expect(duplicateObjectRegion).toHaveBeenCalledWith("film", "core", {});
     expect(deleteObjectRegion).toHaveBeenCalledWith("film", "core");
+  });
+
+  it("records a revision-fenced history entry for an immediate region mutation", async () => {
+    const registry = registryWithRegionCommands();
+    const selection = new SelectionController(new EventBus<KernelEventMap>());
+    const before = { revision: 4, scene_revision: 4, objects: [], couplings: [] };
+    const after = { revision: 5, scene_revision: 5, objects: [], couplings: [] };
+    const record = vi.fn();
+    const scene = vi.fn(async () => before);
+    const duplicateObjectRegion = vi.fn(async () => after);
+    selectRegion(selection);
+
+    await registry.execute("regions.duplicate", {
+      api: { model: { scene, duplicateObjectRegion } } as never,
+      authoringHistory: { record } as never,
+      selection,
+      source: "test",
+    });
+
+    expect(duplicateObjectRegion).toHaveBeenCalledWith(
+      "film",
+      "core",
+      {},
+      { baseRevision: 4 },
+    );
+    expect(record).toHaveBeenCalledWith({
+      after,
+      before,
+      committedRevision: 5,
+      label: "Duplicate region core",
+    });
   });
 
   it("moves the selected authored region through owner-scoped reorder requests", async () => {
@@ -182,5 +243,38 @@ describe("REGION_COMMANDS", () => {
 
     expect(patchCoupling).toHaveBeenCalledWith("exchange-core", { enabled: false });
     expect(deleteCoupling).toHaveBeenCalledWith("exchange-core");
+  });
+
+  it("records coupling mutations from the immediate command surface", async () => {
+    const registry = registryWithRegionCommands();
+    const selection = new SelectionController(new EventBus<KernelEventMap>());
+    const before = { revision: 8, scene_revision: 8, objects: [], couplings: [] };
+    const after = { revision: 9, scene_revision: 9, objects: [], couplings: [] };
+    const record = vi.fn();
+    const scene = vi.fn(async () => before);
+    const patchCoupling = vi.fn(async () => ({
+      committed_scene: after,
+      scene_revision: 9,
+    }));
+    selectCoupling(selection);
+
+    await registry.execute("couplings.disable", {
+      api: { model: { scene, patchCoupling } } as never,
+      authoringHistory: { record } as never,
+      selection,
+      source: "test",
+    });
+
+    expect(patchCoupling).toHaveBeenCalledWith(
+      "exchange-core",
+      { enabled: false },
+      { baseRevision: 8 },
+    );
+    expect(record).toHaveBeenCalledWith({
+      after,
+      before,
+      committedRevision: 9,
+      label: "Disable coupling exchange-core",
+    });
   });
 });

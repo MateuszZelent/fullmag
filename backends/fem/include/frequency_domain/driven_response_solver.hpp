@@ -3,6 +3,7 @@
 #include "cpu/frequency_domain/mfem_driven_response_validation.hpp"
 #include "cpu/frequency_domain/production_cpu_driven_response.hpp"
 #include "frequency_domain/frequency_domain_contract.hpp"
+#include "frequency_domain/artifact_identity.hpp"
 #include "frequency_domain/operator_contract.hpp"
 #include "frequency_domain/operator_terms.hpp"
 #include "frequency_domain/tangent_frame.hpp"
@@ -11,7 +12,7 @@
 
 namespace fullmag::fem::frequency_domain {
 
-constexpr std::uint32_t kDrivenFrequencyResponseSolveRequestAbiVersion = 12;
+constexpr std::uint32_t kDrivenFrequencyResponseSolveRequestAbiVersion = 13;
 
 struct DrivenFrequencyResponseSolverOptions {
     // Zero-valued options use the runtime defaults selected by the production
@@ -122,7 +123,8 @@ struct DrivenFrequencyResponseSolveRequest {
     std::uint32_t abi_version = kDrivenFrequencyResponseSolveRequestAbiVersion;
     std::uint32_t reserved_contract_flags = 0;
     // struct_size == 0 preserves legacy/default C++ callers. Nonzero values
-    // must match sizeof(DrivenFrequencyResponseSolveRequest).
+    // must match sizeof(DrivenFrequencyResponseSolveRequest), or the legacy
+    // prefix size for ABI 0/9/12. Legacy requests never carry artifact identity.
     std::uint64_t struct_size = 0;
     DrivenFrequencyResponseRequest solve_request{};
     DrivenFrequencyResponseSolverOptions solver_options{};
@@ -155,6 +157,7 @@ struct DrivenFrequencyResponseSolveRequest {
     DrivenFrequencyResponsePeriodicAirboxCoupledBlockProblem periodic_airbox_coupled_block_problem{};
     DrivenFrequencyResponseTinyValidationProblem tiny_validation_problem{};
     DrivenFrequencyResponseMfemValidationProblem mfem_validation_problem{};
+    const FullmagFemFrequencyDomainArtifactIdentityV1 *artifact_identity = nullptr;
 };
 
 struct DrivenFrequencyResponseSolveResult {

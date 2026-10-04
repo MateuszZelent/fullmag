@@ -2233,6 +2233,7 @@ mod tests {
             source_hash: None,
             execution_mode: fullmag_ir::ExecutionMode::Strict,
             layout: serde_json::json!({"kind": "fdm", "cell_count": 1}),
+            magnetization_field_semantics: Ok(None),
             execution_resolution: None,
         };
         let pipeline = ArtifactPipeline::start(output_dir.clone(), context, 2)
@@ -2521,6 +2522,7 @@ mod tests {
             source_hash: None,
             execution_mode: fullmag_ir::ExecutionMode::Strict,
             layout: serde_json::json!({"kind": "fem", "node_count": 2}),
+            magnetization_field_semantics: Ok(None),
             execution_resolution: None,
         };
         let mut pipeline = ArtifactPipeline::start(output_dir.clone(), context, 2)
@@ -2596,6 +2598,7 @@ mod tests {
             source_hash: None,
             execution_mode: fullmag_ir::ExecutionMode::Strict,
             layout: serde_json::json!({"kind": "fdm", "grid": [2, 1, 1]}),
+            magnetization_field_semantics: Ok(None),
             execution_resolution: None,
         };
         let info = NativeVectorSnapshotInfo {
@@ -2667,6 +2670,7 @@ mod tests {
             source_hash: None,
             execution_mode: fullmag_ir::ExecutionMode::Strict,
             layout: serde_json::json!({"kind": "fdm", "grid": [1, 1, 1]}),
+            magnetization_field_semantics: Ok(None),
             execution_resolution: None,
         };
         let execution_context =
@@ -2761,6 +2765,7 @@ mod tests {
             source_hash: None,
             execution_mode: fullmag_ir::ExecutionMode::Strict,
             layout: serde_json::json!({"kind": "fdm", "grid": [1, 1, 1]}),
+            magnetization_field_semantics: Ok(None),
             execution_resolution: None,
         };
         let stage_autosave = StageAutosavePipelineConfig {
@@ -2877,6 +2882,7 @@ mod tests {
             source_hash: None,
             execution_mode: fullmag_ir::ExecutionMode::Strict,
             layout: serde_json::json!({"kind": "fem", "node_count": 1}),
+            magnetization_field_semantics: Ok(None),
             execution_resolution: None,
         };
         let stage_autosave = StageAutosavePipelineConfig {

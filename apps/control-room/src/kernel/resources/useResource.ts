@@ -26,10 +26,13 @@ import {
   emitResourceLoadFailed,
   normalizeResourceLoadFailure,
 } from "./resourceLoadFailure";
+import { resourceRuntimeKeyForClientScope } from "./resourceClientScope";
 import type { ResourceKey, ResourceResult } from "./resourceTypes";
 import { markResourceLoading, type ResourceState } from "./resourceState";
 
 interface LoadContext {
+  resourceKey: ResourceKey;
+  sessionScopeKey?: string;
   signal: AbortSignal;
 }
 
@@ -87,8 +90,12 @@ export function useResource<TData>({
   resolveRevision,
   resourceKey,
 }: UseResourceOptions<TData>): ResourceResult<TData> {
-  const { bus, diagnosticRecorder, resources } = useKernel();
+  const { api, bus, diagnosticRecorder, resources } = useKernel();
   const runtimeStore = sharedResourceRuntimeStore as ResourceRuntimeStore<TData>;
+  const runtimeResourceKey = resourceRuntimeKeyForClientScope(
+    resourceKey,
+    api.resourceCacheScope,
+  );
   const effectiveRetryPolicy = useMemo(
     () => resolveResourceRetryPolicy(retryPolicy),
     [retryPolicy],
@@ -117,13 +124,13 @@ export function useResource<TData>({
   const subscribeRuntime = useCallback(
     (onStoreChange: () => void) =>
       enabled
-        ? runtimeStore.subscribe(resourceKey, onStoreChange)
+        ? runtimeStore.subscribe(runtimeResourceKey, onStoreChange)
         : NOOP_SUBSCRIBE,
-    [enabled, resourceKey, runtimeStore],
+    [enabled, runtimeResourceKey, runtimeStore],
   );
   const getRuntimeSnapshot = useCallback(
-    () => runtimeStore.getSnapshot<TData>(resourceKey),
-    [resourceKey, runtimeStore],
+    () => runtimeStore.getSnapshot<TData>(runtimeResourceKey),
+    [runtimeResourceKey, runtimeStore],
   );
   const state = useSyncExternalStore<ResourceRuntimeSnapshot<TData>>(
     subscribeRuntime,
@@ -143,7 +150,7 @@ export function useResource<TData>({
     enabled,
     errorCountRef,
     externalRevision,
-    load,
+    load: (context) => load({ ...context, resourceKey }),
     loadedRefreshToken,
     minRefetchIntervalMs,
     pauseLoad,
@@ -151,6 +158,7 @@ export function useResource<TData>({
     refreshToken,
     resolveRevision,
     resourceKey,
+    runtimeResourceKey,
     runtimeStore,
     setLoadedRefreshToken,
   });
@@ -174,7 +182,7 @@ export function useResource<TData>({
     externalRevision,
     manualRefreshPending: refreshToken !== loadedRefreshToken,
     pauseLoad,
-    resourceKey,
+    resourceKey: runtimeResourceKey,
     state,
   });
 
@@ -193,8 +201,12 @@ export function useResourceSelector<TData, TSelected>({
   resourceKey,
   selector,
 }: UseResourceSelectorOptions<TData, TSelected>): TSelected {
-  const { bus, diagnosticRecorder, resources } = useKernel();
+  const { api, bus, diagnosticRecorder, resources } = useKernel();
   const runtimeStore = sharedResourceRuntimeStore as ResourceRuntimeStore<TData>;
+  const runtimeResourceKey = resourceRuntimeKeyForClientScope(
+    resourceKey,
+    api.resourceCacheScope,
+  );
   const effectiveRetryPolicy = useMemo(
     () => resolveResourceRetryPolicy(retryPolicy),
     [retryPolicy],
@@ -202,7 +214,10 @@ export function useResourceSelector<TData, TSelected>({
   const [refreshToken, setRefreshToken] = useState(0);
   const [loadedRefreshToken, setLoadedRefreshToken] = useState(refreshToken);
   const errorCountRef = useRef(0);
-  const selectedRef = useRef<{ selected: TSelected } | null>(null);
+  const selectedRef = useRef<{
+    resourceKey: ResourceKey;
+    selected: TSelected;
+  } | null>(null);
 
   const subscribeStable = useCallback(
     (onStoreChange: () => void) =>
@@ -241,28 +256,31 @@ export function useResourceSelector<TData, TSelected>({
   const subscribeRuntime = useCallback(
     (onStoreChange: () => void) =>
       enabled
-        ? runtimeStore.subscribe(resourceKey, onStoreChange)
+        ? runtimeStore.subscribe(runtimeResourceKey, onStoreChange)
         : NOOP_SUBSCRIBE,
-    [enabled, resourceKey, runtimeStore],
+    [enabled, runtimeResourceKey, runtimeStore],
   );
   const getRuntimeSelectedSnapshot = useCallback(() => {
-    const state = runtimeStore.getSnapshot<TData>(resourceKey);
+    const state = runtimeStore.getSnapshot<TData>(runtimeResourceKey);
     const visibleState = visibleResourceResult({
       enabled,
       externalRevision,
       manualRefreshPending: refreshToken !== loadedRefreshToken,
       pauseLoad,
       refetch,
-      resourceKey,
+      resourceKey: runtimeResourceKey,
       state,
     });
     const selected = selector(visibleState);
     const previous = selectedRef.current;
-    if (previous && isEqual(previous.selected, selected)) {
+    if (
+      previous?.resourceKey === runtimeResourceKey &&
+      isEqual(previous.selected, selected)
+    ) {
       return previous.selected;
     }
 
-    selectedRef.current = { selected };
+    selectedRef.current = { resourceKey: runtimeResourceKey, selected };
     return selected;
   }, [
     enabled,
@@ -271,7 +289,7 @@ export function useResourceSelector<TData, TSelected>({
     loadedRefreshToken,
     pauseLoad,
     refetch,
-    resourceKey,
+    runtimeResourceKey,
     refreshToken,
     runtimeStore,
     selector,
@@ -290,7 +308,7 @@ export function useResourceSelector<TData, TSelected>({
     enabled,
     errorCountRef,
     externalRevision,
-    load,
+    load: (context) => load({ ...context, resourceKey }),
     loadedRefreshToken,
     minRefetchIntervalMs,
     pauseLoad,
@@ -298,6 +316,7 @@ export function useResourceSelector<TData, TSelected>({
     refreshToken,
     resolveRevision,
     resourceKey,
+    runtimeResourceKey,
     runtimeStore,
     setLoadedRefreshToken,
   });
@@ -320,6 +339,7 @@ function useResourceLoader<TData>({
   refreshToken,
   resolveRevision,
   resourceKey,
+  runtimeResourceKey,
   runtimeStore,
   setLoadedRefreshToken,
 }: {
@@ -337,6 +357,7 @@ function useResourceLoader<TData>({
   refreshToken: number;
   resolveRevision?: (data: TData) => ResourceRevision | null;
   resourceKey: ResourceKey;
+  runtimeResourceKey: ResourceKey;
   runtimeStore: ResourceRuntimeStore<TData>;
   setLoadedRefreshToken: (token: number) => void;
 }): void {
@@ -349,7 +370,7 @@ function useResourceLoader<TData>({
     if (!enabled) return;
     const hasManualRefresh = refreshToken !== loadedRefreshToken;
     if (pauseLoad && !hasManualRefresh) {
-      runtimeStore.pauseLoad(resourceKey);
+      runtimeStore.pauseLoad(runtimeResourceKey);
       recordResourceHookDiagnostic({
         action: "stale-skip",
         diagnosticRecorder,
@@ -363,12 +384,12 @@ function useResourceLoader<TData>({
     let completed = false;
     let started = false;
 
-    const snapshotAtEffect = runtimeStore.getSnapshot(resourceKey);
+    const snapshotAtEffect = runtimeStore.getSnapshot(runtimeResourceKey);
     const externalRevisionChanged =
-      snapshotAtEffect.settledResourceKey === resourceKey &&
+      snapshotAtEffect.settledResourceKey === runtimeResourceKey &&
       snapshotAtEffect.settledExternalRevision !== externalRevision;
     if (externalRevisionChanged) {
-      runtimeStore.cancelRetry(resourceKey);
+      runtimeStore.cancelRetry(runtimeResourceKey);
     }
 
     // If the last attempt failed, wait before retrying to avoid
@@ -376,11 +397,11 @@ function useResourceLoader<TData>({
     const delay = errorCountRef.current > 0 ? errorRetryDelayMs() : 0;
     const timeoutId = setTimeout(() => {
       started = true;
-      const snapshotBeforeLoad = runtimeStore.getSnapshot(resourceKey);
+      const snapshotBeforeLoad = runtimeStore.getSnapshot(runtimeResourceKey);
       recordResourceHookDiagnostic({
         action: resourceSettledForRevision(
           snapshotBeforeLoad,
-          resourceKey,
+          runtimeResourceKey,
           externalRevision,
         )
           ? "hit"
@@ -403,7 +424,7 @@ function useResourceLoader<TData>({
           minRefetchIntervalMs,
           retryPolicy,
           resolveRevision: resolveRevisionLatest,
-          resourceKey,
+          resourceKey: runtimeResourceKey,
         })
         .then((snapshot) => {
           completed = true;
@@ -477,6 +498,7 @@ function useResourceLoader<TData>({
     retryPolicy,
     refreshToken,
     resourceKey,
+    runtimeResourceKey,
     runtimeStore,
     setLoadedRefreshToken,
   ]);

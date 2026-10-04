@@ -306,6 +306,13 @@ void single_element_families_preserve_geometry_dofs_vertices_and_attributes()
         auto mesh = build(source);
         check(mesh->GetNV() == static_cast<int>(source.n_nodes),
               "MFEM mesh must preserve canonical vertex count");
+        for (uint32_t node = 0; node < source.n_nodes; ++node) {
+            const auto *actual = mesh->GetVertex(static_cast<int>(node));
+            for (uint32_t axis = 0; axis < 3u; ++axis) {
+                check(actual[axis] == source.nodes_xyz[3u * node + axis],
+                      "MFEM mesh must preserve canonical vertex coordinates");
+            }
+        }
         check(mesh->GetNE() == 1, "single canonical cell must remain one MFEM element");
         check(mesh->GetElementGeometry(0) == item.geometry,
               "canonical cell family must map to its native MFEM geometry");
@@ -1168,6 +1175,37 @@ void typed_boundary_uses_owner_orientation_roles_and_attributes()
     check(triangles == 6 && quads == 2,
           "typed boundary must preserve native tri3 and quad4 geometries");
     check(found_periodic, "periodic seam must remain an attributed MFEM boundary element");
+
+    for (uint32_t facet = 0; facet < source.n_boundary_faces; ++facet) {
+        if (source.facet_roles[facet] == FULLMAG_FEM_FACET_ROLE_MATERIAL_INTERFACE) {
+            continue;
+        }
+        const uint32_t start = source.facet_offsets[facet];
+        const uint32_t end = source.facet_offsets[facet + 1u];
+        std::vector<int> expected;
+        for (uint32_t node = start; node < end; ++node) {
+            expected.push_back(static_cast<int>(source.facet_nodes[node]));
+        }
+        std::sort(expected.begin(), expected.end());
+        const int expected_attribute = source.facet_markers[facet] == 0u
+            ? 1
+            : static_cast<int>(source.facet_markers[facet]);
+        bool found_matching_boundary = false;
+        for (int boundary = 0; boundary < mesh->GetNBE(); ++boundary) {
+            if (mesh->GetBdrAttribute(boundary) != expected_attribute) {
+                continue;
+            }
+            mfem::Array<int> vertices;
+            mesh->GetBdrElementVertices(boundary, vertices);
+            if (sorted_vertices(vertices) == expected) {
+                found_matching_boundary = true;
+                break;
+            }
+        }
+        check(found_matching_boundary,
+              "finalized MFEM boundary connectivity must match every canonical exterior/seam facet");
+    }
+
     std::sort(boundary_attributes.begin(), boundary_attributes.end());
     check(boundary_attributes == std::vector<int>({1,12,13,14,15,16,17,77}),
           "boundary markers must be preserved, with zero mapped to positive attribute one");

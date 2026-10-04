@@ -190,6 +190,7 @@ pub struct RealtimeCommunicationPolicyPatch {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct HelloPayload {
     pub server_time: String,
+    pub request_scope_epoch: String,
     pub replay_available_after_seq: u64,
     pub current_seq: u64,
     pub resource_revisions: RealtimeResourceRevisionMap,

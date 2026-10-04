@@ -124,7 +124,7 @@ describe("VectorFieldLayer performance contracts", () => {
       fieldBufferId: "field-a",
       glyphCount: 7,
       registry,
-      sessionIdentity: { sessionEpoch: "test-session@1000", sessionId: "test-session" },
+      sessionIdentity: { sessionEpoch: "test-session@1000", sessionId: "test-session", requestScopeEpoch: "test-api:1" },
     });
 
     expect(registry.snapshot("object:a")[0]).toMatchObject({

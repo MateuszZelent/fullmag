@@ -19,6 +19,8 @@ import type {
   FdmScopedFieldVectorQuery,
   FieldVectorResponseMetadata,
   LiveStatusResource,
+  LivePreparationMaterializationRequest,
+  LivePreparationMaterializationResource,
   SimulationPreparationResource,
   AnalysisResultPageQuery,
 } from "./apiTypes";
@@ -28,6 +30,7 @@ import {
   DATA_ANTENNA_SOURCE_SPECTRUM_PAYLOAD_PATH,
   DATA_ANTENNA_STAGE_OUTPUT_CATALOG_PATH,
   SESSIONS_PATH,
+  SIMULATION_PREPARATION_MATERIALIZATION_PATH,
   SIMULATION_PREPARATION_PATH,
 } from "./apiPaths";
 import type { DecodedFieldVector } from "./codecs";
@@ -478,6 +481,7 @@ function liveStatusFixture(
       created_at: "0",
       name: "test",
       session_epoch: "session-1@0",
+      request_scope_epoch: "test-api:0",
       session_id: "session-1",
       workspace_root: "/tmp/fullmag",
     },
@@ -871,6 +875,75 @@ function parseRequestBody(body: BodyInit | null | undefined): unknown {
 }
 
 describe("ControlRoomApi", () => {
+  it("preserves the session scope in JSON and binary headers without changing URLs", async () => {
+    const scope = "session=project-a&epoch=project-a%40123";
+    const requests: Array<{ url: string; scope: string | null }> = [];
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url, init) => {
+        requests.push({
+          url: String(url),
+          scope: new Headers(init?.headers).get("x-fullmag-session-scope"),
+        });
+        return String(url).includes("fdm-region-membership/")
+          ? binaryResponse(new ArrayBuffer(8))
+          : jsonResponse({});
+      },
+    });
+    await api.model.scene({ sessionScopeKey: scope });
+    await api.model.commitTransaction({
+      kind: "create_object",
+      base_revision: 1,
+      object_id: "body",
+      name: "Body",
+      geometry: { kind: "box", size: [1, 1, 1] },
+      transform: { rotation: [0, 0, 0], translation: [0, 0, 0] },
+    }, { sessionScopeKey: scope });
+    await api.data.fdmRegionMembershipRegionBytes("body", "core", {
+      sessionScopeKey: scope,
+    });
+    await api.sessions.current.status();
+    expect(requests.map((request) => request.scope)).toEqual([scope, scope, scope, null]);
+    expect(requests.every((request) => !request.url.includes("epoch="))).toBe(true);
+    expect(requests.every((request) => !request.url.includes("session="))).toBe(true);
+  });
+
+  it("routes full visualization replacements through scoped typed PUT requests", async () => {
+    const scope = "session=project-a&epoch=project-a%40123";
+    const requests: Array<{ method: string | undefined; scope: string | null; url: string }> = [];
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url, init) => {
+        requests.push({
+          method: init?.method,
+          scope: new Headers(init?.headers).get("x-fullmag-session-scope"),
+          url: String(url),
+        });
+        return jsonResponse({});
+      },
+    });
+
+    await api.visualization.replaceDisplay({ revision: 1 } as never, {
+      sessionScopeKey: scope,
+    });
+    await api.visualization.replaceState({ revision: 1 } as never, {
+      sessionScopeKey: scope,
+    });
+
+    expect(requests).toEqual([
+      {
+        method: "PUT",
+        scope,
+        url: "http://127.0.0.1:8765/v2/sessions/current/visualization/display",
+      },
+      {
+        method: "PUT",
+        scope,
+        url: "http://127.0.0.1:8765/v2/sessions/current/visualization/state",
+      },
+    ]);
+  });
+
   it("loads preparation through the simulation facade", async () => {
     let observedInit: RequestInit | undefined;
     let observedUrl = "";
@@ -917,6 +990,45 @@ describe("ControlRoomApi", () => {
     expect(observedInit?.signal?.aborted).toBe(false);
     controller.abort();
     expect(observedInit?.signal?.aborted).toBe(true);
+  });
+
+  it("materializes Live preparation through the typed session-scoped facade", async () => {
+    const scope = "session=project-a&epoch=project-a%40123";
+    const request = {
+      preparation_id: "prep-1",
+      scene_revision: 17,
+    } satisfies LivePreparationMaterializationRequest;
+    const response = {
+      disposition: "accepted",
+      preparation_id: "prep-1",
+      scene_revision: 17,
+      run_id: "run-1",
+      plan_fingerprint: `sha256:${"a".repeat(64)}`,
+      receipt_sha256: "b".repeat(64),
+    } satisfies LivePreparationMaterializationResource;
+    let observedUrl = "";
+    let observedInit: RequestInit | undefined;
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url, init) => {
+        observedUrl = String(url);
+        observedInit = init;
+        return jsonResponse(response);
+      },
+    });
+
+    await expect(
+      api.simulation.materializePreparation(request, { sessionScopeKey: scope }),
+    ).resolves.toEqual(response);
+
+    expect(observedUrl).toBe(
+      `http://127.0.0.1:8765${SIMULATION_PREPARATION_MATERIALIZATION_PATH}`,
+    );
+    expect(observedInit?.method).toBe("POST");
+    expect(parseRequestBody(observedInit?.body)).toEqual(request);
+    expect(new Headers(observedInit?.headers).get("x-fullmag-session-scope")).toBe(
+      scope,
+    );
   });
 
   it("sends a request when the browser exposes crypto without randomUUID", async () => {
@@ -2161,6 +2273,97 @@ describe("ControlRoomApi", () => {
       reason: "field_on_demand",
       target: { kind: "study" },
     });
+  });
+
+  it("coalesces field materialization per session scope without changing resource URLs", async () => {
+    let commandRequests = 0;
+    let twoCommandsStartedResolve: (() => void) | null = null;
+    const twoCommandsStarted = new Promise<void>((resolve) => {
+      twoCommandsStartedResolve = resolve;
+    });
+    let releaseCommands!: () => void;
+    let commandsReleased = false;
+    const commandGate = new Promise<void>((resolve) => {
+      releaseCommands = () => {
+        commandsReleased = true;
+        resolve();
+      };
+    });
+    const observedUrls: string[] = [];
+    const freshnessScopes: Array<string | null> = [];
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url, init) => {
+        const requestUrl = String(url);
+        observedUrls.push(requestUrl);
+        if (requestUrl.endsWith("/v2/sessions/current/model/geometry/validation")) {
+          freshnessScopes.push(new Headers(init?.headers).get("x-fullmag-session-scope"));
+          return jsonResponse({ dirty: false, scene_revision: 1 });
+        }
+        if (requestUrl.endsWith("/v2/sessions/current/simulation/commands")) {
+          commandRequests += 1;
+          if (commandRequests >= 2) twoCommandsStartedResolve?.();
+          await commandGate;
+          return jsonResponse({
+            accepted: true,
+            command_id: `cmd-fields-${commandRequests}`,
+            error: null,
+          });
+        }
+        if (
+          requestUrl.includes("/v2/sessions/current/data/fields/") &&
+          /\/meta(?:\?|$)/.test(requestUrl)
+        ) {
+          if (!commandsReleased) {
+            return jsonResponse(
+              { message: "field not available in memory" },
+              { status: 404 },
+            );
+          }
+          const quantityId = requestUrl.includes("/fields/m/") ? "m" : "H_demag";
+          return jsonResponse({
+            components: 3,
+            domain_generation_id: 4,
+            field_revision: 12,
+            kind: "vector",
+            label: quantityId,
+            location: "cells",
+            quantity_id: quantityId,
+            stats: { max: 0.2, mean: 0.01, min: -0.3 },
+            unit: "A/m",
+          });
+        }
+        throw new Error(`Unexpected request ${requestUrl}`);
+      },
+    });
+
+    const sharedScope = "session=alpha&epoch=one";
+    const first = api.data.fields.meta(
+      "H_demag",
+      { component: "full" },
+      { sessionScopeKey: sharedScope },
+    );
+    const second = api.data.fields.meta(
+      "m",
+      { component: "full" },
+      { sessionScopeKey: sharedScope },
+    );
+    const otherSession = api.data.fields.meta(
+      "H_demag",
+      { component: "full" },
+      { sessionScopeKey: "session=beta&epoch=two" },
+    );
+
+    await Promise.race([
+      twoCommandsStarted,
+      new Promise<void>((resolve) => setTimeout(resolve, 1000)),
+    ]);
+    expect(commandRequests).toBe(2);
+    expect(observedUrls.every((url) => !url.includes("sessionScopeKey"))).toBe(true);
+    expect(new Set(freshnessScopes)).toEqual(new Set([sharedScope, "session=beta&epoch=two"]));
+    releaseCommands();
+    await Promise.all([first, second, otherSession]);
+    expect(commandRequests).toBe(2);
   });
 
   it("normalizes object-prefixed field metadata scope ids for object scopes", async () => {
@@ -4789,7 +4992,7 @@ describe("ControlRoomApi", () => {
       {
         body: { fms_base64: "abc" },
         method: "POST",
-        url: "http://127.0.0.1:8765/v2/sessions/current/persistence/imports/inspections",
+        url: "http://127.0.0.1:8765/v2/persistence/imports/inspections",
       },
       {
         body: { fms_base64: "abc", restore_mode: "resume" },
@@ -4797,6 +5000,155 @@ describe("ControlRoomApi", () => {
         url: "http://127.0.0.1:8765/v2/sessions/current/persistence/imports",
       },
     ]);
+  });
+
+  it("materializes a pinned project run without a current-session target", async () => {
+    const requests: Array<{ body: unknown; method: string | undefined; url: string }> = [];
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url, init) => {
+        requests.push({
+          body: init?.body ? parseRequestBody(init.body) : null,
+          method: init?.method,
+          url: String(url),
+        });
+        return jsonResponse({
+          run_id: "run-1",
+          catalog_revision: 1,
+          task_ids: ["task-1"],
+          execution_state: "pending_preparation",
+        });
+      },
+    });
+
+    const result = await api.persistence.projects.materializeRun("project-1", "run-1");
+    expect(result.execution_state).toBe("pending_preparation");
+    expect(requests).toEqual([{
+      body: null,
+      method: "POST",
+      url: "http://127.0.0.1:8765/v2/persistence/projects/project-1/runs/run-1/materialization",
+    }]);
+  });
+
+  it("requests durable cancellation for the exact project run task", async () => {
+    const requests: Array<{ body: unknown; method: string | undefined; url: string }> = [];
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url, init) => {
+        requests.push({
+          body: init?.body ? parseRequestBody(init.body) : null,
+          method: init?.method,
+          url: String(url),
+        });
+        return jsonResponse({
+          disposition: "accepted",
+          run_id: "run-1",
+          task_id: "task-1",
+          command_id: "command-1",
+          lifecycle: "stopping",
+          catalog_revision: 4,
+        });
+      },
+    });
+
+    const result = await api.persistence.projects.cancelRunTask(
+      "project-1",
+      "run-1",
+      "task-1",
+      { reason: "Cancelled by operator from Control Room" },
+    );
+
+    expect(result.catalog_revision).toBe(4);
+    expect(requests).toEqual([{
+      body: { reason: "Cancelled by operator from Control Room" },
+      method: "POST",
+      url: "http://127.0.0.1:8765/v2/persistence/projects/project-1/runs/run-1/tasks/task-1/cancellation",
+    }]);
+  });
+
+  it("reads a durable project run without a current-session target", async () => {
+    const requests: Array<{ method: string | undefined; url: string }> = [];
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url, init) => {
+        requests.push({ method: init?.method, url: String(url) });
+        return jsonResponse({
+          project_id: "project-1",
+          run_id: "run-1",
+          payload_fingerprint: "a".repeat(64),
+          requested_execution: { backend: "fdm", device: "cpu", precision: "double", mode: "strict" },
+          catalog_state: "materialized",
+          catalog_revision: 1,
+          tasks: [{ task_id: "task-1", lifecycle: "accepted", readiness: { state: "blocked", reason: "preparation" } }],
+        });
+      },
+    });
+
+    const result = await api.persistence.projects.getRun("project-1", "run-1");
+    expect(result.catalog_state).toBe("materialized");
+    expect(result.tasks[0]?.task_id).toBe("task-1");
+    expect(requests).toEqual([{
+      method: "GET",
+      url: "http://127.0.0.1:8765/v2/persistence/projects/project-1/runs/run-1",
+    }]);
+  });
+
+  it("reads a pinned historical scalar without using the current session", async () => {
+    const requests: Array<{ method: string | undefined; url: string }> = [];
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url, init) => {
+        requests.push({ method: init?.method, url: String(url) });
+        return jsonResponse({
+          project_id: "project-1",
+          run_id: "run-1",
+          solution_set_id: "set-1",
+          revision: "9007199254740993",
+          member_id: "member-1",
+          artifact_id: "artifact-1",
+          value_si: -1,
+          unit: "J",
+        });
+      },
+    });
+
+    const result = await api.persistence.projects.solutionScalar(
+      "project-1",
+      "run-1",
+      "set-1",
+      "9007199254740993",
+      "member-1",
+      "artifact-1",
+    );
+    expect(result.revision).toBe("9007199254740993");
+    expect(result.value_si).toBe(-1);
+    expect(requests).toEqual([{
+      method: "GET",
+      url: "http://127.0.0.1:8765/v2/persistence/projects/project-1/runs/run-1/solution-sets/set-1/revisions/9007199254740993/members/member-1/artifacts/artifact-1/scalar",
+    }]);
+  });
+
+  it("lists durable project runs with an explicit cursor", async () => {
+    const requests: Array<{ method: string | undefined; url: string }> = [];
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url, init) => {
+        requests.push({ method: init?.method, url: String(url) });
+        return jsonResponse({ project_id: "project-1", runs: [], next_cursor: null });
+      },
+    });
+
+    const result = await api.persistence.projects.listRuns("project-1", {
+      limit: 10,
+      cursor: "run-prev",
+    });
+    expect(result.project_id).toBe("project-1");
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.method).toBe("GET");
+    const url = new URL(requests[0]!.url);
+    expect(url.pathname).toBe("/v2/persistence/projects/project-1/runs");
+    expect(url.searchParams.get("limit")).toBe("10");
+    expect(url.searchParams.get("cursor")).toBe("run-prev");
   });
 
   it("loads and patches object interaction resources through v2 model facade methods", async () => {
@@ -5991,5 +6343,65 @@ describe("ControlRoomApi", () => {
       "http://127.0.0.1:8765/v2/sessions/current/analysis/frequency-domain/fmr/resonance-fits",
       "http://127.0.0.1:8765/v2/sessions/current/analysis/frequency-domain/fmr/kittel-fit",
     ]);
+  });
+});
+
+
+describe("API instance fence", () => {
+  it("discards binary output when replacement is observed during decoding", async () => {
+    const pin = "12345678-1234-4234-8234-123456789abc";
+    let releaseDecode: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => { releaseDecode = resolve; });
+    let decoding = false;
+    const api = new ControlRoomApi({
+      baseUrl: "http://localhost",
+      expectedApiInstance: pin,
+      binaryDecodeScheduler: async ({ buffer, decodeInline }) => {
+        decoding = true;
+        await gate;
+        return decodeInline(buffer);
+      },
+      fetchImpl: async (url) => new URL(String(url)).pathname.endsWith("/topology")
+        ? binaryResponse(makeTopologyBuffer(), { headers: { ...contractHeaders, "x-fullmag-api-instance": pin } })
+        : new Response("{}", { headers: { "x-fullmag-api-instance": "replacement" } }),
+    });
+    const pending = api.data.domain.topology();
+    await vi.waitFor(() => expect(decoding).toBe(true));
+    await expect(api.platform.health()).rejects.toMatchObject({ code: "API_INSTANCE_MISMATCH" });
+    const rejected = expect(pending).rejects.toMatchObject({ code: "API_INSTANCE_MISMATCH" });
+    releaseDecode?.();
+    await rejected;
+  });
+
+  it("discards an in-flight old response after another request observes replacement", async () => {
+    const pin = "12345678-1234-4234-8234-123456789abc";
+    let releaseOld: ((response: Response) => void) | undefined;
+    const oldResponse = new Promise<Response>((resolve) => { releaseOld = resolve; });
+    const fetchImpl = vi.fn()
+      .mockImplementationOnce(() => oldResponse)
+      .mockResolvedValueOnce(new Response("{}", { headers: { "x-fullmag-api-instance": "replacement" } }));
+    const api = new ControlRoomApi({ expectedApiInstance: pin, fetchImpl });
+    const pending = api.sessions.current.status();
+    while (fetchImpl.mock.calls.length === 0) await Promise.resolve();
+    await expect(api.sessions.current.status()).rejects.toMatchObject({ code: "API_INSTANCE_MISMATCH" });
+    const rejected = expect(pending).rejects.toMatchObject({ code: "API_INSTANCE_MISMATCH" });
+    releaseOld?.(new Response("{}", { headers: { "x-fullmag-api-instance": pin } }));
+    await rejected;
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it("pins requests and permanently refuses a replacement without retries", async () => {
+    const pin = "12345678-1234-4234-8234-123456789abc";
+    const fetchImpl = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+      expect(new Headers(init?.headers).get("x-fullmag-api-instance")).toBe(pin);
+      return new Response("{}", { headers: {
+        "x-api-contract-version": "1.0.0",
+        "x-fullmag-api-instance": "87654321-1234-4234-8234-123456789abc",
+      } });
+    });
+    const api = new ControlRoomApi({ expectedApiInstance: pin, fetchImpl });
+    await expect(api.sessions.current.status()).rejects.toMatchObject({ code: "API_INSTANCE_MISMATCH" });
+    await expect(api.sessions.current.status()).rejects.toMatchObject({ code: "API_INSTANCE_MISMATCH" });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 });

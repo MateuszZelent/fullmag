@@ -17,6 +17,10 @@ const HEALTH_TIMEOUT: Duration = Duration::from_secs(30);
 pub struct ApiSidecar {
     child: Child,
     port: u16,
+    api_instance_id: String,
+    prepared_attach: Option<fullmag_runtime_control::application_attach::PreparedApplicationAttach>,
+    runtime_attach:
+        Option<fullmag_runtime_control::application_attach::BackgroundApplicationAttach>,
 }
 
 impl ApiSidecar {
@@ -30,8 +34,13 @@ impl ApiSidecar {
         let repo_root = discover_repo_root(&api_exe);
         let web_static_dir = resolve_web_static_dir(&repo_root);
 
-        let log_dir = repo_root.join(".fullmag").join("logs");
-        let _ = std::fs::create_dir_all(&log_dir);
+        let state_root = sidecar_state_root(
+            &repo_root,
+            std::env::var_os("FULLMAG_STATE_ROOT").map(PathBuf::from),
+        )?;
+        let log_dir = state_root.join("logs");
+        std::fs::create_dir_all(&log_dir)
+            .map_err(|e| format!("failed to create API log directory: {e}"))?;
 
         let stdout_file = std::fs::File::create(log_dir.join("fullmag-api.log"))
             .map_err(|e| format!("failed to create api log: {e}"))?;
@@ -43,6 +52,7 @@ impl ApiSidecar {
         cmd.current_dir(&repo_root)
             .env("FULLMAG_API_PORT", port.to_string())
             .env("FULLMAG_REPO_ROOT", &repo_root)
+            .env("FULLMAG_STATE_ROOT", &state_root)
             .stdin(Stdio::null())
             .stdout(stdout_file)
             .stderr(stderr_file);
@@ -63,13 +73,46 @@ impl ApiSidecar {
             .spawn()
             .map_err(|e| format!("failed to spawn fullmag-api at {}: {e}", api_exe.display()))?;
 
-        let mut sidecar = Self { child, port };
+        let mut sidecar = Self {
+            child,
+            port,
+            api_instance_id: String::new(),
+            prepared_attach: None,
+            runtime_attach: None,
+        };
         sidecar.wait_healthy()?;
+        let binding = fullmag_runtime_control::application_attach::prepare_for_authoring(
+            &repo_root,
+            &state_root,
+            port,
+        )
+        .map_err(|error| format!("API authoring binding failed: {error:#}"))?;
+        sidecar.api_instance_id = binding.api_instance_id().to_string();
+        sidecar.prepared_attach = Some(binding);
         Ok(sidecar)
+    }
+
+    /// Called only after the authoring window has been created.
+    pub fn start_runtime_attach(&mut self) {
+        let Some(prepared) = self.prepared_attach.take() else {
+            return;
+        };
+        match prepared.start() {
+            Ok(attach) => self.runtime_attach = attach,
+            Err(error) => eprintln!("Native runtime attach unavailable: {error:#}"),
+        }
     }
 
     pub fn base_url(&self) -> String {
         format!("http://localhost:{}/", self.port)
+    }
+
+    pub fn ui_url(&self) -> String {
+        format!(
+            "{}workspace?fullmag_api_instance={}",
+            self.base_url(),
+            self.api_instance_id
+        )
     }
 
     fn wait_healthy(&mut self) -> Result<(), String> {
@@ -93,6 +136,8 @@ impl ApiSidecar {
 
 impl Drop for ApiSidecar {
     fn drop(&mut self) {
+        // The observer must finish before its pinned API is terminated.
+        drop(self.runtime_attach.take());
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
@@ -163,6 +208,11 @@ fn packaged_root_marker(root: &std::path::Path) -> bool {
 }
 
 fn discover_repo_root(api_exe: &std::path::Path) -> PathBuf {
+    // The installed executable owns asset discovery, even if a shell still
+    // carries a development checkout override.
+    if let Some(root) = fullmag_runtime_control::python_runtime::packaged_windows_root(api_exe) {
+        return root;
+    }
     if let Ok(root) = std::env::var("FULLMAG_REPO_ROOT") {
         return PathBuf::from(root);
     }
@@ -172,6 +222,21 @@ fn discover_repo_root(api_exe: &std::path::Path) -> PathBuf {
             .and_then(|e| find_repo_root_from(&e))
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
     })
+}
+
+fn sidecar_state_root(
+    repo_root: &std::path::Path,
+    configured: Option<PathBuf>,
+) -> Result<PathBuf, String> {
+    if let Some(root) =
+        fullmag_runtime_control::python_runtime::validated_state_override(configured)
+            .map_err(|error| error.to_string())?
+    {
+        return Ok(root);
+    }
+    fullmag_runtime_control::python_runtime::packaged_windows_state_root(repo_root)
+        .map(|root| root.unwrap_or_else(|| repo_root.join(".fullmag")))
+        .map_err(|error| format!("Windows package state directory unavailable: {error}"))
 }
 
 fn resolve_web_static_dir(repo_root: &std::path::Path) -> Option<PathBuf> {
@@ -189,7 +254,33 @@ fn resolve_web_static_dir(repo_root: &std::path::Path) -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::packaged_install_root;
+    use super::{packaged_install_root, sidecar_state_root};
+
+    #[test]
+    fn explicit_state_root_is_shared_with_the_api() {
+        let root = tempfile::tempdir().unwrap();
+        let state = root.path().join("user-state");
+        assert_eq!(
+            sidecar_state_root(root.path(), Some(state.clone())).unwrap(),
+            state
+        );
+    }
+
+    #[test]
+    fn relative_state_override_is_rejected_before_creating_logs() {
+        let root = tempfile::tempdir().unwrap();
+        assert!(sidecar_state_root(root.path(), Some("relative-state".into())).is_err());
+        assert!(!root.path().join(".fullmag/logs").exists());
+    }
+
+    #[test]
+    fn source_checkout_uses_its_existing_state_directory() {
+        let root = tempfile::tempdir().unwrap();
+        assert_eq!(
+            sidecar_state_root(root.path(), None).unwrap(),
+            root.path().join(".fullmag")
+        );
+    }
 
     #[test]
     fn packaged_install_root_is_derived_from_bin_executable() {

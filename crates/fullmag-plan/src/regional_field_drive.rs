@@ -356,7 +356,7 @@ fn adaptive_cell_average(
             match geometry_cell_relation(entry, center, half)? {
                 CellRelation::Outside => return Ok(0.0),
                 CellRelation::Inside if matches!(envelope, FieldEnvelopeIR::Uniform {}) => {
-                    return Ok(1.0)
+                    return Ok(1.0);
                 }
                 CellRelation::Inside => return tensor_average(compiled, center, half, P4, W4),
                 CellRelation::Boundary => {}

@@ -1955,9 +1955,9 @@ pub(crate) fn build_air_box_config(
     {
         if marker != certified_marker {
             return Err(format!(
-                    "air_box_policy.boundary_marker={} does not match certified Gamma_out marker {} in mesh '{}'",
-                    marker, certified_marker, mesh.mesh_name
-                ));
+                "air_box_policy.boundary_marker={} does not match certified Gamma_out marker {} in mesh '{}'",
+                marker, certified_marker, mesh.mesh_name
+            ));
         }
         (marker, "user_policy")
     } else {
@@ -2060,11 +2060,7 @@ pub(crate) fn load_mesh_from_source(source: &str) -> Result<MeshIR, String> {
             let mesh: MeshIR = serde_json::from_str(&payload)
                 .map_err(|err| format!("failed to parse FEM mesh_source '{}': {}", source, err))?;
             validate_mesh_for_execution(&mesh).map_err(|errors| {
-                format!(
-                    "mesh_source '{}' is invalid: {}",
-                    source,
-                    errors.join("; ")
-                )
+                format!("mesh_source '{}' is invalid: {}", source, errors.join("; "))
             })?;
             Ok(mesh)
         }
@@ -2103,8 +2099,7 @@ fn merged_fem_element_markers(mesh: &MeshIR) -> Result<Vec<u32>, String> {
 
     Err(format!(
         "mesh '{}' does not mark magnetic elements with marker=1 and uses multiple element markers {:?}; current multi-body FEM merge baseline cannot infer magnetic ownership safely",
-        mesh.mesh_name,
-        distinct
+        mesh.mesh_name, distinct
     ))
 }
 

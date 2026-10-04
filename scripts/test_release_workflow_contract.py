@@ -78,6 +78,47 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertIn("web\\index.html", content)
         self.assertNotIn("apps\\web\\out", content)
 
+    def test_accepted_runtimes_are_in_portable_and_windows_packages(self) -> None:
+        portable = (ROOT / "scripts/package_fullmag_portable.sh").read_text(encoding="utf-8")
+        validator = (ROOT / "scripts/validate_portable_bundle.sh").read_text(encoding="utf-8")
+        windows = WINDOWS_MSI_SCRIPT.read_text(encoding="utf-8")
+        packaged_binaries = (
+            "fullmag-api-accepted-scheduler",
+            "fullmag-runtime-service",
+            "fullmag-api-resource-pool",
+            "fullmag-api-accepted-fem-preparer",
+            "fullmag-api-accepted-fem-preparation-supervisor",
+            "fullmag-api-accepted-fem-preparation-scheduler",
+            "fullmag-api-preparation-resource-pool",
+            "fullmag-api-preparation-retry",
+        )
+        for binary in packaged_binaries:
+            with self.subTest(binary=binary):
+                self.assertIn(f"bin/{binary}", portable)
+                self.assertIn(f"bin/{binary}", validator)
+                self.assertIn(f"bin/{binary}.exe", windows)
+
+    def test_portable_runtime_dependencies_are_installed_with_runpath(self) -> None:
+        portable = (ROOT / "scripts/package_fullmag_portable.sh").read_text(encoding="utf-8")
+        makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+        required = set(re.findall(
+            r'require_file "\$\{REPO_ROOT\}/\.fullmag/local/bin/(fullmag-api-[\w-]+)"',
+            portable,
+        ))
+        self.assertEqual(len(required), 9)
+        installed = set(re.findall(r'cargo_target_dir\}/release/(fullmag-api-[\w-]+)', makefile))
+        runpath = set(re.findall(
+            r"patchelf --set-rpath '[^']+' \.fullmag/local/bin/(fullmag-api-[\w-]+)",
+            makefile,
+        ))
+        for names, body in re.findall(r'for binary in ([^;]+); do \\\n(.*?)\n\t*done', makefile, re.S):
+            if 'release/$$binary' in body and 'cp ' in body:
+                installed.update(names.split())
+            if 'patchelf --set-rpath' in body and 'bin/$$binary' in body:
+                runpath.update(names.split())
+        self.assertFalse(required - installed, f"Not installed: {sorted(required - installed)}")
+        self.assertFalse(required - runpath, f"Missing runpath: {sorted(required - runpath)}")
+
     def test_managed_runtime_export_has_safe_automatic_pruning(self) -> None:
         exporter = (ROOT / "scripts/export_fem_gpu_runtime.sh").read_text(encoding="utf-8")
         pruner = (ROOT / "scripts/prune_managed_fem_runtimes.sh").read_text(encoding="utf-8")

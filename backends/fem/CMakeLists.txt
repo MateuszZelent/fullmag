@@ -7,6 +7,9 @@ option(FULLMAG_ENABLE_FEM_GPU "Build FEM GPU backend sources" ON)
 option(FULLMAG_USE_MFEM_STACK "Build FEM backend against MFEM/libCEED/hypre" OFF)
 option(FULLMAG_FEM_WITH_SLEPC "Build FEM frequency-domain dependency slice against PETSc/SLEPc" ON)
 option(FULLMAG_ENABLE_NVTX "Enable phase-level FEM GPU NVTX ranges" OFF)
+option(FULLMAG_FEM_REQUIRE_GPU "Fail configuration unless FEM GPU can be built" OFF)
+include("${CMAKE_SOURCE_DIR}/cmake/RequireFemGpu.cmake")
+fullmag_require_fem_gpu_configuration()
 
 if(FULLMAG_ENABLE_CUDA AND FULLMAG_ENABLE_FEM_GPU AND NOT CMAKE_CUDA_ARCHITECTURES)
     message(FATAL_ERROR
@@ -160,6 +163,7 @@ set(FEM_SOURCES
     gpu/cuda/runtime/execution_receipt.cpp
     gpu/cuda/runtime/performance_counters.cpp
     cpu/mfem/runtime/interrupt.cpp
+    cpu/mfem/runtime/indexed_geometry.cpp
     cpu/mfem/runtime/mfem_context.cpp
     cpu/mfem/runtime/mfem_device.cpp
     cpu/mfem/runtime/runtime_build_info.cpp
@@ -224,13 +228,25 @@ set(FEM_SOURCES
     src/context.cpp
     src/dmi_weak_residual.cpp
     src/error.cpp
+    src/mesh_space_preparation.cpp
 )
 
 if(FULLMAG_USE_MFEM_STACK)
-    find_package(MFEM CONFIG REQUIRED)
+    if(WIN32 AND FULLMAG_FEM_WITH_SLEPC)
+        include("${CMAKE_SOURCE_DIR}/cmake/FindFullmagWindowsModal.cmake")
+        # Pin MPI before MFEM so MFEMConfig.cmake's find_dependency(MPI)
+        # cannot silently replace the selected Windows provider.
+        fullmag_find_windows_modal()
+    endif()
+    include("${CMAKE_SOURCE_DIR}/cmake/FindFullmagMfem.cmake")
+    fullmag_find_mfem()
     if(FULLMAG_FEM_WITH_SLEPC)
-        find_package(PETSc REQUIRED)
-        find_package(SLEPc REQUIRED)
+        if(WIN32)
+            fullmag_validate_windows_modal()
+        else()
+            find_package(PETSc REQUIRED)
+            find_package(SLEPc REQUIRED)
+        endif()
     endif()
 
     list(APPEND FEM_SOURCES
@@ -329,6 +345,7 @@ if(FULLMAG_USE_MFEM_STACK)
 endif()
 
 add_library(fullmag_fem SHARED ${FEM_SOURCES})
+target_compile_definitions(fullmag_fem PRIVATE FULLMAG_FEM_BUILD_SHARED=1)
 
 if(FULLMAG_ENABLE_NVTX)
     target_compile_definitions(fullmag_fem PRIVATE FULLMAG_ENABLE_NVTX=1)
@@ -412,6 +429,24 @@ set_target_properties(fullmag_fem PROPERTIES
 enable_testing()
 
 if(FULLMAG_USE_MFEM_STACK)
+    add_executable(
+        fem_mesh_space_preparation_contract
+        tests/mesh_space_preparation_contract.cpp
+    )
+    target_link_libraries(fem_mesh_space_preparation_contract PRIVATE fullmag_fem)
+    if(TARGET MFEM::mfem)
+        target_link_libraries(fem_mesh_space_preparation_contract PRIVATE MFEM::mfem)
+    else()
+        target_link_libraries(fem_mesh_space_preparation_contract PRIVATE mfem)
+    endif()
+    target_include_directories(fem_mesh_space_preparation_contract PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    add_test(
+        NAME fem_mesh_space_preparation_contract
+        COMMAND fem_mesh_space_preparation_contract)
+
     add_executable(
         fem_oersted_direct_tetra_contract
         tests/oersted_direct_tetra_contract.cpp
@@ -928,7 +963,11 @@ add_fem_source_facade_contract(
     tests/frequency_domain/poisson_airbox_schur_matshell_test.cpp
 )
 if(FULLMAG_USE_MFEM_STACK AND FULLMAG_ENABLE_CUDA AND FULLMAG_FEM_WITH_SLEPC)
-    find_package(MPI REQUIRED COMPONENTS CXX)
+    if(WIN32)
+        fullmag_validate_windows_modal()
+    else()
+        find_package(MPI REQUIRED COMPONENTS CXX)
+    endif()
     add_executable(
         fem_gpu_petsc_slepc_runtime_contract
         tests/frequency_domain/gpu_petsc_slepc_runtime_test.cpp

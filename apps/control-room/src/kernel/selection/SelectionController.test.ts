@@ -19,6 +19,16 @@ function setup() {
 }
 
 describe("SelectionController", () => {
+  it("drops old runtime selection despite a dirty draft guard when session ownership is lost", () => {
+    const { controller } = setup();
+    controller.set({ objectId: "old-body", kind: "object.geometry" }, "explorer");
+    controller.addChangeGuard(() => false);
+    controller.clear("workspace");
+    expect(controller.get().objectId).toBe("old-body");
+    controller.clearForSessionTransition("workspace");
+    expect(controller.get().objectId).toBeNull();
+    expect(controller.get().kind).toBeNull();
+  });
   it("starts with empty selection", () => {
     const { controller } = setup();
     const sel = controller.get();

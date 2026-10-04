@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
@@ -57,6 +58,7 @@ vi.mock("@/kernel/resources/spinAuthoringResources", () => ({
   useSpinTorquesResource: () => ({ data: { items: [torque, unknownTorque, prescribedSot, torqueWithUnavailableSource, torqueWithSource], scene_revision: 9 }, status: "ready" }),
 }));
 vi.mock("@/kernel/resources/useSessionStatus", () => ({
+  useSessionResourceIdentity: () => ({ requestScopeEpoch: "1", sessionEpoch: "1", sessionId: "test-session" }),
   useSessionStatusSelector: (selector: (value: unknown) => unknown) => selector({ data: { capabilities: { transport_authoring: { m1_one_way_steady: { authoring_allowed: true, reason: "M1", status: "semantic_only" } } } } }),
 }));
 
@@ -70,6 +72,22 @@ function selection(
 }
 
 describe("dedicated torque and Oersted inspectors", () => {
+  it("records create and replace writes through the shared authoring history boundary", () => {
+    const source = readFileSync(
+      new URL("./SpinAuthoringInspector.tsx", import.meta.url),
+      "utf8",
+    );
+
+    expect(source).toContain("const commit = await runAuthoringMutationWithHistory(");
+    expect(source).toContain("captureAuthoringMutationFence(");
+    expect(source).toContain("api.model.validateTransport(validationRequest(), { sessionScopeKey })");
+    expect(source).toContain("request, requestOptions");
+    expect(source).toContain("mutationContext.isCurrentSessionScope?.() !== true");
+    expect(source).toContain("baseRevision ?? base_revision");
+    expect(source).toContain("api.model.replaceSpinTorque");
+    expect(source).toContain("api.model.replaceOerstedField");
+  });
+
   it("initializes a selected torque draft from the exact selected payload", () => {
     const html = renderToStaticMarkup(<KernelContext.Provider value={kernel}><SpinTorqueInspectorPanel selection={selection({ kind: "physics.spin-torque", nodeId: "torque", spinTorqueId: "selected-torque", spinTorqueIndex: 0, type: "spin-torque" })} /></KernelContext.Provider>);
     expect(html).toContain("selected-torque");

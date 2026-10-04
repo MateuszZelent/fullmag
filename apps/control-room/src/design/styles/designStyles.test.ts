@@ -22,13 +22,22 @@ function readAppFile(relativePath: string): string {
 }
 
 describe("control-room design styles", () => {
-  it("keeps app/globals.css as an import-only entrypoint", () => {
+  it("keeps app/globals.css as a CSS entrypoint with bounded Tailwind sources", () => {
     const globalsCss = readAppFile("app/globals.css").trim();
 
     const statements = globalsCss.split("\n").filter(Boolean);
     expect(statements.length).toBeGreaterThan(20);
-    expect(statements.every((statement) => statement.startsWith("@import "))).toBe(true);
-    expect(statements[0]).toBe('@import "tailwindcss";');
+    expect(
+      statements.every(
+        (statement) =>
+          statement.startsWith("@import ") || statement.startsWith("@source "),
+      ),
+    ).toBe(true);
+    expect(statements.slice(0, 3)).toEqual([
+      '@import "tailwindcss" source(none);',
+      '@source "./";',
+      '@source "../src";',
+    ]);
     expect(globalsCss).toContain('inspector-visualization.css" layer(fm-modules)');
   });
 
@@ -48,7 +57,7 @@ describe("control-room design styles", () => {
     const bridgeCss = readAppFile("src/design/styles/tailwind-theme.css");
 
     expect(globalsCss.indexOf('tailwind-theme.css"')).toBeGreaterThan(
-      globalsCss.indexOf('@import "tailwindcss";'),
+      globalsCss.indexOf('@import "tailwindcss" source(none);'),
     );
     expect(globalsCss.indexOf('tailwind-theme.css"')).toBeLessThan(
       globalsCss.indexOf('tokens.css"'),

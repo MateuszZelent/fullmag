@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import math
 import unittest
 
@@ -193,6 +194,17 @@ class StructuredCurrentClosureTests(unittest.TestCase):
             structured_current_closure=_closed_geometry(),
         )
         payload = transport.to_ir()
+        invalid_payload = copy.deepcopy(payload)
+        invalid_closure = invalid_payload["structured_current_closure"]
+        invalid_closure["source_cuts"][0]["plane"]["future_policy"] = "new"
+        with self.assertRaisesRegex(
+            ValueError,
+            r"current_transport\.structured_current_closure\.source_cuts\[0\]\.plane has unsupported fields: future_policy",
+        ):
+            build_scene_document_from_builder(
+                {"revision": 1, "current_modules": [invalid_payload]}
+            )
+
         scene = build_scene_document_from_builder(
             {"revision": 1, "current_modules": [payload]}
         )

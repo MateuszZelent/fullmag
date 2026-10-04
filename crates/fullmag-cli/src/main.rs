@@ -1,15 +1,21 @@
 use anyhow::{anyhow, bail, Context, Result};
 use clap::Parser;
+use fullmag_application::{DocumentMode, FileProjectRepository, ProjectApplication, ProjectSource};
 use fullmag_engine::run_reference_exchange_demo;
 use fullmag_ir::{BackendPlanIR, BackendTarget, ProblemIR};
 use serde_json::Value;
 use std::ffi::OsString;
 
+mod accepted_run_transport;
 mod args;
 mod command_bridge;
 mod communication_policy;
 mod control_room;
 mod dev_smoke;
+mod development_api_owner;
+mod development_api_replacement;
+mod development_api_supervisor;
+mod development_restart;
 mod diagnostics;
 mod feature_flags;
 mod formatting;
@@ -19,7 +25,9 @@ mod live_workspace;
 mod nvtx_range;
 mod orchestrator;
 mod python_bridge;
+mod runtime_service_client;
 mod runtime_supervisor;
+mod saved_fem_snapshot_gate;
 mod scratch_runtime;
 mod simulation_preparation;
 mod solver_profile_persistence;
@@ -65,6 +73,67 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
+        Command::Runtime(RuntimeCommand::ServiceEnsure { config }) => {
+            let owner = runtime_service_client::ensure(&config)?;
+            println!(
+                "{}",
+                serde_json::to_string(&serde_json::json!({
+                    "schema_version": "runtime_service_discovery.v1",
+                    "status": "ready", "owner": owner,
+                }))?
+            );
+        }
+        Command::Runtime(RuntimeCommand::ServiceStatus {
+            store,
+            target,
+            timeout_seconds,
+        }) => {
+            let owner = runtime_service_client::probe(&store, &target, timeout_seconds)?;
+            println!(
+                "{}",
+                serde_json::to_string(&serde_json::json!({
+                    "schema_version": "runtime_service_discovery.v1",
+                    "status": "ready", "owner": owner,
+                }))?
+            );
+        }
+        Command::Runtime(RuntimeCommand::VerifySavedFemSnapshot {
+            store,
+            source,
+            source_artifact_id,
+        }) => {
+            saved_fem_snapshot_gate::verify(&store, &source, &source_artifact_id)?;
+        }
+        Command::Runtime(RuntimeCommand::VerifyDevelopmentObserverPause) => {
+            if std::env::var("FULLMAG_DEVELOPMENT_OWNER_PROBE").as_deref() != Ok("1") {
+                anyhow::bail!("observer pause verification requires an explicit managed fixture");
+            }
+            println!("{}", scratch_runtime::verify_idle_pause_control()?);
+        }
+        Command::Runtime(RuntimeCommand::VerifyDevelopmentApiOwner) => {
+            control_room::verify_development_api_owner()?;
+        }
+        Command::Runtime(RuntimeCommand::VerifyDevelopmentRestartConsumer) => {
+            control_room::verify_development_restart_consumer()?;
+        }
+        Command::Runtime(RuntimeCommand::VerifyDevelopmentCompletionOwner) => {
+            control_room::verify_development_completion_owner()?;
+        }
+        Command::Runtime(RuntimeCommand::InitializeScopedAcceptedStore) => {
+            control_room::initialize_scoped_accepted_store()?;
+        }
+        Command::Runtime(RuntimeCommand::VerifyDevelopmentHandoffCommit {
+            store,
+            corrupt_store,
+        }) => {
+            control_room::verify_development_handoff_commit(&store, &corrupt_store)?;
+        }
+        Command::Runtime(RuntimeCommand::VerifyDevelopmentColdIdle { config }) => {
+            control_room::verify_development_cold_idle(&config)?;
+        }
+        Command::Runtime(RuntimeCommand::VerifyDevelopmentServiceDrain { config }) => {
+            control_room::verify_development_service_drain(&config)?;
+        }
         Command::Doctor => {
             println!("fullmag status");
             println!("- public authoring surface: embedded Python API");
@@ -198,7 +267,7 @@ fn main() -> Result<()> {
                 .map_err(join_errors)?;
             println!("{}", serde_json::to_string_pretty(&plan)?);
         }
-        Command::RunJson {
+        Command::RunProblemJsonDirect {
             path,
             until,
             output_dir,
@@ -211,8 +280,21 @@ fn main() -> Result<()> {
                 .map_err(|e| anyhow!("{}", e))?;
             println!(
                 "{}",
-                serde_json::to_string_pretty(&run_json_summary(&result, &output_dir))?
+                serde_json::to_string_pretty(&direct_run_summary(&result, &output_dir))?
             );
+        }
+        Command::RunJson {
+            path,
+            api_url,
+            submit_only,
+        }
+        | Command::SubmitRunJson {
+            path,
+            api_url,
+            submit_only,
+        } => {
+            let result = accepted_run_transport::submit_run_json(&path, &api_url, submit_only)?;
+            println!("{}", serde_json::to_string_pretty(&result)?);
         }
         Command::ResumeJson {
             path,
@@ -241,7 +323,7 @@ fn main() -> Result<()> {
                     &execution_plan.output_plan.outputs,
                 )
                 .map_err(|error| anyhow!(error.message))?;
-                serde_json::to_value(run_json_summary(&result, std::path::Path::new("")))?
+                serde_json::to_value(direct_run_summary(&result, std::path::Path::new("")))?
             } else {
                 serde_json::to_value(
                     fullmag_runner::resume_reference_fdm_from_coupled_checkpoint_evidence(
@@ -318,9 +400,49 @@ fn main() -> Result<()> {
                 println!("{}", serde_json::to_string(&resolution)?);
             }
         }
+        Command::Project(cmd) => handle_project(cmd)?,
         Command::Session(cmd) => handle_session(cmd)?,
     }
 
+    Ok(())
+}
+
+// ── Project definition CLI ────────────────────────────────────────────
+
+fn handle_project(cmd: args::ProjectSubcommand) -> Result<()> {
+    let args::ProjectSubcommand::Open { path } = cmd;
+    let mut application = ProjectApplication::new(FileProjectRepository::new());
+    let opened = application
+        .open(ProjectSource::Path(path.clone()))
+        .map_err(|error| anyhow!(error.to_string()))?;
+    let view = opened.view;
+    let mode = match view.mode {
+        DocumentMode::ReadWrite => serde_json::json!({"kind": "read_write"}),
+        DocumentMode::ReadOnly { reason } => {
+            serde_json::json!({"kind": "read_only", "reason": reason})
+        }
+    };
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&serde_json::json!({
+            "operation": "open_project",
+            "path": path,
+            "project_id": view.project_id,
+            "schema_version": view.schema_version,
+            "revision": view.revision,
+            "dirty": view.dirty,
+            "mode": mode,
+            "migration": {
+                "source_schema": view.migration.source_schema,
+                "target_schema": view.migration.target_schema,
+                "migrated": view.migration.migrated,
+                "can_write": view.migration.can_write,
+                "warnings": view.migration.warnings,
+                "preserved_paths": view.migration.preserved_paths,
+            },
+            "runtime": "untouched",
+        }))?
+    );
     Ok(())
 }
 
@@ -348,10 +470,9 @@ fn coupled_checkpoint_state(value: Value) -> Result<Value> {
 fn handle_session(cmd: args::SessionSubcommand) -> Result<()> {
     use args::SessionSubcommand;
     use fullmag_session::{
-        hex_sha256, inspect_fms, pack_fms, unpack_fms, FmsExportProfile, FmsSessionManifest,
-        FmsWorkspaceManifest, PackOptions, SessionStore,
+        hex_sha256, pack_fms_file, preflight_fms_staged, unpack_fms_staged, FmsExportProfile,
+        FmsSessionManifest, FmsWorkspaceManifest, PackOptions, SessionStore,
     };
-    use std::collections::HashMap;
 
     let default_store_root =
         crate::control_room::runtime_state_root(&crate::control_room::repo_root())
@@ -365,11 +486,17 @@ fn handle_session(cmd: args::SessionSubcommand) -> Result<()> {
             name,
         } => {
             let store = SessionStore::open(&default_store_root)?;
+            let _transaction = store.write_transaction()?;
             let profile = fullmag_session::SaveProfile::from(profile);
-            let session_name = name.unwrap_or_else(|| "CLI Session".into());
-            let session_id = uuid::Uuid::new_v4().to_string();
-
-            let session = FmsSessionManifest::new(&session_id, &session_name, profile);
+            let mut session = store.current_session()?.unwrap_or_else(|| {
+                FmsSessionManifest::new(uuid::Uuid::new_v4().to_string(), "CLI Session", profile)
+            });
+            if let Some(name) = name {
+                session.name = name;
+            }
+            session.profile = profile;
+            session.saved_at = std::time::SystemTime::now().into();
+            let session_id = session.session_id.clone();
             let script = store
                 .read_document("project/main.py")?
                 .filter(|bytes| !bytes.is_empty())
@@ -377,7 +504,7 @@ fn handle_session(cmd: args::SessionSubcommand) -> Result<()> {
             let script_sha256 = hex_sha256(&script);
             let workspace = FmsWorkspaceManifest {
                 workspace_id: "local-live".into(),
-                problem_name: session_name.clone(),
+                problem_name: session.name.clone(),
                 project_ref: "project/".into(),
                 script_ref: "project/main.py".into(),
                 script_sha256,
@@ -387,17 +514,19 @@ fn handle_session(cmd: args::SessionSubcommand) -> Result<()> {
                 model_builder_graph_ref: None,
                 asset_index_ref: None,
             };
+            let workspace = match store.read_document("manifest/workspace.json")? {
+                Some(bytes) => {
+                    let mut saved: FmsWorkspaceManifest = serde_json::from_slice(&bytes)?;
+                    saved.script_sha256 = workspace.script_sha256;
+                    saved
+                }
+                None => workspace,
+            };
             let export_profile = FmsExportProfile::for_profile(profile);
-            let mut docs: HashMap<String, Vec<u8>> = HashMap::new();
-            docs.insert("main.py".into(), script);
+            let docs = store.project_documents()?;
             let opts = PackOptions::default();
-
-            store.commit_session(&session)?;
-
-            let file = std::fs::File::create(&path)?;
-            let writer = std::io::BufWriter::new(file);
-            pack_fms(
-                writer,
+            pack_fms_file(
+                &path,
                 &store,
                 &session,
                 &workspace,
@@ -405,16 +534,54 @@ fn handle_session(cmd: args::SessionSubcommand) -> Result<()> {
                 &docs,
                 &opts,
             )?;
+            store.commit_session(&session)?;
 
             println!("Session saved to {}", path.display());
             println!("  session_id: {session_id}");
             println!("  profile:    {profile:?}");
         }
         SessionSubcommand::Open { path } => {
-            let store = SessionStore::open(&default_store_root)?;
             let file = std::fs::File::open(&path)?;
             let reader = std::io::BufReader::new(file);
-            let session = unpack_fms(reader, &store)?;
+            let decoding_root = default_store_root
+                .parent()
+                .context("session storage parent is missing")?;
+            std::fs::create_dir_all(decoding_root)?;
+            let preflight = preflight_fms_staged(reader, &[], decoding_root)?;
+            if default_store_root.exists() {
+                bail!(
+                    "session import destination already exists: {}",
+                    default_store_root.display()
+                );
+            }
+            let staging = decoding_root.join(format!(".session-import-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir(&staging)?;
+            let result = (|| -> Result<_> {
+                let store = SessionStore::open(&staging)?;
+                let session = unpack_fms_staged(&preflight, &store)?;
+                drop(store);
+                fullmag_session::publish_directory(&staging, &default_store_root)?;
+                Ok(session)
+            })();
+            let session = match result {
+                Ok(session) => session,
+                Err(error) => {
+                    if error
+                        .downcast_ref::<fullmag_session::PublicationUncertain>()
+                        .is_none()
+                        && error
+                            .downcast_ref::<fullmag_session::WriterReleaseUnconfirmed>()
+                            .is_none()
+                    {
+                        let _ = std::fs::remove_dir_all(&staging);
+                    }
+                    return Err(error.context(format!(
+                        "import staging: {}; destination: {}",
+                        staging.display(),
+                        default_store_root.display()
+                    )));
+                }
+            };
 
             println!("Session imported: {}", session.name);
             println!("  session_id: {}", session.session_id);
@@ -424,7 +591,12 @@ fn handle_session(cmd: args::SessionSubcommand) -> Result<()> {
         SessionSubcommand::Inspect { path } => {
             let file = std::fs::File::open(&path)?;
             let reader = std::io::BufReader::new(file);
-            let info = inspect_fms(reader)?;
+            let decoding_root = default_store_root
+                .parent()
+                .context("session storage parent is missing")?;
+            std::fs::create_dir_all(decoding_root)?;
+            let staged = preflight_fms_staged(reader, &[], decoding_root)?;
+            let info = &staged.inspection;
 
             println!("Session: {}", info.name);
             println!("  format:          {}", info.format_version);
@@ -434,7 +606,7 @@ fn handle_session(cmd: args::SessionSubcommand) -> Result<()> {
             println!("  saved_at:        {}", info.saved_at);
             println!("  restore_class:   {:?}", info.restore_class);
             println!("  runs:            {}", info.run_count);
-            if let Some(s) = info.latest_checkpoint {
+            if let Some(s) = &info.latest_checkpoint {
                 println!("  latest_ckpt:     step={} t={:.6e}", s.step, s.time_s);
             }
             if !info.warnings.is_empty() {
@@ -464,11 +636,21 @@ fn handle_session(cmd: args::SessionSubcommand) -> Result<()> {
                 }
             }
         }
-        SessionSubcommand::Gc { store } => {
+        SessionSubcommand::Gc { store, apply, plan } => {
             let root = store.unwrap_or_else(|| default_store_root.clone());
-            let ss = SessionStore::open(&root)?;
-            ss.gc()?;
-            println!("Garbage collection complete on {}", root.display());
+            let ss = SessionStore::open_existing(&root)?;
+            if apply {
+                let plan_path = plan.context("--apply requires a reviewed --plan")?;
+                let preview: fullmag_session::GcPlan =
+                    serde_json::from_slice(&std::fs::read(plan_path)?)?;
+                let removed = ss.gc_apply(&root, &preview)?;
+                println!("Removed {removed} reviewed objects from {}", root.display());
+            } else {
+                if plan.is_some() {
+                    bail!("--plan is only consumed with --apply; preview is printed as JSON");
+                }
+                println!("{}", serde_json::to_string_pretty(&ss.gc_preview()?)?);
+            }
         }
     }
 
@@ -476,6 +658,7 @@ fn handle_session(cmd: args::SessionSubcommand) -> Result<()> {
 }
 
 fn launch_ui(ui: UiCli) -> Result<()> {
+    crate::control_room::development_restore_requested(ui.dev, ui.script.is_some())?;
     crate::control_room::init_api_port()?;
     let (session_id, live_workspace) = if let Some(script) = ui.script.as_ref() {
         let (session_id, live_workspace) =
@@ -497,35 +680,116 @@ fn launch_ui(ui: UiCli) -> Result<()> {
     } else {
         "hub"
     };
-    let ready = crate::control_room::bootstrap_control_plane(
+    let mut ready = crate::control_room::bootstrap_control_plane(
         &session_id,
         ui.dev,
         ui.web_port,
         live_workspace.as_ref(),
     )?;
-    let mut ui_child = crate::control_room::open_in_tauri(&ready, intent)?;
-    let scratch_runtime = if live_workspace.is_none() {
+    let owns_api = ready.api_child.is_some();
+    let owned_api_pid = ready.api_child.as_ref().map(std::process::Child::id);
+    let mut control_room_guard = crate::control_room::ControlRoomGuard::active(
+        ready.web_port,
+        ready.api_child.take(),
+        ready.frontend_child.take(),
+    );
+    let root = crate::control_room::repo_root();
+    let state_root = crate::control_room::runtime_state_root(&root);
+    let mut runtime_binding = fullmag_runtime_control::application_attach::prepare_for_authoring(
+        &root,
+        &state_root,
+        crate::control_room::api_port(),
+    )?;
+    let development_owner = match ready.development_owner.take() {
+        Some(owner) => Some(owner.confirm(
+            owned_api_pid.context("development owner requires an owned API child")?,
+            ready.api_port,
+            runtime_binding.api_instance_id(),
+        )?),
+        None => None,
+    };
+    if let Some(owner) = development_owner {
+        control_room_guard.adopt_development_owner(owner)?;
+        control_room_guard.enable_development_restart_transport(ready.web_port)?;
+    }
+    if !owns_api {
+        runtime_binding.disable_automatic_attach(
+            fullmag_runtime_control::application_attach::ApplicationAttachBlockReason::ApiNotOwned,
+        );
+    }
+    let initial_api_instance = runtime_binding.api_instance_id().to_owned();
+    let mut ui_child =
+        crate::control_room::open_in_tauri(&ready, intent, runtime_binding.api_instance_id())?;
+    // Native startup has an owned observer and cannot delay opening the window.
+    let mut runtime_attach = match runtime_binding.start() {
+        Ok(attach) => attach,
+        Err(error) => {
+            eprintln!("Native runtime attach unavailable: {error:#}");
+            None
+        }
+    };
+    let mut scratch_runtime = if live_workspace.is_none() {
         let executable = std::env::current_exe().context("failed to resolve fullmag executable")?;
         Some(crate::scratch_runtime::spawn(
             crate::control_room::api_port(),
             executable,
             None,
+            initial_api_instance,
         ))
     } else {
         None
     };
-    let control_room_guard = crate::control_room::ControlRoomGuard::active(
-        ready.web_port,
-        ready.api_child,
-        ready.frontend_child,
-    );
-    let _ = ui_child.wait();
-    drop(control_room_guard);
+    let mut restart_pump = crate::development_restart::NativeRestartPump::default();
+    let mut last_restart_error = None;
+    let mut ui_closed = false;
+    let mut retention_reported = false;
+    loop {
+        if !ui_closed {
+            match ui_child.try_wait() {
+                Ok(Some(_)) => ui_closed = true,
+                Ok(None) => {}
+                Err(error) => {
+                    eprintln!("UI process observation unavailable: {error}");
+                    let _ = ui_child.wait();
+                    ui_closed = true;
+                }
+            }
+        }
+        if ui_closed {
+            if !control_room_guard.retains_unknown_development_custody() {
+                break;
+            }
+            if !retention_reported {
+                eprintln!("Development restart outcome is unknown; retaining launcher and API ownership after UI close for explicit recovery");
+                retention_reported = true;
+            }
+        }
+        match restart_pump.step(
+            &root,
+            &mut control_room_guard,
+            &mut runtime_attach,
+            &mut scratch_runtime,
+        ) {
+            Ok(()) => last_restart_error = None,
+            Err(error) => {
+                let message = format!("{error:#}");
+                if last_restart_error.as_ref() != Some(&message) {
+                    eprintln!("Native restart observation unavailable: {message}");
+                    last_restart_error = Some(message);
+                }
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
+    // Join the observer before shutting down the API it is pinned to.
+    drop(runtime_attach);
     drop(scratch_runtime);
+    drop(restart_pump);
+    drop(control_room_guard);
     Ok(())
 }
 
-fn run_json_summary(
+fn direct_run_summary(
     result: &fullmag_runner::RunResult,
     output_dir: &std::path::Path,
 ) -> serde_json::Value {
@@ -594,8 +858,12 @@ fn is_script_mode(raw_args: &[OsString]) -> bool {
         "validate-json",
         "plan-json",
         "run-json",
+        "submit-run-json",
+        "run-problem-json-direct",
         "resume-json",
         "resolve-runtime-invocation",
+        "session",
+        "project",
     ];
     const FLAG_ONLY: &[&str] = &["-i", "--interactive", "--headless", "--dev", "--json"];
     const VALUE_FLAGS: &[&str] = &[
@@ -976,7 +1244,7 @@ mod tests {
     };
 
     #[test]
-    fn run_json_summary_reports_create_and_first_accepted_step_demag_apply_aggregate() {
+    fn direct_run_summary_reports_create_and_first_accepted_step_demag_apply_aggregate() {
         let result = fullmag_runner::RunResult {
             status: fullmag_runner::RunStatus::Completed,
             steps: vec![
@@ -1009,7 +1277,7 @@ mod tests {
             completion: None,
         };
 
-        let payload = run_json_summary(&result, std::path::Path::new("/tmp/run"));
+        let payload = direct_run_summary(&result, std::path::Path::new("/tmp/run"));
 
         assert_eq!(payload["backend_create_wall_time_ns"], 91);
         assert_eq!(
@@ -1498,6 +1766,82 @@ mod tests {
     }
 
     #[test]
+    fn cli_parses_run_json_as_public_accepted_run_transport() {
+        let cli = Cli::try_parse_from([
+            "fullmag",
+            "run-json",
+            "accepted-run.json",
+            "--api-url",
+            "http://127.0.0.1:8000",
+            "--submit-only",
+        ])
+        .expect("cli parse");
+
+        assert!(matches!(
+            cli.command,
+            Command::RunJson {
+                path,
+                api_url,
+                submit_only: true,
+            } if path == std::path::Path::new("accepted-run.json")
+                && api_url == "http://127.0.0.1:8000"
+        ));
+    }
+
+    #[test]
+    fn cli_keeps_hidden_submit_run_json_compatibility_alias() {
+        let cli = Cli::try_parse_from([
+            "fullmag",
+            "submit-run-json",
+            "accepted-run.json",
+            "--api-url",
+            "http://127.0.0.1:8000",
+        ])
+        .expect("cli parse");
+
+        assert!(matches!(
+            cli.command,
+            Command::SubmitRunJson {
+                path,
+                api_url,
+                submit_only: false,
+            } if path == std::path::Path::new("accepted-run.json")
+                && api_url == "http://127.0.0.1:8000"
+        ));
+    }
+
+    #[test]
+    fn cli_keeps_direct_problem_runner_hidden_from_public_help() {
+        use clap::CommandFactory;
+
+        let cli = Cli::try_parse_from([
+            "fullmag",
+            "run-problem-json-direct",
+            "problem.json",
+            "--until",
+            "1e-12",
+            "--output-dir",
+            "artifacts",
+        ])
+        .expect("cli parse");
+        assert!(matches!(
+            cli.command,
+            Command::RunProblemJsonDirect {
+                path,
+                until,
+                output_dir,
+            } if path == std::path::Path::new("problem.json")
+                && until == 1e-12
+                && output_dir == std::path::Path::new("artifacts")
+        ));
+
+        let help = Cli::command().render_long_help().to_string();
+        assert!(help.contains("run-json"));
+        assert!(!help.contains("submit-run-json"));
+        assert!(!help.contains("run-problem-json-direct"));
+    }
+
+    #[test]
     fn cli_parses_runtime_fem_availability_json_subcommand() {
         let cli = Cli::try_parse_from(["fullmag", "runtime", "fem-availability", "--json"])
             .expect("cli parse");
@@ -1583,6 +1927,22 @@ mod tests {
     fn ui_subcommand_is_not_treated_as_script_mode() {
         let args = vec![OsString::from("fullmag"), OsString::from("ui")];
         assert!(!is_script_mode(&args));
+    }
+
+    #[test]
+    fn project_and_session_subcommands_are_not_treated_as_script_mode() {
+        assert!(!is_script_mode(&[
+            OsString::from("fullmag"),
+            OsString::from("project"),
+            OsString::from("open"),
+            OsString::from("project.fms"),
+        ]));
+        assert!(!is_script_mode(&[
+            OsString::from("fullmag"),
+            OsString::from("session"),
+            OsString::from("inspect"),
+            OsString::from("session.fms"),
+        ]));
     }
 
     #[test]

@@ -1,8 +1,13 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 
 import { useKernel } from "@/kernel/KernelContext";
+import {
+  authoringWriteOptions,
+  captureAuthoringMutationFence,
+  runAuthoringMutationWithHistory,
+} from "@/kernel/authoring/authoringHistoryMutation";
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import {
   useMeshBuildCurrent,
@@ -13,7 +18,11 @@ import {
   useModelRegionsResource,
   useSceneResource,
 } from "@/kernel/resources/geometryLifecycleResources";
-import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
+import { sessionRequestScopeKey } from "@/kernel/resources/sessionResourceIdentity";
+import {
+  useSessionResourceIdentity,
+  useSessionStatusSelector,
+} from "@/kernel/resources/useSessionStatus";
 import { visualizationTargetIdForSceneObject } from "@/kernel/selection/selectionTypes";
 
 import { useRegisterInspectorEditSession } from "../InspectorEditSession";
@@ -119,14 +128,15 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function revisionFromScene(scene: unknown): number {
-  if (scene && typeof scene === "object" && "revision" in scene) {
-    const revision = (scene as { revision?: unknown }).revision;
+function revisionFromScene(scene: unknown): number | null {
+  if (scene && typeof scene === "object" && ("scene_revision" in scene || "revision" in scene)) {
+    const value = scene as { revision?: unknown; scene_revision?: unknown };
+    const revision = value.scene_revision ?? value.revision;
     if (typeof revision === "number" && Number.isFinite(revision)) {
       return revision;
     }
   }
-  return Date.now();
+  return null;
 }
 
 export function ObjectRegionsPanel(props: InspectorPanelProps) {
@@ -135,7 +145,12 @@ export function ObjectRegionsPanel(props: InspectorPanelProps) {
 
 function useObjectRegionsPanelView({ selection }: InspectorPanelProps) {
   const kernel = useKernel();
-  const { api, resources, selection: selectionController } = kernel;
+  const {
+    api,
+    resources,
+    selection: selectionController,
+  } = kernel;
+  const sessionScopeKey = sessionRequestScopeKey(useSessionResourceIdentity());
   const sessionDiscretization = useSessionStatusSelector(
     (status) => status.data?.domain.discretization ?? null,
   );
@@ -163,7 +178,7 @@ function useObjectRegionsPanelView({ selection }: InspectorPanelProps) {
   );
 
   const baseDraft = useMemo(() => objectRegionDraftFromModel(model), [model]);
-  const draftKey = objectRegionDraftKey(model);
+  const draftKey = `${sessionScopeKey ?? "no-session"}:${objectRegionDraftKey(model)}`;
   const draftIdentityKey = objectRegionDraftIdentityKey(model);
   const [draftState, setDraftState] = useState<
     InspectorDraftState<ObjectRegionDraft>
@@ -174,10 +189,40 @@ function useObjectRegionsPanelView({ selection }: InspectorPanelProps) {
       identityKey: draftIdentityKey,
     }),
   );
-  const [feedback, setFeedback] = useState<Feedback>(null);
-  const [pending, setPending] = useState(false);
-  const [buildPending, setBuildPending] = useState(false);
-  const buildInFlight = useRef(false);
+  const [feedbackState, setFeedbackState] = useState<{
+    identityKey: string;
+    sessionScopeKey: string | null;
+    value: Feedback;
+  } | null>(null);
+  const feedback = feedbackState?.sessionScopeKey === sessionScopeKey &&
+    feedbackState.identityKey === draftIdentityKey
+    ? feedbackState.value
+    : null;
+  const setFeedback = useCallback(
+    (value: Feedback) => setFeedbackState({ identityKey: draftIdentityKey, sessionScopeKey, value }),
+    [draftIdentityKey, sessionScopeKey],
+  );
+  const [pendingOperation, setPendingOperation] = useState<{
+    id: number;
+    identityKey: string;
+    sessionScopeKey: string;
+  } | null>(null);
+  const nextOperationId = useRef(0);
+  const pending = pendingOperation?.sessionScopeKey === sessionScopeKey &&
+    pendingOperation.identityKey === draftIdentityKey;
+  const [buildPendingOperation, setBuildPendingOperation] = useState<{
+    id: number;
+    identityKey: string;
+    sessionScopeKey: string;
+  } | null>(null);
+  const nextBuildOperationId = useRef(0);
+  const buildInFlight = useRef<{
+    id: number;
+    identityKey: string;
+    sessionScopeKey: string;
+  } | null>(null);
+  const buildPending = buildPendingOperation?.sessionScopeKey === sessionScopeKey &&
+    buildPendingOperation.identityKey === draftIdentityKey;
   const { draft } = resolveInspectorDraftState({
     baseDraft,
     baseKey: draftKey,
@@ -218,8 +263,42 @@ function useObjectRegionsPanelView({ selection }: InspectorPanelProps) {
 
   const canWriteRegion =
     model.mode === "committed" && model.source === "authored_object_region";
+  const sessionAvailable = sessionScopeKey !== null;
   const femMeshLane = meshLane === "fem";
   const canWriteMeshRegion = canWriteRegion && femMeshLane;
+  function captureRegionMutationContext(sourceDetail: string) {
+    return captureAuthoringMutationFence(
+      createCommandContext("inspector", kernel, {
+        sessionScopeKey,
+        sourceDetail,
+        input: { object_id: model.objectId, region_id: model.regionId },
+      }),
+    );
+  }
+
+  function isCurrentRegionMutation(context: ReturnType<typeof captureRegionMutationContext>): boolean {
+    return context.isCurrentSessionScope?.() === true;
+  }
+
+  function beginRegionOperation(): number | null {
+    if (!sessionScopeKey) return null;
+    const id = ++nextOperationId.current;
+    setPendingOperation({ id, identityKey: draftIdentityKey, sessionScopeKey });
+    return id;
+  }
+
+  function finishRegionOperation(id: number): void {
+    setPendingOperation((current) => current?.id === id ? null : current);
+  }
+
+  function requireRegionBaseRevision(baseRevision: number | null): number {
+    const revision = baseRevision ?? model.revision;
+    if (typeof revision !== "number" || !Number.isFinite(revision)) {
+      throw new Error("A finite committed scene revision is required for region writes.");
+    }
+    return revision;
+  }
+
   const couplingDependencies = useMemo(
     () =>
       resolveRegionCouplingDependencies(
@@ -340,17 +419,48 @@ function useObjectRegionsPanelView({ selection }: InspectorPanelProps) {
       return false;
     }
 
-    setPending(true);
+    const operationContext = captureRegionMutationContext("object-region-apply");
+    const operationSessionScopeKey = operationContext.sessionScopeKey;
+    if (!operationSessionScopeKey || !isCurrentRegionMutation(operationContext)) {
+      setFeedback({ kind: "error", message: "An active session is required to update this region." });
+      return false;
+    }
+    const operationId = beginRegionOperation();
+    if (operationId === null) return false;
     try {
-      const response = await api.model.patchObjectRegionResource(
-        model.objectId,
-        model.regionId,
-        buildObjectRegionPatch(draft, { meshPolicyLane: meshLane }),
-        { baseRevision: model.revision ?? undefined },
+      const response = await runAuthoringMutationWithHistory(
+        operationContext,
+        `Update region ${model.regionId}`,
+        async ({ baseRevision }) => {
+          const revision = requireRegionBaseRevision(baseRevision);
+          const options = authoringWriteOptions(revision, operationSessionScopeKey);
+          if (!options?.sessionScopeKey || options.baseRevision === undefined) {
+            throw new Error("A scoped region revision is required for this write.");
+          }
+          return api.model.patchObjectRegionResource(
+            model.objectId,
+            model.regionId,
+            buildObjectRegionPatch(draft, { meshPolicyLane: meshLane }),
+            options,
+          );
+        },
       );
       const revision = revisionFromScene(response);
-      publishRegionAuthoringScene(resources, response, revision);
-      const syncWarning = await syncAuthoringScriptBestEffort(api);
+      if (!isCurrentRegionMutation(operationContext)) return false;
+      if (revision === null) throw new Error("The region update returned no committed scene revision.");
+      publishRegionAuthoringScene(
+        resources,
+        response,
+        revision,
+        undefined,
+        operationSessionScopeKey,
+        api.resourceCacheScope,
+      );
+      const syncWarning = await syncAuthoringScriptBestEffort(
+        api,
+        operationSessionScopeKey,
+      );
+      if (!isCurrentRegionMutation(operationContext)) return false;
       setFeedback({
         kind: "success",
         message: syncWarning
@@ -359,15 +469,17 @@ function useObjectRegionsPanelView({ selection }: InspectorPanelProps) {
       });
       return true;
     } catch (error) {
+      if (!isCurrentRegionMutation(operationContext)) return false;
       setFeedback({ kind: "error", message: errorMessage(error) });
       return false;
     } finally {
-      setPending(false);
+      finishRegionOperation(operationId);
     }
   }
 
   async function buildRegion(): Promise<void> {
-    if (pending || buildInFlight.current) return;
+    if (pending || (buildInFlight.current?.sessionScopeKey === sessionScopeKey &&
+      buildInFlight.current.identityKey === draftIdentityKey)) return;
     if (meshLane !== "fem") {
       setFeedback({
         kind: "error",
@@ -393,15 +505,28 @@ function useObjectRegionsPanelView({ selection }: InspectorPanelProps) {
       setFeedback({ kind: "error", message: regionMeshLifecycle.reason });
       return;
     }
-    buildInFlight.current = true;
-    setBuildPending(true);
+    const operationContext = captureRegionMutationContext("object-region-mesh-build");
+    const operationSessionScopeKey = operationContext.sessionScopeKey;
+    if (!operationSessionScopeKey || !isCurrentRegionMutation(operationContext)) {
+      setFeedback({ kind: "error", message: "An active session is required to build this region mesh." });
+      return;
+    }
+    const operationId = ++nextBuildOperationId.current;
+    buildInFlight.current = {
+      id: operationId,
+      identityKey: draftIdentityKey,
+      sessionScopeKey: operationSessionScopeKey,
+    };
+    setBuildPendingOperation({
+      id: operationId,
+      identityKey: draftIdentityKey,
+      sessionScopeKey: operationSessionScopeKey,
+    });
     try {
       if (objectRegionDraftDirty(draft, baseDraft) && !(await applyRegion())) return;
-      const commandContext = createCommandContext("inspector", kernel, {
-        sourceDetail: "object-region-mesh",
-        input: { object_id: model.objectId, region_id: model.regionId },
-      });
-      const result = await kernel.commands.execute("mesh.build-shared-domain", commandContext);
+      if (!isCurrentRegionMutation(operationContext)) return;
+      const result = await kernel.commands.execute("mesh.build-shared-domain", operationContext);
+      if (!isCurrentRegionMutation(operationContext)) return;
       setFeedback({
         kind: result.status === "completed" ? "success" : result.status === "failed" ? "error" : "warning",
         message: result.message ?? (result.status === "completed"
@@ -411,10 +536,11 @@ function useObjectRegionsPanelView({ selection }: InspectorPanelProps) {
           : "Mesh build was not submitted."),
       });
     } catch (error) {
+      if (!isCurrentRegionMutation(operationContext)) return;
       setFeedback({ kind: "error", message: errorMessage(error) });
     } finally {
-      buildInFlight.current = false;
-      setBuildPending(false);
+      if (buildInFlight.current?.id === operationId) buildInFlight.current = null;
+      setBuildPendingOperation((current) => current?.id === operationId ? null : current);
     }
   }
 
@@ -424,16 +550,43 @@ function useObjectRegionsPanelView({ selection }: InspectorPanelProps) {
       return;
     }
 
-    setPending(true);
+    const operationContext = captureRegionMutationContext("object-region-duplicate");
+    const operationSessionScopeKey = operationContext.sessionScopeKey;
+    if (!operationSessionScopeKey || !isCurrentRegionMutation(operationContext)) {
+      setFeedback({ kind: "error", message: "An active session is required to duplicate this region." });
+      return;
+    }
+    const operationId = beginRegionOperation();
+    if (operationId === null) return;
     try {
-      const response = await api.model.duplicateObjectRegion(
-        model.objectId,
-        model.regionId,
-        {},
-        { baseRevision: model.revision ?? undefined },
+      const response = await runAuthoringMutationWithHistory(
+        operationContext,
+        `Duplicate region ${model.regionId}`,
+        async ({ baseRevision }) => {
+          const revision = requireRegionBaseRevision(baseRevision);
+          const options = authoringWriteOptions(revision, operationSessionScopeKey);
+          if (!options?.sessionScopeKey || options.baseRevision === undefined) {
+            throw new Error("A scoped region revision is required for this write.");
+          }
+          return api.model.duplicateObjectRegion(
+            model.objectId,
+            model.regionId,
+            {},
+            options,
+          );
+        },
       );
       const revision = revisionFromScene(response);
-      publishRegionAuthoringScene(resources, response, revision);
+      if (!isCurrentRegionMutation(operationContext)) return;
+      if (revision === null) throw new Error("The duplicated region returned no committed scene revision.");
+      publishRegionAuthoringScene(
+        resources,
+        response,
+        revision,
+        undefined,
+        operationSessionScopeKey,
+        api.resourceCacheScope,
+      );
       const duplicated = findLastRegionSelection(
         response,
         model.objectId,
@@ -442,7 +595,11 @@ function useObjectRegionsPanelView({ selection }: InspectorPanelProps) {
       if (duplicated) {
         selectRegion(duplicated.regionId, duplicated.name);
       }
-      const syncWarning = await syncAuthoringScriptBestEffort(api);
+      const syncWarning = await syncAuthoringScriptBestEffort(
+        api,
+        operationSessionScopeKey,
+      );
+      if (!isCurrentRegionMutation(operationContext)) return;
       setFeedback({
         kind: "success",
         message: syncWarning
@@ -450,9 +607,10 @@ function useObjectRegionsPanelView({ selection }: InspectorPanelProps) {
           : "Object region duplicated.",
       });
     } catch (error) {
+      if (!isCurrentRegionMutation(operationContext)) return;
       setFeedback({ kind: "error", message: errorMessage(error) });
     } finally {
-      setPending(false);
+      finishRegionOperation(operationId);
     }
   }
 
@@ -462,11 +620,45 @@ function useObjectRegionsPanelView({ selection }: InspectorPanelProps) {
       return;
     }
 
-    setPending(true);
+    const operationContext = captureRegionMutationContext("object-region-delete");
+    const operationSessionScopeKey = operationContext.sessionScopeKey;
+    if (!operationSessionScopeKey || !isCurrentRegionMutation(operationContext)) {
+      setFeedback({ kind: "error", message: "An active session is required to delete this region." });
+      return;
+    }
+    const operationId = beginRegionOperation();
+    if (operationId === null) return;
     try {
-      const response = await api.model.deleteRegion(model.objectId, model.regionId);
-      const revision = revisionFromScene(response);
-      publishRegionAuthoringScene(resources, response, revision);
+      const transaction = await runAuthoringMutationWithHistory(
+        operationContext,
+        `Delete region ${model.regionId}`,
+        async ({ baseRevision }) => {
+          const revision = requireRegionBaseRevision(baseRevision);
+          const options = authoringWriteOptions(revision, operationSessionScopeKey);
+          if (!options?.sessionScopeKey || options.baseRevision === undefined) {
+            throw new Error("A scoped region revision is required for this write.");
+          }
+          return api.model.deleteObjectRegion(
+            model.objectId,
+            model.regionId,
+            options,
+          );
+        },
+      );
+      if (!isCurrentRegionMutation(operationContext)) return;
+      const response = transaction.committed_scene;
+      const revision = transaction.scene_revision;
+      if (typeof revision !== "number" || !Number.isFinite(revision)) {
+        throw new Error("The region deletion returned no committed scene revision.");
+      }
+      publishRegionAuthoringScene(
+        resources,
+        response,
+        revision,
+        undefined,
+        operationSessionScopeKey,
+        api.resourceCacheScope,
+      );
       const fallback = findLastRegionSelection(
         response,
         model.objectId,
@@ -494,7 +686,11 @@ function useObjectRegionsPanelView({ selection }: InspectorPanelProps) {
           "inspector",
         );
       }
-      const syncWarning = await syncAuthoringScriptBestEffort(api);
+      const syncWarning = await syncAuthoringScriptBestEffort(
+        api,
+        operationSessionScopeKey,
+      );
+      if (!isCurrentRegionMutation(operationContext)) return;
       setFeedback({
         kind: "success",
         message: syncWarning
@@ -502,9 +698,10 @@ function useObjectRegionsPanelView({ selection }: InspectorPanelProps) {
           : "Object region deleted.",
       });
     } catch (error) {
+      if (!isCurrentRegionMutation(operationContext)) return;
       setFeedback({ kind: "error", message: errorMessage(error) });
     } finally {
-      setPending(false);
+      finishRegionOperation(operationId);
     }
   }
 
@@ -517,16 +714,18 @@ function useObjectRegionsPanelView({ selection }: InspectorPanelProps) {
     canWriteRegion ? "staged" : null,
     pending,
     objectRegionDraftDirty(draft, baseDraft),
-    canWriteRegion && validationErrors.length === 0,
+    sessionAvailable && canWriteRegion && validationErrors.length === 0,
     undefined,
     applyRegion,
     revert,
+    { historyMode: "mutation-owned" },
   );
 
   const subProps: RegionSubPanelProps = {
     model,
     draft,
     pending,
+    sessionAvailable,
     buildPending,
     membership: membership.data ?? null,
     draftDirty: objectRegionDraftDirty(draft, baseDraft),

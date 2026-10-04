@@ -18,10 +18,20 @@ const mocks = vi.hoisted(() => ({
   collection: { monitors: [] as unknown[], scene_revision: 7 },
   duplicate: vi.fn(),
   execute: vi.fn(),
+  currentSessionScopeKey: "session=A&epoch=1&request_scope_epoch=1" as string | null,
+  historyGeneration: 0,
   invalidate: vi.fn(),
   patch: vi.fn(),
   refetch: vi.fn(),
+  sessionIdentity: null as unknown,
 }));
+
+const sessionA = {
+  sessionId: "A",
+  sessionEpoch: "1",
+  requestScopeEpoch: "1",
+} as const;
+const sessionAScopeKey = "session=A&epoch=1&request_scope_epoch=1";
 
 const monitorFixture = {
   frame: {
@@ -42,9 +52,17 @@ const monitorFixture = {
 vi.mock("@/kernel/KernelContext", () => ({
   useKernel: () => ({
     api: { model: { planarMonitors: { duplicate: mocks.duplicate, patch: mocks.patch } } },
-    commands: { execute: mocks.execute },
+    authoringHistory: undefined,
+    commands: {
+      execute: mocks.execute,
+      getSessionScopeKey: () => mocks.currentSessionScopeKey,
+    },
     resources: { invalidate: mocks.invalidate },
   }),
+}));
+
+vi.mock("@/kernel/resources/useSessionStatus", () => ({
+  useSessionResourceIdentity: () => mocks.sessionIdentity,
 }));
 
 vi.mock("@/kernel/resources/planarMonitorResources", () => ({
@@ -83,6 +101,9 @@ describe("PlanarMonitorInspectorPanel", () => {
     vi.clearAllMocks();
     planarMonitorFramePreviewStore.clearDraft();
     mocks.collection.monitors = [monitorFixture];
+    mocks.currentSessionScopeKey = sessionAScopeKey;
+    mocks.historyGeneration = 0;
+    mocks.sessionIdentity = sessionA;
     mocks.patch.mockResolvedValue({
       monitor: { ...monitorFixture, name: "Edited" },
       scene_revision: 8,
@@ -170,7 +191,7 @@ describe("PlanarMonitorInspectorPanel", () => {
       expect(mocks.patch).toHaveBeenCalledWith("plane-1", {
         expected_scene_revision: 7,
         monitor: uiRoundtripFixture().patch,
-      });
+      }, { baseRevision: 7, sessionScopeKey: sessionAScopeKey });
     } finally {
       await act(async () => root.unmount());
       dom.restore();
@@ -220,6 +241,67 @@ describe("PlanarMonitorInspectorPanel", () => {
         { monitorId: "plane-1" },
       );
       expect(mocks.duplicate).not.toHaveBeenCalled();
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("does not publish an edit ACK after the active session changes", async () => {
+    let finishPatch: ((value: unknown) => void) | null = null;
+    const patchResult = new Promise((resolve) => {
+      finishPatch = resolve;
+    });
+    mocks.patch.mockReturnValue(patchResult);
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => root.render(<PlanarMonitorInspectorPanel selection={selection()} />));
+      await act(async () => change(findControl(container, "Target kind"), "domain"));
+      await act(async () => {
+        findButton(container, "Apply").click();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(mocks.patch).toHaveBeenCalledWith(
+        "plane-1",
+        expect.objectContaining({ expected_scene_revision: 7 }),
+        { baseRevision: 7, sessionScopeKey: sessionAScopeKey },
+      );
+      mocks.currentSessionScopeKey = "session=B&epoch=2&request_scope_epoch=2";
+      mocks.historyGeneration += 1;
+      await act(async () => {
+        finishPatch?.({
+          monitor: { ...monitorFixture, name: "Edited" },
+          scene_revision: 8,
+        });
+        await patchResult;
+      });
+
+      expect(controlValue(findControl(container, "Target kind"))).toBe("domain");
+      expect(mocks.invalidate).not.toHaveBeenCalled();
+      expect(mocks.refetch).not.toHaveBeenCalled();
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("fails closed when no session identity is available", async () => {
+    mocks.currentSessionScopeKey = null;
+    mocks.sessionIdentity = null;
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => root.render(<PlanarMonitorInspectorPanel selection={selection()} />));
+      await act(async () => change(findControl(container, "Target kind"), "domain"));
+      await act(async () => findButton(container, "Apply").click());
+
+      expect(mocks.patch).not.toHaveBeenCalled();
+      expect(container.textContent).toContain("Session identity is not ready");
     } finally {
       await act(async () => root.unmount());
       dom.restore();

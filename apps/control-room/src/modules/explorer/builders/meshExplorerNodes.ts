@@ -28,6 +28,14 @@ export function meshRootStatus(mesh: ModelTreeSnapshot["mesh"]): ExplorerNodeSta
   return "mesh-stale";
 }
 function meshRootBadge(mesh: ModelTreeSnapshot["mesh"]): string {
+  if (
+    mesh?.lastError &&
+    mesh.latestBuildStatus &&
+    mesh.meshName &&
+    mesh.meshRevision != null
+  ) {
+    return `failed · retained ${mesh.meshName}`;
+  }
   if (mesh?.lastError) return "failed";
   if (mesh?.activeBuildStatus) return mesh.activeBuildStatus;
   if (mesh?.meshName) return mesh.meshName;
@@ -70,11 +78,24 @@ function meshFreshnessBadge(freshness: MeshFreshnessState): string {
   return freshness;
 }
 
+function meshBuildPipelineBadge(mesh: ModelTreeSnapshot["mesh"]): string {
+  const revision = mesh?.meshRevision ?? mesh?.buildRevision ?? "none";
+  const sourceSceneRevision =
+    mesh?.manifestSourceSceneRevision ?? mesh?.latestBuildSourceSceneRevision;
+  if (
+    mesh?.lastError &&
+    mesh.latestBuildStatus &&
+    mesh.meshRevision != null
+  ) {
+    return `failed · retained rev ${mesh.meshRevision}`;
+  }
+  return `rev ${revision} · scene ${sourceSceneRevision ?? "unknown"}`;
+}
+
 export function buildMeshPolicyNode(mesh: ModelTreeSnapshot["mesh"]): ExplorerNode {
   const status = meshRootStatus(mesh);
   const freshness = meshFreshnessState(mesh);
   const sharedDomainStatus = meshFreshnessStatus(freshness, status);
-  const revision = mesh?.meshRevision ?? mesh?.buildRevision ?? "none";
   const partCount = mesh?.partCount ?? 0;
   const objectSegmentCount = mesh?.objectSegmentCount ?? 0;
   const regionCount = mesh?.regionCount ?? 0;
@@ -111,7 +132,7 @@ export function buildMeshPolicyNode(mesh: ModelTreeSnapshot["mesh"]): ExplorerNo
         kind: "mesh.builds",
         label: "Build Pipeline",
         parentId: "model:mesh",
-        badge: `rev ${revision}`,
+        badge: meshBuildPipelineBadge(mesh),
         icon: "activity",
         status,
         contextCommands: ["mesh.build-shared-domain", "mesh.open-builds"],
@@ -255,6 +276,7 @@ export function buildFdmMeshPolicyNode(
       badge: `${grid.shape.join(" × ")} / ${cellCount} cells`,
       icon: "mesh",
       status,
+      contextCommands: ["grid.build-fdm"],
     },
     {
       id: "model:mesh:magnetic-support",
@@ -309,7 +331,7 @@ export function buildFdmMeshPolicyNode(
     badge: `FDM · ${grid.shape.join(" × ")} / ${cellCount} cells`,
     icon: "mesh",
     status,
-    contextCommands: ["workspace.focus-selection"],
+    contextCommands: ["grid.build-fdm", "workspace.focus-selection"],
     children: [
       {
         id: domainMeshId,
@@ -319,6 +341,7 @@ export function buildFdmMeshPolicyNode(
         badge: `structured grid · ${grid.shape.join(" × ")} / ${cellCount} cells`,
         icon: "mesh",
         status,
+        contextCommands: ["grid.build-fdm"],
         children: [...structuredGridDetails, ...multilayerDetails],
       },
       {

@@ -4,11 +4,17 @@ import { useMemo, useState } from "react";
 
 import { useKernel } from "@/kernel/KernelContext";
 import {
+  authoringWriteOptions,
+  runAuthoringMutationWithHistory,
+} from "@/kernel/authoring/authoringHistoryMutation";
+import {
   MODEL_COUPLINGS_RESOURCE_KEY,
   MODEL_REGION_DIAGNOSTICS_RESOURCE_KEY,
   publishCommittedSceneResource,
   useModelCouplingsResource,
 } from "@/kernel/resources/geometryLifecycleResources";
+import { sessionRequestScopeKey } from "@/kernel/resources/sessionResourceIdentity";
+import { useSessionResourceIdentity } from "@/kernel/resources/useSessionStatus";
 import { Button } from "@/shared/ui/Button";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
@@ -35,7 +41,8 @@ function errorMessage(error: unknown): string {
 }
 
 export function CouplingInspectorPanel({ selection }: InspectorPanelProps) {
-  const { api, resources } = useKernel();
+  const { api, authoringHistory, resources } = useKernel();
+  const sessionScopeKey = sessionRequestScopeKey(useSessionResourceIdentity());
   const couplings = useModelCouplingsResource();
   const [pending, setPending] = useState(false);
   const [feedback, setFeedback] = useState<{
@@ -55,22 +62,47 @@ export function CouplingInspectorPanel({ selection }: InspectorPanelProps) {
       return;
     }
 
+    const operationSessionScopeKey = sessionScopeKey;
     setPending(true);
     try {
-      const response =
+      const response = await runAuthoringMutationWithHistory(
+        {
+          api,
+          authoringHistory,
+          sessionScopeKey: operationSessionScopeKey,
+        },
         action === "delete"
-          ? await api.model.deleteCoupling(model.couplingId, {
-              baseRevision: couplings.data?.scene_revision,
-            })
-          : await api.model.patchCoupling(
-              model.couplingId,
-              { enabled: !model.enabled },
-              { baseRevision: couplings.data?.scene_revision },
-            );
+          ? `Delete coupling ${model.couplingId}`
+          : `Toggle coupling ${model.couplingId}`,
+        async ({ baseRevision }) => {
+          const options = authoringWriteOptions(
+            baseRevision ?? couplings.data?.scene_revision,
+            operationSessionScopeKey,
+          );
+          if (action === "delete") {
+            return options
+              ? api.model.deleteCoupling(model.couplingId!, options)
+              : api.model.deleteCoupling(model.couplingId!);
+          }
+          return options
+            ? api.model.patchCoupling(
+                model.couplingId!,
+                { enabled: !model.enabled },
+                options,
+              )
+            : api.model.patchCoupling(model.couplingId!, {
+                enabled: !model.enabled,
+              });
+        },
+      );
       publishCommittedSceneResource(
         resources,
         response.committed_scene,
         response.scene_revision,
+        undefined,
+        true,
+        operationSessionScopeKey,
+        api.resourceCacheScope,
       );
       resources.invalidate(
         MODEL_COUPLINGS_RESOURCE_KEY,

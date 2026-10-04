@@ -1,6 +1,4 @@
-use crate::quantities::{
-    global_scalar_value, normalize_quantity_id, quantity_spec, QuantityKind,
-};
+use crate::quantities::{global_scalar_value, normalize_quantity_id, quantity_spec, QuantityKind};
 use crate::types::{LivePreviewField, StepStats};
 use serde::{Deserialize, Serialize};
 
@@ -149,9 +147,8 @@ impl DisplaySelectionState {
     /// and non-1/3-component quantities are excluded so native observers can
     /// consume the result without a second shape policy.
     pub fn canonicalize_observation_quantities(&mut self) {
-        let mut canonical = Vec::with_capacity(
-            MAX_OBSERVATION_QUANTITIES.min(self.observation_quantities.len()),
-        );
+        let mut canonical =
+            Vec::with_capacity(MAX_OBSERVATION_QUANTITIES.min(self.observation_quantities.len()));
         for requested in &self.observation_quantities {
             let Ok(quantity_id) = normalize_quantity_id(requested.trim()) else {
                 continue;
@@ -159,8 +156,10 @@ impl DisplaySelectionState {
             let Some(spec) = quantity_spec(quantity_id.as_str()) else {
                 continue;
             };
-            if !matches!(spec.shape, QuantityKind::VectorField | QuantityKind::SpatialScalar)
-                || !matches!(spec.n_comp, 1 | 3)
+            if !matches!(
+                spec.shape,
+                QuantityKind::VectorField | QuantityKind::SpatialScalar
+            ) || !matches!(spec.n_comp, 1 | 3)
             {
                 continue;
             }
@@ -343,6 +342,9 @@ mod tests {
         state.canonicalize_observation_quantities();
 
         assert!(state.observation_quantities.len() <= MAX_OBSERVATION_QUANTITIES);
-        assert_eq!(state.observation_quantities.len(), MAX_OBSERVATION_QUANTITIES);
+        assert_eq!(
+            state.observation_quantities.len(),
+            MAX_OBSERVATION_QUANTITIES
+        );
     }
 }

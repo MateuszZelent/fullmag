@@ -43,6 +43,7 @@ pub use antenna_stage::{
 mod antenna_fields;
 pub mod artifact_pipeline;
 mod artifacts;
+pub use artifacts::fem_p1_magnetization_field_semantics;
 #[cfg(feature = "stage-autosave-hdf5")]
 pub mod autosave_hdf5;
 pub mod autosave_storage;
@@ -64,14 +65,25 @@ pub mod hysteresis;
 pub mod interactive;
 mod interactive_runtime;
 mod native_fem;
+#[cfg(feature = "fem-native")]
+pub use native_fem::prepare_fem_mesh_space;
 mod observation;
+mod observation_runtime;
 mod physics_graph_execution;
 mod preview;
 pub mod quantities;
 mod solvers;
 pub use observation::{
-    observation_provider_policy, ObservationLane, ObservationProviderPolicy,
-    ObservationProviderResolver,
+    accepted_state_digests, observation_provider_policy, AcceptedPrimaryCarrier,
+    AcceptedStateDigests, AcceptedStateGeneration, AcceptedStateId, AcceptedStateIdentityError,
+    AcceptedStateRef, FdmCpuAcceptedStateSnapshotV1, FdmGpuAcceptedStateSnapshotV1,
+    ObservationClock, ObservationLane, ObservationProviderPolicy, ObservationProviderResolver,
+    FDM_CPU_ACCEPTED_STATE_SNAPSHOT_FILE, FDM_CPU_ACCEPTED_STATE_SNAPSHOT_SCHEMA,
+    FDM_GPU_ACCEPTED_STATE_SNAPSHOT_FILE, FDM_GPU_ACCEPTED_STATE_SNAPSHOT_SCHEMA,
+};
+pub use observation_runtime::{
+    ObservationFrame, ObservationPrimaryCarrier, ObservationQuantityBatch, ObservationRuntime,
+    ObservationRuntimeError,
 };
 mod regional_field_drive_artifacts;
 mod relaxation;
@@ -2461,6 +2473,160 @@ pub fn run_problem(
     run_planned_problem(problem, &plan, until_seconds, output_dir)
 }
 
+/// Return the runner's canonical layout identity for supported study state
+/// inputs. The exact artifact layout is the contract; the worker must never
+/// infer compatibility from vector length alone.
+pub fn study_magnetization_layout_for_plan(
+    plan: &fullmag_ir::ExecutionPlanIR,
+) -> Result<serde_json::Value, RunError> {
+    let layout = artifacts::field_layout(plan);
+    let backend = layout
+        .get("backend")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    if layout.get("layout_error").is_some()
+        || !matches!(backend, "fdm" | "fdm_multilayer" | "fem")
+        || matches!(&plan.backend_plan, fullmag_ir::BackendPlanIR::Fem(fem) if fem.fe_order != 1)
+    {
+        return Err(RunError {
+            message: format!(
+                "study magnetization input is unsupported for runner layout `{backend}`"
+            ),
+        });
+    }
+    Ok(layout)
+}
+
+/// Apply an immutable, decoded study magnetization to a copy of the accepted
+/// execution plan. Only exact same-space FDM, FDM multilayer, and FEM H1 P1
+/// layouts are supported; this performs no interpolation or backend change.
+pub fn materialize_study_magnetization_input(
+    plan: &fullmag_ir::ExecutionPlanIR,
+    source_layout: &serde_json::Value,
+    values: &[[f64; 3]],
+) -> Result<fullmag_ir::ExecutionPlanIR, RunError> {
+    let expected_layout = study_magnetization_layout_for_plan(plan)?;
+    if &expected_layout != source_layout {
+        return Err(RunError {
+            message: "study magnetization input space does not exactly match the accepted execution plan; cross-space transfer is unsupported".into(),
+        });
+    }
+    if values.is_empty() || values.iter().flatten().any(|value| !value.is_finite()) {
+        return Err(RunError {
+            message: "study magnetization input must contain finite three-component samples"
+                .into(),
+        });
+    }
+
+    let expected_samples = study_plan_state_sample_count(plan, &expected_layout)?;
+    if values.len() != expected_samples {
+        return Err(RunError {
+            message: format!(
+                "study magnetization input has {} samples but the accepted execution plan requires {expected_samples}",
+                values.len()
+            ),
+        });
+    }
+
+    let mut materialized = plan.clone();
+    match &mut materialized.backend_plan {
+        fullmag_ir::BackendPlanIR::Fdm(fdm) => {
+            fdm.initial_magnetization.copy_from_slice(values);
+        }
+        fullmag_ir::BackendPlanIR::FdmMultilayer(multilayer) => {
+            let mut offset = 0usize;
+            for layer in &mut multilayer.layers {
+                let end = offset + layer.initial_magnetization.len();
+                layer
+                    .initial_magnetization
+                    .copy_from_slice(&values[offset..end]);
+                offset = end;
+            }
+        }
+        fullmag_ir::BackendPlanIR::Fem(fem) => {
+            fem.initial_magnetization.copy_from_slice(values);
+        }
+        _ => unreachable!("accepted layout was validated above"),
+    }
+    Ok(materialized)
+}
+
+fn study_plan_state_sample_count(
+    plan: &fullmag_ir::ExecutionPlanIR,
+    layout: &serde_json::Value,
+) -> Result<usize, RunError> {
+    let invalid_layout = || RunError {
+        message: "study magnetization layout sample identity differs from the accepted execution plan".into(),
+    };
+    match (&plan.backend_plan, layout["backend"].as_str()) {
+        (fullmag_ir::BackendPlanIR::Fdm(fdm), Some("fdm")) => {
+            let sample_count = layout["total_cell_count"]
+                .as_u64()
+                .and_then(|count| usize::try_from(count).ok())
+                .ok_or_else(invalid_layout)?;
+            if sample_count != fdm.initial_magnetization.len() {
+                return Err(invalid_layout());
+            }
+            Ok(sample_count)
+        }
+        (fullmag_ir::BackendPlanIR::FdmMultilayer(multilayer), Some("fdm_multilayer")) => {
+            let layout_layers = layout["layers"].as_array().ok_or_else(invalid_layout)?;
+            if layout_layers.len() != multilayer.layers.len() {
+                return Err(invalid_layout());
+            }
+            let mut expected_offset = 0usize;
+            for (layer, descriptor) in multilayer.layers.iter().zip(layout_layers) {
+                let offset = descriptor["value_offset"]
+                    .as_u64()
+                    .and_then(|offset| usize::try_from(offset).ok())
+                    .ok_or_else(invalid_layout)?;
+                let count = descriptor["value_count"]
+                    .as_u64()
+                    .and_then(|count| usize::try_from(count).ok())
+                    .ok_or_else(invalid_layout)?;
+                if offset != expected_offset || count != layer.initial_magnetization.len() {
+                    return Err(invalid_layout());
+                }
+                expected_offset = expected_offset
+                    .checked_add(count)
+                    .ok_or_else(invalid_layout)?;
+            }
+            Ok(expected_offset)
+        }
+        (fullmag_ir::BackendPlanIR::Fem(fem), Some("fem")) if fem.fe_order == 1 => {
+            let sample_count = layout["n_nodes"]
+                .as_u64()
+                .and_then(|count| usize::try_from(count).ok())
+                .ok_or_else(invalid_layout)?;
+            if sample_count != fem.mesh.nodes.len()
+                || sample_count != fem.initial_magnetization.len()
+            {
+                return Err(invalid_layout());
+            }
+            Ok(sample_count)
+        }
+        _ => Err(invalid_layout()),
+    }
+}
+
+fn require_frequency_response_artifact_identity(
+    plan: &fullmag_ir::ExecutionPlanIR,
+    identity: Option<&eigen::FrequencyDomainArtifactIdentity>,
+) -> Result<(), RunError> {
+    let Some(identity) = identity else {
+        return Ok(());
+    };
+    identity.validate().map_err(|error| RunError {
+        message: format!("invalid frequency-domain artifact identity: {error}"),
+    })?;
+    let BackendPlanIR::FemFrequencyResponse(response) = &plan.backend_plan else {
+        return Err(RunError {
+            message: "exact FMR artifact identity requires a FEM frequency-response plan".into(),
+        });
+    };
+    frequency_response::validate_frequency_response_artifact_identity(response, Some(identity))
+}
+
 /// Run a problem with an already materialized execution plan.
 ///
 /// Interactive frontends use this to preserve the materialize -> wait ->
@@ -2473,6 +2639,36 @@ pub fn run_planned_problem(
     until_seconds: f64,
     output_dir: &Path,
 ) -> Result<RunResult, RunError> {
+    run_planned_problem_with_artifact_context(problem, plan, until_seconds, output_dir, None)
+}
+
+/// Execute an FMR plan with exact artifact ownership.
+/// Native execution requires the FEM feature; dense execution must be explicit.
+/// Identity is runner-owned and does not change the canonical ProblemIR.
+pub fn run_planned_problem_with_artifact_identity(
+    problem: &ProblemIR,
+    plan: &fullmag_ir::ExecutionPlanIR,
+    until_seconds: f64,
+    output_dir: &Path,
+    artifact_identity: &eigen::FrequencyDomainArtifactIdentity,
+) -> Result<RunResult, RunError> {
+    run_planned_problem_with_artifact_context(
+        problem,
+        plan,
+        until_seconds,
+        output_dir,
+        Some(artifact_identity),
+    )
+}
+
+fn run_planned_problem_with_artifact_context(
+    problem: &ProblemIR,
+    plan: &fullmag_ir::ExecutionPlanIR,
+    until_seconds: f64,
+    output_dir: &Path,
+    artifact_identity: Option<&eigen::FrequencyDomainArtifactIdentity>,
+) -> Result<RunResult, RunError> {
+    require_frequency_response_artifact_identity(plan, artifact_identity)?;
     require_resolved_runtime_sampling(problem, plan)?;
     require_physics_graph_runtime_provenance(problem, plan)?;
     if let fullmag_ir::StudyIR::Hysteresis { .. } = &problem.study {
@@ -2566,9 +2762,10 @@ pub fn run_planned_problem(
             let stage_context =
                 types::FemStageExecutionContext::from_backend_plan(&plan.backend_plan)
                     .expect("FEM stage context");
-            frequency_response::execute_fem_frequency_response_validation_with_context(
+            frequency_response::execute_fem_frequency_response_validation_with_artifact_context(
                 response,
                 &stage_context,
+                artifact_identity,
                 output_dir,
                 None,
                 None,
@@ -2840,8 +3037,60 @@ pub fn run_planned_problem_with_callback_and_fem_mesh_identity_and_relax_handoff
     output_dir: &Path,
     field_every_n: u64,
     relax_handoff: Option<&AcceptedFemRelaxStageHandoff>,
-    mut on_step: impl FnMut(StepUpdate) -> StepAction + Send,
+    on_step: impl FnMut(StepUpdate) -> StepAction + Send,
 ) -> Result<RunResult, RunError> {
+    run_planned_problem_with_callback_artifact_context(
+        problem,
+        plan,
+        fem_mesh_identity,
+        until_seconds,
+        output_dir,
+        field_every_n,
+        relax_handoff,
+        on_step,
+        None,
+    )
+}
+
+/// Execute an FMR plan with exact artifact ownership.
+/// Native execution requires the FEM feature; dense execution must be explicit.
+/// Identity is runner-owned and does not change the canonical ProblemIR.
+pub fn run_planned_problem_with_callback_and_artifact_identity(
+    problem: &ProblemIR,
+    plan: &fullmag_ir::ExecutionPlanIR,
+    fem_mesh_identity: Option<&StageFemMeshIdentity>,
+    until_seconds: f64,
+    output_dir: &Path,
+    field_every_n: u64,
+    relax_handoff: Option<&AcceptedFemRelaxStageHandoff>,
+    on_step: impl FnMut(StepUpdate) -> StepAction + Send,
+    artifact_identity: &eigen::FrequencyDomainArtifactIdentity,
+) -> Result<RunResult, RunError> {
+    run_planned_problem_with_callback_artifact_context(
+        problem,
+        plan,
+        fem_mesh_identity,
+        until_seconds,
+        output_dir,
+        field_every_n,
+        relax_handoff,
+        on_step,
+        Some(artifact_identity),
+    )
+}
+
+fn run_planned_problem_with_callback_artifact_context(
+    problem: &ProblemIR,
+    plan: &fullmag_ir::ExecutionPlanIR,
+    fem_mesh_identity: Option<&StageFemMeshIdentity>,
+    until_seconds: f64,
+    output_dir: &Path,
+    field_every_n: u64,
+    relax_handoff: Option<&AcceptedFemRelaxStageHandoff>,
+    mut on_step: impl FnMut(StepUpdate) -> StepAction + Send,
+    artifact_identity: Option<&eigen::FrequencyDomainArtifactIdentity>,
+) -> Result<RunResult, RunError> {
+    require_frequency_response_artifact_identity(plan, artifact_identity)?;
     require_resolved_runtime_sampling(problem, plan)?;
     require_physics_graph_runtime_provenance(problem, plan)?;
     if let fullmag_ir::StudyIR::Hysteresis { .. } = &problem.study {
@@ -2858,7 +3107,12 @@ pub fn run_planned_problem_with_callback_and_fem_mesh_identity_and_relax_handoff
     }
     let fem_stage_context = fem_mesh_identity
         .cloned()
-        .map(types::FemStageExecutionContext::from_mesh_identity);
+        .map(types::FemStageExecutionContext::from_mesh_identity)
+        .or_else(|| {
+            artifact_identity.and_then(|_| {
+                types::FemStageExecutionContext::from_backend_plan(&plan.backend_plan)
+            })
+        });
     let mut artifact_pipeline = artifact_pipeline::ArtifactPipeline::start_for_problem_and_plan(
         problem,
         plan,
@@ -2986,9 +3240,10 @@ pub fn run_planned_problem_with_callback_and_fem_mesh_identity_and_relax_handoff
             }
         }
         BackendPlanIR::FemFrequencyResponse(response) => {
-            frequency_response::execute_fem_frequency_response_validation_with_context(
+            frequency_response::execute_fem_frequency_response_validation_with_artifact_context(
                 response,
                 fem_stage_context.as_ref().expect("FEM stage context"),
+                artifact_identity,
                 output_dir,
                 None,
                 Some(&mut on_step as &mut dyn FnMut(StepUpdate) -> StepAction),
@@ -3302,8 +3557,72 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
     display_selection: &(dyn Fn() -> DisplaySelectionState + Send + Sync),
     interrupt_requested: Option<&std::sync::atomic::AtomicBool>,
     initial_snapshot: bool,
-    mut on_step: impl FnMut(StepUpdate) -> StepAction + Send,
+    on_step: impl FnMut(StepUpdate) -> StepAction + Send,
 ) -> Result<RunResult, RunError> {
+    run_planned_problem_with_live_preview_artifact_context(
+        problem,
+        plan,
+        fem_mesh_identity,
+        until_seconds,
+        output_dir,
+        autosave_root,
+        field_every_n,
+        display_selection,
+        interrupt_requested,
+        initial_snapshot,
+        on_step,
+        None,
+    )
+}
+
+/// Execute an FMR plan with exact artifact ownership.
+/// Native execution requires the FEM feature; dense execution must be explicit.
+/// Identity is runner-owned and does not change the canonical ProblemIR.
+pub fn run_planned_problem_with_live_preview_and_artifact_identity(
+    problem: &ProblemIR,
+    plan: &fullmag_ir::ExecutionPlanIR,
+    fem_mesh_identity: Option<&StageFemMeshIdentity>,
+    until_seconds: f64,
+    output_dir: &Path,
+    autosave_root: &Path,
+    field_every_n: u64,
+    display_selection: &(dyn Fn() -> DisplaySelectionState + Send + Sync),
+    interrupt_requested: Option<&std::sync::atomic::AtomicBool>,
+    initial_snapshot: bool,
+    on_step: impl FnMut(StepUpdate) -> StepAction + Send,
+    artifact_identity: &eigen::FrequencyDomainArtifactIdentity,
+) -> Result<RunResult, RunError> {
+    run_planned_problem_with_live_preview_artifact_context(
+        problem,
+        plan,
+        fem_mesh_identity,
+        until_seconds,
+        output_dir,
+        autosave_root,
+        field_every_n,
+        display_selection,
+        interrupt_requested,
+        initial_snapshot,
+        on_step,
+        Some(artifact_identity),
+    )
+}
+
+fn run_planned_problem_with_live_preview_artifact_context(
+    problem: &ProblemIR,
+    plan: &fullmag_ir::ExecutionPlanIR,
+    fem_mesh_identity: Option<&StageFemMeshIdentity>,
+    until_seconds: f64,
+    output_dir: &Path,
+    autosave_root: &Path,
+    field_every_n: u64,
+    display_selection: &(dyn Fn() -> DisplaySelectionState + Send + Sync),
+    interrupt_requested: Option<&std::sync::atomic::AtomicBool>,
+    initial_snapshot: bool,
+    mut on_step: impl FnMut(StepUpdate) -> StepAction + Send,
+    artifact_identity: Option<&eigen::FrequencyDomainArtifactIdentity>,
+) -> Result<RunResult, RunError> {
+    require_frequency_response_artifact_identity(plan, artifact_identity)?;
     require_resolved_runtime_sampling(problem, plan)?;
     if let fullmag_ir::StudyIR::Hysteresis { .. } = &problem.study {
         return hysteresis::run_planned_hysteresis_with_live_preview(
@@ -3322,7 +3641,12 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
     }
     let fem_stage_context = fem_mesh_identity
         .cloned()
-        .map(types::FemStageExecutionContext::from_mesh_identity);
+        .map(types::FemStageExecutionContext::from_mesh_identity)
+        .or_else(|| {
+            artifact_identity.and_then(|_| {
+                types::FemStageExecutionContext::from_backend_plan(&plan.backend_plan)
+            })
+        });
     let mut artifact_pipeline =
         artifact_pipeline::ArtifactPipeline::start_for_problem_and_plan_with_autosave_root(
             problem,
@@ -3456,9 +3780,10 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
             )
         }
         BackendPlanIR::FemFrequencyResponse(response) => {
-            frequency_response::execute_fem_frequency_response_validation_with_context(
+            frequency_response::execute_fem_frequency_response_validation_with_artifact_context(
                 response,
                 fem_stage_context.as_ref().expect("FEM stage context"),
+                artifact_identity,
                 output_dir,
                 interrupt_requested,
                 Some(&mut on_step as &mut dyn FnMut(StepUpdate) -> StepAction),
@@ -6905,7 +7230,9 @@ mod tests {
                 body.contains("hysteresis::run_planned_hysteresis")
                     || body.contains(
                         "run_planned_problem_with_callback_and_fem_mesh_identity_and_relax_handoff(",
-                    ),
+                    )
+                    || body.contains("run_planned_problem_with_artifact_context(")
+                    || body.contains("run_planned_problem_with_live_preview_artifact_context("),
                 "{entrypoint} bypasses the shared hysteresis owner"
             );
         }

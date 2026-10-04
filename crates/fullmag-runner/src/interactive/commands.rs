@@ -185,16 +185,9 @@ mod tests {
             "frozen_spins".to_string(),
         ];
 
-        let command = parse_session_command(
-            "display_sync",
-            None,
-            None,
-            None,
-            None,
-            Some(&display),
-            None,
-        )
-        .expect("display sync should produce a typed command");
+        let command =
+            parse_session_command("display_sync", None, None, None, None, Some(&display), None)
+                .expect("display sync should produce a typed command");
 
         let LiveControlCommand::SetDisplaySelection(display) = command else {
             panic!("display sync should preserve the display state payload");

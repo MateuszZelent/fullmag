@@ -1132,14 +1132,17 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "fontdue",
+ "fullmag-application",
  "fullmag-authoring",
  "fullmag-build-info",
  "fullmag-ir",
  "fullmag-plan",
  "fullmag-quantities",
  "fullmag-runner",
+ "fullmag-runtime-control",
  "fullmag-session",
  "futures-core",
+ "libc",
  "png 0.17.16",
  "serde",
  "serde_json",
@@ -1153,6 +1156,22 @@ dependencies = [
  "utoipa",
  "utoipa-swagger-ui",
  "uuid",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "fullmag-application"
+version = "0.1.0"
+dependencies = [
+ "fullmag-ir",
+ "fullmag-plan",
+ "fullmag-quantities",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "uuid",
+ "zip",
 ]
 
 [[package]]
@@ -1162,6 +1181,7 @@ dependencies = [
  "fullmag-ir",
  "serde",
  "serde_json",
+ "sha2",
  "utoipa",
 ]
 
@@ -1191,11 +1211,13 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "fullmag-application",
  "fullmag-build-info",
  "fullmag-engine",
  "fullmag-ir",
  "fullmag-plan",
  "fullmag-runner",
+ "fullmag-runtime-control",
  "fullmag-session",
  "libc",
  "rayon",
@@ -1209,12 +1231,16 @@ dependencies = [
 name = "fullmag-desktop"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
+ "fullmag-application",
+ "fullmag-runtime-control",
  "serde",
  "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
  "tauri-plugin-shell",
+ "tempfile",
  "url",
 ]
 
@@ -1268,6 +1294,7 @@ dependencies = [
 name = "fullmag-plan"
 version = "0.1.0"
 dependencies = [
+ "fullmag-authoring",
  "fullmag-fdm-demag",
  "fullmag-ir",
  "fullmag-quantities",
@@ -1280,6 +1307,7 @@ dependencies = [
 name = "fullmag-py-core"
 version = "0.1.0"
 dependencies = [
+ "fullmag-application",
  "fullmag-engine",
  "fullmag-ir",
  "fullmag-plan",
@@ -1298,6 +1326,7 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]
@@ -1325,12 +1354,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "fullmag-runtime-control"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "fullmag-application",
+ "fullmag-authoring",
+ "fullmag-build-info",
+ "fullmag-ir",
+ "fullmag-plan",
+ "fullmag-quantities",
+ "fullmag-runner",
+ "fullmag-session",
+ "libc",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "uuid",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "fullmag-session"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
  "fullmag-ir",
+ "fullmag-quantities",
  "libc",
  "serde",
  "serde_json",

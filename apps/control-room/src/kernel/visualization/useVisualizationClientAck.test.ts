@@ -47,6 +47,8 @@ describe("visualization ACK coordinator contract", () => {
     const api = { visualization: { ack } } as never;
     const input = {
       revision: 7,
+      requestScopeEpoch: "api:1",
+      sessionId: "session-1",
       sessionEpoch: "epoch-1",
       status: "rendered" as const,
       viewportId: "main",
@@ -77,6 +79,8 @@ describe("visualization ACK coordinator contract", () => {
     } as never);
     const input = {
       revision: 7,
+      requestScopeEpoch: "api:1",
+      sessionId: "session-1",
       sessionEpoch: "epoch-1",
       status: "rendered" as const,
       viewportId: "main",
@@ -106,6 +110,8 @@ describe("visualization ACK coordinator contract", () => {
       },
       resourceKey: "field:H_demag:r7",
       revision: 7,
+      requestScopeEpoch: "api:1",
+      sessionId: "session-1",
       sessionEpoch: "epoch-1",
       status: "applied" as const,
       viewportId: "main",
@@ -166,6 +172,8 @@ describe("visualization ACK coordinator contract", () => {
         changeKind: "data",
         resourceKey: `field:${revision}`,
         revision,
+        requestScopeEpoch: "api:1",
+        sessionId: "session-1",
         sessionEpoch: "epoch-1",
         status: "applied",
         viewportId: "main",
@@ -188,6 +196,8 @@ describe("visualization ACK coordinator contract", () => {
       changeKind: "data",
       resourceKey: "field:m",
       revision: 11,
+      requestScopeEpoch: "api:1",
+      sessionId: "session-1",
       sessionEpoch: "epoch-1",
       status: "applied",
       viewportId: "main",
@@ -205,6 +215,8 @@ describe("visualization ACK coordinator contract", () => {
       dataIdentity: { fieldBufferId: "s1:e1:m:1", fieldRevision: "1", resourceKey: "field:m", sessionEpoch: "e1", sessionId: "s1", visualizationRevision: 1 },
       resourceKey: "field:m",
       revision: 1,
+      requestScopeEpoch: "api:1",
+      sessionId: "s1",
       sessionEpoch: "e1",
       status: "applied",
       viewportId: "main",
@@ -212,6 +224,8 @@ describe("visualization ACK coordinator contract", () => {
     coordinator.send({
       changeKind: "style",
       revision: 2,
+      requestScopeEpoch: "api:2",
+      sessionId: "s2",
       sessionEpoch: "e2",
       status: "rendered",
       viewportId: "main",
@@ -232,6 +246,8 @@ describe("visualization ACK coordinator contract", () => {
     coordinator.send({
       effectiveRenderMode: "surface+wireframe",
       revision: 8,
+      requestScopeEpoch: "api:1",
+      sessionId: "session-1",
       sessionEpoch: "epoch-1",
       status: "rendered",
       viewportId: "main",
@@ -245,6 +261,48 @@ describe("visualization ACK coordinator contract", () => {
     });
   });
 
+  it("sends the complete canonical session scope for terminal acknowledgements", () => {
+    const ack = vi.fn().mockResolvedValue(undefined);
+    const coordinator = createVisualizationAckCoordinator({
+      visualization: { ack },
+    } as never);
+
+    coordinator.send({
+      requestScopeEpoch: "api:7",
+      revision: 8,
+      sessionEpoch: "session-1@7",
+      sessionId: "session-1",
+      status: "rendered",
+      viewportId: "main",
+    });
+
+    expect(ack).toHaveBeenCalledWith(
+      expect.objectContaining({ revision: 8, status: "rendered" }),
+      {
+        sessionScopeKey:
+          "session=session-1&epoch=session-1%407&request_scope_epoch=api%3A7",
+      },
+    );
+  });
+
+  it("fails closed when the request scope epoch is unavailable", () => {
+    const ack = vi.fn().mockResolvedValue(undefined);
+    const coordinator = createVisualizationAckCoordinator({
+      visualization: { ack },
+    } as never);
+
+    coordinator.send({
+      requestScopeEpoch: null,
+      revision: 8,
+      sessionEpoch: "session-1@7",
+      sessionId: "session-1",
+      status: "rendered",
+      viewportId: "main",
+    });
+
+    expect(ack).not.toHaveBeenCalled();
+  });
+
   it("does not send another ACK for orbit rerenders without a revision change", () => {
     const ack = vi.fn().mockResolvedValue(undefined);
     const coordinator = createVisualizationAckCoordinator({
@@ -252,6 +310,8 @@ describe("visualization ACK coordinator contract", () => {
     } as never);
     const input = {
       revision: 9,
+      requestScopeEpoch: "api:1",
+      sessionId: "session-1",
       sessionEpoch: "epoch-1",
       status: "rendered" as const,
       viewportId: "main",

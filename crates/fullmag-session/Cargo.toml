@@ -3,6 +3,7 @@ name = "fullmag-session"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
+rust-version = "1.89"
 
 [dependencies]
 anyhow.workspace = true
@@ -15,6 +16,7 @@ uuid = { version = "1", features = ["v4", "serde"] }
 tracing.workspace = true
 libc = "0.2"
 fullmag-ir = { path = "../fullmag-ir" }
+fullmag-quantities = { path = "../fullmag-quantities" }
 utoipa = { version = "5", features = ["chrono"] }
 
 [dev-dependencies]

@@ -16,6 +16,7 @@ import {
 } from "@/kernel/resources/planarFieldResources";
 import { useDomainMetaResource } from "@/kernel/resources/geometryLifecycleResources";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
+import { useSessionScopedResourceKey } from "@/kernel/resources/useSessionScopedResourceKey";
 import { useSelectionSelector } from "@/kernel/selection/useSelection";
 import { resolveVisualizationTargetFromSelection } from "@/kernel/visualization/ObjectVisualizationController";
 import {
@@ -49,9 +50,11 @@ import {
   type PlanarRenderEvidence,
 } from "./model/fieldMapEvidence";
 import { PlanarSurface } from "./renderer/PlanarSurface";
+import { useRetainedPlanarFrame } from "./hooks/useRetainedPlanarFrame";
 
 function useFieldMapModuleController() {
   const { layout, visualizationSync } = useKernel();
+  const { resourceKey: sessionFrameKey, sessionIdentity } = useSessionScopedResourceKey("planar-render-frame");
   const [pinned, setPinned] = useState<readonly [number, number] | null>(null);
   const [renderEvidence, setRenderEvidence] =
     useState<PlanarRenderEvidence | null>(null);
@@ -310,6 +313,10 @@ function useFieldMapModuleController() {
   const planarViewIdentityKey = useMemo(
     () =>
       JSON.stringify({
+        sessionFrameKey,
+        domainGenerationId: domain.data?.generation_id ?? null,
+        defaultSlice: canonicalPlanar?.default_slice ?? null,
+        vectorBudget: canonicalPlanar?.resolution.vector_budget ?? 0,
         component: canonicalPlanar?.component ?? null,
         quality: canonicalPlanar?.quality ?? null,
         quantityId: canonicalPlanar?.quantity_id ?? null,
@@ -324,6 +331,8 @@ function useFieldMapModuleController() {
         viewScope: canonicalPlanar?.view_scope ?? null,
       }),
     [
+      sessionFrameKey,
+      domain.data?.generation_id,
       canonicalPlanar,
       canonicalSourceKind,
       canonicalSourceMonitorId,
@@ -331,39 +340,11 @@ function useFieldMapModuleController() {
       selectedFieldContext.stageId,
     ],
   );
-  const [retainedPlanarFrame, setRetainedPlanarFrame] = useState<{
-    identityKey: string;
-    revisionKey: string;
-    model: NonNullable<typeof freshRenderModel>;
-  } | null>(null);
-  const planarFrameRevisionKey = JSON.stringify({
-    mask: mask.revision,
-    mesh: meshOverlay.revision,
-    meta: meta.data?.etag,
-    presentation: presentationPlanar,
-    scalar: scalar.data?.etag,
-    vectors: vectors.revision,
-    wireframe: effectiveWireframeStyle,
-  });
-  if (freshRenderModel && (
-    retainedPlanarFrame?.identityKey !== planarViewIdentityKey ||
-    retainedPlanarFrame.revisionKey !== planarFrameRevisionKey
-  )) {
-    setRetainedPlanarFrame({
-      identityKey: planarViewIdentityKey,
-      revisionKey: planarFrameRevisionKey,
-      model: freshRenderModel,
-    });
-  } else if (!freshRenderModel && retainedPlanarFrame &&
-    retainedPlanarFrame.identityKey !== planarViewIdentityKey) {
-    setRetainedPlanarFrame(null);
-  }
-  const renderModel =
-    freshRenderModel ??
-    (retainedPlanarFrame &&
-    retainedPlanarFrame.identityKey === planarViewIdentityKey
-      ? retainedPlanarFrame.model
-      : null);
+  const renderModel = useRetainedPlanarFrame(
+    sessionIdentity === null ? null : planarViewIdentityKey,
+    freshRenderModel,
+    meta.data?.source ? JSON.stringify(meta.data.source) : null,
+  );
   const pinnedAxisState = useMemo(() => {
     if (!renderModel || !probe.data) return null;
     const axisFrame = {

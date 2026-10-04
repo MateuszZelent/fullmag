@@ -4500,9 +4500,9 @@ fn resolve_k0_periodic_airbox_execution(
                     ),
                     Some(reason) => {
                         return Err(PlanError {
-                        reasons: vec![format!(
-                            "fem_eigen.k0_periodic_airbox_unsupported_fallback_reason: '{reason}'; fallback=none"
-                        )],
+                            reasons: vec![format!(
+                                "fem_eigen.k0_periodic_airbox_unsupported_fallback_reason: '{reason}'; fallback=none"
+                            )],
                         });
                     }
                 },
@@ -5721,10 +5721,14 @@ fn fem_frequency_response_production_slice_rejection_reason(
     if plan.domain_mesh_mode != fullmag_ir::FemDomainMeshModeIR::MergedMagneticMesh
         && plan.domain_mesh_mode != fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir
     {
-        return Some("frequency-response dynamic demag requires a magnetic-body or shared-domain airbox mesh");
+        return Some(
+            "frequency-response dynamic demag requires a magnetic-body or shared-domain airbox mesh",
+        );
     }
     if plan.enable_demag != plan.demag_realization.is_some() {
-        return Some("frequency-response dynamic demag requires include_demag=true and a resolved Demag energy term");
+        return Some(
+            "frequency-response dynamic demag requires include_demag=true and a resolved Demag energy term",
+        );
     }
     match plan.spin_wave_bc.kind() {
         fullmag_ir::SpinWaveBoundaryKindIR::Free => {
@@ -5775,7 +5779,9 @@ fn fem_frequency_response_production_slice_rejection_reason(
             }
         }
         _ => {
-            return Some("the requested spin-wave boundary condition is not enforced by the driven response operator");
+            return Some(
+                "the requested spin-wave boundary condition is not enforced by the driven response operator",
+            );
         }
     }
     None

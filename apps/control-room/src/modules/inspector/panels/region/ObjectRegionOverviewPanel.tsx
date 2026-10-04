@@ -35,6 +35,7 @@ export function ObjectRegionOverviewPanel({
   model,
   draft,
   pending,
+  sessionAvailable,
   draftDirty,
   buildRegion,
   regionMeshLifecycle,
@@ -123,6 +124,7 @@ export function ObjectRegionOverviewPanel({
 
       <ObjectRegionActionsSection
         pending={pending}
+        sessionAvailable={sessionAvailable}
         draftDirty={draftDirty}
         buildRegion={buildRegion}
         regionMeshLifecycle={regionMeshLifecycle}

@@ -7476,7 +7476,7 @@ def problem_ir_execution_command(
 ) -> list[str]:
     return [
         str(binary),
-        "run-json",
+        "run-problem-json-direct",
         str(problem_ir_path),
         "--until",
         repr(until_seconds),
@@ -7981,7 +7981,7 @@ def run_backend(
         if problem_ir is not None:
             if ui_surface != "headless":
                 raise ValueError(
-                    "interactive benchmark surface requires script execution, not run-json"
+                    "interactive benchmark surface requires script execution, not run-problem-json-direct"
                 )
             problem_ir_path = case_dir / "canonical.problem-ir.json"
             problem_ir_payload = canonical_problem_ir_bytes(problem_ir)

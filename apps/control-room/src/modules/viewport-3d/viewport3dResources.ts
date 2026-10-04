@@ -48,8 +48,9 @@ import {
 } from "@/kernel/resources/ResourceRuntimeStore";
 import type { ResourceInvalidationController } from "@/kernel/resources/ResourceInvalidationController";
 import { useResource } from "@/kernel/resources/useResource";
-import { sessionScopedResourceKey } from "@/kernel/resources/sessionResourceIdentity";
+import { sessionResourceIdentityKey, sessionScopedResourceKey } from "@/kernel/resources/sessionResourceIdentity";
 import { useSessionResourceIdentity } from "@/kernel/resources/useSessionStatus";
+import { observationFrameMagnetizationResourceKey } from "@/kernel/resources/observationFrameResources";
 
 import {
   buildViewport3DFieldResourceRequestId,
@@ -96,9 +97,7 @@ function abortViewport3DInflightBinaryResources(): void {
 export function synchronizeViewport3DSessionIdentity(
   identity: ReturnType<typeof useSessionResourceIdentity>,
 ): boolean {
-  const identityKey = identity
-    ? `${identity.sessionId}\u0000${identity.sessionEpoch}`
-    : null;
+  const identityKey = identity ? sessionResourceIdentityKey(identity) : null;
   if (activeViewportSessionIdentityKey === identityKey) return false;
   viewport3DSessionIdentityGeneration += 1;
   abortViewport3DInflightBinaryResources();
@@ -1411,7 +1410,7 @@ export function resolveViewport3DFieldVectorCollectionResourceKey(
     : `${DATA_FIELDS_PATH}#viewport-3d:${kind}-field-vectors:none`;
 }
 
-export function useViewport3DDomainMeta() {
+export function useViewport3DDomainMeta(enabled = true) {
   const { api } = useKernel();
   const sessionIdentity = useViewport3DSessionIdentity();
   const resourceKey = sessionIdentity
@@ -1423,14 +1422,14 @@ export function useViewport3DDomainMeta() {
   );
 
   return useResource({
-    enabled: sessionIdentity !== null,
+    enabled: enabled && sessionIdentity !== null,
     load,
     resolveRevision: resolveDomainMetaRevision,
     resourceKey,
   });
 }
 
-export function useViewport3DDomainTopology() {
+export function useViewport3DDomainTopology(enabled = true) {
   const { api } = useKernel();
   const sessionIdentity = useViewport3DSessionIdentity();
   const resourceKey = sessionIdentity
@@ -1452,7 +1451,7 @@ export function useViewport3DDomainTopology() {
   );
 
   return useResource({
-    enabled: sessionIdentity !== null,
+    enabled: enabled && sessionIdentity !== null,
     load,
     resolveRevision: () => topologyCache.peek(resourceKey)?.etag ?? null,
     resourceKey,
@@ -1515,13 +1514,14 @@ export function useViewport3DFieldVectorRequest(
     ? sessionScopedResourceKey(sessionIdentity, unscopedRequestKey)
     : unscopedRequestKey;
   const load = useCallback(
-    async ({ signal }: { signal: AbortSignal }) => {
+    async ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) => {
       const data = await loadCachedBinaryResource(
         fieldVectorCache,
         requestKey,
         (etag, requestSignal) =>
           api.data.fields.vector(quantityId, query, {
             etag,
+            sessionScopeKey,
             signal: requestSignal,
           }),
         {
@@ -1559,6 +1559,89 @@ export function useViewport3DFieldVectorRequest(
     load,
     minRefetchIntervalMs: fieldVectorMinRefetchIntervalMs(),
     pauseLoad: options.pauseLoad,
+    retryPolicy: FIELD_VECTOR_RETRY_POLICY,
+    resolveRevision,
+    resourceKey: requestKey,
+  });
+  return {
+    ...resource,
+    data: resource.data?.data ?? null,
+    payloadRevision: resource.data?.etag ?? resolveRevision(),
+    responseMetadata: resource.data?.responseMetadata ?? null,
+  };
+}
+
+export function validateViewport3DObservationFrameMagnetization(
+  data: DecodedFieldVector,
+  frameId: string,
+): void {
+  if (data.sourceKind !== "observation_frame") {
+    throw new Error(
+      `Observation frame ${frameId} returned field source kind ${data.sourceKind ?? "unknown"}.`,
+    );
+  }
+  if (data.sourceId !== frameId) {
+    throw new Error(
+      `Observation frame ${frameId} returned field source ${data.sourceId ?? "unknown"}.`,
+    );
+  }
+  if (resolveCanonicalQuantityId(data.quantityId) !== "m") {
+    throw new Error(
+      `Observation frame ${frameId} returned quantity ${data.quantityId}.`,
+    );
+  }
+}
+
+export function useViewport3DObservationFrameMagnetization(
+  frameId: string | null | undefined,
+  enabled = true,
+) {
+  const { api } = useKernel();
+  const sessionIdentity = useViewport3DSessionIdentity();
+  const unscopedRequestKey = observationFrameMagnetizationResourceKey(frameId);
+  const requestKey = sessionIdentity
+    ? sessionScopedResourceKey(sessionIdentity, unscopedRequestKey)
+    : unscopedRequestKey;
+  const load = useCallback(
+    async ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) => {
+      if (!frameId) {
+        throw new Error("An observation frame must be pinned before it can be rendered.");
+      }
+      const data = await loadCachedBinaryResource(
+        fieldVectorCache,
+        requestKey,
+        async (etag, requestSignal) => {
+          const result = await api.data.observationFrames.magnetization(frameId, {
+            etag,
+            sessionScopeKey,
+            signal: requestSignal,
+          });
+          if (result.status === "ready") {
+            validateViewport3DObservationFrameMagnetization(result.data, frameId);
+          }
+          return result;
+        },
+        {
+          onFreshAdoption: recordFieldVectorCacheAdoption,
+          preferCached: true,
+          signal,
+        },
+      );
+      return data === null
+        ? null
+        : resolveCachedFieldVectorEnvelope(fieldVectorCache, requestKey, data);
+    },
+    [api, frameId, requestKey],
+  );
+  const resolveRevision = useCallback(
+    () => fieldVectorCache.peek(requestKey)?.etag ?? null,
+    [requestKey],
+  );
+  const resource = useResource({
+    abortStaleInflight: true,
+    enabled: enabled && Boolean(frameId) && sessionIdentity !== null,
+    load,
+    pauseLoad: false,
     retryPolicy: FIELD_VECTOR_RETRY_POLICY,
     resolveRevision,
     resourceKey: requestKey,
@@ -1618,7 +1701,7 @@ export function useViewport3DAirboxFieldVectors(
     );
   }, [requests]);
   const load = useCallback(
-    async ({ signal }: { signal: AbortSignal }) => {
+    async ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) => {
       const uniqueRequests = Array.from(
         new Map(
           Array.from(requests.values(), (request) => [request.key, request]),
@@ -1641,6 +1724,7 @@ export function useViewport3DAirboxFieldVectors(
             (etag, requestSignal) =>
               api.data.fields.vector(request.quantityId, request.query, {
                 etag,
+                sessionScopeKey,
                 signal: requestSignal,
               }),
             {
@@ -1895,7 +1979,7 @@ export function useViewport3DQuantityFieldVectors(
     );
   }, [requestKeys]);
   const load = useCallback(
-    async ({ signal }: { signal: AbortSignal }) => {
+    async ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) => {
       const entries: Array<readonly [string, CachedFieldVectorEnvelope | null]> = [];
       const requestFailures: Viewport3DFieldVectorRequestFailure[] = [];
       let firstError: unknown = null;
@@ -1914,7 +1998,7 @@ export function useViewport3DQuantityFieldVectors(
               api.data.fields.vector(
                 request.quantityId,
                 request.query,
-                { etag, signal: requestSignal },
+                { etag, sessionScopeKey, signal: requestSignal },
               ),
             {
               onFreshAdoption: recordFieldVectorCacheAdoption,
@@ -2137,7 +2221,7 @@ export function useViewport3DPartFieldVectors(
     );
   }, [requestKeys]);
   const load = useCallback(
-    async ({ signal }: { signal: AbortSignal }) => {
+    async ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) => {
       const entries: Array<readonly [string, CachedFieldVectorEnvelope | null]> = [];
       const requestFailures: Viewport3DFieldVectorRequestFailure[] = [];
       let firstError: unknown = null;
@@ -2156,7 +2240,7 @@ export function useViewport3DPartFieldVectors(
               api.data.fields.vector(
                 request.quantityId,
                 request.query,
-                { etag, signal: requestSignal },
+                { etag, sessionScopeKey, signal: requestSignal },
               ),
             {
               onFreshAdoption: recordFieldVectorCacheAdoption,
@@ -2356,7 +2440,7 @@ export function useViewport3DMeshQualityData(enabled = true) {
   });
 }
 
-export function useViewport3DSharedDomainManifest() {
+export function useViewport3DSharedDomainManifest(enabled = true) {
   const { api } = useKernel();
   const sessionIdentity = useViewport3DSessionIdentity();
   const resourceKey = sessionIdentity
@@ -2372,14 +2456,14 @@ export function useViewport3DSharedDomainManifest() {
   );
 
   return useResource({
-    enabled: sessionIdentity !== null,
+    enabled: enabled && sessionIdentity !== null,
     load,
     resolveRevision: resolveSharedDomainManifestRevision,
     resourceKey,
   });
 }
 
-export function useViewport3DScene() {
+export function useViewport3DScene(enabled = true) {
   const { api } = useKernel();
   const sessionIdentity = useViewport3DSessionIdentity();
   const resourceKey = sessionIdentity
@@ -2391,13 +2475,13 @@ export function useViewport3DScene() {
   );
 
   return useResource({
-    enabled: sessionIdentity !== null,
+    enabled: enabled && sessionIdentity !== null,
     load,
     resourceKey,
   });
 }
 
-export function useViewport3DUniverse() {
+export function useViewport3DUniverse(enabled = true) {
   const { api } = useKernel();
   const sessionIdentity = useViewport3DSessionIdentity();
   const resourceKey = sessionIdentity
@@ -2409,7 +2493,7 @@ export function useViewport3DUniverse() {
   );
 
   return useResource({
-    enabled: sessionIdentity !== null,
+    enabled: enabled && sessionIdentity !== null,
     load,
     resolveRevision: resolveUniverseRevision,
     resourceKey,

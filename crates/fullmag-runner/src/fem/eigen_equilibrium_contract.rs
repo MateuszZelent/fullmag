@@ -171,10 +171,7 @@ impl AcceptedFemRelaxStageHandoff {
         let source_magnetic_nodes =
             crate::preview::mesh_quantity_active_mask("m", &source_plan.mesh)
                 .expect("magnetization has a magnetic-only spatial domain");
-        validate_handoff_m0_norms(
-            &equilibrium_magnetization,
-            &source_magnetic_nodes,
-        )?;
+        validate_handoff_m0_norms(&equilibrium_magnetization, &source_magnetic_nodes)?;
         let source_signatures =
             crate::fem::equilibrium_identity::EquilibriumIdentitySignaturesV1::from_relax_plan(
                 source_plan,

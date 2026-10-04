@@ -126,6 +126,9 @@ export async function qualifyMeshPolicyEditing({ page, fixture, outputDir, works
       evidence.screenshots.push(afterFile);
       evidence.scenarios.push({ target: target.name, jsonSynchronization: "passed", invalidJson: "passed", dirtySelection: "passed", during, after, mutationRequests });
     }
+    if (process.env.CONTROL_ROOM_INSPECTOR_RETAINED_MESH === "1") {
+      evidence.retainedMesh = await qualifyRetainedMeshArtifact(page, fixture);
+    }
     const canvas = page.locator(".fm-viewport-3d canvas").first();
     assert.ok(await canvas.isVisible(), "3D canvas is not visible");
     evidence.webgl = await canvas.evaluate((element) => {
@@ -144,6 +147,45 @@ export async function qualifyMeshPolicyEditing({ page, fixture, outputDir, works
     await writeFile(resolve(outputDir, "mesh-policy-browser.json"), JSON.stringify(evidence, null, 2));
   }
   console.log(JSON.stringify(evidence, null, 2));
+}
+
+async function qualifyRetainedMeshArtifact(page, fixture) {
+  await selectNode(page, "model:mesh:builds", ["model:mesh"]);
+  const inspector = page.locator(".fm-inspector");
+  const panel = inspector.locator(".fm-inspector-panel").first();
+  const [panelText, meshRootText, buildNodeText] = await Promise.all([
+    panel.innerText(),
+    page.locator('[data-node-id="model:mesh"]').innerText(),
+    page.locator('[data-node-id="model:mesh:builds"]').innerText(),
+  ]);
+
+  assert.match(
+    panelText,
+    /The latest mesh build failed\. The candidate was not promoted;/,
+    "Mesh Inspector did not explain retained last-good state.",
+  );
+  assert.match(panelText, /Retained after failure\s+yes — published artifact unchanged/);
+  assert.match(panelText, /Retained build id\s+mesh:inspector-good/);
+  assert.match(panelText, /Retained generation\s+1/);
+  assert.match(
+    meshRootText,
+    /failed · retained Inspector fixture mesh/,
+    "Explorer mesh root hid the retained artifact identity.",
+  );
+  assert.match(
+    buildNodeText,
+    /failed · retained rev 7/,
+    "Explorer build node hid the retained artifact revision.",
+  );
+
+  return {
+    buildId: "mesh:inspector-good",
+    generationId: fixture.manifest.generation_id,
+    meshName: fixture.manifest.mesh_name,
+    meshRevision: fixture.manifest.revision,
+    sourceSceneRevision: fixture.manifest.source_scene_revision,
+    state: "retained",
+  };
 }
 
 async function selectNode(page, nodeId, parents) {

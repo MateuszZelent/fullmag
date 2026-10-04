@@ -1,4 +1,8 @@
-use crate::eigen::solve_and_write_field_driven_response_sweep_bundle_with_interrupt;
+use crate::eigen::{
+    FrequencyDomainArtifactIdentity,
+    solve_and_write_field_driven_response_sweep_bundle_with_interrupt,
+    solve_and_write_field_driven_response_sweep_bundle_with_interrupt_and_identity,
+};
 #[cfg(any(feature = "fem-gpu", test))]
 use crate::native_fem::NativeFrequencyDomainProgress;
 #[cfg(any(feature = "fem-gpu", test))]
@@ -268,6 +272,7 @@ pub(crate) fn execute_fem_frequency_response_validation(
     )
 }
 
+#[cfg(test)]
 pub(crate) fn execute_fem_frequency_response_validation_with_context(
     plan: &fullmag_ir::FemFrequencyResponsePlanIR,
     stage_context: &crate::types::FemStageExecutionContext,
@@ -275,6 +280,48 @@ pub(crate) fn execute_fem_frequency_response_validation_with_context(
     interrupt_requested: Option<&AtomicBool>,
     on_step: Option<&mut dyn FnMut(StepUpdate) -> StepAction>,
 ) -> Result<ExecutedRun, RunError> {
+    execute_fem_frequency_response_validation_with_artifact_context(
+        plan,
+        stage_context,
+        None,
+        output_dir,
+        interrupt_requested,
+        on_step,
+    )
+}
+
+pub(crate) fn validate_frequency_response_artifact_identity(
+    plan: &fullmag_ir::FemFrequencyResponsePlanIR,
+    identity: Option<&FrequencyDomainArtifactIdentity>,
+) -> Result<(), RunError> {
+    let Some(identity) = identity else {
+        return Ok(());
+    };
+    identity.validate().map_err(|error| RunError {
+        message: format!("invalid frequency-domain artifact identity: {error}"),
+    })?;
+    #[cfg(not(feature = "fem-gpu"))]
+    if plan.solver_policy.as_ref().and_then(|policy| policy.method)
+        != Some(fullmag_ir::FrequencyResponseSolverMethodIR::DenseReference)
+    {
+        return Err(RunError {
+            message: "exact FMR artifact identity for production requires native FEM; dense fallback is disabled".into(),
+        });
+    }
+    #[cfg(feature = "fem-gpu")]
+    let _ = plan;
+    Ok(())
+}
+
+pub(crate) fn execute_fem_frequency_response_validation_with_artifact_context(
+    plan: &fullmag_ir::FemFrequencyResponsePlanIR,
+    stage_context: &crate::types::FemStageExecutionContext,
+    artifact_identity: Option<&FrequencyDomainArtifactIdentity>,
+    output_dir: &Path,
+    interrupt_requested: Option<&AtomicBool>,
+    on_step: Option<&mut dyn FnMut(StepUpdate) -> StepAction>,
+) -> Result<ExecutedRun, RunError> {
+    validate_frequency_response_artifact_identity(plan, artifact_identity)?;
     let fem_mesh_generation_id = stage_context.generation_id();
     let mut on_step = on_step;
     #[cfg(not(feature = "fem-gpu"))]
@@ -303,12 +350,21 @@ pub(crate) fn execute_fem_frequency_response_validation_with_context(
     #[cfg(feature = "fem-gpu")]
     if let Some(executed) = try_execute_fem_frequency_response_native_production_cpu(
         plan,
+        artifact_identity,
         output_dir,
         interrupt_requested,
         &mut on_step,
         &fem_mesh_generation_id,
     )? {
         return Ok(executed);
+    }
+    if artifact_identity.is_some()
+        && plan.solver_policy.as_ref().and_then(|policy| policy.method)
+            != Some(fullmag_ir::FrequencyResponseSolverMethodIR::DenseReference)
+    {
+        return Err(RunError {
+            message: "native FMR could not execute the exact artifact context; dense fallback is disabled".into(),
+        });
     }
     #[cfg(not(feature = "fem-gpu"))]
     if plan.magnetostatic_bc == fullmag_ir::MagnetostaticBoundaryConditionIR::PeriodicAirboxK0 {
@@ -364,36 +420,53 @@ pub(crate) fn execute_fem_frequency_response_validation_with_context(
         .collect::<Vec<_>>();
 
     let mut stop_requested = false;
-    let artifact = solve_and_write_field_driven_response_sweep_bundle_with_interrupt(
-        output_dir,
-        &template,
-        &frequencies_rad_per_s,
-        &field_excitation,
-        |completed_points| {
-            if completed_points > 0 {
-                if let Some(on_step) = on_step.as_deref_mut() {
-                    let completed_frequency_count = completed_points as u64;
-                    let action = on_step(dense_frequency_response_progress_update(
-                        fem_mesh_generation_id.clone(),
-                        completed_frequency_count,
-                        plan.frequencies_hz.values_hz.len() as u64,
-                        plan.frequencies_hz.values_hz[completed_points - 1],
-                        frequency_response_range_hz(&plan.frequencies_hz.values_hz),
-                        drive_norm,
-                        plan.enable_demag,
-                    ));
-                    if action != StepAction::Continue {
-                        stop_requested = true;
-                    }
+    let should_interrupt = |completed_points: usize| {
+        if completed_points > 0 {
+            if let Some(on_step) = on_step.as_deref_mut() {
+                let completed_frequency_count = completed_points as u64;
+                let action = on_step(dense_frequency_response_progress_update(
+                    fem_mesh_generation_id.clone(),
+                    completed_frequency_count,
+                    plan.frequencies_hz.values_hz.len() as u64,
+                    plan.frequencies_hz.values_hz[completed_points - 1],
+                    frequency_response_range_hz(&plan.frequencies_hz.values_hz),
+                    drive_norm,
+                    plan.enable_demag,
+                ));
+                if action != StepAction::Continue {
+                    stop_requested = true;
                 }
             }
-            interrupt_requested.is_some_and(|flag| flag.load(Ordering::Relaxed)) || stop_requested
-        },
-        "runner.dense_block_real_validation",
-        "dense_block_real_lu",
-        "gilbert_linear_validation",
-        "fem_frequency_response_validation",
-    )
+        }
+        interrupt_requested.is_some_and(|flag| flag.load(Ordering::Relaxed)) || stop_requested
+    };
+    let artifact = match artifact_identity {
+        Some(identity) => {
+            solve_and_write_field_driven_response_sweep_bundle_with_interrupt_and_identity(
+                output_dir,
+                identity,
+                &template,
+                &frequencies_rad_per_s,
+                &field_excitation,
+                should_interrupt,
+                "runner.dense_block_real_validation",
+                "dense_block_real_lu",
+                "gilbert_linear_validation",
+                "fem_frequency_response_validation",
+            )
+        }
+        None => solve_and_write_field_driven_response_sweep_bundle_with_interrupt(
+            output_dir,
+            &template,
+            &frequencies_rad_per_s,
+            &field_excitation,
+            should_interrupt,
+            "runner.dense_block_real_validation",
+            "dense_block_real_lu",
+            "gilbert_linear_validation",
+            "fem_frequency_response_validation",
+        ),
+    }
     .map_err(|message| RunError { message })?;
     let interrupted = artifact.points.len() < plan.frequencies_hz.values_hz.len();
 
@@ -1742,6 +1815,7 @@ fn patch_delta_phi_flux_fields(
 #[cfg(feature = "fem-gpu")]
 fn try_execute_fem_frequency_response_native_production_cpu(
     plan: &fullmag_ir::FemFrequencyResponsePlanIR,
+    artifact_identity: Option<&FrequencyDomainArtifactIdentity>,
     output_dir: &Path,
     interrupt_requested: Option<&AtomicBool>,
     on_step: &mut Option<&mut dyn FnMut(StepUpdate) -> StepAction>,
@@ -1927,6 +2001,7 @@ fn try_execute_fem_frequency_response_native_production_cpu(
     })?;
     let native_result =
         solve_native_driven_frequency_response(NativeDrivenFrequencyResponseRequest {
+            artifact_identity,
             node_count,
             tangent_dof_count,
             alpha: payload.alpha_uniform,
@@ -5989,6 +6064,135 @@ mod tests {
         let _ = std::fs::remove_dir_all(output_dir);
     }
 
+    #[test]
+    fn exact_identity_fmr_preserves_ownership_for_complete_and_cancelled_sweeps() {
+        for stop in [false, true] {
+            let mut plan = minimal_frequency_response_plan();
+            plan.solver_policy = Some(fullmag_ir::FrequencyResponseSolverPolicyIR {
+                method: Some(fullmag_ir::FrequencyResponseSolverMethodIR::DenseReference),
+                preconditioner: None,
+                rtol: None,
+                max_iterations: None,
+                restart_iterations: None,
+            });
+            plan.frequencies_hz.values_hz = vec![1.0e9, 2.0e9];
+            let identity = FrequencyDomainArtifactIdentity::try_new(
+                "session:fixture",
+                "run:fixture",
+                "stage:fixture",
+                "runtime:fixture",
+            )
+            .expect("exact fixture identity");
+            let output_dir =
+                std::env::temp_dir().join(format!("fullmag-exact-fmr-{}", uuid::Uuid::new_v4(),));
+            let stage_asset =
+                crate::types::StageFemMeshAsset::build_from_fem_frequency_response_plan(&plan);
+            let mut callback = |_| {
+                if stop {
+                    StepAction::Stop
+                } else {
+                    StepAction::Continue
+                }
+            };
+            let executed = execute_fem_frequency_response_validation_with_artifact_context(
+                &plan,
+                &crate::types::FemStageExecutionContext::from_mesh_identity(stage_asset.identity),
+                Some(&identity),
+                &output_dir,
+                None,
+                Some(&mut callback),
+            )
+            .expect("exact FMR execution");
+            assert_eq!(
+                executed.result.status,
+                if stop {
+                    RunStatus::Cancelled
+                } else {
+                    RunStatus::Completed
+                }
+            );
+            let manifest: serde_json::Value = serde_json::from_slice(
+                &std::fs::read(output_dir.join("frequency_domain/manifest.v1.json")).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(manifest["session_id"], identity.session_id);
+            assert_eq!(manifest["run_id"], identity.run_id);
+            assert_eq!(manifest["stage_id"], identity.stage_id);
+            assert_eq!(manifest["runtime_id"], identity.runtime_id);
+            assert!(
+                !manifest.to_string().contains("/v2/sessions/current"),
+                "exact artifact ownership must not persist a mutable session route"
+            );
+            assert_eq!(
+                manifest["artifacts"]["response_sweep_v1_path"],
+                "response/magnetic_response_sweep.v1.json"
+            );
+            assert_eq!(
+                manifest["artifacts"]["frequency_point_paths"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                if stop { 1 } else { 2 }
+            );
+            std::fs::remove_dir_all(output_dir).unwrap();
+        }
+    }
+
+    #[cfg(not(feature = "fem-gpu"))]
+    #[test]
+    fn exact_identity_fmr_rejects_alias_and_unavailable_native_lane_before_output() {
+        let mut plan = minimal_frequency_response_plan();
+        let mut identity = FrequencyDomainArtifactIdentity::try_new(
+            "session:fixture",
+            "run:fixture",
+            "stage:fixture",
+            "runtime:fixture",
+        )
+        .unwrap();
+        let output_dir =
+            std::env::temp_dir().join(format!("fullmag-rejected-fmr-{}", uuid::Uuid::new_v4()));
+        let stage_asset =
+            crate::types::StageFemMeshAsset::build_from_fem_frequency_response_plan(&plan);
+        let context =
+            crate::types::FemStageExecutionContext::from_mesh_identity(stage_asset.identity);
+        let error = execute_fem_frequency_response_validation_with_artifact_context(
+            &plan,
+            &context,
+            Some(&identity),
+            &output_dir,
+            None,
+            None,
+        )
+        .err()
+        .expect("native writer identity must fail closed");
+        assert!(
+            error
+                .message
+                .contains("requires native FEM")
+        );
+        assert!(!output_dir.exists());
+        plan.solver_policy = Some(fullmag_ir::FrequencyResponseSolverPolicyIR {
+            method: Some(fullmag_ir::FrequencyResponseSolverMethodIR::DenseReference),
+            preconditioner: None,
+            rtol: None,
+            max_iterations: None,
+            restart_iterations: None,
+        });
+        identity.run_id = "current".into();
+        let error = execute_fem_frequency_response_validation_with_artifact_context(
+            &plan,
+            &context,
+            Some(&identity),
+            &output_dir,
+            None,
+            None,
+        )
+        .err()
+        .expect("mutable alias must fail closed");
+        assert!(error.message.contains("exact identity"));
+        assert!(!output_dir.exists());
+    }
+
     fn minimal_frequency_response_plan() -> fullmag_ir::FemFrequencyResponsePlanIR {
         fullmag_ir::FemFrequencyResponsePlanIR {
             mesh_build_report: None,
@@ -6035,6 +6239,7 @@ mod tests {
                 kc2_field: None,
                 kc3_field: None,
                 interfacial_dmi: None,
+                rotated_interfacial_dmi: None,
                 bulk_dmi: None,
                 dind_field: None,
                 dbulk_field: None,
@@ -6062,6 +6267,7 @@ mod tests {
             enable_exchange: true,
             enable_demag: false,
             interfacial_dmi: None,
+            rotated_interfacial_dmi: None,
             dmi_interface_normal: None,
             bulk_dmi: None,
             external_field: Some([1.0, 0.0, 0.0]),

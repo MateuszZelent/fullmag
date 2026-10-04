@@ -68,6 +68,13 @@ fn generate_gpu_execution_receipt_abi_assertions(out_dir: &std::path::Path) {
     .expect("writing GPU execution receipt ABI assertions should succeed");
 }
 
+fn emit_unix_runtime_rpath(path: &str) {
+    // Cargo's target may differ from the host running this build script.
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
+        println!("cargo:rustc-link-arg=-Wl,-rpath,{path}");
+    }
+}
+
 fn main() {
     let out_dir = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());
     generate_gpu_execution_receipt_abi_assertions(&out_dir);
@@ -75,13 +82,17 @@ fn main() {
     if let Ok(lib_dir) = std::env::var("FULLMAG_FEM_LIB_DIR") {
         println!("cargo:rustc-link-search=native={}", lib_dir);
         println!("cargo:rustc-link-lib=dylib=fullmag_fem");
-        println!("cargo:rustc-link-arg=-Wl,-rpath,{}", lib_dir);
+        emit_unix_runtime_rpath(&lib_dir);
         println!("cargo:rerun-if-env-changed=FULLMAG_FEM_LIB_DIR");
         return;
     }
 
     println!("cargo:rerun-if-changed=../../native/include/fullmag_fem.h");
     println!("cargo:rerun-if-changed=../../native/CMakeLists.txt");
+    println!("cargo:rerun-if-changed=../../native/cmake/ImportFullmagFdm.cmake");
+    println!("cargo:rerun-if-changed=../../native/cmake/RequireFemGpu.cmake");
+    println!("cargo:rerun-if-changed=../../native/cmake/FindFullmagMfem.cmake");
+    println!("cargo:rerun-if-changed=../../native/cmake/FindFullmagWindowsModal.cmake");
     println!("cargo:rerun-if-changed=../../backends/fem/CMakeLists.txt");
     rerun_if_changed_tree("../../backends/fem/core");
     rerun_if_changed_tree("../../backends/fem/cpu");
@@ -91,7 +102,9 @@ fn main() {
     rerun_if_changed_tree("../../backends/fem/include");
     println!("cargo:rerun-if-env-changed=FULLMAG_FEM_LIB_DIR");
     println!("cargo:rerun-if-env-changed=FULLMAG_USE_MFEM_STACK");
+    println!("cargo:rerun-if-env-changed=FULLMAG_FEM_DEPENDENCY_PREFIX");
     println!("cargo:rerun-if-env-changed=FULLMAG_FEM_REQUIRE_GPU");
+    println!("cargo:rerun-if-env-changed=FULLMAG_FEM_ENABLE_CUDA");
     println!("cargo:rerun-if-env-changed=FULLMAG_FEM_WITH_SLEPC");
     println!("cargo:rerun-if-env-changed=FULLMAG_ENABLE_NVTX");
 
@@ -114,9 +127,18 @@ fn main() {
     };
     let use_mfem_stack = env_flag("FULLMAG_USE_MFEM_STACK");
     let require_gpu = env_flag("FULLMAG_FEM_REQUIRE_GPU");
+    // Preserve legacy defaults while allowing an explicit CPU-only MFEM build.
+    let enable_cuda = if std::env::var_os("FULLMAG_FEM_ENABLE_CUDA").is_some() {
+        env_flag("FULLMAG_FEM_ENABLE_CUDA")
+    } else {
+        use_mfem_stack
+    };
+    if require_gpu && !enable_cuda {
+        panic!("FULLMAG_FEM_REQUIRE_GPU=1 conflicts with FULLMAG_FEM_ENABLE_CUDA=OFF");
+    }
     let enable_nvtx = env_flag("FULLMAG_ENABLE_NVTX");
     let with_slepc = std::env::var("FULLMAG_FEM_WITH_SLEPC").unwrap_or_else(|_| {
-        if use_mfem_stack {
+        if use_mfem_stack && enable_cuda {
             "ON".to_string()
         } else {
             "OFF".to_string()
@@ -136,9 +158,20 @@ fn main() {
         .arg(format!("-DCMAKE_BUILD_TYPE={}", cmake_build_type))
         .arg(format!(
             "-DFULLMAG_ENABLE_CUDA={}",
-            if use_mfem_stack { "ON" } else { "OFF" }
+            if enable_cuda { "ON" } else { "OFF" }
         ))
-        .arg("-DFULLMAG_ENABLE_FEM_GPU=ON")
+        .arg(format!(
+            "-DFULLMAG_ENABLE_FEM_GPU={}",
+            if use_mfem_stack && enable_cuda {
+                "ON"
+            } else {
+                "OFF"
+            }
+        ))
+        .arg(format!(
+            "-DFULLMAG_FEM_REQUIRE_GPU={}",
+            if require_gpu { "ON" } else { "OFF" }
+        ))
         .arg(format!(
             "-DFULLMAG_USE_MFEM_STACK={}",
             if use_mfem_stack { "ON" } else { "OFF" }
@@ -148,6 +181,9 @@ fn main() {
             if enable_nvtx { "ON" } else { "OFF" }
         ))
         .arg(format!("-DFULLMAG_FEM_WITH_SLEPC={}", with_slepc));
+    // Clear a previous CMake cache entry when the operator removes the prefix.
+    let prefix = std::env::var("FULLMAG_FEM_DEPENDENCY_PREFIX").unwrap_or_default();
+    configure.arg(format!("-DFULLMAG_FEM_DEPENDENCY_PREFIX={prefix}"));
     if let Ok(value) = std::env::var("FULLMAG_CUDA_ARCHITECTURES") {
         let value = value.trim();
         if !value.is_empty() {
@@ -175,6 +211,8 @@ fn main() {
     build
         .arg("--build")
         .arg(&build_dir)
+        .arg("--config")
+        .arg(cmake_build_type)
         .arg("--target")
         .arg("fullmag_fem");
     if let Ok(jobs) = std::env::var("NUM_JOBS") {
@@ -189,14 +227,27 @@ fn main() {
         panic!("cmake build for fullmag_fem failed");
     }
 
+    let native_lib_root = build_dir.join("backends/fem");
+    let native_lib_dir = if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows")
+        && std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc")
+    {
+        let configured = native_lib_root.join(cmake_build_type);
+        if configured.join("fullmag_fem.lib").is_file() {
+            configured
+        } else if native_lib_root.join("fullmag_fem.lib").is_file() {
+            // Single-configuration generators such as Ninja use the flat path.
+            native_lib_root
+        } else {
+            panic!("native FEM build did not produce the MSVC fullmag_fem.lib import library");
+        }
+    } else {
+        native_lib_root
+    };
     println!(
         "cargo:rustc-link-search=native={}",
-        build_dir.join("backends/fem").display()
+        native_lib_dir.display()
     );
     println!("cargo:rustc-link-lib=dylib=fullmag_fem");
-    println!("cargo:rustc-link-arg=-Wl,-rpath,$ORIGIN/../lib");
-    println!(
-        "cargo:rustc-link-arg=-Wl,-rpath,{}",
-        build_dir.join("backends/fem").display()
-    );
+    emit_unix_runtime_rpath("$ORIGIN/../lib");
+    emit_unix_runtime_rpath(&native_lib_dir.to_string_lossy());
 }

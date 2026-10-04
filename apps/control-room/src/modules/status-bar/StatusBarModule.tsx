@@ -117,10 +117,10 @@ export default function StatusBarModule() {
     : "—";
   const dotStatus = mounted ? sessionResourceStatus : "loading";
 
-  const handleItemClick = (tab: "telemetry" | "mesh" | "diagnostics") => {
+  const handleItemClick = (tab: "telemetry" | "operations" | "diagnostics") => {
     kernel.bus.emit("footer:tab-requested", { tab });
   };
-  const handleItemKeyDown = (event: React.KeyboardEvent, tab: "telemetry" | "mesh" | "diagnostics") => {
+  const handleItemKeyDown = (event: React.KeyboardEvent, tab: "telemetry" | "operations" | "diagnostics") => {
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
       handleItemClick(tab);
@@ -162,8 +162,8 @@ export default function StatusBarModule() {
         title={mesh.title}
         role="button"
         tabIndex={0}
-        onClick={() => handleItemClick("mesh")}
-        onKeyDown={(e) => handleItemKeyDown(e, "mesh")}
+        onClick={() => handleItemClick("operations")}
+        onKeyDown={(e) => handleItemKeyDown(e, "operations")}
       >
         {mesh.label}
       </span>

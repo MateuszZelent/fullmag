@@ -13,6 +13,7 @@ pub mod mesh_assets;
 pub mod mesh_hints;
 pub mod mesh_policy;
 pub mod mixed_certificate;
+pub mod native_indexed_geometry;
 pub mod model;
 pub mod physics_object;
 pub mod plan;

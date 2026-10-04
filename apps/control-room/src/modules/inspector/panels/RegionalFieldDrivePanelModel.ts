@@ -1,5 +1,7 @@
 import type {
+  AuthoringTransactionResponse,
   FieldDriveListResource,
+  RequestOptions,
   RegionalFieldDriveResource,
   SceneResource,
 } from "@/kernel/api/apiTypes";
@@ -28,14 +30,15 @@ interface RegionalFieldDriveMutationApi {
   createFieldDrive(request: {
     base_revision: number;
     drive: RegionalFieldDriveResource;
-  }): Promise<{ scene_revision: number }>;
+  }, options?: RequestOptions): Promise<AuthoringTransactionResponse>;
   replaceFieldDrive(
     driveId: string,
     request: {
       base_revision: number;
       drive: RegionalFieldDriveResource;
     },
-  ): Promise<{ scene_revision: number }>;
+    options?: RequestOptions,
+  ): Promise<AuthoringTransactionResponse>;
 }
 
 type JsonRecord = Record<string, unknown>;
@@ -190,9 +193,10 @@ export function commitRegionalFieldDrive(
   mode: "create" | "found",
   baseRevision: number,
   drive: RegionalFieldDriveResource,
-): Promise<{ scene_revision: number }> {
+  options?: RequestOptions,
+): Promise<AuthoringTransactionResponse> {
   const request = { base_revision: baseRevision, drive };
   return mode === "create"
-    ? api.createFieldDrive(request)
-    : api.replaceFieldDrive(drive.id, request);
+    ? api.createFieldDrive(request, options)
+    : api.replaceFieldDrive(drive.id, request, options);
 }

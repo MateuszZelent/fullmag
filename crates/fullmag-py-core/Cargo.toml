@@ -9,6 +9,7 @@ name = "_fullmag_core"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+fullmag-application = { path = "../fullmag-application" }
 fullmag-engine = { path = "../fullmag-engine" }
 fullmag-ir = { path = "../fullmag-ir" }
 fullmag-plan = { path = "../fullmag-plan" }

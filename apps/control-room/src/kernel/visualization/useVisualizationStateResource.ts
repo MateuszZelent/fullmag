@@ -6,6 +6,7 @@ import { VISUALIZATION_STATE_PATH } from "../api/apiPaths";
 import type { VisualizationStateResource } from "../api/apiTypes";
 import { useKernel } from "../KernelContext";
 import { useResource } from "../resources/useResource";
+import { useSessionScopedResourceKey } from "../resources/useSessionScopedResourceKey";
 
 export const VISUALIZATION_STATE_RESOURCE_KEY = VISUALIZATION_STATE_PATH;
 
@@ -19,8 +20,20 @@ export function useVisualizationStateResource({
   enabled = true,
 }: { enabled?: boolean } = {}) {
   const { api, cameraRegistry, visualization, visualizationSync } = useKernel();
+  const { resourceKey, sessionIdentity } = useSessionScopedResourceKey(
+    VISUALIZATION_STATE_RESOURCE_KEY,
+  );
+  const sessionScopeKey = sessionIdentity
+    ? resourceKey.slice(0, resourceKey.indexOf("|"))
+    : null;
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) => api.visualization.state({ signal }),
+    ({
+      sessionScopeKey,
+      signal,
+    }: {
+      sessionScopeKey?: string;
+      signal: AbortSignal;
+    }) => api.visualization.state({ sessionScopeKey, signal }),
     [api],
   );
   useSyncExternalStore(
@@ -30,11 +43,15 @@ export function useVisualizationStateResource({
   );
 
   const resource = useResource({
-    enabled,
+    enabled: enabled && sessionIdentity !== null,
     load,
     resolveRevision: resolveVisualizationStateRevision,
-    resourceKey: VISUALIZATION_STATE_RESOURCE_KEY,
+    resourceKey,
   });
+
+  useEffect(() => {
+    visualizationSync.setSessionScopeKey(sessionScopeKey);
+  }, [sessionScopeKey, visualizationSync]);
 
   useEffect(() => {
     visualizationSync.observeRemoteState(resource.data);

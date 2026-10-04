@@ -25,8 +25,10 @@ use crate::schemas::hysteresis::{
     HysteresisStorageEstimateSchema,
 };
 use crate::schemas::preparation::{
+    LivePreparationMaterializationRequest, LivePreparationMaterializationResource,
     PreparationClockAdjustment, PreparationExecutionSummary, PreparationFailureResource,
-    PreparationLogEntryResource, PreparationLogLevel, PreparationProgressStage, PreparationStageId,
+    PreparationLogEntryResource, PreparationLogLevel, PreparationMaterializationDisposition,
+    PreparationProgressStage, PreparationReceiptResource, PreparationStageId,
     PreparationStageStatus, PreparationStatus, SimulationPreparationResource,
 };
 use crate::schemas::relaxation::{
@@ -44,7 +46,8 @@ use crate::session::{
     build_runtime_status_view, command_ledger_revisions, effective_runtime_status_code,
 };
 use crate::types::{
-    AppState, CommandCompletionState, CommandLifecycleState, ScalarRow, SessionStateResponse,
+    AppState, CommandCompletionState, CommandLifecycleState,
+    CurrentLivePreparationMaterializationRequest, ScalarRow, SessionStateResponse,
     StageExecutionRecord, StageExecutionState, TrackedCommandRecord,
 };
 
@@ -76,10 +79,18 @@ pub struct HysteresisExecutionTreeQuery {
 pub async fn get_simulation_preparation(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<SimulationPreparationResource>, ApiError> {
+    let request_context = crate::capture_current_live_request_context(&state).await?;
     let guard = state.current_live_state.read().await;
     let snapshot = guard
         .as_ref()
         .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    crate::ensure_current_live_request_context(
+        snapshot,
+        &request_context,
+        state
+            .current_live_session_epoch
+            .load(std::sync::atomic::Ordering::Acquire),
+    )?;
     let preparation = snapshot
         .simulation_preparation
         .as_ref()
@@ -172,6 +183,26 @@ pub async fn get_simulation_preparation(
             })
         })
         .transpose()?;
+    let receipt = state
+        .current_live_preparation_receipt
+        .read()
+        .await
+        .clone()
+        .filter(|receipt| receipt.run_id == snapshot.session.run_id)
+        .map(|receipt| PreparationReceiptResource {
+            schema_version: bounded_preparation_string(&receipt.schema_version, 64),
+            preparation_id: bounded_preparation_string(&receipt.preparation_id, 128),
+            run_id: bounded_preparation_string(&receipt.run_id, 128),
+            plan_fingerprint: bounded_preparation_string(&receipt.plan_fingerprint, 71),
+            payload_sha256: bounded_preparation_string(&receipt.payload_sha256, 64),
+        });
+    crate::ensure_current_live_request_context(
+        snapshot,
+        &request_context,
+        state
+            .current_live_session_epoch
+            .load(std::sync::atomic::Ordering::Acquire),
+    )?;
 
     Ok(Json(SimulationPreparationResource {
         preparation_id: bounded_preparation_string(&preparation.preparation_id, 128),
@@ -209,6 +240,85 @@ pub async fn get_simulation_preparation(
         stages,
         log_tail,
         failure,
+        receipt,
+    }))
+}
+
+#[utoipa::path(
+    post,
+    path = "/v2/sessions/current/simulation/preparation/materialization",
+    request_body = LivePreparationMaterializationRequest,
+    responses(
+        (status = 200, description = "Preparation receipt accepted for the current Live run", body = LivePreparationMaterializationResource),
+        (status = 404, description = "Current Live preparation or scene is not available", body = crate::schemas::common::ApiErrorResponse),
+        (status = 409, description = "The session, preparation, or scene revision changed", body = crate::schemas::common::ApiErrorResponse),
+    ),
+    tag = "simulation"
+)]
+pub async fn materialize_live_preparation(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<LivePreparationMaterializationRequest>,
+) -> Result<Json<LivePreparationMaterializationResource>, ApiError> {
+    let context = crate::capture_current_live_request_context(&state).await?;
+    let (requested_execution, display_projection) = {
+        let current = state.current_live_state.read().await;
+        let snapshot = current
+            .as_ref()
+            .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+        crate::ensure_current_live_request_context(
+            snapshot,
+            &context,
+            state
+                .current_live_session_epoch
+                .load(std::sync::atomic::Ordering::Acquire),
+        )?;
+        let scene = snapshot.scene_document.as_ref().ok_or_else(|| {
+            ApiError::not_found("no scene document available for current workspace")
+        })?;
+        if scene.revision != request.scene_revision {
+            return Err(ApiError::conflict(
+                "current_live_preparation_materialization_scene_revision_mismatch",
+            ));
+        }
+        let requested_execution = fullmag_application::RequestedExecution {
+            backend: scene.study.requested_backend.clone(),
+            device: scene.study.requested_device.clone(),
+            precision: scene.study.requested_precision.clone(),
+            mode: scene.study.requested_mode.clone(),
+            minimum_resources: None,
+        };
+        let display_projection =
+            serde_json::to_value(&snapshot.display_selection).map_err(|error| {
+                ApiError::internal(format!(
+                    "failed to encode current display projection: {error}"
+                ))
+            })?;
+        (requested_execution, display_projection)
+    };
+
+    let published = crate::live_scene_preparation::materialize_current_live_preparation(
+        &state,
+        CurrentLivePreparationMaterializationRequest {
+            session_id: context.session_id,
+            preparation_id: request.preparation_id.clone(),
+            scene_revision: request.scene_revision,
+            requested_execution,
+            display_projection,
+        },
+    )
+    .await?;
+    let disposition = match published.disposition {
+        "accepted" => PreparationMaterializationDisposition::Accepted,
+        "replayed" => PreparationMaterializationDisposition::Replayed,
+        _ => return Err(ApiError::internal("unknown preparation disposition")),
+    };
+    Ok(Json(LivePreparationMaterializationResource {
+        disposition,
+        preparation_id: published.preparation_id,
+        scene_revision: request.scene_revision,
+        run_id: published.run_id,
+        plan_fingerprint: published.plan_fingerprint,
+        receipt_sha256: published.receipt_sha256,
     }))
 }
 
@@ -312,10 +422,18 @@ fn preparation_log_level(value: &str) -> Result<PreparationLogLevel, ApiError> {
 pub async fn get_current_run(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<CurrentRunResource>, ApiError> {
+    let request_context = crate::capture_current_live_request_context(&state).await?;
     let guard = state.current_live_state.read().await;
     let snapshot = guard
         .as_ref()
         .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    crate::ensure_current_live_request_context(
+        snapshot,
+        &request_context,
+        state
+            .current_live_session_epoch
+            .load(std::sync::atomic::Ordering::Acquire),
+    )?;
     let run = snapshot
         .run
         .as_ref()
@@ -375,7 +493,20 @@ pub async fn get_run_by_id(
     State(state): State<Arc<AppState>>,
     Path(run_id): Path<String>,
 ) -> Result<Json<CurrentRunResource>, ApiError> {
-    let current = get_current_run(State(state)).await?;
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let current = get_current_run(State(Arc::clone(&state))).await?;
+    let _transition = state.current_live_session_transition.lock().await;
+    let guard = state.current_live_state.read().await;
+    let snapshot = guard
+        .as_ref()
+        .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    crate::ensure_current_live_request_context(
+        snapshot,
+        &request_context,
+        state
+            .current_live_session_epoch
+            .load(std::sync::atomic::Ordering::Acquire),
+    )?;
     if current.run_id == run_id {
         Ok(current)
     } else {
@@ -396,10 +527,18 @@ pub async fn get_run_by_id(
 pub async fn get_stage_execution(
     State(state): State<Arc<AppState>>,
 ) -> Result<axum::response::Response, ApiError> {
+    let request_context = crate::capture_current_live_request_context(&state).await?;
     let guard = state.current_live_state.read().await;
     let Some(snapshot) = guard.as_ref() else {
         return Ok(StatusCode::NO_CONTENT.into_response());
     };
+    crate::ensure_current_live_request_context(
+        snapshot,
+        &request_context,
+        state
+            .current_live_session_epoch
+            .load(std::sync::atomic::Ordering::Acquire),
+    )?;
     let Some(stage) = snapshot.stage_execution.as_ref() else {
         return Ok(StatusCode::NO_CONTENT.into_response());
     };
@@ -780,10 +919,11 @@ pub async fn get_hysteresis_plan(
     State(state): State<Arc<AppState>>,
     Path(stage_id): Path<String>,
 ) -> Result<Json<HysteresisStagePlanSchema>, ApiError> {
+    let request_context = crate::capture_current_live_request_context(&state).await?;
     let stage = resolve_hysteresis_scene_stage(&state, &stage_id).await?;
     let site_count = current_hysteresis_storage_site_count(&state).await;
     let storage_estimate = estimate_hysteresis_storage(&stage.value, site_count);
-    Ok(Json(HysteresisStagePlanSchema {
+    let resource = HysteresisStagePlanSchema {
         revision: stage.revision,
         stage_id: stage.stage_id,
         stage_index: stage.stage_index,
@@ -801,7 +941,9 @@ pub async fn get_hysteresis_plan(
         minor_loops: stage.value.get("minor_loops").cloned(),
         branch_mode: value_string(stage.value.get("branch_mode")),
         storage_estimate: Some(storage_estimate),
-    }))
+    };
+    crate::validate_current_live_request_context(&state, &request_context).await?;
+    Ok(Json(resource))
 }
 
 fn estimate_hysteresis_storage(
@@ -958,8 +1100,9 @@ pub async fn get_hysteresis_protocol(
     State(state): State<Arc<AppState>>,
     Path(stage_id): Path<String>,
 ) -> Result<Json<HysteresisProtocolSchema>, ApiError> {
+    let request_context = crate::capture_current_live_request_context(&state).await?;
     let stage = resolve_hysteresis_scene_stage(&state, &stage_id).await?;
-    Ok(Json(HysteresisProtocolSchema {
+    let resource = HysteresisProtocolSchema {
         revision: stage.revision,
         stage_id: stage.stage_id,
         stage_index: stage.stage_index,
@@ -967,7 +1110,9 @@ pub async fn get_hysteresis_protocol(
         branch_mode: value_string(stage.value.get("branch_mode")),
         saturation: stage.value.get("saturation").cloned(),
         storage: stage.value.get("storage").cloned(),
-    }))
+    };
+    crate::validate_current_live_request_context(&state, &request_context).await?;
+    Ok(Json(resource))
 }
 
 #[utoipa::path(
@@ -986,6 +1131,7 @@ pub async fn get_hysteresis_stage_saturation(
     State(state): State<Arc<AppState>>,
     Path(stage_id): Path<String>,
 ) -> Result<Json<HysteresisStageSaturationSchema>, ApiError> {
+    let request_context = crate::capture_current_live_request_context(&state).await?;
     let stage = resolve_hysteresis_scene_stage(&state, &stage_id).await?;
     let saturation =
         crate::router_v2::handlers::analysis::hysteresis::read_hysteresis_saturation_result(
@@ -999,7 +1145,7 @@ pub async fn get_hysteresis_stage_saturation(
         Err(error) => return Err(error),
     };
 
-    Ok(Json(HysteresisStageSaturationSchema {
+    let resource = HysteresisStageSaturationSchema {
         revision: stage.revision,
         stage_id: stage.stage_id.clone(),
         stage_index: stage.stage_index,
@@ -1010,7 +1156,9 @@ pub async fn get_hysteresis_stage_saturation(
             "/v2/sessions/current/analysis/hysteresis/{}/saturation",
             stage.stage_id
         ),
-    }))
+    };
+    crate::validate_current_live_request_context(&state, &request_context).await?;
+    Ok(Json(resource))
 }
 
 #[utoipa::path(
@@ -1029,15 +1177,18 @@ pub async fn get_hysteresis_orientation(
     State(state): State<Arc<AppState>>,
     Path(stage_id): Path<String>,
 ) -> Result<Json<HysteresisOrientationSchema>, ApiError> {
+    let request_context = crate::capture_current_live_request_context(&state).await?;
     let stage = resolve_hysteresis_scene_stage(&state, &stage_id).await?;
-    Ok(Json(HysteresisOrientationSchema {
+    let resource = HysteresisOrientationSchema {
         revision: stage.revision,
         stage_id: stage.stage_id,
         stage_index: stage.stage_index,
         orientation: stage.value.get("orientation").cloned(),
         direction: value_vec3(stage.value.get("direction")),
         measurement_axis: stage.value.get("measurement_axis").cloned(),
-    }))
+    };
+    crate::validate_current_live_request_context(&state, &request_context).await?;
+    Ok(Json(resource))
 }
 
 #[utoipa::path(
@@ -1056,17 +1207,20 @@ pub async fn get_hysteresis_settle_pipeline(
     State(state): State<Arc<AppState>>,
     Path(stage_id): Path<String>,
 ) -> Result<Json<HysteresisSettlePipelineSchema>, ApiError> {
+    let request_context = crate::capture_current_live_request_context(&state).await?;
     let stage = resolve_hysteresis_scene_stage(&state, &stage_id).await?;
     let resolved_steps = build_hysteresis_resolved_settle_steps(&stage);
     let resolved_branch_ids = build_hysteresis_resolved_branch_ids(&stage);
-    Ok(Json(HysteresisSettlePipelineSchema {
+    let resource = HysteresisSettlePipelineSchema {
         revision: stage.revision,
         stage_id: stage.stage_id,
         stage_index: stage.stage_index,
         settle_pipeline: stage.value.get("settle_pipeline").cloned(),
         resolved_steps,
         resolved_branch_ids,
-    }))
+    };
+    crate::validate_current_live_request_context(&state, &request_context).await?;
+    Ok(Json(resource))
 }
 
 fn build_hysteresis_resolved_settle_steps(
@@ -1169,6 +1323,7 @@ pub async fn get_hysteresis_execution_tree(
     Path(stage_id): Path<String>,
     Query(query): Query<HysteresisExecutionTreeQuery>,
 ) -> Result<Json<HysteresisExecutionTreeResource>, ApiError> {
+    let request_context = crate::capture_current_live_request_context(&state).await?;
     let stage = resolve_hysteresis_scene_stage(&state, &stage_id).await?;
     let progress = resolve_hysteresis_stage_progress(&state, &stage.stage_id).await?;
     let points = read_hysteresis_points_if_available(&state, &stage.stage_id).await?;
@@ -1185,7 +1340,7 @@ pub async fn get_hysteresis_execution_tree(
     let bookmarks = bookmark_resource
         .map(|resource| resource.bookmarks)
         .unwrap_or_default();
-    Ok(Json(build_hysteresis_execution_tree(
+    let resource = build_hysteresis_execution_tree(
         stage,
         progress,
         query,
@@ -1194,7 +1349,9 @@ pub async fn get_hysteresis_execution_tree(
         settle_trace,
         bookmarks,
         bookmark_revision,
-    )))
+    );
+    crate::validate_current_live_request_context(&state, &request_context).await?;
+    Ok(Json(resource))
 }
 
 #[utoipa::path(
@@ -1213,11 +1370,13 @@ pub async fn get_hysteresis_progress(
     State(state): State<Arc<AppState>>,
     Path(stage_id): Path<String>,
 ) -> Result<Json<HysteresisProgressSchema>, ApiError> {
+    let request_context = crate::capture_current_live_request_context(&state).await?;
     let mut progress = resolve_hysteresis_stage_progress(&state, &stage_id).await?;
     if let Ok(stage) = resolve_hysteresis_scene_stage(&state, &progress.stage_id).await {
         enrich_hysteresis_progress_counts(&mut progress, &stage);
         attach_hysteresis_live_magnetization(&state, &mut progress, &stage).await;
     }
+    crate::validate_current_live_request_context(&state, &request_context).await?;
     Ok(Json(progress))
 }
 
@@ -1572,10 +1731,18 @@ fn infer_hysteresis_active_point_index(
 pub async fn get_solver_status(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<SolverStatusResource>, ApiError> {
+    let request_context = crate::capture_current_live_request_context(&state).await?;
     let guard = state.current_live_state.read().await;
     let snapshot = guard
         .as_ref()
         .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    crate::ensure_current_live_request_context(
+        snapshot,
+        &request_context,
+        state
+            .current_live_session_epoch
+            .load(std::sync::atomic::Ordering::Acquire),
+    )?;
     let latest = snapshot.live_state.as_ref().map(|value| &value.latest_step);
     let latest_scalar_row = snapshot.scalar_rows.last();
     let runtime_status = build_runtime_status_view(&effective_runtime_status_code(snapshot));
@@ -1684,10 +1851,18 @@ pub async fn get_solver_status(
 pub async fn get_solver_energies_current(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<SolverEnergyCurrentResource>, ApiError> {
+    let request_context = crate::capture_current_live_request_context(&state).await?;
     let guard = state.current_live_state.read().await;
     let snapshot = guard
         .as_ref()
         .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    crate::ensure_current_live_request_context(
+        snapshot,
+        &request_context,
+        state
+            .current_live_session_epoch
+            .load(std::sync::atomic::Ordering::Acquire),
+    )?;
     let latest_row =
         latest_energy_row(snapshot).ok_or_else(|| ApiError::not_found("no solver energy data"))?;
 
@@ -1718,10 +1893,18 @@ pub async fn get_solver_energies_history(
     State(state): State<Arc<AppState>>,
     Query(query): Query<EnergyHistoryQuery>,
 ) -> Result<Json<SolverEnergyHistoryResource>, ApiError> {
+    let request_context = crate::capture_current_live_request_context(&state).await?;
     let guard = state.current_live_state.read().await;
     let snapshot = guard
         .as_ref()
         .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    crate::ensure_current_live_request_context(
+        snapshot,
+        &request_context,
+        state
+            .current_live_session_epoch
+            .load(std::sync::atomic::Ordering::Acquire),
+    )?;
 
     let total_rows = snapshot.scalar_rows.len();
     let rows = match query.limit {
@@ -1768,10 +1951,18 @@ pub async fn get_object_metrics(
     State(state): State<Arc<AppState>>,
     Path(object_id): Path<String>,
 ) -> Result<Json<ObjectMetricsResource>, ApiError> {
+    let request_context = crate::capture_current_live_request_context(&state).await?;
     let guard = state.current_live_state.read().await;
     let snapshot = guard
         .as_ref()
         .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    crate::ensure_current_live_request_context(
+        snapshot,
+        &request_context,
+        state
+            .current_live_session_epoch
+            .load(std::sync::atomic::Ordering::Acquire),
+    )?;
     let scene = snapshot
         .scene_document
         .as_ref()
@@ -1880,8 +2071,19 @@ pub async fn get_object_metrics(
 pub async fn get_command_status(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<CommandQueueStatusResource>, ApiError> {
-    ensure_workspace(&state).await?;
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let _transition = state.current_live_session_transition.lock().await;
     let current = state.current_live_state.read().await;
+    let snapshot = current
+        .as_ref()
+        .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    crate::ensure_current_live_request_context(
+        snapshot,
+        &request_context,
+        state
+            .current_live_session_epoch
+            .load(std::sync::atomic::Ordering::Acquire),
+    )?;
     let ledger = state.current_command_ledger.lock().await;
     let pending_count = ledger
         .iter()
@@ -1911,7 +2113,13 @@ pub async fn get_command_status(
         .iter()
         .filter(|record| record.status == CommandLifecycleState::Failed)
         .count() as u64;
-    let revision = command_ledger_revisions(&ledger).command_queue_revision;
+    let revision = command_ledger_revisions(
+        &ledger,
+        state
+            .current_command_journal_revision
+            .load(std::sync::atomic::Ordering::Acquire),
+    )
+    .command_queue_revision;
     let (can_accept_commands, runtime_controls) = {
         let snapshot = current.as_ref();
         (
@@ -2062,7 +2270,23 @@ pub async fn report_command_failure(
     Path(command_id): Path<String>,
     Json(request): Json<CommandFailureRequest>,
 ) -> Result<Json<CommandDetailResource>, ApiError> {
+    let request_context = crate::capture_current_live_request_context(&state).await?;
     ensure_workspace(&state).await?;
+    let _transition = state.current_live_session_transition.lock().await;
+    let snapshot = {
+        let current = state.current_live_state.read().await;
+        let snapshot = current
+            .as_ref()
+            .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+        crate::ensure_current_live_request_context(
+            snapshot,
+            &request_context,
+            state
+                .current_live_session_epoch
+                .load(std::sync::atomic::Ordering::Acquire),
+        )?;
+        snapshot.clone()
+    };
     let error = request.error.trim();
     if error.is_empty() {
         return Err(ApiError::bad_request(
@@ -2073,9 +2297,7 @@ pub async fn report_command_failure(
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_millis())
         .unwrap_or(0);
-    let mut changed = false;
-    {
-        let mut ledger = state.current_command_ledger.lock().await;
+    let changed = crate::live_command_journal::mutate(&state, &snapshot, |ledger| {
         let record = ledger
             .iter_mut()
             .find(|record| record.command.command_id == command_id)
@@ -2090,9 +2312,11 @@ pub async fn report_command_failure(
             record.completed_at_unix_ms = Some(completed_at_unix_ms);
             record.completion_status = Some(CommandCompletionState::Failed);
             record.error = Some(error.to_string());
-            changed = true;
+            return Ok((true, true));
         }
-    }
+        Ok((false, false))
+    })
+    .await?;
     if changed {
         state
             .current_control_queue
@@ -2111,7 +2335,10 @@ pub async fn report_command_failure(
                 .await?;
         }
     }
-    get_command_detail(State(state), Path(command_id)).await
+    // `get_command_detail` captures the live-session transition context itself;
+    // release the mutation guard before delegating to avoid re-locking it.
+    drop(_transition);
+    get_command_detail(State(Arc::clone(&state)), Path(command_id)).await
 }
 
 #[utoipa::path(
@@ -2130,6 +2357,7 @@ pub async fn get_command_detail(
     State(state): State<Arc<AppState>>,
     Path(command_id): Path<String>,
 ) -> Result<Json<CommandDetailResource>, ApiError> {
+    let request_context = crate::capture_current_live_request_context(&state).await?;
     ensure_workspace(&state).await?;
     let record = {
         let ledger = state.current_command_ledger.lock().await;
@@ -2148,6 +2376,15 @@ pub async fn get_command_detail(
         diagnostics,
     ) = {
         let guard = state.current_live_state.read().await;
+        if let Some(snapshot) = guard.as_ref() {
+            crate::ensure_current_live_request_context(
+                snapshot,
+                &request_context,
+                state
+                    .current_live_session_epoch
+                    .load(std::sync::atomic::Ordering::Acquire),
+            )?;
+        }
         let stage_linkage = guard.as_ref().and_then(|snapshot| {
             command_stage_linkage(
                 snapshot.stage_execution.as_ref(),
@@ -2221,6 +2458,15 @@ pub async fn get_command_detail(
         accepted_at_unix_ms,
         dispatched_at_unix_ms: record.dispatched_at_unix_ms,
         started_at_unix_ms,
+        applied_step: stage_linkage
+            .as_ref()
+            .and_then(|linkage| linkage.applied_step),
+        applied_time_seconds: stage_linkage
+            .as_ref()
+            .and_then(|linkage| linkage.applied_time_seconds),
+        segment_id: stage_linkage
+            .as_ref()
+            .and_then(|linkage| linkage.segment_id.clone()),
         completed_at_unix_ms: record.completed_at_unix_ms,
         terminal_at_unix_ms,
         completion_status: record
@@ -3583,6 +3829,9 @@ struct CommandStageLinkage {
     stage_id: Option<String>,
     stage_index: Option<u32>,
     started_at_unix_ms: Option<u128>,
+    applied_step: Option<u64>,
+    applied_time_seconds: Option<f64>,
+    segment_id: Option<String>,
     completed_at_unix_ms: Option<u128>,
     artifact_refs: Vec<String>,
     checkpoint_ref: Option<String>,
@@ -3626,6 +3875,9 @@ fn command_stage_linkage_from_record(
         ),
         stage_index: Some(index as u32),
         started_at_unix_ms: record.started_at_unix_ms.map(u128::from),
+        applied_step: record.applied_step,
+        applied_time_seconds: record.applied_time_seconds,
+        segment_id: record.segment_id.clone(),
         completed_at_unix_ms: record.completed_at_unix_ms.map(u128::from),
         artifact_refs: record.artifact_refs.clone(),
         checkpoint_ref: record.checkpoint_ref.clone(),

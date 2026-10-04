@@ -329,6 +329,7 @@ pub async fn get_object_topological_charge(
     query
         .validate()
         .map_err(|error| ApiError::bad_request(error.to_string()))?;
+    let request_context = crate::capture_current_live_request_context(&state).await?;
     let snapshot = state
         .current_live_state
         .read()
@@ -388,14 +389,15 @@ pub async fn get_object_topological_charge(
         ),
         "berg_luescher_oriented_triangles_v2",
     );
-    if let Some(cached) = state
+    let cached = state
         .quantity_data_plane
         .topological_charge_cache
         .lock()
         .await
-        .get(&cache_key)
-    {
+        .get(&cache_key);
+    if let Some(cached) = cached {
         if let Ok(resource) = serde_json::from_value::<TopologicalChargeResourceV2>(cached) {
+            crate::validate_current_live_request_context(&state, &request_context).await?;
             return Ok(Json(resource));
         }
     }
@@ -680,6 +682,7 @@ pub async fn get_object_topological_charge(
             .await
             .insert(cache_key, value);
     }
+    crate::validate_current_live_request_context(&state, &request_context).await?;
     Ok(Json(resource))
 }
 

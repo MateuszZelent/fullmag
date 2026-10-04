@@ -4,6 +4,7 @@ import { useCallback, useEffect } from "react";
 
 import type { ControlRoomApi } from "../api/ControlRoomApi";
 import type { VisualizationClientAckRequest } from "../api/apiTypes";
+import { sessionRequestScopeKey } from "../resources/sessionResourceIdentity";
 
 const VISUALIZATION_CLIENT_ID_STORAGE_KEY = "fullmag.visualization.clientId";
 
@@ -26,6 +27,8 @@ export interface VisualizationClientAckInput {
   dataIdentity?: VisualizationDataAdoptionIdentity | null;
   renderCommit?: VisualizationDataAdoptionIdentity | null;
   resourceKey?: string | null;
+  requestScopeEpoch: string | null;
+  sessionId?: string | null;
   sessionEpoch: string | null;
   status: VisualizationClientAckStatus;
   viewportId: string;
@@ -94,7 +97,9 @@ export function useVisualizationClientAck({
   enabled = true,
   error,
   revision,
+  requestScopeEpoch,
   sendAck,
+  sessionId,
   sessionEpoch,
   status,
   viewportId,
@@ -107,11 +112,13 @@ export function useVisualizationClientAck({
       enabled,
       error,
       revision,
+      requestScopeEpoch,
+      sessionId,
       sessionEpoch,
       status,
       viewportId,
     });
-  }, [effectiveRenderMode, enabled, error, revision, sendAck, sessionEpoch, status, viewportId]);
+  }, [effectiveRenderMode, enabled, error, requestScopeEpoch, revision, sendAck, sessionId, sessionEpoch, status, viewportId]);
 }
 
 export function useVisualizationClientAckSender({
@@ -135,11 +142,16 @@ interface VisualizationAckCoordinator {
   owners: number;
   pending: Map<
     string,
-    { request: VisualizationClientAckRequest; timeoutId: ReturnType<typeof setTimeout> }
+    {
+      request: VisualizationClientAckRequest;
+      sessionScopeKey: string;
+      timeoutId: ReturnType<typeof setTimeout>;
+    }
   >;
   sentApplied: Set<string>;
   sentTerminal: Set<string>;
   sessionEpoch: string | null;
+  sessionScopeKey: string | null;
   send(input: VisualizationClientAckInput): void;
 }
 
@@ -181,7 +193,7 @@ function releaseVisualizationAckCoordinator(coordinator: VisualizationAckCoordin
       ...entry.request,
       error: "visualization ACK owner released before render commit",
       status: "failed",
-    });
+    }, entry.sessionScopeKey);
   }
   coordinator.pending.clear();
 }
@@ -196,6 +208,7 @@ export function createVisualizationAckCoordinator(
     sentApplied: new Set(),
     sentTerminal: new Set(),
     sessionEpoch: null,
+    sessionScopeKey: null,
     send(input) {
       const {
         changeKind = "style",
@@ -205,24 +218,37 @@ export function createVisualizationAckCoordinator(
         error,
         renderCommit = null,
         revision,
+        requestScopeEpoch,
+        sessionId,
         sessionEpoch,
         status,
         viewportId,
       } = input;
       if (!enabled || revision === null || revision === undefined || !sessionEpoch) return;
-      if (coordinator.sessionEpoch !== sessionEpoch) {
+      const sessionScopeKey = visualizationSessionScopeKey(
+        sessionId,
+        sessionEpoch,
+        requestScopeEpoch,
+        dataIdentity,
+      );
+      // Current-session visualization ACKs are context-bound mutations. Do not
+      // fall back to an unscoped POST while the authoritative request scope is
+      // unavailable; the backend must reject stale or incomplete identity.
+      if (sessionScopeKey === null) return;
+      if (coordinator.sessionEpoch !== sessionEpoch || coordinator.sessionScopeKey !== sessionScopeKey) {
         for (const [pendingKey, entry] of coordinator.pending) {
           clearTimeout(entry.timeoutId);
           sendTerminalAck(api, coordinator, pendingKey, {
             ...entry.request,
             error: "visualization session epoch changed before render commit",
             status: "failed",
-          });
+          }, entry.sessionScopeKey);
         }
         coordinator.pending.clear();
         coordinator.sentApplied.clear();
         coordinator.sentTerminal.clear();
         coordinator.sessionEpoch = sessionEpoch;
+        coordinator.sessionScopeKey = sessionScopeKey;
       }
       const key = `${sessionEpoch}\u0000${viewportId}\u0000${revision}`;
       if (coordinator.sentTerminal.has(key)) return;
@@ -261,7 +287,7 @@ export function createVisualizationAckCoordinator(
             ...request,
             error: "visualization ACK backlog exhausted",
             status: "failed",
-          });
+          }, sessionScopeKey);
           return;
         }
         const timeoutId = setTimeout(() => {
@@ -271,9 +297,9 @@ export function createVisualizationAckCoordinator(
             ...request,
             error: "visualization render adoption timed out",
             status: "failed",
-          });
+          }, sessionScopeKey);
         }, VISUALIZATION_ACK_TIMEOUT_MS);
-        coordinator.pending.set(key, { request, timeoutId });
+        coordinator.pending.set(key, { request, sessionScopeKey, timeoutId });
         return;
       }
       if (
@@ -283,7 +309,7 @@ export function createVisualizationAckCoordinator(
       ) {
         return;
       }
-      sendTerminalAck(api, coordinator, key, request);
+      sendTerminalAck(api, coordinator, key, request, sessionScopeKey);
     },
   };
   return coordinator;
@@ -309,12 +335,30 @@ function sendTerminalAck(
   coordinator: VisualizationAckCoordinator,
   key: string,
   request: VisualizationClientAckRequest,
+  sessionScopeKey: string,
 ): void {
   if (coordinator.sentTerminal.has(key)) return;
   coordinator.sentTerminal.add(key);
   coordinator.sentApplied.delete(key);
   trimVisualizationAckKeys(coordinator.sentTerminal);
-  void api.visualization.ack(request).catch(() => undefined);
+  const result = api.visualization.ack(request, { sessionScopeKey });
+  void result.catch(() => undefined);
+}
+
+function visualizationSessionScopeKey(
+  sessionId: string | null | undefined,
+  sessionEpoch: string,
+  requestScopeEpoch: string | null | undefined,
+  dataIdentity: VisualizationDataAdoptionIdentity | null,
+): string | null {
+  const id = sessionId ?? dataIdentity?.sessionId ?? null;
+  const scopeEpoch = requestScopeEpoch ?? null;
+  if (!id || !scopeEpoch) return null;
+  return sessionRequestScopeKey({
+    requestScopeEpoch: scopeEpoch,
+    sessionEpoch,
+    sessionId: id,
+  });
 }
 
 function trimVisualizationAckKeys(keys: Set<string>): void {

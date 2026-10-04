@@ -9,6 +9,7 @@ import {
   createViewport3DScalarColorUploadStore,
   createViewport3DScalarShaderColorUploadPlan,
   createViewport3DScalarShaderUploadStore,
+  isViewport3DScalarUploadSnapshotCurrent,
 } from "./useViewport3DScalarColorUpload";
 import { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
 import {
@@ -101,6 +102,46 @@ describe("canRetainViewport3DScalarUploadBuffer", () => {
   });
 });
 
+describe("isViewport3DScalarUploadSnapshotCurrent", () => {
+  it("requires the same geometry and normalized retention key", () => {
+    const geometry = new BufferGeometry();
+    const otherGeometry = new BufferGeometry();
+
+    expect(
+      isViewport3DScalarUploadSnapshotCurrent({
+        requestedGeometry: geometry,
+        requestedRetentionKey: "field-a",
+        snapshotGeometry: geometry,
+        snapshotRetentionKey: "field-a",
+      }),
+    ).toBe(true);
+    expect(
+      isViewport3DScalarUploadSnapshotCurrent({
+        requestedGeometry: geometry,
+        requestedRetentionKey: "field-b",
+        snapshotGeometry: geometry,
+        snapshotRetentionKey: "field-a",
+      }),
+    ).toBe(false);
+    expect(
+      isViewport3DScalarUploadSnapshotCurrent({
+        requestedGeometry: geometry,
+        requestedRetentionKey: undefined,
+        snapshotGeometry: otherGeometry,
+        snapshotRetentionKey: null,
+      }),
+    ).toBe(false);
+    expect(
+      isViewport3DScalarUploadSnapshotCurrent({
+        requestedGeometry: geometry,
+        requestedRetentionKey: undefined,
+        snapshotGeometry: geometry,
+        snapshotRetentionKey: null,
+      }),
+    ).toBe(true);
+  });
+});
+
 describe("createViewport3DScalarColorUploadPlan", () => {
   it("splits scalar color buffers into upload chunks before visible adoption", () => {
     const geometry = new BufferGeometry();
@@ -136,9 +177,16 @@ describe("createViewport3DScalarColorUploadPlan", () => {
 
   it("reuses an existing compatible scalar color attribute", () => {
     const geometry = new BufferGeometry();
-    const existing = new BufferAttribute(new Float32Array(6), 3);
+    const previous = new Float32Array([90, 91, 92, 93, 94, 95]);
+    const existing = new BufferAttribute(previous, 3);
     geometry.setAttribute("color", existing);
+    existing.addUpdateRange(3, 3);
+    const previousUpdateRanges = existing.updateRanges.map(({ start, count }) => ({
+      count,
+      start,
+    }));
     const colorBuffer = scalarColorBuffer(2);
+    const initialVersion = existing.version;
 
     const uploadPlan = createViewport3DScalarColorUploadPlan(
       geometry,
@@ -150,13 +198,31 @@ describe("createViewport3DScalarColorUploadPlan", () => {
     for (const chunk of uploadPlan?.chunks ?? []) {
       chunk.upload();
     }
+
+    // Staging must leave the attached attribute and its GPU-facing version
+    // unchanged until the complete plan is adopted.
+    expect(existing.array).toBe(previous);
+    expect(Array.from(existing.array as Float32Array)).toEqual(
+      Array.from(previous),
+    );
+    expect(existing.version).toBe(initialVersion);
+
     uploadPlan?.onVisible();
 
     expect(geometry.getAttribute("color")).toBe(existing);
     expect(existing.usage).toBe(StaticDrawUsage);
+    expect(existing.array).not.toBe(previous);
     expect(Array.from(existing.array as Float32Array)).toEqual(
       Array.from(colorBuffer.colors),
     );
+    expect(existing.version).toBeGreaterThan(initialVersion);
+
+    // A failed visibility callback must restore the previous live array and
+    // pending update ranges without replacing the BufferAttribute.
+    uploadPlan?.chunks[0]?.rollback?.();
+    expect(geometry.getAttribute("color")).toBe(existing);
+    expect(existing.array).toBe(previous);
+    expect(existing.updateRanges).toEqual(previousUpdateRanges);
   });
 });
 
@@ -204,7 +270,8 @@ describe("createViewport3DScalarShaderColorUploadPlan", () => {
 
   it("reuses compatible shader attributes while retaining inactive slots", () => {
     const geometry = new BufferGeometry();
-    const scalarAttribute = new BufferAttribute(new Float32Array(2), 1);
+    const previousScalar = new Float32Array([11, 12]);
+    const scalarAttribute = new BufferAttribute(previousScalar, 1);
     geometry.setAttribute(VIEWPORT_3D_SCALAR_VALUE_ATTRIBUTE, scalarAttribute);
     geometry.setAttribute(
       VIEWPORT_3D_VECTOR_VALUE_ATTRIBUTE,
@@ -228,14 +295,96 @@ describe("createViewport3DScalarShaderColorUploadPlan", () => {
     for (const chunk of uploadPlan?.chunks ?? []) {
       chunk.upload();
     }
+
+    expect(scalarAttribute.array).toBe(previousScalar);
+    expect(Array.from(scalarAttribute.array as Float32Array)).toEqual([11, 12]);
+
     uploadPlan?.onVisible();
 
     expect(geometry.getAttribute(VIEWPORT_3D_SCALAR_VALUE_ATTRIBUTE)).toBe(
       scalarAttribute,
     );
     expect(scalarAttribute.usage).toBe(StaticDrawUsage);
+    expect(scalarAttribute.array).not.toBe(previousScalar);
     expect(Array.from(scalarAttribute.array as Float32Array)).toEqual([7, 9]);
     expect(geometry.hasAttribute(VIEWPORT_3D_VECTOR_VALUE_ATTRIBUTE)).toBe(true);
+  });
+
+  it("stages and commits all compatible shader attributes as one update", () => {
+    const geometry = new BufferGeometry();
+    const previous = {
+      imag: new Float32Array([10, 11, 12, 13, 14, 15]),
+      real: new Float32Array([20, 21, 22, 23, 24, 25]),
+      scalar: new Float32Array([30, 31]),
+      vector: new Float32Array([40, 41, 42, 43, 44, 45]),
+    };
+    const attributes = {
+      imag: new BufferAttribute(previous.imag, 3),
+      real: new BufferAttribute(previous.real, 3),
+      scalar: new BufferAttribute(previous.scalar, 1),
+      vector: new BufferAttribute(previous.vector, 3),
+    };
+    geometry.setAttribute(VIEWPORT_3D_COMPLEX_IMAG_VALUE_ATTRIBUTE, attributes.imag);
+    geometry.setAttribute(VIEWPORT_3D_COMPLEX_REAL_VALUE_ATTRIBUTE, attributes.real);
+    geometry.setAttribute(VIEWPORT_3D_SCALAR_VALUE_ATTRIBUTE, attributes.scalar);
+    geometry.setAttribute(VIEWPORT_3D_VECTOR_VALUE_ATTRIBUTE, attributes.vector);
+
+    const colorBuffer: ScalarColorBuffer = {
+      colors: new Float32Array(),
+      complexImagValues: new Float32Array([1, 2, 3, 4, 5, 6]),
+      complexRealValues: new Float32Array([7, 8, 9, 10, 11, 12]),
+      range: { max: 12, min: 1 },
+      scalarValues: new Float32Array([13, 14]),
+      vectorValues: new Float32Array([15, 16, 17, 18, 19, 20]),
+    };
+    const uploadPlan = createViewport3DScalarShaderColorUploadPlan(
+      geometry,
+      colorBuffer,
+      2,
+      1,
+    );
+
+    for (const chunk of uploadPlan?.chunks ?? []) chunk.upload();
+
+    expect(Array.from(attributes.imag.array as Float32Array)).toEqual(
+      Array.from(previous.imag),
+    );
+    expect(Array.from(attributes.real.array as Float32Array)).toEqual(
+      Array.from(previous.real),
+    );
+    expect(Array.from(attributes.scalar.array as Float32Array)).toEqual(
+      Array.from(previous.scalar),
+    );
+    expect(Array.from(attributes.vector.array as Float32Array)).toEqual(
+      Array.from(previous.vector),
+    );
+
+    uploadPlan?.onVisible();
+
+    expect(geometry.getAttribute(VIEWPORT_3D_COMPLEX_IMAG_VALUE_ATTRIBUTE)).toBe(
+      attributes.imag,
+    );
+    expect(geometry.getAttribute(VIEWPORT_3D_COMPLEX_REAL_VALUE_ATTRIBUTE)).toBe(
+      attributes.real,
+    );
+    expect(geometry.getAttribute(VIEWPORT_3D_SCALAR_VALUE_ATTRIBUTE)).toBe(
+      attributes.scalar,
+    );
+    expect(geometry.getAttribute(VIEWPORT_3D_VECTOR_VALUE_ATTRIBUTE)).toBe(
+      attributes.vector,
+    );
+    expect(Array.from(attributes.imag.array as Float32Array)).toEqual(
+      Array.from(colorBuffer.complexImagValues ?? []),
+    );
+    expect(Array.from(attributes.real.array as Float32Array)).toEqual(
+      Array.from(colorBuffer.complexRealValues ?? []),
+    );
+    expect(Array.from(attributes.scalar.array as Float32Array)).toEqual(
+      Array.from(colorBuffer.scalarValues ?? []),
+    );
+    expect(Array.from(attributes.vector.array as Float32Array)).toEqual(
+      Array.from(colorBuffer.vectorValues ?? []),
+    );
   });
 
   it("retains inactive shader slots so mode switches reuse their GPU attribute identities", () => {

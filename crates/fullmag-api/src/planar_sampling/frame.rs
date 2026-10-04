@@ -22,7 +22,7 @@ impl ResolvedFrame {
             _ => {
                 return Err(ApiError::bad_request(
                     "unresolved_planar_extent: sampler requires explicit runtime bounds",
-                ))
+                ));
             }
         };
         let finite = frame

@@ -81,6 +81,18 @@ impl ApiError {
         }
     }
 
+    pub fn too_many_requests_with_code(
+        code: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
+        Self {
+            status: StatusCode::TOO_MANY_REQUESTS,
+            code: Some(code.into()),
+            message: message.into(),
+            diagnostics: Vec::new(),
+        }
+    }
+
     pub fn unprocessable(message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::UNPROCESSABLE_ENTITY,
@@ -134,6 +146,7 @@ impl IntoResponse for ApiError {
                     StatusCode::BAD_REQUEST => "bad_request",
                     StatusCode::NOT_FOUND => "not_found",
                     StatusCode::CONFLICT => "conflict",
+                    StatusCode::TOO_MANY_REQUESTS => "too_many_requests",
                     StatusCode::UNPROCESSABLE_ENTITY => "unsupported_capability",
                     StatusCode::SERVICE_UNAVAILABLE => "service_unavailable",
                     _ => "internal_error",

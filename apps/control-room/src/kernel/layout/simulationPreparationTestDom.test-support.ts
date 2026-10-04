@@ -148,8 +148,48 @@ export class TestNode {
   }
 }
 
+type TestAttribute = {
+  readonly name: string;
+  readonly value: string;
+};
+
+/**
+ * Minimal NamedNodeMap surface required by React's hydration reconciler.
+ * The map API remains available to the test DOM, while numeric properties
+ * mirror browser `element.attributes[index]` entries.
+ */
+class TestNamedNodeMap extends Map<string, string> {
+  get length(): number {
+    return this.size;
+  }
+
+  override set(name: string, value: string): this {
+    const result = super.set(name, value);
+    this.syncIndexedEntries();
+    return result;
+  }
+
+  override delete(name: string): boolean {
+    const deleted = super.delete(name);
+    if (deleted) this.syncIndexedEntries();
+    return deleted;
+  }
+
+  private syncIndexedEntries(): void {
+    const indexed = this as unknown as Record<string, unknown>;
+    const entries = Array.from(this.entries());
+    for (let index = 0; index < entries.length; index += 1) {
+      const [name, value] = entries[index]!;
+      indexed[String(index)] = { name, value } satisfies TestAttribute;
+    }
+    for (let index = entries.length; indexed[String(index)] !== undefined; index += 1) {
+      delete indexed[String(index)];
+    }
+  }
+}
+
 export class TestElement extends TestNode {
-  readonly attributes = new Map<string, string>();
+  readonly attributes = new TestNamedNodeMap();
   clientHeight = 0;
   clientWidth = 0;
   readonly namespaceURI = "http://www.w3.org/1999/xhtml";
@@ -165,6 +205,15 @@ export class TestElement extends TestNode {
   };
   readonly tagName: string;
   private controlValue = "";
+
+  get inputMode(): string {
+    return this.getAttribute("inputMode") ?? "";
+  }
+
+  set inputMode(value: string) {
+    if (value) this.setAttribute("inputMode", value);
+    else this.removeAttribute("inputMode");
+  }
 
   get value(): string {
     return this.controlValue;
@@ -250,7 +299,11 @@ export class TestElement extends TestNode {
   }
 
   getAttribute(name: string): string | null {
-    return this.attributes.get(name) ?? null;
+    return this.attributes.get(normalizeAttributeName(name)) ?? null;
+  }
+
+  getAttributeNames(): string[] {
+    return Array.from(this.attributes.keys());
   }
 
   getBoundingClientRect(): DOMRect {
@@ -268,7 +321,7 @@ export class TestElement extends TestNode {
   }
 
   hasAttribute(name: string): boolean {
-    return this.attributes.has(name);
+    return this.attributes.has(normalizeAttributeName(name));
   }
 
   matches(selector: string): boolean {
@@ -289,12 +342,16 @@ export class TestElement extends TestNode {
   }
 
   removeAttribute(name: string): void {
-    this.attributes.delete(name);
+    this.attributes.delete(normalizeAttributeName(name));
   }
 
   setAttribute(name: string, value: string): void {
-    this.attributes.set(name, String(value));
+    this.attributes.set(normalizeAttributeName(name), String(value));
   }
+}
+
+function normalizeAttributeName(name: string): string {
+  return name.toLowerCase() === "inputmode" ? "inputmode" : name;
 }
 
 const VOID_HTML_ELEMENTS = new Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"]);

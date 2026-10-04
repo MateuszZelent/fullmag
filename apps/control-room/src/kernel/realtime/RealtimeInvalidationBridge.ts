@@ -53,6 +53,7 @@ import {
   MODEL_SCENE_PATH,
   MODEL_STUDY_PATH,
   SESSION_CURRENT_PATH,
+  SESSIONS_PATH,
   SIMULATION_COMMANDS_PATH,
   SIMULATION_OBJECT_METRICS_PATH,
   SIMULATION_SOLVER_STATUS_PATH,
@@ -475,6 +476,15 @@ export class RealtimeInvalidationBridge {
     return { ...this.fieldInvalidationTelemetry };
   }
 
+  /**
+   * Reconnect is a transport boundary.  HTTP remains authoritative, so force
+   * the session status/current resources to refetch even when the socket did
+   * not deliver a hello or replay marker after the handshake.
+   */
+  handleReconnect(): void {
+    this.invalidateSessionScope(`realtime:reconnect:${Date.now()}`);
+  }
+
   handleEvent(event: unknown): boolean {
     const sessionHandled = this.handleSessionEnvelope(event);
 
@@ -717,6 +727,7 @@ export class RealtimeInvalidationBridge {
   }
 
   private invalidateSessionScope(revision: ResourceRevision): void {
+    this.resources.invalidate(SESSIONS_PATH, revision);
     this.resources.invalidate(SESSION_STATUS_RESOURCE_KEY, revision);
     this.resources.invalidatePrefix(SESSION_CURRENT_PATH, revision);
   }

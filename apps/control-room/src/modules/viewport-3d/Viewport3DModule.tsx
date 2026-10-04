@@ -34,7 +34,7 @@ import {
 import type { MeshSizeHistogramHighlight } from "@/kernel/events/eventTypes";
 import { useMeshHistogramBinElementsResource } from "@/kernel/resources/geometryLifecycleResources";
 import { useSessionResourceIdentity } from "@/kernel/resources/useSessionStatus";
-import type { SessionResourceIdentity } from "@/kernel/resources/sessionResourceIdentity";
+import { sessionResourceIdentityKey, type SessionResourceIdentity } from "@/kernel/resources/sessionResourceIdentity";
 import { useFieldMetaResource } from "@/kernel/resources/studyRuntimeResources";
 import {
   frozenSpinsMaskIdFromResource,
@@ -1368,6 +1368,7 @@ interface Viewport3DFrameProps
   quantityId: string;
   renderedMeshRevision: number | string | null;
   scalarColorPalette: string;
+  savedViewportActive: boolean;
   sessionIdentity: SessionResourceIdentity | null;
   selectedLabel: string;
   sceneRefetch: () => void;
@@ -1391,11 +1392,12 @@ export default function Viewport3DModule({
   const selection = useSelectionSelector((state) => state, {
     isEqual: selectionSnapshotEquals,
   });
+  const savedViewportSelectionActive =
+    selection.kind === "results.materialized_dataset" &&
+    selection.ref?.type === "materialized-dataset";
   const { select, clear } = useSelectionActions(moduleId);
   const tracker = useViewport3DResourceTracker();
-  const sessionIdentityKey = sessionIdentity
-    ? `${sessionIdentity.sessionId}\u0000${sessionIdentity.sessionEpoch}`
-    : null;
+  const sessionIdentityKey = sessionIdentity ? sessionResourceIdentityKey(sessionIdentity) : null;
   const previousSessionIdentityKeyRef = useRef(sessionIdentityKey);
   useEffect(() => {
     if (previousSessionIdentityKeyRef.current === sessionIdentityKey) return;
@@ -1428,8 +1430,13 @@ export default function Viewport3DModule({
     useState(true);
   const meshHistogramBinElements = useMeshHistogramBinElementsResource(
     meshSizeHighlight?.resource ?? null,
+    { enabled: !savedViewportSelectionActive },
   );
-  const { domainId, ...sceneModel } = useViewport3DSceneModel({
+  const {
+    domainId,
+    savedViewportCamera,
+    ...sceneModel
+  } = useViewport3DSceneModel({
     commandState,
     colors,
     meshSizeHighlight,
@@ -1440,17 +1447,28 @@ export default function Viewport3DModule({
     selection,
     tracker,
   });
+  const {
+    beginInteraction: beginSavedCameraInteraction,
+    endInteraction: endSavedCameraInteraction,
+    patchCamera: patchSavedCamera,
+    saveCameraState: saveSavedCameraState,
+  } = savedViewportCamera;
   const frozenSpinsPreviewId = useFrozenSpinsActivePreviewId();
   const frozenSpinsPreview = useFrozenSpinsPreviewResource(
     frozenSpinsPreviewId ?? "",
-    { enabled: frozenSpinsPreviewId !== null },
+    {
+      enabled:
+        !sceneModel.savedViewportActive && frozenSpinsPreviewId !== null,
+    },
   );
-  const frozenSpinsMaskId = frozenSpinsPreview.data
+  const frozenSpinsMaskId = !sceneModel.savedViewportActive && frozenSpinsPreview.data
     ? frozenSpinsMaskIdFromResource(frozenSpinsPreview.data.mask_resource)
     : null;
   const frozenSpinsMask = useFrozenSpinsMaskResource(
     frozenSpinsMaskId ?? "",
-    { enabled: frozenSpinsMaskId !== null },
+    {
+      enabled: !sceneModel.savedViewportActive && frozenSpinsMaskId !== null,
+    },
   );
   const femFrozenSpinsCarrier = useMemo(() => {
     const topology = sceneModel.topologyModel;
@@ -1473,8 +1491,9 @@ export default function Viewport3DModule({
     };
   }, [sceneModel.topologyModel]);
   const frozenSpinsOverlayModel = useMemo(
-    () =>
-      buildFrozenSpinsOverlayModel({
+    () => {
+      if (sceneModel.savedViewportActive) return null;
+      return buildFrozenSpinsOverlayModel({
         current: frozenSpinsPreview.data?.current ?? false,
         expectedTopologyFingerprint:
           frozenSpinsPreview.data?.resolved.topology_fingerprint ?? null,
@@ -1484,12 +1503,14 @@ export default function Viewport3DModule({
         femCarrier: femFrozenSpinsCarrier,
         mask: frozenSpinsMask.data,
         previewId: frozenSpinsPreviewId ?? "",
-      }),
+      });
+    },
     [
       frozenSpinsMask.data,
       frozenSpinsPreview.data,
       frozenSpinsPreviewId,
       femFrozenSpinsCarrier,
+      sceneModel.savedViewportActive,
       sceneModel.fdmDomain,
     ],
   );
@@ -1544,6 +1565,10 @@ export default function Viewport3DModule({
   });
   const patchCameraState = useCallback(
     (patch: NonNullable<VisualizationStatePatch["camera"]>) => {
+      if (sceneModel.savedViewportActive) {
+        patchSavedCamera(patch);
+        return;
+      }
       kernel.cameraRegistry.patchCamera(patch);
       if (patch.position && patch.target) {
         const nextCamera = {
@@ -1570,10 +1595,14 @@ export default function Viewport3DModule({
         viewport3dStore.setCameraOrthographicScale(patch.orthographic_scale ?? null);
       }
     },
-    [kernel.cameraRegistry],
+    [kernel.cameraRegistry, patchSavedCamera, sceneModel.savedViewportActive],
   );
   const saveCameraState = useCallback(
     (camera: Viewport3DCameraChange, epoch?: number) => {
+      if (sceneModel.savedViewportActive) {
+        saveSavedCameraState(camera, epoch);
+        return;
+      }
       const accepted = kernel.cameraRegistry.patchCamera(
         buildViewport3DCameraRegistryPatch(camera),
         epoch,
@@ -1608,7 +1637,7 @@ export default function Viewport3DModule({
         timestamp: performance.now(),
       });
     },
-    [kernel.cameraRegistry],
+    [kernel.cameraRegistry, saveSavedCameraState, sceneModel.savedViewportActive],
   );
   const cameraFieldUpdateHoldRef = useRef(false);
   const beginCameraInteraction = useCallback((epoch?: number) => {
@@ -1616,15 +1645,31 @@ export default function Viewport3DModule({
       cameraFieldUpdateHoldRef.current = true;
       beginViewport3DFieldUpdateHold();
     }
+    if (sceneModel.savedViewportActive) {
+      beginSavedCameraInteraction(epoch);
+      return;
+    }
     kernel.cameraRegistry.beginInteraction(epoch);
-  }, [kernel.cameraRegistry]);
+  }, [
+    beginSavedCameraInteraction,
+    kernel.cameraRegistry,
+    sceneModel.savedViewportActive,
+  ]);
   const endCameraInteraction = useCallback((epoch?: number) => {
-    kernel.cameraRegistry.endInteraction(epoch);
+    if (sceneModel.savedViewportActive) {
+      endSavedCameraInteraction(epoch);
+    } else {
+      kernel.cameraRegistry.endInteraction(epoch);
+    }
     if (cameraFieldUpdateHoldRef.current) {
       cameraFieldUpdateHoldRef.current = false;
       endViewport3DFieldUpdateHold();
     }
-  }, [kernel.cameraRegistry]);
+  }, [
+    endSavedCameraInteraction,
+    kernel.cameraRegistry,
+    sceneModel.savedViewportActive,
+  ]);
   useEffect(
     () => () => {
       if (!cameraFieldUpdateHoldRef.current) return;
@@ -1633,6 +1678,19 @@ export default function Viewport3DModule({
     },
     [],
   );
+  useEffect(() => {
+    if (!sceneModel.savedViewportActive) return;
+    viewport3dStore.setCameraView({
+      camera: sceneModel.cameraState,
+      orthographicScale: sceneModel.cameraOrthographicScale,
+      projection: sceneModel.cameraProjection,
+    });
+  }, [
+    sceneModel.cameraOrthographicScale,
+    sceneModel.cameraProjection,
+    sceneModel.cameraState,
+    sceneModel.savedViewportActive,
+  ]);
   const changeRegionOverlaySource = useCallback(
     (source: RegionDiagnosticOverlaySource) => {
       setRegionDiagnosticOverlayState((state) => ({ ...state, source }));
@@ -1697,6 +1755,7 @@ export default function Viewport3DModule({
       regionDiagnosticOverlayState={regionDiagnosticOverlayState}
       regionOverlayMode={regionDiagnosticOverlayMode(regionDiagnosticOverlayState)}
       rotationMode={commandState.widgets.rotationMode}
+      savedViewportActive={sceneModel.savedViewportActive}
       scaleLabelsVisible={commandState.widgets.scaleLabelsVisible}
       scaleUnitMode={commandState.widgets.scaleUnitMode}
       sessionIdentity={sessionIdentity}
@@ -1892,6 +1951,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
   onRegionOverlayVisibilityChange,
   regionDiagnosticOverlayState,
   quantityId,
+  savedViewportActive,
   sessionIdentity,
   selectedLabel,
   sceneRefetch,
@@ -2084,22 +2144,27 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
     () => getRetainedViewport3DColorbarPlans(slotId),
     () => EMPTY_VIEWPORT_3D_COLORBAR_PLANS,
   );
+  const savedViewportColorbarReady =
+    !savedViewportActive || sceneProps.fieldModel !== null;
   const colorbarTargetPlans = useMemo(
     () =>
-      buildViewport3DColorbarTargetPlans({
-        availableQuantityIds: sceneProps.availableQuantityIds,
-        fdmSettings:
-          sceneProps.fdmDomain && sceneProps.fdmTargetViews.length === 0
-            ? sceneProps.fdmSettings
-            : null,
-        parts: colorbarParts,
-      }),
+      savedViewportColorbarReady
+        ? buildViewport3DColorbarTargetPlans({
+            availableQuantityIds: sceneProps.availableQuantityIds,
+            fdmSettings:
+              sceneProps.fdmDomain && sceneProps.fdmTargetViews.length === 0
+                ? sceneProps.fdmSettings
+                : null,
+            parts: colorbarParts,
+          })
+        : [],
     [
       colorbarParts,
       sceneProps.availableQuantityIds,
       sceneProps.fdmDomain,
       sceneProps.fdmSettings,
       sceneProps.fdmTargetViews.length,
+      savedViewportColorbarReady,
     ],
   );
   const initialColorbarPlans = useMemo(
@@ -2155,14 +2220,16 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
   const colorbarTargetPlanAvailable = Boolean(
     sceneProps.fdmDomain || colorbarTopologyModel,
   );
-  const colorbarPlans = resolveViewport3DColorbarPlansForRender({
-    fieldIdentityCompatible: sceneProps.fdmFieldIdentityCompatible,
-    planned: plannedColorbars,
-    renderSurfaceAvailable,
-    retained: retainedColorbarPlans,
-    targetPlanAvailable: colorbarTargetPlanAvailable,
-    viewportColorbarRequested,
-  });
+  const colorbarPlans = savedViewportColorbarReady
+    ? resolveViewport3DColorbarPlansForRender({
+        fieldIdentityCompatible: sceneProps.fdmFieldIdentityCompatible,
+        planned: plannedColorbars,
+        renderSurfaceAvailable,
+        retained: retainedColorbarPlans,
+        targetPlanAvailable: colorbarTargetPlanAvailable,
+        viewportColorbarRequested,
+      })
+    : EMPTY_VIEWPORT_3D_COLORBAR_PLANS;
   const colorbarLabelByTargetId = useMemo(() => {
     const labels = new Map<string, string>(
       colorbarParts.map((part) => [part.id, part.label]),
@@ -2206,14 +2273,16 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
   useEffect(() => {
     setRetainedViewport3DColorbarPlans(
       slotId,
-      resolveRetainedViewport3DColorbarPlansForStore({
-        fieldIdentityCompatible: sceneProps.fdmFieldIdentityCompatible,
-        planned: plannedColorbars,
-        renderSurfaceAvailable,
-        retained: retainedColorbarPlans,
-        targetPlanAvailable: colorbarTargetPlanAvailable,
-        viewportColorbarRequested,
-      }),
+      savedViewportColorbarReady
+        ? resolveRetainedViewport3DColorbarPlansForStore({
+            fieldIdentityCompatible: sceneProps.fdmFieldIdentityCompatible,
+            planned: plannedColorbars,
+            renderSurfaceAvailable,
+            retained: retainedColorbarPlans,
+            targetPlanAvailable: colorbarTargetPlanAvailable,
+            viewportColorbarRequested,
+          })
+        : EMPTY_VIEWPORT_3D_COLORBAR_PLANS,
     );
     viewport3dStore.setActiveScalarColorbarLegends(
       colorbarLegends.map(({ legend }) => legend),
@@ -2227,6 +2296,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
     retainedColorbarPlans,
     renderedScalarRanges,
     sceneProps.fdmFieldIdentityCompatible,
+    savedViewportColorbarReady,
     slotId,
     viewportColorbarRequested,
   ]);
@@ -2280,7 +2350,9 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
       dataIdentity: committedDataIdentity,
       renderCommit: committedDataIdentity,
       revision,
+      requestScopeEpoch: sessionIdentity?.requestScopeEpoch ?? null,
       resourceKey,
+      sessionId: sessionIdentity?.sessionId ?? null,
       sessionEpoch: sessionIdentity?.sessionEpoch ?? null,
       status: "rendered",
       viewportId: slotId,
@@ -2349,6 +2421,8 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
       error: visualizationError,
       resourceKey,
       revision,
+      requestScopeEpoch: sessionIdentity?.requestScopeEpoch ?? null,
+      sessionId: sessionIdentity?.sessionId ?? null,
       sessionEpoch: sessionIdentity?.sessionEpoch ?? null,
       status: visualizationError ? "failed" : changeKind === "data" ? "applied" : "rendered",
       viewportId: slotId,
@@ -2483,6 +2557,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
     <section
       aria-label="3D viewport"
       className="fm-viewport-3d"
+      data-view-source={savedViewportActive ? "saved" : "current"}
       data-camera-position={sceneProps.cameraState.position.join(" ")}
       data-camera-projection={sceneProps.cameraProjection}
       data-camera-target={sceneProps.cameraState.target.join(" ")}
@@ -2546,6 +2621,22 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
       onPointerDown={() => kernel.layout.setFocusedSlot(slotId)}
     >
       <div aria-live="polite" className="fm-viewport-3d__hud">
+        {savedViewportActive && sessionIdentity ? (
+          <fieldset
+            aria-label="Viewport source"
+            className="fm-viewport-3d__region-modes"
+          >
+            <Button
+              aria-label="Return to current view"
+              onClick={onClearSelection}
+              size="sm"
+              type="button"
+              variant="secondary"
+            >
+              Current view
+            </Button>
+          </fieldset>
+        ) : null}
         <span>{quantityId}</span>
         <span>{selectedLabel}</span>
         {hysteresisReplayLabel ? <span>{hysteresisReplayLabel}</span> : null}
@@ -2707,6 +2798,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
             {...sceneProps}
             adoptionRegistry={visualizationDebugAdoptionRegistry}
             colors={colors}
+            savedViewportActive={savedViewportActive}
             sessionIdentity={sessionIdentity}
             hysteresisReplayGlyphModel={hysteresisReplayGlyphModel}
             orbitDebugAngles={orbitDebugAngles}

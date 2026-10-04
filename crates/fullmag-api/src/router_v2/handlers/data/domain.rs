@@ -49,10 +49,18 @@ pub struct DomainSliceMeshOverlayQuery {
 pub async fn get_domain_meta(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<DomainMeta>, ApiError> {
+    let request_context = crate::capture_current_live_request_context(&state).await?;
     let guard = state.current_live_state.read().await;
     let snapshot = guard
         .as_ref()
         .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    crate::ensure_current_live_request_context(
+        snapshot,
+        &request_context,
+        state
+            .current_live_session_epoch
+            .load(std::sync::atomic::Ordering::Acquire),
+    )?;
 
     Ok(Json(domain_meta_for_snapshot(snapshot)))
 }
@@ -169,10 +177,18 @@ pub(crate) fn domain_meta_for_snapshot(snapshot: &SessionStateResponse) -> Domai
 pub async fn get_fdm_multilayer_layout(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<FdmMultilayerLayoutResource>, ApiError> {
+    let request_context = crate::capture_current_live_request_context(&state).await?;
     let guard = state.current_live_state.read().await;
     let snapshot = guard
         .as_ref()
         .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    crate::ensure_current_live_request_context(
+        snapshot,
+        &request_context,
+        state
+            .current_live_session_epoch
+            .load(std::sync::atomic::Ordering::Acquire),
+    )?;
     Ok(Json(fdm_multilayer_layout_resource(snapshot)?))
 }
 
@@ -203,10 +219,18 @@ pub async fn get_fdm_multilayer_layer_active_mask(
     Path(layer_id): Path<String>,
     headers: HeaderMap,
 ) -> Result<axum::response::Response, ApiError> {
+    let request_context = crate::capture_current_live_request_context(&state).await?;
     let guard = state.current_live_state.read().await;
     let snapshot = guard
         .as_ref()
         .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    crate::ensure_current_live_request_context(
+        snapshot,
+        &request_context,
+        state
+            .current_live_session_epoch
+            .load(std::sync::atomic::Ordering::Acquire),
+    )?;
     let layout = fdm_multilayer_layout_resource(snapshot)?;
     if !layout.available {
         return Err(ApiError::not_found(
@@ -335,10 +359,18 @@ pub async fn get_fdm_multilayer_layer_region_membership(
     Path(layer_id): Path<String>,
     headers: HeaderMap,
 ) -> Result<axum::response::Response, ApiError> {
+    let request_context = crate::capture_current_live_request_context(&state).await?;
     let guard = state.current_live_state.read().await;
     let snapshot = guard
         .as_ref()
         .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    crate::ensure_current_live_request_context(
+        snapshot,
+        &request_context,
+        state
+            .current_live_session_epoch
+            .load(std::sync::atomic::Ordering::Acquire),
+    )?;
     let layout = fdm_multilayer_layout_resource(snapshot)?;
     let descriptor = layout
         .layers
@@ -440,10 +472,18 @@ pub async fn get_fdm_multilayer_layer_region_memberships(
     State(state): State<Arc<AppState>>,
     Path(layer_id): Path<String>,
 ) -> Result<Json<FdmNativeLayerRegionMembershipResource>, ApiError> {
+    let request_context = crate::capture_current_live_request_context(&state).await?;
     let guard = state.current_live_state.read().await;
     let snapshot = guard
         .as_ref()
         .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    crate::ensure_current_live_request_context(
+        snapshot,
+        &request_context,
+        state
+            .current_live_session_epoch
+            .load(std::sync::atomic::Ordering::Acquire),
+    )?;
     let layout = fdm_multilayer_layout_resource(snapshot)?;
     let descriptor = layout
         .layers
@@ -1631,10 +1671,18 @@ pub async fn get_domain_topology(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Result<axum::response::Response, ApiError> {
+    let request_context = crate::capture_current_live_request_context(&state).await?;
     let guard = state.current_live_state.read().await;
     let snapshot = guard
         .as_ref()
         .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    crate::ensure_current_live_request_context(
+        snapshot,
+        &request_context,
+        state
+            .current_live_session_epoch
+            .load(std::sync::atomic::Ordering::Acquire),
+    )?;
 
     if is_fdm_snapshot(snapshot) {
         return Ok(StatusCode::NO_CONTENT.into_response());
@@ -1680,10 +1728,18 @@ pub async fn get_domain_slice_mesh_overlay(
     headers: HeaderMap,
     Query(query): Query<DomainSliceMeshOverlayQuery>,
 ) -> Result<axum::response::Response, ApiError> {
+    let request_context = crate::capture_current_live_request_context(&state).await?;
     let guard = state.current_live_state.read().await;
     let snapshot = guard
         .as_ref()
         .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    crate::ensure_current_live_request_context(
+        snapshot,
+        &request_context,
+        state
+            .current_live_session_epoch
+            .load(std::sync::atomic::Ordering::Acquire),
+    )?;
 
     if is_fdm_snapshot(snapshot) {
         return Ok(StatusCode::NO_CONTENT.into_response());

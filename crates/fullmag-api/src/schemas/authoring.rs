@@ -445,6 +445,9 @@ pub struct SceneResource {
     pub field_drives: FieldDriveListStateResource,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(additional_properties, nullable)]
+    pub monitors: Option<BTreeMap<String, Value>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(additional_properties, nullable)]
     pub current_modules: Option<BTreeMap<String, Value>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[schema(value_type = Vec<AntennaPortModeResource>)]
@@ -1579,6 +1582,8 @@ pub struct CouplingListResource {
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct RegionPatchRequest {
+    #[serde(default)]
+    pub base_revision: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

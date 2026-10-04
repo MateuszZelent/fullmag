@@ -28,6 +28,32 @@ The older public `/v1/live/current/...` tree has been removed. Only
 
 ## 2. Canonical route families
 
+### Warunek oczekiwanej sesji HTTP (P3a)
+
+Żądania powiązane z sesją mogą przekazać `x-fullmag-session-scope`:
+`session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`.
+Wszystkie trzy wartości pochodzą z tego samego odczytu statusu. `session_epoch`
+zachowuje tożsamość naukową, a `request_scope_epoch` oznacza instancję API i
+monotoniczną zmianę bieżącej sesji. Fasada przenosi
+`RequestOptions.sessionScopeKey` do nagłówka dla JSON i binary; nie dodaje
+go do URL. Niezgodność celu skutkuje `409 request_context_stale` przed
+mutacją. Niepoprawny format jest błędem żądania.
+
+Backend wiąże oczekiwaną tożsamość z immutable request context pod blokadą
+transition. Ponowne otwarcie tego samego `session_id` i `session_epoch` otrzymuje
+inny `request_scope_epoch`; stary nagłówek dostaje 409. Klucze cache, decode
+i generacja viewportu używają tej samej inkarnacji. Brak nagłówka pozostaje
+kompatybilny z bootstrapem i klientami
+w migracji; nie jest dowodem ochrony wieloetapowej operacji. Szczegóły
+ograniczeń i usunięcia adaptera: ADR 0011, uzupełnienie P3a z 22.09.2026.
+
+WebSocket nie przenosi scope w URL. Pierwszy `hello.payload.request_scope_epoch`
+jest wymagany i odpowiada inkarnacji przechwyconej przy upgrade. Klient ze
+znanym statusem nie przetwarza kolejnych zdarzeń przed zgodnym `hello`; przy
+niezgodności zamyka połączenie i ponownie pobiera status przez HTTP. Serwer
+zamyka strumień po przejściu do innej inkarnacji. Zdarzenia po `hello` są
+związane z tym połączeniem, a nie osobnym tokenem w każdym rekordzie.
+
 The API is organized by platform concepts, not by frontend screens:
 
 | Family | Responsibility |
@@ -45,6 +71,65 @@ The API is organized by platform concepts, not by frontend screens:
 | `diagnostics` | GPU/CPU telemetry, engine logs, and revisioned solver/publisher performance diagnostics |
 
 The default frontend base path is `/v2/sessions/current`.
+
+### Status kompilacji backendu developerskiego (P8-53)
+
+Transport kontrolowanego zastosowania wersji obejmuje
+`POST /v2/platform/development-restart-requests` i
+`GET /v2/platform/development-restart-requests/{request_id}`. Jest domyślnie
+niedostępny, dopóki launcher nie podłączy pełnego koordynatora. POST wymaga
+bieżącego `x-fullmag-api-instance`, dokładnego Origin lokalnego UI i
+`Authorization: Bearer <token>`; token statusu powstaje przed żądaniem.
+Storage zapisuje tylko jego hash. Strict request przenosi osobno `editor`,
+`workspace` i `project_document`, wymagane nullable `session_id` i epoch;
+autorytatywną scenę pobiera prywatny owner. Limit zakodowanego request/result
+wynosi 32 MiB. Żądanie nie zawiera ścieżek hosta ani parametrów procesów.
+
+Token-bound GET działa bez starego pina HTTP, aby odczyt był możliwy po
+wymianie API; podanie niezgodnego pina nadal powoduje zwykłą odmowę.
+Zasób ma stany `pending`, `ready`, `failed`, `unknown` i `Cache-Control:
+no-store`. Dopiero `ready` zawiera świeży UUID API i dane odtworzenia UI.
+Nowy klient i scope cache powstają wyłącznie po sprawdzonym handoffie.
+Sam ACK 202, zapis requestu ani stan kompilacji nie oznaczają restartu.
+
+`GET /v2/platform/development-backend` obserwuje prywatny status natywnego
+watchera. Konfiguracja jest przechwytywana raz przy starcie API z launchera
+Windows dev. Bez niej zasób zwraca `disabled`; częściowa lub błędna konfiguracja
+zwraca `unknown`. Release nie uzyskuje konfiguracji dev.
+
+Zasób zawiera `schema_version`, `configured`, `revision`, `state`,
+`current_build`, `ready_build`, `restart_available` i zamknięty kod `reason`.
+Tożsamości buildów obejmują `id` i `source_sha256`: bieżący identyfikator to
+wersja zapieczętowanego procesu, gotowy to SHA256 zweryfikowanego manifestu.
+Nie są identyfikatorami sesji ani dowodem kwalifikacji solvera.
+
+Status prywatny musi mieć zgodny worktree i generację launchera, poprawny
+schemat oraz heartbeat młodszy niż 10 sekund. Brak, niezgodność, zbyt duży
+plik, niebezpieczna ścieżka lub stary heartbeat nie stają się `ready`.
+Heartbeat odświeża obserwację co około 2 sekundy również podczas kompilacji;
+sam nie zmienia publicznej rewizji ani ETag. GET wspiera `If-None-Match`/304.
+
+Publiczny zasób nie zawiera ścieżek hosta, generacji procesu, PID ani modelu.
+`ready` oznacza tylko ukończoną kompilację. Do integracji komendy handoffu
+`restart_available=false` oraz `reason=restart_integration_pending` przy
+gotowym buildzie. Ten odczyt nie wywołuje restartu, zapisu projektu ani
+przerwania symulacji. Kontrakt docelowego restartu określa ADR 0050.
+
+Jawne operacje `POST /v2/persistence/projects/{project_id}/runs` i
+`POST /v2/persistence/projects/{project_id}/runs/{run_id}/materialization`
+zwracają `409` z kodem `run_store_busy`, jeżeli magazyn ma aktywnego pisarza.
+Klient może ponowić to samo żądanie po zakończeniu konkurencyjnej operacji;
+Submit zachowuje ten sam klucz idempotencji. Konflikt blokady nie oznacza
+błędnego payloadu ani przyjęcia nowego runu. Nie wolno omijać blokady,
+zmieniać klucza ani tworzyć zastępczego magazynu w ramach takiego ponowienia.
+
+Recovery bieżącej sesji: `GET` i `DELETE /v2/sessions/current/persistence/recovery`
+obejmują wyłącznie snapshot o `session_id` przechwyconej aktywnej sesji.
+Walidacja kontekstu i operacja pozostają pod blokadą zmiany sesji. Usuwanie
+waliduje tożsamość dokumentu pod blokadą pisarza; niezgodna tożsamość lub schemat
+powodują błąd bez usunięcia. Pole `cleared` liczy rzeczywiście usunięty snapshot
+(0 lub 1). Globalne operacje magazynu używane poza tym endpointem zachowują
+oddzielny zakres. Kształt odpowiedzi OpenAPI pozostaje bez zmian.
 
 ## 3. Contract rules
 
@@ -212,6 +297,83 @@ new revision, and the canonical
 `recommended_fetch = "/v2/sessions/current/simulation/preparation"`. HTTP v2
 remains authoritative; the event is cache invalidation only.
 
+### Document open, runtime restore and Compute preparation
+
+`OpenDocument` belongs to the project/persistence application use case. It
+reads and validates a CAE document or draft and does not execute a script,
+build a mesh, start `Compute`, or mutate `LiveRuntime`. The current-session
+routes remain adapters during migration; this section does not introduce a
+second project API or a second writer.
+
+The first transport adapter for this use case is deliberately bytes-only:
+`POST /v2/persistence/projects` creates a new draft and returns a validated
+`.fms` archive, while `POST /v2/persistence/projects/open` reads an archive
+and returns its document projection plus canonical or source-preserving bytes.
+Both operations use the single `fullmag-application`/`FileProjectRepository`
+codec, do not publish a filesystem target, and report `memory_only` durability.
+An unknown schema remains read-only and is returned byte-for-byte. These
+endpoints are not runtime-session import or restore aliases; durable Save,
+host file selection, and the UI document lifecycle remain separate follow-up
+work.
+
+`POST /v2/persistence/projects/authoring` aktualizuje dostarczone archiwum
+przez ten sam use case dokumentu. Wymaga oczekiwanego ProjectId i rewizji oraz
+pełnego `scene.v2`; konflikt i read-only dają odmowę. Zapisuje surową scenę
+po walidacji typowanej, zachowuje dodatkowe pola i istniejące assets, generuje
+kanoniczny Python kompletnej sceny bez wykonania źródła użytkownika ani Compute
+i zachowuje poprzednie źródło jako
+opaque history. Zmiana zwiększa rewizję raz; identyczna scena i źródło są no-op.
+Odpowiedź nadal ma `memory_only` durability. Operacja nie wybiera sesji,
+nie importuje nowych plików hosta i nie uruchamia przygotowania ani Compute.
+Niekompletny szkic pozostaje zapisywalny z brakiem bieżącego źródła; stary
+Python zostaje w historii. Eksport Python szkicu wymaga odrębnej bramki.
+
+The durable run read model is `GET
+/v2/persistence/projects/{project_id}/runs/{run_id}`. It reads the accepted
+RunIntent and optional task catalog from managed project storage, verifies the
+pinned project/run identity, and exposes requested execution plus a typed,
+revisioned task summary. `catalog_state=pending_materialization` means no task
+catalog exists; `materialized` means task identities are durable, not that a
+worker has started. Dla ukończonego attemptu `tasks[].accepted_state_ref`
+projektuje dokładny wspólny kontrakt z CAS-backed `study_output_manifest.v3`.
+Historyczny manifest v1 albo lane bez kompletnego refa zwraca `null`; v2 nadal
+projektuje swój `accepted_state_ref`, lecz nie deklaruje źródła obserwacji. Zły
+scope, brak obiektu CAS albo więcej niż jeden manifest bieżącego attemptu daje błąd.
+Handler nie czyta prywatnego katalogu workera. Nie odczytuje ani nie zmienia
+bieżącej sesji runtime.
+
+`POST /v2/persistence/projects/{project_id}/runs` accepts the exact project
+archive, `run_intent.v1`, current `study_plan.v2` (with compatible
+`study_plan.v1` reads), and `study_problem_catalog.v1` JSON objects plus an
+explicit asset path map. Rust validates each versioned payload before it enters
+durable storage. Lowering rejects TimeEvolution without an explicit positive
+`until_seconds`. OpenAPI constrains each payload root to an
+object and generated TypeScript represents it as `Record<string, unknown>`;
+the detailed nested `ProblemIR` schema is not yet expanded by the API contract.
+
+`GET /v2/persistence/projects/{project_id}/runs` lists accepted run intents for
+that project, newest first. `limit` is 1–100 (default 50), and `next_cursor`
+is the last `run_id` returned; passing it as `cursor` reads the next page.
+An unknown cursor is a request error. The list exposes catalog state and task
+count without implying execution. Control Room reads it as a project-keyed
+resource in Study after a project document is opened; switching projects
+changes the resource identity. This source-level read path still needs HTTP
+and restart verification, and the current store scans intents before paging.
+
+`RestoreRuntime` is an explicit operation over a compatible checkpoint. It
+builds a candidate runtime, validates primary carriers and runtime identity,
+then performs one atomic swap or leaves the active runtime unchanged. Opening a
+document never implies `RestoreRuntime`; `LogicalResume` and `ExactResume`
+retain their distinct semantics from ADR 0025.
+
+`Compute` consumes a current mesh artifact or an explicitly accepted
+`PreparationPlan`. A stale or missing mesh is a typed precondition failure; the
+Compute command does not silently dispatch `mesh_build`. The existing explicit
+`mesh_build` command remains the authorizing preparation operation, and its
+published result must carry the committed scene revision, resolved target and
+mesh identity before a dependent Compute can run. Preparation content is
+revisioned through `simulation/preparation`; it is not copied into `status`.
+
 FDM membership realization has an independent
 `region_membership_revision`; neither `mesh_revision` nor
 `domain_generation_id` substitutes for it. A revision change emits a
@@ -371,6 +533,13 @@ PATCH  /v2/sessions/current/model/planar-monitors/{monitor_id}
 DELETE /v2/sessions/current/model/planar-monitors/{monitor_id}
 POST   /v2/sessions/current/model/planar-monitors/{monitor_id}/duplicate
 ```
+
+The full `model/scene` and `committed_scene` resources preserve the enclosing
+`SceneDocument.monitors.planar` collection and `study.table_autosave` value.
+Dedicated monitor routes are projections over that same scene state; converting
+the complete scene to an API resource must not drop either field. Scene v2
+deserialization rejects unknown top-level and study fields so newer physical
+authoring data cannot be accepted and silently erased by an older server.
 
 The planar visualization source is a separate session resource and never uses
 `monitor_id = "default"` as a sentinel:
@@ -896,6 +1065,21 @@ surface coloring still requires complete field coverage. FMVP v2 remains a
 legacy full-domain compatibility format and must not be treated as proof for
 scoped FEM surface mapping.
 
+FMVP v4 zachowuje ten sam 48-bajtowy nagłówek i rozszerza blok `FMMI` do
+wersji metadanych 3. Stała część ma 80 bajtów. Offsety 8, 10, 12 i 14 zawierają
+odpowiednio długości `domain_generation_id`, `source_kind`, `source_id` i
+`field_generation_id`; offset 68 zawiera `source_revision` jako `u64`, a bajty
+76..80 są zerami. Po części stałej występują kolejno `scope_kind`, `scope_id`,
+`domain_generation_id`, `source_kind`, `source_id`, `field_generation_id` oraz
+indeksy. Wszystkie teksty są UTF-8, a blok pozostaje wyrównany do 8 bajtów.
+
+`source_kind` przyjmuje `live` albo `observation_frame`. Dla historycznej ramki
+`source_id` jest immutable `frame_id`, a `source_revision` jest dokładną
+accepted revision. Klient musi porównać te wartości oraz
+`field_generation_id` z nagłówkami odpowiedzi. Rozbieżność dyskwalifikuje
+payload. FMVP v4 rozszerza kanoniczny data plane; nie tworzy drugiego formatu
+snapshotów ani prawa do użycia danych z innego source.
+
 The same rule applies to realtime fetch hints. If the active viewport consumes
 `component=magnitude&scope_kind=airbox&scope_id=airbox`, the invalidation
 system must prefer that aggregate query. It must not fall back to
@@ -975,8 +1159,112 @@ niezależne od cache/materialization. Brak primary carriera zwraca typed
 mogą być przejściowymi command aliases, ale wywołują ten sam koordynator
 `ComputeQuantities`; nie ustanawiają alternatywnego ownera pól lub skalarów.
 
+Trwała publikacja prostego FDM CPU używa `study_output_manifest.v3` z opcjonalnym
+`observation_source.v1`. Descriptor wiąże ten sam pełny `AcceptedStateRef` z
+dwoma systemowymi obiektami CAS: strict snapshotem primary carriers i terminalną
+magnetyzacją w zarejestrowanym codec. Zawiera także grid, adapter i allow-listę
+quantity. Obiekty nie są deklarowanymi portami study, ale są publikowane w tym
+samym fenced batchu i po manifeście dopuszczają wyłącznie exact replay.
+Manifesty v1/v2 nie są reinterpretowane jako źródła obserwacji.
+
 Autosave frame jest observation source, nie resume checkpointem. `.fms`
 powstaje wyłącznie po jawnym Save/Save As/Export; import waliduje kandydacki
 runtime i wykonuje jeden atomowy swap albo nie zmienia aktywnej sesji. Task 0
 nie zmienia OpenAPI ani generowanych typów/transportu: opisuje obowiązek
 późniejszej implementacji, więc żadna runtime capability nie jest promowana.
+
+## Fragmenty trwałych pól MaterializedDataset
+
+`GET /v2/persistence/projects/{project_id}/runs/{run_id}/solution-sets/{solution_set_id}/revisions/{revision}/members/{member_id}/artifacts/{artifact_id}/materialized-dataset/slice`
+czyta wyłącznie istniejący, przypięty wynik. Nie zależy od `sessions/current`
+i nie uruchamia materializacji, solvera ani mutacji projektu.
+
+Query wymaga `schema_version=1.0.0`, `dataset_id`, `dataset_revision`,
+`sample_id`, `item_id`, `field_id`, `expected_manifest_object_ref`,
+`element_offset`, `element_count` i `max_response_bytes`. Rewizje i liczniki
+są kanonicznymi stringami u64; offset może być zerem, count i budżet muszą być
+dodatnie. Limit count to 8 Mi elementów, limit payloadu to 64 MiB. Oczekiwany
+manifest jest bare lowercase SHA-256. Scope projektu/runu jest sprawdzany
+przez durable RunIntent/RunSpec, następnie dokładny SolutionSet i manifest.
+Nie ma wyszukiwania „latest”, aliasu current, automatycznego retry compute
+ani translacji indeksów. Nieobsługiwany lub uszkodzony rekord daje błąd.
+
+Body `application/octet-stream` używa FMDS v1: magic `FMDS`, u16 LE version=1,
+u16 LE flags=0, u32 LE metadata length; dalej JSON
+`MaterializedDatasetSliceEnvelopeResource` do 1 MiB i raw part bytes.
+Descriptor przenosi jednostki i całą semantykę pola; `slice.parts` określa
+kolejność bytes, pozycje CAS, względne offsety płaszczyzny i range SHA-256.
+Wszystkie u64 metadata pozostają stringami. Całe body może przekroczyć
+payload budget wyłącznie o metadata i 12-bajtowy header. Klient kontroluje
+budżet podczas odczytu body, potem exact source/descriptor, długość, kompletność
+zakresów i checksumy przed udostępnieniem wartości.
+Jeżeli legalna liczba chunków albo descriptor powodują metadata większe niż
+1 MiB, odpowiedź ma HTTP 422 `DATASET_SLICE_METADATA_BYTE_LIMIT`; mniejszy
+wycinek może zmieścić się w kontrakcie. Nie oznacza to uszkodzonego manifestu.
+Backend i klient odrzucają NaN/Infinity również przy prawidłowym checksum.
+
+`integrity=verified_returned_ranges` obejmuje metadane i dotknięte obiekty CAS,
+nie całe pole ani naukową kwalifikację. Sprawdzenie hasha może wymagać odczytu
+całego dotkniętego chunku. Istniejący metadata endpoint nadal weryfikuje pełny
+payload; nowy slice nie osłabia tego kontraktu. Brakujące, uszkodzone lub
+niezgodne dane nie są zastępowane zerami. Cache-Control to `private, no-store`;
+etag/HTTP Range nie należą do tego przyrostu.
+
+Manifest v1 dopuszcza wyłącznie rzeczywiste `Values`, little-endian F32/F64.
+Pary real/imag wymagają nowego jawnego manifestu plane sources. Geometria i
+mapowanie indeksów także wymagają przypiętych artefaktów; bieżąca topologia
+sesji nie jest zamiennikiem. Bounded transport nie oznacza jeszcze montowanego
+resource hooka lub renderera w workspace. Decyzję i dalsze bramki opisuje
+[ADR 0040](../adr/0040-bounded-materialized-dataset-binary-slices.md).
+
+### Historyczna geometria i support zapisanego pola
+
+`GET .../artifacts/{artifact_id}/saved-field-geometry` jest adresem geometrii
+wybranego MaterializedDataset. Pełna ścieżka zawiera project/run/SolutionSet,
+containing revision i member. Odpowiedź rozróżnia containing i exact owner
+revision, podaje source, descriptor, geometry binding/payload CAS refs,
+topology/support fingerprints, liczności oraz hashe i długości projekcji.
+Nie zawiera arrays topologii ani wartości pola. Brak geometrii daje 404;
+obcy lub zmieniony binding daje konflikt, uszkodzenie CAS błąd integralności.
+
+`/saved-field-geometry/topology` zwraca istniejący FMMT v2;
+`/saved-field-geometry/support` zwraca FMSP v1 w canonical-node order.
+FMSP ma 24-bajtowy header: magic, u16 LE wersja 1, u16 LE flags 0,
+u64 LE liczba węzłów i u64 LE liczba bajtów bitsetu. Dalej znajdują się
+bity LSB-first, z zerowym paddingiem. Support pozostaje oddzielony od
+frozen-spin constraints i nie jest wywodzony z nazw ani markerów materiałów.
+
+Query wymaga `expected_dataset_manifest_object_ref`,
+`expected_geometry_manifest_object_ref`, `expected_geometry_object_ref`
+(bare lowercase SHA-256) oraz `max_response_bytes` (canonical decimal u64).
+Limit pełnego body wynosi 64 MiB dla FMMT i 1 MiB dla FMSP. API wspiera
+single byte Range i immutable ETag, bez zmiany ownership source.
+Klient domyślnie odbiera pełne bounded body i kontroluje jego SHA-256,
+długość, zakres headera i liczności przed publikacją zasobu.
+
+FMMT jest projekcją MeshIR, bez pełnej semantyki periodic pairs. Nie wolno
+łączyć tego zasobu z geometry/data-plane aktywnej sesji. Status naukowy
+oraz `representation_evidence=not_verified` pozostają jawne. Kontrakt,
+ograniczenia cold decode i wymagane dalsze bramki opisuje
+[ADR 0041](../adr/0041-saved-field-geometry-root.md#transport-przypiętej-geometrii).
+
+### Trwały skalar SolutionSet
+
+`GET /v2/persistence/projects/{project_id}/runs/{run_id}/solution-sets/{solution_set_id}/revisions/{revision}/members/{member_id}/artifacts/{artifact_id}/scalar`
+zwraca `SolutionScalarResource` (`fullmag.analysis.solution_scalar.v1`).
+Projekt jest sprawdzany przez niezmienny RunSpec; run, rewizja, member i
+artefakt przez zapisany SolutionSet. Odczyt akceptuje wyłącznie Table o
+schemacie artefaktu `fullmag.study.scalar_json@v1` (payload `study_scalar.v1`), kontroluje CAS SHA-256, dokładną długość i
+limit 64 KiB przed dekodowaniem. Kanoniczny dekoder aplikacji zachowuje
+quantity_id, unit, value_si, step i time_s; step oraz revision są decimal
+u64 strings. Aktywna sesja nie jest źródłem tego odczytu.
+
+Odpowiedź zachowuje osobno stany wykonania i oceny naukowe SolutionSet
+oraz member, provenance i oryginalny accepted_state. Poprawny hash nie
+ustanawia akceptowanego stanu ani kwalifikacji naukowej. Brak właściciela
+lub artefaktu daje 404, obcy projekt/run lub inny rodzaj/schema 409,
+uszkodzony CAS albo niepoprawny scalar 500.
+
+Status implementacji: backend source i rejestracja OpenAPI. Managed export,
+generated transport, facade/hook i UI pozostają NOT VERIFIED; nie edytujemy
+ręcznie wygenerowanego kontraktu przed odbiorem buildu.

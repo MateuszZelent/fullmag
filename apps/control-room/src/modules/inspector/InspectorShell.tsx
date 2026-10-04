@@ -11,6 +11,7 @@ import {
   Database,
   Gauge,
   Layers3,
+  PanelRightClose,
   Play,
 } from "lucide-react";
 import { useId, useLayoutEffect, useRef, type ReactNode } from "react";
@@ -45,10 +46,12 @@ import {
 } from "./InspectorTabState";
 
 interface InspectorShellProps {
+  focusDisabled?: boolean;
   children: ReactNode;
   descriptor: InspectorDescriptor;
   onFocus: () => void;
   onSelectBreadcrumb: (selection: NonNullable<InspectorDescriptor["breadcrumbs"][number]["selection"]>) => void;
+  onToggleVisibility: () => void;
 }
 
 function statusVariant(
@@ -72,10 +75,12 @@ function InspectorIdentityIcon({ icon }: Pick<InspectorDescriptor, "icon">) {
 }
 
 export function InspectorShell({
+  focusDisabled = false,
   children,
   descriptor,
   onFocus,
   onSelectBreadcrumb,
+  onToggleVisibility,
 }: InspectorShellProps) {
   const editSession = useInspectorEditSession();
   const actions = inspectorActionState(editSession);
@@ -139,28 +144,42 @@ export function InspectorShell({
               ) : null}
             </div>
           </div>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                aria-label="Inspector options"
-                className="fm-inspector__options-button"
-                size="icon"
-                variant="ghost"
-              >
-                <MoreHorizontal size={16} aria-hidden="true" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem
-                disabled={!nodeId}
-                onSelect={() => {
-                  if (nodeId) void navigator.clipboard?.writeText(nodeId);
-                }}
-              >
-                Copy node ID
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+          <div className="fm-inspector__header-actions">
+            <Button
+              aria-label="Hide Inspector"
+              className="fm-inspector__panel-toggle"
+              data-panel-toggle="inspector"
+              size="icon"
+              title="Hide Inspector"
+              type="button"
+              variant="ghost"
+              onClick={onToggleVisibility}
+            >
+              <PanelRightClose size={16} aria-hidden="true" />
+            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  aria-label="Inspector options"
+                  className="fm-inspector__options-button"
+                  size="icon"
+                  variant="ghost"
+                >
+                  <MoreHorizontal size={16} aria-hidden="true" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem
+                  disabled={!nodeId}
+                  onSelect={() => {
+                    if (nodeId) void navigator.clipboard?.writeText(nodeId);
+                  }}
+                >
+                  Copy node ID
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
         </div>
         {descriptor.metadata.length > 0 ? (
           <dl className="fm-inspector__metadata-grid">
@@ -201,6 +220,7 @@ export function InspectorShell({
                 size="sm"
                 variant="secondary"
                 onClick={onFocus}
+                disabled={focusDisabled}
               >
                 <Focus size={14} aria-hidden="true" />
                 Focus

@@ -92,6 +92,16 @@ checkoutu tylko z powodu samej izolacji.
 
 ### Build, cache i równoległość
 
+Rozszerzenie natywnego workspace Windows (P8-52): działające EXE mogą pochodzić
+z zapieczętowanej kopii w resolverowym runtime root. Publikacja i kontrola
+wszystkich hashy odbywają się pod blokadą worktree. Dopiero handshake własnego
+launchera zwalnia tę blokadę; osobna blokada runtime pozostaje do końca procesu.
+Mutowalne targety nadal wymagają dotychczasowej blokady. Watcher buduje nowe
+EXE, ale nie restartuje sesji ani nie deklaruje odtworzenia niezapisanych
+szkiców. Kopia EXE nie stanowi izolacji naukowego runu od edytowalnego Python
+DSL i zależności frontendu. Wycofanie: wyłączyć watcher i wrócić do jawnego
+release; zachować opublikowane kopie i dowody zamiast kasować aktywne dane.
+
 Profil builda powinien rozróżniać platformę, toolchain, debug/release, funkcje,
 rodzinę backendu, urządzenie, precyzję i zależności ABI. Obecny resolver używa
 jawnej nazwy profilu i nie wylicza automatycznie pełnego fingerprintu ABI;
@@ -152,6 +162,32 @@ uprawnień/sandboxa hosta, zatwierdzonych mountów i dostępu do Docker daemon.
 Wrapper można ominąć surowym poleceniem, dlatego kwalifikacja musi obejmować
 rzeczywisty command, inventory przed/po, manifest i ścieżki. Nie deklaruje się
 „całkowitego zakazu zapisu” wyłącznie na podstawie dokumentacji.
+
+### Dokument CAE a infrastruktura hosta
+
+[ADR 0048](0048-installed-windows-run-storage.md) rozszerza tę politykę
+o magazyn runów zainstalowanego produktu Windows, bez checkoutu developerskiego.
+Nie zmienia resolvera buildów ani konfiguracji storage operatora.
+
+Dokument CAE i hostowa infrastruktura mają różne tożsamości oraz cykle życia:
+
+| Pojęcie | Właściciel i znaczenie | Czego nie zastępuje |
+|---|---|---|
+| `ProjectId` | Logiczny, użytkownikowy dokument CAE: authoring, studies, definicje i jawne referencje artefaktów. | Worktree, build profile i ścieżki hosta. |
+| `.fms` / ProjectRepository | Przenośny zapis dokumentu, wersji schema, manifestów i danych objętych formatem. | Aktualnego runtime'u, cache i `target/`. |
+| `worktree_id` | Tożsamość checkoutu źródeł i jego commit/dirty state. | Tożsamości dokumentu CAE. |
+| `FULLMAG_PROJECT_STORAGE_ROOT` | Hostowa granica buildów, runtime staging, logów, run artifacts, cache i locków. | `ProjectId` oraz przenośnego dokumentu. |
+
+`ProjectId` może być wykonywany z wielu worktree, profili i hostów. Run lub
+artifact może wiązać dokument przez `ProjectId`, snapshot/plan digest, source
+SHA i profile provenance, lecz `.fms` nie może przechowywać hostowej ścieżki
+storage jako swojej tożsamości. Eksport dokumentu nie kopiuje `target/`,
+mutable cache ani niezweryfikowanego runtime'u; brak infrastruktury po imporcie
+jest jawną niedostępnością, a nie zgodą na zapis do repozytorium lub `TEMP`.
+
+Otwarcie dokumentu oraz restore runtime'u są osobnymi operacjami zgodnie z
+ADR 0025. Resolver storage pozostaje granicą wykonawczą buildów i uruchomień,
+nie magazynem semantyki CAE.
 
 ## Konsekwencje
 

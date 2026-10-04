@@ -34,7 +34,7 @@ import { ObjectMaterialPanel } from "./panels/ObjectMaterialPanel";
 
 const SESSION_STATUS = {
   resources: { scene_revision: 21 },
-  session: { session_id: "scratch-session", session_epoch: "scratch-session@1" },
+  session: { session_id: "scratch-session", session_epoch: "scratch-session@1", request_scope_epoch: "test-api:1" },
 } as never;
 
 interface Fixture {

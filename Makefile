@@ -68,6 +68,7 @@ web-build-static:
 	fi; \
 	mkdir -p .fullmag/local; \
 	cp -a "$$WEB_APP_DIR/out" .fullmag/local/web.new; \
+	python3 scripts/stage_control_room_static_runtime.py --source "$$WEB_APP_DIR" --destination .fullmag/local/web.new; \
 	touch .fullmag/local/web.new/.build-stamp; \
 	rm -rf .fullmag/local/web; \
 	mv .fullmag/local/web.new .fullmag/local/web; \
@@ -89,6 +90,7 @@ web-build-static-if-needed:
 			echo "Static control room is stale; rebuilding..."; \
 			$(MAKE) web-build-static; \
 		else \
+			python3 scripts/stage_control_room_static_runtime.py --source "$$WEB_APP_DIR" --destination .fullmag/local/web; \
 			echo "Reusing static control room:"; \
 			echo "  $(PWD)/.fullmag/local/web"; \
 		fi; \
@@ -114,6 +116,8 @@ install-cli-dev: FULLMAG_BUILD_INCREMENTAL=1
 install-cli-static: FULLMAG_BUILD_INCREMENTAL=0
 
 install-cli install-cli-dev install-cli-static:
+	@set -e
+	python3 scripts/refresh_managed_source_mtimes.py
 	mkdir -p .fullmag/local
 	@set -e; \
 	cmake_bin=""; \
@@ -156,8 +160,8 @@ install-cli install-cli-dev install-cli-static:
 		CARGO_TARGET_DIR="$$cargo_target_dir" CARGO_INCREMENTAL="$$build_incremental" cargo +nightly build --locked -p fullmag-api --release --no-default-features; \
 	elif [ "$${FULLMAG_FORCE_LOCAL_FEM_CPU:-0}" = "1" ]; then \
 		echo "FULLMAG_FORCE_LOCAL_FEM_CPU=1 selects the container-local MFEM FEM CPU launcher."; \
-		FULLMAG_USE_MFEM_STACK=ON FULLMAG_FEM_REQUIRE_GPU=0 FULLMAG_FEM_REQUIRE_CEED=0 CARGO_TARGET_DIR="$$cargo_target_dir" CARGO_INCREMENTAL="$$build_incremental" cargo +nightly build --locked -p fullmag-cli --release --features "fem-gpu"; \
-		FULLMAG_USE_MFEM_STACK=ON FULLMAG_FEM_REQUIRE_GPU=0 FULLMAG_FEM_REQUIRE_CEED=0 CARGO_TARGET_DIR="$$cargo_target_dir" CARGO_INCREMENTAL="$$build_incremental" cargo +nightly build --locked -p fullmag-api --release --no-default-features --features "fem-gpu"; \
+		FULLMAG_USE_MFEM_STACK=ON FULLMAG_FEM_ENABLE_CUDA=OFF FULLMAG_FEM_WITH_SLEPC="$${FULLMAG_FEM_WITH_SLEPC:-OFF}" FULLMAG_FEM_REQUIRE_GPU=0 FULLMAG_FEM_REQUIRE_CEED=0 CARGO_TARGET_DIR="$$cargo_target_dir" CARGO_INCREMENTAL="$$build_incremental" cargo +nightly build --locked -p fullmag-cli --release --features "fem-gpu"; \
+		FULLMAG_USE_MFEM_STACK=ON FULLMAG_FEM_ENABLE_CUDA=OFF FULLMAG_FEM_WITH_SLEPC="$${FULLMAG_FEM_WITH_SLEPC:-OFF}" FULLMAG_FEM_REQUIRE_GPU=0 FULLMAG_FEM_REQUIRE_CEED=0 CARGO_TARGET_DIR="$$cargo_target_dir" CARGO_INCREMENTAL="$$build_incremental" cargo +nightly build --locked -p fullmag-api --release --no-default-features --features "fem-gpu"; \
 		build_mode="fem-cpu"; \
 	elif [ -n "$$nvcc_bin" ] && [ -n "$$cmake_bin" ]; then \
 		echo "Installing Rust launcher with CUDA support..."; \
@@ -253,9 +257,22 @@ install-cli install-cli-dev install-cli-static:
 	@mv -f .fullmag/local/bin/fullmag-bin.new .fullmag/local/bin/fullmag-bin
 	@cp "$${cargo_target_dir}/release/fullmag-api" .fullmag/local/bin/fullmag-api.new
 	@mv -f .fullmag/local/bin/fullmag-api.new .fullmag/local/bin/fullmag-api
+	@cp "$${cargo_target_dir}/release/fullmag-api-accepted-worker" .fullmag/local/bin/fullmag-api-accepted-worker.new
+	@mv -f .fullmag/local/bin/fullmag-api-accepted-worker.new .fullmag/local/bin/fullmag-api-accepted-worker
+	@cp "$${cargo_target_dir}/release/fullmag-api-accepted-supervisor" .fullmag/local/bin/fullmag-api-accepted-supervisor.new
+	@mv -f .fullmag/local/bin/fullmag-api-accepted-supervisor.new .fullmag/local/bin/fullmag-api-accepted-supervisor
+	@for binary in fullmag-api-accepted-scheduler fullmag-runtime-service fullmag-api-resource-pool fullmag-api-accepted-fem-preparer fullmag-api-accepted-fem-preparation-supervisor fullmag-api-accepted-fem-preparation-scheduler fullmag-api-preparation-resource-pool fullmag-api-preparation-retry; do \
+		cp "$${cargo_target_dir}/release/$$binary" ".fullmag/local/bin/$$binary.new" || exit $$?; \
+		mv -f ".fullmag/local/bin/$$binary.new" ".fullmag/local/bin/$$binary" || exit $$?; \
+	done
 	@if command -v patchelf >/dev/null 2>&1; then \
 		patchelf --set-rpath '$$ORIGIN/../lib' .fullmag/local/bin/fullmag-bin; \
 		patchelf --set-rpath '$$ORIGIN/../lib' .fullmag/local/bin/fullmag-api; \
+		patchelf --set-rpath '$$ORIGIN/../lib' .fullmag/local/bin/fullmag-api-accepted-worker; \
+		patchelf --set-rpath '$$ORIGIN/../lib' .fullmag/local/bin/fullmag-api-accepted-supervisor; \
+		for binary in fullmag-api-accepted-scheduler fullmag-runtime-service fullmag-api-resource-pool fullmag-api-accepted-fem-preparer fullmag-api-accepted-fem-preparation-supervisor fullmag-api-accepted-fem-preparation-scheduler fullmag-api-preparation-resource-pool fullmag-api-preparation-retry; do \
+			patchelf --set-rpath '$$ORIGIN/../lib' ".fullmag/local/bin/$$binary" || exit $$?; \
+		done; \
 	fi
 		@printf '%s\n' '#!/usr/bin/env bash' \
 			'SELF_DIR="$$(cd "$$(dirname "$$0")" && pwd)"' \

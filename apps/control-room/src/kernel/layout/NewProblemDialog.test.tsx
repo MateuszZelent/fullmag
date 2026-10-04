@@ -61,14 +61,14 @@ describe("NewProblemDialog", () => {
       });
 
       expect(invalidations.invalidate.mock.calls).toEqual([
-        [SESSIONS_PATH, 7],
-        [SESSION_STATUS_RESOURCE_KEY, 7],
-        [MODEL_SCENE_PATH, 7],
-        [MODEL_READINESS_PATH, 7],
+        [SESSIONS_PATH, "session:scratch-session"],
+        [SESSION_STATUS_RESOURCE_KEY, "session:scratch-session"],
+        [MODEL_SCENE_PATH, "session:scratch-session"],
+        [MODEL_READINESS_PATH, "session:scratch-session"],
       ]);
       expect(invalidations.invalidatePrefix).toHaveBeenCalledWith(
         SESSION_CURRENT_PATH,
-        7,
+        "session:scratch-session",
       );
       expect(onOpenChange).toHaveBeenCalledWith(false);
     } finally {
@@ -146,6 +146,43 @@ describe("NewProblemDialog", () => {
     }
   });
 
+  it("invalidates a replacement by session identity when its state version resets", async () => {
+    const create = vi.fn(async () => createResponse(0, "session-fem-replacement"));
+    const { body, invalidations, dispose } = await mountDialog({
+      create,
+      hasActiveSession: true,
+    });
+
+    try {
+      const checkbox = findElements(
+        body,
+        (element) => element.tagName === "INPUT",
+      ).at(-1)!;
+      Object.assign(checkbox!, { checked: true });
+      await act(async () => {
+        checkbox!.dispatchEvent(new TestEvent("click", { bubbles: true }));
+      });
+
+      await act(async () => findButton(body, "Create").click());
+      await settle();
+
+      expect(invalidations.invalidate).toHaveBeenCalledWith(
+        SESSIONS_PATH,
+        "session:session-fem-replacement",
+      );
+      expect(invalidations.invalidate).toHaveBeenCalledWith(
+        SESSION_STATUS_RESOURCE_KEY,
+        "session:session-fem-replacement",
+      );
+      expect(invalidations.invalidatePrefix).toHaveBeenCalledWith(
+        SESSION_CURRENT_PATH,
+        "session:session-fem-replacement",
+      );
+    } finally {
+      await dispose();
+    }
+  });
+
   it("renders name and replacement confirmation through shared primitives", async () => {
     const { body, dispose } = await mountDialog({
       create: async () => createResponse(1),
@@ -178,7 +215,10 @@ interface CreateResponse {
   };
 }
 
-function createResponse(revision: number): CreateResponse {
+function createResponse(
+  revision: number,
+  sessionId = "scratch-session",
+): CreateResponse {
   const execution = { backend: "fdm", device: "cpu", precision: "double" } as const;
   return {
     revisions: { scene_revision: revision, state_version: revision },
@@ -189,7 +229,7 @@ function createResponse(revision: number): CreateResponse {
       schema_version: "0.3",
       version: null,
     },
-    session_id: "scratch-session",
+    session_id: sessionId,
     status: {
       effective_execution: execution,
       fallback: null,

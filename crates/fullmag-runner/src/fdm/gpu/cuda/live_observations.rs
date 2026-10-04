@@ -225,12 +225,15 @@ fn estimated_peak_bytes(
     let cell_count = (original_grid[0] as usize)
         .saturating_mul(original_grid[1] as usize)
         .saturating_mul(original_grid[2] as usize);
-    quantities.iter().fold(active_mask_len as u64, |total, quantity| {
-        // Derived torque retains two captured inputs plus decoded vectors and
-        // output/conversion buffers; budget them before starting the batch.
-        let copies = if quantity == "torque" { 10 } else { 3 };
-        total.saturating_add(quantity_payload_bytes(quantity, cell_count).saturating_mul(copies))
-    })
+    quantities
+        .iter()
+        .fold(active_mask_len as u64, |total, quantity| {
+            // Derived torque retains two captured inputs plus decoded vectors and
+            // output/conversion buffers; budget them before starting the batch.
+            let copies = if quantity == "torque" { 10 } else { 3 };
+            total
+                .saturating_add(quantity_payload_bytes(quantity, cell_count).saturating_mul(copies))
+        })
 }
 
 fn stamp_captured_field(
@@ -317,11 +320,7 @@ fn materialize_observation_job(job: ObservationJob) -> ObservationWorkerResult {
                     });
                     continue;
                 }
-                stamp_captured_field(
-                    &mut field,
-                    &job.identity,
-                    materialization_wall_time_ns,
-                );
+                stamp_captured_field(&mut field, &job.identity, materialization_wall_time_ns);
                 fields.push(field);
             }
             Err(error) => errors.push(ObservationMaterializationError {
@@ -439,7 +438,9 @@ impl FdmLiveObservationScheduler {
             Ok(worker) => (Some(worker), None),
             Err(error) => (
                 None,
-                Some(format!("starting native CUDA live observation worker failed: {error}")),
+                Some(format!(
+                    "starting native CUDA live observation worker failed: {error}"
+                )),
             ),
         };
         Self {
@@ -527,7 +528,10 @@ impl FdmLiveObservationScheduler {
             if remaining.is_zero() {
                 break;
             }
-            match self.result_rx.recv_timeout(remaining.min(Duration::from_millis(20))) {
+            match self
+                .result_rx
+                .recv_timeout(remaining.min(Duration::from_millis(20)))
+            {
                 Ok(result) => self.promote_result(result, &mut timings),
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
@@ -577,10 +581,9 @@ impl FdmLiveObservationScheduler {
         // only presentation changed, re-read no quantity data and keep the
         // physical capture state below.
         let (demand, requested_errors) = match self.current_demand.as_ref() {
-            Some(current) if current.revision == display_state.revision => (
-                current.clone(),
-                self.current_demand_errors.clone(),
-            ),
+            Some(current) if current.revision == display_state.revision => {
+                (current.clone(), self.current_demand_errors.clone())
+            }
             _ => requested_observation_demand(display_state, &self.supported),
         };
         let quantity_set_changed = self
@@ -595,7 +598,10 @@ impl FdmLiveObservationScheduler {
                 .iter()
                 .any(|quantity| !self.ready.contains_key(quantity));
             self.ready.retain(|quantity, _field| {
-                demand.quantities.iter().any(|requested| requested == quantity)
+                demand
+                    .quantities
+                    .iter()
+                    .any(|requested| requested == quantity)
             });
             self.statuses.clear();
             for (quantity, message) in &requested_errors {
@@ -611,18 +617,20 @@ impl FdmLiveObservationScheduler {
                 );
             }
             for quantity in &demand.quantities {
-                let status = self.ready.get(quantity).map(|field| {
-                    LiveFieldMaterializationStatus {
+                let status = self
+                    .ready
+                    .get(quantity)
+                    .map(|field| LiveFieldMaterializationStatus {
                         quantity: quantity.clone(),
                         source_step: field.source_step,
                         request_revision: demand.revision,
                         state: LiveFieldMaterializationState::Complete,
                         error: None,
-                    }
-                });
+                    });
                 self.statuses.insert(
                     quantity.clone(),
-                    status.unwrap_or_else(|| pending_status(quantity, capture_step, demand.revision)),
+                    status
+                        .unwrap_or_else(|| pending_status(quantity, capture_step, demand.revision)),
                 );
             }
         } else {
@@ -700,10 +708,7 @@ impl FdmLiveObservationScheduler {
         let due_by_rate = self
             .last_submit
             .is_none_or(|submitted| submitted.elapsed() >= LIVE_OBSERVATION_MIN_INTERVAL);
-        if can_accept
-            && !demand.quantities.is_empty()
-            && (self.force_schedule || due_by_rate)
-        {
+        if can_accept && !demand.quantities.is_empty() && (self.force_schedule || due_by_rate) {
             self.schedule(
                 backend,
                 display_state,
@@ -855,9 +860,11 @@ impl FdmLiveObservationScheduler {
                 self.last_submit = Some(Instant::now());
                 self.force_schedule = false;
                 for quantity in &demand.quantities {
-                    if self.statuses.get(quantity).is_none_or(|status| {
-                        status.state != LiveFieldMaterializationState::Error
-                    }) {
+                    if self
+                        .statuses
+                        .get(quantity)
+                        .is_none_or(|status| status.state != LiveFieldMaterializationState::Error)
+                    {
                         self.statuses.insert(
                             quantity.clone(),
                             pending_status(quantity, capture_step, demand.revision),
@@ -868,8 +875,8 @@ impl FdmLiveObservationScheduler {
             Err(TrySendError::Full(_job)) => {
                 self.last_submit = Some(Instant::now());
                 self.force_schedule = false;
-                let message =
-                    "native CUDA live observation worker is busy; request was coalesced".to_string();
+                let message = "native CUDA live observation worker is busy; request was coalesced"
+                    .to_string();
                 for quantity in &demand.quantities {
                     self.statuses.insert(
                         quantity.clone(),
@@ -903,9 +910,8 @@ impl FdmLiveObservationScheduler {
                 Ok(result) => self.promote_result(result, timings),
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => {
-                    self.worker_error = Some(
-                        "native CUDA live observation worker disconnected".to_string(),
-                    );
+                    self.worker_error =
+                        Some("native CUDA live observation worker disconnected".to_string());
                     break;
                 }
             }

@@ -1,0 +1,185 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fullmag.org/schema/recent-index-1.0.json",
+  "title": "Fullmag recent-project index",
+  "description": "Host-side cache that backs the start screen's recent list. It is derived state: every field can be rebuilt by rescanning the configured project locations, so a corrupt or missing index must never block creating or opening a project. Written by the Tauri host, read by the control-room renderer. Location: %APPDATA%/Fullmag/recent-index.json (Windows), ~/.config/fullmag/recent-index.json (Linux), ~/Library/Application Support/Fullmag/recent-index.json (macOS).",
+  "type": "object",
+  "required": ["format_version", "generated_at", "entries"],
+  "additionalProperties": false,
+  "properties": {
+    "format_version": {
+      "description": "Index format, independent of the .fms archive schema_version. Bump on any breaking change; an unreadable or newer index is discarded and rebuilt.",
+      "type": "integer",
+      "const": 1
+    },
+    "generated_at": { "type": "string", "format": "date-time" },
+    "scanned_locations": {
+      "description": "Roots walked during the last rebuild. Shown in Settings → Projects → Scanned locations.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["path"],
+        "additionalProperties": false,
+        "properties": {
+          "path": { "type": "string" },
+          "recursive": { "type": "boolean", "default": true },
+          "last_scanned_at": { "type": "string", "format": "date-time" },
+          "reachable": {
+            "description": "False for a network share that was offline during the scan. Entries under an unreachable root keep their cached metadata and are shown with status \"missing\" rather than being dropped.",
+            "type": "boolean",
+            "default": true
+          }
+        }
+      }
+    },
+    "continue": {
+      "description": "The interrupted run offered by the Continue card. Absent when no run was checkpointed. At most one; a second interrupted run appears in the list with status \"running\" instead.",
+      "$ref": "#/$defs/continue_session"
+    },
+    "entries": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/entry" }
+    }
+  },
+  "$defs": {
+    "entry": {
+      "type": "object",
+      "required": ["project_id", "name", "path", "solver", "status", "last_opened_at"],
+      "additionalProperties": false,
+      "properties": {
+        "project_id": {
+          "description": "Stable identity, carried in the .fms manifest. Survives renames and moves; the list de-duplicates on it.",
+          "type": "string",
+          "format": "uuid"
+        },
+        "name": { "type": "string", "maxLength": 200 },
+        "path": {
+          "description": "Absolute host path of the .fms archive. Never shown unabbreviated in a 72 px column — the UI ellipsises from the left so the file name stays readable.",
+          "type": "string"
+        },
+        "solver": { "enum": ["FDM", "FEM"] },
+        "status": {
+          "description": "Drives the status pill. \"missing\" is set by the host when the path no longer resolves; \"migrate\" when manifest_schema_version < the app's supported version.",
+          "enum": ["ready", "running", "failed", "draft", "migrate", "missing", "readonly"]
+        },
+        "last_opened_at": { "type": "string", "format": "date-time" },
+        "created_at": { "type": "string", "format": "date-time" },
+        "modified_at": { "type": "string", "format": "date-time" },
+        "size_bytes": {
+          "description": "Total on disk: the .fms archive plus its results directory. The archive alone is capped at 64 MB by the host (MAX_PROJECT_ARCHIVE_BYTES), so a multi-gigabyte figure here is almost entirely results. Computed by the scanner; summary.output_bytes carries the results directory on its own.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "revision": {
+          "description": "Mirrors ProjectDocumentResource.revision at the time of the last close.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "manifest_schema_version": { "type": "string", "pattern": "^\\d+\\.\\d+$" },
+        "created_with_version": { "type": "string" },
+        "mode": { "enum": ["read_write", "read_only"] },
+        "mode_reason": {
+          "description": "Why the project opens read-only — a network share, a shipped benchmark, a locked file. Shown verbatim in the inspector banner.",
+          "type": "string"
+        },
+        "pinned": { "type": "boolean", "default": false },
+        "tags": { "type": "array", "items": { "type": "string", "maxLength": 32 }, "maxItems": 12 },
+        "thumbnail": {
+          "description": "Preview of the last result, 16:10. Relative to the index file, or a data URI for a thumbnail small enough to inline. Absent for a project that has never been run.",
+          "type": "string"
+        },
+        "thumbnail_generated_at": { "type": "string", "format": "date-time" },
+        "last_error": {
+          "description": "One sentence from the last failed run, shown in the inspector banner. Cleared on the next successful run.",
+          "type": "string",
+          "maxLength": 400
+        },
+        "summary": {
+          "description": "Denormalised model facts so the inspector can render without opening the archive. Refreshed on close; treated as a hint, never as truth — opening the project re-reads the manifest.",
+          "$ref": "#/$defs/model_summary"
+        },
+        "authors": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/author" }
+        }
+      }
+    },
+    "continue_session": {
+      "type": "object",
+      "required": ["project_id", "run_id", "checkpoint_at", "progress"],
+      "additionalProperties": false,
+      "properties": {
+        "project_id": { "type": "string", "format": "uuid" },
+        "run_id": { "type": "string" },
+        "checkpoint_at": { "type": "string", "format": "date-time" },
+        "checkpoint_path": { "type": "string" },
+        "device": { "type": "string", "examples": ["RTX 4090", "CPU ×32"] },
+        "progress": {
+          "type": "object",
+          "required": ["fraction"],
+          "additionalProperties": false,
+          "properties": {
+            "fraction": { "type": "number", "minimum": 0, "maximum": 1 },
+            "sim_time_s": { "type": "number", "description": "Simulated time reached, in seconds." },
+            "sim_time_total_s": { "type": "number" },
+            "frames_written": { "type": "integer", "minimum": 0 },
+            "frames_total": { "type": "integer", "minimum": 0 },
+            "eta_seconds": {
+              "description": "Estimated remaining wall-clock. Null when the estimate is not yet meaningful — the UI then omits the ETA rather than showing a guess.",
+              "type": ["number", "null"],
+              "minimum": 0
+            }
+          }
+        },
+        "resumable": {
+          "description": "False when the checkpoint cannot be resumed on this machine (missing device, incompatible build). The Continue card then offers Open and Discard only, and says why.",
+          "type": "boolean",
+          "default": true
+        },
+        "not_resumable_reason": { "type": "string" }
+      }
+    },
+    "model_summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "discretisation": {
+          "description": "\"512 × 512 × 8\" for FDM, \"42 180 tetrahedra\" for FEM. Pre-formatted by the host so the renderer does not branch on solver kind.",
+          "type": "string"
+        },
+        "cell_size": { "type": "string", "examples": ["2.0 × 2.0 × 5.0 nm", "h_max = 3.0 nm"] },
+        "periodicity": { "type": "string", "examples": ["none", "x", "x, y", "Bloch, x"] },
+        "materials": { "type": "array", "items": { "type": "string" }, "maxItems": 8 },
+        "ms": { "type": "string", "examples": ["140 kA/m"] },
+        "aex": { "type": "string", "examples": ["3.65 pJ/m"] },
+        "alpha": { "type": "string", "examples": ["2.0e-4"] },
+        "interactions": {
+          "type": "array",
+          "items": {
+            "enum": ["exchange", "demag", "Zeeman", "uniaxial anisotropy", "cubic anisotropy",
+                     "DMI (bulk)", "DMI (interfacial)", "Gilbert", "STT (Zhang–Li)",
+                     "STT (Slonczewski)", "Oersted field", "thermal"]
+          }
+        },
+        "integrator": { "type": "string" },
+        "tolerance": { "type": "string" },
+        "excitation": { "type": "string" },
+        "output_frames": { "type": "integer", "minimum": 0 },
+        "output_bytes": { "type": "integer", "minimum": 0 },
+        "output_fields": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "author": {
+      "type": "object",
+      "required": ["name", "role"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "affiliation": { "type": "string" },
+        "orcid": { "type": "string", "pattern": "^\\d{4}-\\d{4}-\\d{4}-\\d{3}[\\dX]$" },
+        "role": { "enum": ["creator", "contributor", "maintainer"] }
+      }
+    }
+  }
+}

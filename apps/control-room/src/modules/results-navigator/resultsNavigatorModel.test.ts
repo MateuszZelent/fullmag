@@ -738,6 +738,25 @@ describe("results navigator model", () => {
     });
   });
 
+  it("derives durable field transport without mutating the hashed payload", () => {
+    const resource = fieldSweepResource();
+    const payload = resource.payload as components["schemas"]["FrequencyDomainFieldSweepArtifactPayload"];
+    const firstSample = payload.samples?.[0];
+    const firstMode = firstSample?.modes?.[0];
+    if (!firstSample || !firstMode) throw new Error("field-sweep fixture is empty");
+    const durableResource = { ...resource, payload: { ...payload, samples: [{
+      ...firstSample, modes: [{ ...firstMode, mode_field_resource_key: null,
+        mode_artifact_path: "eigen/modes/sample_0000/mode_0000.json" }],
+    }] } };
+    const sourceBefore = JSON.stringify(durableResource.payload);
+    const mode = navigatorFieldSweepFromResource(durableResource)?.samples[0]?.modes[0];
+    expect(mode).toMatchObject({ fieldAvailability: "available", modeFieldId: firstMode.mode_field_id });
+    expect(mode?.modeFieldResourceKey).toContain(encodeURIComponent(firstMode.mode_field_id ?? ""));
+    expect(mode?.modeFieldResourceKey).toContain("phase_rad=0");
+    expect(mode?.modeFieldResourceKey).toContain("view=phase_rotated_real");
+    expect(JSON.stringify(durableResource.payload)).toBe(sourceBefore);
+  });
+
   it("does not expose a spectrum-only mode field even when typed refs are present", () => {
     const resource = fieldSweepResource();
     const payload = resource.payload as components["schemas"]["FrequencyDomainFieldSweepArtifactPayload"];

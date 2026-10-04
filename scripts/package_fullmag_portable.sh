@@ -247,8 +247,19 @@ EOF
 
 require_file "${REPO_ROOT}/.fullmag/local/bin/fullmag-bin"
 require_file "${REPO_ROOT}/.fullmag/local/bin/fullmag-api"
+require_file "${REPO_ROOT}/.fullmag/local/bin/fullmag-api-accepted-worker"
+require_file "${REPO_ROOT}/.fullmag/local/bin/fullmag-api-accepted-supervisor"
+require_file "${REPO_ROOT}/.fullmag/local/bin/fullmag-api-accepted-scheduler"
+require_file "${REPO_ROOT}/.fullmag/local/bin/fullmag-runtime-service"
+require_file "${REPO_ROOT}/.fullmag/local/bin/fullmag-api-resource-pool"
+require_file "${REPO_ROOT}/.fullmag/local/bin/fullmag-api-accepted-fem-preparer"
+require_file "${REPO_ROOT}/.fullmag/local/bin/fullmag-api-accepted-fem-preparation-supervisor"
+require_file "${REPO_ROOT}/.fullmag/local/bin/fullmag-api-accepted-fem-preparation-scheduler"
+require_file "${REPO_ROOT}/.fullmag/local/bin/fullmag-api-preparation-resource-pool"
+require_file "${REPO_ROOT}/.fullmag/local/bin/fullmag-api-preparation-retry"
 require_file "${REPO_ROOT}/.fullmag/local/lib/libfullmag_fdm.so.0"
 require_file "${REPO_ROOT}/.fullmag/local/web/index.html"
+require_file "${REPO_ROOT}/.fullmag/local/web/workspace/index.html"
 require_file "${REPO_ROOT}/.fullmag/local/python/bin/python"
 require_file "${REPO_ROOT}/packages/fullmag-py/src/fullmag/__init__.py"
 require_file "${REPO_ROOT}/examples/exchange_relax.py"
@@ -282,9 +293,21 @@ rm -rf "${BUNDLE_ROOT}/.fullmag/local-live"
 
 cp -a "${REPO_ROOT}/.fullmag/local/bin/fullmag-bin" "${BUNDLE_ROOT}/bin/"
 cp -a "${REPO_ROOT}/.fullmag/local/bin/fullmag-api" "${BUNDLE_ROOT}/bin/"
+cp -a "${REPO_ROOT}/.fullmag/local/bin/fullmag-api-accepted-worker" "${BUNDLE_ROOT}/bin/"
+cp -a "${REPO_ROOT}/.fullmag/local/bin/fullmag-api-accepted-supervisor" "${BUNDLE_ROOT}/bin/"
+cp -a "${REPO_ROOT}/.fullmag/local/bin/fullmag-api-accepted-scheduler" "${BUNDLE_ROOT}/bin/"
+cp -a "${REPO_ROOT}/.fullmag/local/bin/fullmag-runtime-service" "${BUNDLE_ROOT}/bin/"
+cp -a "${REPO_ROOT}/.fullmag/local/bin/fullmag-api-resource-pool" "${BUNDLE_ROOT}/bin/"
+cp -a "${REPO_ROOT}/.fullmag/local/bin/fullmag-api-accepted-fem-preparer" "${BUNDLE_ROOT}/bin/"
+cp -a "${REPO_ROOT}/.fullmag/local/bin/fullmag-api-accepted-fem-preparation-supervisor" "${BUNDLE_ROOT}/bin/"
+cp -a "${REPO_ROOT}/.fullmag/local/bin/fullmag-api-accepted-fem-preparation-scheduler" "${BUNDLE_ROOT}/bin/"
+cp -a "${REPO_ROOT}/.fullmag/local/bin/fullmag-api-preparation-resource-pool" "${BUNDLE_ROOT}/bin/"
+cp -a "${REPO_ROOT}/.fullmag/local/bin/fullmag-api-preparation-retry" "${BUNDLE_ROOT}/bin/"
 cp -a "${REPO_ROOT}/.fullmag/local/lib/." "${BUNDLE_ROOT}/lib/"
 copy_cuda_runtime_libs "${BUNDLE_ROOT}/lib" libcudart.so* libcufft.so*
 cp -a "${REPO_ROOT}/.fullmag/local/web" "${BUNDLE_ROOT}/web"
+"${REPO_ROOT}/.fullmag/local/python/bin/python" "${REPO_ROOT}/scripts/stage_control_room_static_runtime.py" \
+  --source "${REPO_ROOT}/apps/control-room" --destination "${BUNDLE_ROOT}/web"
 assemble_python_runtime "${BUNDLE_ROOT}/python"
 mkdir -p "${BUNDLE_ROOT}/packages/fullmag-py/src"
 tar --exclude='__pycache__' -C "${REPO_ROOT}/packages/fullmag-py" -cf - src \
@@ -385,6 +408,16 @@ EOF
 
 "$PATCHELF_BIN" --set-rpath '$ORIGIN/../lib' "${BUNDLE_ROOT}/bin/fullmag-bin"
 "$PATCHELF_BIN" --set-rpath '$ORIGIN/../lib' "${BUNDLE_ROOT}/bin/fullmag-api"
+"$PATCHELF_BIN" --set-rpath '$ORIGIN/../lib' "${BUNDLE_ROOT}/bin/fullmag-api-accepted-worker"
+"$PATCHELF_BIN" --set-rpath '$ORIGIN/../lib' "${BUNDLE_ROOT}/bin/fullmag-api-accepted-supervisor"
+"$PATCHELF_BIN" --set-rpath '$ORIGIN/../lib' "${BUNDLE_ROOT}/bin/fullmag-api-accepted-scheduler"
+"$PATCHELF_BIN" --set-rpath '$ORIGIN/../lib' "${BUNDLE_ROOT}/bin/fullmag-runtime-service"
+"$PATCHELF_BIN" --set-rpath '$ORIGIN/../lib' "${BUNDLE_ROOT}/bin/fullmag-api-resource-pool"
+"$PATCHELF_BIN" --set-rpath '$ORIGIN/../lib' "${BUNDLE_ROOT}/bin/fullmag-api-accepted-fem-preparer"
+"$PATCHELF_BIN" --set-rpath '$ORIGIN/../lib' "${BUNDLE_ROOT}/bin/fullmag-api-accepted-fem-preparation-supervisor"
+"$PATCHELF_BIN" --set-rpath '$ORIGIN/../lib' "${BUNDLE_ROOT}/bin/fullmag-api-accepted-fem-preparation-scheduler"
+"$PATCHELF_BIN" --set-rpath '$ORIGIN/../lib' "${BUNDLE_ROOT}/bin/fullmag-api-preparation-resource-pool"
+"$PATCHELF_BIN" --set-rpath '$ORIGIN/../lib' "${BUNDLE_ROOT}/bin/fullmag-api-preparation-retry"
 find "${BUNDLE_ROOT}/lib" -maxdepth 1 \( -name '*.so' -o -name '*.so.*' \) -type f \
   -exec "$PATCHELF_BIN" --set-rpath '$ORIGIN' {} \;
 

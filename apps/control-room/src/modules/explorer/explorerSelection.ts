@@ -149,6 +149,23 @@ function postprocessingRootKind(
 }
 
 export function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
+  if (node.kind === "results.observation_frame" && node.observationFrame) {
+    const frame = node.observationFrame;
+    return {
+      acceptedRevision: frame.accepted_state_ref.generation.accepted_revision,
+      acceptedStep: frame.accepted_state_ref.id.accepted_step,
+      adapterId: frame.adapter_id,
+      frameId: frame.frame_id,
+      kind: "results.observation_frame",
+      nodeId: node.id,
+      runId: frame.run_id,
+      runtimeEpoch: frame.accepted_state_ref.generation.runtime_epoch,
+      stageId: frame.stage_id,
+      stateDigest: frame.accepted_state_ref.id.state_digest,
+      type: "observation-frame",
+    };
+  }
+
   if (
     node.kind === "object.frozen-spins" &&
     node.constraintId

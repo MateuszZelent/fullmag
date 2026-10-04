@@ -1,5 +1,3 @@
-import type { DecodedFieldVector } from "@/kernel/api/codecs";
-
 import { srgbToLinearChannel } from "../viewport3dColorSpace";
 import {
   buildSurfaceFaceScalarColors,
@@ -9,6 +7,7 @@ import {
   type ChunkedFieldTransformOptions,
   type ScalarColorBuffer,
   type ScalarRange,
+  type Viewport3DFieldVector,
 } from "../viewport3dFieldMapping";
 import {
   normalizeViewport3DVectorColorMode,
@@ -50,13 +49,13 @@ export type Viewport3DFieldColorBuildTarget =
 
 export interface Viewport3DFieldColorBuildModelInput
   extends ChunkedFieldTransformOptions {
-  fieldVector: DecodedFieldVector;
+  fieldVector: Viewport3DFieldVector;
   target: Viewport3DFieldColorBuildTarget;
 }
 
 export interface Viewport3DFieldColorBuildByteEstimateInput {
   colorMode?: string;
-  fieldVector: DecodedFieldVector;
+  fieldVector: Viewport3DFieldVector;
   shaderOnly?: boolean;
   target: Viewport3DFieldColorBuildTarget;
 }
@@ -106,7 +105,7 @@ export function estimateViewport3DFieldColorBuildInputBytes({
   fieldVector,
   target,
 }: {
-  fieldVector: DecodedFieldVector;
+  fieldVector: Viewport3DFieldVector;
   target: Viewport3DFieldColorBuildTarget;
 }): number {
   switch (target.kind) {
@@ -156,7 +155,7 @@ export function estimateViewport3DFieldColorBuildOutputBytes({
 }
 
 async function buildSampledFieldColorBuffer(
-  fieldVector: DecodedFieldVector,
+  fieldVector: Viewport3DFieldVector,
   target: Extract<Viewport3DFieldColorBuildTarget, { kind: "sampled" }>,
   options: ChunkedFieldTransformOptions,
 ): Promise<ScalarColorBuffer | null> {
@@ -221,7 +220,7 @@ async function buildSampledFieldColorBuffer(
 }
 
 async function buildMappedFieldColorBuffer(
-  fieldVector: DecodedFieldVector,
+  fieldVector: Viewport3DFieldVector,
   target: Extract<Viewport3DFieldColorBuildTarget, { kind: "mapped-vertices" }>,
   options: ChunkedFieldTransformOptions,
 ): Promise<ScalarColorBuffer | null> {
@@ -306,7 +305,7 @@ function resolveDivergingSymmetricRange(
 }
 
 async function resolveScalarRangeForField(
-  fieldVector: DecodedFieldVector,
+  fieldVector: Viewport3DFieldVector,
   colorMode: Viewport3DVectorColorMode,
   options: ChunkedFieldTransformOptions,
 ): Promise<ScalarRange> {
@@ -356,7 +355,7 @@ function resolveProvidedScalarRange(
 }
 
 function resolveTargetVertexCount(
-  fieldVector: DecodedFieldVector,
+  fieldVector: Viewport3DFieldVector,
   target: Viewport3DFieldColorBuildTarget,
 ): number {
   switch (target.kind) {
@@ -374,7 +373,7 @@ function resolveTargetVertexCount(
 
 function resolveShaderOnly(
   colorMode: Viewport3DVectorColorMode,
-  fieldVector: DecodedFieldVector,
+  fieldVector: Viewport3DFieldVector,
   options: ChunkedFieldTransformOptions,
 ): { any: boolean; vector: boolean } {
   const scalar = shaderScalarModeSupports(colorMode);
@@ -391,7 +390,7 @@ function resolveChunkSize(options: ChunkedFieldTransformOptions): number {
 }
 
 function writeFieldColor(
-  fieldVector: DecodedFieldVector,
+  fieldVector: Viewport3DFieldVector,
   pointIndex: number,
   targetIndex: number,
   colors: Float32Array,
@@ -441,7 +440,7 @@ function writeLinearRgb(
 }
 
 function writeVectorValue(
-  fieldVector: DecodedFieldVector,
+  fieldVector: Viewport3DFieldVector,
   pointIndex: number,
   values: Float32Array,
   targetIndex: number,
@@ -454,7 +453,7 @@ function writeVectorValue(
 }
 
 function colorAt(
-  fieldVector: DecodedFieldVector,
+  fieldVector: Viewport3DFieldVector,
   pointIndex: number,
   colorMode: Viewport3DVectorColorMode,
   range: ScalarRange,
@@ -494,7 +493,7 @@ function colorAt(
 }
 
 function scalarAt(
-  fieldVector: DecodedFieldVector,
+  fieldVector: Viewport3DFieldVector,
   pointIndex: number,
   colorMode: Viewport3DVectorColorMode,
 ): number {
@@ -537,7 +536,7 @@ function shaderScalarModeSupports(mode: Viewport3DVectorColorMode): boolean {
 
 function shaderVectorModeSupports(
   mode: Viewport3DVectorColorMode,
-  fieldVector: DecodedFieldVector,
+  fieldVector: Viewport3DFieldVector,
 ): boolean {
   return mode === "orientation" && fieldVector.nComp >= 3;
 }

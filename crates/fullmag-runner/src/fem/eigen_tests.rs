@@ -526,7 +526,11 @@ fn accepted_relax_stage_handoff_accepts_prism_source_and_checks_m0() {
     plan.equilibrium_magnetization[5] = [0.5, 0.0, 0.0];
     let error = relax_handoff_from_completion(&plan, &accepted_relax_completion())
         .expect_err("prism magnetic nodes must retain unit-norm validation");
-    assert!(error.message.contains("m0_norm_mismatch"), "{}", error.message);
+    assert!(
+        error.message.contains("m0_norm_mismatch"),
+        "{}",
+        error.message
+    );
 }
 
 #[test]

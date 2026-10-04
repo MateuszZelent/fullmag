@@ -5,6 +5,7 @@ import { EventBus } from "../events/EventBus";
 import type { KernelEventMap } from "../events/eventTypes";
 
 import { ResourceInvalidationController } from "./ResourceInvalidationController";
+import { sessionScopedResourceKey } from "./sessionResourceIdentity";
 
 describe("ResourceInvalidationController", () => {
   it("tracks resource revisions and emits invalidation events", () => {
@@ -125,5 +126,37 @@ describe("ResourceInvalidationController", () => {
     controller.invalidate(MODEL_SCENE_PATH, 16);
 
     expect(controller.getRevision(MODEL_SCENE_PATH)).toBe(16);
+  });
+
+  it("applies canonical session-prefix invalidation to session-scoped keys", () => {
+    const bus = new EventBus<KernelEventMap>();
+    const controller = new ResourceInvalidationController(bus);
+    const resourceKey = sessionScopedResourceKey(
+      { sessionId: "session-a", sessionEpoch: "session-a@7", requestScopeEpoch: "test-api:7" },
+      MODEL_SCENE_PATH,
+    );
+    const listener = vi.fn();
+
+    controller.subscribe(resourceKey, listener);
+    controller.invalidatePrefix(SESSION_CURRENT_PATH, "session:session-a:8");
+
+    expect(listener).toHaveBeenCalledWith("session:session-a:8");
+    expect(controller.getRevision(resourceKey)).toBe("session:session-a:8");
+  });
+
+  it("propagates exact canonical invalidation to an active session-scoped key", () => {
+    const bus = new EventBus<KernelEventMap>();
+    const controller = new ResourceInvalidationController(bus);
+    const resourceKey = sessionScopedResourceKey(
+      { sessionId: "session-a", sessionEpoch: "session-a@7", requestScopeEpoch: "test-api:7" },
+      MODEL_SCENE_PATH,
+    );
+    const listener = vi.fn();
+
+    controller.subscribe(resourceKey, listener);
+    controller.invalidate(MODEL_SCENE_PATH, 16);
+
+    expect(listener).toHaveBeenCalledWith(16);
+    expect(controller.getRevision(resourceKey)).toBe(16);
   });
 });

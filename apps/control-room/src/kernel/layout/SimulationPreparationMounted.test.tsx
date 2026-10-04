@@ -28,7 +28,11 @@ import {
 } from "../realtime/communicationPolicy";
 import { ResourceInvalidationController } from "../resources/ResourceInvalidationController";
 import { RealtimeConnectionController } from "../realtime/RealtimeConnectionController";
-import { sharedResourceRuntimeStore } from "../resources/ResourceRuntimeStore";
+import { sessionScopedResourceKey } from "../resources/sessionResourceIdentity";
+import {
+  resetSharedResourceRuntimeStoreForTests,
+  sharedResourceRuntimeStore,
+} from "../resources/ResourceRuntimeStore";
 import type { ResourceResult } from "../resources/resourceTypes";
 import { SESSION_STATUS_RESOURCE_KEY } from "../resources/useSessionStatus";
 import type { KernelApi } from "../types";
@@ -39,6 +43,7 @@ import {
   SimulationStartupOverlayView,
   WorkspaceStartupGateView,
   useSimulationStartupOverlayState,
+  type SimulationStartupOverlayState,
 } from "./SimulationStartupOverlay";
 import {
   resolveSimulationPreparationViewModel,
@@ -110,6 +115,15 @@ vi.mock("@/shared/ui/Dialog", async () => {
   };
 });
 
+const SIMULATION_PREPARATION_TEST_RESOURCE_KEY = sessionScopedResourceKey(
+  {
+    requestScopeEpoch: "api-instance:preparation-test",
+    sessionEpoch: "session-preparation-test@1700000000000",
+    sessionId: "session-preparation-test",
+  },
+  SIMULATION_PREPARATION_PATH,
+);
+
 interface Deferred<TData> {
   readonly promise: Promise<TData>;
   readonly resolve: (value: TData) => void;
@@ -119,6 +133,7 @@ afterEach(() => {
   updateRealtimeCommunicationPolicy({});
   vi.useRealTimers();
   vi.restoreAllMocks();
+  resetSharedResourceRuntimeStoreForTests();
 });
 
 describe("mounted simulation preparation UI", () => {
@@ -149,6 +164,91 @@ describe("mounted simulation preparation UI", () => {
 
     expect(container.textContent).toContain("Viewport module");
     expect(container.textContent).not.toContain("Preparing simulation");
+
+    await act(async () => root.unmount());
+    dom.restore();
+  });
+
+  it("keeps the mounted workspace node through a startup re-entry", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const { kernel } = makeKernel({
+      loadPreparation: async () => preparationFixture(),
+      loadStatus: async () => statusFixture(),
+    });
+    const readyPreparation: SimulationPreparationResource = {
+      ...preparationFixture(),
+      active_stage_id: null,
+      completed_at_unix_ms: 20_000,
+      status: "ready",
+    };
+    const readyState = resolveSimulationPreparationViewModel(
+      resource(readyPreparation),
+      resource(statusFixture({ solverState: "awaiting_command" })),
+      20_000,
+    );
+    const blockedState = resolveSimulationPreparationViewModel(
+      resource(preparationFixture()),
+      resource(statusFixture()),
+      20_000,
+    );
+    expect(readyState.isVisible).toBe(false);
+    expect(blockedState.isVisible).toBe(true);
+
+    const container = dom.document.createElement("div");
+    dom.document.body.appendChild(container);
+    const root = createRoot(container as unknown as Element);
+
+    await act(async () => {
+      root.render(
+        <KernelContext.Provider value={kernel}>
+          <TransitionWorkspaceGate state={readyState} />
+        </KernelContext.Provider>,
+      );
+    });
+    const mountedProbe = findElement(
+      container,
+      (element) => element.getAttribute("data-workspace-probe") === "mounted",
+      "mounted workspace probe",
+    );
+
+    await act(async () => {
+      root.render(
+        <KernelContext.Provider value={kernel}>
+          <TransitionWorkspaceGate state={blockedState} />
+        </KernelContext.Provider>,
+      );
+    });
+    expect(
+      findElement(
+        container,
+        (element) =>
+          element.getAttribute("data-workspace-probe") === "mounted",
+        "workspace probe after startup re-entry",
+      ),
+    ).toBe(mountedProbe);
+    expect(
+      findElement(
+        container,
+        (element) => hasClass(element, "fm-simulation-startup"),
+        "startup overlay after re-entry",
+      ),
+    ).toBeTruthy();
+
+    await act(async () => {
+      root.render(
+        <KernelContext.Provider value={kernel}>
+          <TransitionWorkspaceGate state={readyState} />
+        </KernelContext.Provider>,
+      );
+    });
+    expect(
+      findElement(
+        container,
+        (element) =>
+          element.getAttribute("data-workspace-probe") === "mounted",
+        "workspace probe after startup recovery",
+      ),
+    ).toBe(mountedProbe);
 
     await act(async () => root.unmount());
     dom.restore();
@@ -344,7 +444,8 @@ describe("mounted simulation preparation UI", () => {
     });
     await settleDialog();
 
-    expect(findDialogs(dom.document.body)).toHaveLength(1);
+    const dialogs = findDialogs(dom.document.body);
+    expect(dialogs).toHaveLength(1);
     expect(dom.document.body.textContent).toContain(
       "What happened",
     );
@@ -727,7 +828,7 @@ describe("mounted simulation preparation UI", () => {
 
     await act(async () => {
       sharedResourceRuntimeStore.updateData(
-        SIMULATION_PREPARATION_PATH,
+        SIMULATION_PREPARATION_TEST_RESOURCE_KEY,
         failedPreparationFixture(),
         8,
       );
@@ -741,7 +842,7 @@ describe("mounted simulation preparation UI", () => {
 
     await act(async () => {
       sharedResourceRuntimeStore.updateData(
-        SIMULATION_PREPARATION_PATH,
+        SIMULATION_PREPARATION_TEST_RESOURCE_KEY,
         { ...preparationFixture(), revision: 9 },
         9,
       );
@@ -781,7 +882,7 @@ describe("mounted simulation preparation UI", () => {
 
     await act(async () => {
       sharedResourceRuntimeStore.updateData(
-        SIMULATION_PREPARATION_PATH,
+        SIMULATION_PREPARATION_TEST_RESOURCE_KEY,
         attemptPreparationFixture(8, "Attempt 2 — HXT — progress indeterminate", 20_000),
         8,
       );
@@ -798,7 +899,7 @@ describe("mounted simulation preparation UI", () => {
 
     await act(async () => {
       sharedResourceRuntimeStore.updateData(
-        SIMULATION_PREPARATION_PATH,
+        SIMULATION_PREPARATION_TEST_RESOURCE_KEY,
         attemptPreparationFixture(9, "Attempt 2 — HXT — progress indeterminate", 35_000),
         9,
       );
@@ -807,7 +908,7 @@ describe("mounted simulation preparation UI", () => {
 
     await act(async () => {
       sharedResourceRuntimeStore.updateData(
-        SIMULATION_PREPARATION_PATH,
+        SIMULATION_PREPARATION_TEST_RESOURCE_KEY,
         attemptPreparationFixture(
           10,
           "Attempt 3 — Frontal — progress indeterminate",
@@ -958,7 +1059,12 @@ function statusFixture(
     resources: {
       simulation_preparation_revision: patch.preparationRevision ?? 7,
     },
-    session: { name: "permalloy-relaxation" },
+    session: {
+      name: "permalloy-relaxation",
+      session_id: "session-preparation-test",
+      session_epoch: "session-preparation-test@1700000000000",
+      request_scope_epoch: "api-instance:preparation-test",
+    },
     solver: { state: patch.solverState ?? "bootstrapping" },
   } as LiveStatusResource;
 }
@@ -967,6 +1073,18 @@ function MountedWorkspaceGate() {
   return (
     <WorkspaceStartupGateView state={useSimulationStartupOverlayState()}>
       <div data-slot-id="viewport-main">Viewport module</div>
+    </WorkspaceStartupGateView>
+  );
+}
+
+function TransitionWorkspaceGate({
+  state,
+}: {
+  readonly state: SimulationStartupOverlayState;
+}) {
+  return (
+    <WorkspaceStartupGateView state={state} preserveMountedWorkspace>
+      <div data-workspace-probe="mounted">Workspace module</div>
     </WorkspaceStartupGateView>
   );
 }
@@ -1052,6 +1170,12 @@ async function settleLoads(): Promise<void> {
       await Promise.resolve();
     });
   }
+  await act(async () => {
+    // Status identity enables scoped hooks in a later React commit; advance the
+    // fake clock once so their zero-delay load runs at the browser timer floor.
+    await vi.advanceTimersByTimeAsync(1);
+    await Promise.resolve();
+  });
 }
 
 function hasClass(element: TestElement, className: string): boolean {

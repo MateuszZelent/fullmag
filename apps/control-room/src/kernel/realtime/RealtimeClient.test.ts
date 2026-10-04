@@ -34,6 +34,140 @@ class FakeWebSocket implements RealtimeWebSocketLike {
 }
 
 describe("RealtimeClient", () => {
+  it("does not open or retry a socket after the API preflight rejects replacement", async () => {
+    const createSocket = vi.fn(() => new FakeWebSocket());
+    const onScopeMismatch = vi.fn();
+    const scheduleReconnect = vi.fn(() => () => {});
+    const client = new RealtimeClient({
+      beforeConnect: async () => false,
+      bridge: { handleEvent: () => true },
+      createSocket,
+      onScopeMismatch,
+      scheduleReconnect,
+      url: "ws://localhost/v2/sessions/current/events/ws",
+    });
+    client.connect();
+    await vi.waitFor(() => expect(onScopeMismatch).toHaveBeenCalledTimes(1));
+    expect(createSocket).not.toHaveBeenCalled();
+    expect(scheduleReconnect).not.toHaveBeenCalled();
+    client.close();
+  });
+
+  it("does not resurrect a socket after close during API preflight", async () => {
+    let release: ((allowed: boolean) => void) | undefined;
+    const check = new Promise<boolean>((resolve) => { release = resolve; });
+    const beforeConnect = vi.fn(() => check);
+    const createSocket = vi.fn(() => new FakeWebSocket());
+    const client = new RealtimeClient({
+      beforeConnect,
+      bridge: { handleEvent: () => true },
+      createSocket,
+      url: "ws://localhost/v2/sessions/current/events/ws",
+    });
+    client.connect();
+    await vi.waitFor(() => expect(beforeConnect).toHaveBeenCalledTimes(1));
+    client.close();
+    release?.(true);
+    await check;
+    await Promise.resolve();
+    expect(createSocket).not.toHaveBeenCalled();
+  });
+  it("preserves the API instance companion protocol across reconnect", () => {
+    const pin = "12345678-1234-4234-8234-123456789abc";
+    const socket = new FakeWebSocket();
+    const createSocket = vi.fn(() => socket);
+    let reconnect: (() => void) | undefined;
+    const client = new RealtimeClient({
+      bridge: { handleEvent: () => true },
+      createSocket,
+      expectedApiInstance: pin,
+      scheduleReconnect: (callback) => { reconnect = callback; return () => {}; },
+      url: "ws://localhost/v2/sessions/current/events/ws",
+    });
+    client.connect();
+    socket.emit("close", "");
+    reconnect?.();
+    expect(createSocket).toHaveBeenCalledTimes(2);
+    for (const args of createSocket.mock.calls) {
+      expect(args).toEqual(["ws://localhost/v2/sessions/current/events/ws", "fullmag.live.v1", `fullmag.api-instance.${pin}`]);
+    }
+    client.close();
+  });
+  it("rejects a hello from another request scope before accepting events", () => {
+    const socket = new FakeWebSocket();
+    const handleEvent = vi.fn(() => true);
+    const onScopeMismatch = vi.fn();
+    const client = new RealtimeClient({
+      bridge: { handleEvent },
+      createSocket: () => socket,
+      expectedRequestScopeEpoch: "api-instance:2",
+      onScopeMismatch,
+      url: `ws://127.0.0.1:8765${SESSION_EVENTS_WS_PATH}`,
+    });
+
+    client.connect();
+    socket.emit("message", JSON.stringify({ type: "resource.batch_changed" }));
+    expect(handleEvent).not.toHaveBeenCalled();
+
+    socket.emit("message", JSON.stringify({
+      payload: { request_scope_epoch: "api-instance:1" },
+      type: "hello",
+    }));
+    expect(onScopeMismatch).toHaveBeenCalledTimes(1);
+    expect(socket.close).toHaveBeenCalledTimes(1);
+    expect(handleEvent).not.toHaveBeenCalled();
+  });
+
+  it("accepts events only after a hello with the expected request scope", () => {
+    const socket = new FakeWebSocket();
+    const handleEvent = vi.fn(() => true);
+    const client = new RealtimeClient({
+      bridge: { handleEvent },
+      createSocket: () => socket,
+      expectedRequestScopeEpoch: "api-instance:2",
+      url: `ws://127.0.0.1:8765${SESSION_EVENTS_WS_PATH}`,
+    });
+
+    client.connect();
+    socket.emit("message", JSON.stringify({
+      payload: { request_scope_epoch: "api-instance:2" },
+      type: "hello",
+    }));
+    socket.emit("message", JSON.stringify({ type: "resource.batch_changed" }));
+    expect(handleEvent).toHaveBeenCalledTimes(2);
+    client.close();
+  });
+
+  it("closes a scoped socket before forwarding a message from another session", () => {
+    const socket = new FakeWebSocket();
+    const handleEvent = vi.fn(() => true);
+    const onScopeMismatch = vi.fn();
+    const client = new RealtimeClient({
+      bridge: { handleEvent },
+      createSocket: () => socket,
+      expectedRequestScopeEpoch: "api-instance:2",
+      expectedSessionId: "session-b",
+      onScopeMismatch,
+      url: `ws://127.0.0.1:8765${SESSION_EVENTS_WS_PATH}`,
+    });
+
+    client.connect();
+    socket.emit("message", JSON.stringify({
+      payload: { request_scope_epoch: "api-instance:2" },
+      session_id: "session-b",
+      type: "hello",
+    }));
+    socket.emit("message", JSON.stringify({
+      payload: { changes: [] },
+      session_id: "session-a",
+      type: "resource.batch_changed",
+    }));
+
+    expect(handleEvent).toHaveBeenCalledTimes(1);
+    expect(onScopeMismatch).toHaveBeenCalledTimes(1);
+    expect(socket.close).toHaveBeenCalledTimes(1);
+  });
+
   it("connects to the v2 realtime endpoint and invalidates resources from events", () => {
     const bus = new EventBus<KernelEventMap>();
     const diagnostics = new RequestDiagnosticsController();
@@ -163,6 +297,39 @@ describe("RealtimeClient", () => {
 
     client.close();
     expect(statuses.at(-1)).toBe("idle");
+  });
+
+  it("notifies the kernel only after an established socket reconnects", () => {
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const sockets: FakeWebSocket[] = [];
+    const reconnectCallbacks: Array<() => void> = [];
+    const reconnected = vi.fn();
+    const client = new RealtimeClient({
+      bridge: new RealtimeInvalidationBridge(resources),
+      createSocket: () => {
+        const socket = new FakeWebSocket();
+        sockets.push(socket);
+        return socket;
+      },
+      onReconnected: reconnected,
+      scheduleReconnect: (callback) => {
+        reconnectCallbacks.push(callback);
+        return () => {};
+      },
+      url: `ws://127.0.0.1:8765${SESSION_EVENTS_WS_PATH}`,
+    });
+
+    client.connect();
+    sockets[0].emit("open", "");
+    expect(reconnected).not.toHaveBeenCalled();
+
+    sockets[0].emit("close", "");
+    reconnectCallbacks[0]();
+    sockets[1].emit("open", "");
+    expect(reconnected).toHaveBeenCalledTimes(1);
+
+    client.close();
   });
 
   it("reconnects with the last processed sequence cursor", () => {

@@ -9,6 +9,7 @@ import {
   createResourcePartialLoadError,
   ResourceRuntimeStore,
 } from "./ResourceRuntimeStore";
+import { sessionScopedResourceKey } from "./sessionResourceIdentity";
 
 function deferred<TData>(): {
   promise: Promise<TData>;
@@ -499,6 +500,27 @@ describe("ResourceRuntimeStore", () => {
 
     expect(store.getSnapshot("visualization/state")).toMatchObject({
       data: "fresh-camera",
+      revision: 11,
+      status: "ready",
+    });
+  });
+
+  it("updates active session-scoped aliases when a canonical resource is seeded", () => {
+    const store = new ResourceRuntimeStore<string>();
+    const scopedKey = sessionScopedResourceKey(
+      { sessionId: "session-a", sessionEpoch: "session-a@7", requestScopeEpoch: "test-api:7" },
+      "model/scene",
+    );
+    store.subscribe(scopedKey, () => undefined);
+
+    store.updateDataMatching(
+      (resourceKey) => resourceKey === scopedKey,
+      "fresh-scene",
+      11,
+    );
+
+    expect(store.getSnapshot(scopedKey)).toMatchObject({
+      data: "fresh-scene",
       revision: 11,
       status: "ready",
     });

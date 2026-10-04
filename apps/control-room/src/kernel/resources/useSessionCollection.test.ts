@@ -4,10 +4,40 @@ import { describe, expect, it, vi } from "vitest";
 
 import { ControlRoomApi } from "../api/ControlRoomApi";
 import type { components } from "../api/generated/openapi-v2-types";
+import {
+  resolveSessionCollectionResourceState,
+  resolveSessionCollectionState,
+} from "./useSessionCollection";
 
 type SessionListResource = components["schemas"]["SessionListResource"];
 
 describe("session collection facade", () => {
+  it("keeps the confirmed collection during a refresh error", () => {
+    const collection = {
+      schema_version: "2.0.0",
+      sessions: [{
+        current: true,
+        name: "session-1",
+        session_id: "session-1",
+        status: "active",
+      }],
+    } as SessionListResource;
+
+    expect(resolveSessionCollectionState(collection)).toBe("ready");
+    expect(
+      resolveSessionCollectionResourceState({
+        data: collection,
+        status: "error",
+      }),
+    ).toBe("ready");
+  });
+
+  it("does not turn an initial collection error into an empty workspace", () => {
+    expect(
+      resolveSessionCollectionResourceState({ data: null, status: "error" }),
+    ).toBe("error");
+  });
+
   it("returns the generated GET /v2/sessions response type", async () => {
     const api = new ControlRoomApi({
       baseUrl: "http://localhost",
