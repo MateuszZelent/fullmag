@@ -3,10 +3,10 @@ import { BookOpen, Box, GraduationCap, Import, Info, LayoutGrid, Settings, type 
 import type { ScriptOpener } from "../model/scriptOpen";
 import type { StartSection } from "../model/startScreenState";
 import { STUDY_TEMPLATES } from "../model/templates";
-import type { ComputeProbeState, ContinueSession, RecentEntry } from "../model/types";
-
+import type { ComputeProbeState, ContinueSession, RecentEntry, RecentIndexState } from "../model/types";
 import type { WorkspaceItem } from "../model/workspaceItems";
 
+import { AboutInspector } from "./AboutInspector";
 import { ProjectDetails } from "./ProjectDetails";
 import { ScriptDetails, type ScriptDetailsProps } from "./ScriptDetails";
 import { TemplateDetails } from "./TemplateDetails";
@@ -71,6 +71,7 @@ export interface ProjectInspectorProps {
   readonly scriptActions?: Omit<ScriptDetailsProps, "item"> | null;
   /** Opens a template script as a project; null when this build cannot. */
   readonly scriptOpener?: ScriptOpener | null;
+  readonly index?: RecentIndexState;
 }
 
 /**
@@ -85,8 +86,12 @@ export function ProjectInspector({
   scriptOpener = null,
   script = null,
   scriptActions = null,
+  index,
   ...actions
 }: ProjectInspectorProps) {
+  if (section === "about") {
+    return <AboutInspector compute={compute} index={index} />;
+  }
   const template = STUDY_TEMPLATES.find((t) => t.id === templateId);
   if (section === "templates" && template) {
     return (

@@ -6,7 +6,10 @@ const GIGABYTE = 1e9;
 export function describeCompute(compute: ComputeProbeState): string | null {
   if (!compute) return null;
   const gpu = compute.gpus[0];
-  if (!gpu) return `CPU only · ${compute.cpuThreads} threads`;
+  if (!gpu) {
+    const label = compute.gpuProbeStatus === "unavailable" ? "GPU telemetry unavailable" : "CPU only";
+    return compute.cpuThreads > 0 ? `${label} · ${compute.cpuThreads} threads` : label;
+  }
   const used = Math.max(0, gpu.vramTotalBytes - gpu.vramFreeBytes) / GIGABYTE;
   const total = gpu.vramTotalBytes / GIGABYTE;
   return [gpu.cudaVersion ? `CUDA ${gpu.cudaVersion}` : null, gpu.name, `${used.toFixed(1)}/${total.toFixed(1)} GB`]

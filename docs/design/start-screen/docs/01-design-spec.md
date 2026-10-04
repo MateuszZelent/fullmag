@@ -142,11 +142,16 @@ VRAM              5.8 / 24.0 GB
 |---|---|---|
 | GPU ready | `--fm-success` | device name + CUDA version |
 | GPU busy | `--fm-warning` | "in use by run r-0042" |
-| No GPU | `--fm-degraded` | "CPU fallback — roughly 40× slower" |
+| No GPU | `--fm-degraded` | "No GPU detected"; CPU thread count remains visible |
 | Driver mismatch | `--fm-danger` | "CUDA 12.4 required, 11.8 found" |
 
 The VRAM meter is live. A user who sees 22 of 24 GB in use knows why their
 512³ problem will not start, before they wait four minutes to find out.
+
+Aktualny kontrakt odczytu hosta, szczegółów Settings i stanów niedostępnej
+telemetrii opisuje [Compute environment](09-compute-environment.md).
+Wykrycie GPU nie potwierdza gotowości solvera. Nie stosujemy stałego mnożnika
+spowolnienia CPU ani domyślnego fallbacku; wybór urządzenia należy do study.
 
 ---
 

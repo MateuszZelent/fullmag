@@ -915,6 +915,7 @@ use utoipa::OpenApi;
         crate::types::ScriptSyncRequest,
         crate::types::ScriptSyncResponse,
         crate::types::ScriptSourceResponse,
+        crate::types::SessionScriptSummary,
         crate::types::EngineLogEntry,
         crate::types::CpuTelemetryResponse,
         crate::types::GpuTelemetryDevice,

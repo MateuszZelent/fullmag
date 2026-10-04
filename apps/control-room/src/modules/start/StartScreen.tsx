@@ -53,7 +53,8 @@ export function StartScreen({ kernel }: ModuleProps) {
   // then enables the picker.
   const desktop = useSyncExternalStore(subscribeNever, workspaceHostAvailable, () => false);
   const [scriptFlowNotice, setScriptFlowNotice] = useState<string | null>(null);
-  const compute = useComputeProbe();
+  const computeProbe = useComputeProbe();
+  const { compute } = computeProbe;
   const authorName = useAuthorName();
   const { section, selectedProjectId, selectedScriptId, selectedTemplateId, openScriptNonce } =
     useSyncExternalStore(
@@ -218,7 +219,16 @@ export function StartScreen({ kernel }: ModuleProps) {
 
   return (
     <div className="fm-start" data-section={section}>
-      <StartRail compute={compute} onRunCommand={runCommand} ref={railRef} section={section} />
+      <StartRail
+        compute={compute}
+        computeError={computeProbe.error}
+        refreshing={computeProbe.refreshing}
+        stale={computeProbe.stale}
+        onRefreshCompute={computeProbe.refresh}
+        onRunCommand={runCommand}
+        ref={railRef}
+        section={section}
+      />
       <main className="fm-start__content" id="fm-main-content" ref={mainRef} tabIndex={-1}>
         <div className="fm-start__content-inner">
           {section === "home" ? (
@@ -250,7 +260,14 @@ export function StartScreen({ kernel }: ModuleProps) {
           ) : section === "learn" ? (
             <LearnSection />
           ) : section === "settings" ? (
-            <SettingsSection recent={recent} />
+            <SettingsSection
+              compute={compute}
+              computeError={computeProbe.error}
+              refreshing={computeProbe.refreshing}
+              stale={computeProbe.stale}
+              onRefreshCompute={computeProbe.refresh}
+              recent={recent}
+            />
           ) : (
             <AboutSection compute={compute} index={recent.state} />
           )}
@@ -283,6 +300,7 @@ export function StartScreen({ kernel }: ModuleProps) {
         section={section}
         templateId={selectedTemplateId}
         session={recent.state.kind === "ready" ? recent.state.index.continue : undefined}
+        index={recent.state}
       />
       <StartStatusBar compute={compute} index={recent.state} />
     </div>

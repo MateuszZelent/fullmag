@@ -12,6 +12,7 @@ use fullmag_ir::{BackendTarget, ExecutionMode, ExecutionPlanIR, ProblemIR, Study
 use fullmag_ir::*;
 
 mod antenna_zeeman;
+mod compute_resources;
 mod current_transport;
 mod error;
 mod fdm;
@@ -93,7 +94,7 @@ pub use selection::{
 };
 pub use study_catalog::{
     lower_study_plan_with_catalog, StudyCatalogError, StudyProblemCatalog,
-    StudyProblemCatalogEntry, STUDY_PROBLEM_CATALOG_SCHEMA,
+    StudyProblemCatalogEntry, STUDY_PROBLEM_CATALOG_SCHEMA, STUDY_PROBLEM_CATALOG_SCHEMA_V1,
 };
 pub use study_lowering::{
     lower_study_plan, StudyExecutionPlan, StudyLoweringError, StudyStepExecutionPlan,
@@ -143,6 +144,13 @@ pub fn plan(problem: &ProblemIR) -> Result<ExecutionPlanIR, PlanError> {
         return Err(PlanError {
             reasons: graph_errors,
         });
+    }
+
+    if let Some(resources) = fullmag_ir::ComputeResourcesIR::from_problem(problem)
+        .map_err(|reason| PlanError { reasons: vec![reason] })?
+    {
+        compute_resources::validate_current_runtime_support(&resources)
+            .map_err(|reasons| PlanError { reasons })?;
     }
 
     let mut errors = Vec::new();

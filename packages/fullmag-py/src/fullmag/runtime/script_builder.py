@@ -372,22 +372,35 @@ def rewrite_loaded_problem_script(
     *,
     overrides: dict[str, object] | None = None,
     write: bool = False,
+    output_path: Path | None = None,
 ) -> dict[str, object]:
+    """Render the canonical script and optionally persist it.
+
+    ``write`` replaces the loaded source file in place and is only meant for
+    scripts Fullmag itself manages.  ``output_path`` writes the canonical copy
+    to a different file and never touches the loaded source, which is how a
+    user-owned script is exported.  The two options are mutually exclusive.
+    """
+    if write and output_path is not None:
+        raise ValueError("write and output_path are mutually exclusive")
     rendered = render_loaded_problem_as_script(loaded, overrides=overrides)
     script_path = loaded.source_path
+    target_path = script_path if write else output_path
 
-    if write:
-        temp_path = script_path.with_name(f"{script_path.name}.fullmag.tmp")
+    if target_path is not None:
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = target_path.with_name(f"{target_path.name}.fullmag.tmp")
         temp_path.write_text(rendered, encoding="utf-8")
-        temp_path.replace(script_path)
+        temp_path.replace(target_path)
 
+    persisted = target_path is not None
     return {
-        "script_path": str(script_path),
+        "script_path": str(target_path if target_path is not None else script_path),
         "source_kind": _builder_source_kind(loaded.entrypoint_kind),
         "entrypoint_kind": loaded.entrypoint_kind,
-        "written": write,
-        "bytes_written": len(rendered.encode("utf-8")) if write else 0,
-        **({"rendered_source": rendered} if not write else {}),
+        "written": persisted,
+        "bytes_written": len(rendered.encode("utf-8")) if persisted else 0,
+        **({"rendered_source": rendered} if not persisted else {}),
     }
 
 

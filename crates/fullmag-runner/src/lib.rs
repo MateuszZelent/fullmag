@@ -5160,6 +5160,9 @@ pub(crate) fn resolve_planned_session_runtime_with_registry_and_preview(
 }
 
 pub(crate) fn requested_cpu_threads(problem: &ProblemIR) -> Option<u32> {
+    if let Ok(Some(resources)) = fullmag_ir::ComputeResourcesIR::from_problem(problem) {
+        return resources.cpu.threads.count();
+    }
     problem
         .problem_meta
         .runtime_metadata
@@ -5171,6 +5174,12 @@ pub(crate) fn requested_cpu_threads(problem: &ProblemIR) -> Option<u32> {
 }
 
 pub(crate) fn configured_cpu_threads(problem: &ProblemIR) -> usize {
+    if let Ok(Some(resources)) = fullmag_ir::ComputeResourcesIR::from_problem(problem) {
+        return resources.cpu.threads.count().map_or_else(
+            || resolve_auto_cpu_threads(default_cpu_threads(), None),
+            |threads| threads as usize,
+        );
+    }
     // 1. Explicit per-problem setting from runtime_metadata
     if let Some(threads) = requested_cpu_threads(problem).map(|threads| threads as usize) {
         return threads;
@@ -8512,6 +8521,26 @@ mod tests {
             }),
         );
         assert_eq!(configured_cpu_threads(&problem), 7);
+    }
+
+    #[test]
+    fn typed_cpu_request_reaches_runner_and_preserves_auto() {
+        let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
+        problem.problem_meta.runtime_metadata.insert(
+            "compute_resources".into(),
+            json!({"schema_version":"compute_resources.v1", "cpu":{"threads":3}}),
+        );
+        assert_eq!(requested_cpu_threads(&problem), Some(3));
+        assert_eq!(configured_cpu_threads(&problem), 3);
+        problem.problem_meta.runtime_metadata.insert(
+            "compute_resources".into(),
+            json!({"schema_version":"compute_resources.v1", "cpu":{"threads":"auto"}}),
+        );
+        assert_eq!(requested_cpu_threads(&problem), None);
+        assert_eq!(
+            configured_cpu_threads(&problem),
+            resolve_auto_cpu_threads(default_cpu_threads(), None)
+        );
     }
 
     fn fem_session_runtime_problem() -> fullmag_ir::ProblemIR {

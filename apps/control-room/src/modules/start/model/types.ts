@@ -17,10 +17,21 @@ export type ProjectStatus =
 
 export interface GpuInfo {
   readonly name: string;
+  readonly index?: number;
   readonly cudaVersion?: string;
   readonly vramTotalBytes: number;
   readonly vramFreeBytes: number;
   readonly busyWithRun?: string;
+  readonly utilizationPercent?: number;
+  readonly temperatureC?: number;
+}
+
+export interface ComputeRuntimeLane {
+  readonly backend: SolverKind;
+  readonly device: "CPU" | "GPU";
+  readonly availability: "available" | "unavailable" | "unknown";
+  readonly precisions: readonly string[];
+  readonly reason?: string;
 }
 
 export interface ComputeEnvironment {
@@ -28,13 +39,30 @@ export interface ComputeEnvironment {
   readonly cpuThreads: number;
   readonly preferredBackend: "cuda" | "cpu";
   readonly warnings: readonly string[];
+  readonly source?: "runtime" | "desktop";
+  readonly gpuProbeStatus?: "ready" | "unavailable";
+  readonly cpuProbeStatus?: "ready" | "unavailable";
+  readonly cpuName?: string;
+  readonly cpuUtilizationPercent?: number;
+  readonly memoryTotalBytes?: number;
+  readonly memoryUsedBytes?: number;
+  readonly sampledAt?: number;
+  readonly runtimeLanes?: readonly ComputeRuntimeLane[];
 }
 
 /**
- * `undefined` while a probe is in flight, `null` when this host cannot probe
- * at all (the browser build, or a desktop host without `compute_probe`).
+ * `undefined` while the initial reading is in flight, `null` when neither
+ * runtime telemetry nor the desktop host can supply an inventory.
  */
 export type ComputeProbeState = ComputeEnvironment | null | undefined;
+
+export interface ComputeProbeController {
+  readonly compute: ComputeProbeState;
+  readonly refreshing: boolean;
+  readonly stale: boolean;
+  readonly error: string | null;
+  readonly refresh: () => void;
+}
 
 export type DocumentMode = "read_write" | "read_only";
 

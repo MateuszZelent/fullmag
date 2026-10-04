@@ -974,7 +974,14 @@ pub(crate) fn execute_accepted_worker_start(
     }
 
     let specification = &accepted.run.specification;
-    let request = &specification.requested_execution;
+    let immutable_problem = accepted.catalog.entries().iter()
+        .find(|entry| entry.step_id() == accepted_step.step_id)
+        .context("accepted worker step has no immutable catalog entry")?
+        .problem();
+    accepted_step.resolved_input
+        .validate_execution_for_problem(specification, immutable_problem)
+        .context("validate accepted task execution before dispatch")?;
+    let request = &accepted_step.resolved_input.requested_execution;
     if request.backend == "fem" {
         crate::accepted_fem_study_worker::validate_declared_outputs(&study_step.outputs)
             .context("validate accepted FEM output contract before recovery or reservation")?;
@@ -1067,14 +1074,19 @@ pub(crate) fn execute_accepted_worker_start(
         Err(error) if is_not_found_error(&error) => {}
         Err(error) => return Err(error).context("inspect existing accepted FDM attempt"),
     }
-    // RunSpec is the accepted source for requested device/precision. Project
-    // that explicit device request into the runner's runtime-selection metadata;
+    // The verified task input is the accepted device/precision intent. Project
+    // that request into the runner adapter while retaining other authored fields;
     // the environment guard above prevents a managed override from changing it.
     let mut problem = accepted_step.problem.clone();
-    problem.problem_meta.runtime_metadata.insert(
-        "runtime_selection".into(),
-        serde_json::json!({"device": request.device, "precision": "double"}),
-    );
+    let selection = problem
+        .problem_meta
+        .runtime_metadata
+        .entry("runtime_selection".into())
+        .or_insert_with(|| serde_json::json!({}))
+        .as_object_mut()
+        .context("accepted runtime_selection must be an object")?;
+    selection.insert("device".into(), serde_json::json!(request.device));
+    selection.insert("precision".into(), serde_json::json!(request.precision));
     crate::accepted_project_storage::AcceptedProjectStorage::preflight(
         &problem,
         store,

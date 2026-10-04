@@ -57,7 +57,7 @@ pub(crate) struct ProjectRunSubmitRequest {
     pub run_intent: BTreeMap<String, serde_json::Value>,
     /// Versioned `study_plan.v2` object with typed steps, references and runner controls.
     pub study_plan: BTreeMap<String, serde_json::Value>,
-    /// Versioned `study_problem_catalog.v1` object bound to the exact study digest.
+    /// Immutable study catalog: legacy v1, or v2 with pinned execution profiles and field origins.
     pub study_problem_catalog: BTreeMap<String, serde_json::Value>,
     /// Explicit immutable asset ID to path inside `project/assets/`.
     pub asset_paths: BTreeMap<String, String>,

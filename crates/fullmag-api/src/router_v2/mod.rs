@@ -1259,12 +1259,18 @@ async fn get_current_session(State(state): State<Arc<AppState>>) -> Result<Json<
     let snapshot = guard
         .as_ref()
         .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    let script = crate::script::session_script_summary(
+        state.current_workspace_root.as_path(),
+        &snapshot.session.script_path,
+        true,
+    );
     Ok(Json(json!({
         "schema_version": "2.0.0",
         "session_id": snapshot.session.session_id,
         "name": snapshot.session.problem_name,
         "status": snapshot.session.status,
         "script_path": snapshot.session.script_path,
+        "script": script,
         "current": true,
     })))
 }

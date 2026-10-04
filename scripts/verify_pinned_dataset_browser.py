@@ -62,12 +62,12 @@ def port_is_open(port: int):
 
 
 def run(repo: Path, port: int, scenario: str = "pinned-dataset"):
-    if scenario not in {"pinned-dataset", "project-document-handoff", "development-kernel-host", "development-run-outcome-handoff"}:
+    if scenario not in {"pinned-dataset", "project-document-handoff", "development-kernel-host", "development-run-outcome-handoff", "development-restart-action"}:
         raise storage.StorageError("Unknown fixed browser fixture scenario")
     layout = storage.resolve_layout(repo, PROFILE)
     storage.initialize(layout)
     app = repo / "apps/control-room"
-    smoke_name = {"pinned-dataset": "smoke-pinned-materialized-dataset.mjs", "project-document-handoff": "smoke-project-document-handoff.mjs", "development-kernel-host": "smoke-development-kernel-host.mjs", "development-run-outcome-handoff": "smoke-development-run-outcome-handoff.mjs"}[scenario]
+    smoke_name = {"pinned-dataset": "smoke-pinned-materialized-dataset.mjs", "project-document-handoff": "smoke-project-document-handoff.mjs", "development-kernel-host": "smoke-development-kernel-host.mjs", "development-run-outcome-handoff": "smoke-development-run-outcome-handoff.mjs", "development-restart-action": "smoke-development-restart-action.mjs"}[scenario]
     smoke = app / "scripts" / smoke_name
     node = shutil.which("node")
     next_cli = app / "node_modules/next/dist/bin/next"
@@ -89,7 +89,7 @@ def run(repo: Path, port: int, scenario: str = "pinned-dataset"):
         before = fingerprint(repo, False)
         receipt_path = run_root / "receipt.json"
         receipt = {
-            "schema": {"pinned-dataset": "fullmag_pinned_dataset_browser_fixture_v1", "project-document-handoff": "fullmag_project_document_browser_fixture_v1", "development-kernel-host": "fullmag_development_kernel_host_browser_fixture_v1", "development-run-outcome-handoff": "fullmag_development_run_outcome_handoff_browser_fixture_v1"}[scenario], "state": "running",
+            "schema": {"pinned-dataset": "fullmag_pinned_dataset_browser_fixture_v1", "project-document-handoff": "fullmag_project_document_browser_fixture_v1", "development-kernel-host": "fullmag_development_kernel_host_browser_fixture_v1", "development-run-outcome-handoff": "fullmag_development_run_outcome_handoff_browser_fixture_v1", "development-restart-action": "fullmag_development_restart_action_browser_fixture_v1"}[scenario], "state": "running",
             "scenario": scenario,
             "repo_root": str(repo), "worktree_id": layout["worktree_id"], "profile": PROFILE,
             "head": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip(),
@@ -165,9 +165,12 @@ def run(repo: Path, port: int, scenario: str = "pinned-dataset"):
                 env["FULLMAG_PINNED_DATASET_BROWSER_CHANNEL"] = BROWSER_CHANNEL
             if scenario != "pinned-dataset":
                 env["CONTROL_ROOM_URL"] = f"http://127.0.0.1:{port}/{scenario}"
-                if scenario == "development-kernel-host":
+                if scenario in {"development-kernel-host", "development-restart-action"}:
                     env["CONTROL_ROOM_URL"] += "?fullmag_api_instance=11111111-1111-4111-8111-111111111111"
-                report_prefix = "FULLMAG_DEVELOPMENT_RUN_OUTCOME" if scenario == "development-run-outcome-handoff" else "FULLMAG_PROJECT_DOCUMENT"
+                report_prefix = {
+                    "development-run-outcome-handoff": "FULLMAG_DEVELOPMENT_RUN_OUTCOME",
+                    "development-restart-action": "FULLMAG_DEVELOPMENT_RESTART_ACTION",
+                }.get(scenario, "FULLMAG_PROJECT_DOCUMENT")
                 env[report_prefix + "_REPORT_DIR"] = str(run_root / "browser")
                 if BROWSER_CHANNEL:
                     env[report_prefix + "_BROWSER_CHANNEL"] = BROWSER_CHANNEL
@@ -232,7 +235,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo-root", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--port", type=int, default=3250)
-    parser.add_argument("--scenario", choices=("pinned-dataset", "project-document-handoff", "development-kernel-host", "development-run-outcome-handoff"), default="pinned-dataset")
+    parser.add_argument("--scenario", choices=("pinned-dataset", "project-document-handoff", "development-kernel-host", "development-run-outcome-handoff", "development-restart-action"), default="pinned-dataset")
     args = parser.parse_args()
     if not 1 <= args.port <= 65535:
         parser.error("port must be between 1 and 65535")

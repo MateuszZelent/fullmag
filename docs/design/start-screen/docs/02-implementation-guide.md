@@ -158,6 +158,12 @@ copied from the file. The card never shows a button that will fail.
 
 ### 4.5 Compute probe (required for the environment widget)
 
+Bieżąca implementacja w przeglądarce i desktopie korzysta w pierwszej
+kolejności z istniejących zasobów CPU/GPU i capabilities runtime przez
+typowany klient oraz resource hooks. Poniższe polecenie desktopowe pozostaje
+trasą zgodności dla starszych hostów. Pełny kontrakt:
+[Compute environment](09-compute-environment.md).
+
 ```rust
 #[tauri::command] async fn compute_probe() -> Result<ComputeEnvironment, String>;
 // { gpus: [{ name, cuda_version, vram_total, vram_free, busy_with_run }],
