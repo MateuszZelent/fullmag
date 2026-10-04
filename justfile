@@ -414,6 +414,12 @@ verify-control-room-development-kernel-host:
 verify-control-room-development-transport-pause:
     {{storage_python}} "{{repo_root}}/scripts/verify_control_room_sources.py" --route development-transport-pause-check --repo-root "{{repo_root}}"
 
+verify-control-room-development-run-outcome-handoff:
+    {{storage_python}} "{{repo_root}}/scripts/verify_control_room_sources.py" --route development-run-outcome-handoff-check --repo-root "{{repo_root}}"
+
+lint-control-room-development-run-outcome-handoff:
+    {{storage_python}} "{{repo_root}}/scripts/verify_control_room_sources.py" --route development-run-outcome-handoff-lint --repo-root "{{repo_root}}"
+
 # Actual browser interaction on an isolated managed frontend source snapshot.
 # Responses are fixtures; this is neither a backend runtime nor a solver gate.
 verify-pinned-dataset-browser:
@@ -425,6 +431,9 @@ verify-project-document-handoff-browser:
 
 verify-development-kernel-host-browser:
     {{storage_python}} "{{repo_root}}/scripts/verify_pinned_dataset_browser.py" --repo-root "{{repo_root}}" --port 3252 --scenario development-kernel-host
+
+verify-development-run-outcome-handoff-browser:
+    {{storage_python}} "{{repo_root}}/scripts/verify_pinned_dataset_browser.py" --repo-root "{{repo_root}}" --port 3253 --scenario development-run-outcome-handoff
 
 lint-control-room-source:
     {{storage_python}} "{{repo_root}}/scripts/verify_control_room_sources.py" --route lint --repo-root "{{repo_root}}"

@@ -144,6 +144,11 @@ nie przechodzi do świeżego właściciela. Przed udostępnieniem restartu dla
 niepustego workspace wymagane jest objęcie scheduled/queued/flushing
 outcomes ochroną oraz wykonywalna regresja. Empty fixture tego nie dowodzi.
 
+Aktualizacja P8-53AS: [rezerwacja i ochrona kolejki](53as-run-outcome-handoff.md)
+zabezpieczają tę lukę. Fokusowana regresja 5 grup i browser 9/9 PASS;
+wspólne kontrole frontendu są nadal blokowane przez równoległy Start/About.
+Nie jest to dowód pełnego natywnego nonempty restartu.
+
 ## Pozostałe bramki
 
 Nie uruchamia to restartu po samym buildzie ani nie podnosi

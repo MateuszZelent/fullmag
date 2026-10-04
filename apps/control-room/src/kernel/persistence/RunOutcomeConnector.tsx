@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useSyncExternalStore } from "react";
 
 import { captureRegisteredViewport3DThumbnail } from "@/modules/viewport-3d/public";
 
@@ -18,6 +18,9 @@ import {
   type RunOutcomeTracker,
 } from "./runOutcome";
 
+const NO_PROJECT_DOCUMENT_SNAPSHOT = () => null;
+const NO_PROJECT_DOCUMENT_SUBSCRIBE = () => () => undefined;
+
 /** The viewport follows the status by one resource fetch; let the final frame land. */
 export const RUN_OUTCOME_THUMBNAIL_SETTLE_MS = 400;
 
@@ -28,10 +31,14 @@ function settle(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function recordRunOutcome(kernel: KernelApi, outcome: RunOutcomeRecord): Promise<void> {
-  const controller = kernel.projectDocument;
-  if (!controller) return;
+async function recordRunOutcome(
+  kernel: KernelApi,
+  outcome: RunOutcomeRecord,
+  releaseReservation: () => void,
+): Promise<void> {
   try {
+    const controller = kernel.projectDocument;
+    if (!controller) return;
     await settle(RUN_OUTCOME_THUMBNAIL_SETTLE_MS);
     const thumbnail = await captureRegisteredViewport3DThumbnail();
     await controller.recordRunOutcome(
@@ -42,6 +49,8 @@ async function recordRunOutcome(kernel: KernelApi, outcome: RunOutcomeRecord): P
     );
   } catch {
     return;
+  } finally {
+    releaseReservation();
   }
 }
 
@@ -55,26 +64,48 @@ async function recordRunOutcome(kernel: KernelApi, outcome: RunOutcomeRecord): P
 export function RunOutcomeConnector({
   kernel,
   sessionIdentity,
+  paused,
 }: {
   kernel: KernelApi;
   sessionIdentity: SessionResourceIdentity;
+  paused: boolean;
 }) {
   const observation = useSessionStatusSelector(selectRunLifecycle, {
     isEqual: runLifecycleObservationsEqual,
   });
   const trackerRef = useRef<RunOutcomeTracker>(INITIAL_RUN_OUTCOME_TRACKER);
   const sessionKey = `${sessionIdentity.sessionId}\u0000${sessionIdentity.sessionEpoch}`;
+  const documentSnapshot = useSyncExternalStore(
+    kernel.projectDocument?.subscribe ?? NO_PROJECT_DOCUMENT_SUBSCRIBE,
+    kernel.projectDocument?.getSnapshot ?? NO_PROJECT_DOCUMENT_SNAPSHOT,
+    NO_PROJECT_DOCUMENT_SNAPSHOT,
+  );
 
   useEffect(() => {
     trackerRef.current = INITIAL_RUN_OUTCOME_TRACKER;
   }, [sessionKey]);
 
   useEffect(() => {
-    const scoped = observation?.sessionKey === sessionKey ? observation : null;
-    const { outcome, tracker } = advanceRunOutcomeTracker(trackerRef.current, scoped, Date.now());
-    trackerRef.current = tracker;
-    if (outcome) void recordRunOutcome(kernel, outcome);
-  }, [kernel, observation, sessionKey]);
+    const host = kernel.developmentWorkspace?.getSnapshot();
+    if (paused || host?.paused || (host && host.kernel !== kernel)) return;
+
+    const controller = kernel.projectDocument;
+    const releaseReservation = controller?.tryReserveRunOutcome();
+    if (controller && !releaseReservation) return;
+
+    let reservationTransferred = false;
+    try {
+      const scoped = observation?.sessionKey === sessionKey ? observation : null;
+      const { outcome, tracker } = advanceRunOutcomeTracker(trackerRef.current, scoped, Date.now());
+      trackerRef.current = tracker;
+      if (outcome) {
+        reservationTransferred = true;
+        void recordRunOutcome(kernel, outcome, releaseReservation ?? (() => undefined));
+      }
+    } finally {
+      if (!reservationTransferred) releaseReservation?.();
+    }
+  }, [documentSnapshot, kernel, observation, paused, sessionKey]);
 
   return null;
 }

@@ -1,5 +1,13 @@
 # Status realizacji całego planu refaktoryzacji
 
+Checkpoint P8-53AS, 04.10.2026: [wynik runu podczas restartu](p8/53as-run-outcome-handoff.md).
+Rezerwacja opóźnionego recordera i ochrona queued/flushing outcomes mają
+5 grup regresji, browser 9/9, lint 6 plików i wspólną API hygiene PASS.
+Review źródeł nie pozostawił Required dla tego P2. Wspólne produkcyjne
+typowanie i pełny lint pozostają zablokowane przez niezależne zmiany Start/About.
+Pełny natywny restart i komenda UI nadal otwarte; `restart_available=false`,
+procenty całego planu bez awansu.
+
 Checkpoint P8-53AR, 04.10.2026: [zamontowany kernel](p8/53ar-mounted-kernel-handoff.md).
 Produkcyjny KernelProvider zachowuje dzieci podczas pauzy i publikuje nową
 generację po odtworzeniu ownerów. Registry, transport oraz scoped resources
@@ -7,8 +15,9 @@ chronią także nową generację przed ACK; stary klient pozostaje retired.
 Host 6 grup, transport 13 grup, production TypeScript/API hygiene/lint oraz
 browser fixture 13/13 PASS. Pełny natywny restart z niepustą sceną, komenda UI,
 warm-service i fault qualification pozostają otwarte; `restart_available=false`.
-Po równoległych merge'ach review wykrył otwartą ochronę opóźnionych i queued
-wyników runu na starym właścicielu dokumentu; wymaga poprawki przed nonempty restart.
+Po równoległych merge'ach review wykrył ochronę opóźnionych i queued
+wyników runu na starym właścicielu dokumentu wymagającą poprawki;
+zabezpieczenie i fokusowane dowody zapisano w P8-53AS.
 Procenty całego planu bez awansu.
 
 Checkpoint P8-53AQ, 04.10.2026: [właściciele workspace i cache klienta](p8/53aq-workspace-owners-and-client-cache.md).

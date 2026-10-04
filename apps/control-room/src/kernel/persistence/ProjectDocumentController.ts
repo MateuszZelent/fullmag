@@ -134,6 +134,7 @@ export class ProjectDocumentController {
   private activeOperation: ProjectDocumentOperation | null = null;
   private pendingOutcomes: PendingRunOutcome[] = [];
   private flushingOutcomes = false;
+  private scheduledRunOutcomeCount = 0;
   private outcomeErrorSnapshot: ProjectDocumentSnapshot | null = null;
 
   constructor(private readonly api: ProjectDocumentApi | ControlRoomApi) {}
@@ -236,7 +237,24 @@ export class ProjectDocumentController {
     options: CaptureProjectDocumentDevelopmentHandoffOptions = {},
   ): ProjectDocumentDevelopmentHandoff {
     this.assertOperationAvailable();
+    this.assertDevelopmentHandoffIdle();
     return captureProjectDocumentDevelopmentHandoff(this.snapshot, options);
+  }
+
+  /** Reserve this outcome before asynchronous preview work can outlive capture. */
+  tryReserveRunOutcome(): (() => void) | null {
+    if (this.developmentGuard !== null) return null;
+
+    this.scheduledRunOutcomeCount += 1;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.scheduledRunOutcomeCount = Math.max(
+        0,
+        this.scheduledRunOutcomeCount - 1,
+      );
+    };
   }
 
   /** Freeze this document owner until a confirmed restart outcome releases its guard. */
@@ -244,6 +262,7 @@ export class ProjectDocumentController {
     options: CaptureProjectDocumentDevelopmentHandoffOptions = {},
   ): ProjectDocumentDevelopmentGuard {
     this.assertOperationAvailable();
+    this.assertDevelopmentHandoffIdle();
     const handoff = captureProjectDocumentDevelopmentHandoff(this.snapshot, options);
     const capturedJson = JSON.stringify(handoff);
     const original = this.snapshot;
@@ -264,6 +283,7 @@ export class ProjectDocumentController {
     return {
       handoff,
       assertCurrent: () => {
+        this.assertDevelopmentHandoffIdle();
         if (released || this.developmentGuard !== token || this.snapshot !== captured
           || JSON.stringify(captureProjectDocumentDevelopmentHandoff(this.snapshot, { carryUnsaved: true })) !== capturedJson) {
           throw new Error("The captured project document is no longer guarded.");
@@ -288,6 +308,7 @@ export class ProjectDocumentController {
    */
   async restoreDevelopmentHandoff(value: unknown): Promise<void> {
     this.assertOperationAvailable();
+    this.assertDevelopmentHandoffIdle();
     if (this.snapshot.state !== "empty") {
       throw new Error("Project document handoff restore requires an empty controller.");
     }
@@ -307,7 +328,6 @@ export class ProjectDocumentController {
       // The API reopen proves the archive is still byte-identical and
       // compatible. Keep the captured metadata as source provenance; no host
       // filesystem save or durability claim is made by this operation.
-      this.pendingOutcomes = [];
       this.setReady(captured.resource, captured.fileName, captured.hostPath);
     } finally {
       this.finishOperation("restore");
@@ -636,6 +656,18 @@ export class ProjectDocumentController {
     }
     if (this.activeOperation !== null || this.snapshot.state === "loading") {
       throw new Error("A project document operation is already in progress.");
+    }
+  }
+
+  private assertDevelopmentHandoffIdle(): void {
+    if (
+      this.scheduledRunOutcomeCount > 0 ||
+      this.pendingOutcomes.length > 0 ||
+      this.flushingOutcomes
+    ) {
+      throw new Error(
+        "A project run outcome is pending or being recorded; wait before development handoff.",
+      );
     }
   }
 

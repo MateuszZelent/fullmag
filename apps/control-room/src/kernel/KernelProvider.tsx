@@ -474,7 +474,7 @@ function AvailableSessionRuntimeConnectors({ kernel, collection, paused }: {
       <CommandShortcutConnector kernel={kernel} paused={paused} />
       <VisualizationRegistrySyncConnector kernel={kernel} paused={paused} />
       <CameraRegistrySyncConnector kernel={kernel} paused={paused} sessionScopeKey={scopeKey!} />
-      <RunOutcomeConnector kernel={kernel} sessionIdentity={confirmedIdentity} />
+      <RunOutcomeConnector kernel={kernel} sessionIdentity={confirmedIdentity} paused={paused} />
     </>
   );
 }

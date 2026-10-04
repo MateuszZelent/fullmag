@@ -8,6 +8,17 @@ NOT VERIFIED. Utrata ACK wymaga potwierdzonego exit własnego API i zgodnego
 trwałego rekordu; nie upoważnia do ponowienia commit ani zwolnienia fence.
 Data: 03.10.2026.
 
+### Wynik runu jako praca właściciela dokumentu — P8-53AS
+
+Okno oczekiwania na końcową klatkę i thumbnail również należy do pracy
+właściciela dokumentu. Connector rezerwuje je synchronicznie przed
+konsumowaniem obserwacji runu. Capture/guard/restore nie omijają rezerwacji,
+queued outcomes ani flushu. Pauza lub guard nie konsumują obserwacji;
+po zwolnieniu można ją rozpatrzyć ponownie. Ogólna operacja Save zachowuje
+możliwość opróżnienia kolejki. Nie rozszerza to payloadu handoff ani nie
+pozwala wyczyścić kolejki przy restore. Wykonanie i granice dowodów:
+[P8-53AS](../plans/active/refactor_runtime/final/p8/53as-run-outcome-handoff.md).
+
 ### Zamontowany kernel — P8-53AR
 
 [Dowód P8-53AR](../plans/active/refactor_runtime/final/p8/53ar-mounted-kernel-handoff.md)
