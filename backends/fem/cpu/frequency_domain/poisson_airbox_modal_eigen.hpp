@@ -494,6 +494,13 @@ struct PoissonAirboxModalEigenResult {
     char slepc_converged_reason[64]{};
     int slepc_converged_reason_code = 0;
     char stop_reason[96]{};
+    // Internal FEM CPU K0 hard-EPS-error evidence; unavailable/default false
+    // until the solve records the corresponding state.
+    bool eps_solve_error_code_available = false;
+    std::int32_t eps_solve_error_code = 0;
+    bool slepc_process_quarantined = false;
+    bool operator_context_invalidated = false;
+    bool eps_lifetime_unsafe = false;
     std::uint32_t window_subwindow_count = 0;
     std::uint32_t window_completed_subwindow_count = 0;
     std::uint32_t window_failed_subwindow_count = 0;

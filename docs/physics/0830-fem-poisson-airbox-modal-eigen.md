@@ -614,6 +614,84 @@ oraz CLI `orchestrator.rs` + `append_fem_eigen_step_progress`.
 C++/Rust zgodnie z zakazem. Managed query, publikacja API/UI i rzeczywisty
 log wymagają nowego runtime-v2: NOT VERIFIED.
 
+<!-- gamma-hard-error-contract -->
+### 3.1.3 Twardy błąd EPS: kwarantanna grafu K0
+
+Niezerowy PetscErrorCode z EPSSolve jest odrębny od ujemnego
+EPSConvergedReason zwróconego po poprawnym powrocie funkcji. W drugim
+przypadku można odczytać wykonane iteracje i konwergentne Ritz vectors jako
+diagnostykę, lecz nie zaakceptować niekompletnego okna. W pierwszym
+przypadku nie wolno zakładać, że wewnętrzne borrowed views SLEPc zostały
+oddane: przykładowa ścieżka Krylov–Schur odczytuje DSGetMat, wykonuje
+Arnoldi przez PetscCall i dopiero potem DSRestoreMat. DSReset niszczy
+przechowywane macierze. To uzasadnienie konserwatywnej polityki Fullmag,
+nie obietnica biblioteki, że każdy błąd uszkadza graf.
+
+FEM CPU K0 zachowuje po twardym błędzie heap-owned kontekst Schura i cały
+zależny EPS/ST/KSP/Mat/Vec graph do odzyskania przez system operacyjny.
+Właściciel kontekstu musi pozostać pod stabilnym adresem; samo pominięcie
+EPSDestroy nie wystarcza przy stack-local callback context. Powrót nie
+wywołuje getterów ani PETSc teardown tego grafu, rozbraja hostowe callbacks,
+oznacza go invalidated i przerywa lokalne próby/growth oraz pozostałe
+podokna. Trwała kwarantanna procesu nie dopuszcza kolejnego produkcyjnego
+K0 solve w tym procesie; operator otrzymuje błąd wymagający nowego procesu.
+Nie zabija to UI ani nie udaje sukcesu. Retencja jest wyjątkiem po błędzie,
+nie cache ani polityką normalnego cleanup. Normalna ścieżka i ujemny
+convergence reason bez PetscErrorCode zachowują dotychczasowy teardown.
+
+Diagnostyka zachowuje pierwotny liczbowy kod EPSSolve, etap i brak
+after-query; cancellation nadal ma status interrupted. Zachowane liczniki
+hosta nie są wymyśloną liczbą iteracji EPS. Nie publikuje się accepted modes,
+complete window ani certificate w tej gałęzi. Operatory, strojenie,
+normalizacja, demag i końcowy residual acceptance pozostają takie same.
+Publiczny Python→IR, SI i requested/resolved intent nie zmieniają się.
+Zakres FEM CPU K0; pozostałe lane nie są przez to kwalifikowane.
+Osobny izolowany failure regression i późniejszy managed runtime-v2 muszą
+potwierdzić brak getterów/teardown/reuse oraz kontrolowane zakończenie.
+Failure fixture nie został jeszcze wykonany; kompilacja testów C++ jest
+obecnie zabroniona. Przegląd źródeł nie zamyka tej bramki. NOT VERIFIED runtime.
+
+Podstawy źródłowe: [Krylov–Schur SLEPc](https://slepc.upv.es/release/src/eps/impls/krylov/krylovschur/krylovschur.c.html)
+oraz [DSReset/DSDestroy](https://slepc.upv.es/release/src/sys/classes/ds/interface/dsbasic.c.html).
+Źródła upstream są uzasadnieniem mechanizmu; dowód zachowania konkretnego
+builda Fullmag wymaga jego własnego source/runtime identity.
+
+<!-- gamma-common-query-trial -->
+### 3.1.4 Kontrolowany trial samodzielnego Γ
+
+Managed driver dopuszcza jawny typ gmres/fgmres w native frequency_window
+DE-SMOKE również dla samodzielnego Γ. Zachowuje pierwotny model i pełny
+operator K0. Konsument konfiguracji Γ wymaga rzeczywistego native adaptera
+K0 Schur CPU, wektora zerowego, przypisania sample_index oraz query EPS/ST
+w każdym wykonanym podoknie. Phase musi być queried_after_eps; snapshot
+configured_before_eps, missing/null lub historyczny build bez obsługi nie
+dowodzą wykonania requested konfiguracji.
+
+Typ ST, requested rtol oraz jawne EPS prefilter/restart są porównywane z
+query; restart uwzględnia ograniczenie liczbą split DOF. Budżety są
+dodatnie, z dopuszczalnym null jedynie dla nierozwiązanego EPS max.
+Niefinity/bool/ujemne dane, duplicate/missing pary (pass,subwindow_index) i niezerowy wektor
+w recordzie Γ kończą się błędem. Liczby planowanych podokien pochodzą z
+base_schedule i refinement_schedule natywnego window_certificate; konsument
+nie narzuca własnej liczby okien. Tożsamość native adaptera odczytuje się z
+solver_adapter, a nie z prezentacyjnego solver_model całej ścieżki. Global
+fallback jest dopuszczony wyłącznie dla samodzielnego punktu Γ. W mieszanym
+sweepie globalny adapter i query mogą należeć do pierwszego niezerowego
+Floquet; Γ jest wtedy sprawdzane wyłącznie na indexed sample i jego oknach.
+Brak after-query po hard EPS error nie staje się konfiguracją domyślną.
+
+Wrapper K0 publikuje jawny wektor z operator_request albo zadeklarowanego
+floquet_k_vector takze w swoim bezposrednim return; nie dopisuje zer dla
+niezadeklarowanego wektora. Zapis dotyczy diagnostics i result, bez zmiany
+rownan, ABI ani publicznej semantyki k.
+
+Existing nonzero-k Floquet true-residual criterion pozostaje osobną,
+nieosłabioną bramką. Mieszany sweep musi przejść oba konsumenty, standalone
+Γ tylko własną kontrolę query. Receipt konfiguracji nie mierzy końcowego
+true residual i nie kwalifikuje fizyki: istniejący row/spectrum/window/
+demag preflight, certified equilibrium i naukowa zbieżność pozostają
+obowiązkowe. Status naukowy NOT VERIFIED do managed wykonania.
+
 ### 3.2 GPU
 
 A GPU result can become production-capable only when the assembled blocks,
@@ -1196,6 +1274,9 @@ managed manifest, not these links alone.
 
 | Equation/claim | Lane | Repository path + stable symbol | Responsibility | Tests | Evidence status | Immutable link |
 |---|---|---|---|---|---|---|
+| source-k0-request-vector | FEM CPU | `backends/fem/src/frequency_domain/modal_eigen_solver.cpp` + `modal_request_k_vector_json_field` | Publish declared request-derived wavevector provenance on the direct K0 result and diagnostics path without inventing an undeclared zero vector. | prepared native actual-entry regression; strict consumer cases | source WIP; managed runtime NOT VERIFIED | current source; checkpoint pending |
+| source-k0-eps-hard-error | FEM CPU | `backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.cpp` + `solve_poisson_airbox_modal_eigen_cpu_schur` | Quarantine the heap-owned borrowed solver graph after a hard EPS error, preserve the original code and stop further K0 reuse. | source lifetime review; isolated failure-path gate pending | source WIP; managed runtime NOT VERIFIED | current source; checkpoint pending |
+| source-gamma-query-trial | FEM CPU | `scripts/de_gamma_krylov_trial.py` + `validate_gamma_krylov_trial` | Verify actual per-Gamma and per-pass EPS/ST configuration against requested tuning, independently of physical residual qualification. | scoped source regression; interpreted query cases | source WIP; managed runtime NOT VERIFIED | current source; checkpoint pending |
 | source-k0-linear-progress | FEM CPU | `backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.cpp` + `production_modal_ksp_convergence_test` | Emit actual KSP norm and explicit Poisson/ST role, independently of physical modal residual. | prepared native/consumer regression | source WIP; managed runtime NOT VERIFIED | current source; immutable checkpoint pending |
 | source-modal-progress-json | FEM CPU | `backends/fem/cpu/frequency_domain/poisson_airbox_modal_eigen.hpp` + `poisson_airbox_modal_emit_progress` | Publish nullable physical residual and distinct tagged linear-solver diagnostics without invalid nonfinite JSON. | prepared native/consumer regression | source WIP; managed runtime NOT VERIFIED | current source; immutable checkpoint pending |
 | source-modal-progress-decoder | FEM CPU | `crates/fullmag-runner/src/fem/eigen_progress.rs` + `native_modal_progress_event` | Keep outer iteration, subwindow index and tagged linear norm distinct. | prepared native/consumer regression | source WIP; managed runtime NOT VERIFIED | current source; immutable checkpoint pending |

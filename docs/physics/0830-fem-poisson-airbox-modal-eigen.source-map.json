@@ -452,7 +452,10 @@
     {"id": "source-modal-progress-json", "path": "backends/fem/cpu/frequency_domain/poisson_airbox_modal_eigen.hpp", "symbol": "poisson_airbox_modal_emit_progress", "responsibility": "Publish nullable physical residual and distinct tagged linear-solver diagnostics without invalid nonfinite JSON."},
     {"id": "source-modal-progress-decoder", "path": "crates/fullmag-runner/src/fem/eigen_progress.rs", "symbol": "native_modal_progress_event", "responsibility": "Keep outer iteration, subwindow index and tagged linear norm distinct."},
     {"id": "source-modal-progress-runtime", "path": "crates/fullmag-runner/src/lib.rs", "symbol": "fem_eigen_progress_update", "responsibility": "Preserve typed solver diagnostics in the existing progress scalar envelope."},
-    {"id": "source-modal-progress-cli", "path": "crates/fullmag-cli/src/orchestrator.rs", "symbol": "append_fem_eigen_step_progress", "responsibility": "Label KSP norm/iteration independently of modal relative residual and window progress."}
+    {"id": "source-modal-progress-cli", "path": "crates/fullmag-cli/src/orchestrator.rs", "symbol": "append_fem_eigen_step_progress", "responsibility": "Label KSP norm/iteration independently of modal relative residual and window progress."},
+    {"id": "source-k0-eps-hard-error", "path": "backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.cpp", "symbol": "solve_poisson_airbox_modal_eigen_cpu_schur", "responsibility": "Quarantine the heap-owned borrowed solver graph after a hard EPS error, preserve the original code and stop further K0 reuse."},
+    {"id": "source-gamma-query-trial", "path": "scripts/de_gamma_krylov_trial.py", "symbol": "validate_gamma_krylov_trial", "responsibility": "Verify actual per-Gamma and per-pass EPS/ST configuration against requested tuning, independently of physical residual qualification."},
+    {"id": "source-k0-request-vector", "path": "backends/fem/src/frequency_domain/modal_eigen_solver.cpp", "symbol": "modal_request_k_vector_json_field", "responsibility": "Publish declared request-derived wavevector provenance on the direct K0 result and diagnostics path without inventing an undeclared zero vector."}
   ],
   "public_api": {
     "parameters": [

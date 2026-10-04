@@ -1042,6 +1042,36 @@ class PilotTests(unittest.TestCase):
         self.assertIn("export FULLMAG_GMSH_THREADS=1", single)
         self.assertIn("case_dir=/workspace/benchmark-output/de-smoke-k2", single)
 
+    def test_gamma_krylov_trial_admits_only_frequency_window_de_smoke(self):
+        pilot._validate_shifted_ksp_trial_request(
+            "de-smoke-k0", "fgmres", None, "frequency_window")
+        rejected = (
+            ("de-smoke-k0", "11", "nearest", False),
+            ("de-smoke-k0", None, "frequency_window", True),
+            ("de100", None, "frequency_window", False),
+        )
+        for pilot_name, nearest, target, dense in rejected:
+            with self.subTest(pilot=pilot_name, nearest=nearest, target=target, dense=dense):
+                with self.assertRaises(pilot.managed.BenchmarkError):
+                    pilot._validate_shifted_ksp_trial_request(
+                        pilot_name, "fgmres", nearest, target, dense_oracle=dense)
+
+    def test_gamma_and_nonzero_krylov_receipt_gates_are_separate(self):
+        cases = (
+            ("k0", {"gamma_krylov_trial"}),
+            ("two", {"gamma_krylov_trial", "shifted_ksp_trial"}),
+            ("k2", {"shifted_ksp_trial"}),
+        )
+        for sampling, expected_keys in cases:
+            with self.subTest(sampling=sampling), \
+                    patch.object(pilot, "validate_gamma_krylov_trial", return_value={"gate": "gamma"}) as gamma, \
+                    patch.object(pilot, "validate_shifted_ksp_trial", return_value={"gate": "floquet"}) as floquet:
+                artifacts = pilot._validate_krylov_trials(
+                    Path("case"), sampling, "fgmres", "1e-9", "1e-9", "10")
+                self.assertEqual(set(artifacts), expected_keys)
+                self.assertEqual(gamma.call_count, int("gamma_krylov_trial" in expected_keys))
+                self.assertEqual(floquet.call_count, int("shifted_ksp_trial" in expected_keys))
+
     def test_nearest_pilot_is_single_k_selected_only_and_fail_closed(self):
         context = SimpleNamespace(source_tree=Path("/capsule"), runtime_root=Path("/runtime"),
                                   image_digest="sha256:test",

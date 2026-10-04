@@ -874,6 +874,15 @@ std::mutex &pa_e3_slepc_mutex()
     return mutex;
 }
 
+// Access only while pa_e3_slepc_mutex() is held.  Once a production K0
+// EPS solve returns a hard PETSc error, no later production K0 solve may
+// create or query another SLEPc graph in this process.
+bool &production_k0_slepc_process_quarantined()
+{
+    static bool quarantined = false;
+    return quarantined;
+}
+
 bool ensure_slepc_initialized(char error_message[256])
 {
     PetscBool initialized = PETSC_FALSE;
@@ -2313,6 +2322,8 @@ struct ProductionCpuOperatorContext {
     double exact_cache_construction_seconds = 0.0;
     bool k0_demag_probe_completed = false;
     PoissonAirboxK0DemagProbeResult k0_demag_operator_probe{};
+    bool invalidated = false;
+    bool eps_lifetime_unsafe = false;
     bool ready = false;
 
     ProductionCpuOperatorContext() = default;
@@ -2407,7 +2418,7 @@ bool run_k0_demag_operator_probe(
 void destroy_production_cpu_operator_context(
     ProductionCpuOperatorContext *context) noexcept
 {
-    if (context == nullptr) {
+    if (context == nullptr || context->eps_lifetime_unsafe) {
         return;
     }
     context->solve_control.disarm();
@@ -2442,8 +2453,12 @@ bool configure_production_cpu_operator_context(
     const PoissonAirboxEigenBlockProblem &problem,
     ProductionCpuOperatorContext *context) noexcept
 {
-    if (context == nullptr || context->ready) {
-        return context != nullptr && context->ready;
+    if (context == nullptr || context->invalidated ||
+        context->eps_lifetime_unsafe) {
+        return false;
+    }
+    if (context->ready) {
+        return true;
     }
     ++context->operator_context_setup_count;
     if (!configure_production_context(
@@ -2517,25 +2532,29 @@ struct ProductionCpuSolveControlScope {
     }
 };
 
-struct ProductionCpuOwnedOperatorScope {
-    ProductionCpuOperatorContext *context = nullptr;
-
-    ~ProductionCpuOwnedOperatorScope()
+struct ProductionCpuOperatorContextDeleter {
+    void operator()(ProductionCpuOperatorContext *context) const noexcept
     {
-        if (context != nullptr) {
-            destroy_production_cpu_operator_context(context);
+        if (context == nullptr || context->eps_lifetime_unsafe) {
+            // An unsafe graph is intentionally retained until process exit;
+            // PETSc/SLEPc teardown may touch borrowed DS views after EPSSolve fails.
+            return;
         }
+        destroy_production_cpu_operator_context(context);
+        delete context;
     }
 };
 
+using ProductionCpuOperatorContextOwner =
+    std::unique_ptr<ProductionCpuOperatorContext,
+                    ProductionCpuOperatorContextDeleter>;
+
 struct ProductionCpuWindowOperatorScope {
     ProductionCpuOperatorContext *previous = nullptr;
-    ProductionCpuOperatorContext *context = nullptr;
 
     ~ProductionCpuWindowOperatorScope()
     {
         active_cpu_window_operator_context = previous;
-        destroy_production_cpu_operator_context(context);
     }
 };
 
@@ -3334,6 +3353,11 @@ void write_production_schur_diagnostics(
         "\"slepc_converged_reason\":\"%s\","
         "\"slepc_converged_reason_code\":%d,"
         "\"stop_reason\":\"%s\","
+        "\"eps_solve_error_code_available\":%s,"
+        "\"eps_solve_error_code\":%d,"
+        "\"slepc_process_quarantined\":%s,"
+        "\"operator_context_invalidated\":%s,"
+        "\"eps_lifetime_unsafe\":%s,"
         "\"study_product\":\"modal_eigen\","
         "\"solver_adapter\":\"k0_poisson_airbox_cpu_schur_slepc\","
         "\"engine_id\":\"native_fem.frequency_domain.k0_poisson_airbox_cpu_schur_slepc.v1\","
@@ -3391,7 +3415,7 @@ void write_production_schur_diagnostics(
         "\"slepc\":{\"eps_type\":\"krylovschur\",\"problem_type\":\"gnhep\","
         "\"spectral_transform\":\"shift_invert\",\"which_eigenpairs\":\"target_magnitude\","
         "\"ksp_type\":\"%s\",\"pc_type\":\"lu\",\"pc_matrix\":\"%s\","
-        "\"converged_eigenpair_count\":%u,\"accepted_mode_count\":%u,\"outer_iterations\":%u},"
+        "\"converged_eigenpair_count\":%u,\"accepted_mode_count\":%u,\"outer_iterations\":%s},"
         "\"operator_apply_count\":%llu,\"poisson_solve_count\":%llu,"
         "\"poisson_iteration_count\":%llu,\"shift_linear_iteration_count\":%llu,"
         "\"eps_restart_count\":null,"
@@ -3467,6 +3491,11 @@ void write_production_schur_diagnostics(
         result.stop_reason[0] != '\0'
             ? result.stop_reason
             : (reason != nullptr ? reason : "not_available"),
+        result.eps_solve_error_code_available ? "true" : "false",
+        static_cast<int>(result.eps_solve_error_code),
+        result.slepc_process_quarantined ? "true" : "false",
+        result.operator_context_invalidated ? "true" : "false",
+        result.eps_lifetime_unsafe ? "true" : "false",
         problem.solver_adapter != nullptr ? problem.solver_adapter : "",
         problem.production_shared_domain ? "true" : "false",
         problem.production_shared_domain ? "false" : "true",
@@ -3527,7 +3556,8 @@ void write_production_schur_diagnostics(
             : "not_configured",
         result.converged_eigenpair_count,
         result.accepted_mode_count,
-        result.outer_iterations,
+        result.slepc_process_quarantined
+            ? "null" : std::to_string(result.outer_iterations).c_str(),
         static_cast<unsigned long long>(result.operator_apply_count),
         static_cast<unsigned long long>(result.poisson_solve_count),
         static_cast<unsigned long long>(result.poisson_iteration_count),
@@ -3781,6 +3811,15 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
         problem.frequency_min_hz >= 0.0 &&
         problem.frequency_max_hz > problem.frequency_min_hz) {
         const std::lock_guard<std::mutex> window_lock(pa_e3_slepc_mutex());
+        if (production_k0_slepc_process_quarantined()) {
+            out_result->slepc_process_quarantined = true;
+            return fail_production_schur(
+                problem,
+                out_result,
+                FrequencyDomainStatus::solve_error,
+                "production K0 SLEPc graph is quarantined; process restart required",
+                "k0_slepc_process_quarantined");
+        }
         if (!ensure_slepc_initialized(out_result->error_message)) {
             return fail_production_schur(
                 problem,
@@ -3789,10 +3828,21 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                 out_result->error_message,
                 "slepc_initialization_failed");
         }
-        ProductionCpuOperatorContext window_operator_context{};
+        ProductionCpuOperatorContextOwner window_operator_context_owner(
+            new (std::nothrow) ProductionCpuOperatorContext{},
+            ProductionCpuOperatorContextDeleter{});
+        if (!window_operator_context_owner) {
+            return fail_production_schur(
+                problem,
+                out_result,
+                FrequencyDomainStatus::operator_error,
+                "production K0 window operator context allocation failed",
+                "production_operator_context_allocation_failed");
+        }
+        ProductionCpuOperatorContext &window_operator_context =
+            *window_operator_context_owner;
         ProductionCpuWindowOperatorScope window_operator_scope{
-            active_cpu_window_operator_context,
-            &window_operator_context};
+            active_cpu_window_operator_context};
         active_cpu_window_operator_context = &window_operator_context;
         copy_message(
             out_result->operator_context_scope,
@@ -4063,6 +4113,9 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                     shifted_status = solve_poisson_airbox_modal_eigen_cpu_schur(
                         shifted_problem,
                         shifted_result_storage.get());
+                    if (window_operator_context.invalidated) {
+                        break;
+                    }
                     const PoissonAirboxModalEigenResult &attempted_result =
                         *shifted_result_storage;
                     std::size_t local_accepted_mode_count = 0u;
@@ -4247,6 +4300,110 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                             pass_effective_requested_mode_count[pass_index],
                             subwindow_requested_mode_count);
                     ++subwindow_retry_count;
+                }
+                if (window_operator_context.invalidated) {
+                    const PoissonAirboxModalEigenResult &failed_result =
+                        *shifted_result_storage;
+                    const bool failure_interrupted =
+                        shifted_status == FrequencyDomainStatus::interrupted;
+                    const char *failure_stop_reason =
+                        failure_interrupted ? "cancel_requested" : "slepc_solve_failed";
+                    ++pass_failed_subwindow_count[pass_index];
+                    ++out_result->window_failed_subwindow_count;
+                    pass_cancelled[pass_index] = failure_interrupted;
+                    window_failed = true;
+                    window_interrupted = failure_interrupted;
+                    out_result->window_subwindow_count =
+                        base_subwindow_count + refinement_subwindow_count;
+                    out_result->window_failed_subwindow = true;
+                    out_result->window_cancelled = failure_interrupted;
+                    out_result->window_complete = false;
+                    out_result->window_empty_subwindow_count =
+                        window_empty_subwindow_count;
+                    out_result->operator_context_setup_count =
+                        window_operator_context.operator_context_setup_count;
+                    out_result->poisson_factorization_setup_count =
+                        window_operator_context.poisson_factorization_setup_count;
+                    out_result->shift_solver_setup_count =
+                        window_operator_context.shift_solver_setup_count;
+                    out_result->operator_apply_count =
+                        window_operator_context.schur.operator_apply_count;
+                    out_result->poisson_solve_count =
+                        window_operator_context.schur.poisson_solve_count;
+                    out_result->poisson_iteration_count =
+                        window_operator_context.schur.poisson_iteration_count;
+                    out_result->outer_iterations = 0u;
+                    out_result->converged_eigenpair_count = 0u;
+                    out_result->accepted_mode_count = 0u;
+                    out_result->accepted_modes.clear();
+                    out_result->certified_spectral_guard_frequencies_hz.clear();
+                    out_result->slepc_process_quarantined = true;
+                    out_result->operator_context_invalidated = true;
+                    out_result->eps_lifetime_unsafe = true;
+                    out_result->eps_solve_error_code_available =
+                        failed_result.eps_solve_error_code_available;
+                    out_result->eps_solve_error_code =
+                        failed_result.eps_solve_error_code;
+                    out_result->eps_solve_timing_available =
+                        failed_result.eps_solve_timing_available;
+                    out_result->eps_solve_seconds =
+                        failed_result.eps_solve_seconds;
+                    out_result->eps_reason_available = false;
+                    out_result->eps_stop_reason[0] = '\0';
+                    copy_message(
+                        out_result->eps_stop_reason,
+                        sizeof(out_result->eps_stop_reason),
+                        failure_stop_reason);
+                    copy_message(
+                        out_result->stop_reason,
+                        sizeof(out_result->stop_reason),
+                        failure_stop_reason);
+                    copy_message(
+                        out_result->operator_context_scope,
+                        sizeof(out_result->operator_context_scope),
+                        "frequency_window");
+                    copy_message(
+                        out_result->configured_shifted_ksp_type,
+                        sizeof(out_result->configured_shifted_ksp_type),
+                        failed_result.configured_shifted_ksp_type);
+                    copy_message(
+                        out_result->modal_krylov_tuning_json,
+                        sizeof(out_result->modal_krylov_tuning_json),
+                        failed_result.modal_krylov_tuning_json);
+                    out_result->k0_demag_operator_probe =
+                        window_operator_context.k0_demag_operator_probe;
+                    copy_exact_cache_observability(
+                        window_operator_context,
+                        out_result);
+                    out_result->window_certificate_json[0] = '\0';
+                    const int failure_code =
+                        static_cast<int>(failed_result.eps_solve_error_code);
+                    append_subwindow_json(
+                        "%s{\"pass\":\"%s\",\"subwindow_index\":%u,"
+                        "\"status\":\"failed\",\"stop_reason\":\"%s\","
+                        "\"eps_solve_error_code_available\":%s,"
+                        "\"eps_solve_error_code\":%d,"
+                        "\"slepc_process_quarantined\":true,"
+                        "\"operator_context_invalidated\":true,"
+                        "\"eps_lifetime_unsafe\":true,"
+                        "\"accepted_mode_count\":0,\"outer_iterations\":null,"
+                        "\"window_complete\":false}",
+                        executed_subwindows_size == 1u ? "" : ",",
+                        pass_index == 0u ? "base" : "refinement",
+                        subwindow_index,
+                        failure_stop_reason,
+                        failed_result.eps_solve_error_code_available
+                            ? "true" : "false",
+                        failure_code);
+                    finalize_subwindow_json();
+                    return fail_production_schur(
+                        problem,
+                        out_result,
+                        shifted_status,
+                        failed_result.error_message[0] != '\0'
+                            ? failed_result.error_message
+                            : "production K0 EPSSolve failed and its graph was quarantined",
+                        failure_stop_reason);
                 }
                 pass_effective_requested_mode_count[pass_index] = std::max(
                     pass_effective_requested_mode_count[pass_index],
@@ -5468,6 +5625,17 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
     if (!borrowed_window_operator) {
         lock.lock();
     }
+    // The window recursion already owns pa_e3_slepc_mutex(); standalone
+    // calls own the unique_lock above.  Read the process latch only here.
+    if (production_k0_slepc_process_quarantined()) {
+        out_result->slepc_process_quarantined = true;
+        return fail_production_schur(
+            problem,
+            out_result,
+            FrequencyDomainStatus::solve_error,
+            "production K0 SLEPc graph is quarantined; process restart required",
+            "k0_slepc_process_quarantined");
+    }
     if (!ensure_slepc_initialized(out_result->error_message)) {
         return fail_production_schur(
             problem,
@@ -5477,13 +5645,25 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
             "slepc_initialization_failed");
     }
 
-    ProductionCpuOperatorContext owned_operator_context{};
-    ProductionCpuOwnedOperatorScope owned_operator_scope{
-        borrowed_window_operator ? nullptr : &owned_operator_context};
+    ProductionCpuOperatorContextOwner owned_operator_context_owner(
+        nullptr,
+        ProductionCpuOperatorContextDeleter{});
+    if (!borrowed_window_operator) {
+        owned_operator_context_owner.reset(
+            new (std::nothrow) ProductionCpuOperatorContext{});
+        if (!owned_operator_context_owner) {
+            return fail_production_schur(
+                problem,
+                out_result,
+                FrequencyDomainStatus::operator_error,
+                "production K0 operator context allocation failed",
+                "production_operator_context_allocation_failed");
+        }
+    }
     ProductionCpuOperatorContext *operator_context =
         borrowed_window_operator
             ? active_cpu_window_operator_context
-            : &owned_operator_context;
+            : owned_operator_context_owner.get();
     operator_context->solve_control.arm(problem);
     ProductionCpuSolveControlScope solve_control_scope{
         &operator_context->solve_control};
@@ -5898,6 +6078,52 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
     bool solve_interrupted =
         operator_context->solve_control.cancellation_observed ||
         poisson_airbox_modal_cancel_requested(problem);
+    if (eps_solve_status != PETSC_SUCCESS) {
+        operator_context->eps_lifetime_unsafe = true;
+        operator_context->invalidated = true;
+        operator_context->solve_control.disarm();
+        production_k0_slepc_process_quarantined() = true;
+        const char *failure_stop_reason =
+            solve_interrupted ? "cancel_requested" : "slepc_solve_failed";
+        out_result->eps_solve_error_code_available = true;
+        out_result->eps_solve_error_code =
+            static_cast<std::int32_t>(eps_solve_status);
+        out_result->slepc_process_quarantined = true;
+        out_result->operator_context_invalidated = true;
+        out_result->eps_lifetime_unsafe = true;
+        out_result->eps_reason_available = false;
+        out_result->outer_iterations = 0u;
+        out_result->converged_eigenpair_count = 0u;
+        out_result->accepted_mode_count = 0u;
+        out_result->accepted_modes.clear();
+        out_result->certified_spectral_guard_frequencies_hz.clear();
+        out_result->window_complete = false;
+        out_result->operator_apply_count =
+            context.operator_apply_count - operator_apply_count_before;
+        out_result->poisson_solve_count =
+            context.poisson_solve_count - poisson_solve_count_before;
+        out_result->poisson_iteration_count = context.poisson_iteration_count;
+        out_result->shift_linear_iteration_count = 0u;
+        copy_exact_cache_observability(*operator_context, out_result);
+        copy_message(
+            out_result->eps_stop_reason,
+            sizeof(out_result->eps_stop_reason),
+            failure_stop_reason);
+        char failure_message[256]{};
+        std::snprintf(
+            failure_message,
+            sizeof(failure_message),
+            "production shared-domain K0 EPSSolve failed with PetscErrorCode %d",
+            static_cast<int>(eps_solve_status));
+        return fail_production_schur(
+            problem,
+            out_result,
+            solve_interrupted
+                ? FrequencyDomainStatus::interrupted
+                : FrequencyDomainStatus::solve_error,
+            failure_message,
+            failure_stop_reason);
+    }
     const bool tuning_snapshot_ok = capture_krylov_configuration("queried_after_eps");
     if (!tuning_snapshot_ok && !solve_interrupted) {
         destroy_slepc_objects(&eps, &xr, &xi, nullptr, nullptr);

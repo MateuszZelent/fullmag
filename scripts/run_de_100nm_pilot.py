@@ -23,6 +23,7 @@ from control_room_port import is_bindable
 import run_comsol_dispersion_benchmark as managed
 from runtime_source_change_policy import is_non_runtime_path
 from de_shifted_ksp_trial import validate_shifted_ksp_trial
+from de_gamma_krylov_trial import validate_gamma_krylov_trial
 from validate_de_smoke_rows import (
     PARALLEL_PROBE_FREQUENCY_WINDOW_HZ,
     PARALLEL_PROBE_VECTORS_RAD_PER_M,
@@ -1039,9 +1040,27 @@ def _validate_shifted_ksp_trial_request(pilot, requested_type, nearest_frequency
     modal_target, _ = _modal_selection(pilot, nearest_frequency, spectral_target)
     if modal_target != "frequency_window" or dense_oracle:
         raise managed.BenchmarkError("shifted KSP type diagnostic requires a native frequency_window pilot")
-    values = SAMPLING.get(PILOTS[pilot][1], ())
-    if not any(value != 0.0 for value in values):
-        raise managed.BenchmarkError("shifted KSP type diagnostic requires nonzero-k Floquet samples")
+
+
+def _validate_krylov_trials(case_dir, sampling, requested_type, requested_rtol,
+                            eps_prefilter, gmres_restart):
+    """Run the separate K0 query and nonzero Floquet residual receipt gates."""
+    wavevectors = SAMPLING.get(sampling, ())
+    artifacts = {}
+    if any(value == 0.0 for value in wavevectors):
+        artifacts["gamma_krylov_trial"] = validate_gamma_krylov_trial(
+            case_dir,
+            sampling,
+            requested_type,
+            requested_rtol,
+            eps_prefilter=eps_prefilter,
+            gmres_restart=gmres_restart,
+        )
+    if any(value != 0.0 for value in wavevectors):
+        artifacts["shifted_ksp_trial"] = validate_shifted_ksp_trial(
+            case_dir, sampling, requested_type, requested_rtol
+        )
+    return artifacts
 
 
 def compose_command(context, output, timeout_seconds=managed.DEFAULT_TIMEOUT_SECONDS, *, pilot="de100", external_model=False, dense_oracle=False, solver_rtol=None, eps_prefilter=None, shifted_ksp_rtol=None, gmres_restart=None, mesh_level=None, thickness_layers=None, nearest_target_frequency_ghz=None, spectral_target=None, frequency_min_ghz=None, frequency_max_ghz=None, ui_web_root=None, ui_host_port=UI_API_PORT, capture_session=False, probe_input_dir=None, probe_manifest_sha256=None, parallel_mode=None, schur_action_diagnostic=False, shifted_ksp_type=None):
@@ -1830,8 +1849,14 @@ def execute(context, output, command, model_sha, timeout_seconds=managed.DEFAULT
                     if modal_target == "nearest" else validate_rows(*row_args)
                 )
                 if shifted_ksp_type is not None:
-                    artifacts["shifted_ksp_trial"] = validate_shifted_ksp_trial(
-                        output / pilot, PILOTS[pilot][1], shifted_ksp_type, shifted_ksp_rtol)
+                    artifacts.update(_validate_krylov_trials(
+                        output / pilot,
+                        PILOTS[pilot][1],
+                        shifted_ksp_type,
+                        shifted_ksp_rtol,
+                        eps_prefilter,
+                        gmres_restart,
+                    ))
                 artifacts["potential_reconstruction"] = validate_smoke_potential_fields(
                     output / pilot, artifacts["row_preflight"]["sample_count"])
                 if _is_parallel_probe(pilot):

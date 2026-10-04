@@ -3661,6 +3661,9 @@ void modal_poisson_airbox_tail_payload_resolves_augmented_gauge_schur_solver()
     const CsrOwned B_qq = dense_to_csr(2, 2, b_qq);
 
     FullmagFemModalEigenRequest request = base_request();
+    const double gamma_k[3] = {0.0, 0.0, 0.0};
+    request.operator_request.k_vector_rad_m = gamma_k;
+    request.operator_request.k_vector_len = 3;
     request.operator_request.include_demag = 1;
     request.operator_request.demag_realization = "periodic_airbox_k0";
     request.operator_request.spin_wave_bc_kind = "floquet";
@@ -3706,6 +3709,12 @@ void modal_poisson_airbox_tail_payload_resolves_augmented_gauge_schur_solver()
     check(contains(result.diagnostics_json,
                    "\"solver_adapter\":\"k0_poisson_airbox_cpu_schur_slepc\""),
           "modal Poisson-airbox tail diagnostics name the resolved Schur adapter");
+    check(contains(result.diagnostics_json, "\"k_vector_len\":3") &&
+              contains(result.diagnostics_json, "\"k_vector_rad_m\":[0,0,0]"),
+          "K0 special adapter diagnostics preserve the explicitly requested Gamma vector");
+    check(contains(result.result_json, "\"k_vector_len\":3") &&
+              contains(result.result_json, "\"k_vector_rad_m\":[0,0,0]"),
+          "K0 special adapter result preserves the explicitly requested Gamma vector");
     check(contains(result.diagnostics_json, "\"demag_kind\":\"periodic_airbox_k0\""),
           "modal Poisson-airbox tail diagnostics preserve periodic_airbox_k0");
     check(contains(result.diagnostics_json, "\"gauge_policy\":\"mean_zero_augmented\""),

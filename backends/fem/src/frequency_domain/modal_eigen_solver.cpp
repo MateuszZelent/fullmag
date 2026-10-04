@@ -527,6 +527,29 @@ std::string append_json_field(std::string json, const std::string &field)
     return json;
 }
 
+std::string modal_request_k_vector_json_field(const ModalEigenRequest &request)
+{
+    const double *values = request.operator_request.k_vector_rad_m;
+    int count = request.operator_request.k_vector_len;
+    if ((values == nullptr || count <= 0) && request.has_floquet_k_vector) {
+        values = request.floquet_k_vector_rad_per_m;
+        count = 3;
+    }
+    if (values == nullptr || count <= 0) {
+        return "";
+    }
+    std::string field = "\"k_vector_len\":" + std::to_string(count) +
+        ",\"k_vector_rad_m\":[";
+    for (int index = 0; index < count; ++index) {
+        if (index != 0) {
+            field += ',';
+        }
+        field += format_double(values[index]);
+    }
+    field += ']';
+    return field;
+}
+
 bool json_has_top_level_field(
     const std::string &json,
     const char *field_name) noexcept
@@ -2668,6 +2691,9 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
         result.status = status;
         result.error_message = poisson_result.error_message;
         result.diagnostics_json = poisson_result.diagnostics_json;
+        const std::string request_k_vector_field = modal_request_k_vector_json_field(request);
+        result.diagnostics_json = append_json_field(
+            std::move(result.diagnostics_json), request_k_vector_field);
         append_shared_domain_operator_provenance(
             result, k0_shared_domain_provenance);
         const std::string k0_demag_probe_json =
@@ -2877,6 +2903,8 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
                 }
             }
         }
+        result.result_json = append_json_field(
+            std::move(result.result_json), request_k_vector_field);
         return result;
     }
     // The nonzero-k Floquet provider materializes a dense real-split
