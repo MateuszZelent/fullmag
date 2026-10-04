@@ -585,3 +585,116 @@ kompilowane. To kolejny wymagany składnik S09, nie ukończone S09.
 | Source ID | Path + symbol | Zakres dowodu |
 |---|---|---|
 | source-0833-mesh-wire | crates/fullmag-ir/src/waveguide_mesh.rs + WaveguideCrossSectionMeshIR | Surowy typed descriptor; nie validated mesh ani runtime proof |
+
+
+## Lokalne kontrole elementów i incydencji — przyrost źródłowy S09
+
+Przed przyszłym compilerem/providerem przekroju przygotowujemy osobne
+walidatory `validate_waveguide_mesh_elements` oraz
+`validate_waveguide_mesh_incidence`. Ich raporty dotyczą wyłącznie
+sprawdzonych właściwości lokalnej geometrii lub kombinatorycznej topologii.
+Nie są certyfikatem całego mesha, embeddingu, invariance ani admission.
+Nie dodają nowej legalności Python/IR/planner i nie zmieniają norm/artefaktów
+obecnego pełnego 3D.
+
+### Skalowanie P1, orientacja i reprezentowalność
+
+```{math}
+:label: eq-0833-mesh-element-quality
+\begin{aligned}
+s_T&=\max\{\|x_1-x_0\|_2,\|x_2-x_1\|_2,\|x_0-x_2\|_2\}>0,\\
+r_i&=(x_i-x_0)/s_T,\quad i=1,2,\\
+d_T&=r_{1,u}r_{2,v}-r_{1,v}r_{2,u}>0,\qquad a_T=d_T/2,\\
+A_T&=(s_T a_T)s_T,\\
+q_T&=\frac{4\sqrt3\,a_T}
+ {\|r_1\|_2^2+\|r_2-r_1\|_2^2+\|r_2\|_2^2}
+ >64\epsilon_{\mathrm{f64}},\qquad \epsilon_{\mathrm{f64}}=2^{-52}.
+\end{aligned}
+```
+
+```{math}
+:label: eq-0833-mesh-p1-geometry
+\begin{aligned}
+g_0&=\frac{(r_{1,v}-r_{2,v},\;r_{2,u}-r_{1,u})}{d_Ts_T},\\
+g_1&=\frac{(r_{2,v},-r_{2,u})}{d_Ts_T},\qquad
+g_2=\frac{(-r_{1,v},r_{1,u})}{d_Ts_T},\\
+M^\Sigma_{ij}&=\int_T N_iN_j\,dA=
+ \begin{cases}A_T/6&i=j,\\A_T/12&i\ne j,\end{cases}\\
+K^\Sigma_{ij}&=\int_T\nabla N_i\cdot\nabla N_j\,dA
+ =a_T\,(s_Tg_i)\cdot(s_Tg_j).
+\end{aligned}
+```
+
+| Symbol | Znaczenie | Jednostka SI |
+|---|---|---|
+| $x_i$ | lokalne współrzędne węzła elementu | $\mathrm m$ |
+| $s_T$ | największa długość krawędzi, obliczona przez hypot | $\mathrm m$ |
+| $r_i$ | współrzędne krawędzi po skalowaniu; u,v są jej składowymi | $1$ |
+| $d_T$ | wyznacznik w skali elementu | $1$ |
+| $a_T$ | pole w skali elementu | $1$ |
+| $A_T$ | fizyczne pole dodatnio zorientowanego elementu | $\mathrm{m^2}$ |
+| $q_T$ | bezwymiarowa jakość trójkąta | $1$ |
+| $\epsilon_{\mathrm{f64}}$ | epsilon maszynowy binary64, oddzielny od solver tolerance | $1$ |
+| $g_i$ | fizyczny gradient skalarnej funkcji P1 | $\mathrm{m^{-1}}$ |
+| $M^\Sigma_{ij}$ | skalarna geometryczna consistent mass | $\mathrm{m^2}$ |
+| $K^\Sigma_{ij}$ | skalarna geometryczna stiffness, bez materiału | $1$ |
+
+Różnice współrzędnych i długości muszą być finite, krawędzie niezerowe.
+Utrata niezerowej składowej przy skalowaniu, zły determinant, q nieprzekraczające
+granicy roundoff oraz overflow/underflow wymaganych fizycznych area/mass/
+gradientów są jawnym błędem. Pole liczymy w podanej kolejności bez osobnego
+s_T²; stiffness używa scaled gradients, nie iloczynu ogromnych fizycznych
+gradientów. Mass entries muszą pozostać dodatnie i reprezentowalne. Dokładne
+zera składników gradientu i off-diagonal stiffness są legalne. q nie jest
+certyfikatem dokładności FEM ani rekomendowanym progiem meshera. Nie kopiować
+absolute area floor bounded oracle. Każde publiczne wywołanie sprawdza IEEE
+gradual underflow bez zmiany FPU; frame i elements korzystają z jednego
+crate-private guardu. Sprawdzone elementy nie dowodzą braku ich przecięć.
+
+M^Sigma nie jest kompletną tangent metric tej noty: ta nadal wymaga T_i^T T_j,
+m0, mapping magnetic subspace i materiałów. K^Sigma nie jest kompletnym
+exchange/demag pencil. Helper nie tworzy operatora ani certyfikatu residualu.
+Raport publikuje rzeczywiste minima q, area, positive mass entry oraz maxima
+gradientu i scalar stiffness; liczby są mierzone z danych, nie synthetic pass.
+
+### Incydencja, kontury i lokalny manifold
+
+Osobny walidator sprawdza: wszystkie indeksy i niepowtarzane węzły trójkątów;
+niepuste i unikalne region/boundary IDs; istniejący region każdej komórki;
+brak orphan nodes/regions/edges, duplikatów komórek i krawędzi; kompletne
+edge→triangle-side incidence, co najwyżej dwie różne komórki na krawędź
+i przeciwne kierunki dwóch incidences. Node index jest sprawdzany jako u64
+przed konwersją do usize. Object/material IDs muszą być niepuste; ich
+istnienie w kanonicznych rejestrach sprawdza odrębny binding validator.
+
+Boundary half-edges wynikają z incidence: jeden właściciel na zewnętrznym
+brzegu całej domeny, dwóch po obu stronach interfejsu różnych regionów;
+wnętrze jednego regionu nie jest konturem. Każdy wymagany half-edge jest
+pokryty dokładnie raz we właściwym konturze regionu. Kontury są skierowane,
+zamknięte, mają co najmniej trzy różne węzły i brak powtarzanej półkrawędzi.
+Kontury tego samego regionu nie mogą dotykać się tylko w węźle. Vertex stars
+całej scalar domeny są połączonym fanem; odrzucamy point-contact mesh.
+Nie rozdzielamy składowych po samym regionie air. Raport wyznacza składowe
+całego scalar mesh oraz liczbę zewnętrznych air edges w każdej; nie tworzy
+Dirichlet BC ani synthetic anchoring certificate na podstawie samego kind.
+
+Topologia nie ustala geometrycznego znaczenia loop_kind outer/hole:
+signed contour area/nesting, intersections/overlap/T-junction,
+registry bindings, frame/fingerprint, structural fields/interactions/BC,
+equilibrium i provider są odrębnymi nadal wymaganymi bramkami. Żaden z tych
+dwóch raportów nie ma statusu validated_structural_2d ani nie może być
+zdeserializowany jako zwalidowany obiekt. Metryki mają prywatne pola,
+Serialize oraz tylko accessors; powstają z checked funkcji.
+
+Prepared regresje Rust muszą obejmować skalę nm/tiny/huge (także finite area
+mimo overflow s_T²), odwrócenie/degenerację/NaN/nielegalne indeksy oraz
+uszkodzone incidence/contours i poprawną zamkniętą wyspę air w magnetic.
+Ich kompilacja pozostaje zakazana; source review/parser i niezależne oracle
+inputs nie są wykonaniem Rust ani kwalifikacją solvera. FEM CPU provider
+planned/runtime NOT VERIFIED, FEM GPU unsupported; FDM not-applicable.
+
+| Source ID | Path + symbol | Zakres |
+|---|---|---|
+| source-0833-mesh-elements | crates/fullmag-ir/src/waveguide_mesh_elements.rs + validate_waveguide_mesh_elements | Lokalna geometria i representability; embedding/runtime NOT VERIFIED |
+| source-0833-mesh-incidence | crates/fullmag-ir/src/waveguide_mesh_incidence.rs + validate_waveguide_mesh_incidence | Incidence/fan/closed contours; nie pełny mesh certificate |
+| source-0833-fp-guard | crates/fullmag-ir/src/floating_point_guard.rs + require_ieee_gradual_underflow | Wspólny sprawdzany FP guard, bez zmiany środowiska |

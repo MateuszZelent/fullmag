@@ -144,3 +144,34 @@ i representability; pełna incidence/fan/contour/non-overlap kontrola;
 bindingi rejestrów i pól; typed V04 migration/admission; owner MFEM i
 wszystkie bramki runtime/nauki. Prepared serde regressions nie są dowodem
 wykonania Rust; kompilacja unit tests pozostaje zakazana.
+
+
+## Lokalna walidacja raw mesha — przyrost źródłowy 2026-10-04
+
+`validate_waveguide_mesh_elements` w `crates/fullmag-ir/src/waveguide_mesh_elements.rs`
+sprawdza orientację CCW, finite coordinates, indeksy, duplikaty współrzędnych
+oraz reprezentowalność geometrycznych skalarów P1. Quality używa jawnego
+bezwymiarowego `WAVEGUIDE_TRIANGLE_QUALITY_ROUNDOFF_THRESHOLD = 64 * f64::EPSILON`,
+bez absolute area floor. Guard IEEE gradual underflow jest współdzielony
+z walidacją ramy. Równania, jednostki i ograniczenia są w nocie
+[0833](../physics/0833-fem-waveguide-25d-normalization.md#lokalne-kontrole-elementów-i-incydencji--przyrost-źródłowy-s09).
+
+`validate_waveguide_mesh_incidence` w `crates/fullmag-ir/src/waveguide_mesh_incidence.rs`
+sprawdza pełne pokrycie boków komórek przez incydencje, skierowane zamknięte
+kontury regionów, referencje i spójność vertex fans. Wyznacza składowe całej
+domeny skalarnej oraz zewnętrzne krawędzie air w każdej. Sam rodzaj regionu
+nie aktywuje ani nie dowodzi BC/anchoring; zamknięta wyspa air jest legalną
+topologią. Object/material references muszą być niepuste, ale istnienie tych
+obiektów w rejestrach wymaga osobnego binding validator.
+
+Raporty obu funkcji mają prywatne pola i są serializowalne tylko w kierunku
+wyjścia. Nie są typem `ValidatedWaveguideMesh`, nie nadają statusu
+`validated_structural_2d`, nie aktywują wersji IR0.4 ani capability/provider.
+Brak przecięć/overlap/T-junction, geometryczne znaczenie outer/hole i nesting,
+frame/world map, immutable registry bindings, invariance/equilibrium oraz
+finite-air boundary certificate pozostają wymagane przed admission.
+
+Prepared Rust regression checks nie są wykonywane ani kompilowane w okresie
+obowiązywania zakazu. Source review, parser i dokładny oracle wejściowy nie
+zastępują produkcyjnego wykonania MFEM, testów Rust ani walidacji naukowej.
+S09 pozostaje OPEN.

@@ -18,7 +18,9 @@
     {"id": "eq-0833-extruded-l2-scaling", "symbols": ["u_3D", "u_2D", "a_3D", "a_2D", "ell"], "sources": ["source-0833-extrusion"]},
     {"id": "eq-0833-p1-cartesian-shape", "symbols": ["N_i", "T_i", "q_i"], "sources": ["source-0833-p1-shape"]},
     {"id": "eq-0833-p1-geometric-mass", "symbols": ["N_i", "N_j", "T_i", "T_j", "G_ij"], "sources": ["source-0833-p1-mass"]},
-    {"id": "eq-0833-discrete-common-scale", "symbols": ["s_L2", "q_L2", "s_max", "q_max", "T_j", "q_j"], "sources": ["source-0833-discrete"]}
+    {"id": "eq-0833-discrete-common-scale", "symbols": ["s_L2", "q_L2", "s_max", "q_max", "T_j", "q_j"], "sources": ["source-0833-discrete"]},
+    {"id": "eq-0833-mesh-element-quality", "symbols": ["x_i", "s_T", "r_i", "d_T", "a_T", "A_T", "q_T", "epsilon_f64"], "sources": ["source-0833-mesh-elements"]},
+    {"id": "eq-0833-mesh-p1-geometry", "symbols": ["g_i_2d", "M_scalar_ij", "K_scalar_ij", "A_T", "a_T", "s_T", "r_i", "d_T", "N_i", "N_j"], "sources": ["source-0833-mesh-elements"]}
   ],
   "symbols": [
     {"id": "Sigma_m", "latex": "\\Sigma_m", "meaning": "magnetyczny przekrój waveguide", "si_unit": "\\mathrm{m^2}"},
@@ -59,7 +61,18 @@
     {"id": "mathscr_R", "latex": "\\mathscr R", "meaning": "pełny residual descriptora", "si_unit": "zależna od descriptora"},
     {"id": "R", "latex": "R", "meaning": "blok residualu descriptora", "si_unit": "zależna od descriptora"},
     {"id": "g", "latex": "g", "meaning": "mnożnik lub wektor gauge", "si_unit": "zależna od descriptora"},
-    {"id": "epsilon_full", "latex": "\\varepsilon_{\\mathrm{full}}", "meaning": "pełny względny residual", "si_unit": "1"}
+    {"id": "epsilon_full", "latex": "\\varepsilon_{\\mathrm{full}}", "meaning": "pełny względny residual", "si_unit": "1"},
+    {"id": "x_i", "latex": "x_i", "meaning": "lokalne współrzędne węzła", "si_unit": "\\mathrm m"},
+    {"id": "s_T", "latex": "s_T", "meaning": "największa długość krawędzi", "si_unit": "\\mathrm m"},
+    {"id": "r_i", "latex": "r_i", "meaning": "współrzędne krawędzi po skalowaniu", "si_unit": "1"},
+    {"id": "d_T", "latex": "d_T", "meaning": "wyznacznik w skali elementu", "si_unit": "1"},
+    {"id": "a_T", "latex": "a_T", "meaning": "pole w skali elementu", "si_unit": "1"},
+    {"id": "A_T", "latex": "A_T", "meaning": "fizyczne pole dodatnio zorientowanego elementu", "si_unit": "\\mathrm{m^2}"},
+    {"id": "q_T", "latex": "q_T", "meaning": "bezwymiarowa jakość trójkąta", "si_unit": "1"},
+    {"id": "epsilon_f64", "latex": "\\epsilon_{\\mathrm{f64}}", "meaning": "epsilon maszynowy binary64", "si_unit": "1"},
+    {"id": "g_i_2d", "latex": "g_i", "meaning": "fizyczny gradient skalarnej funkcji P1", "si_unit": "\\mathrm{m^{-1}}"},
+    {"id": "M_scalar_ij", "latex": "M^\\Sigma_{ij}", "meaning": "skalarna geometryczna consistent mass", "si_unit": "\\mathrm{m^2}"},
+    {"id": "K_scalar_ij", "latex": "K^\\Sigma_{ij}", "meaning": "skalarna geometryczna stiffness", "si_unit": "1"}
   ],
   "sources": [
     {"id": "source-0833-raw", "path": "docs/physics/0833-fem-waveguide-25d-normalization.md", "symbol": "DOC-ANCHOR:eq-0833-raw-shape-area-norm", "responsibility": "Surowy shape, lokalna tangencja do m0 i norma pola.", "evidence_status": "planned_contract"},
@@ -85,7 +98,10 @@
     {"id": "source-current-mass", "path": "crates/fullmag-runner/src/fem/eigen_mass_metric.rs", "symbol": "SharedDomainSparseMass", "responsibility": "Objętościowa metryka Tet4.", "evidence_status": "source_visible_unqualified"},
     {"id": "source-current-projection", "path": "crates/fullmag-runner/src/fem/eigen_projection.rs", "symbol": "project_complex_2x2_mode_to_tangent_basis_with_periodic_map", "responsibility": "Projekcja Cartesian po wcześniejszej skali.", "evidence_status": "source_visible_unqualified"},
     {"id": "source-interpreted-0833", "path": "scripts/test_waveguide_25d_normalization_source.py", "symbol": "class Waveguide25DNormalizationTests", "responsibility": "Niezależna regresja algebraiczna źródła.", "evidence_status": "source_verified"},
-    {"id": "source-0833-mesh-wire", "path": "crates/fullmag-ir/src/waveguide_mesh.rs", "symbol": "WaveguideCrossSectionMeshIR", "responsibility": "Surowy typed mesh przekroju i closed wire; nie geometry/admission certificate.", "evidence_status": "source_prepared_runtime_not_verified"}
+    {"id": "source-0833-mesh-wire", "path": "crates/fullmag-ir/src/waveguide_mesh.rs", "symbol": "WaveguideCrossSectionMeshIR", "responsibility": "Surowy typed mesh przekroju i closed wire; nie geometry/admission certificate.", "evidence_status": "source_prepared_runtime_not_verified"},
+    {"id": "source-0833-mesh-elements", "path": "crates/fullmag-ir/src/waveguide_mesh_elements.rs", "symbol": "validate_waveguide_mesh_elements", "responsibility": "Lokalna geometria P1, scaled quality i representability.", "evidence_status": "source_prepared_runtime_not_verified"},
+    {"id": "source-0833-mesh-incidence", "path": "crates/fullmag-ir/src/waveguide_mesh_incidence.rs", "symbol": "validate_waveguide_mesh_incidence", "responsibility": "Kompletne incidence i kombinatoryczne kontury/fans.", "evidence_status": "source_prepared_runtime_not_verified"},
+    {"id": "source-0833-fp-guard", "path": "crates/fullmag-ir/src/floating_point_guard.rs", "symbol": "require_ieee_gradual_underflow", "responsibility": "Wspólny crate-private guard gradual underflow.", "evidence_status": "source_prepared_runtime_not_verified"}
   ],
   "public_api": {
     "parameters": [

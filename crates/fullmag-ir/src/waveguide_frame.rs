@@ -408,24 +408,12 @@ pub fn validate_waveguide_frame(
 }
 
 fn require_gradual_underflow() -> Result<(), WaveguideFrameValidationError> {
-    let min_subnormal = f64::from_bits(1);
-    let two = std::hint::black_box(2.0_f64);
-    let doubled_min_subnormal = std::hint::black_box(min_subnormal) * two;
-    let min_positive = std::hint::black_box(f64::MIN_POSITIVE);
-    let halved_min_positive = min_positive / two;
-    let doubled_min_subnormal_bits = doubled_min_subnormal.to_bits();
-    let halved_min_positive_bits = halved_min_positive.to_bits();
-
-    if doubled_min_subnormal_bits == 0x0000_0000_0000_0002
-        && halved_min_positive_bits == 0x0008_0000_0000_0000
-    {
-        Ok(())
-    } else {
-        Err(WaveguideFrameValidationError::UnsupportedFloatEnvironment {
-            doubled_min_subnormal_bits,
-            halved_min_positive_bits,
-        })
-    }
+    crate::floating_point_guard::require_ieee_gradual_underflow().map_err(|error| {
+        WaveguideFrameValidationError::UnsupportedFloatEnvironment {
+            doubled_min_subnormal_bits: error.doubled_min_subnormal_bits,
+            halved_min_positive_bits: error.halved_min_positive_bits,
+        }
+    })
 }
 
 fn stable_norm3(vector: Vector3) -> f64 {
