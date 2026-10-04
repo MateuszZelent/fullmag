@@ -1,4 +1,4 @@
-import { Box, GraduationCap, Import, Info, LayoutGrid, Settings, type LucideIcon } from "lucide-react";
+import { BookOpen, Box, GraduationCap, Import, Info, LayoutGrid, Settings, type LucideIcon } from "lucide-react";
 
 import type { StartSection } from "../model/startScreenState";
 import { STUDY_TEMPLATES } from "../model/templates";
@@ -28,6 +28,11 @@ const INSPECTOR_HINTS: Readonly<Record<StartSection, InspectorHint>> = {
     icon: Import,
     title: "Nothing staged",
     body: "Choose a file and Fullmag reports what maps cleanly and what needs a decision before anything is written.",
+  },
+  docs: {
+    icon: BookOpen,
+    title: "Documentation",
+    body: "Search the physics, numerics and API documentation bundled with the app.",
   },
   learn: {
     icon: GraduationCap,

@@ -1554,6 +1554,59 @@
   font-size: var(--fm-font-size-xs);
 }
 
+/* ── Documentation ────────────────────────────────────────────────────── */
+
+/* The docs need the width: no inspector, and the content column drops its measure. */
+.fm-start[data-section="docs"] {
+  grid-template-columns: var(--fm-start-rail-width) minmax(0, 1fr);
+}
+
+.fm-start[data-section="docs"] .fm-start__inspector {
+  display: none;
+}
+
+.fm-start[data-section="docs"] .fm-start__content-inner {
+  display: flex;
+  max-width: none;
+  height: 100%;
+  flex-direction: column;
+  padding: var(--fm-space-3);
+}
+
+.fm-start-docs {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: var(--fm-space-3);
+}
+
+.fm-start-docs__bar {
+  display: flex;
+  align-items: center;
+  gap: var(--fm-space-3);
+}
+
+.fm-start-docs__bar .fm-start-search {
+  flex: 1;
+}
+
+.fm-start-docs__online {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--fm-space-1);
+  white-space: nowrap;
+}
+
+.fm-start-docs__frame {
+  min-height: 0;
+  flex: 1;
+  width: 100%;
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-md);
+  background: var(--fm-bg-surface);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .fm-start *,
   .fm-start *::before,

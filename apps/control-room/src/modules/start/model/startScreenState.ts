@@ -5,6 +5,7 @@ export type StartSection =
   | "templates"
   | "import"
   | "learn"
+  | "docs"
   | "settings"
   | "about";
 
