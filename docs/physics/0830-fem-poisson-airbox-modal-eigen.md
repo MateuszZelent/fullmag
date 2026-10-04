@@ -1691,3 +1691,61 @@ Python `equilibrium_source="artifact"` / `equilibrium_artifact` oraz ProblemIR `
 | source-static-demag-replay-preimage | crates/fullmag-runner/src/fem/eigen_shared_domain.rs + shared_domain_static_demag_signature | dokładny persisted preimage; odrębna kontrola numeryczna w build_shared_domain_linearization_state |
 
 Dodatkowa kontrola fail-closed: `max_vector_field_difference` i `max_scalar_field_difference` odrzucają również puste, różnej długości oraz nieskończone/NaN tablice po obu stronach porównania, na całej domenie. Zapobiega to pominięciu NaN przez `f64::max` podczas replay demag/phi0. Piąta przygotowana regresja obejmuje NaN na drugim węźle, obie strony, puste/krótsze tablice i nieskończoność; niekompilowana zgodnie z zakazem.
+
+## Spójna stała przenikalności w shared-domain FEM CPU
+
+Status: poprawka źródeł; świeży build i powtórny managed runtime **NOT VERIFIED**.
+Ta sekcja określa spójność istniejącego modelu, a nie migrację wartości stałych SI.
+
+W aktualnej konwencji projektu $\mu_0$ ma jednostkę
+$\mathrm{T\,m\,A^{-1}}$ i wspólną wartość `fullmag::fem::kMu0`:
+
+```{math}
+:label: eq-shared-domain-mu0-convention
+
+\mu_0 = 1.2566370614359172\times 10^{-6}
+\;\mathrm{T\,m\,A^{-1}}.
+```
+
+Jest to używane w Fullmag przybliżenie odpowiadające tradycyjnej wartości
+`4.0e-7 * pi`. Po redefinicji SI w 2019 roku przenikalność próżni jest
+wyznaczana doświadczalnie; powyższa konwencja projektu nie oznacza, że współczesna
+wartość SI jest dokładnie ustalona na `4*pi*1e-7`.
+Źródło metrologiczne: [BIPM, Resolution 1 (2018)](https://www.bipm.org/en/committees/cg/cgpm/26-2018/resolution-1).
+
+Producent `assemble_poisson_airbox_shared_domain_payload` przekazuje tę samą
+wartość do sprzężenia `A_qphi`, macierzy gyrotropowej `B_qq` oraz probe demag.
+`assemble_native_magnetic_a_qq` korzysta z niej przy składaniu magnetycznej
+części operatora. Dotychczas dwa przypisania w tym producencie używały
+`1.25663706212e-6`, podczas gdy Python, IR i zamrożony model używały wspólnej
+konwencji. Zmiana wyłącznie pola diagnostyki ukryłaby różnicę rzeczywistego operatora.
+
+Nie zmieniamy publicznego Python DSL, parametrów materiału, serializacji IR,
+planera, wyboru CPU/GPU, jednostek, pola zewnętrznego, demag ani warunków brzegowych.
+Niższa warstwa assemblera nadal obsługuje jawny request stałej; poprawka dotyczy
+producenta wartości dla publicznego shared-domain modelu. FEM CPU wymaga świeżej
+kompilacji i pomiaru. FEM GPU może używać wspólnych złożonych bloków, lecz jego
+wykonanie i zgodność po poprawce pozostają NOT VERIFIED. FDM CPU/GPU nie są
+modyfikowane tym przyrostem.
+
+Dowód starego runtime #226: nearest Γ zakończył solver kodem 0, zapisał
+9,299249697068216 GHz i względny pełny residual 6,3964287916e-11 przy progu 1e-8.
+Driver prawidłowo odrzucił wynik: różnica stałej względem modelu wynosiła
+około 5,44e-10 względnie, przy bramce spójności 1e-12. Nie zmieniamy tej bramki,
+nie podmieniamy starego artefaktu i nie deklarujemy zamknięcia pełnego okna widma.
+
+Walidacja: przygotowana regresja rzeczywistego importera ma sprawdzać wartość
+probe względem `kMu0`; fixture wzajemności Floqueta również używa wspólnej stałej.
+Testów C++ nie kompilujemy ani nie uruchamiamy do odwołania zakazu użytkownika.
+Po nowym managed buildzie trzeba powtórzyć nearest Γ, odczytać query i pełny
+residual, sprawdzić demag, zgodność stałej z niezmienionymi metadata oraz
+binding równowagi i siatki. Pełne okno, signed15, porównania DE/BV/COMSOL,
+zbieżność i GPU pozostają osobnymi otwartymi bramkami.
+
+| Source ID | Path + symbol | Odpowiedzialność i dowód |
+| --- | --- | --- |
+| source-shared-domain-canonical-mu0 | crates/fullmag-engine/src/lib.rs + MU0 | Wspólna konwencja, równoważna kMu0 w fem_common.hpp |
+| source-shared-domain-mu0-magnetic | backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.hpp + assemble_native_magnetic_a_qq | Deklaracja; implementacja w sąsiednim .cpp używa kMu0; runtime NOT VERIFIED |
+| source-shared-domain-mu0-payload | backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp + assemble_poisson_airbox_shared_domain_payload | Sprzężenie, masa i probe; source review, runtime NOT VERIFIED |
+| source-shared-domain-mu0-regression | backends/fem/tests/frequency_domain/poisson_airbox_shared_domain_test.cpp + main | Przygotowany test prawdziwego importera; niekompilowany |
+| source-shared-domain-mu0-gate | scripts/validate_de_smoke_rows.py + validate_gamma_demag_probe | Niezmieniona bramka zgodności z zamrożonym modelem |

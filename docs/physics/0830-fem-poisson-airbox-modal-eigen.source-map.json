@@ -344,6 +344,19 @@
         "source-floquet-schur-components",
         "source-floquet-action-probe"
       ]
+    },
+    {
+      "id": "eq-shared-domain-mu0-convention",
+      "symbols": [
+        "mu0"
+      ],
+      "sources": [
+        "source-shared-domain-canonical-mu0",
+        "source-shared-domain-mu0-magnetic",
+        "source-shared-domain-mu0-payload",
+        "source-shared-domain-mu0-regression",
+        "source-shared-domain-mu0-gate"
+      ]
     }
   ],
   "symbols": [
@@ -1196,6 +1209,46 @@
       "responsibility": "Native test harness invokes reports_opt_in_action_diagnostic_unavailable_before_setup, executes_native_sparse_matshell_above_dense_bound, and normalizes_si_scale_floquet_pencil. Tests remain prepared only.",
       "lane": "FEM CPU",
       "evidence_status": "test source prepared; not compiled or run"
+    },
+    {
+      "id": "source-shared-domain-canonical-mu0",
+      "path": "crates/fullmag-engine/src/lib.rs",
+      "symbol": "MU0",
+      "responsibility": "Canonical project vacuum-permeability convention; equivalent to fullmag::fem::kMu0 in fem_common.hpp.",
+      "lane": "FEM CPU",
+      "evidence_status": "source review only; fixed managed runtime NOT VERIFIED"
+    },
+    {
+      "id": "source-shared-domain-mu0-magnetic",
+      "path": "backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.hpp",
+      "symbol": "assemble_native_magnetic_a_qq",
+      "responsibility": "Declaration of magnetic weak assembly; implementation in the sibling .cpp uses fullmag::fem::kMu0.",
+      "lane": "FEM CPU",
+      "evidence_status": "source review only; fixed managed runtime NOT VERIFIED"
+    },
+    {
+      "id": "source-shared-domain-mu0-payload",
+      "path": "backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp",
+      "symbol": "assemble_poisson_airbox_shared_domain_payload",
+      "responsibility": "Use the canonical constant for the operator request and its probe.",
+      "lane": "FEM CPU",
+      "evidence_status": "source review only; fixed managed runtime NOT VERIFIED"
+    },
+    {
+      "id": "source-shared-domain-mu0-regression",
+      "path": "backends/fem/tests/frequency_domain/poisson_airbox_shared_domain_test.cpp",
+      "symbol": "main",
+      "responsibility": "Prepared native importer/reciprocity regression, not compiled or run.",
+      "lane": "FEM CPU",
+      "evidence_status": "source review only; fixed managed runtime NOT VERIFIED"
+    },
+    {
+      "id": "source-shared-domain-mu0-gate",
+      "path": "scripts/validate_de_smoke_rows.py",
+      "symbol": "validate_gamma_demag_probe",
+      "responsibility": "Unchanged strict comparison against frozen model metadata.",
+      "lane": "FEM CPU",
+      "evidence_status": "source review only; fixed managed runtime NOT VERIFIED"
     }
   ],
   "public_api": {

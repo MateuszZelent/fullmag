@@ -1,5 +1,6 @@
 #include "cpu/frequency_domain/operators/poisson_airbox_shared_domain.hpp"
 #include "context.hpp"
+#include "fem_common.hpp"
 #include "core/fem_mesh.hpp"
 #include "cpu/mfem/runtime/mfem_mesh_builder.hpp"
 #include "frequency_domain/mesh_symmetry_certificate.hpp"
@@ -2928,6 +2929,8 @@ int main()
         fd::assemble_poisson_airbox_shared_domain_payload(
             film_air_payload, &film_air_result) == fd::FrequencyDomainStatus::ok,
         film_air_result.error_message);
+    check(film_air_result.k0_demag_probe.mu0_t_m_a == fullmag::fem::kMu0,
+          "native importer demag probe must use the canonical model permeability");
     check(film_air_result.p.row_count == 2u,
           "magnetic+airbox importer compacts scalar Poisson to declared classes");
     check(film_air_result.a_qq.row_count == 2u && film_air_result.a_qq.values.size() > 0u,
@@ -3399,9 +3402,8 @@ int main()
         complex_matrix_value(
             floquet_reciprocity_result.floquet_a_phiq, 0u, 0u).real() > 0.0,
         "Floquet A_phiq must use the descriptor sign opposite to the weak source");
-    // Matches request.mu0_T_m_A as hard-coded by
-    // assemble_poisson_airbox_shared_domain_payload for the Floquet lane.
-    const double floquet_vacuum_permeability = 1.25663706212e-6;
+    // The production payload and this reciprocity check share the model constant.
+    const double floquet_vacuum_permeability = fullmag::fem::kMu0;
     double floquet_reciprocal_sign_error = 0.0;
     double floquet_reciprocal_scale = 0.0;
     for (std::uint64_t q = 0; q < floquet_reciprocity_result.floquet_a_qphi.row_count; ++q) {

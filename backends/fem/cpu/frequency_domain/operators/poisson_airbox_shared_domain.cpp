@@ -4,6 +4,7 @@
 #if FULLMAG_HAS_MFEM_STACK
 
 #include "context.hpp"
+#include "fem_common.hpp"
 #include "core/fem_mesh.hpp"
 #include "cpu/mfem/runtime/mfem_mesh_builder.hpp"
 #include "frequency_domain/canonical_digest.hpp"
@@ -2056,7 +2057,7 @@ FrequencyDomainStatus assemble_native_magnetic_a_qq(
 
         const std::uint64_t full_q_count = 2u * node_count;
         SparseAccumulator assembled(full_q_count, full_q_count);
-        const double mu0 = 1.25663706212e-6;
+        const double mu0 = fullmag::fem::kMu0;
         const auto node_ms = [&](std::uint64_t node) {
             return descriptor.saturation_magnetisation_a_per_m != nullptr
                 ? descriptor.saturation_magnetisation_a_per_m[node]
@@ -3445,7 +3446,7 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain_payload(
         request.uniform_saturation_magnetization_a_per_m =
             payload.uniform_saturation_magnetisation_a_per_m;
         request.gamma0_m_per_a_s = payload.gamma0_m_per_a_s;
-        request.mu0_T_m_A = 1.25663706212e-6;
+        request.mu0_T_m_A = fullmag::fem::kMu0;
         const bool has_floquet_wavevector = floquet_k_rad_per_m != nullptr;
         const bool has_floquet_result = out_floquet_dynamic_demag_k != nullptr;
         if ((!has_floquet_wavevector && has_floquet_result) ||
