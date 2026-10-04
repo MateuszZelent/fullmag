@@ -7,24 +7,54 @@ import { Button } from "@/shared/ui/Button";
 import { cn } from "@/shared/utils/className";
 
 import { IMPORT_ACCEPT, IMPORT_FORMATS, classifyImportFile } from "../model/importFormats";
+import { translateMx3, type Mx3Translation } from "../model/mx3Import";
+import { copyScript, saveScriptFile } from "../model/scriptExport";
+import { buildImportOpenRequest, openTranslatedMx3, type ScriptOpener } from "../model/scriptOpen";
+
+import { Mx3ImportReport } from "./Mx3ImportReport";
 
 export interface ImportSectionProps {
   /** Resolves to why the file did not open, or null on success. */
   readonly onOpenFile: (file: File) => Promise<string | null>;
   readonly openDisabledReason: string | null;
+  /** Opens a translated script as a project; null when this build cannot. */
+  readonly onOpenScript?: ScriptOpener | null;
 }
 
-export function ImportSection({ onOpenFile, openDisabledReason }: ImportSectionProps) {
+interface StagedImport {
+  readonly fileName: string;
+  readonly translation: Mx3Translation;
+}
+
+const studyNameFor = (fileName: string): string =>
+  fileName.replace(/\.[^.]*$/, "").replace(/[^A-Za-z0-9_-]+/g, "_") || "mx3_import";
+
+export function ImportSection({ onOpenFile, openDisabledReason, onOpenScript = null }: ImportSectionProps) {
   const [dragging, setDragging] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [staged, setStaged] = useState<StagedImport | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const handle = async (file: File | undefined) => {
     if (!file) return;
+    setStaged(null);
     const verdict = classifyImportFile(file.name);
     if (verdict.kind !== "supported") {
       setMessage(verdict.reason);
+      return;
+    }
+    if (verdict.format.id === "mx3") {
+      // Translating is pure text work; nothing is written until the report is confirmed.
+      setBusy(true);
+      setMessage(null);
+      try {
+        const translation = translateMx3(await file.text(), { studyName: studyNameFor(file.name) });
+        setStaged({ fileName: file.name, translation });
+      } catch {
+        setMessage(`Could not read ${file.name}.`);
+      }
+      setBusy(false);
       return;
     }
     if (openDisabledReason) {
@@ -35,6 +65,26 @@ export function ImportSection({ onOpenFile, openDisabledReason }: ImportSectionP
     setMessage(null);
     setMessage(await onOpenFile(file));
     setBusy(false);
+  };
+
+  const openStaged = async () => {
+    if (!staged) return;
+    setBusy(true);
+    const failure = await openTranslatedMx3(staged.fileName, staged.translation, onOpenScript);
+    setMessage(failure);
+    if (failure === null) setStaged(null);
+    setBusy(false);
+  };
+
+  const saveStaged = () => {
+    if (!staged) return;
+    const request = buildImportOpenRequest(staged.fileName, staged.translation);
+    setMessage(saveScriptFile(request.fileName, request.source) ? null : "Saving a file is not available here.");
+  };
+
+  const copyStaged = async () => {
+    if (!staged) return;
+    setMessage((await copyScript(staged.translation.script)) ? null : "The clipboard is not available here.");
   };
 
   const onDrop = (event: DragEvent<HTMLDivElement>) => {
@@ -92,6 +142,22 @@ export function ImportSection({ onOpenFile, openDisabledReason }: ImportSectionP
         {message ? <p className="fm-start-notice fm-start-notice--warning">{message}</p> : null}
       </div>
 
+      {staged ? (
+        <Mx3ImportReport
+          busy={busy}
+          fileName={staged.fileName}
+          onCopy={() => void copyStaged()}
+          onDiscard={() => {
+            setStaged(null);
+            setMessage(null);
+          }}
+          onOpen={() => void openStaged()}
+          onSave={saveStaged}
+          opener={onOpenScript}
+          translation={staged.translation}
+        />
+      ) : null}
+
       <table className="fm-start-formats">
         <caption className="fm-start-visually-hidden">Supported import formats</caption>
         <thead>
@@ -108,7 +174,13 @@ export function ImportSection({ onOpenFile, openDisabledReason }: ImportSectionP
               <th scope="row">{format.label}</th>
               <td className="fm-start-formats__ext">{format.extensions.join(" ")}</td>
               <td>{format.fidelity}</td>
-              <td>{format.unavailableReason ? "Not yet supported" : "Supported"}</td>
+              <td>
+                {format.unavailableReason
+                  ? "Not yet supported"
+                  : format.partial
+                    ? "Supported (subset)"
+                    : "Supported"}
+              </td>
             </tr>
           ))}
         </tbody>

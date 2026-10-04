@@ -1,5 +1,6 @@
 import { BookOpen, Box, GraduationCap, Import, Info, LayoutGrid, Settings, type LucideIcon } from "lucide-react";
 
+import type { ScriptOpener } from "../model/scriptOpen";
 import type { StartSection } from "../model/startScreenState";
 import { STUDY_TEMPLATES } from "../model/templates";
 import type { ComputeProbeState, ContinueSession, RecentEntry } from "../model/types";
@@ -62,6 +63,8 @@ export interface ProjectInspectorProps {
   readonly onOpen: (entry: RecentEntry) => Promise<string | null>;
   readonly onTogglePin: (projectId: string, pinned: boolean) => void;
   readonly onForget: (projectId: string) => void;
+  /** Opens a template script as a project; null when this build cannot. */
+  readonly scriptOpener?: ScriptOpener | null;
 }
 
 /**
@@ -73,11 +76,19 @@ export function ProjectInspector({
   entry,
   templateId,
   compute,
+  scriptOpener = null,
   ...actions
 }: ProjectInspectorProps) {
   const template = STUDY_TEMPLATES.find((t) => t.id === templateId);
   if (section === "templates" && template) {
-    return <TemplateDetails compute={compute} key={template.id} template={template} />;
+    return (
+      <TemplateDetails
+        compute={compute}
+        key={template.id}
+        scriptOpener={scriptOpener}
+        template={template}
+      />
+    );
   }
   if (section === "home" && entry) {
     // Keyed so the tab and the copied flag reset when another project is chosen.

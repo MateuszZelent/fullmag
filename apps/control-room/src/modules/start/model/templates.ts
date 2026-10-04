@@ -1,3 +1,4 @@
+import { TEMPLATE_SCRIPTS } from "./templateScripts";
 import type { ComputeProbeState, SolverKind } from "./types";
 
 export interface TemplateEstimate {
@@ -22,6 +23,17 @@ export interface StudyTemplate {
 }
 
 export const CPU_REFERENCE_THREADS = 32;
+
+/**
+ * The canonical Python for a template, or null when none was validated. A
+ * template without a script stays visible but cannot be created or saved.
+ */
+export function templateScript(template: StudyTemplate): string | null {
+  return Object.hasOwn(TEMPLATE_SCRIPTS, template.id) ? TEMPLATE_SCRIPTS[template.id] : null;
+}
+
+/** The file name a template's script is saved under. */
+export const templateScriptFileName = (template: StudyTemplate): string => `${template.id}.py`;
 
 /**
  * The shipped set. Descriptions follow the design spec; estimates are
@@ -61,7 +73,7 @@ export const STUDY_TEMPLATES: readonly StudyTemplate[] = [
     id: "spin-wave-dispersion",
     name: "Spin-wave dispersion",
     description:
-      "Sinc-excited waveguide with FFT post-processing; gives ω(k) maps directly in the results viewer.",
+      "Sinc-excited YIG waveguide with a space-time FFT of m_y; gives ω(k) maps directly in the results viewer.",
     solver: "FDM",
     estimate: { gpuMinutes: 25, vramGb: 6, cpuMinutes: 420 },
     reference: "Magnetostatic spin-wave dispersion of a YIG waveguide.",
@@ -75,34 +87,37 @@ export const STUDY_TEMPLATES: readonly StudyTemplate[] = [
     id: "magnonic-crystal-bands",
     name: "Magnonic crystal bands",
     description:
-      "Bloch-periodic eigenmode study of a 1D stripe lattice; reports band edges and gap widths.",
+      "Bloch-periodic eigenmode study of a 1D two-material stripe lattice along Γ–X–Γ; band edges and gaps are read from the dispersion.",
     solver: "FEM",
     estimate: { gpuMinutes: 90, vramGb: 10, cpuMinutes: 120 },
     reference: "Band structure of a one-dimensional magnonic crystal.",
     docsPage: "python-api/boundary-conditions/floquet-boundary-conditions.html",
-    model: [{ label: "Study", value: "Bloch-periodic eigenmodes" }],
+    model: [
+      { label: "Study", value: "Bloch-periodic eigenmodes" },
+      { label: "Demag", value: "not included" },
+    ],
   },
   {
     id: "skyrmion-phase-diagram",
     name: "Skyrmion phase diagram",
     description:
-      "Relaxation sweep over DMI strength and out-of-plane field, with topological-charge tracking.",
+      "Relaxation series over the out-of-plane field at fixed interfacial DMI, with topological-charge tracking. Re-run at another D to add a row of the diagram.",
     solver: "FDM",
     estimate: { gpuMinutes: 60, vramGb: 8, cpuMinutes: 900 },
     reference: "Phase diagram of interfacial-DMI skyrmions in a thin film.",
     docsPage: "physics/interactions/dmi/interfacial.html",
-    model: [{ label: "Sweep", value: "D × B_z grid" }],
+    model: [{ label: "Sweep", value: "B_z series at fixed D" }],
   },
   {
     id: "broadband-fmr",
     name: "Broadband FMR",
     description:
-      "Field-swept absorption map with S11 extraction, the usual starting point for a resonance study.",
+      "Field-stepped linear response: relaxes the film at each bias field and solves the susceptibility tensor over a frequency list.",
     solver: "FDM",
     estimate: { gpuMinutes: 20, vramGb: 4, cpuMinutes: 300 },
     reference: "Field-swept ferromagnetic resonance absorption map.",
     docsPage: "python-api/studies/frequency-response.html",
-    model: [{ label: "Study", value: "field sweep, S11" }],
+    model: [{ label: "Study", value: "bias-field steps, susceptibility" }],
   },
   {
     id: "domain-wall-motion",
@@ -119,7 +134,7 @@ export const STUDY_TEMPLATES: readonly StudyTemplate[] = [
     id: "vortex-gyration",
     name: "Vortex gyration",
     description:
-      "Pulsed excitation of a Py disc; tracks the core trajectory and extracts the gyration frequency.",
+      "Field-pulse excitation of a Py disc; ⟨m⟩(t) after the pulse gives the gyration frequency.",
     solver: "FEM",
     estimate: { gpuMinutes: 45, vramGb: 7, cpuMinutes: 240 },
     reference: "Gyrotropic mode of a magnetic vortex in a Permalloy disc.",

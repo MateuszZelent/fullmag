@@ -1,0 +1,12 @@
+// Relax a random state in a periodic Permalloy dot.
+SetGridSize(64, 64, 1)
+SetCellSize(4e-9, 4e-9, 5e-9)
+SetPBC(1, 1, 0)
+SetGeom(Cylinder(200e-9, 5e-9))
+
+Msat = 800e3
+Aex = 13e-12
+alpha = 1
+
+m = RandomMag()
+Relax()
