@@ -5,6 +5,11 @@ import math
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from fullmag.model.output_storage import OutputStorage
+from fullmag.runtime.output_storage_lowering import (
+    configure_scene_stage_autosaves,
+    configure_study_pipeline_autosaves,
+)
 from fullmag.model.current_transport import (
     ConservativeCurrentBoundaryFace,
     ConservativeCurrentClosedGeometry,
@@ -1550,10 +1555,19 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
             "mesh_defaults": builder.get("mesh") or {},
             "stages": [
                 _canonical_scene_stage(stage)
-                for stage in (builder.get("stages") or [])
+                for stage in configure_scene_stage_autosaves(
+                    builder.get("stages") or [],
+                    builder.get("output_storage"),
+                    table_autosave=builder.get("table_autosave"),
+                )
             ],
-            "study_pipeline": builder.get("study_pipeline"),
+            "study_pipeline": configure_study_pipeline_autosaves(
+                builder.get("study_pipeline"),
+                builder.get("output_storage"),
+                table_autosave=builder.get("table_autosave"),
+            ),
             "table_autosave": builder.get("table_autosave"),
+            "output_storage": builder.get("output_storage"),
             "initial_state": builder.get("initial_state"),
         },
         "outputs": {"items": []},
@@ -1703,6 +1717,21 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
         geometries.append(entry)
 
     study = dict(scene.get("study") or {})
+    output_storage = study.get("output_storage")
+    if output_storage is not None:
+        if not isinstance(output_storage, Mapping):
+            raise ValueError("SceneDocument.study.output_storage must be an object")
+        study["output_storage"] = OutputStorage.from_ir(output_storage).to_ir()
+        study["stages"] = configure_scene_stage_autosaves(
+            study.get("stages") or [],
+            study["output_storage"],
+            table_autosave=study.get("table_autosave"),
+        )
+        study["study_pipeline"] = configure_study_pipeline_autosaves(
+            study.get("study_pipeline"),
+            study["output_storage"],
+            table_autosave=study.get("table_autosave"),
+        )
     current_modules_value = scene.get("current_modules", {})
     if not isinstance(current_modules_value, Mapping):
         raise ValueError("SceneDocument.current_modules must be an object")
@@ -1825,6 +1854,7 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
         "stages": study.get("stages") or [],
         "study_pipeline": study.get("study_pipeline"),
         "table_autosave": study.get("table_autosave"),
+        "output_storage": study.get("output_storage"),
         "initial_state": study.get("initial_state"),
         "geometries": geometries,
         "couplings": scene.get("couplings") or [],
@@ -2060,6 +2090,7 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
                     else {}
                 ),
                 "until_seconds": _number_or_none(stage.get("until_seconds")),
+                "autosave": copy.deepcopy(stage.get("autosave")),
                 "relax_algorithm": _stage_relax_algorithm(stage) or None,
                 "torque_tolerance": _number_or_none(stage.get("torque_tolerance")),
                 "energy_tolerance": _number_or_none(stage.get("energy_tolerance")),
@@ -2095,6 +2126,7 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
         ],
         "study_pipeline": builder.get("study_pipeline"),
         "table_autosave": builder.get("table_autosave"),
+        "output_storage": builder.get("output_storage"),
         "initial_state": builder.get("initial_state"),
         "geometries": builder.get("geometries") or [],
         "couplings": builder.get("couplings") or [],

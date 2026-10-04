@@ -203,6 +203,7 @@ import {
   PROJECT_RUN_PATH,
   PROJECT_RUN_TASK_CANCELLATION_PATH,
   PLATFORM_CAPABILITIES_PATH,
+  PLATFORM_OUTPUT_STORAGE_PATH,
   PLATFORM_HEALTH_PATH,
   PLATFORM_DEVELOPMENT_BACKEND_PATH,
   PLATFORM_DEVELOPMENT_RESTART_REQUESTS_PATH,
@@ -246,6 +247,7 @@ import {
   resolveCanonicalQuantityId,
   storedFieldQuantityId,
 } from "./quantityIds";
+import type { OutputStorageDefaultsResource, OutputStorageDefaultsRequest } from "./apiTypes";
 import type {
   BinaryRequestOptions,
   BinaryResourceResult,
@@ -1065,6 +1067,10 @@ export class ControlRoomApi {
   };
 
   readonly platform = {
+    outputStorageDefaults: (options?: RequestOptions) =>
+      this.requestJson<OutputStorageDefaultsResource>(PLATFORM_OUTPUT_STORAGE_PATH, options),
+    saveOutputStorageDefaults: (input: OutputStorageDefaultsRequest, options?: RequestOptions) =>
+      this.putJson<OutputStorageDefaultsResource, OutputStorageDefaultsRequest>(PLATFORM_OUTPUT_STORAGE_PATH, input, options),
     developmentBackend: (options?: RequestOptions) =>
       this.requestJson<DevelopmentBackendResource>(PLATFORM_DEVELOPMENT_BACKEND_PATH, options),
     submitDevelopmentRestartRequest: (

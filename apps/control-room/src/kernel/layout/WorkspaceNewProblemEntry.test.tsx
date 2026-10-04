@@ -99,6 +99,23 @@ vi.mock("@/shared/ui/DropdownMenu", () => {
   };
 });
 
+vi.mock("../resources/useOutputStorageDefaults", () => ({
+  useOutputStorageDefaults: () => ({
+    data: { output_parent: "C:/simulations", temp_parent: "C:/simulations/.fullmag-tmp",
+      data_format: "zarr", cleanup: "on_success", existing_output: "timestamp",
+      supported_formats: ["zarr"], hdf5_unavailable_reason: "HDF5 unavailable in this runtime" },
+    status: "ready", error: null, refetch: vi.fn(), revision: null,
+  }),
+}));
+
+vi.mock("@/shared/ui/Select", () => ({
+  Select: ({ children }: { children: ReactNode }) => <>{children}</>,
+  SelectTrigger: (props: ComponentProps<"button">) => <button type="button" {...props} />,
+  SelectValue: () => null,
+  SelectContent: () => null,
+  SelectItem: ({ children }: { children: ReactNode }) => <span>{children}</span>,
+}));
+
 afterEach(() => {
   resetSharedResourceRuntimeStoreForTests();
   startScreenStore.resetForTests();
@@ -122,7 +139,7 @@ describe("confirmed-empty New Problem entry wiring", () => {
       await settle();
 
       expect(findDialogs(mounted.body)).toHaveLength(1);
-      expect(findDialogs(mounted.body)[0]?.textContent).toContain("New Problem");
+      expect(findDialogs(mounted.body)[0]?.textContent).toContain("New simulation");
     } finally {
       await mounted.dispose();
     }

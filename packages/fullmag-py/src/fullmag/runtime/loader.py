@@ -8,6 +8,7 @@ from types import ModuleType
 from uuid import uuid4
 
 from fullmag.model import Problem, Relaxation, StageAutosave, TableAutosave, TimeEvolution
+from fullmag.runtime.output_storage_lowering import configure_problem_ir_autosave
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,6 +30,8 @@ class LoadedStage:
         execution_precision,
         script_source: str,
         source_root: str | Path | None = None,
+        source_stem: str | None = None,
+        until_seconds: float | None = None,
         asset_cache: dict[str, dict[str, object] | None] | None = None,
         include_geometry_assets: bool = True,
         study_pipeline: dict[str, object] | None = None,
@@ -57,6 +60,25 @@ class LoadedStage:
             sampling["table_autosave"] = self.table_autosave.to_ir()
         if self.autosave is not None:
             sampling["stage_autosave"] = self.autosave.to_ir()
+        problem_meta = ir.get("problem_meta")
+        runtime_metadata = (
+            problem_meta.get("runtime_metadata") if isinstance(problem_meta, dict) else None
+        )
+        if isinstance(runtime_metadata, dict) and source_root is not None:
+            runtime_metadata["output_storage_source_dir"] = str(Path(source_root).resolve())
+            if source_stem:
+                runtime_metadata["output_storage_source_stem"] = source_stem
+        if isinstance(runtime_metadata, dict):
+            configure_problem_ir_autosave(
+                ir,
+                runtime_metadata.get("output_storage"),
+                until_seconds=(
+                    until_seconds
+                    if until_seconds is not None
+                    else self.default_until_seconds
+                ),
+                output_every_seconds=self.output_every_seconds,
+            )
         if self.stage_id is not None:
             runtime_metadata = ir.get("problem_meta", {}).get("runtime_metadata")
             if not isinstance(runtime_metadata, dict):
@@ -222,6 +244,12 @@ class LoadedProblem:
               runtime_device_override=runtime_device_override,
               _copy_cached_geometry_assets=_copy_cached_geometry_assets,
         )
+        runtime_metadata = ir.get("problem_meta", {}).get("runtime_metadata")
+        if isinstance(runtime_metadata, dict):
+            runtime_metadata["output_storage_source_dir"] = str(
+                self.source_path.parent.resolve()
+            )
+            runtime_metadata["output_storage_source_stem"] = self.source_path.stem
         workspace_problem = (
             self.pipeline_base_problem(self.workspace_problem)
             if self.workspace_problem is not None

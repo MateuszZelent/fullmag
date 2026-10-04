@@ -1,5 +1,8 @@
 use clap::{Parser, Subcommand, ValueEnum};
-use fullmag_ir::{BackendTarget, ExecutionMode, ExecutionPrecision};
+use fullmag_ir::{
+    BackendTarget, ExecutionMode, ExecutionPrecision, ExistingOutputIR, OutputDataFormatIR,
+    TempCleanupIR,
+};
 use serde::Serialize;
 use std::ffi::OsString;
 use std::path::PathBuf;
@@ -31,8 +34,16 @@ pub(crate) struct ScriptCli {
     pub mode: Option<ModeArg>,
     #[arg(long, value_enum)]
     pub precision: Option<PrecisionArg>,
-    #[arg(long)]
+    #[arg(long, help = "Explicit result directory override; default is a script sibling .zarr bundle.")]
     pub output_dir: Option<PathBuf>,
+    #[arg(long, help = "Parent directory for private run scratch.")]
+    pub temp_dir: Option<PathBuf>,
+    #[arg(long, value_enum, help = "Override the authored result format.")]
+    pub data_format: Option<OutputDataFormatArg>,
+    #[arg(long, value_enum, help = "Override private-scratch cleanup policy.")]
+    pub temp_cleanup: Option<TempCleanupArg>,
+    #[arg(long, value_enum, help = "Behavior when the requested result directory exists.")]
+    pub existing_output: Option<ExistingOutputArg>,
     #[arg(long)]
     pub initial_magnetization_state: Option<PathBuf>,
     #[arg(long)]
@@ -322,6 +333,54 @@ pub(crate) enum ModeArg {
 pub(crate) enum PrecisionArg {
     Single,
     Double,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub(crate) enum OutputDataFormatArg {
+    Zarr,
+    #[value(alias = "h5")]
+    Hdf5,
+}
+
+impl From<OutputDataFormatArg> for OutputDataFormatIR {
+    fn from(value: OutputDataFormatArg) -> Self {
+        match value {
+            OutputDataFormatArg::Zarr => Self::Zarr,
+            OutputDataFormatArg::Hdf5 => Self::Hdf5,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub(crate) enum TempCleanupArg {
+    OnSuccess,
+    Always,
+    Never,
+}
+
+impl From<TempCleanupArg> for TempCleanupIR {
+    fn from(value: TempCleanupArg) -> Self {
+        match value {
+            TempCleanupArg::OnSuccess => Self::OnSuccess,
+            TempCleanupArg::Always => Self::Always,
+            TempCleanupArg::Never => Self::Never,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub(crate) enum ExistingOutputArg {
+    Timestamp,
+    Error,
+}
+
+impl From<ExistingOutputArg> for ExistingOutputIR {
+    fn from(value: ExistingOutputArg) -> Self {
+        match value {
+            ExistingOutputArg::Timestamp => Self::Timestamp,
+            ExistingOutputArg::Error => Self::Error,
+        }
+    }
 }
 
 impl From<BackendArg> for BackendTarget {
