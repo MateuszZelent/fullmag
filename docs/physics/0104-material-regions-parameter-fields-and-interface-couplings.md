@@ -841,9 +841,11 @@ do artifacts/provenance. Dual-write V03/V04 i heurystyczne odczyty są zabronion
 (material-regions-v04-registry-identities)=
 ### 4.2.1 Tożsamości rejestrów przed przypisaniem fizyki V04
 
-Stan: wykryta luka w obecnym walidatorze V04; poniższe guardy są
-**wymagane, jeszcze nie zaimplementowane**. Priorytet integracji mastera
-przesuwa wykonanie poprawki na kolejny przyrost.
+Stan: poniższe guardy są **zaimplementowane w źródłach walidatora V04**.
+Regresje Rust są przygotowane, lecz nie skompilowane ani wykonane zgodnie
+z obowiązującym zakazem kompilowania testów. Parser i przegląd źródeł
+nie zastępują typechecku ani wykonania `ProblemIRV04::validate`.
+Managed build #229 przypięto przed tym przyrostem i nie kwalifikuje tych guardów.
 
 Przed zbudowaniem lookupów materiałów i par owner/region walidator V04
 musi odrzucić puste lub whitespace-only `materials[].name` oraz
@@ -1057,3 +1059,5 @@ must include:
 | ProblemIR vocabulary | `crates/fullmag-ir/src/model.rs` | `MaterialParameterNameIR` | typed parameter names |
 | ProblemIR couplings | `crates/fullmag-ir/src/model.rs` | `CouplingIR` | typed explicit couplings |
 | FEM material core | `backends/fem/core/fem_element_quadrature_material.hpp` | `class ElementQuadratureMaterial` | element/quadrature material access |
+| Rejestry V04 | `crates/fullmag-ir/src/validation.rs` | `validate_physics_object_problem` | indeksowane błędy pustych/duplikowanych materiałów i regionów oraz właścicieli; źródła, bez kwalifikacji runtime |
+| Publiczna walidacja V04 | `crates/fullmag-ir/src/physics_object.rs` | `validate` | `validate()` egzekwuje istniejący kontrakt rejestrów, bez zmiany wire V03/V04 |

@@ -1,30 +1,52 @@
 <!-- integration-checkpoint-20261004 -->
 ## Integracja zmian do mastera — checkpoint 2026-10-04
 
-Użytkownik zlecił zapis i push wszystkich pozostałych zmian tego worktree,
-pobranie najnowszego origin/master, rozwiązanie konfliktów oraz integrację
-PR97 do mastera. To osobny etap Git; cały cel S00–S12 nadal OPEN.
-Historyczne checkpointy poniżej opisują stan w chwili odczytu i nie są
-bieżącą listą procesów, jobów ani niewypchniętych commitów.
+Użytkownik zlecił zapis i push zmian worktree, pobranie origin/master,
+rozwiązanie konfliktów i integrację PR97. Wszystkie 40 konfliktów rozwiązano
+i zreviewowano. Merge `9085b6a0242b3cde9737bfd87c854e278c537616`
+oraz `cfc3fc3d28f461543048b4bfac8c6a5e36b03878` obejmują master do
+`1010f5d94cb13a9aae2e5644992c0fc26c93f33e`. Commit
+`bdb927fd2400cb2372d1fbeeff57e8c62f99016a` poprawia wyłącznie dwa dokładne
+wyjątki design-token CSS w capture źródeł. Wszystkie trzy commity wypchnięto.
+PR97 był MERGEABLE/CLEAN/OPEN przy sprawdzeniu tego checkpointu; brak konfliktów
+nie zastępuje kwalifikacji. Pominięte CI nie jest PASS.
+
+Source-only kontrole merge: 503 interpretowane testy i 42 podprzypadki PASS;
+production TypeScript 985 plików, bez wejść jednostkowych i bez błędów; scoped
+Rust/TS parser, API hygiene i source-map PASS. Capture CSS: 15 testów PASS.
+Testów kompilowanych nie uruchomiono. Pełne szczegóły decyzji, warningów hooka
+i ograniczeń: `docs/raports/2026-10-04-dispersion-master-merge-checkpoint.md`.
+
+Managed build #229 (`b0fbe5759e5940ceb41c0bc283cef8ff`) jest running,
+z rzeczywistą kompilacją Rust/FEM. Profil `fem-cpu-slepc-runtime-v2`, źródło
+`bdb927fd2400cb2372d1fbeeff57e8c62f99016a`, digest
+`c3fc343bbd56bac5555ad1f7c52c8235ea3efb404600002926f5dabfe2fc0156`.
+Aktualny klient pochodzi z worktree; stary klient głównego checkoutu ma inną
+listę profili. Nie zmieniano allowlisty w celu obejścia tej różnicy.
+Receipt, export OpenAPI z nowego binarium i runtime pozostają NOT VERIFIED.
+
+Guardy pustych/duplikowanych nazw materiałów i globalnych region_id oraz
+nieprawidłowych owner_object są teraz zaimplementowane w źródłach V04.
+Referencje materiałów pozostają dokładnymi MaterialIR.name; brak normalizacji
+i nowych pól wire. Pięć funkcji regresji Rust przygotowano, bez kompilacji
+i wykonania. Review poprawiło trzy tabulatorowe dane testowe. Parser i kontrola
+tekstu nie dowodzą działania walidatora. #229 nie zawiera tego nowego przyrostu;
+wymaga on osobnego typechecku. Providera waveguide nie aktywowano.
 
 Aktualny dowód naukowy: 15 rzeczywistych punktów DE (14 nonzero z #228,
-Gamma selected-only z #227) oraz dwa izolowane refinements air1,15.
-Wszystkie raw wyniki i receipt-y zachowano. Zbieżność, Gamma full window,
-wspólny signed15/serial-adaptive parity i zasoby, GUI/A1-COMSOL/GPU/S09
-nadal wymagają osobnych dowodów. Integracja źródeł nie nadaje tym bramkom PASS.
+Gamma selected-only z #227) i dwa refinements air1,15. Wszystkie raw wyniki
+i receipt-y zachowano. Zbieżność, Gamma full window, wspólny signed15,
+serial/adaptive parity, GUI, A1-COMSOL, GPU i S09 nadal wymagają osobnych dowodów.
+Dokładną parę nearest k=10 GMRES/FGMRES przygotowano dla #229: identyczny model,
+siatka, target 11,2 GHz i tolerancje; różni się tylko KSP kind. Nie wykonano jej.
+Air1,075 wymaga ponownego przygotowania po zmianie drivera. S00–S12 nadal OPEN.
 
-Przed implementacją waveguide registry-binding odkryto brak kontroli
-pustych/duplikowanych nazw materiałów i region_id oraz dangling owner w
-walidatorze V04. Nota0104/material-regions-v04-registry-identities zapisuje
-istniejące wymagania; poprawka guardów NIE jest zaimplementowana i została
-przesunięta zgodnie z nowym priorytetem użytkownika. Nie aktywowano providera.
-
-Kontrole dokumentacji: 35 interpretowanych PASS. Zakaz kompilowania unit
-tests pozostaje w mocy; nie zgłaszamy takich zadań. Aktualny runner jest
-zdrowy/idle, bez aktywnych jobów, około1,80GiB wolnego przy progu8GiB.
-Nearest runtime-v2 i przygotowane air1,075 triale nie są jeszcze wykonane.
-Audyt całego storage wskazał dwa stare incremental API do potencjalnego
-zwolnienia21,84GiB; dane nie zostały usunięte.
+Integracja remote PR97 pozostaje niezakończona. Główny checkout master miał
+24 dirty ścieżki i dwa unikalne lokalne commity (688f1f23… oraz ddfd6bc1…);
+zachowano je, bez resetu ani lokalnego merge. Cleanup blokują kwalifikacja,
+integracja i aktywne zasoby. Nie usunięto cache/storage. Ostatni pomiar runnera
+przed tym przyrostem wynosił około 40 GB wolnego; to pomiar chwilowy.
+Historyczne checkpointy poniżej pozostają zapisem dawnych odczytów.
 
 <!-- nearest-floquet-consumer-source-checkpoint-20261004 -->
 ## S05 — konsument nearest i jawny trial GMRES/FGMRES

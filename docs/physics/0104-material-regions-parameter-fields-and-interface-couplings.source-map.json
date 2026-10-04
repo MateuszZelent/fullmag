@@ -656,6 +656,27 @@
       "symbol": "region_coupling_is_executable_for_backend",
       "responsibility": "Fail closed because RKKY is not executable on current backends; the surface-energy equation is a planned scientific contract, not implementation evidence.",
       "evidence_status": "planned_contract"
+    },
+    {
+      "id": "v04-registry-identity-validation",
+      "path": "crates/fullmag-ir/src/validation.rs",
+      "symbol": "validate_physics_object_problem",
+      "responsibility": "Validate exact material names, global region IDs and exact object owners before consuming V04 registries; source implementation, native execution not verified.",
+      "evidence_status": "implemented"
+    },
+    {
+      "id": "v04-public-validation-entry",
+      "path": "crates/fullmag-ir/src/physics_object.rs",
+      "symbol": "validate",
+      "responsibility": "Public validate entry delegates registry checks without adding wire fields or changing V03 authoring.",
+      "evidence_status": "implemented"
+    },
+    {
+      "id": "v04-registry-identity-contract",
+      "path": "docs/physics/0104-material-regions-parameter-fields-and-interface-couplings.md",
+      "symbol": "DOC-ANCHOR:material-regions-v04-registry-identities",
+      "responsibility": "Existing exact-name, global region identity and owner semantics shared by all four backend lanes; execution qualification remains separate.",
+      "evidence_status": "planned_contract"
     }
   ],
   "public_api": {

@@ -1030,11 +1030,6 @@ pub(crate) fn validate_physics_object_problem(problem: &ProblemIRV04) -> Result<
         .iter()
         .map(crate::GeometryEntryIR::name)
         .collect();
-    let material_ids: BTreeSet<&str> = problem
-        .materials
-        .iter()
-        .map(|material| material.name.as_str())
-        .collect();
     let mut object_ids = BTreeSet::new();
     let mut object_names = BTreeSet::new();
     for (index, object) in problem.objects.iter().enumerate() {
@@ -1069,6 +1064,42 @@ pub(crate) fn validate_physics_object_problem(problem: &ProblemIRV04) -> Result<
         .iter()
         .map(|object| object.object_id.as_str())
         .collect();
+    let mut material_ids = BTreeSet::new();
+    for (index, material) in problem.materials.iter().enumerate() {
+        if material.name.trim().is_empty() {
+            errors.push(format!("materials[{index}].name must not be empty"));
+        } else if !material_ids.insert(material.name.as_str()) {
+            errors.push(format!(
+                "materials[{index}] duplicate name '{}'",
+                material.name
+            ));
+        }
+    }
+
+    let mut region_ids = BTreeSet::new();
+    for (index, region) in problem.object_regions.iter().enumerate() {
+        if region.region_id.trim().is_empty() {
+            errors.push(format!(
+                "object_regions[{index}].region_id must not be empty"
+            ));
+        } else if !region_ids.insert(region.region_id.as_str()) {
+            errors.push(format!(
+                "object_regions[{index}] duplicate region_id '{}'",
+                region.region_id
+            ));
+        }
+        if region.owner_object.trim().is_empty() {
+            errors.push(format!(
+                "object_regions[{index}].owner_object must not be empty"
+            ));
+        } else if !object_ids.contains(region.owner_object.as_str()) {
+            errors.push(format!(
+                "object_regions[{index}].owner_object '{}' does not reference an existing object_id",
+                region.owner_object
+            ));
+        }
+    }
+
     let object_region_ids: BTreeSet<(&str, &str)> = problem
         .object_regions
         .iter()
