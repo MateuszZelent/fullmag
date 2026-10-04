@@ -1372,6 +1372,7 @@ impl LiveProgressCadence {
         if update.stats.step <= 1
             || update.finished
             || has_heavy_live_payload(update)
+            || step_update_has_parallel_execution_progress(update)
             || step_update_has_frequency_response_progress(update)
         {
             self.last_publish_at = Some(Instant::now());
@@ -1426,6 +1427,14 @@ fn step_update_has_frequency_response_progress(update: &fullmag_runner::StepUpda
                 .get("total_frequency_count")
                 .is_some_and(|value| value.is_finite() && *value > 0.0)
         })
+}
+
+fn step_update_has_parallel_execution_progress(update: &fullmag_runner::StepUpdate) -> bool {
+    update
+        .stats
+        .per_object_scalars
+        .get("fem_eigen_progress")
+        .is_some_and(|progress| progress.get("parallel_telemetry_available") == Some(&1.0))
 }
 
 fn publish_live_step_update(
@@ -1917,7 +1926,111 @@ fn apply_fem_eigen_progress_to_stage_execution(
     }
     stage.progress_label = Some(phase.to_string());
     stage.progress_detail = Some(fem_eigen_progress_detail(progress, phase, solver));
+    if progress.get("parallel_telemetry_available") == Some(&1.0) {
+        stage.parallel_execution = parallel_execution_telemetry_from_progress(progress);
+    }
     stage.last_progress_unix_ms = Some(current_unix_millis_u64());
+}
+
+fn parallel_execution_telemetry_from_progress(
+    progress: &std::collections::HashMap<String, f64>,
+) -> Option<fullmag_runner::LiveParallelExecutionTelemetry> {
+    if progress.get("parallel_telemetry_available") != Some(&1.0) {
+        return None;
+    }
+
+    fn scalar_u32(value: Option<&f64>) -> Option<u32> {
+        let value = value.copied()?;
+        (value.is_finite() && value >= 0.0 && value.fract() == 0.0 && value <= u32::MAX as f64)
+            .then_some(value as u32)
+    }
+
+    fn scalar_u64_pair(
+        progress: &std::collections::HashMap<String, f64>,
+        key: &str,
+    ) -> Option<u64> {
+        let low = scalar_u32(progress.get(&format!("{key}_lo")))?;
+        let high = scalar_u32(progress.get(&format!("{key}_hi")))?;
+        Some((u64::from(high) << 32) | u64::from(low))
+    }
+
+    fn optional_u32(
+        progress: &std::collections::HashMap<String, f64>,
+        key: &str,
+    ) -> Option<Option<u32>> {
+        match progress.get(key) {
+            None => Some(None),
+            Some(value) => scalar_u32(Some(value)).map(Some),
+        }
+    }
+
+    fn optional_f64(
+        progress: &std::collections::HashMap<String, f64>,
+        key: &str,
+    ) -> Option<Option<f64>> {
+        match progress.get(key) {
+            None => Some(None),
+            Some(value) if value.is_finite() => Some(Some(*value)),
+            Some(_) => None,
+        }
+    }
+
+    fn optional_u64_pair(
+        progress: &std::collections::HashMap<String, f64>,
+        key: &str,
+    ) -> Option<Option<u64>> {
+        let has_low = progress.contains_key(&format!("{key}_lo"));
+        let has_high = progress.contains_key(&format!("{key}_hi"));
+        match (has_low, has_high) {
+            (false, false) => Some(None),
+            (true, true) => scalar_u64_pair(progress, key).map(Some),
+            _ => None,
+        }
+    }
+
+    fn tagged(progress: &std::collections::HashMap<String, f64>, prefix: &str) -> Option<String> {
+        let mut values = progress.iter().filter_map(|(key, value)| {
+            (key.starts_with(prefix) && *value == 1.0).then(|| key[prefix.len()..].to_string())
+        });
+        let value = values.next().filter(|value| !value.is_empty())?;
+        values.next().is_none().then_some(value)
+    }
+
+    let sampled_at_unix_ms = scalar_u64_pair(progress, "parallel_sampled_at_unix_ms")?;
+    let active_workers = scalar_u32(progress.get("parallel_active_workers"))?;
+    let admission_desired_workers = scalar_u32(progress.get("parallel_admission_desired_workers"))?;
+    let admission_pending_samples = scalar_u32(progress.get("parallel_admission_pending_samples"))?;
+    let cpu_target_percent = progress.get("parallel_cpu_target_percent").copied()?;
+    let memory_target_percent = progress.get("parallel_memory_target_percent").copied()?;
+    if !cpu_target_percent.is_finite()
+        || !memory_target_percent.is_finite()
+        || cpu_target_percent <= 0.0
+        || memory_target_percent <= 0.0
+    {
+        return None;
+    }
+    let memory_reserve_bytes = scalar_u64_pair(progress, "parallel_memory_reserve_bytes")?;
+    Some(fullmag_runner::LiveParallelExecutionTelemetry {
+        sampled_at_unix_ms,
+        active_workers,
+        admission_desired_workers,
+        admission_worker_limit: optional_u32(progress, "parallel_admission_worker_limit")?,
+        admission_pending_samples,
+        resolved_workers: optional_u32(progress, "parallel_resolved_workers")?,
+        cpu_target_percent,
+        memory_target_percent,
+        memory_reserve_bytes,
+        cpu_target_kind: tagged(progress, "parallel_cpu_target_kind:")?,
+        cpu_busy_percent: optional_f64(progress, "parallel_cpu_busy_percent")?,
+        allocated_cpu_cores: optional_f64(progress, "parallel_allocated_cpu_cores")?,
+        cpu_available_cores: optional_f64(progress, "parallel_cpu_available_cores")?,
+        memory_limit_bytes: optional_u64_pair(progress, "parallel_memory_limit_bytes")?,
+        memory_available_bytes: optional_u64_pair(progress, "parallel_memory_available_bytes")?,
+        worker_peak_cpu_cores: optional_f64(progress, "parallel_worker_peak_cpu_cores")?,
+        worker_peak_rss_bytes: optional_u64_pair(progress, "parallel_worker_peak_rss_bytes")?,
+        admission_reason: tagged(progress, "parallel_admission_reason:")?,
+        terminal: progress.get("parallel_telemetry_terminal") == Some(&1.0),
+    })
 }
 
 fn fem_eigen_progress_solver(progress: &std::collections::HashMap<String, f64>) -> &str {
@@ -4383,6 +4496,50 @@ fn stage_execution_from_records(
     }
 }
 
+fn mark_live_stage_execution_failed(
+    stage_execution: &mut Option<CurrentLiveStageExecutionState>,
+    completed_at_unix_ms: u128,
+) {
+    let Some(previous) = stage_execution.take() else {
+        return;
+    };
+    let mut stages = previous.stages;
+    let active_index = previous
+        .active_stage_index
+        .or_else(|| stages.iter().position(|stage| stage.status == "running"));
+    if let Some(active_index) = active_index.and_then(|index| stages.get_mut(index)) {
+        active_index.status = "failed".to_string();
+        active_index.completed_at_unix_ms = Some(millis_to_u64(completed_at_unix_ms));
+        active_index.progress_label = Some("failed".to_string());
+        active_index.last_progress_unix_ms = Some(millis_to_u64(completed_at_unix_ms));
+        active_index.parallel_execution = None;
+    }
+    *stage_execution = Some(stage_execution_from_records(&stages, None, None, "failed"));
+}
+
+fn preserve_completed_parallel_execution(
+    next: &mut CurrentLiveStageExecutionState,
+    previous: Option<&CurrentLiveStageExecutionState>,
+    stage_index: usize,
+) {
+    if next
+        .stages
+        .get(stage_index)
+        .is_none_or(|stage| stage.status != "completed")
+    {
+        return;
+    }
+    let Some(telemetry) = previous
+        .and_then(|state| state.stages.get(stage_index))
+        .and_then(|stage| stage.parallel_execution.clone())
+    else {
+        return;
+    };
+    if let Some(stage) = next.stages.get_mut(stage_index) {
+        stage.parallel_execution = Some(telemetry);
+    }
+}
+
 fn scripted_stage_execution_state(
     total_stages: usize,
     active_index: usize,
@@ -4430,6 +4587,7 @@ fn scripted_stage_execution_state(
             current_settle_step_index: None,
             current_settle_step_kind: None,
             current_settle_step_method: None,
+            parallel_execution: None,
         };
         total_stages
     ];
@@ -4622,6 +4780,7 @@ fn stage_record(index: usize, kind: Option<&str>) -> CurrentLiveStageExecutionRe
         current_settle_step_index: None,
         current_settle_step_kind: None,
         current_settle_step_method: None,
+        parallel_execution: None,
     }
 }
 
@@ -4816,6 +4975,9 @@ impl ActiveSequenceState {
                 current_settle_step_index: previous.current_settle_step_index,
                 current_settle_step_kind: previous.current_settle_step_kind,
                 current_settle_step_method: previous.current_settle_step_method,
+                parallel_execution: (status == "completed")
+                    .then_some(previous.parallel_execution)
+                    .flatten(),
             };
         }
     }
@@ -9010,6 +9172,10 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         &artifact_dir,
                         &aggregated_steps,
                     );
+                    mark_live_stage_execution_failed(
+                        &mut snapshot.stage_execution,
+                        failed_at_unix_ms,
+                    );
                     set_live_state_status(&mut snapshot.live_state, "failed", Some(true));
                     live_workspace.replace(snapshot);
                     live_workspace.push_log(
@@ -9378,6 +9544,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     &artifact_dir,
                     &aggregated_steps,
                 );
+                mark_live_stage_execution_failed(&mut snapshot.stage_execution, failed_at_unix_ms);
                 set_live_state_status(&mut snapshot.live_state, "failed", Some(true));
                 live_workspace.replace(snapshot);
                 live_workspace.push_log("error", format!("Stage execution failed: {}", error));
@@ -9826,6 +9993,11 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             preserve_terminal_stage_history(
                 &mut next_stage_execution,
                 previous_stage_execution.as_ref(),
+            );
+            preserve_completed_parallel_execution(
+                &mut next_stage_execution,
+                previous_stage_execution.as_ref(),
+                stage_index,
             );
             attach_stage_fem_mesh_identity(
                 &mut next_stage_execution,
@@ -11876,7 +12048,8 @@ mod tests {
         format_stage_progress_line, has_heavy_live_payload,
         initial_live_state_manifest_from_backend_plan, initial_magnetization_state_override,
         initial_step_update, interactive_session_should_stay_alive,
-        mark_ui_shell_preparation_ready, mesh_build_pipeline_status_json,
+        mark_live_stage_execution_failed, mark_ui_shell_preparation_ready,
+        mesh_build_pipeline_status_json,
         mesh_source_scene_revision, offset_step_update, own_preparation_boundary_failure,
         plan_materialized_stage_snapshot, prepare_remesh_stage_transaction,
         preserve_terminal_stage_history, project_script_export_failure,
@@ -11888,7 +12061,8 @@ mod tests {
         run_solver_initialization_safety_check, scripted_stage_execution_state,
         scripted_stage_execution_state_with_completion, set_latest_scalar_row_if_due,
         shared_domain_object_region_mesh_specs, stage_allows_sampled_continuation_initial_state,
-        step_update_has_frequency_response_progress, user_cancelled_stage_completion,
+        step_update_has_frequency_response_progress, step_update_has_parallel_execution_progress,
+        parallel_execution_telemetry_from_progress, user_cancelled_stage_completion,
         validate_periodic_remesh_candidate, wait_for_failed_preparation_close,
         wait_for_solve_prompt, wait_for_solve_should_block, wait_for_solve_supported,
         write_sampling_resolution_stage_record, ActiveSequenceState, ContinuationStageSource,
@@ -12490,6 +12664,90 @@ mod tests {
             terminal_field_snapshot: false,
             finished: false,
         }
+    }
+
+    #[test]
+    fn adaptive_parallel_progress_decodes_typed_admission_telemetry() {
+        let mut progress = std::collections::HashMap::new();
+        progress.insert("parallel_telemetry_available".into(), 1.0);
+        progress.insert("parallel_active_workers".into(), 2.0);
+        progress.insert("parallel_admission_desired_workers".into(), 3.0);
+        progress.insert("parallel_admission_pending_samples".into(), 5.0);
+        progress.insert("parallel_admission_worker_limit".into(), 4.0);
+        progress.insert("parallel_cpu_target_percent".into(), 90.0);
+        progress.insert("parallel_memory_target_percent".into(), 80.0);
+        progress.insert("parallel_cpu_busy_percent".into(), 62.5);
+        progress.insert("parallel_cpu_available_cores".into(), 4.0);
+        progress.insert("parallel_memory_reserve_bytes_lo".into(), 1_073_741_824.0);
+        progress.insert("parallel_memory_reserve_bytes_hi".into(), 0.0);
+        progress.insert("parallel_sampled_at_unix_ms_lo".into(), 3_350_608_227.0);
+        progress.insert("parallel_sampled_at_unix_ms_hi".into(), 414.0);
+        progress.insert("parallel_cpu_target_kind:soft_admission_target".into(), 1.0);
+        progress.insert("parallel_admission_reason:waiting_cpu_headroom_for_probe".into(), 1.0);
+        progress.insert("parallel_admission_reason:waiting_memory_headroom_for_probe".into(), 1.0);
+        assert!(parallel_execution_telemetry_from_progress(&progress).is_none());
+        progress.remove("parallel_admission_reason:waiting_memory_headroom_for_probe");
+
+        let decoded = parallel_execution_telemetry_from_progress(&progress)
+            .expect("complete adaptive telemetry should decode");
+        assert_eq!(decoded.active_workers, 2);
+        assert_eq!(decoded.admission_desired_workers, 3);
+        assert_eq!(decoded.admission_worker_limit, Some(4));
+        assert_eq!(decoded.memory_reserve_bytes, 1_073_741_824);
+        assert_eq!(decoded.cpu_target_kind, "soft_admission_target");
+        assert_eq!(decoded.admission_reason, "waiting_cpu_headroom_for_probe");
+        assert_eq!(decoded.cpu_busy_percent, Some(62.5));
+        assert_eq!(decoded.cpu_available_cores, Some(4.0));
+
+        progress.remove("parallel_cpu_available_cores");
+        let historical = parallel_execution_telemetry_from_progress(&progress)
+            .expect("telemetry without legacy CPU capacity remains decodable");
+        assert_eq!(historical.cpu_available_cores, None);
+    }
+
+    #[test]
+    fn failed_stage_clears_previous_parallel_admission_sample() {
+        let mut stage_execution = Some(CurrentLiveStageExecutionState {
+            total_stages: 1,
+            completed_stage_indexes: Vec::new(),
+            stages: vec![CurrentLiveStageExecutionRecord {
+                status: "running".to_string(),
+                parallel_execution: Some(fullmag_runner::LiveParallelExecutionTelemetry {
+                    sampled_at_unix_ms: 10,
+                    active_workers: 2,
+                    admission_desired_workers: 2,
+                    admission_worker_limit: Some(4),
+                    admission_pending_samples: 1,
+                    resolved_workers: None,
+                    cpu_target_percent: 90.0,
+                    memory_target_percent: 80.0,
+                    memory_reserve_bytes: 1_073_741_824,
+                    cpu_target_kind: "soft_admission_target".to_string(),
+                    cpu_busy_percent: Some(50.0),
+                    allocated_cpu_cores: Some(2.0),
+                    cpu_available_cores: Some(4.0),
+                    memory_limit_bytes: Some(8 * 1024 * 1024 * 1024),
+                    memory_available_bytes: Some(4 * 1024 * 1024 * 1024),
+                    worker_peak_cpu_cores: Some(1.0),
+                    worker_peak_rss_bytes: Some(512 * 1024 * 1024),
+                    admission_reason: "calibrating_first_sample".to_string(),
+                    terminal: false,
+                }),
+                ..CurrentLiveStageExecutionRecord::default()
+            }],
+            stage_statuses: vec!["running".to_string()],
+            active_stage_index: Some(0),
+            active_stage_kind: Some("eigenmodes".to_string()),
+            runtime_state: "running".to_string(),
+        });
+
+        mark_live_stage_execution_failed(&mut stage_execution, 20);
+        let failed = stage_execution.expect("failed stage state should remain published");
+        assert_eq!(failed.runtime_state, "failed");
+        assert_eq!(failed.active_stage_index, None);
+        assert_eq!(failed.stages[0].status, "failed");
+        assert_eq!(failed.stages[0].completed_at_unix_ms, Some(20));
+        assert_eq!(failed.stages[0].parallel_execution, None);
     }
 
     fn test_preview_field(quantity: &str, revision: u64, z: f64) -> LivePreviewField {
@@ -14505,6 +14763,23 @@ mod tests {
         assert!(step_update_has_frequency_response_progress(&update));
         assert!(cadence.should_publish(&update));
         assert!(cadence.should_log(&update));
+    }
+
+    #[test]
+    fn parallel_admission_progress_forces_publish_without_waiting_for_heartbeat() {
+        let mut cadence = LiveProgressCadence::default();
+        cadence.last_publish_at = Some(Instant::now());
+        let mut progress = std::collections::HashMap::new();
+        progress.insert("parallel_telemetry_available".to_string(), 1.0);
+        let mut update = test_step_update(257);
+        update
+            .stats
+            .per_object_scalars
+            .insert("fem_eigen_progress".to_string(), progress);
+
+        assert!(!has_heavy_live_payload(&update));
+        assert!(step_update_has_parallel_execution_progress(&update));
+        assert!(cadence.should_publish(&update));
     }
 
     #[test]

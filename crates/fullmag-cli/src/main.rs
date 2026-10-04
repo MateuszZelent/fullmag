@@ -319,6 +319,10 @@ fn main() -> Result<()> {
                 println!("{}", serde_json::to_string(&resolution)?);
             }
         }
+        Command::EigenKWorker { request } => {
+            fullmag_runner::run_eigen_k_worker_request_file(&request)
+                .map_err(|error| anyhow!(error.message))?;
+        }
         Command::Project(cmd) => handle_project(cmd)?,
         Command::Session(cmd) => handle_session(cmd)?,
     }
@@ -657,6 +661,7 @@ fn is_script_mode(raw_args: &[OsString]) -> bool {
         "run-json",
         "resume-json",
         "resolve-runtime-invocation",
+        "__eigen-k-worker",
         "session",
         "project",
     ];

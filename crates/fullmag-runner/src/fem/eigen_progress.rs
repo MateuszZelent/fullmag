@@ -1,5 +1,5 @@
 use crate::types::RunError;
-use crate::types::StepAction;
+use crate::types::{LiveParallelExecutionTelemetry, StepAction};
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct FemEigenLinearProgress {
@@ -34,6 +34,8 @@ pub(crate) struct FemEigenProgress {
     pub total_subwindows: Option<u32>,
     pub subwindow_elapsed_seconds: Option<f64>,
     pub window_elapsed_seconds: Option<f64>,
+    /// Latest real adaptive FEM CPU admission sample, when available.
+    pub parallel_execution: Option<LiveParallelExecutionTelemetry>,
 }
 
 pub(crate) type FemEigenProgressCallback<'a> =
@@ -182,6 +184,7 @@ pub(super) fn native_modal_progress_event(
         total_subwindows: subwindow_position.map(|(_, total)| total),
         subwindow_elapsed_seconds: as_f64("subwindow_elapsed_seconds"),
         window_elapsed_seconds: as_f64("window_elapsed_seconds"),
+        parallel_execution: None,
     })
 }
 

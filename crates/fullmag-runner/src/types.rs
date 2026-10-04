@@ -46,6 +46,44 @@ fn record_fem_mesh_payload_build() {
 
 // ----- public types -----
 
+/// Latest real admission sample for the adaptive FEM CPU eigen-k process pool.
+///
+/// This is live control-plane telemetry.  It is intentionally optional at the
+/// stage boundary: serial, FDM, GPU, and historical runs do not manufacture a
+/// pool sample.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LiveParallelExecutionTelemetry {
+    pub sampled_at_unix_ms: u64,
+    pub active_workers: u32,
+    pub admission_desired_workers: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub admission_worker_limit: Option<u32>,
+    pub admission_pending_samples: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolved_workers: Option<u32>,
+    pub cpu_target_percent: f64,
+    pub memory_target_percent: f64,
+    pub memory_reserve_bytes: u64,
+    pub cpu_target_kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cpu_busy_percent: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allocated_cpu_cores: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cpu_available_cores: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memory_limit_bytes: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memory_available_bytes: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worker_peak_cpu_cores: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worker_peak_rss_bytes: Option<u64>,
+    pub admission_reason: String,
+    #[serde(default)]
+    pub terminal: bool,
+}
+
 /// Public result type returned by [`crate::run_reference_fem_eigen`].
 ///
 /// Contains the solver status and all artifact files (spectrum, modes) written

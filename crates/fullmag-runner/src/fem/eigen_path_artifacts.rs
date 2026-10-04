@@ -1,6 +1,7 @@
 //! Private FEM eigen-path artifacts helpers.
 
 use super::*;
+use std::collections::HashSet;
 
 pub(super) fn eigen_path_publication_gamma0(
     plan: &FemEigenPlanIR,

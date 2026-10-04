@@ -2677,6 +2677,28 @@ pub(crate) fn execute_fem_eigen_with_producer_identity(
     outputs: &[OutputIR],
     producer_identity: Option<&fem_eigen::FemRelaxationProducerStageIdentity>,
 ) -> Result<ExecutedRun, RunError> {
+    execute_fem_eigen_with_producer_identity_and_parallel_policy(
+        execution,
+        plan,
+        outputs,
+        producer_identity,
+        &fullmag_ir::ParallelExecutionPolicyIR::default(),
+        None,
+    )
+}
+
+pub(crate) fn execute_fem_eigen_with_producer_identity_and_parallel_policy(
+    execution: PlannedFemEigenExecution<'_>,
+    plan: &FemEigenPlanIR,
+    outputs: &[OutputIR],
+    producer_identity: Option<&fem_eigen::FemRelaxationProducerStageIdentity>,
+    parallel_policy: &fullmag_ir::ParallelExecutionPolicyIR,
+    process_root: Option<&std::path::Path>,
+) -> Result<ExecutedRun, RunError> {
+    // Adaptive policy is meaningful for independent Path points.  A Single
+    // (or legacy no-sampling) plan remains one serial work item while the
+    // requested policy stays in the execution provenance; rejecting it here
+    // would make GUI/API single-point previews needlessly illegal.
     // Route Path k-sampling through the multi-k orchestrator, which calls
     // the single-k solver for each sample point and then performs branch
     // tracking and writes V2 artifacts.
@@ -2692,13 +2714,15 @@ pub(crate) fn execute_fem_eigen_with_producer_identity(
     } {
         executed
     } else if matches!(plan.k_sampling, Some(fullmag_ir::KSamplingIR::Path { .. })) {
-        crate::fem::execute_fem_eigen_path_with_producer_identity(
+        crate::fem::execute_fem_eigen_path_with_producer_identity_and_parallel_policy(
             execution,
             plan,
             outputs,
             None,
             None,
             producer_identity,
+            parallel_policy,
+            process_root,
         )?
     } else if execution.resolution().is_some() {
         fem_eigen::execute_planned_fem_eigen_with_producer_identity(
@@ -2753,6 +2777,26 @@ pub(crate) fn execute_fem_eigen_with_progress_and_producer_identity(
     progress: &mut fem_eigen::FemEigenProgressCallback<'_>,
     producer_identity: Option<&fem_eigen::FemRelaxationProducerStageIdentity>,
 ) -> Result<ExecutedRun, RunError> {
+    execute_fem_eigen_with_progress_and_producer_identity_and_parallel_policy(
+        execution,
+        plan,
+        outputs,
+        progress,
+        producer_identity,
+        &fullmag_ir::ParallelExecutionPolicyIR::default(),
+        None,
+    )
+}
+
+pub(crate) fn execute_fem_eigen_with_progress_and_producer_identity_and_parallel_policy(
+    execution: PlannedFemEigenExecution<'_>,
+    plan: &FemEigenPlanIR,
+    outputs: &[OutputIR],
+    progress: &mut fem_eigen::FemEigenProgressCallback<'_>,
+    producer_identity: Option<&fem_eigen::FemRelaxationProducerStageIdentity>,
+    parallel_policy: &fullmag_ir::ParallelExecutionPolicyIR,
+    process_root: Option<&std::path::Path>,
+) -> Result<ExecutedRun, RunError> {
     let mut executed = if let Some(executed) = {
         #[cfg(test)]
         {
@@ -2765,13 +2809,15 @@ pub(crate) fn execute_fem_eigen_with_progress_and_producer_identity(
     } {
         executed
     } else if matches!(plan.k_sampling, Some(fullmag_ir::KSamplingIR::Path { .. })) {
-        crate::fem::execute_fem_eigen_path_with_producer_identity(
+        crate::fem::execute_fem_eigen_path_with_producer_identity_and_parallel_policy(
             execution,
             plan,
             outputs,
             None,
             Some(progress),
             producer_identity,
+            parallel_policy,
+            process_root,
         )?
     } else if execution.resolution().is_some() {
         fem_eigen::execute_planned_fem_eigen_with_progress_and_producer_identity(
@@ -2830,14 +2876,38 @@ pub(crate) fn execute_fem_eigen_with_progress_and_stage_handoff_and_producer_ide
     handoff: &fem_eigen::AcceptedFemRelaxStageHandoff,
     producer_identity: Option<&fem_eigen::FemRelaxationProducerStageIdentity>,
 ) -> Result<ExecutedRun, RunError> {
+    execute_fem_eigen_with_progress_and_stage_handoff_and_producer_identity_and_parallel_policy(
+        execution,
+        plan,
+        outputs,
+        progress,
+        handoff,
+        producer_identity,
+        &fullmag_ir::ParallelExecutionPolicyIR::default(),
+        None,
+    )
+}
+
+pub(crate) fn execute_fem_eigen_with_progress_and_stage_handoff_and_producer_identity_and_parallel_policy(
+    execution: PlannedFemEigenExecution<'_>,
+    plan: &FemEigenPlanIR,
+    outputs: &[OutputIR],
+    progress: &mut fem_eigen::FemEigenProgressCallback<'_>,
+    handoff: &fem_eigen::AcceptedFemRelaxStageHandoff,
+    producer_identity: Option<&fem_eigen::FemRelaxationProducerStageIdentity>,
+    parallel_policy: &fullmag_ir::ParallelExecutionPolicyIR,
+    process_root: Option<&std::path::Path>,
+) -> Result<ExecutedRun, RunError> {
     if matches!(plan.k_sampling, Some(fullmag_ir::KSamplingIR::Path { .. })) {
-        let mut executed = crate::fem::execute_fem_eigen_path_with_producer_identity(
+        let mut executed = crate::fem::execute_fem_eigen_path_with_producer_identity_and_parallel_policy(
             execution,
             plan,
             outputs,
             Some(handoff),
             Some(progress),
             producer_identity,
+            parallel_policy,
+            process_root,
         )?;
         execution.bind_execution_provenance(&mut executed.provenance);
         return Ok(executed);

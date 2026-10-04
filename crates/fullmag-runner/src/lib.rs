@@ -14,6 +14,7 @@
 /// Vacuum permeability μ₀ in T·m/A.
 pub const MU0: f64 = 4.0 * std::f64::consts::PI * 1e-7;
 
+pub mod adaptive_resources;
 mod antenna_fields;
 pub mod artifact_pipeline;
 mod artifacts;
@@ -517,7 +518,8 @@ pub use types::{
     FdmGpuTransferCounts, FemCrossoverDecision, FemEigenRunResult, FemMeshObjectSegment,
     FemMeshPartPayload, FemMeshPayload, InitialTimestepReason, LegacyDtPolicy,
     LiveFieldMaterializationState, LiveFieldMaterializationStatus, LivePreviewField,
-    LivePreviewRequest, LiveVectorFieldSnapshot, LlgTimestepCapabilityId,
+    LiveParallelExecutionTelemetry, LivePreviewRequest, LiveVectorFieldSnapshot,
+    LlgTimestepCapabilityId,
     LlgTimestepQualificationId, RecomputedFemLinearizationCertificateV1, RequestedTimestepPolicy,
     ResolvedFallback, ResolvedTimestepPolicy, RunError, RunResult, RunStatus, RuntimeEngineInfo,
     SolverAttemptRecord, StageFemMeshAsset, StageFemMeshIdentity, StepAction, StepStats,
@@ -2475,6 +2477,118 @@ pub fn run_problem(
     run_planned_problem(problem, &plan, until_seconds, output_dir)
 }
 
+#[derive(Debug, Clone)]
+struct ValidatedParallelExecution {
+    policy: fullmag_ir::ParallelExecutionPolicyIR,
+    resolved_mode: &'static str,
+    resolved_reason: &'static str,
+}
+
+/// Resolve the requested process policy once at every top-level execution
+/// boundary.  Adaptive admission is a FEM eigen-k capability; accepting it
+/// for FDM, time integration, FEM frequency response, or an unrelated FEM
+/// stage would silently execute serial work while claiming the request.
+/// FEM relaxation remains legal as a prerequisite stage and resolves to one
+/// serial work item.  FEM eigen Single likewise remains serial, while Path
+/// is the independent-k process-pool realization.
+fn validate_parallel_execution_workflow(
+    problem: &ProblemIR,
+    plan: &fullmag_ir::ExecutionPlanIR,
+) -> Result<ValidatedParallelExecution, RunError> {
+    let policy = fullmag_ir::ParallelExecutionPolicyIR::from_runtime_metadata(
+        &problem.problem_meta.runtime_metadata,
+    )
+    .map_err(|message| RunError { message })?;
+    policy.validate().map_err(|message| RunError { message })?;
+
+    if policy.mode == fullmag_ir::ParallelExecutionModeIR::Adaptive {
+        if problem.backend_policy.requested_backend != fullmag_ir::BackendTarget::Fem {
+            return Err(RunError {
+                message: format!(
+                    "parallel_execution adaptive requires requested_backend='fem'; got {:?}; fallback=none",
+                    problem.backend_policy.requested_backend
+                ),
+            });
+        }
+        let requested_device = crate::solver_runtime::selection::runtime_selection(problem)
+            .and_then(|selection| selection.get("device"))
+            .and_then(Value::as_str);
+        if requested_device != Some("cpu") {
+            return Err(RunError {
+                message: format!(
+                    "parallel_execution adaptive requires runtime_selection.device='cpu' for the FEM CPU lane; got {}; fallback=none",
+                    requested_device.unwrap_or("<missing>")
+                ),
+            });
+        }
+    }
+
+    let (resolved_mode, resolved_reason) = match policy.mode {
+        fullmag_ir::ParallelExecutionModeIR::Serial => ("serial", "requested_serial"),
+        fullmag_ir::ParallelExecutionModeIR::Adaptive => match &plan.backend_plan {
+            BackendPlanIR::Fem(fem) if fem.relaxation.is_some() => {
+                ("serial", "fem_relax_prerequisite")
+            }
+            BackendPlanIR::FemEigen(fem) => {
+                if !fem.bias_field_samples.is_empty() {
+                    return Err(RunError {
+                        message: "parallel_execution adaptive is unsupported for FEM bias-field continuation; use serial continuation or a k-path without bias_field_samples".into(),
+                    });
+                }
+                match fem.k_sampling.as_ref() {
+                    Some(fullmag_ir::KSamplingIR::Path { .. }) => {
+                        ("adaptive", "independent_k_path")
+                    }
+                    Some(fullmag_ir::KSamplingIR::Single { .. }) | None => {
+                        ("serial", "single_work_item")
+                    }
+                }
+            }
+            BackendPlanIR::Fdm(_) | BackendPlanIR::FdmMultilayer(_) => {
+                return Err(RunError {
+                    message: "parallel_execution adaptive is unsupported for FDM and time-integration workflows; use serial execution".into(),
+                });
+            }
+            BackendPlanIR::Fem(_) => {
+                return Err(RunError {
+                    message: "parallel_execution adaptive is unsupported for FEM stages without a Relax prerequisite or Eigen k-path".into(),
+                });
+            }
+            BackendPlanIR::FemFrequencyResponse(_) => {
+                return Err(RunError {
+                    message: "parallel_execution adaptive is unsupported for FEM frequency-response workflows; use serial execution".into(),
+                });
+            }
+        },
+    };
+
+    Ok(ValidatedParallelExecution {
+        policy,
+        resolved_mode,
+        resolved_reason,
+    })
+}
+
+fn append_parallel_execution_provenance(
+    executed: &mut types::ExecutedRun,
+    resolution: &ValidatedParallelExecution,
+) -> Result<(), RunError> {
+    let bytes = serde_json::to_vec_pretty(&serde_json::json!({
+        "schema_version": "parallel_execution.runtime.v1",
+        "requested_policy": &resolution.policy,
+        "resolved_mode": resolution.resolved_mode,
+        "resolved_reason": resolution.resolved_reason,
+    }))
+    .map_err(|error| RunError {
+        message: format!("serialize parallel execution provenance: {error}"),
+    })?;
+    executed.auxiliary_artifacts.push(AuxiliaryArtifact {
+        relative_path: "execution/parallel_execution.v1.json".to_string(),
+        bytes,
+    });
+    Ok(())
+}
+
 /// Run a problem with an already materialized execution plan.
 ///
 /// Interactive frontends use this to preserve the materialize -> wait ->
@@ -2491,6 +2605,7 @@ pub fn run_planned_problem(
     let problem = execution_problem.as_ref();
     require_resolved_runtime_sampling(problem, plan)?;
     require_physics_graph_runtime_provenance(problem, plan)?;
+    let parallel_execution = validate_parallel_execution_workflow(problem, plan)?;
     if let fullmag_ir::StudyIR::Hysteresis { .. } = &problem.study {
         return hysteresis::run_planned_hysteresis(problem, plan, until_seconds, output_dir, None);
     }
@@ -2580,11 +2695,13 @@ pub fn run_planned_problem(
                 fem::eigen_equilibrium_contract::FemRelaxationProducerStageIdentity::from_problem(
                     problem,
                 );
-            dispatch::execute_fem_eigen_with_producer_identity(
+            dispatch::execute_fem_eigen_with_producer_identity_and_parallel_policy(
                 execution,
                 fem,
                 &plan.output_plan.outputs,
                 producer_identity.as_ref(),
+                &parallel_execution.policy,
+                Some(output_dir),
             )
         }
         BackendPlanIR::FemFrequencyResponse(response) => {
@@ -2624,6 +2741,7 @@ pub fn run_planned_problem(
         .extend(spin_wave_sampling::requested_finite_k_artifacts(
             problem, plan, output_dir,
         )?);
+    append_parallel_execution_provenance(&mut executed, &parallel_execution)?;
 
     if let Err(e) = artifacts::write_artifacts(
         output_dir,
@@ -2655,6 +2773,7 @@ pub fn run_planned_problem_with_hysteresis_stage_id(
     require_resolved_runtime_sampling(problem, plan)?;
     require_physics_graph_runtime_provenance(problem, plan)?;
     if let fullmag_ir::StudyIR::Hysteresis { .. } = &problem.study {
+        validate_parallel_execution_workflow(problem, plan)?;
         return hysteresis::run_planned_hysteresis(
             problem,
             plan,
@@ -2672,6 +2791,18 @@ pub fn fem_observables_for_magnetization(
 ) -> Result<fullmag_engine::EffectiveFieldObservables, RunError> {
     require_tetrahedral_fem_plan_mesh(&plan.mesh, plan.mesh_build_report.as_ref(), "fem")?;
     fem_baseline::fem_observables_for_magnetization(plan, magnetization)
+}
+
+fn insert_parallel_u64_scalars(
+    scalars: &mut std::collections::HashMap<String, f64>,
+    key: &str,
+    value: u64,
+) {
+    scalars.insert(
+        format!("{key}_lo"),
+        f64::from((value & u64::from(u32::MAX)) as u32),
+    );
+    scalars.insert(format!("{key}_hi"), f64::from((value >> 32) as u32));
 }
 
 fn fem_eigen_progress_update(
@@ -2747,6 +2878,82 @@ fn fem_eigen_progress_update(
     }
     if let Some(window_elapsed_seconds) = progress.window_elapsed_seconds {
         progress_scalars.insert("window_elapsed_seconds".to_string(), window_elapsed_seconds);
+    }
+    if let Some(parallel) = progress.parallel_execution.as_ref() {
+        progress_scalars.insert("parallel_telemetry_available".to_string(), 1.0);
+        progress_scalars.insert(
+            "parallel_active_workers".to_string(),
+            f64::from(parallel.active_workers),
+        );
+        progress_scalars.insert(
+            "parallel_admission_desired_workers".to_string(),
+            f64::from(parallel.admission_desired_workers),
+        );
+        progress_scalars.insert(
+            "parallel_admission_pending_samples".to_string(),
+            f64::from(parallel.admission_pending_samples),
+        );
+        progress_scalars.insert(
+            "parallel_cpu_target_percent".to_string(),
+            parallel.cpu_target_percent,
+        );
+        progress_scalars.insert(
+            "parallel_memory_target_percent".to_string(),
+            parallel.memory_target_percent,
+        );
+        insert_parallel_u64_scalars(
+            &mut progress_scalars,
+            "parallel_memory_reserve_bytes",
+            parallel.memory_reserve_bytes,
+        );
+        insert_parallel_u64_scalars(
+            &mut progress_scalars,
+            "parallel_sampled_at_unix_ms",
+            parallel.sampled_at_unix_ms,
+        );
+        progress_scalars.insert(
+            "parallel_telemetry_terminal".to_string(),
+            parallel.terminal as u8 as f64,
+        );
+        for (key, value) in [
+            ("parallel_admission_worker_limit", parallel.admission_worker_limit),
+            ("parallel_resolved_workers", parallel.resolved_workers),
+        ] {
+            if let Some(value) = value {
+                progress_scalars.insert(key.to_string(), f64::from(value));
+            }
+        }
+        for (key, value) in [
+            ("parallel_cpu_busy_percent", parallel.cpu_busy_percent),
+            ("parallel_allocated_cpu_cores", parallel.allocated_cpu_cores),
+            ("parallel_cpu_available_cores", parallel.cpu_available_cores),
+            ("parallel_worker_peak_cpu_cores", parallel.worker_peak_cpu_cores),
+        ] {
+            if let Some(value) = value.filter(|value| value.is_finite()) {
+                progress_scalars.insert(key.to_string(), value);
+            }
+        }
+        for (key, value) in [
+            ("parallel_memory_limit_bytes", parallel.memory_limit_bytes),
+            ("parallel_memory_available_bytes", parallel.memory_available_bytes),
+            ("parallel_worker_peak_rss_bytes", parallel.worker_peak_rss_bytes),
+        ] {
+            if let Some(value) = value {
+                insert_parallel_u64_scalars(&mut progress_scalars, key, value);
+            }
+        }
+        if !parallel.cpu_target_kind.is_empty() {
+            progress_scalars.insert(
+                format!("parallel_cpu_target_kind:{}", parallel.cpu_target_kind),
+                1.0,
+            );
+        }
+        if !parallel.admission_reason.is_empty() {
+            progress_scalars.insert(
+                format!("parallel_admission_reason:{}", parallel.admission_reason),
+                1.0,
+            );
+        }
     }
     progress_scalars.insert(
         "window_phase_base".to_string(),
@@ -2898,6 +3105,7 @@ pub fn run_planned_problem_with_callback_and_fem_mesh_identity_and_relax_handoff
     let problem = execution_problem.as_ref();
     require_resolved_runtime_sampling(problem, plan)?;
     require_physics_graph_runtime_provenance(problem, plan)?;
+    let parallel_execution = validate_parallel_execution_workflow(problem, plan)?;
     if let fullmag_ir::StudyIR::Hysteresis { .. } = &problem.study {
         return hysteresis::run_planned_hysteresis_with_callback(
             problem,
@@ -3028,20 +3236,24 @@ pub fn run_planned_problem_with_callback_and_fem_mesh_identity_and_relax_handoff
                 ))
             };
             match relax_handoff {
-                Some(handoff) => dispatch::execute_fem_eigen_with_progress_and_stage_handoff_and_producer_identity(
+                Some(handoff) => dispatch::execute_fem_eigen_with_progress_and_stage_handoff_and_producer_identity_and_parallel_policy(
                     execution,
                     fem,
                     &runtime_outputs,
                     &mut progress_callback,
                     handoff,
                     producer_identity.as_ref(),
+                    &parallel_execution.policy,
+                    Some(output_dir),
                 ),
-                None => dispatch::execute_fem_eigen_with_progress_and_producer_identity(
+                None => dispatch::execute_fem_eigen_with_progress_and_producer_identity_and_parallel_policy(
                     execution,
                     fem,
                     &runtime_outputs,
                     &mut progress_callback,
                     producer_identity.as_ref(),
+                    &parallel_execution.policy,
+                    Some(output_dir),
                 ),
             }
         }
@@ -3079,6 +3291,7 @@ pub fn run_planned_problem_with_callback_and_fem_mesh_identity_and_relax_handoff
         .extend(spin_wave_sampling::requested_finite_k_artifacts(
             problem, plan, output_dir,
         )?);
+    append_parallel_execution_provenance(&mut executed, &parallel_execution)?;
 
     if let Err(e) = artifacts::write_artifacts(
         output_dir,
@@ -3367,6 +3580,7 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
     let execution_problem = bind_fem_execution_stage_identity(problem, plan)?;
     let problem = execution_problem.as_ref();
     require_resolved_runtime_sampling(problem, plan)?;
+    let parallel_execution = validate_parallel_execution_workflow(problem, plan)?;
     if let fullmag_ir::StudyIR::Hysteresis { .. } = &problem.study {
         return hysteresis::run_planned_hysteresis_with_live_preview(
             problem,
@@ -3514,12 +3728,14 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
                         .and_then(|context| context.generation_id()),
                 ))
             };
-            dispatch::execute_fem_eigen_with_progress_and_producer_identity(
+            dispatch::execute_fem_eigen_with_progress_and_producer_identity_and_parallel_policy(
                 execution,
                 fem,
                 &runtime_outputs,
                 &mut progress_callback,
                 producer_identity.as_ref(),
+                &parallel_execution.policy,
+                Some(output_dir),
             )
         }
         BackendPlanIR::FemFrequencyResponse(response) => {
@@ -3556,6 +3772,7 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
         .extend(spin_wave_sampling::requested_finite_k_artifacts(
             problem, plan, output_dir,
         )?);
+    append_parallel_execution_provenance(&mut executed, &parallel_execution)?;
 
     if let Err(e) = artifacts::write_artifacts(
         output_dir,
@@ -5237,6 +5454,15 @@ pub fn run_reference_fem_eigen(
             .map(|a| (a.relative_path, a.bytes))
             .collect(),
     })
+}
+
+/// Hidden process-worker entry point used by the adaptive independent-k pool.
+/// The CLI wrapper keeps the request/response protocol file based so startup
+/// diagnostics cannot be mistaken for solver output.
+pub fn run_eigen_k_worker_request_file(
+    request_path: &std::path::Path,
+) -> Result<(), RunError> {
+    fem::eigen_k_worker::run_request_file(request_path)
 }
 
 #[cfg(test)]

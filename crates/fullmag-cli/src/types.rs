@@ -895,6 +895,9 @@ pub(crate) struct CurrentLiveStageExecutionRecord {
     pub current_settle_step_kind: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current_settle_step_method: Option<String>,
+    /// Latest real adaptive FEM CPU admission sample for this stage.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parallel_execution: Option<fullmag_runner::LiveParallelExecutionTelemetry>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

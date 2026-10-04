@@ -1,6 +1,7 @@
 pub mod artifacts;
 pub mod assembly_scalar;
 pub mod diagnostics;
+pub(crate) mod k_process_pool;
 pub mod orchestrator;
 pub(crate) mod output_selection;
 pub mod path;

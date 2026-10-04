@@ -105,6 +105,13 @@ pub(crate) enum Command {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         raw_args: Vec<OsString>,
     },
+    /// Internal allowlisted FEM eigen k worker.  This command is launched
+    /// only by the runner's process pool and exchanges data through files.
+    #[command(name = "__eigen-k-worker", hide = true)]
+    EigenKWorker {
+        #[arg(long)]
+        request: PathBuf,
+    },
     /// Session persistence commands (save, open, inspect, recover, gc)
     #[command(subcommand)]
     Session(SessionSubcommand),

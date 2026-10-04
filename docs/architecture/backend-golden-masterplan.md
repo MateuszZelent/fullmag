@@ -581,6 +581,24 @@ routing i numerykę, a runner nadal wykonuje część method rejection/resolutio
 docelowej architektury. Ich naprawa jest późniejszym behavior-preserving
 refaktorem i implementacją, nie częścią tego dokumentacyjnego patcha.
 
+### Adaptacyjne próbkowanie dyspersji FEM CPU
+
+Polityka wykonania i granice dopuszczania procesów są opisane w
+[ADR 0034](../adr/0034-adaptive-dispersion-process-pool.md).
+`crates/fullmag-runner/src/eigen/k_process_pool.rs` jest właścicielem puli
+izolowanych procesów oraz cancellation, a `adaptive_resources*.rs` pomiarów
+alokacji CPU/RAM. `fem/eigen_k_worker.rs` wiąże żądanie i artefakty z planem,
+przyjętą równowagą i indeksem próbki. Numeryka nadal należy do natywnego FEM;
+pula nie współdzieli MFEM/PETSc pomiędzy wątkami ani nie zmienia operatorów.
+
+Brak polityki zachowuje wykonanie szeregowe. Tryb adaptacyjny dotyczy
+niezależnych k w FEM CPU; GPU oraz continuation pola wymagają odrębnej
+kwalifikacji. Cel procentowego obciążenia CPU jest miękką regułą dopuszczania,
+a limity OS/cgroup/HPC są nadrzędne. Stan wdrożenia i osobne bramki runtime,
+GUI oraz parytetu naukowego podaje
+[plan wykonania](../superpowers/plans/2026-10-02-adaptive-dispersion-execution.md).
+Sam obecny kod nie dowodzi zaliczenia tych bramek.
+
 ## 7.3 Workflow pola anteny mikrofalowej
 
 Kanoniczny kontrakt fizyczny dla anten microstrip/CPW z profilem zmiennym

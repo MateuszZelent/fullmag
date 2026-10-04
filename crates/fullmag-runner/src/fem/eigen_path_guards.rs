@@ -130,7 +130,7 @@ fn normalize_gamma_floquet_point_to_periodic_k0(
     };
 }
 
-pub(super) fn eigen_path_single_k_point_plan(
+pub(in crate::fem) fn eigen_path_single_k_point_plan(
     plan: &FemEigenPlanIR,
     sample: &crate::eigen::KSampleDescriptor,
     reuse_relaxed_equilibrium: bool,
