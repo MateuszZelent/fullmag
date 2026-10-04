@@ -35,6 +35,7 @@ mod stage_heartbeat;
 mod step_utils;
 mod terminal_logs;
 mod types;
+mod workspace_usage;
 
 use args::*;
 use formatting::*;
@@ -51,7 +52,13 @@ fn main() -> Result<()> {
         let script_mode = std::thread::Builder::new()
             .name("fullmag-script-mode".to_string())
             .stack_size(SCRIPT_MODE_STACK_SIZE_BYTES)
-            .spawn(move || orchestrator::run_script_mode(raw_args))
+            .spawn(move || {
+                // Usage history is best effort and never changes the run.
+                let usage = workspace_usage::begin_script_run(&raw_args);
+                let result = orchestrator::run_script_mode(raw_args);
+                workspace_usage::finish_script_run(usage, &result);
+                result
+            })
             .context("failed to spawn script-mode worker")?;
         return script_mode
             .join()
@@ -416,6 +423,15 @@ fn handle_project(cmd: args::ProjectSubcommand) -> Result<()> {
         .open(ProjectSource::Path(path.clone()))
         .map_err(|error| anyhow!(error.to_string()))?;
     let view = opened.view;
+    workspace_usage::record_project_open(
+        &path,
+        Some(view.project_id.as_str()),
+        serde_json::json!({ "via": "project open" }),
+        serde_json::json!({
+            "schema_version": view.schema_version,
+            "revision": view.revision,
+        }),
+    );
     let mode = match view.mode {
         DocumentMode::ReadWrite => serde_json::json!({"kind": "read_write"}),
         DocumentMode::ReadOnly { reason } => {
@@ -564,7 +580,15 @@ fn handle_session(cmd: args::SessionSubcommand) -> Result<()> {
                 Ok(session)
             })();
             let session = match result {
-                Ok(session) => session,
+                Ok(session) => {
+                    workspace_usage::record_project_open(
+                        &path,
+                        None,
+                        serde_json::json!({ "via": "session open" }),
+                        serde_json::Value::Null,
+                    );
+                    session
+                }
                 Err(error) => {
                     if error
                         .downcast_ref::<fullmag_session::PublicationUncertain>()

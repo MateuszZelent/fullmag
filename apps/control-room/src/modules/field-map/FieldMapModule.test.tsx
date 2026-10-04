@@ -362,7 +362,9 @@ describe("FieldMapModule planar state ownership", () => {
       source: _label === "monitor source definition" ? { kind: "monitor", monitor_id: "plane-1" } : { kind: "default" },
       default_slice: { plane: "xy", position_fraction: 0.5, operator: { kind: "plane_sample" } },
       resolution: { width: 256, height: 128, vector_budget: 512 },
+      interaction: { pan_u_m: 0, pan_v_m: 0, zoom: 1 },
       layers: { raster: true, vectors: false },
+      vector_style: { color_mode: "orientation", length_mode: "uniform", scale: 1 },
       view_scope: { kind: "monitor_target" },
     };
     mocks.visualization.data = { planar };

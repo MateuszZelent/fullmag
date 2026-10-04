@@ -40,6 +40,7 @@ import { RegionalFieldDrivePanel } from "./RegionalFieldDrivePanel";
 
 const kernel = {
   api: { model: {} },
+  commands: { getSessionScopeKey: () => null },
   resources: { invalidate: vi.fn() },
   selection: { set: vi.fn() },
 } as unknown as KernelApi;

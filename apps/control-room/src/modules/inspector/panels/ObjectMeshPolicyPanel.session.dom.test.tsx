@@ -64,7 +64,10 @@ vi.mock("@/shared/ui/Tabs", () => ({
   TabsContent: ({ children }: { children: ReactNode }) => <div>{children}</div>,
 }));
 
-vi.mock("lucide-react", () => ({ HelpCircle: () => null }));
+vi.mock("lucide-react", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("lucide-react")>();
+  return { ...actual, HelpCircle: () => null };
+});
 
 import { ObjectMeshPolicyPanel } from "./ObjectMeshPolicyPanel";
 

@@ -161,6 +161,12 @@ describe("generated OpenAPI v2 transport", () => {
     for (const parameter of document.paths[
       "/v2/sessions/current/data/fields/{quantity_id}/planar-monitors/{monitor_id}/scalar"
     ].get.parameters) {
+      // Shared parameters (for example the session scope header) are `$ref`
+      // entries without an inline name or schema.
+      if (parameter.$ref) {
+        expect(parameter.$ref).toMatch(/^#\/components\/parameters\//);
+        continue;
+      }
       if (parameter.name.startsWith("expected_")) {
         expect(parameter.schema.type, parameter.name).toBe("string");
       }

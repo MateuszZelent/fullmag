@@ -1,7 +1,7 @@
 {
   "document": {
     "path": "public_docs/site/numerical-methods/demag-solvers/fdm-convolution.md",
-    "reviewed_revision": "a1de38b4d7dad275dccbdbfd937b757d6ca7ee99",
+    "reviewed_revision": "f79d34a22373377322421b0f44934e08aa3edf0c",
     "source_of_truth": "Current repository source declarations and public Python API contracts."
   },
   "backend_matrix": [
@@ -37,7 +37,7 @@
     {"id": "newell", "path": "crates/fullmag-fdm-demag/src/newell.rs", "symbol": "compute_newell_kernels", "responsibility": "Newell cell-averaged tensor construction."},
     {"id": "multiply", "path": "crates/fullmag-fdm-demag/src/multiply.rs", "symbol": "accumulate_tensor_convolution", "responsibility": "Tensor-vector convolution and sign convention."},
     {"id": "cpu-spectrum", "path": "crates/fullmag-engine/src/fdm/cpu/fft.rs", "symbol": "compute_newell_kernel_spectra", "responsibility": "CPU FFT kernel spectra."},
-    {"id": "cpu-field", "path": "crates/fullmag-engine/src/fdm/cpu/fields.rs", "symbol": "demag_field_from_vectors", "responsibility": "CPU demagnetizing field and energy path."},
+    {"id": "cpu-field", "path": "crates/fullmag-engine/src/fdm/cpu/fields/demag.rs", "symbol": "demag_field_from_vectors", "responsibility": "CPU demagnetizing field and energy path."},
     {"id": "cuda64", "path": "backends/fdm/gpu/cuda/interactions/demag_fp64.cu", "symbol": "launch_demag_field_fp64", "responsibility": "CUDA FP64 field dispatch."},
     {"id": "python-stage", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "relax_stage", "responsibility": "Stage-first example lowering."}
   ],

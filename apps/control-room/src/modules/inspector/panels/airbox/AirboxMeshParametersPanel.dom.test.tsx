@@ -24,7 +24,8 @@ const mocks = vi.hoisted(() => ({
   scopeKey: "session=A&epoch=4&request_scope_epoch=4",
 }));
 
-vi.mock("@/kernel/resources/useSessionStatus", () => ({
+vi.mock("@/kernel/resources/useSessionStatus", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/kernel/resources/useSessionStatus")>()),
   useSessionResourceIdentity: () => mocks.identity,
 }));
 

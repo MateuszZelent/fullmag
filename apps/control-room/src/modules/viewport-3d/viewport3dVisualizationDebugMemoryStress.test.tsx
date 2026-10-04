@@ -546,11 +546,28 @@ function makeKernel(): KernelApi {
         },
       },
       sessions: {
+        // Session identity is confirmed against the session collection.
+        list: async () => ({
+          schema_version: "2.0.0",
+          sessions: [
+            {
+              current: true,
+              name: "session-1",
+              session_id: "session-1",
+              status: "running",
+            },
+          ],
+        }),
         current: {
           status: async () => ({
             capabilities: { explicit_topology: true },
             domain: { discretization: "fem" },
             resources: {},
+            session: {
+              request_scope_epoch: "api-instance:1",
+              session_epoch: "session-1@1700000000000",
+              session_id: "session-1",
+            },
           }),
         },
       },

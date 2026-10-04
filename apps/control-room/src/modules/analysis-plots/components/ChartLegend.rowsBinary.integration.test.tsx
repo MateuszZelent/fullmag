@@ -18,6 +18,27 @@ import type { KernelApi } from "@/kernel/types";
 
 import { AnalysisTableSurface } from "./AnalysisTableSurface";
 
+const sessionStatus = {
+  capabilities: { binary_fields: true },
+  domain: { discretization: "fdm" },
+  resources: { scene_revision: 1 },
+  run: null,
+  session: {
+    request_scope_epoch: "api-instance:test",
+    session_epoch: "test-session@1",
+    session_id: "test-session",
+  },
+};
+// Session identity is confirmed against the session collection before any
+// session-scoped resource loads.
+const sessionsApi = {
+  current: { status: async () => sessionStatus },
+  list: async () => ({
+    schema_version: "2.0.0",
+    sessions: [{ current: true, name: "test", session_id: "test-session", status: "running" }],
+  }),
+};
+
 describe("chart legend local selection", () => {
   it("does not refetch rowsBinary when a mounted legend click changes the rendered subset", async () => {
     const dom = installSimulationPreparationTestDom();
@@ -33,7 +54,7 @@ describe("chart legend local selection", () => {
     );
     const bus = new EventBus<KernelEventMap>();
     const kernel = {
-      api: { data: { tables: { rowsBinary } } },
+      api: { data: { tables: { rowsBinary } }, sessions: sessionsApi },
       bus,
       diagnosticRecorder: new DiagnosticRecorderController({ config: { enabled: false } }),
       resources: new ResourceInvalidationController(bus),

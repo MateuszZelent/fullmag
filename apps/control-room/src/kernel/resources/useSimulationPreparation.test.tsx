@@ -89,7 +89,21 @@ function makeKernel(
   return {
     kernel: {
       api: {
-        sessions: { current: { status: async () => statusFixture() } },
+        sessions: {
+          current: { status: async () => statusFixture() },
+          // Session identity is confirmed against the session collection.
+          list: async () => ({
+            schema_version: "2.0.0",
+            sessions: [
+              {
+                current: true,
+                name: "session-1",
+                session_id: "session-1",
+                status: "running",
+              },
+            ],
+          }),
+        },
         simulation: { preparation },
       },
       bus,
@@ -160,9 +174,13 @@ describe("useSimulationPreparation", () => {
           </KernelContext.Provider>,
         );
       });
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(1);
-      });
+      // Session identity (status + session collection) enables the scoped
+      // hook in a later React commit; advance the fake clock past each hop.
+      for (let index = 0; index < 4; index += 1) {
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(1);
+        });
+      }
 
       expect(load).toHaveBeenCalledTimes(1);
       expect(resultSnapshot(observations.at(-1)!)).toMatchObject({

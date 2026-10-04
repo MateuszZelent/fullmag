@@ -201,7 +201,7 @@ library, storage layout, precision, reductions and residency.
 | Stage lowering | `packages/fullmag-py/src/fullmag/world.py` | `relax_stage` | stage-first example lowering | public API |
 | Newell tensor | `crates/fullmag-fdm-demag/src/newell.rs` | `compute_newell_kernels` | cell-averaged tensor construction | CPU/reference |
 | Tensor convolution | `crates/fullmag-fdm-demag/src/multiply.rs` | `accumulate_tensor_convolution` | symmetric tensor-vector product | CPU/reference |
-| CPU field | `crates/fullmag-engine/src/fdm/cpu/fields.rs` | `demag_field_from_vectors` | CPU field realization | FDM CPU |
+| CPU field | `crates/fullmag-engine/src/fdm/cpu/fields/demag.rs` | `demag_field_from_vectors` | CPU field realization | FDM CPU |
 | GPU field | `backends/fdm/gpu/cuda/interactions/demag_fp64.cu` | `launch_demag_field_fp64` | CUDA FP64 field dispatch | FDM GPU |
 
 (numerical-methods-demag-fdm-validation)=
@@ -242,5 +242,5 @@ Use `Model Explorer -> Stages -> Add stage -> <stage kind>` for stage-level cont
 | Stage lowering | `packages/fullmag-py/src/fullmag/world.py` | `relax_stage` | stage-first lowering | public API | Python tests |
 | Newell kernel | `crates/fullmag-fdm-demag/src/newell.rs` | `compute_newell_kernels` | cell-averaged demag tensor | CPU/reference | Rust tests |
 | FFT product | `crates/fullmag-fdm-demag/src/multiply.rs` | `accumulate_tensor_convolution` | tensor-vector product | CPU/reference | Rust tests |
-| CPU field | `crates/fullmag-engine/src/fdm/cpu/fields.rs` | `demag_field_from_vectors` | CPU field calculation | FDM CPU | engine tests |
+| CPU field | `crates/fullmag-engine/src/fdm/cpu/fields/demag.rs` | `demag_field_from_vectors` | CPU field calculation | FDM CPU | engine tests |
 | GPU field | `backends/fdm/gpu/cuda/interactions/demag_fp64.cu` | `launch_demag_field_fp64` | CUDA FP64 field kernel dispatch | FDM GPU | CUDA/source contracts |

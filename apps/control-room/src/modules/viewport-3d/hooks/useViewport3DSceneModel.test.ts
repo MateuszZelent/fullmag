@@ -755,11 +755,18 @@ describe("useViewport3DSceneModel", () => {
     expect(source).toContain(
       "airboxFieldVectorPartStates: airboxFieldVectors.partStates,",
     );
+    // Live scene model carries the states directly; the debug source and the
+    // memoized scene model drop them while a pinned saved selection is active.
     expect(
       source.match(
         /airboxFieldVectorPartStates: airboxFieldVectors\.partStates,/g,
       ),
-    ).toHaveLength(3);
+    ).toHaveLength(1);
+    expect(
+      source.match(
+        /airboxFieldVectorPartStates: savedSelectionActive\s*\? EMPTY_VIEWPORT_FDM_PART_STATES\s*: airboxFieldVectors\.partStates,/g,
+      ),
+    ).toHaveLength(2);
   });
 
   it("keeps FDM native-layer visibility on the local structured-grid target state", () => {
@@ -1006,7 +1013,12 @@ describe("useViewport3DSceneModel", () => {
       "topologyRenderModel: fieldCompatibleTopologyRenderModel",
     );
     expect(source).toContain("topology: fieldCompatibleTopologyRenderModel");
-    expect(source).toContain("topologyModel: topologyRenderModelForGeometry");
+    // The geometry-only topology model stays the live path; pinned saved
+    // selections substitute their own saved-viewport topology model.
+    expect(source).toContain(
+      "const effectiveViewportTopologyModel = savedSelectionActive\n    ? savedViewportSceneModel?.topologyModel ?? null\n    : topologyRenderModelForGeometry;",
+    );
+    expect(source).toContain("topologyModel: effectiveViewportTopologyModel");
     expect(source).toContain(
       "Boolean(fdmDomain || fieldCompatibleTopologyRenderModel) &&",
     );
@@ -1020,7 +1032,7 @@ describe("useViewport3DSceneModel", () => {
       "const tet4FmmqQualitySupported = topologySupportsTet4FmmqQuality(topology.data);",
     );
     expect(source).toContain(
-      "useViewport3DMeshQualityData(\n    Boolean(\n      fieldCompatibleTopologyRenderModel &&\n        meshQualityOverlayVisible &&\n        tet4FmmqQualitySupported,\n    ),\n  )",
+      "useViewport3DMeshQualityData(\n    Boolean(\n      liveViewportResourcesEnabled &&\n        fieldCompatibleTopologyRenderModel &&\n        meshQualityOverlayVisible &&\n        tet4FmmqQualitySupported,\n    ),\n  )",
     );
   });
 
@@ -2339,7 +2351,7 @@ describe("useViewport3DSceneModel", () => {
     expect(source).toContain(
       "resolveViewport3DTargetQuantityFieldVectorForTarget({",
     );
-    expect(source).toContain("fieldVector: fdmFieldVector,");
+    expect(source).toContain("fieldVector: savedSelectionActive ? null : fdmFieldVector,");
   });
 
   it("builds synthetic +Z airbox vector fields without backend data", () => {
@@ -2474,7 +2486,8 @@ describe("useViewport3DSceneModel", () => {
 
     expect(source).toContain("useRenderableAnalysisFieldOverlay");
     expect(source).toContain("startAnalysisFieldOverlayPhaseAnimation");
-    expect(source).toContain("const primaryFieldQuantityId = analysisOverlay?.fieldId ?? quantityId;");
+    expect(source).toContain("const primaryFieldQuantityId = analysisOverlay?.fieldId ??");
+    expect(source).toContain('(pinnedObservationActive ? "m" : quantityId);');
     expect(source).toContain("const analysisPrimaryFieldDemandPlan = useMemo(() => {");
     expect(source).toContain("query: analysisOverlay.query,");
     expect(source).toContain("consumers: [\"primary-field-vector\"],");
@@ -2524,7 +2537,9 @@ describe("useViewport3DSceneModel", () => {
     const source = readFileSync(sceneModelSourceUrl, "utf8");
 
     expect(source).toContain("useModelRegionsResource({");
-    expect(source).toContain("enabled: Boolean(scene.data)");
+    expect(source).toContain(
+      "enabled: liveViewportResourcesEnabled && Boolean(scene.data)",
+    );
   });
 
   it("does not use domain selections to filter object region overlays", () => {
@@ -5250,7 +5265,9 @@ describe("useViewport3DSceneModel", () => {
     expect(source).toContain("const visualizationState = useVisualizationStateResource();");
     expect(source).toContain("const cameraRegistryCamera = useCameraRegistryCamera();");
     expect(source).toContain("const cameraView = resolveViewport3DSceneCameraView({");
-    expect(source).toContain("const cameraResource = cameraView.cameraResource;");
+    expect(source).toContain("const cameraResource = savedSelectionActive");
+    expect(source).toContain("? savedViewportCamera.cameraResource");
+    expect(source).toContain(": cameraView.cameraResource;");
     expect(source).not.toContain("useViewport3DVisualizationState");
   });
 
@@ -5394,7 +5411,9 @@ describe("useViewport3DSceneModel", () => {
 
     expect(source).toContain("activeCrossSectionFramePreview");
     expect(source).toContain("crossSectionFramePreviewToClip");
-    expect(source).toContain("enabled: Boolean(renderingState?.clip?.enabled && topologyCurrent)");
+    expect(source).toContain(
+      "liveViewportResourcesEnabled &&\n      Boolean(renderingState?.clip?.enabled && topologyCurrent)",
+    );
     expect(source).toContain("crossSectionFrameClip");
     expect(source).toContain("clipFrameRotationDegrees: 0");
   });
@@ -5501,7 +5520,9 @@ describe("useViewport3DSceneModel", () => {
       "fdmRegionMembership.error || fdmRegionMembershipBinary.error",
     );
     expect(source).toContain("fdmBuildFieldRevision");
-    expect(source).toContain("fdmInstanceModel: fdmInstanceModel");
+    expect(source).toContain(
+      "fdmInstanceModel: savedSelectionActive ? null : fdmInstanceModel",
+    );
     expect(source).toContain("fdmVectorSegments");
     expect(source).not.toContain("const fdmInstanceModel = useMemo<");
     expect(source).not.toContain("buildFdmCuboidInstanceModel(");
@@ -5627,8 +5648,9 @@ describe("useViewport3DSceneModel", () => {
     );
     expect(adoptionSource).toContain("?.fieldBuffer ?? fdmAirboxFieldBuffer");
     expect(identitySource).toContain(
-      "fullFieldBufferIdentity: adoptedFdmFieldBuffer",
+      "fullFieldBufferIdentity: !savedSelectionActive && adoptedFdmFieldBuffer",
     );
+    expect(identitySource).toContain("bufferId: adoptedFdmFieldBuffer.bufferId");
     expect(identitySource).not.toContain(
       "fullFieldBufferIdentity: fdmAirboxFieldBuffer",
     );

@@ -505,6 +505,7 @@ mod tests {
     fn complete_coverage_requires_exact_contiguous_range() {
         let mut solution = solution_set();
         solution.coverage[0].segments[0].start_sample = 1;
+        solution.coverage[0].segments[0].end_sample_exclusive = 5;
         assert_eq!(
             solution.validate(),
             Err(SolutionSetError::IncompleteDeclaredComplete(
