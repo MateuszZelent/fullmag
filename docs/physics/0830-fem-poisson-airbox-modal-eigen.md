@@ -1,3 +1,38 @@
+<!-- de-air-refinement-levels-20261004 -->
+(de-air-refinement-levels)=
+## Dalsze poziomy kontrolowanego zagęszczania powietrza DE
+
+Nota poprzedza rozszerzenie wejścia diagnostycznego. Dwie zakończone próby air growth1,15 przy +10/+25 potwierdziły wkład siatki powietrza, ale nie jej zbieżność: [raport obu prób](../raports/2026-10-04-de-air-grading-two-points.md). Następny krok wymaga co najmniej dalszego poziomu przy niezmienionym filmie. Dla tej kontrolowanej sekwencji dopuszczamy cztery dokładne wartości stringów, bez swobodnego parametru i bez zmian domyślnego growth1,3:
+
+```{math}
+:label: eq-de-air-refinement-levels
+r_n=1+0.3\,2^{-n},\qquad n\in\{0,1,2,3\}.
+```
+
+| Symbol | Znaczenie | SI |
+| --- | --- | --- |
+| $r_n$ | zadany współczynnik wzrostu warstw powietrza na poziomie kontrolnej sekwencji | $1$ |
+| $n$ | indeks poziomu diagnostycznego, nie stopień wielomianu FEM | $1$ |
+
+| Poziom | Dokładny string CLI/environment | Float w istniejącym DSL | Stan dowodu |
+| ---: | --- | ---: | --- |
+| 0 | `"1.3"` | 1.3 | historyczny baseline15; zbieżność OPEN |
+| 1 | `"1.15"` | 1.15 | +10/+25 zaakceptowane, rzeczywista izolacja filmu/stanów PASS |
+| 2 | `"1.075"` | 1.075 | źródła przygotowywane; wykonanie i izolacja NOT VERIFIED |
+| 3 | `"1.0375"` | 1.0375 | źródła przygotowywane; wykonanie i izolacja NOT VERIFIED |
+
+Równanie definiuje dyskretną sekwencję wyborów, nie produkcyjną regułę automatycznego refinementu ani ocenę błędu. Planer zachowuje poprzednią rekurencję {eq}`eq-de-air-grading-controlled-sequence`, seed5nm i cap100nm w L2/3. Mniejszy wzrost może zwiększyć liczbę warstw, pamięć i czas; nie gwarantuje gniazdowania siatek ani zbieżności częstotliwości. Nie wolno ekstrapolować rzędu dokładności z samego indeksu poziomu.
+
+`FULLMAG_DE_SMOKE_AIR_GROWTH_RATE` i opcjonalny `--air-growth-rate` są bezwymiarowymi stringami z powyższej listy; domyślnie environment1,3, CLI brak override. Wartości niefinitywne, bool, liczby zamiast stringów i niezatwierdzone zapisy (np.1.0750) są odrzucane. Ograniczenia pozostają: single-k Damon–Eshbach, standalone input z pełnego `--model-ref`, bez grouped/parallel/BV. Przed przyjęciem wyniku cztery ścieżki requested/declaration/effective mesh growth muszą zgadzać się; nie zamieniamy tego na odczyt legacy grading.
+
+Publiczny Python/IR, requested device i równania fizyczne nie zmieniają się: `StudyUniverseHandle.mesh` → `StudyUniverseConfig.to_dict` → `meta.runtime_metadata.study_universe.airbox_growth_rate` → `_study_universe_airbox_options` → `AirboxOptions.grading_ratio`. Istniejący przykład stage-first `examples/fem_de_smoke_numeric.py` zachowuje film, materiał, demag, Floquet, padding i tolerancje. Sterowanie diagnostyczne mapuje `AIR_GROWTH_RATE`, `_validate_air_growth_rate_request` i `validate_air_growth_rate_metadata` w source-map; dalsze poziomy wymagają nowego wersjonowanego inputu, nie nadpisania historycznej kapsuły.
+
+FEM CPU: poziomy2/3 source przygotowywane i runtime NOT VERIFIED; przejdą niezależne postsolve i actual body/equilibrium/profile isolation. FEM GPU: brak dowodu tych prób, NOT VERIFIED. FDM CPU/GPU: nie dotyczy layered FEM airboxu; ich demag ma odrębną realizację. Nie wprowadzamy fallbacku, capability ani publicznej migracji.
+
+Kryterium dalszej oceny: na +10/+25 porównać kolejne rzeczywiste częstotliwości, pełny residual i zmianę względem poprzedniego poziomu; skontrolować geometrię filmu, stan, air z-schedule i profile, zachowując raw artefakty oraz tożsamości runtime/model. Lepsza zgodność z open-air1D nie wystarcza do uznania zbieżności. Padding, body/thickness, mode-count, Γ full window, native serial/adaptive parity/zasoby, GUI, A1/COMSOL i integracja pozostają osobnymi otwartymi bramkami. Żadne obliczenie nie może omijać admission storage.
+
+Poniższa starsza nota opisuje pierwszy etap1,3→1,15; aktualny zakres kontrolki rozszerza wyłącznie powyższa dyskretna lista.
+
 <!-- de-air-grading-controlled-input-20261004 -->
 (de-air-grading-controlled-input)=
 ## Kontrolowany eksperyment siatki powietrza DE — 4 października 2026

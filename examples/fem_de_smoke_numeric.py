@@ -19,11 +19,18 @@ import os
 import fullmag as fm
 
 SAMPLING = os.environ.get("FULLMAG_DE_SMOKE_SAMPLING", "two")
-_AIR_GROWTH_RATE_VALUES = {"1.3": 1.3, "1.15": 1.15}
+_AIR_GROWTH_RATE_VALUES = {
+    "1.3": 1.3,
+    "1.15": 1.15,
+    "1.075": 1.075,
+    "1.0375": 1.0375,
+}
 _AIR_GROWTH_RATE_TEXT = os.environ.get("FULLMAG_DE_SMOKE_AIR_GROWTH_RATE", "1.3")
 if _AIR_GROWTH_RATE_TEXT not in _AIR_GROWTH_RATE_VALUES:
     raise ValueError(
-        "FULLMAG_DE_SMOKE_AIR_GROWTH_RATE must be '1.3' or '1.15', "
+        "FULLMAG_DE_SMOKE_AIR_GROWTH_RATE must be one of "
+        + ", ".join(repr(value) for value in _AIR_GROWTH_RATE_VALUES)
+        + ", "
         f"got {_AIR_GROWTH_RATE_TEXT!r}"
     )
 AIR_GROWTH_RATE = _AIR_GROWTH_RATE_VALUES[_AIR_GROWTH_RATE_TEXT]

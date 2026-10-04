@@ -1,3 +1,12 @@
+<!-- de-air-refinement-levels-source-20261004 -->
+## Aktualny checkpoint — dalsze poziomy air mesh i kontrola wersji wejścia
+
+Dodano jawne diagnostyczne wartości growth1,075 i1,0375, zachowując baseline1,3/1,15 i domyślny brak override CLI. Niezmienione single-k standalone DE, model fizyczny, body L2/3 i wszystkie tolerancje. Kontrola AST przed dispatch wymaga, aby wersjonowany input obsługiwał dokładny requested string z prawidłową wartością; stare wejście38fc nie może użyć nowych poziomów. Źródłowe interpreted pilot tests: 53PASS; scientific-documentation35PASS oraz focused staged source-map PASS. Testy kompilowane NOT RUN.
+
+Nowe poziomy **runtime/actual isolation NOT VERIFIED**; nie wykonano nowego ciężkiego buildu ani solve. Runner przy odczycie miał7765102592B wolnego, poniżej8GiB; nie obniżano admission ani nie usuwano danych. Następne obliczenia: +10/+25 przygrowth1,075 po spełnieniu admission, potem1,0375 gdy wcześniejszy wynik/zasoby to uzasadnią. Kolejne różnice częstotliwości i actual film/equilibrium/profile isolation muszą być odczytane z raw artefaktów. Nie ogłaszać zbieżności na podstawie samego zbliżenia do1D. Γ full window, padding/body/thickness/mode-count, native signed15/serial-adaptive parity/zasoby, GUI, A1/COMSOL, S09/provider/typecheck/GPU oraz PR97 pozostają **OPEN**.
+
+Nota: docs/physics/0830-fem-poisson-airbox-modal-eigen.md — de-air-refinement-levels. Poprzednie checkpointy i15baseline/dwa refinementy zachowano.
+
 <!-- de-air-two-points-isolation-20261004 -->
 ## Aktualny checkpoint — izolacja siatki powietrza potwierdzona przy +10 i +25
 

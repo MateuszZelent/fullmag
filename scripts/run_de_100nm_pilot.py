@@ -114,7 +114,7 @@ SHIFTED_KSP_RTOL_CHOICES = ("1e-8", "1e-9", "1e-10", "1e-11", "1e-12")
 GMRES_RESTART_CHOICES = ("8", "10", "12", "16", "30")
 MESH_LEVEL_CHOICES = ("L0", "L1", "L2", "L3")
 THICKNESS_LAYERS_CHOICES = ("3", "6", "9")
-AIR_GROWTH_RATE_CHOICES = ("1.3", "1.15")
+AIR_GROWTH_RATE_CHOICES = ("1.3", "1.15", "1.075", "1.0375")
 MESH_LEVEL_ELEMENT_SIZES_M = {"L0": 10e-9, "L1": 7.5e-9, "L2": 5e-9, "L3": 3.75e-9}
 UI_API_PORT = 8081
 UI_WORKSPACE_ROOT = "/workspace/fullmag-ui-workspace"
@@ -132,7 +132,8 @@ def _validate_air_growth_rate_request(pilot, requested, *, external_model, paral
     if requested is None:
         return
     if type(requested) is not str or requested not in AIR_GROWTH_RATE_CHOICES:
-        raise managed.BenchmarkError("air growth rate must be exactly '1.3' or '1.15'")
+        allowed = ", ".join(repr(value) for value in AIR_GROWTH_RATE_CHOICES)
+        raise managed.BenchmarkError(f"air growth rate must be exactly one of {allowed}")
     if pilot not in PILOTS or not pilot.startswith("de-smoke-"):
         raise managed.BenchmarkError("air growth rate requires a standalone DE-SMOKE pilot")
     if not external_model:
@@ -148,8 +149,13 @@ def _validate_air_growth_rate_request(pilot, requested, *, external_model, paral
         )
 
 
-def _validate_air_growth_rate_model_input(data):
+def _validate_air_growth_rate_model_input(data, requested=None):
     """Reject versioned inputs that cannot consume the explicit mesh control."""
+    if requested is not None and (
+        type(requested) is not str or requested not in AIR_GROWTH_RATE_CHOICES
+    ):
+        allowed = ", ".join(repr(value) for value in AIR_GROWTH_RATE_CHOICES)
+        raise managed.BenchmarkError(f"air growth rate must be exactly one of {allowed}")
     try:
         tree = ast.parse(data.decode("utf-8"), filename="fem_de_smoke_numeric.py")
     except (AttributeError, UnicodeDecodeError, SyntaxError) as error:
@@ -186,6 +192,61 @@ def _validate_air_growth_rate_model_input(data):
         raise managed.BenchmarkError(
             "air growth rate requires a versioned standalone model that applies "
             "FULLMAG_DE_SMOKE_AIR_GROWTH_RATE to study.universe.mesh"
+        )
+    if requested is None:
+        return
+
+    mapping_values = []
+    for statement in tree.body:
+        if isinstance(statement, ast.Assign):
+            targets = statement.targets
+            value = statement.value
+        elif isinstance(statement, ast.AnnAssign):
+            targets = [statement.target]
+            value = statement.value
+        else:
+            continue
+        if any(
+            isinstance(target, ast.Name) and target.id == "_AIR_GROWTH_RATE_VALUES"
+            for target in targets
+        ):
+            mapping_values.append(value)
+    if len(mapping_values) != 1 or not isinstance(mapping_values[0], ast.Dict):
+        raise managed.BenchmarkError(
+            "versioned standalone model must declare one literal "
+            "_AIR_GROWTH_RATE_VALUES mapping"
+        )
+
+    literal_values = {}
+    for key_node, value_node in zip(mapping_values[0].keys, mapping_values[0].values):
+        if (
+            not isinstance(key_node, ast.Constant)
+            or type(key_node.value) is not str
+            or key_node.value in literal_values
+            or not isinstance(value_node, ast.Constant)
+            or type(value_node.value) not in (int, float)
+        ):
+            raise managed.BenchmarkError(
+                "versioned standalone model air growth values must be unique "
+                "string keys and finite numeric literals"
+            )
+        try:
+            numeric_value = float(value_node.value)
+        except (OverflowError, ValueError) as error:
+            raise managed.BenchmarkError(
+                "versioned standalone model air growth values must be finite numeric literals"
+            ) from error
+        if not math.isfinite(numeric_value):
+            raise managed.BenchmarkError(
+                "versioned standalone model air growth values must be finite numeric literals"
+            )
+        literal_values[key_node.value] = numeric_value
+
+    expected_value = float(requested)
+    if literal_values.get(requested) != expected_value:
+        raise managed.BenchmarkError(
+            f"versioned standalone model does not declare air growth rate {requested!r} "
+            "with its exact finite numeric value"
         )
 
 
@@ -2428,7 +2489,7 @@ def main(argv=None):
                 raise ValueError("--model-ref requires a DE-SMOKE pilot")
             input_data, input_identity = model_input.load_model(Path(layout["repo_root"]), args.model_ref)
         if args.air_growth_rate is not None:
-            _validate_air_growth_rate_model_input(input_data)
+            _validate_air_growth_rate_model_input(input_data, args.air_growth_rate)
         if not args.dry_run:
             managed.fullmag_storage.initialize(layout)
         if args.dry_run:

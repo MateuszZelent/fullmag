@@ -1033,11 +1033,13 @@ class PilotTests(unittest.TestCase):
         context = SimpleNamespace(source_tree=Path("/capsule"), runtime_root=Path("/runtime"),
                                   image_digest="sha256:test",
                                   job={"job_id": "a" * 32, "profile": "fem-cpu-slepc-runtime-v1"})
-        shell = pilot.compose_command(
-            context, Path("/outputs"), pilot="de-smoke-k10", external_model=True,
-            air_growth_rate="1.15",
-        )[-1]
-        self.assertIn("export FULLMAG_DE_SMOKE_AIR_GROWTH_RATE=1.15", shell)
+        for rate in pilot.AIR_GROWTH_RATE_CHOICES:
+            with self.subTest(rate=rate):
+                shell = pilot.compose_command(
+                    context, Path("/outputs"), pilot="de-smoke-k10", external_model=True,
+                    air_growth_rate=rate,
+                )[-1]
+                self.assertIn(f"export FULLMAG_DE_SMOKE_AIR_GROWTH_RATE={rate}", shell)
         default_shell = pilot.compose_command(
             context, Path("/outputs"), pilot="de-smoke-k10", external_model=True,
         )[-1]
@@ -1061,7 +1063,7 @@ class PilotTests(unittest.TestCase):
                     external_model=external_model, parallel_mode=parallel_mode,
                     air_growth_rate="1.15",
                 )
-        for unsupported in ("1.2", 1.15, True):
+        for unsupported in ("1.2", "1.0750", "1.0375;echo bad", 1.15, True):
             with self.subTest(unsupported=unsupported), self.assertRaises(pilot.managed.BenchmarkError):
                 pilot.compose_command(
                     context, Path("/outputs"), pilot="de-smoke-k10", external_model=True,
@@ -1070,8 +1072,48 @@ class PilotTests(unittest.TestCase):
 
     def test_air_growth_rate_input_support_and_preview_are_version_bound(self):
         fixture_path = Path(__file__).resolve().parents[1] / "examples" / "fem_de_smoke_numeric.py"
-        source = fixture_path.read_bytes()
+        source = fixture_path.read_bytes().replace(b"\r\n", b"\n")
         pilot._validate_air_growth_rate_model_input(source)
+        for rate in pilot.AIR_GROWTH_RATE_CHOICES:
+            with self.subTest(rate=rate):
+                pilot._validate_air_growth_rate_model_input(source, rate)
+
+        mapping = (
+            b'_AIR_GROWTH_RATE_VALUES = {\n'
+            b'    "1.3": 1.3,\n'
+            b'    "1.15": 1.15,\n'
+            b'    "1.075": 1.075,\n'
+            b'    "1.0375": 1.0375,\n'
+            b'}'
+        )
+        self.assertIn(mapping, source)
+        old_source = source.replace(
+            mapping,
+            b'_AIR_GROWTH_RATE_VALUES = {"1.3": 1.3, "1.15": 1.15}',
+        )
+        pilot._validate_air_growth_rate_model_input(old_source)
+        pilot._validate_air_growth_rate_model_input(old_source, "1.15")
+        for rate in ("1.075", "1.0375"):
+            with self.subTest(old_model_rate=rate), self.assertRaisesRegex(
+                pilot.managed.BenchmarkError, "does not declare"
+            ):
+                pilot._validate_air_growth_rate_model_input(old_source, rate)
+
+        malformed_mappings = (
+            mapping.replace(b'"1.075": 1.075', b'1.075: 1.075'),
+            mapping.replace(b'"1.075": 1.075', b'"1.075": 1.0751'),
+            mapping.replace(b'"1.075": 1.075', b'"1.075": True'),
+            mapping.replace(b'"1.075": 1.075', b'"1.075": 1e999'),
+            mapping.replace(b'"1.075": 1.075', b'"1.075": 1.075 + 0'),
+            mapping.replace(b'"1.075": 1.075,\n', b''),
+        )
+        for bad_mapping in malformed_mappings:
+            bad_source = source.replace(mapping, bad_mapping)
+            with self.subTest(mapping=bad_mapping), self.assertRaises(
+                pilot.managed.BenchmarkError
+            ):
+                pilot._validate_air_growth_rate_model_input(bad_source, "1.075")
+
         old_source = source.replace(
             b"FULLMAG_DE_SMOKE_AIR_GROWTH_RATE",
             b"FULLMAG_DE_SMOKE_AIR_GROWTH_RATE_UNSUPPORTED",
@@ -1119,27 +1161,31 @@ class PilotTests(unittest.TestCase):
         with TemporaryDirectory() as temporary:
             case = Path(temporary)
             metadata_path = case / "metadata.json"
-            metadata_path.write_text(json.dumps(metadata_for(1.15)), encoding="utf-8")
-            record = pilot.validate_air_growth_rate_metadata(case, "1.15")
-            self.assertEqual(record["requested"], "1.15")
-            self.assertEqual(record["resolved"], 1.15)
-            self.assertEqual(
-                record["resolved_metadata_path"],
-                "mesh.mesh_build_report.effective_airbox_target.growth_rate",
-            )
-            for path in paths:
-                with self.subTest(path=path):
-                    payload = metadata_for(1.15)
-                    set_path(payload, path, 1.3)
+            for requested in ("1.075", "1.0375"):
+                resolved = float(requested)
+                metadata_path.write_text(json.dumps(metadata_for(resolved)), encoding="utf-8")
+                record = pilot.validate_air_growth_rate_metadata(case, requested)
+                self.assertEqual(record["requested"], requested)
+                self.assertEqual(record["resolved"], resolved)
+                self.assertEqual(
+                    record["resolved_metadata_path"],
+                    "mesh.mesh_build_report.effective_airbox_target.growth_rate",
+                )
+                for path in paths:
+                    with self.subTest(requested=requested, path=path):
+                        payload = metadata_for(resolved)
+                        set_path(payload, path, 1.3)
+                        metadata_path.write_text(json.dumps(payload), encoding="utf-8")
+                        with self.assertRaisesRegex(pilot.managed.BenchmarkError, "ignored or changed"):
+                            pilot.validate_air_growth_rate_metadata(case, requested)
+                for invalid in (True, str(resolved), float("nan")):
+                    payload = metadata_for(resolved)
+                    set_path(payload, paths[-1], invalid)
                     metadata_path.write_text(json.dumps(payload), encoding="utf-8")
-                    with self.assertRaisesRegex(pilot.managed.BenchmarkError, "ignored or changed"):
-                        pilot.validate_air_growth_rate_metadata(case, "1.15")
-            for invalid in (True, "1.15", float("nan")):
-                payload = metadata_for(1.15)
-                set_path(payload, paths[-1], invalid)
-                metadata_path.write_text(json.dumps(payload), encoding="utf-8")
-                with self.subTest(invalid=invalid), self.assertRaises(pilot.managed.BenchmarkError):
-                    pilot.validate_air_growth_rate_metadata(case, "1.15")
+                    with self.subTest(requested=requested, invalid=invalid), self.assertRaises(
+                        pilot.managed.BenchmarkError
+                    ):
+                        pilot.validate_air_growth_rate_metadata(case, requested)
 
     def test_air_growth_rate_is_recorded_in_the_run_request(self):
         with TemporaryDirectory() as temporary:
@@ -1196,8 +1242,12 @@ class PilotTests(unittest.TestCase):
                 runpy.run_path(str(fixture_path), run_name="__main__")
             return recorder
 
-        for environment, expected in (({}, 1.3),
-                                      ({"FULLMAG_DE_SMOKE_AIR_GROWTH_RATE": "1.15"}, 1.15)):
+        baseline = run_fixture({})
+        baseline_metadata = dict(baseline.runtime_metadata[0])
+        baseline_metadata.pop("air_growth_rate")
+        for requested in pilot.AIR_GROWTH_RATE_CHOICES:
+            environment = {"FULLMAG_DE_SMOKE_AIR_GROWTH_RATE": requested}
+            expected = float(requested)
             with self.subTest(environment=environment):
                 recorder = run_fixture(environment)
                 self.assertEqual(len(recorder.mesh_calls), 1)
@@ -1205,8 +1255,21 @@ class PilotTests(unittest.TestCase):
                 self.assertEqual(recorder.mesh_calls[0]["maximum_element_growth_rate"], expected)
                 self.assertEqual(recorder.mesh_calls[0]["grading"], "geometric")
                 self.assertEqual(recorder.runtime_metadata[0]["air_growth_rate"], expected)
+                metadata = dict(recorder.runtime_metadata[0])
+                metadata.pop("air_growth_rate")
+                self.assertEqual(metadata, baseline_metadata)
         with self.assertRaisesRegex(ValueError, "FULLMAG_DE_SMOKE_AIR_GROWTH_RATE"):
             run_fixture({"FULLMAG_DE_SMOKE_AIR_GROWTH_RATE": "1.2"})
+
+    def test_air_growth_rate_cli_help_lists_exact_control_sequence(self):
+        with contextlib.redirect_stdout(io.StringIO()) as output, \
+                contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit) as exit_info:
+                pilot.main(["--help"])
+        self.assertEqual(exit_info.exception.code, 0)
+        help_text = output.getvalue()
+        expected = "--air-growth-rate {" + ",".join(pilot.AIR_GROWTH_RATE_CHOICES) + "}"
+        self.assertIn(expected, help_text)
 
     def test_mesh_level_is_recorded_and_ignored_setting_is_rejected(self):
         context = SimpleNamespace(source_tree=Path("/capsule"), runtime_root=Path("/runtime"),
