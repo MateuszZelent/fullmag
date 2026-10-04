@@ -89,6 +89,7 @@ import { ObjectMoveToolController } from "./authoring/ObjectMoveToolController";
 import { AuthoringHistoryController } from "./authoring/AuthoringHistoryController";
 import { PendingFormRegistry } from "./authoring/PendingFormRegistry";
 import { ProjectDocumentController } from "./persistence/ProjectDocumentController";
+import { RunOutcomeConnector } from "./persistence/RunOutcomeConnector";
 import { resolveControlRoomModules } from "@/modules";
 
 installPerformanceMeasureGuard();
@@ -454,6 +455,7 @@ function AvailableSessionRuntimeConnectors({ kernel, collection }: {
       <CommandShortcutConnector kernel={kernel} />
       <VisualizationRegistrySyncConnector kernel={kernel} />
       <CameraRegistrySyncConnector kernel={kernel} sessionScopeKey={scopeKey!} />
+      <RunOutcomeConnector kernel={kernel} sessionIdentity={confirmedIdentity} />
     </>
   );
 }
