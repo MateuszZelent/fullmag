@@ -1783,3 +1783,53 @@ następne strojenie. FEM GPU/FDM nie otrzymują przez ten przyrost kwalifikacji.
 | source-cpu-schur | backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.hpp + solve_poisson_airbox_modal_eigen_cpu_schur | K0 EPS i agregacja podokien w sąsiednim .cpp; przygotowana poprawka źródeł, runtime NOT VERIFIED |
 | source-k0-subwindow-termination-format | backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.hpp + format_poisson_airbox_subwindow_termination_json | Rzeczywisty formatter nullable EPS termination, bez getterów; runtime NOT VERIFIED |
 | source-k0-subwindow-termination-test | backends/fem/tests/frequency_domain/poisson_airbox_schur_matshell_test.cpp + main | Przygotowana regresja formattera; niekompilowana |
+
+## Odczyt wymiarów EPS osobno od żądania
+
+Status: kontrakt przygotowanego przyrostu diagnostyki FEM CPU/K0; poprawiony
+native/runtime **NOT VERIFIED**. Wymiar żądany w `requested_nev`/`requested_ncv`
+nie jest automatycznie wymiarem odczytanym z biblioteki. Konfiguracja podokna
+ma dodatkowo zachować wynik `EPSGetDimensions` w istniejącym snapshotcie
+`modal_krylov_tuning`: `eps_dimensions.query_succeeded`, `nev`, `ncv`, `mpd`.
+
+NEV oznacza liczbę żądanych par, NCV maksymalny wymiar podprzestrzeni, MPD
+maksymalny wymiar problemu rzutowanego. Są to całkowite liczby w jednostce
+$1$. Wartości getterów zapisujemy jako signed integers, także zero i sentinel
+ujemny. Nie podstawiamy ustawień żądanych w miejsce brakującego pomiaru.
+Faza `configured_before_eps` opisuje odczyt przed setup/solve; nierozwiązany
+jeszcze MPD nie jest wtedy dowodem rzeczywistego rozmiaru problemu po solve.
+Faza `queried_after_eps` oznacza odczyt z tej samej, poprawnie dostępnej próby.
+Błąd getterów wymiaru daje `query_succeeded=false` i trzy `null`, nie nową
+bramkę akceptacji fizycznej ani zmianę parametrów EPS.
+
+Żaden nowy getter nie może wykonać się po hard error EPSSolve lub na
+nieważnym kontekście. Istniejąca wcześniejsza bezpieczna migawka nie staje
+się migawką postsolve przez sam wpis do JSON. Dodanie obserwacji nie zmienia
+operatora, NEV/NCV/MPD, tolerancji, limitów, preconditionera, warunków brzegu
+ani certyfikacji pełnego residualu. Snapshot pozostaje małym fragmentem
+diagnostyki; nie tworzy osobnego endpointu lub alternatywnego planera.
+
+Konsument `validate_gamma_krylov_trial` zachowuje ten mały obiekt osobno
+dla globalnej migawki, próbki i każdego podokna: opcjonalne
+`eps_dimensions` na poziomie root raportu, `by_sample[i].eps_dimensions`
+oraz `by_sample[i].subwindows[j].eps_dimensions`. W mixed sweep root
+nie otrzymuje wymiarów nieistniejącego globalnego snapshotu Γ. W historycznych artefaktach
+brak obiektu pozostaje brakiem dodatkowego pomiaru; jawne null zamiast
+obiektu, nieboolowski status, brak klucza lub wartość poza signed int64 są
+błędem kontraktu danych. Przy `query_succeeded=false` wszystkie trzy wartości
+muszą być null. Nie porównujemy wymiarów między podoknami, bo base/refinement
+mogą legalnie żądać innych baz. Walidacja kształtu telemetry nie zastępuje
+fizycznego residualu ani nie ustala polityki strojenia.
+
+Regresja ma wywołać rzeczywisty formatter dla poprawnych wymiarów, znanego
+zera, ujemnego sentinela, braku odczytu i zbyt małego bufora. Test C++ jest
+przygotowany i niekompilowany zgodnie z zakazem użytkownika. Źródłowe review
+i walidacja noty nie dowodzą wykonania getterów ani bramki naukowej. Źródło
+znaczenia NEV/NCV/MPD: [dokumentacja SLEPc EPSGetDimensions](https://slepc.upv.es/release/manualpages/EPS/EPSGetDimensions.html).
+
+| Source ID | Path + symbol | Odpowiedzialność i dowód |
+| --- | --- | --- |
+| source-cpu-schur | backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.hpp + solve_poisson_airbox_modal_eigen_cpu_schur | Odczyt EPS w istniejących fazach; runtime NOT VERIFIED |
+| source-k0-eps-dimensions-format | backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.hpp + format_poisson_airbox_eps_dimensions_json | Signed nullable wymiary odczytane, bez setterów/getterów w formatterze |
+| source-k0-subwindow-termination-test | backends/fem/tests/frequency_domain/poisson_airbox_schur_matshell_test.cpp + main | Regresja actual formattera wymiarów; niekompilowana |
+| source-gamma-query-trial | scripts/de_gamma_krylov_trial.py + validate_gamma_krylov_trial | Zachowanie opcjonalnych rzeczywistych wymiarów osobno dla każdego podokna |

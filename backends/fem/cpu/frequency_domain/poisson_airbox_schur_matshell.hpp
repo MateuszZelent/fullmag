@@ -131,6 +131,15 @@ bool format_poisson_airbox_subwindow_termination_json(
     char *destination,
     std::size_t destination_size) noexcept;
 
+// Formats the queried SLEPc dimensions without inferring them from requests.
+bool format_poisson_airbox_eps_dimensions_json(
+    bool query_succeeded,
+    std::int64_t nev,
+    std::int64_t ncv,
+    std::int64_t mpd,
+    char *destination,
+    std::size_t destination_size) noexcept;
+
 // Production shared-domain K0 lane.  The scalar Poisson block is eliminated
 // through a persistent PETSc factorization and SLEPc operates on the
 // real-frequency-rotated Schur pencil.  Synthetic/dense certification remains

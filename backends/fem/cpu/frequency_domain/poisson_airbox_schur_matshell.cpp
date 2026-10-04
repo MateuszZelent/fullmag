@@ -3722,6 +3722,38 @@ bool format_poisson_airbox_subwindow_termination_json(
     return true;
 }
 
+bool format_poisson_airbox_eps_dimensions_json(
+    bool query_succeeded,
+    std::int64_t nev,
+    std::int64_t ncv,
+    std::int64_t mpd,
+    char *destination,
+    std::size_t destination_size) noexcept
+{
+    if (destination == nullptr || destination_size == 0u) {
+        return false;
+    }
+    const int written = query_succeeded
+        ? std::snprintf(
+              destination,
+              destination_size,
+              "\"eps_dimensions\":{\"query_succeeded\":true,"
+              "\"nev\":%lld,\"ncv\":%lld,\"mpd\":%lld}",
+              static_cast<long long>(nev),
+              static_cast<long long>(ncv),
+              static_cast<long long>(mpd))
+        : std::snprintf(
+              destination,
+              destination_size,
+              "\"eps_dimensions\":{\"query_succeeded\":false,"
+              "\"nev\":null,\"ncv\":null,\"mpd\":null}");
+    if (written < 0 || static_cast<std::size_t>(written) >= destination_size) {
+        destination[0] = '\0';
+        return false;
+    }
+    return true;
+}
+
 FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
     const PoissonAirboxEigenBlockProblem &problem,
     PoissonAirboxModalEigenResult *out_result) noexcept
@@ -6083,6 +6115,9 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
     auto capture_krylov_configuration = [&](const char *phase) noexcept {
         PetscReal eps_tol = 0.0, ksp_rtol = 0.0;
         PetscInt eps_max = 0, ksp_max = 0, restart = 0;
+        PetscInt queried_nev = 0, queried_ncv = 0, queried_mpd = 0;
+        const bool eps_dimensions_query_succeeded =
+            EPSGetDimensions(eps, &queried_nev, &queried_ncv, &queried_mpd) == 0;
         const char *ksp_type = nullptr;
         if (EPSGetTolerances(eps, &eps_tol, &eps_max) != 0 ||
             KSPGetTolerances(st_ksp, &ksp_rtol, nullptr, nullptr, &ksp_max) != 0 ||
@@ -6097,16 +6132,30 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
         char eps_max_json[32]{};
         format_nullable_u64_json(eps_max_json, sizeof(eps_max_json),
             eps_max > 0, eps_max > 0 ? static_cast<std::uint64_t>(eps_max) : 0u);
+        char eps_dimensions_json[192]{};
+        const bool eps_dimensions_formatted =
+            format_poisson_airbox_eps_dimensions_json(
+                eps_dimensions_query_succeeded,
+                static_cast<std::int64_t>(queried_nev),
+                static_cast<std::int64_t>(queried_ncv),
+                static_cast<std::int64_t>(queried_mpd),
+                eps_dimensions_json,
+                sizeof(eps_dimensions_json));
+        const char *eps_dimensions_fields = eps_dimensions_formatted
+            ? eps_dimensions_json
+            : "\"eps_dimensions\":{\"query_succeeded\":false,"
+              "\"nev\":null,\"ncv\":null,\"mpd\":null}";
         const int written = std::snprintf(
             out_result->modal_krylov_tuning_json,
             sizeof(out_result->modal_krylov_tuning_json),
             "{\"phase\":\"%s\",\"eps_tolerance\":%.17g,"
             "\"eps_max_iterations\":%s,\"shifted_ksp_type\":\"%s\","
             "\"shifted_ksp_rtol\":%.17g,\"shifted_ksp_max_iterations\":%lld,"
-            "\"shifted_ksp_restart\":%lld}",
+            "\"shifted_ksp_restart\":%lld,%s}",
             phase, static_cast<double>(eps_tol), eps_max_json,
             resolved_tuning.shifted_ksp_type, static_cast<double>(ksp_rtol),
-            static_cast<long long>(ksp_max), static_cast<long long>(restart));
+            static_cast<long long>(ksp_max), static_cast<long long>(restart),
+            eps_dimensions_fields);
         if (written < 0 || static_cast<std::size_t>(written) >=
                 sizeof(out_result->modal_krylov_tuning_json)) {
             out_result->modal_krylov_tuning_json[0] = '\0';

@@ -22,12 +22,42 @@ _QUERY_FIELDS = (
 _NUMBER_TOLERANCE_REL = 1e-12
 _WINDOW_CERTIFICATE_SCHEMA = "poisson_airbox_frequency_window_certificate.v1"
 _WINDOW_PASSES = (("base", "base_schedule"), ("refinement", "refinement_schedule"))
+_EPS_DIMENSIONS_FIELDS = ("nev", "ncv", "mpd")
+_EPS_DIMENSIONS_KEYS = frozenset(("query_succeeded", *_EPS_DIMENSIONS_FIELDS))
+_SIGNED_INT64_MIN = -(2 ** 63)
+_SIGNED_INT64_MAX = (2 ** 63) - 1
 
 
 def _required_object(value, name):
     if not isinstance(value, dict):
         raise ValueError(f"{name} must be an object")
     return value
+
+
+def _validate_eps_dimensions(value, name):
+    dimensions = _required_object(value, name)
+    for field in ("query_succeeded", *_EPS_DIMENSIONS_FIELDS):
+        if field not in dimensions:
+            raise ValueError(f"{name}.{field} is missing")
+    extra_keys = [key for key in dimensions if key not in _EPS_DIMENSIONS_KEYS]
+    if extra_keys:
+        raise ValueError(f"{name} has unexpected key {extra_keys[0]!r}")
+
+    query_succeeded = dimensions["query_succeeded"]
+    if type(query_succeeded) is not bool:
+        raise ValueError(f"{name}.query_succeeded must be a boolean")
+    for field in _EPS_DIMENSIONS_FIELDS:
+        dimension = dimensions[field]
+        field_name = f"{name}.{field}"
+        if not query_succeeded:
+            if dimension is not None:
+                raise ValueError(f"{field_name} must be null when query_succeeded is false")
+            continue
+        if type(dimension) is not int:
+            raise ValueError(f"{field_name} must be an integer when query_succeeded is true")
+        if not _SIGNED_INT64_MIN <= dimension <= _SIGNED_INT64_MAX:
+            raise ValueError(f"{field_name} must be within signed 64-bit range")
+    return dict(dimensions)
 
 
 def _required_integer(value, name, *, minimum=None):
@@ -109,6 +139,11 @@ def _validate_query(
     split_dof_count,
 ):
     query = _required_object(value, name)
+    eps_dimensions = None
+    if "eps_dimensions" in query:
+        eps_dimensions = _validate_eps_dimensions(
+            query["eps_dimensions"], f"{name}.eps_dimensions"
+        )
     if query.get("phase") != "queried_after_eps":
         raise ValueError(f"{name}.phase must be queried_after_eps")
 
@@ -153,7 +188,7 @@ def _validate_query(
     elif ksp_restart > split_dof_count:
         raise ValueError(f"{name}.shifted_ksp_restart exceeds the split operator dimension")
 
-    return {
+    validated_query = {
         "phase": "queried_after_eps",
         "eps_tolerance": eps_tolerance,
         "eps_max_iterations": eps_max_iterations,
@@ -162,6 +197,9 @@ def _validate_query(
         "shifted_ksp_max_iterations": ksp_max_iterations,
         "shifted_ksp_restart": ksp_restart,
     }
+    if eps_dimensions is not None:
+        validated_query["eps_dimensions"] = eps_dimensions
+    return validated_query
 
 
 def _require_matching_query(expected, actual, name):
@@ -318,7 +356,7 @@ def validate_gamma_krylov_trial(
                 )
         pass_order = {name: position for position, (name, _) in enumerate(_WINDOW_PASSES)}
         accepted_windows.sort(key=lambda item: (pass_order[item["pass"]], item["subwindow_index"]))
-        accepted_by_sample[sample_index] = {
+        accepted_sample = {
             "sample_index": sample_index,
             "solver_adapter": _K0_SOLVER_ADAPTER,
             "engine_id": _K0_ENGINE_ID,
@@ -327,8 +365,11 @@ def validate_gamma_krylov_trial(
             "subwindow_count": len(accepted_windows),
             "subwindows": accepted_windows,
         }
+        if "eps_dimensions" in sample_query:
+            accepted_sample["eps_dimensions"] = sample_query["eps_dimensions"]
+        accepted_by_sample[sample_index] = accepted_sample
 
-    return {
+    report = {
         "schema": _SCHEMA,
         "status": "pass",
         "qualification": "NOT VERIFIED",
@@ -344,3 +385,6 @@ def validate_gamma_krylov_trial(
             "frequency, physical residual, equilibrium, and convergence gates",
         ],
     }
+    if global_query is not None and "eps_dimensions" in global_query:
+        report["eps_dimensions"] = global_query["eps_dimensions"]
+    return report

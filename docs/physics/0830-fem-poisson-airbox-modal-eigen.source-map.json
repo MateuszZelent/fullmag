@@ -1265,6 +1265,14 @@
       "responsibility": "Prepared regression of actual termination formatter; not compiled or run.",
       "lane": "FEM CPU",
       "evidence_status": "test source prepared; not compiled or run"
+    },
+    {
+      "id": "source-k0-eps-dimensions-format",
+      "path": "backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.hpp",
+      "symbol": "format_poisson_airbox_eps_dimensions_json",
+      "responsibility": "Format actual signed nullable EPS dimensions without changing solver configuration.",
+      "lane": "FEM CPU",
+      "evidence_status": "source prepared; getter runtime NOT VERIFIED"
     }
   ],
   "public_api": {

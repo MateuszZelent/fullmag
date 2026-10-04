@@ -614,6 +614,72 @@ void SubwindowTerminationFormatterPreservesMeasuredNullableEpsFields()
         "cancellation must preserve successfully queried EPS termination");
 }
 
+void EpsDimensionsFormatterPreservesSignedQueriesAndBoundsBuffers()
+{
+    char json[192]{};
+    check(fd::format_poisson_airbox_eps_dimensions_json(
+              true, 4, 8, 16, json, sizeof(json)),
+        "positive EPS dimensions must fit the formatter buffer");
+    check(std::strcmp(
+              json,
+              "\"eps_dimensions\":{\"query_succeeded\":true,"
+              "\"nev\":4,\"ncv\":8,\"mpd\":16}") == 0,
+        "successful EPS dimensions must serialize all queried values");
+
+    check(fd::format_poisson_airbox_eps_dimensions_json(
+              true, 0, -1, -2, json, sizeof(json)),
+        "zero and negative EPS dimension sentinels must remain serializable");
+    check(std::strcmp(
+              json,
+              "\"eps_dimensions\":{\"query_succeeded\":true,"
+              "\"nev\":0,\"ncv\":-1,\"mpd\":-2}") == 0,
+        "successful EPS query must preserve zero and signed sentinel values");
+
+    check(fd::format_poisson_airbox_eps_dimensions_json(
+              false,
+              std::numeric_limits<std::int64_t>::max(),
+              std::numeric_limits<std::int64_t>::min(),
+              123,
+              json,
+              sizeof(json)),
+        "failed EPS dimension query must remain serializable");
+    check(std::strcmp(
+              json,
+              "\"eps_dimensions\":{\"query_succeeded\":false,"
+              "\"nev\":null,\"ncv\":null,\"mpd\":null}") == 0,
+        "failed EPS query must ignore raw outputs and report null dimensions");
+
+    check(fd::format_poisson_airbox_eps_dimensions_json(
+              true,
+              std::numeric_limits<std::int64_t>::min(),
+              std::numeric_limits<std::int64_t>::max(),
+              std::numeric_limits<std::int64_t>::min(),
+              json,
+              sizeof(json)),
+        "signed 64-bit EPS dimensions must fit the formatter buffer");
+    check(std::strcmp(
+              json,
+              "\"eps_dimensions\":{\"query_succeeded\":true,"
+              "\"nev\":-9223372036854775808,"
+              "\"ncv\":9223372036854775807,"
+              "\"mpd\":-9223372036854775808}") == 0,
+        "signed 64-bit EPS dimension boundaries must serialize exactly");
+
+    char tiny_buffer[8] = "partial";
+    check(!fd::format_poisson_airbox_eps_dimensions_json(
+              true, 4, 8, 16, tiny_buffer, sizeof(tiny_buffer)) &&
+              tiny_buffer[0] == '\0',
+        "truncated EPS dimensions must fail and clear the destination");
+    check(!fd::format_poisson_airbox_eps_dimensions_json(
+              true, 4, 8, 16, nullptr, sizeof(json)),
+        "null EPS dimension destination must be rejected");
+    char zero_size_buffer[] = "keep";
+    check(!fd::format_poisson_airbox_eps_dimensions_json(
+              true, 4, 8, 16, zero_size_buffer, 0u) &&
+              zero_size_buffer[0] == 'k',
+        "zero-size EPS dimension destination must be rejected without writing");
+}
+
 void CertifiesSchurMatShellAgainstFullCoupledSparseReference()
 {
     TinySparseFixture fixture = make_tiny_full_coupled_fixture();
@@ -957,6 +1023,7 @@ int main()
     ModalKrylovTuningRejectsMalformedValuesAndInvalidDefaults();
     ModalKspProgressUsesLinearResidualSemanticsAndValidJson();
     SubwindowTerminationFormatterPreservesMeasuredNullableEpsFields();
+    EpsDimensionsFormatterPreservesSignedQueriesAndBoundsBuffers();
     CertifiesSchurMatShellAgainstFullCoupledSparseReference();
     PlannerRequiresExplicitCertifiedSchurSelection();
     RejectsInvalidGaugeWeightsBeforeSchurCertification();

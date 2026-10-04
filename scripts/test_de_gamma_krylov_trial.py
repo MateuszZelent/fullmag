@@ -4,6 +4,7 @@ from __future__ import annotations
 import copy
 import json
 from pathlib import Path
+import re
 from tempfile import TemporaryDirectory
 import unittest
 
@@ -113,6 +114,52 @@ def _replace_all_queries(diagnostics, query):
             window["modal_krylov_tuning"] = copy.deepcopy(query)
 
 
+def _indexed_gamma_diagnostics():
+    diagnostics = _diagnostics()
+    diagnostics.update({
+        "solver_adapter": SOLVER_ADAPTER,
+        "engine_id": ENGINE_ID,
+        "q_dof_count": 4,
+        "modal_krylov_tuning": _query(),
+        "sample_solver_diagnostics": [
+            {"sample_index": 0, "diagnostics": _gamma_sample()}
+        ],
+    })
+    return diagnostics
+
+
+def _queries_by_level(diagnostics):
+    sample = diagnostics["sample_solver_diagnostics"][0]["diagnostics"]
+    return {
+        "global": [diagnostics["modal_krylov_tuning"]],
+        "sample": [sample["modal_krylov_tuning"]],
+        "window": [sample["subwindows"][0]["modal_krylov_tuning"]],
+    }
+
+
+def _all_krylov_queries(diagnostics):
+    sample = diagnostics["sample_solver_diagnostics"][0]["diagnostics"]
+    return [
+        diagnostics["modal_krylov_tuning"],
+        sample["modal_krylov_tuning"],
+        *(window["modal_krylov_tuning"] for window in sample["subwindows"]),
+    ]
+
+
+def _set_all_eps_dimensions(diagnostics, dimensions):
+    for query in _all_krylov_queries(diagnostics):
+        query["eps_dimensions"] = copy.deepcopy(dimensions)
+
+
+def _eps_dimensions(*, query_succeeded=True, nev=0, ncv=4, mpd=-1):
+    return {
+        "query_succeeded": query_succeeded,
+        "nev": nev,
+        "ncv": ncv,
+        "mpd": mpd,
+    }
+
+
 class GammaKrylovTrialTests(unittest.TestCase):
     def _validate(self, case_dir, sampling="k0", **kwargs):
         return trial.validate_gamma_krylov_trial(
@@ -141,6 +188,172 @@ class GammaKrylovTrialTests(unittest.TestCase):
             report = self._validate(case, sampling="two")
             self.assertEqual(list(report["by_sample"]), [0])
             self.assertEqual(report["by_sample"][0]["k_vector_rad_m"], [0.0, 0.0, 0.0])
+
+    def test_legacy_payload_keeps_eps_dimensions_absent_from_report(self):
+        with TemporaryDirectory() as tmp:
+            case = _write_case(tmp, _diagnostics())
+            report = self._validate(case)
+            self.assertNotIn("eps_dimensions", report)
+            sample = report["by_sample"][0]
+            self.assertNotIn("eps_dimensions", sample)
+            self.assertNotIn("eps_dimensions", sample["subwindows"][0])
+
+    def test_global_sample_and_window_dimensions_are_preserved_independently(self):
+        diagnostics = _indexed_gamma_diagnostics()
+        global_dimensions = _eps_dimensions(nev=0, ncv=-1, mpd=-(2 ** 63))
+        sample_dimensions = _eps_dimensions(
+            nev=(2 ** 63) - 1, ncv=-(2 ** 63), mpd=0
+        )
+        window_dimensions = _eps_dimensions(nev=3, ncv=11, mpd=-7)
+        queries = _queries_by_level(diagnostics)
+        queries["global"][0]["eps_dimensions"] = global_dimensions
+        queries["sample"][0]["eps_dimensions"] = sample_dimensions
+        queries["window"][0]["eps_dimensions"] = window_dimensions
+
+        with TemporaryDirectory() as tmp:
+            case = _write_case(tmp, diagnostics)
+            report = self._validate(case)
+            sample = report["by_sample"][0]
+            self.assertEqual(report["eps_dimensions"], global_dimensions)
+            self.assertEqual(sample["eps_dimensions"], sample_dimensions)
+            self.assertEqual(sample["subwindows"][0]["eps_dimensions"], window_dimensions)
+
+    def test_failed_dimensions_query_with_null_values_is_preserved(self):
+        diagnostics = _indexed_gamma_diagnostics()
+        dimensions = _eps_dimensions(
+            query_succeeded=False, nev=None, ncv=None, mpd=None
+        )
+        _set_all_eps_dimensions(diagnostics, dimensions)
+
+        with TemporaryDirectory() as tmp:
+            case = _write_case(tmp, diagnostics)
+            report = self._validate(case)
+            self.assertEqual(report["qualification"], "NOT VERIFIED")
+            self.assertEqual(report["eps_dimensions"], dimensions)
+            self.assertEqual(report["by_sample"][0]["eps_dimensions"], dimensions)
+            self.assertEqual(
+                report["by_sample"][0]["subwindows"][0]["eps_dimensions"],
+                dimensions,
+            )
+
+    def test_subwindow_dimensions_may_differ_and_are_retained(self):
+        diagnostics = _indexed_gamma_diagnostics()
+        sample = diagnostics["sample_solver_diagnostics"][0]["diagnostics"]
+        sample["modal_krylov_tuning"]["eps_dimensions"] = _eps_dimensions(
+            nev=4, ncv=8, mpd=12
+        )
+        for window in sample["subwindows"]:
+            window["modal_krylov_tuning"]["eps_dimensions"] = _eps_dimensions(
+                nev=4, ncv=8, mpd=12
+            )
+        window_dimensions = _eps_dimensions(nev=2, ncv=6, mpd=9)
+        sample["subwindows"][1]["modal_krylov_tuning"][
+            "eps_dimensions"
+        ] = window_dimensions
+
+        with TemporaryDirectory() as tmp:
+            case = _write_case(tmp, diagnostics)
+            report = self._validate(case)
+            windows = report["by_sample"][0]["subwindows"]
+            self.assertEqual(
+                windows[0]["eps_dimensions"],
+                _eps_dimensions(nev=4, ncv=8, mpd=12),
+            )
+            self.assertEqual(windows[1]["eps_dimensions"], window_dimensions)
+
+    def test_mixed_sweep_does_not_invent_global_dimensions(self):
+        diagnostics = _diagnostics("two")
+        dimensions = _eps_dimensions(nev=0, ncv=-1, mpd=-3)
+        gamma = diagnostics["sample_solver_diagnostics"][0]["diagnostics"]
+        gamma["modal_krylov_tuning"]["eps_dimensions"] = copy.deepcopy(dimensions)
+        for window in gamma["subwindows"]:
+            window["modal_krylov_tuning"]["eps_dimensions"] = copy.deepcopy(dimensions)
+
+        with TemporaryDirectory() as tmp:
+            case = _write_case(tmp, diagnostics)
+            report = self._validate(case, sampling="two")
+            self.assertNotIn("eps_dimensions", report)
+            self.assertEqual(report["by_sample"][0]["eps_dimensions"], dimensions)
+
+    def test_malformed_eps_dimensions_fail_at_global_sample_and_window_paths(self):
+        base = _eps_dimensions()
+        cases = [
+            ("null object", None, " must be an object"),
+            ("scalar object", 7, " must be an object"),
+            ("array object", [], " must be an object"),
+        ]
+        for field in ("query_succeeded", "nev", "ncv", "mpd"):
+            missing = copy.deepcopy(base)
+            del missing[field]
+            cases.append((f"missing {field}", missing, f".{field} is missing"))
+        extra = copy.deepcopy(base)
+        extra["unexpected"] = 1
+        cases.append(("extra key", extra, " has unexpected key 'unexpected'"))
+        for invalid_status in (1.0, "true", 1):
+            malformed = copy.deepcopy(base)
+            malformed["query_succeeded"] = invalid_status
+            cases.append(
+                (
+                    f"invalid status {invalid_status!r}",
+                    malformed,
+                    ".query_succeeded must be a boolean",
+                )
+            )
+        for invalid_dimension in (True, 1.0, "1"):
+            malformed = copy.deepcopy(base)
+            malformed["nev"] = invalid_dimension
+            cases.append(
+                (
+                    f"invalid NEV {invalid_dimension!r}",
+                    malformed,
+                    ".nev must be an integer when query_succeeded is true",
+                )
+            )
+        malformed = copy.deepcopy(base)
+        malformed["mpd"] = None
+        cases.append(
+            (
+                "null dimension after successful query",
+                malformed,
+                ".mpd must be an integer when query_succeeded is true",
+            )
+        )
+        malformed = _eps_dimensions(
+            query_succeeded=False, nev=None, ncv=3, mpd=None
+        )
+        cases.append(
+            (
+                "non-null dimension after failed query",
+                malformed,
+                ".ncv must be null when query_succeeded is false",
+            )
+        )
+        for label, dimension in (
+            ("above signed int64", 2 ** 63),
+            ("below signed int64", -(2 ** 63) - 1),
+        ):
+            malformed = copy.deepcopy(base)
+            malformed["mpd"] = dimension
+            cases.append((label, malformed, ".mpd must be within signed 64-bit range"))
+
+        path_prefixes = {
+            "global": "global.modal_krylov_tuning",
+            "sample": "sample 0.modal_krylov_tuning",
+            "window": "sample 0 subwindow 0.modal_krylov_tuning",
+        }
+        for level, path_prefix in path_prefixes.items():
+            for label, malformed, error_suffix in cases:
+                with self.subTest(level=level, malformed=label), TemporaryDirectory() as tmp:
+                    diagnostics = _indexed_gamma_diagnostics()
+                    _set_all_eps_dimensions(diagnostics, base)
+                    query = _queries_by_level(diagnostics)[level][0]
+                    query["eps_dimensions"] = copy.deepcopy(malformed)
+                    case = _write_case(tmp, diagnostics)
+                    error_path = re.escape(
+                        f"{path_prefix}.eps_dimensions{error_suffix}"
+                    )
+                    with self.assertRaisesRegex(ValueError, error_path):
+                        self._validate(case)
 
     def test_mixed_sampling_rejects_missing_or_duplicate_gamma_indices(self):
         for mutation in ("missing", "duplicate"):
