@@ -193,7 +193,7 @@ The probe is a single `HEAD /docs/index.html` with `cache: "no-store"`.
 |---|---|
 | URL building, path hardening, message parsing, online link | `modules/start/model/docs.test.ts` |
 | Bundle precondition | `scripts/bundle-docs.mjs` exits non-zero without a build |
-| Strict docs build with the embed assets | `sphinx-build -W -n` (CI) builds with `fullmag-embed.{js,css}` registered in `conf.py` |
+| Strict docs build with the embed assets | `sphinx-build -W -n` builds with `fullmag-embed.{js,css}` registered in `conf.py` (verified locally, exit 0; the CI documentation workflow currently stops earlier on an unrelated Python API contract test that also fails on `master`) |
 | Framed behaviour | in a browser: `data-fullmag-embedded` set, theme follows the app both ways, theme toggle hidden, **Open online** follows the page, search returns results |
 
 ---

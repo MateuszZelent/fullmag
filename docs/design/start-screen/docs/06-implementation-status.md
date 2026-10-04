@@ -25,7 +25,7 @@ desktop application against real project archives.
 | 8 | Templates gallery | Done as a gallery | browser. Creating a project from a template is disabled with its reason |
 | 9 | Import | `.fms` only | browser (a refused `.mx3`). No other importer |
 | 10 | Learn, Settings, About | Done | browser |
-| 11 | Sphinx documentation (this folder, `05-…`) | Done, not bundled by builds | browser against the real built site; strict-style build of the site with the embed assets |
+| 11 | Sphinx documentation (this folder, `05-…`) | Done, not bundled by builds | browser against the real built site; `sphinx-build -W -n` of the site with the embed assets succeeds locally (exit 0) |
 
 Additions beyond the original ten steps:
 
