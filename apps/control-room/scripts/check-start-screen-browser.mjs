@@ -57,7 +57,10 @@ const contrast = (a, b) => {
   return (hi + 0.05) / (lo + 0.05);
 };
 
-const browser = await chromium.launch({ channel: "chrome" });
+// Local runs use installed Chrome; CI installs only Playwright Chromium and
+// sets CONTROL_ROOM_BROWSER_CHANNEL=chromium.
+const browserChannel = process.env.CONTROL_ROOM_BROWSER_CHANNEL ?? "chrome";
+const browser = await chromium.launch(browserChannel === "chromium" ? {} : { channel: browserChannel });
 const failures = [];
 try {
   const page = await browser.newPage();

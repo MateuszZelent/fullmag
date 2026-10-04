@@ -164,7 +164,7 @@ describe("NewProblemDialog", () => {
       });
       expect(createButton.disabled).toBe(false);
 
-      await act(async () => createButton.click());
+      await act(async () => submitDialog(body));
       await settle();
       expect(create).toHaveBeenCalledWith(expect.objectContaining({
         replace_current: true,

@@ -169,7 +169,7 @@ The **Status Bar** (`.fm-status-bar`) at the bottom footer of the window provide
 
 Press **`Ctrl + K`** (or **`Cmd + K`** on macOS) anywhere in the workspace to launch the **Command Palette**:
 
-- Search for commands by name (e.g., *"Add Box Geometry"*, *"Export Python Script"*, *"Toggle Wireframe"*).
+- Search for commands by name (e.g., *"Add Box Geometry"*, *"Save canonical copy as…"*, *"Toggle Wireframe"*).
 - Switch workspace themes between **Catppuccin Mocha** (dark theme) and **Catppuccin Latte** (light theme).
 - Trigger camera framing (**`F`**) or reset camera view (**`R`**).
 ## Control Room crosswalk

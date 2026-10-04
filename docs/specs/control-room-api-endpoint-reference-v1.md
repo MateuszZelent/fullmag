@@ -1562,6 +1562,11 @@ Current implementation note:
 - This route currently delegates to the same rewrite helper that previously sat
   behind the removed public flat route `POST /v1/live/current/script/sync`.
 - The authoring route is now the canonical mounted placement for browser calls.
+- Since the v2 `model/syncs` route (Phase 0b of `docs/design/start-screen/docs/08-script-open.md`),
+  a session whose script is a user-owned file (`script.origin = "user_file"`) is never rewritten:
+  the canonical script is written to `<workspace_root>/exports/<name>.canonical.py` and the response
+  reports `written_to = "export_copy"`, `source_script_modified = false` and `managed_copy_path`.
+  Scripts inside Fullmag-managed storage (`generated`) are still rewritten in place.
 
 ## 8. Display and Commands
 

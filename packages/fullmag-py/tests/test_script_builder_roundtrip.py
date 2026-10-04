@@ -1182,6 +1182,25 @@ class ScriptBuilderRegionalDriveRoundTripTests(unittest.TestCase):
         self.assertEqual(after["temperature"], before["temperature"])
         self.assertEqual(after["energy_terms"], before["energy_terms"])
 
+    def test_output_path_writes_copy_and_leaves_source_untouched(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            loaded = _load_text(_SCRIPT, root, "source.py")
+            source_path = root / "source.py"
+            before = source_path.read_bytes()
+            copy_path = root / "exports" / "source.canonical.py"
+            result = rewrite_loaded_problem_script(loaded, output_path=copy_path)
+
+            self.assertTrue(result["written"])
+            self.assertEqual(result["script_path"], str(copy_path))
+            self.assertNotIn("rendered_source", result)
+            self.assertIn("study.field_drives.add(", copy_path.read_text(encoding="utf-8"))
+            self.assertEqual(source_path.read_bytes(), before)
+            self.assertEqual(sorted(path.name for path in root.iterdir()), ["exports", "source.py"])
+            with self.assertRaises(ValueError):
+                rewrite_loaded_problem_script(loaded, write=True, output_path=copy_path)
+            self.assertEqual(source_path.read_bytes(), before)
+
 
 if __name__ == "__main__":
     unittest.main()
