@@ -80,10 +80,10 @@
      why they diverge there. */
   --fm-project-ready-text: var(--fm-project-ready);
   --fm-project-running-text: var(--fm-project-running);
-  --fm-project-failed-text: var(--fm-project-failed);
+  --fm-project-failed-text: #f592ad;    /* danger lightened: 4.75:1 on the selected row */
   --fm-project-draft-text: var(--fm-start-meta);   /* --fm-text-muted is 3.36:1 */
   --fm-project-migrate-text: var(--fm-project-migrate);
-  --fm-project-missing-text: var(--fm-project-missing);
+  --fm-project-missing-text: #f592ad;
   --fm-project-readonly-text: var(--fm-project-readonly);
 
   /* Solver badge label — Mocha's palette clears 4.5:1 as text. */
