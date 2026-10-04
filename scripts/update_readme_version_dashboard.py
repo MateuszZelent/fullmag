@@ -53,6 +53,24 @@ def toml_string(text: str, section: str, key: str, source: str) -> str:
     return match.group("value").strip()
 
 
+def python_package_version(
+    pyproject: str, cargo_version: str, source: str
+) -> str:
+    """The Python package version, static or taken from the Cargo authority.
+
+    A package that lists ``version`` under ``[project].dynamic`` has its version
+    resolved by ``fullmag_build_backend`` from the Cargo workspace, so there is
+    no literal to read: the Cargo version is the version.
+    """
+
+    try:
+        return toml_string(pyproject, "project", "version", source)
+    except VersionSourceError:
+        if "version" in toml_array(pyproject, "project", "dynamic", source):
+            return cargo_version
+        raise
+
+
 def toml_dependency(text: str, section: str, key: str, source: str) -> str:
     body = toml_section(text, section, source)
     match = re.search(
@@ -128,9 +146,10 @@ def collect_versions(root: Path) -> dict[str, str]:
     rust = read_text(root, rust_path)
     node = read_text(root, ".node-version").strip()
 
+    cargo_version = toml_string(cargo, "workspace.package", "version", cargo_path)
     package_versions = {
-        "Cargo": toml_string(cargo, "workspace.package", "version", cargo_path),
-        "Python": toml_string(pyproject, "project", "version", pyproject_path),
+        "Cargo": cargo_version,
+        "Python": python_package_version(pyproject, cargo_version, pyproject_path),
         "Control Room": str(frontend.get("version", "")).strip(),
     }
     if "" in package_versions.values() or len(set(package_versions.values())) != 1:

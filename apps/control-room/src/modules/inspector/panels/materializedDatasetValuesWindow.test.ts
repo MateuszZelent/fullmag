@@ -6,7 +6,7 @@ import { savedFieldValuesWindow } from "./materializedDatasetValuesWindow";
 
 const coverage: MaterializedDatasetResource["field"]["coverage"] = {
   total_elements: "9007199254740993", component_count: "3", dtype: "f64",
-  endian: "little", total_bytes: "216172782113783832", chunk_count: 1,
+  endian: "little", total_bytes: "216172782113783832", chunk_count: "1",
 };
 
 describe("saved field numeric window admission", () => {

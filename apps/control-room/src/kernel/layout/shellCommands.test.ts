@@ -132,8 +132,9 @@ describe("SHELL_COMMANDS", () => {
       source: "test",
     });
 
-    expect(syncAuthoringScript).toHaveBeenCalledWith({});
-    expect(authoringScript).toHaveBeenCalledWith();
+    // Without a session scope there are no request options.
+    expect(syncAuthoringScript).toHaveBeenCalledWith({}, undefined);
+    expect(authoringScript).toHaveBeenCalledWith(undefined);
     expect(result).toEqual({
       message: "Canonical Python exported from /tmp/example.py.",
       status: "completed",
