@@ -22,6 +22,7 @@ pub mod spectral_validation;
 pub mod spin_transport;
 pub mod study;
 pub mod waveguide_frame;
+pub mod waveguide_mesh;
 mod validation;
 pub use constraint::*;
 pub use eigen_contract::*;

@@ -81,3 +81,66 @@ Presence guard legacy/staging StudyIR jest przygotowany w źródłach, z review
 oraz parserem PASS; jego regresje Rust i runtime pozostają OPEN. Typed StudyIRV04
 i migracja reprezentacji nie są jeszcze zaimplementowane. Publiczny writer
 pozostaje 0.3; status providera unavailable.
+
+## Typowany surowy descriptor przekroju — wire v1
+
+Przyrost S09 zamraża wyłącznie surowy typ danych `WaveguideCrossSectionMeshIR`.
+Nie jest to validated mesh, certyfikat structural invariance ani admission
+V04. Publiczny writer/reader 0.3 nadal odrzuca spatial_representation. Pełny
+cutover V04 zachowuje wszystkie wcześniejsze wymagania tej specyfikacji.
+
+Właściciel nowych źródeł: `crates/fullmag-ir/src/waveguide_mesh.rs`.
+Zamknięty schema ma token `fullmag.waveguide-cross-section-mesh.v1`.
+Wszystkie obiekty i tagged enum mają lokalny deny_unknown_fields; wymagane
+pola nie mają serde(default). Nieznany kind/schema i jawne null są błędem
+typu. Schema i loop_kind wymagają string-only TryFrom<String>; nie dopuszczają mapy unit wariantu z null. Źródło tego rozróżnienia: [serde_json Value VariantDeserializer](https://docs.rs/serde_json/latest/src/serde_json/value/de.rs.html#556-560).
+Samo serde nie kontroluje znaczenia indeksów, geometrii ani mappingu.
+
+| Pole | Typ i znaczenie | Jednostka SI |
+|---|---|---|
+| schema | dokładny wersjonowany token surowego descriptoru | $1$ |
+| nodes_uv_m | tablica par lokalnych współrzędnych u,v | $\mathrm m$ |
+| triangles | P1: nodes z trzema indeksami u64 i region_id | $1$ |
+| edges | nodes z dwoma indeksami u64 oraz incidences | $1$ |
+| incidences / half_edges | triangle_index u64 i local_edge_index z zamkniętego zbioru 0,1,2 | $1$ |
+| regions | tagged kind magnetic/air; jawne region_id i object_id, material_id wyłącznie magnetic | $1$ |
+| boundary_components | boundary_component_id, region_id, loop_kind outer/hole, ordered half_edges | $1$ |
+
+Local side 0 oznacza nodes[0]→nodes[1], side 1 nodes[1]→nodes[2],
+side 2 nodes[2]→nodes[0]. Kierunek półkrawędzi wynika z dodatnio
+zorientowanego trójkąta, nie ze znacznika użytkownika. Edge.nodes ma
+kanoniczny rosnący porządek indeksów; walidator musi go porównać z obiema
+incidences. Jedna incidence oznacza brzeg całej domeny, dwie muszą mieć
+przeciwne kierunki i różnych właścicieli-trójkąty. Więcej niż dwie, brak
+incidence, duplikaty, orphan edges/triangles, luki lub niezgodne indeksy
+są błędem późniejszej walidacji topologii, nie poprawną siatką.
+
+Każdy region-boundary segment ma dokładnie jednego właściciela w jego
+konturze. Zewnętrzna krawędź należy do konturu jedynego regionu. Interfejs
+dwóch regionów występuje po obu stronach z przeciwstawnym kierunkiem;
+wewnętrzna krawędź jednego regionu nie jest konturem. Każdy kontur jest
+zamknięty, ma niepowtarzane skierowane półkrawędzie, a jego region leży
+po lewej stronie. Loop kind nie zastępuje sprawdzenia signed area i
+nestingu: outer ma CCW, hole CW. Zamknięta wyspa powietrza nie otrzymuje
+automatycznie Dirichleta. BC ma później wiązać jawne ID zewnętrznych
+air contours i każdą składową całego scalar mesh.
+
+Raw region/object/material identyfikatory są referencjami do kanonicznych
+rejestrów; nazwa/type nie włącza fizyki. Deserializer nie daje certyfikatu
+ich istnienia, pełnego pokrycia ani jednolitości wzdłuż osi. Również puste
+tablice, powtarzane ID, współrzędne nonfinite i złe referencje mają zostać
+odrzucone przez niezależny compiler/validator przed jakimkolwiek operatorem.
+
+Rama jest oddzielnym wymaganym polem wariantu spatial representation;
+nie kopiować jej do mesha jako drugiego źródła prawdy. Przyszły fingerprint
+2D wiąże exact nodes/connectivity/incidence/region/object/material/contours
+oraz requested/canonical frame i politykę walidacji. Nie używa fingerprintu
+3D. Definicje structural_2d pól, interakcji i BC pozostają oddzielnym
+kompletnym kontraktem; nie chować ich w unknown extensions mesha.
+
+Ten przyrost nie dodaje validatora topology/geometry, fingerprintu ani
+produkcji certificate. Wymagane następne kroki: scaled signed area/quality
+i representability; pełna incidence/fan/contour/non-overlap kontrola;
+bindingi rejestrów i pól; typed V04 migration/admission; owner MFEM i
+wszystkie bramki runtime/nauki. Prepared serde regressions nie są dowodem
+wykonania Rust; kompilacja unit tests pozostaje zakazana.

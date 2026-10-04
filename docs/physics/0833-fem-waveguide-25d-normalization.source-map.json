@@ -84,7 +84,8 @@
     {"id": "source-current-block-normalize", "path": "crates/fullmag-runner/src/fem/eigen_native_result.rs", "symbol": "normalize_complex_block_mode", "responsibility": "Normalizacja bieżącego bloku 2N; max nadal skaluje spłaszczone składowe.", "evidence_status": "source_visible_unqualified"},
     {"id": "source-current-mass", "path": "crates/fullmag-runner/src/fem/eigen_mass_metric.rs", "symbol": "SharedDomainSparseMass", "responsibility": "Objętościowa metryka Tet4.", "evidence_status": "source_visible_unqualified"},
     {"id": "source-current-projection", "path": "crates/fullmag-runner/src/fem/eigen_projection.rs", "symbol": "project_complex_2x2_mode_to_tangent_basis_with_periodic_map", "responsibility": "Projekcja Cartesian po wcześniejszej skali.", "evidence_status": "source_visible_unqualified"},
-    {"id": "source-interpreted-0833", "path": "scripts/test_waveguide_25d_normalization_source.py", "symbol": "class Waveguide25DNormalizationTests", "responsibility": "Niezależna regresja algebraiczna źródła.", "evidence_status": "source_verified"}
+    {"id": "source-interpreted-0833", "path": "scripts/test_waveguide_25d_normalization_source.py", "symbol": "class Waveguide25DNormalizationTests", "responsibility": "Niezależna regresja algebraiczna źródła.", "evidence_status": "source_verified"},
+    {"id": "source-0833-mesh-wire", "path": "crates/fullmag-ir/src/waveguide_mesh.rs", "symbol": "WaveguideCrossSectionMeshIR", "responsibility": "Surowy typed mesh przekroju i closed wire; nie geometry/admission certificate.", "evidence_status": "source_prepared_runtime_not_verified"}
   ],
   "public_api": {
     "parameters": [

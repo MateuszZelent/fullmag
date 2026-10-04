@@ -562,3 +562,26 @@ ta nota nie przenosi jej API, warunków brzegowych ani wyników do Fullmag.
 | source-current-mass | crates/fullmag-runner/src/fem/eigen_mass_metric.rs | SharedDomainSparseMass | source_visible_unqualified |
 | source-current-projection | crates/fullmag-runner/src/fem/eigen_projection.rs | project_complex_2x2_mode_to_tangent_basis_with_periodic_map | source_visible_unqualified |
 | source-interpreted-0833 | scripts/test_waveguide_25d_normalization_source.py | class Waveguide25DNormalizationTests | source_verified |
+
+## Surowy typed mesh przekroju a walidacja normy
+
+Źródłowy `WaveguideCrossSectionMeshIR` w
+`crates/fullmag-ir/src/waveguide_mesh.rs` opisuje wyłącznie authored dane:
+nodes_uv_m [m], trójkąty P1, edges/half-edge incidence oraz region/object/
+material i ordered boundary contours. [Specyfikacja wire v1](../specs/fem-waveguide-spatial-representation-v1.md#typowany-surowy-descriptor-przekroju--wire-v1)
+ustala lokalną numerację 0,1,2 i zamknięte tagged warianty. Nieznany token,
+pole lub jawne null nie otrzymują defaultu. Typ RAW jest serializowalny;
+nie twierdzi, że dane przeszły kontrolę geometrii, mappingu lub invariance.
+
+Całki norm i energii z tej noty wymagają wcześniejszego niezależnego
+sprawdzenia dodatniej orientacji/quality, kompletnej incidence i konturów,
+konformności, mapowania regionów i materiałów oraz powiązania z ramą i
+zaakceptowaną równowagą. Sam round-trip JSON nie spełnia tych założeń.
+Nie aktywowano normalizacji 2D, providera, V04/admission, Python/UI ani
+nowego artefaktu wyniku. FEM CPU pozostaje planned/runtime NOT VERIFIED;
+FEM GPU unsupported, FDM not-applicable. Prepared regresje serde nie były
+kompilowane. To kolejny wymagany składnik S09, nie ukończone S09.
+
+| Source ID | Path + symbol | Zakres dowodu |
+|---|---|---|
+| source-0833-mesh-wire | crates/fullmag-ir/src/waveguide_mesh.rs + WaveguideCrossSectionMeshIR | Surowy typed descriptor; nie validated mesh ani runtime proof |
