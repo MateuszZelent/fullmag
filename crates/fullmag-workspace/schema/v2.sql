@@ -1,0 +1,5 @@
+CREATE TABLE thumbnails (
+  item_id  INTEGER PRIMARY KEY REFERENCES items(id) ON DELETE CASCADE,
+  sha256   TEXT NOT NULL,
+  png      BLOB NOT NULL
+);

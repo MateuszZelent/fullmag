@@ -18,6 +18,7 @@ from fullmag import workspace as ws
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 RUST_SCHEMA = REPOSITORY_ROOT / "crates/fullmag-workspace/schema/v1.sql"
+RUST_SCHEMA_V2 = REPOSITORY_ROOT / "crates/fullmag-workspace/schema/v2.sql"
 
 
 def _normalise_sql(text: str) -> str:
@@ -96,6 +97,35 @@ class SchemaTests(WorkspaceTestCase):
             _normalise_sql(RUST_SCHEMA.read_text(encoding="utf-8")),
         )
 
+    def test_embedded_v2_schema_matches_the_rust_crate_ddl(self) -> None:
+        if not RUST_SCHEMA_V2.is_file():
+            self.skipTest("Rust crate sources are not part of this checkout")
+        self.assertEqual(
+            _normalise_sql(ws._SCHEMA_V2_SQL),
+            _normalise_sql(RUST_SCHEMA_V2.read_text(encoding="utf-8")),
+        )
+
+    def test_a_version_1_database_is_migrated_to_the_current_schema(self) -> None:
+        self.db.parent.mkdir(parents=True, exist_ok=True)
+        connection = sqlite3.connect(self.db)
+        try:
+            for statement in ws._SCHEMA_V1:
+                connection.execute(statement)
+            connection.execute("PRAGMA user_version = 1")
+            connection.commit()
+        finally:
+            connection.close()
+        self.assertTrue(self.record(self.touch("a.py"), "script", "open"))
+        connection = sqlite3.connect(self.db)
+        try:
+            names = {
+                row[0] for row in connection.execute("SELECT name FROM sqlite_master")
+            }
+            self.assertIn("thumbnails", names)
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 2)
+        finally:
+            connection.close()
+
     def test_created_database_has_the_specified_tables_and_version(self) -> None:
         self.assertTrue(self.record(self.touch("a.py"), "script", "open"))
         connection = sqlite3.connect(self.db)
@@ -104,10 +134,10 @@ class SchemaTests(WorkspaceTestCase):
                 row[0] for row in connection.execute("SELECT name FROM sqlite_master")
             }
             self.assertTrue(
-                {"items", "events", "kv", "items_recent", "items_project_id", "events_item"}
+                {"items", "events", "kv", "thumbnails", "items_recent", "items_project_id", "events_item"}
                 <= names
             )
-            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 1)
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 2)
             self.assertEqual(connection.execute("PRAGMA journal_mode").fetchone()[0], "wal")
             columns = [r[1] for r in connection.execute("PRAGMA table_info(items)")]
             self.assertEqual(

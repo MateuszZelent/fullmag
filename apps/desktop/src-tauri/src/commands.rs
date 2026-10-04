@@ -3,12 +3,13 @@ use fullmag_application::{
     DocumentMode, DurabilityGuarantee, FileProjectRepository, OpaqueDocument, ProjectApplication,
     ProjectSource, ProjectTarget, SaveProjectRequest,
 };
+use crate::workspace_commands::{self, WorkspaceHost};
 use crate::{compute_probe, provenance, recent_index};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 
 const MAX_PROJECT_ARCHIVE_BYTES: u64 = 64 * 1024 * 1024;
@@ -144,20 +145,49 @@ fn summary_from_view(path: &Path, view: fullmag_application::DocumentView) -> Pr
     }
 }
 
-fn open_project_file(path: PathBuf) -> Result<ProjectOpenSummary, String> {
+/// The open summary and the project's own name (not the file stem), which the
+/// workspace database records.
+fn open_project_file(path: PathBuf) -> Result<(ProjectOpenSummary, String), String> {
     let mut application = ProjectApplication::new(FileProjectRepository::new());
     let opened = application
         .open(ProjectSource::Path(path.clone()))
         .map_err(|error| error.to_string())?;
-    Ok(summary_from_view(&path, opened.view))
+    let summary = summary_from_view(&path, opened.view);
+    let name = application
+        .current_document()
+        .map(|document| document.definition.name.clone())
+        .unwrap_or_default();
+    Ok((summary, name))
 }
 
-fn read_project_archive(path: &Path) -> Result<(ProjectOpenSummary, Vec<u8>), String> {
+/// Record, best effort, that a project was opened. The database can be locked,
+/// damaged or read-only; that never stops a project from opening.
+async fn mirror_project_open(
+    app: &AppHandle,
+    workspace: &WorkspaceHost,
+    path: &Path,
+    summary: &ProjectOpenSummary,
+    name: &str,
+) {
+    let event = workspace_commands::project_open_event(
+        path,
+        &summary.project_id,
+        Some(name).filter(|name| !name.trim().is_empty()),
+        summary.revision,
+        summary.mode == "read_only",
+    );
+    workspace_commands::mirror(workspace, workspace_commands::legacy_index_path(app), move |ws| {
+        ws.record_best_effort(&event);
+    })
+    .await;
+}
+
+fn read_project_archive(path: &Path) -> Result<(ProjectOpenSummary, Vec<u8>, String), String> {
     // Validate the selected path through the repository adapter first.  This
     // rejects symlink/reparse-point chains before the bytes are handed to the
     // webview, while the second read preserves the original archive bytes for
     // a byte-faithful host Save.
-    let summary = open_project_file(path.to_path_buf())?;
+    let (summary, name) = open_project_file(path.to_path_buf())?;
     let metadata = fs::metadata(path)
         .map_err(|error| format!("failed to inspect {}: {error}", path.display()))?;
     if !metadata.is_file() {
@@ -173,18 +203,28 @@ fn read_project_archive(path: &Path) -> Result<(ProjectOpenSummary, Vec<u8>), St
     }
     let bytes =
         fs::read(path).map_err(|error| format!("failed to read {}: {error}", path.display()))?;
-    Ok((summary, bytes))
+    Ok((summary, bytes, name))
 }
 
 /// Open a project definition through the same application/repository boundary
 /// used by the CLI.  It never restores a runtime session or starts a solve.
 #[tauri::command]
-pub async fn open_project_path(path: String) -> Result<ProjectOpenSummary, String> {
-    open_project_file(PathBuf::from(path))
+pub async fn open_project_path(
+    app: AppHandle,
+    workspace: State<'_, WorkspaceHost>,
+    path: String,
+) -> Result<ProjectOpenSummary, String> {
+    let file_path = PathBuf::from(path);
+    let (summary, name) = open_project_file(file_path.clone())?;
+    mirror_project_open(&app, workspace.inner(), &file_path, &summary, &name).await;
+    Ok(summary)
 }
 
 #[tauri::command]
-pub async fn open_project_dialog(app: AppHandle) -> Result<Option<ProjectOpenSummary>, String> {
+pub async fn open_project_dialog(
+    app: AppHandle,
+    workspace: State<'_, WorkspaceHost>,
+) -> Result<Option<ProjectOpenSummary>, String> {
     let result = app
         .dialog()
         .file()
@@ -196,7 +236,9 @@ pub async fn open_project_dialog(app: AppHandle) -> Result<Option<ProjectOpenSum
     let file_path = path
         .into_path()
         .map_err(|_| "selected project path is not available on this platform".to_string())?;
-    open_project_file(file_path).map(Some)
+    let (summary, name) = open_project_file(file_path.clone())?;
+    mirror_project_open(&app, workspace.inner(), &file_path, &summary, &name).await;
+    Ok(Some(summary))
 }
 
 /// Open a project through the host file dialog and return the validated bytes
@@ -205,6 +247,7 @@ pub async fn open_project_dialog(app: AppHandle) -> Result<Option<ProjectOpenSum
 #[tauri::command]
 pub async fn open_project_archive_dialog(
     app: AppHandle,
+    workspace: State<'_, WorkspaceHost>,
 ) -> Result<Option<ProjectOpenArchive>, String> {
     let result = app
         .dialog()
@@ -217,12 +260,13 @@ pub async fn open_project_archive_dialog(
     let file_path = path
         .into_path()
         .map_err(|_| "selected project path is not available on this platform".to_string())?;
-    let (summary, bytes) = read_project_archive(&file_path)?;
+    let (summary, bytes, name) = read_project_archive(&file_path)?;
     let file_name = file_path
         .file_name()
         .and_then(|value| value.to_str())
         .unwrap_or("fullmag-project.fms")
         .to_string();
+    mirror_project_open(&app, workspace.inner(), &file_path, &summary, &name).await;
     Ok(Some(ProjectOpenArchive {
         path: file_path.display().to_string(),
         file_name,
@@ -420,6 +464,7 @@ fn save_project_archive_to_target(
 #[tauri::command]
 pub async fn save_project_archive(
     app: AppHandle,
+    workspace: State<'_, WorkspaceHost>,
     request: ProjectSaveRequest,
 ) -> Result<ProjectSaveSummary, String> {
     let target = match request.target_path.clone() {
@@ -440,7 +485,22 @@ pub async fn save_project_archive(
             })?
         }
     };
-    save_project_archive_to_target(request, target)
+    let saved = save_project_archive_to_target(request, target)?;
+    let event = workspace_commands::project_save_event(
+        Path::new(&saved.path),
+        &saved.project_id,
+        saved.revision,
+        saved.save_as,
+    );
+    workspace_commands::mirror(
+        workspace.inner(),
+        workspace_commands::legacy_index_path(&app),
+        move |ws| {
+            ws.record_best_effort(&event);
+        },
+    )
+    .await;
+    Ok(saved)
 }
 
 /// Record a finished run, and optionally its preview thumbnail, in the project
@@ -535,7 +595,7 @@ fn record_project_outcome(
         })
         .map_err(|error| error.to_string())?;
 
-    let (summary, archive) = read_project_archive(&target)?;
+    let (summary, archive, _) = read_project_archive(&target)?;
     Ok(ProjectOpenArchive {
         path: target.display().to_string(),
         file_name: target
@@ -554,53 +614,53 @@ fn record_project_outcome(
 #[tauri::command]
 pub async fn project_record_outcome(
     app: AppHandle,
+    workspace: State<'_, WorkspaceHost>,
     request: ProjectOutcomeRequest,
 ) -> Result<ProjectOpenArchive, String> {
-    let index_file = recent_index_file(&app).ok();
-    tauri::async_runtime::spawn_blocking(move || {
-        let now = std::time::SystemTime::now();
-        let archive = record_project_outcome(
+    let run = request.run.clone();
+    let now = std::time::SystemTime::now();
+    let archive = tauri::async_runtime::spawn_blocking(move || {
+        record_project_outcome(
             request,
             &provenance::author_identity(),
             &recent_index::rfc3339_utc(now),
-        )?;
-        // Best effort: a stale index must never fail a recorded run.
-        if let Some(index_file) = index_file {
-            let _ = recent_index::refresh_entry(&index_file, Path::new(&archive.path));
-        }
-        Ok(archive)
+        )
     })
     .await
-    .map_err(|error| format!("recording the run was interrupted: {error}"))?
-}
+    .map_err(|error| format!("recording the run was interrupted: {error}"))??;
 
-fn recent_index_file(app: &AppHandle) -> Result<PathBuf, String> {
-    app.path()
-        .app_data_dir()
-        .map(|dir| dir.join(recent_index::INDEX_FILE_NAME))
-        .map_err(|error| format!("app data directory is unavailable: {error}"))
+    // Best effort: the database must never fail a recorded run. The run event
+    // updates the item's use and `last_run`; the refresh re-reads the archive so
+    // a fresh thumbnail and summary appear without a rescan.
+    let path = PathBuf::from(&archive.path);
+    let event = workspace_commands::project_run_event(
+        &path,
+        &archive.summary.project_id,
+        &run,
+        archive.summary.revision,
+        &recent_index::rfc3339_utc(now),
+    );
+    workspace_commands::mirror(
+        workspace.inner(),
+        workspace_commands::legacy_index_path(&app),
+        move |ws| {
+            ws.record_best_effort(&event);
+            let _ = recent_index::refresh_project(ws, &path);
+        },
+    )
+    .await;
+    Ok(archive)
 }
 
 /// Locations scanned on rebuild: `FULLMAG_PROJECT_ROOTS` (path-list syntax of
 /// the platform), the roots the last scan used, and `<Documents>/Fullmag`.
-fn recent_project_roots(app: &AppHandle, file: &Path) -> Vec<PathBuf> {
+fn recent_project_roots(documents: Option<PathBuf>, previous: Vec<PathBuf>) -> Vec<PathBuf> {
     let mut roots: Vec<PathBuf> = Vec::new();
     if let Some(configured) = std::env::var_os("FULLMAG_PROJECT_ROOTS") {
         roots.extend(std::env::split_paths(&configured));
     }
-    if let Ok(index) = recent_index::read_index(file) {
-        for location in index
-            .get("scanned_locations")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-        {
-            if let Some(path) = location.get("path").and_then(Value::as_str) {
-                roots.push(PathBuf::from(path));
-            }
-        }
-    }
-    if let Ok(documents) = app.path().document_dir() {
+    roots.extend(previous);
+    if let Some(documents) = documents {
         roots.push(documents.join("Fullmag"));
     }
     let mut seen = std::collections::HashSet::new();
@@ -646,37 +706,68 @@ pub async fn compute_probe() -> Result<Value, String> {
         .map_err(|error| format!("compute probe was interrupted: {error}"))
 }
 
+/// The recent-project list, a view of the workspace database's projects in
+/// the shape of `recent-index.schema.json`.
 #[tauri::command]
-pub async fn recent_index_read(app: AppHandle) -> Result<Value, String> {
-    recent_index::read_index(&recent_index_file(&app)?)
+pub async fn recent_index_read(
+    app: AppHandle,
+    workspace: State<'_, WorkspaceHost>,
+) -> Result<Value, String> {
+    workspace_commands::run(
+        workspace.inner().clone(),
+        workspace_commands::legacy_index_path(&app),
+        |ws, _| recent_index::read_index(ws),
+    )
+    .await
 }
 
 /// Rescan the project locations. Runs off the async executor: it walks the
 /// file system and opens every archive it finds.
 #[tauri::command]
-pub async fn recent_index_rebuild(app: AppHandle) -> Result<Value, String> {
-    let file = recent_index_file(&app)?;
-    let roots = recent_project_roots(&app, &file);
-    tauri::async_runtime::spawn_blocking(move || {
-        recent_index::rebuild_index(&file, &roots, std::time::SystemTime::now())
-    })
+pub async fn recent_index_rebuild(
+    app: AppHandle,
+    workspace: State<'_, WorkspaceHost>,
+) -> Result<Value, String> {
+    let documents = app.path().document_dir().ok();
+    workspace_commands::run(
+        workspace.inner().clone(),
+        workspace_commands::legacy_index_path(&app),
+        move |ws, _| {
+            let roots = recent_project_roots(documents, recent_index::stored_roots(ws));
+            recent_index::rebuild_index(ws, &roots, std::time::SystemTime::now())
+        },
+    )
     .await
-    .map_err(|error| format!("index rebuild was interrupted: {error}"))?
 }
 
 #[tauri::command]
 pub async fn recent_index_pin(
     app: AppHandle,
+    workspace: State<'_, WorkspaceHost>,
     project_id: String,
     pinned: bool,
 ) -> Result<Value, String> {
-    recent_index::set_pinned(&recent_index_file(&app)?, &project_id, pinned)
+    workspace_commands::run(
+        workspace.inner().clone(),
+        workspace_commands::legacy_index_path(&app),
+        move |ws, _| recent_index::set_pinned(ws, &project_id, pinned),
+    )
+    .await
 }
 
 /// Removes the row from the list only; the project file is never touched.
 #[tauri::command]
-pub async fn recent_index_forget(app: AppHandle, project_id: String) -> Result<Value, String> {
-    recent_index::forget(&recent_index_file(&app)?, &project_id)
+pub async fn recent_index_forget(
+    app: AppHandle,
+    workspace: State<'_, WorkspaceHost>,
+    project_id: String,
+) -> Result<Value, String> {
+    workspace_commands::run(
+        workspace.inner().clone(),
+        workspace_commands::legacy_index_path(&app),
+        move |ws, _| recent_index::forget(ws, &project_id),
+    )
+    .await
 }
 
 /// Read an archive the index points at and return the validated bytes, the
@@ -684,19 +775,18 @@ pub async fn recent_index_forget(app: AppHandle, project_id: String) -> Result<V
 #[tauri::command]
 pub async fn open_project_archive_path(
     app: AppHandle,
+    workspace: State<'_, WorkspaceHost>,
     path: String,
 ) -> Result<ProjectOpenArchive, String> {
     let file_path = PathBuf::from(&path);
-    let (summary, bytes) = read_project_archive(&file_path)?;
+    let (summary, bytes, name) = read_project_archive(&file_path)?;
     let file_name = file_path
         .file_name()
         .and_then(|value| value.to_str())
         .unwrap_or("fullmag-project.fms")
         .to_string();
-    // Best effort: a stale index must never stop a project from opening.
-    if let Ok(index_file) = recent_index_file(&app) {
-        let _ = recent_index::touch_opened(&index_file, &file_path, std::time::SystemTime::now());
-    }
+    // Best effort: the database must never stop a project from opening.
+    mirror_project_open(&app, workspace.inner(), &file_path, &summary, &name).await;
     Ok(ProjectOpenArchive {
         path: file_path.display().to_string(),
         file_name,
