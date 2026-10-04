@@ -185,7 +185,7 @@ describe("runOutcomeFromStatusTransition", () => {
 });
 
 describe("advanceRunOutcomeTracker", () => {
-  it("records exactly once per run and attributes a missed intermediate poll", () => {
+  it("records exactly once per run and attributes a skipped intermediate status", () => {
     let tracker = INITIAL_RUN_OUTCOME_TRACKER;
     const outcomes = [];
     const steps: Array<[RunLifecycleObservation | null, number]> = [
