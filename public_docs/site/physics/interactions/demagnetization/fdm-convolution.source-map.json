@@ -17,7 +17,7 @@
     {"id": "newell", "path": "crates/fullmag-fdm-demag/src/newell.rs", "symbol": "compute_newell_kernels", "responsibility": "Newell base functions, 27-point tensor and stable summation."},
     {"id": "multiply", "path": "crates/fullmag-fdm-demag/src/multiply.rs", "symbol": "accumulate_tensor_convolution", "responsibility": "Symmetric six-component tensor-vector convolution."},
     {"id": "cpu-spectrum", "path": "crates/fullmag-engine/src/fdm/cpu/fft.rs", "symbol": "compute_newell_kernel_spectra", "responsibility": "CPU tensor-spectrum construction."},
-    {"id": "cpu-field", "path": "crates/fullmag-engine/src/fdm/cpu/fields.rs", "symbol": "demag_field_from_vectors", "responsibility": "CPU demagnetizing-field realization."},
+    {"id": "cpu-field", "path": "crates/fullmag-engine/src/fdm/cpu/fields/demag.rs", "symbol": "demag_field_from_vectors", "responsibility": "CPU demagnetizing-field realization."},
     {"id": "cuda64", "path": "backends/fdm/gpu/cuda/interactions/demag_fp64.cu", "symbol": "launch_demag_field_fp64", "responsibility": "CUDA FP64 field dispatch."},
     {"id": "cuda32", "path": "backends/fdm/gpu/cuda/interactions/demag_fp32.cu", "symbol": "launch_demag_field_fp32", "responsibility": "CUDA FP32 field dispatch."},
     {"id": "energy64", "path": "backends/fdm/gpu/cuda/runtime/reductions_fp64.cu", "symbol": "reduce_demag_energy_fp64", "responsibility": "CUDA FP64 demagnetization-energy reduction."},

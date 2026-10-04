@@ -172,7 +172,14 @@ export function RegionsListPanel({ selection }: InspectorPanelProps) {
         },
       );
       const revision = revisionFromScene(response);
-      publishRegionAuthoringScene(resources, response, revision);
+      publishRegionAuthoringScene(
+        resources,
+        response,
+        revision,
+        undefined,
+        undefined,
+        api.resourceCacheScope,
+      );
       const createdRegionId = findRegionIdByName(
         response,
         model.objectId,

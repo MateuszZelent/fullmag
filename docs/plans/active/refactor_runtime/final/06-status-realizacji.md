@@ -1,5 +1,14 @@
 # Status realizacji całego planu refaktoryzacji
 
+Checkpoint P8-53AQ, 04.10.2026: [właściciele workspace i cache klienta](p8/53aq-workspace-owners-and-client-cache.md).
+Dokładna tożsamość API/session/globalnego epoch, guard dokumentu i adapter
+odtworzenia wymagają świeżych właścicieli. Hooki oraz wydawcy danych mają
+cache odrębny dla klientów. Build Windows, 24 kontrole natywnego API i
+generacja klienta PASS. Frontend: 39 grup koordynatora, 9 grup cache,
+31/31 kontroli właścicieli w przeglądarce oraz workspace/WebGL PASS;
+production TypeScript, API hygiene i lint PASS. Produkcyjna wymiana kernela i pełny browser/native
+restart pozostają otwarte; `restart_available=false`, procenty bez awansu.
+
 Checkpoint P8-53AP, 04.10.2026: [rekoncyliacja restartu w UI](p8/53ap-frontend-restart-reconciliation.md).
 Koordynator zachowuje pojedynczy intent, po lost ACK odczytuje ten sam request
 i wymaga świeżego pinu oraz zgodnych payloadów przed hydration. 35 grup

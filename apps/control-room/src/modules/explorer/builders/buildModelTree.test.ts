@@ -3599,6 +3599,7 @@ describe("buildModelTree", () => {
       "model:mesh:mask", "model:mesh:provenance", "model:mesh:region:region%3Acore",
     ]));
     expect(nodes.find((node) => node.id === "model:mesh")?.contextCommands).toEqual([
+      "grid.build-fdm",
       "workspace.focus-selection",
     ]);
     for (const nodeId of [
@@ -3648,7 +3649,7 @@ describe("buildModelTree", () => {
       domainPresentationStatus: "error",
     }));
     expect(nodes.find((node) => node.id === "model:mesh")).toMatchObject({
-      kind: "mesh.root", status: "degraded", contextCommands: ["workspace.focus-selection"],
+      kind: "mesh.root", status: "degraded", contextCommands: ["grid.build-fdm", "workspace.focus-selection"],
     });
     expect(nodes.map((node) => node.kind)).not.toEqual(expect.arrayContaining([
       "mesh.unassigned", "airbox.root", "boundary-faces.root",

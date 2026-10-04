@@ -46,9 +46,15 @@ vi.mock("@/kernel/resources/useSessionStatus", () => ({
   useSessionResourceIdentity: () => mocks.sessionIdentity,
 }));
 
-vi.mock("@/kernel/resources/geometryLifecycleResources", () => ({
-  useSceneResource: () => ({ data: mocks.sceneData, status: "ready" }),
-}));
+vi.mock("@/kernel/resources/geometryLifecycleResources", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("@/kernel/resources/geometryLifecycleResources")
+  >();
+  return {
+    ...actual,
+    useSceneResource: () => ({ data: mocks.sceneData, status: "ready" }),
+  };
+});
 
 vi.mock("../regionAuthoringInvalidation", () => ({
   publishRegionAuthoringScene: mocks.publishScene,
@@ -107,6 +113,7 @@ describe("ObjectRegionMagneticParametersPanel session fence", () => {
         11,
         undefined,
         sessionAScopeKey,
+        undefined,
       );
       expect(container.textContent).toContain("Material fields updated.");
     } finally {

@@ -25,7 +25,7 @@ function dataset(): MaterializedDatasetResource {
       tensor_schema_id: "fullmag.tensor.v1", tensor_byte_length: "1024", plane: "values", accepted_state: null,
       tensor_artifact: { artifact_id: "tensor", schema_id: "fullmag.tensor.v1", object_ref: hash, byte_length: "1024", accepted_state: null },
       coverage: { total_elements: "2", component_count: "1", dtype: "f64", endian: "little", total_bytes: "16", chunk_count: "1" },
-      descriptor: { quantity_id: "e_total", unit: "J", tensor_rank: "0", frame: { kind: "laboratory", frame_id: "lab" }, sample_location: "global",
+      descriptor: { quantity_id: "E_total", unit: "J", tensor_rank: "0", frame: { kind: "laboratory", frame_id: "lab" }, sample_location: "global",
         active_support: { support_fingerprint: digest, selection: null }, function_space: null, topology_id: digest, carrier_id: "carrier", layout_digest: digest,
         axes: [{ axis_id: "element", unit: "1", length: "2" }], component_axis: null, complex_encoding: "real", harmonic_convention: null,
         normalization: "none", value_representation: "physical_field", modal_semantics: null, resolution: "quantitative" },

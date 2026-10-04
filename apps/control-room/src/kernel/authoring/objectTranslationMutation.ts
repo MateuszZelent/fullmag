@@ -61,6 +61,7 @@ export async function commitObjectTranslation({
       undefined,
       false,
       sessionScopeKey,
+      api.resourceCacheScope,
     );
   }
   invalidateAuthoringMutationDependents(resources, "geometry", revision);

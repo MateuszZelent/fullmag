@@ -111,6 +111,7 @@ function invalidateAuthoringResources(
   revision: number,
   committedScene?: SceneResource,
   sessionScopeKey?: string | null,
+  resourceCacheScope?: string | null,
 ): void {
   if (committedScene) {
     publishCommittedSceneResource(
@@ -120,6 +121,7 @@ function invalidateAuthoringResources(
       undefined,
       false,
       sessionScopeKey,
+      resourceCacheScope,
     );
   } else {
     resources.invalidate(MODEL_SCENE_PATH, revision);
@@ -134,6 +136,7 @@ function invalidateAuthoringResources(
 export function ObjectGeneralPanel({ selection }: InspectorPanelProps) {
   const kernel = useKernel();
   const {
+    api,
     authoringHistory,
     resources,
   } = kernel;
@@ -263,6 +266,7 @@ export function ObjectGeneralPanel({ selection }: InspectorPanelProps) {
         nextRevision,
         response,
         mutationContext.sessionScopeKey,
+        api.resourceCacheScope,
       );
       setFeedback({ kind: "success", message: "Object identity committed." });
       return true;
@@ -293,6 +297,7 @@ export function ObjectGeneralPanel({ selection }: InspectorPanelProps) {
         response.scene_revision,
         response.committed_scene,
         mutationContext.sessionScopeKey,
+        api.resourceCacheScope,
       );
       return true;
     } catch (error) {

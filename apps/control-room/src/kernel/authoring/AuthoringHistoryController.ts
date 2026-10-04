@@ -14,6 +14,8 @@ import {
 import { publishCommittedSceneResource } from "../resources/geometryLifecycleResources";
 
 export interface AuthoringHistoryApi {
+  /** Production clients scope cache writes; omitted by lightweight compatibility adapters. */
+  resourceCacheScope?: string;
   model: {
     scene(options?: RequestOptions): Promise<SceneResource>;
     commitTransaction(
@@ -378,6 +380,7 @@ export class AuthoringHistoryController {
       undefined,
       false,
       sessionScopeKey,
+      this.api.resourceCacheScope,
     );
     for (const kind of ["geometry", "magnetization", "material", "interaction"] as const) {
       invalidateAuthoringMutationDependents(

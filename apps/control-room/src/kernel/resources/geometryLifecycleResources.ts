@@ -115,6 +115,7 @@ import {
   type ResourceRuntimeStore,
 } from "./ResourceRuntimeStore";
 import { ResourceCache } from "./ResourceCache";
+import { resourceRuntimeKeyForClientScope } from "./resourceClientScope";
 export {
   VISUALIZATION_STATE_RESOURCE_KEY,
   resolveVisualizationStateRevision,
@@ -538,14 +539,25 @@ export function publishCommittedSceneResource(
     sharedResourceRuntimeStore as ResourceRuntimeStore<SceneResource>,
   invalidate = true,
   sessionScopeKey?: string | null,
+  resourceCacheScope?: string | null,
 ): void {
-  runtimeStore.updateData(SCENE_RESOURCE_KEY, scene, revision);
-  // A response without an owner may update the legacy alias, but it must not
-  // become the in-memory value for an arbitrary session. Canonical invalidation
-  // fans out to observed scoped subscribers so each owner can refetch safely.
+  const publish = resourceCacheScope
+    ? runtimeStore.updateObservedData.bind(runtimeStore)
+    : runtimeStore.updateData.bind(runtimeStore);
+  publish(
+    resourceRuntimeKeyForClientScope(SCENE_RESOURCE_KEY, resourceCacheScope),
+    scene,
+    revision,
+  );
+  // Client-owned publications must not create unobserved aliases or resurrect
+  // a disposed owner's snapshots. Canonical invalidation lets future observers
+  // fetch authoritative data through their own session and client scope.
   if (sessionScopeKey) {
-    runtimeStore.updateData(
-      `${sessionScopeKey}|${SCENE_RESOURCE_KEY}`,
+    publish(
+      resourceRuntimeKeyForClientScope(
+        `${sessionScopeKey}|${SCENE_RESOURCE_KEY}`,
+        resourceCacheScope,
+      ),
       scene,
       revision,
     );

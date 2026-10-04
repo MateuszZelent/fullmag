@@ -679,7 +679,7 @@ describe("Viewport3DScene scale helpers", () => {
       "{!fdmLaneActive &&\n      viewport3DAirboxLayerEnabledFromBrowserConfig() ? (",
     );
     expect(modelStack).toContain(
-      "{!fdmLaneActive &&\n      viewport3DTopologyMeshLayerEnabledFromBrowserConfig() ? (",
+      "{!savedViewportActive &&\n      !fdmLaneActive &&\n      viewport3DTopologyMeshLayerEnabledFromBrowserConfig() ? (",
     );
   });
 

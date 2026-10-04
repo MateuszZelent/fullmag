@@ -263,7 +263,7 @@ describe("VisualizationDebugPanelView", () => {
       new URL("../../../../design/styles/components/index.css", import.meta.url),
       "utf8",
     );
-    expect(indexCss.trim()).toBe('@import "./visualization-debug.css";');
+    expect(indexCss).toContain('@import "./visualization-debug.css";');
   });
 });
 

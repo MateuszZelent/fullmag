@@ -331,6 +331,7 @@ use utoipa::OpenApi;
         crate::schemas::development_backend::DevelopmentBackendState,
         crate::schemas::development_backend::DevelopmentBackendReason,
         crate::schemas::development_backend::DevelopmentBuildIdentity,
+        crate::schemas::development_backend::DevelopmentBackendWorkspaceIdentity,
         crate::schemas::development_restart_request::DevelopmentRestartRequest,
         crate::schemas::development_restart_request::DevelopmentRestartResource,
         crate::schemas::development_restart_request::DevelopmentRestartState,

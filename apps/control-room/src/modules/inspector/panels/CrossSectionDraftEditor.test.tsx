@@ -55,6 +55,7 @@ vi.mock("@/kernel/KernelContext", () => ({
       setPanelVisible: mocks.setPanelVisible,
     },
     selection: {
+      get: () => null,
       set: mocks.setSelection,
     },
     resources: {

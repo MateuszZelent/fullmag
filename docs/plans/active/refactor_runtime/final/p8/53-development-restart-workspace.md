@@ -1,5 +1,12 @@
 # P8-53 — bezpieczne zastosowanie nowego backendu w workspace
 
+[P8-53AQ](53aq-workspace-owners-and-client-cache.md) dodaje dokładną tożsamość
+workspace, guard dokumentu, adapter właścicieli oraz odrębny cache klientów.
+Natywny build i 24 kontrole API PASS; frontend: 39 grup koordynatora,
+9 grup cache, 31/31 browser owners oraz workspace/WebGL PASS.
+Produkcyjna wymiana kernela i pełna
+hydration pozostają otwarte; `restart_available=false`.
+
 [P8-53AP](53ap-frontend-restart-reconciliation.md) dodaje fasadę token-bound
 statusu i koordynator pojedynczego intentu UI. Lost ACK prowadzi do odczytu
 tego samego requestu, a błędne Ready nie zwalnia ochrony szkiców. Interpretowane

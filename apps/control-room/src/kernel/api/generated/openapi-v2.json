@@ -4878,6 +4878,16 @@
           },
           "state": {
             "$ref": "#/components/schemas/DevelopmentBackendState"
+          },
+          "workspace_identity": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DevelopmentBackendWorkspaceIdentity"
+              }
+            ]
           }
         },
         "required": [
@@ -4902,6 +4912,30 @@
           "unknown"
         ],
         "type": "string"
+      },
+      "DevelopmentBackendWorkspaceIdentity": {
+        "properties": {
+          "api_instance_id": {
+            "type": "string"
+          },
+          "session_epoch": {
+            "description": "Exact transition counter, including when there is no current session.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "session_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "api_instance_id",
+          "session_epoch"
+        ],
+        "type": "object"
       },
       "DevelopmentBuildIdentity": {
         "properties": {

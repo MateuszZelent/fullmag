@@ -8,6 +8,8 @@ const outputDir = resolve(
 );
 const INSPECTOR_REQUEST_QUIET_MS = 500;
 const INSPECTOR_REQUEST_TIMEOUT_MS = 5_000;
+// Per-path request budget of one page lifecycle: counts restart at every
+// load so the budget detects request storms, not the number of loads in a run.
 const INSPECTOR_MAX_REQUESTS_PER_PATH = 8;
 const INSPECTOR_REQUEST_LIMITS = new Map([
   [
@@ -613,6 +615,8 @@ try {
 
   await qualifyVisualizationMutationStability(page, inspector, fixture);
 
+  fixture.requestCounts.clear();
+
   await page.reload({ waitUntil: "domcontentloaded", timeout: 60_000 });
   await inspector.waitFor({ state: "visible" });
   const objectNode = page
@@ -1008,6 +1012,7 @@ async function qualifyMagneticTextureMutationStability(page, inspector, fixture)
   fixture.revision = fixtureSnapshot.revision;
   fixture.scene = fixtureSnapshot.scene;
   fixture.visualization = fixtureSnapshot.visualization;
+  fixture.requestCounts.clear();
   await page.reload({ waitUntil: "domcontentloaded" });
   await page.locator(".fm-inspector").waitFor({ state: "visible", timeout: 30_000 });
   const unexpectedResetErrors = consoleErrors.filter(
@@ -1022,6 +1027,7 @@ async function qualifyMagneticTextureMutationStability(page, inspector, fixture)
 
 async function qualifyPhysicsScopeExclusivity(page, inspector, fixture) {
   fixture.physicsGuardEnabled = true;
+  fixture.requestCounts.clear();
   await page.reload({ waitUntil: "domcontentloaded", timeout: 60_000 });
   await inspector.waitFor({ state: "visible", timeout: 30_000 });
 
@@ -1096,6 +1102,8 @@ async function qualifyPhysicsScopeExclusivity(page, inspector, fixture) {
   assert(objectDmi, "Physics guard fixture lost its interfacial DMI entry.");
   objectDmi.enabled = false;
   fixture.scene.study.rotated_interfacial_dmi = -0.003;
+
+  fixture.requestCounts.clear();
 
   await page.reload({ waitUntil: "domcontentloaded", timeout: 60_000 });
   await inspector.waitFor({ state: "visible", timeout: 30_000 });
@@ -1285,6 +1293,7 @@ async function qualifyInspectorRoutingMatrix(page, inspector, screenshotFiles, f
 
 async function qualifyModalDispersionAndPostprocessing(page, inspector, screenshotFiles, fixture) {
   fixture.analysisProduct = "modal_eigen";
+  fixture.requestCounts.clear();
   await page.reload({ waitUntil: "domcontentloaded", timeout: 60_000 });
   await inspector.waitFor({ state: "visible", timeout: 30_000 });
 
@@ -1331,6 +1340,7 @@ async function qualifyModalDispersionAndPostprocessing(page, inspector, screensh
   }
 
   fixture.analysisProduct = "driven_response";
+  fixture.requestCounts.clear();
   await page.reload({ waitUntil: "domcontentloaded", timeout: 60_000 });
   await inspector.waitFor({ state: "visible", timeout: 30_000 });
   const modelTab = page
@@ -1726,6 +1736,17 @@ async function installInspectorFixtureApi(page, fixture) {
       );
     }
     if (request.method() === "OPTIONS") return fulfillEmpty(route, 204);
+    // No managed development backend is attached to the fixture session.
+    if (path === "/v2/platform/development-backend" && request.method() === "GET") {
+      return fulfillEmpty(route, 204);
+    }
+    // The fixture run has no durable observation frames.
+    if (path === "/v2/sessions/current/data/observation-frames" && request.method() === "GET") {
+      return fulfillJson(route, {
+        frames: [],
+        run_id: url.searchParams.get("run_id") ?? "inspector-run",
+      });
+    }
     if (path === "/v2/sessions" && request.method() === "GET") {
       return fulfillJson(route, {
         schema_version: "2.0.0",

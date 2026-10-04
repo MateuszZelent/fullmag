@@ -88,7 +88,9 @@ describe("ObjectMagneticTexturePanel", () => {
     for (const source of [objectPanel, regionPanel]) {
       expect(source).toContain("runAuthoringMutationWithHistory(");
       expect(source).toContain("authoringHistory");
-      expect(source).toContain("base_revision: baseRevision ?? request.base_revision");
     }
+    expect(objectPanel).toContain("base_revision: baseRevision ?? request.base_revision");
+    expect(regionPanel).toContain("const commitRevision = baseRevision ?? request.base_revision;");
+    expect(regionPanel).toContain("base_revision: commitRevision");
   });
 });
