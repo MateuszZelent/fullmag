@@ -40,6 +40,25 @@ class StageConsumerTests(unittest.TestCase):
         self.assertLess(len(raw), consumer.MAX_ACK_BYTES)
         self.assertEqual(json.loads(raw)["acquisition_nonce"], self.acquisition["nonce"])
 
+    def test_commit_check_stdin_rereads_same_pending_capsule_without_marking_restored(self):
+        ack = consumer.stage_request(str(self.repo), self.request)
+        request = {**self.request, "schema": consumer.COMMIT_CHECK_REQUEST_SCHEMA,
+                   "staged_acknowledgement": ack}
+        code, raw, errors = self.run_main(json.dumps(request).encode())
+        self.assertEqual((code, errors), (0, ""))
+        self.assertEqual(json.loads(raw), ack)
+        self.assertEqual(len(list((self.runtime / capsule.HANDOFF_DIRECTORY).glob("*/receipt.json"))), 1)
+
+    def test_commit_check_bad_nonce_refused_without_private_output(self):
+        ack = consumer.stage_request(str(self.repo), self.request)
+        ack["acquisition_nonce"] = "private-canary"
+        request = {**self.request, "schema": consumer.COMMIT_CHECK_REQUEST_SCHEMA,
+                   "staged_acknowledgement": ack}
+        code, raw, errors = self.run_main(json.dumps(request).encode())
+        self.assertEqual(code, 2)
+        self.assertEqual(raw, b"")
+        self.assertNotIn("private-canary", errors)
+
     def test_release_or_unmanaged_route_refused_before_write(self):
         for active, profile in (("0", "windows-native-fdm-cpu-dev"), ("1", "windows-native-fdm-cpu")):
             with self.subTest(active=active, profile=profile):

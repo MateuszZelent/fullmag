@@ -10,9 +10,10 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from windows import development_handoff as capsule
-from windows.development_acquisition_handoff import stage_acquired_workspace
+from windows.development_acquisition_handoff import stage_acquired_workspace, prepare_acquired_workspace_commit
 
 REQUEST_SCHEMA = "fullmag.development-acquisition-stage-request.v1"
+COMMIT_CHECK_REQUEST_SCHEMA = "fullmag.development-acquisition-commit-check-request.v1"
 MAX_REQUEST_BYTES = 128 * 1024 * 1024
 MAX_ACK_BYTES = 16 * 1024
 _REQUEST_FIELDS = frozenset({"schema", "acquisition_json", "source_identity", "candidate_bundle_root", "frontend_payload"})
@@ -20,8 +21,10 @@ _REQUEST_FIELDS = frozenset({"schema", "acquisition_json", "source_identity", "c
 
 def stage_request(repo_root: str, request: dict[str, Any]) -> dict[str, Any]:
     """Consume only an owner-validated request; never stop or restore a process."""
-    capsule._exact_keys(request, _REQUEST_FIELDS, "acquisition stage request")
-    if request["schema"] != REQUEST_SCHEMA:
+    checking_commit = isinstance(request, dict) and request.get("schema") == COMMIT_CHECK_REQUEST_SCHEMA
+    fields = _REQUEST_FIELDS | {"staged_acknowledgement"} if checking_commit else _REQUEST_FIELDS
+    capsule._exact_keys(request, fields, "acquisition handoff request")
+    if not isinstance(request["schema"], str) or request["schema"] not in {REQUEST_SCHEMA, COMMIT_CHECK_REQUEST_SCHEMA}:
         raise capsule.HandoffError("Unknown acquisition stage request schema")
     raw = request["acquisition_json"]
     candidate = request["candidate_bundle_root"]
@@ -31,6 +34,14 @@ def stage_request(repo_root: str, request: dict[str, Any]) -> dict[str, Any]:
         data = raw.encode("utf-8", errors="strict")
     except UnicodeError as error:
         raise capsule.HandoffError("Acquisition is not UTF-8") from error
+    if checking_commit:
+        checked = prepare_acquired_workspace_commit(repo_root, data, request["source_identity"],
+            candidate, request["staged_acknowledgement"], request["frontend_payload"])
+        acknowledgement = request["staged_acknowledgement"]
+        if (checked["binding"] != acknowledgement["binding"]
+                or checked["reference"] != acknowledgement["handoff"]):
+            raise capsule.HandoffError("Commit preparation acknowledgement changed")
+        return acknowledgement
     return stage_acquired_workspace(repo_root, data, request["source_identity"],
                                     candidate, request["frontend_payload"])
 

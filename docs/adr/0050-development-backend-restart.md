@@ -156,6 +156,11 @@ UI przypiętym do tej samej instancji API, sesji i epoki. Trwały ACK wymaga
 odczytu zwrotnego hashów, stanu `staged`, oryginalnej sceny i danych UI.
 Nie zastępuje aktualnego potwierdzenia przejęcia ani atomowego commit/shutdown.
 
+Przed commit launcher ponownie sprawdza kapsułę i sealed candidate, używając
+prywatnie zachowanych danych przejęcia i UI. Mały ACK pozostaje `staged`;
+odczyt nie publikuje `restored` i nie upoważnia do shutdown. Niezgodny nonce,
+źródła, scene/UI, snapshot lub receipt unieważniają kanał przejęcia.
+
 Zimny istniejący accepted store wymaga braku metadanych ownera/config oraz
 rezerwacji launchera i przejmowania ownera. Osobny `STARTUP-GATE.lock`
 obejmuje również bezpośredni start service przed publikacją ownera.

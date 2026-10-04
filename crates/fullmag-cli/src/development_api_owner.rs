@@ -338,7 +338,8 @@ impl AuthoringAcquisition {
         candidate_bundle_root: &Path,
         frontend_payload: &Value,
     ) -> Result<StagedAuthoringHandoff> {
-        let result = self.stage_handoff_inner(repo_root, candidate_bundle_root, frontend_payload);
+        let result =
+            self.stage_handoff_inner(repo_root, candidate_bundle_root, frontend_payload, None);
         if result.is_err() {
             self.invalidate_control_stream();
         }
@@ -350,6 +351,7 @@ impl AuthoringAcquisition {
         repo_root: &Path,
         candidate_bundle_root: &Path,
         frontend_payload: &Value,
+        staged_acknowledgement: Option<&Value>,
     ) -> Result<StagedAuthoringHandoff> {
         if self.stream.is_none() {
             bail!("development API acquisition connection is unavailable");
@@ -400,7 +402,11 @@ impl AuthoringAcquisition {
         let acquisition_json = std::str::from_utf8(&self.acquisition_bytes)
             .context("development API acquisition response is not UTF-8")?;
         let request = StageRequest {
-            schema: STAGE_REQUEST_SCHEMA,
+            schema: if staged_acknowledgement.is_some() {
+                "fullmag.development-acquisition-commit-check-request.v1"
+            } else {
+                STAGE_REQUEST_SCHEMA
+            },
             acquisition_json: &acquisition_json,
             source_identity: StageSourceIdentity {
                 api_instance_id: &self.api_instance_id,
@@ -410,6 +416,7 @@ impl AuthoringAcquisition {
             },
             candidate_bundle_root,
             frontend_payload,
+            staged_acknowledgement,
         };
         let request_bytes = serde_json::to_vec(&request)
             .context("unable to encode development acquisition staging request")?;
@@ -437,7 +444,36 @@ impl AuthoringAcquisition {
             helper_pid,
             source_nonce: self.nonce.clone(),
             source_api_instance_id: self.api_instance_id.clone(),
+            candidate_bundle_root: PathBuf::from(candidate_bundle_root),
+            frontend_payload: frontend_payload.clone(),
         })
+    }
+
+    /// Re-read the pending capsule and sealed candidate immediately before
+    /// commit preparation. This never grants shutdown or releases an idle fence.
+    pub(crate) fn revalidate_staged_handoff(
+        &mut self,
+        repo_root: &Path,
+        staged: &StagedAuthoringHandoff,
+    ) -> Result<StagedAuthoringHandoff> {
+        let result = (|| {
+            if staged.source_nonce != self.nonce
+                || staged.source_api_instance_id != self.api_instance_id
+            {
+                bail!("staged handoff does not belong to this API acquisition");
+            }
+            self.confirm_held()?;
+            self.stage_handoff_inner(
+                repo_root,
+                &staged.candidate_bundle_root,
+                &staged.frontend_payload,
+                Some(&staged.acknowledgement),
+            )
+        })();
+        if result.is_err() {
+            self.invalidate_control_stream();
+        }
+        result
     }
 
     /// Fence globally accepted work and drain the pinned resident service only
@@ -617,6 +653,8 @@ pub(crate) struct StagedAuthoringHandoff {
     pub(crate) helper_pid: u32,
     source_nonce: String,
     source_api_instance_id: String,
+    candidate_bundle_root: PathBuf,
+    frontend_payload: Value,
 }
 
 #[derive(Serialize)]
@@ -626,6 +664,8 @@ struct StageRequest<'a> {
     source_identity: StageSourceIdentity<'a>,
     candidate_bundle_root: &'a str,
     frontend_payload: &'a Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    staged_acknowledgement: Option<&'a Value>,
 }
 
 #[derive(Serialize)]

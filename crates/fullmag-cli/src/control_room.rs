@@ -2442,6 +2442,10 @@ pub(crate) fn verify_development_api_owner() -> Result<()> {
     if empty_staged.acknowledgement["workspace_state"] != "no_session" {
         bail!("empty CLI capsule staging returned a session");
     }
+    let empty_checked = acquisition.revalidate_staged_handoff(&root, &empty_staged)?;
+    if empty_checked.acknowledgement != empty_staged.acknowledgement {
+        bail!("empty capsule commit preparation changed its acknowledgement");
+    }
     let create = serde_json::json!({"name":"CLI owner fixture", "backend":"fdm",
                                   "device":"cpu", "precision":"double"});
     let frozen = client
@@ -2483,6 +2487,10 @@ pub(crate) fn verify_development_api_owner() -> Result<()> {
     )?;
     if scene_staged.acknowledgement["workspace_state"] != "session" {
         bail!("canonical scene CLI capsule staging lost its session");
+    }
+    let scene_checked = acquisition.revalidate_staged_handoff(&root, &scene_staged)?;
+    if scene_checked.acknowledgement != scene_staged.acknowledgement {
+        bail!("scene capsule commit preparation changed its acknowledgement");
     }
     let service_config_path = std::env::var_os("FULLMAG_DEVELOPMENT_OWNER_PROBE_SERVICE_CONFIG")
         .context("owned CLI probe requires its isolated service configuration")?;
@@ -2569,6 +2577,18 @@ pub(crate) fn verify_development_api_owner() -> Result<()> {
     {
         bail!("global idle handoff accepted staging from another acquisition");
     }
+    let mut foreign_commit = owner.acquire(&uuid::Uuid::new_v4().to_string())?;
+    let commit_error = foreign_commit
+        .revalidate_staged_handoff(&root, &scene_staged)
+        .err()
+        .context("commit preparation accepted staging from another acquisition")?;
+    if !commit_error
+        .to_string()
+        .contains("staged handoff does not belong to this API acquisition")
+        || foreign_commit.confirm_held().is_ok()
+    {
+        bail!("commit preparation retained a foreign acquisition");
+    }
     // Only this fixture child is terminated; successful wait is recorded.
     let mut process = child.release().0;
     terminate_child_process(&mut process);
@@ -2583,7 +2603,9 @@ pub(crate) fn verify_development_api_owner() -> Result<()> {
             "handoffs":[empty_staged.acknowledgement,scene_staged.acknowledgement],
             "stage_helpers":[
                 {"pid":empty_staged.helper_pid,"waited":true,"exit_code":0},
-                {"pid":scene_staged.helper_pid,"waited":true,"exit_code":0}
+                {"pid":scene_staged.helper_pid,"waited":true,"exit_code":0},
+                {"pid":empty_checked.helper_pid,"waited":true,"exit_code":0},
+                {"pid":scene_checked.helper_pid,"waited":true,"exit_code":0}
             ],
             "api_exit_code":terminal.code(), "checks":["owned-api-discovery",
             "static-script-owner-disabled", "foreign-child-refused", "foreign-token-refused",
@@ -2592,8 +2614,9 @@ pub(crate) fn verify_development_api_owner() -> Result<()> {
             "held-confirmation-preserves-freeze", "confirmation-does-not-renew-expiry",
             "expired-confirmation-refused", "expired-acquisition-reopens-admission",
             "empty-capsule-production-stdin-consumer", "scene-capsule-production-stdin-consumer",
+            "empty-capsule-precommit-readback", "scene-capsule-precommit-readback",
             "global-idle-unbound-api-store-refused", "failed-global-idle-invalidates-acquisition",
-            "global-idle-foreign-staging-refused"]
+            "global-idle-foreign-staging-refused", "precommit-foreign-staging-invalidates-acquisition"]
         })
     );
     Ok(())

@@ -18,8 +18,15 @@ from windows import runtime_bundle
 
 
 ACQUISITION_SCHEMA = "fullmag.development-authoring-acquisition.v1"
+HANDOFF_ACK_SCHEMA = "fullmag.development-acquisition-handoff.v1"
 _SOURCE_FIELDS = frozenset({"api_instance_id", "generation_id", "source_build_id", "source_sha256"})
 _FRONTEND_FIELDS = frozenset({"api_instance_id", "session_id", "session_epoch", "editor", "workspace", "project_document"})
+_HANDOFF_ACK_FIELDS = frozenset({"schema", "acquisition_nonce", "workspace_state", "binding", "handoff"})
+_HANDOFF_ACK_BINDING_FIELDS = frozenset({
+    "api_instance_id", "generation_id", "source_build_id", "source_sha256",
+    "session_id", "session_epoch", "target_build_id",
+})
+_HANDOFF_REFERENCE_FIELDS = frozenset({"handoff_id", "snapshot_sha256", "state"})
 
 
 class _NumberToken(str):
@@ -92,6 +99,107 @@ def _acquired(data: bytes, expected_api: str) -> tuple[dict[str, Any], dict[str,
     return workspace, identity
 
 
+def _owner_source_identity(value: Mapping[str, Any]) -> dict[str, Any]:
+    source = capsule._exact_keys(value, _SOURCE_FIELDS, "owner source identity")
+    _uuid(source["api_instance_id"], "owner API")
+    return source
+
+
+def _scoped_frontend_payload(
+    value: Mapping[str, Any], source: Mapping[str, Any], identity: Mapping[str, Any]
+) -> dict[str, Any]:
+    frontend = capsule._exact_keys(value, _FRONTEND_FIELDS, "frontend handoff payload")
+    for field, expected in (("api_instance_id", source["api_instance_id"]),
+                            ("session_id", identity["session_id"]),
+                            ("session_epoch", identity["session_epoch"])):
+        if type(frontend[field]) is not type(expected) or frontend[field] != expected:
+            raise capsule.HandoffError("Frontend payload belongs to another API/session epoch")
+    # Bound and validate caller data before any capsule creation or commit check.
+    capsule._canonical_json(frontend, "frontend handoff payload", capsule.MAX_SNAPSHOT_BYTES)
+    return frontend
+
+
+def _verified_candidate_target(repo_root: str, candidate_bundle_root: str) -> str:
+    layout, runtime_root = restore._verified_workspace(repo_root)
+    try:
+        candidate, _ = runtime_bundle.validate_bundle(candidate_bundle_root, runtime_root, "dev")
+    except (runtime_bundle.BundleError, OSError, TypeError, ValueError) as error:
+        raise capsule.HandoffError("Acquisition candidate failed bundle verification") from error
+    source = candidate.get("source")
+    if not isinstance(source, dict):
+        raise capsule.HandoffError("Acquisition candidate has no verified source identity")
+    if source.get("workspace_namespace") != layout["worktree_id"]:
+        raise capsule.HandoffError("Acquisition candidate belongs to another workspace")
+    target = source.get("manifest_sha256")
+    if not isinstance(target, str) or not runtime_bundle._is_sha256(target):
+        raise capsule.HandoffError("Acquisition candidate manifest identity is invalid")
+    return target
+
+
+def _expected_binding(
+    source: Mapping[str, Any], identity: Mapping[str, Any], candidate_target: str, workspace_state: str
+) -> dict[str, Any]:
+    return capsule._validate_binding(
+        {
+            **source,
+            "session_id": identity["session_id"],
+            "session_epoch": identity["session_epoch"],
+            "target_build_id": candidate_target,
+        },
+        allow_empty_session=workspace_state == "no_session",
+    )
+
+
+def _validated_staged_acknowledgement(
+    value: Mapping[str, Any],
+    acquisition_nonce: str,
+    workspace_state: str,
+    expected_binding: Mapping[str, Any],
+) -> dict[str, str]:
+    acknowledgement = capsule._exact_keys(value, _HANDOFF_ACK_FIELDS, "staged acquisition acknowledgement")
+    if acknowledgement["schema"] != HANDOFF_ACK_SCHEMA:
+        raise capsule.HandoffError("Unknown staged acquisition acknowledgement schema")
+    if (not isinstance(acknowledgement["acquisition_nonce"], str)
+            or acknowledgement["acquisition_nonce"] != acquisition_nonce):
+        raise capsule.HandoffError("Staged acquisition acknowledgement belongs to another acquisition")
+    if (not isinstance(acknowledgement["workspace_state"], str)
+            or acknowledgement["workspace_state"] != workspace_state):
+        raise capsule.HandoffError("Staged acquisition acknowledgement has another workspace state")
+
+    binding = capsule._exact_keys(
+        acknowledgement["binding"], _HANDOFF_ACK_BINDING_FIELDS, "staged acquisition binding"
+    )
+    normalized_binding = capsule._validate_binding(
+        binding, allow_empty_session=workspace_state == "no_session"
+    )
+    if capsule._canonical_json(normalized_binding, "staged acquisition binding", 4096) != capsule._canonical_json(
+        expected_binding, "owner-derived acquisition binding", 4096
+    ):
+        raise capsule.HandoffError("Staged acquisition acknowledgement has a foreign binding")
+
+    reference = capsule._exact_keys(
+        acknowledgement["handoff"], _HANDOFF_REFERENCE_FIELDS, "staged acquisition reference"
+    )
+    _uuid(reference["handoff_id"], "staged handoff")
+    if not isinstance(reference["snapshot_sha256"], str) or not runtime_bundle._is_sha256(
+        reference["snapshot_sha256"]
+    ):
+        raise capsule.HandoffError("Staged handoff snapshot digest is invalid")
+    if reference["state"] != "staged":
+        raise capsule.HandoffError("Staged acquisition acknowledgement is not pending")
+    return {
+        "handoff_id": reference["handoff_id"],
+        "snapshot_sha256": reference["snapshot_sha256"],
+        "state": "staged",
+    }
+
+
+def _same_json(left: Any, right: Any, label: str) -> bool:
+    return capsule._canonical_json(left, label, capsule.MAX_SNAPSHOT_BYTES) == capsule._canonical_json(
+        right, label, capsule.MAX_SNAPSHOT_BYTES
+    )
+
+
 def stage_acquired_workspace(
     repo_root: str,
     acquisition_bytes: bytes,
@@ -105,30 +213,11 @@ def stage_acquired_workspace(
     supply only its scoped editor/workspace/project payload after draft guards.
     A staged result is not permission to shut down and is not a restored ACK.
     """
-    source = capsule._exact_keys(source_identity, _SOURCE_FIELDS, "owner source identity")
-    _uuid(source["api_instance_id"], "owner API")
+    source = _owner_source_identity(source_identity)
     acquired, identity = _acquired(acquisition_bytes, source["api_instance_id"])
-    frontend = capsule._exact_keys(frontend_payload, _FRONTEND_FIELDS, "frontend handoff payload")
-    for field, expected in (("api_instance_id", source["api_instance_id"]),
-                            ("session_id", identity["session_id"]),
-                            ("session_epoch", identity["session_epoch"])):
-        if type(frontend[field]) is not type(expected) or frontend[field] != expected:
-            raise capsule.HandoffError("Frontend payload belongs to another API/session epoch")
-    # Bound all caller data before any capsule creation.
-    capsule._canonical_json(frontend, "frontend handoff payload", capsule.MAX_SNAPSHOT_BYTES)
-    layout, runtime_root = restore._verified_workspace(repo_root)
-    try:
-        candidate, _ = runtime_bundle.validate_bundle(candidate_bundle_root, runtime_root, "dev")
-    except (runtime_bundle.BundleError, OSError, TypeError, ValueError) as error:
-        raise capsule.HandoffError("Acquisition candidate failed bundle verification") from error
-    candidate_source = candidate["source"]
-    if candidate_source.get("workspace_namespace") != layout["worktree_id"]:
-        raise capsule.HandoffError("Acquisition candidate belongs to another workspace")
-    target = candidate_source.get("manifest_sha256")
-    if not isinstance(target, str) or not runtime_bundle._is_sha256(target):
-        raise capsule.HandoffError("Acquisition candidate manifest identity is invalid")
-    binding = {**source, "session_id": identity["session_id"],
-               "session_epoch": identity["session_epoch"], "target_build_id": target}
+    frontend = _scoped_frontend_payload(frontend_payload, source, identity)
+    target = _verified_candidate_target(repo_root, candidate_bundle_root)
+    binding = _expected_binding(source, identity, target, acquired["state"])
     values = (frontend["editor"], frontend["workspace"], frontend["project_document"])
     if acquired["state"] == "no_session":
         reference = semantic.create_empty_workspace_handoff(repo_root, binding, *values)
@@ -143,6 +232,71 @@ def stage_acquired_workspace(
         loaded[field] != frontend[field] for field in ("editor", "workspace", "project_document")
     ):
         raise capsule.HandoffError("Staged acquisition capsule changed its authoring payload")
-    return {"schema": "fullmag.development-acquisition-handoff.v1",
+    return {"schema": HANDOFF_ACK_SCHEMA,
             "acquisition_nonce": capsule._strict_json(acquisition_bytes, "acquisition")["nonce"],
             "workspace_state": acquired["state"], "binding": binding, "handoff": reference}
+
+
+def prepare_acquired_workspace_commit(
+    repo_root: str,
+    acquisition_bytes: bytes,
+    source_identity: Mapping[str, Any],
+    candidate_bundle_root: str,
+    staged_ack: Mapping[str, Any],
+    frontend_payload: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Revalidate a staged capsule immediately before its native commit.
+
+    This read-only preflight returns the verified restore preparation and the
+    owner-derived binding, staged reference, and acquisition nonce. It does
+    not mark the receipt terminal or authorize shutdown/commit by itself.
+    """
+    source = _owner_source_identity(source_identity)
+    acquired, identity = _acquired(acquisition_bytes, source["api_instance_id"])
+    frontend = _scoped_frontend_payload(frontend_payload, source, identity)
+    candidate_target = _verified_candidate_target(repo_root, candidate_bundle_root)
+    binding = _expected_binding(source, identity, candidate_target, acquired["state"])
+    acquisition_nonce = capsule._strict_json(acquisition_bytes, "authoring acquisition")["nonce"]
+    reference = _validated_staged_acknowledgement(
+        staged_ack, acquisition_nonce, acquired["state"], binding
+    )
+
+    preparation = restore.prepare_development_restore_launch(
+        repo_root, reference["handoff_id"], binding, candidate_bundle_root
+    )
+    if preparation.get("workspace_state") != acquired["state"]:
+        raise capsule.HandoffError("Prepared restore has another workspace state")
+    prepared_candidate = preparation.get("candidate")
+    if (not isinstance(prepared_candidate, dict)
+            or prepared_candidate.get("manifest_sha256") != candidate_target):
+        raise capsule.HandoffError("Prepared restore candidate differs from the owner-verified target")
+    prepared_reference = capsule._exact_keys(
+        preparation.get("handoff"), frozenset({"handoff_id", "snapshot_sha256"}),
+        "prepared restore reference",
+    )
+    if (prepared_reference["handoff_id"] != reference["handoff_id"]
+            or prepared_reference["snapshot_sha256"] != reference["snapshot_sha256"]):
+        raise capsule.HandoffError("Prepared restore differs from the staged acknowledgement")
+
+    # Re-read after candidate preparation to catch a capsule or receipt change
+    # between the initial preparation and this precommit result.
+    loaded = semantic.load_scene_handoff(repo_root, reference["handoff_id"], binding)
+    if (loaded["handoff_id"] != reference["handoff_id"]
+            or loaded["snapshot_sha256"] != reference["snapshot_sha256"]
+            or loaded["receipt"].get("state") != "staged"):
+        raise capsule.HandoffError("Handoff changed after staged acknowledgement")
+    expected_scene = acquired.get("scene_document") if acquired["state"] == "session" else None
+    if not _same_json(loaded["source_scene"], expected_scene, "acquired source scene"):
+        raise capsule.HandoffError("Staged handoff source scene differs from the captured acquisition")
+    for field in ("editor", "workspace", "project_document"):
+        if (not _same_json(loaded[field], frontend[field], f"frontend {field}")
+                or not _same_json(preparation[field], frontend[field], f"prepared frontend {field}")
+                or not _same_json(preparation[field], loaded[field], f"prepared handoff {field}")):
+            raise capsule.HandoffError("Staged handoff changed its scoped frontend payload")
+
+    return {
+        "preparation": preparation,
+        "binding": dict(binding),
+        "reference": dict(reference),
+        "acquisition_nonce": acquisition_nonce,
+    }

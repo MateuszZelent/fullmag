@@ -1,5 +1,9 @@
 # P8-53 — bezpieczne zastosowanie nowego backendu w workspace
 
+[P8-53Y](53y-precommit-capsule-readback.md) podłącza natywny ponowny odczyt
+kapsuły/kandydata przed przygotowaniem commit. Kontrole interpretowane (110)
+i natywne (113) przeszły. Odczyt nie zatwierdza shutdown ani restore.
+
 [P8-53X](53x-cold-accepted-store-reservation.md) dodaje rezerwację istniejącego
 zimnego magazynu, wspólną z bezpośrednim przejmowaniem ownera service.
 Zarządzany build i 110 sprawdzeń natywnych przeszły; pełny restart pozostaje
