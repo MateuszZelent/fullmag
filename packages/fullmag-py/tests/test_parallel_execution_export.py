@@ -89,5 +89,41 @@ class ParallelExecutionExportTests(unittest.TestCase):
                 self.assertFalse(path.with_name("model.py.fullmag.tmp").exists())
 
 
+    def test_output_storage_and_parallel_policy_survive_both_exports(self):
+        from fullmag.runtime.script_builder import (
+            export_builder_draft, render_scene_document_as_script)
+        from fullmag.runtime.scene_document import build_scene_document_from_builder
+
+        storage = fm.OutputStorage(
+            output_dir="results", temp_dir="scratch", cleanup="never",
+            existing_output="error")
+        source = MODEL.replace(
+            'study.parallel_execution(mode="adaptive", max_cpu_percent=75, max_workers=3)',
+            'study.parallel_execution(mode="adaptive", max_cpu_percent=75, max_workers=3)'
+            '.storage(output_dir="results", temp_dir="scratch", cleanup="never", '
+            'existing_output="error")')
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "model.py"
+            path.write_text(source, encoding="utf-8")
+            before = fm.load_problem_from_script(path, lightweight_assets=True)
+            self.assertEqual(export_builder_draft(before)["output_storage"], storage.to_ir())
+            scene = build_scene_document_from_builder(export_builder_draft(before))
+            exports = {
+                "builder": rewrite_loaded_problem_script(before)["rendered_source"],
+                "scene": render_scene_document_as_script(scene),
+            }
+            for surface, rendered in exports.items():
+                with self.subTest(surface=surface):
+                    path.write_text(rendered, encoding="utf-8")
+                    after = fm.load_problem_from_script(path, lightweight_assets=True)
+                    self.assertEqual(export_builder_draft(after)["output_storage"], storage.to_ir())
+                    self.assertEqual(after.problem.runtime.parallel_execution,
+                                     before.problem.runtime.parallel_execution)
+                    self.assertEqual(after.stages[-1].problem.study.to_ir(),
+                                     before.stages[-1].problem.study.to_ir())
+                    self.assertEqual(after.stages[-1].problem.pbc, before.stages[-1].problem.pbc)
+
+
+
 if __name__ == "__main__":
     unittest.main()

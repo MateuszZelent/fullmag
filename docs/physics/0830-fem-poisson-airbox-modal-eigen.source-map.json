@@ -1459,6 +1459,30 @@
       "responsibility": "Interpreted driver admission/forwarding/rejection regression; no solver execution.",
       "lane": "FEM CPU",
       "evidence_status": "29 consumer and58 driver interpreted checks PASS; managed nearest runtime NOT VERIFIED"
+    },
+    {
+      "id": "source-scene-pbc-state",
+      "path": "crates/fullmag-authoring/src/scene.rs",
+      "symbol": "SceneStudyState",
+      "responsibility": "Typed optional PBC in authored study."
+    },
+    {
+      "id": "source-scene-pbc-adapter",
+      "path": "crates/fullmag-authoring/src/adapters.rs",
+      "symbol": "scene_document_to_script_builder",
+      "responsibility": "Preserve requested PBC through canonical Rust adapters without inferring Bloch settings."
+    },
+    {
+      "id": "source-scene-pbc-python",
+      "path": "packages/fullmag-py/src/fullmag/runtime/scene_document.py",
+      "symbol": "build_scene_document_from_builder",
+      "responsibility": "Preserve explicit PBC through Python scene adapters."
+    },
+    {
+      "id": "source-scene-pbc-script",
+      "path": "packages/fullmag-py/src/fullmag/runtime/script_builder.py",
+      "symbol": "render_scene_document_as_script",
+      "responsibility": "Recreate editable public scripts without losing the independently authored PBC policy."
     }
   ],
   "public_api": {

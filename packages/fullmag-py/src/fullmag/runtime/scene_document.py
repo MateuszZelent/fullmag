@@ -61,7 +61,7 @@ from fullmag.model.spin_transport import (
     DriftDiffusionSpinTorque as CanonicalDriftDiffusionSpinTorque,
     SurfaceRef,
 )
-from fullmag.model.problem import ParallelExecutionPolicy
+from fullmag.model.problem import FdmPbc, ParallelExecutionPolicy
 
 
 _SCENE_CURRENT_MODULE_FIELDS = frozenset(
@@ -100,6 +100,79 @@ _CURRENT_TRANSPORT_FIELDS = frozenset(
         "structured_current_closure",
     }
 )
+
+
+def _scene_pbc_from_ir(value: object) -> FdmPbc | None:
+    """Decode the canonical PBC object without lossy Python coercions."""
+    if value is None:
+        return None
+    if isinstance(value, FdmPbc):
+        return value
+    if not isinstance(value, Mapping):
+        raise TypeError("SceneDocument.study.pbc must be an object or null")
+
+    unknown = set(value) - {"axes", "demag", "image_counts"}
+    if unknown:
+        names = ", ".join(sorted(str(name) for name in unknown))
+        raise ValueError(f"SceneDocument.study.pbc has unsupported fields: {names}")
+
+    raw_axes = value.get("axes")
+    if (
+        isinstance(raw_axes, (str, bytes))
+        or not isinstance(raw_axes, Sequence)
+        or len(raw_axes) != 3
+    ):
+        raise ValueError("SceneDocument.study.pbc.axes must contain three axis values")
+    if any(
+        type(axis) is not str or axis not in {"open", "periodic"}
+        for axis in raw_axes
+    ):
+        raise ValueError(
+            "SceneDocument.study.pbc.axes values must be 'open' or 'periodic'"
+        )
+
+    demag = value.get("demag")
+    if type(demag) is not str or demag not in {
+        "open",
+        "truncated_images",
+        "periodic_airbox_k0",
+    }:
+        raise ValueError(
+            "SceneDocument.study.pbc.demag must be 'open', 'truncated_images', "
+            "or 'periodic_airbox_k0'"
+        )
+
+    image_counts: tuple[int, int, int] | None = None
+    if "image_counts" in value and value["image_counts"] is not None:
+        raw_counts = value["image_counts"]
+        if (
+            isinstance(raw_counts, (str, bytes))
+            or not isinstance(raw_counts, Sequence)
+            or len(raw_counts) != 3
+        ):
+            raise ValueError(
+                "SceneDocument.study.pbc.image_counts must contain three integers or null"
+            )
+        maximum = (1 << 32) - 1
+        if any(
+            type(count) is not int or count < 0 or count > maximum
+            for count in raw_counts
+        ):
+            raise ValueError(
+                "SceneDocument.study.pbc.image_counts values must be u32 integers"
+            )
+        image_counts = tuple(raw_counts)
+
+    return FdmPbc(
+        axes=tuple(axis == "periodic" for axis in raw_axes),
+        demag=demag,
+        image_counts=image_counts,
+    )
+
+
+def _scene_pbc_to_ir(value: object) -> dict[str, object] | None:
+    pbc = _scene_pbc_from_ir(value)
+    return pbc.to_ir() if pbc is not None else None
 
 
 def _material_id(name: str) -> str:
@@ -1369,10 +1442,8 @@ def _validate_rotated_dmi_exchange_requirement(
 ) -> None:
     """Reject a nonzero open-boundary rotated DMI term without study Exchange.
 
-    SceneDocument does not yet carry an explicit PBC declaration, therefore a
-    missing/false study switch is treated as an open-boundary authoring state.
-    The planner remains responsible for the fully-periodic exception once it
-    is represented in ProblemIR.
+    PBC is carried as an independent study field. This DMI guard does not infer
+    periodic axes; the planner remains responsible for periodic-boundary legality.
     """
     d = _number_or_none(rotated_interfacial_dmi)
     if d is None or d == 0.0:
@@ -1594,6 +1665,8 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
             "active_transform_scope": None,
         },
     }
+    if "pbc" in builder:
+        document["study"]["pbc"] = _scene_pbc_to_ir(builder["pbc"])
     if "fdm" in builder:
         document["study"]["fdm"] = copy.deepcopy(builder.get("fdm"))
     if "spin_torques" in builder:
@@ -1879,6 +1952,8 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
         "current_modules": [*antenna_modules, *transports],
         "excitation_analysis": excitation_analysis,
     }
+    if "pbc" in study:
+        builder["pbc"] = _scene_pbc_to_ir(study["pbc"])
     if "fdm" in study:
         builder["fdm"] = copy.deepcopy(study.get("fdm"))
     if "field_drives" in scene:
@@ -2173,6 +2248,10 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
         "current_modules": builder.get("current_modules") or [],
         "excitation_analysis": builder.get("excitation_analysis"),
     }
+    raw_study = scene.get("study")
+    if isinstance(raw_study, Mapping) and "pbc" in raw_study:
+        # Missing is no override; explicit null intentionally clears PBC.
+        overrides["pbc"] = copy.deepcopy(builder["pbc"])
     _copy_present_collection(builder, overrides, "spin_torques")
     _copy_present_collection(builder, overrides, "spin_transports")
     _copy_present_collection(builder, overrides, "oersted_terms")

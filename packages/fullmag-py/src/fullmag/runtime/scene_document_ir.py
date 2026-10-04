@@ -54,6 +54,7 @@ _STUDY_FIELDS = frozenset(
         "requested_mode",
         "requested_cpu_threads",
         "parallel_execution",
+        "pbc",
         "fem_demag_solver_policy",
         "exchange_enabled",
         "demag_enabled",
@@ -207,8 +208,9 @@ def scene_document_to_problem_ir(
             runtime_metadata["output_storage_source_dir"] = str(
                 (Path(source_root) if source_root is not None else Path.cwd()).resolve()
             )
-            if isinstance(scene.get("study_name"), str) and scene["study_name"].strip():
-                runtime_metadata["output_storage_source_stem"] = str(scene["study_name"])
+            # The generated scene_document.py bootstrap is not the authored
+            # source file; let Python-core fall back to the Problem name slug.
+            runtime_metadata.pop("output_storage_source_stem", None)
         return result
 
 

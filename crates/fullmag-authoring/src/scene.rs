@@ -332,6 +332,8 @@ pub struct SceneStudyState {
     pub requested_cpu_threads: Option<u32>,
     #[serde(default, deserialize_with = "fullmag_ir::deserialize_parallel_execution_policy")]
     pub parallel_execution: fullmag_ir::ParallelExecutionPolicyIR,
+    #[serde(default)]
+    pub pbc: Option<fullmag_ir::FdmPeriodicityIR>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fem_demag_solver_policy: Option<fullmag_ir::FemLinearSolverPolicy>,
     #[serde(default = "default_true")]

@@ -81,7 +81,7 @@ from fullmag.model.outputs import (
     SaveSpectrum,
     Snapshot,
 )
-from fullmag.model.problem import ParallelExecutionPolicy, Problem
+from fullmag.model.problem import FdmPbc, ParallelExecutionPolicy, Problem
 from fullmag.model.study import (
     DEFAULT_RELAXATION_MAX_STEPS,
     DEFAULT_RELAXATION_TORQUE_TOLERANCE_APM,
@@ -244,6 +244,13 @@ def export_builder_draft(loaded: LoadedProblem) -> dict[str, object]:
     exact_max_err = (
         adaptive_policy is not None and _is_exact_max_err_policy(adaptive_policy)
     )
+    pbc = base_problem.pbc
+    if isinstance(pbc, FdmPbc):
+        pbc_ir = pbc.to_ir()
+    elif pbc is None:
+        pbc_ir = None
+    else:
+        pbc_ir = FdmPbc(tuple(bool(value) for value in pbc)).to_ir()
 
     draft = {
         "revision": 1,
@@ -255,6 +262,7 @@ def export_builder_draft(loaded: LoadedProblem) -> dict[str, object]:
         "requested_mode": base_problem.runtime.execution_mode.value,
         "cpu_threads": base_problem.runtime.cpu_threads,
         "parallel_execution": base_problem.runtime.parallel_execution.to_ir(),
+        "pbc": pbc_ir,
         "fem_demag_solver_policy": _export_fem_demag_solver_policy(base_problem),
         "exchange_enabled": _problem_has_exchange(base_problem),
         "demag_enabled": _problem_has_demag(base_problem),
@@ -1934,6 +1942,12 @@ def _render_runtime(
     # mesh option. Keep the authored axes and demag realization explicit in the
     # exported script so UI/Python round-trips cannot silently drop it.
     pbc = problem.pbc
+    if "pbc" in overrides:
+        # SceneDocument uses field presence to distinguish an explicit reset
+        # from an absent override that should retain the loaded Problem value.
+        from fullmag.runtime.scene_document import _scene_pbc_from_ir
+
+        pbc = _scene_pbc_from_ir(overrides["pbc"])
     if pbc is not None:
         raw_axes = getattr(pbc, "axes", pbc)
         axes = tuple(bool(value) for value in raw_axes)

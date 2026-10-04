@@ -24,8 +24,22 @@ def _without_source_identity(problem_ir: dict[str, object]) -> dict[str, object]
     problem_meta = dict(comparable["problem_meta"])
     problem_meta.pop("script_source", None)
     problem_meta.pop("source_hash", None)
+    runtime_metadata = dict(problem_meta.get("runtime_metadata") or {})
+    runtime_metadata.pop("output_storage_source_stem", None)
+    problem_meta["runtime_metadata"] = runtime_metadata
     comparable["problem_meta"] = problem_meta
     return comparable
+
+
+def _assert_output_storage_source_stem_contract(
+    scene_ir: dict[str, object],
+    reference_ir: dict[str, object],
+    reference_stem: str,
+) -> None:
+    scene_runtime = scene_ir["problem_meta"]["runtime_metadata"]
+    reference_runtime = reference_ir["problem_meta"]["runtime_metadata"]
+    assert "output_storage_source_stem" not in scene_runtime
+    assert reference_runtime["output_storage_source_stem"] == reference_stem
 
 
 def test_scene_document_lowers_to_canonical_ir_with_runtime_and_scene_semantics(
@@ -93,6 +107,9 @@ film.alpha.absorbing_boundary(total_width=40e-9, ramp_width=20e-9, max_damping=0
     reference_ir["selections"] = scene["selections"]
     reference_ir["magnetization_constraints"] = scene["magnetization_constraints"]
 
+    _assert_output_storage_source_stem_contract(
+        problem_ir, reference_ir, canonical_source.stem
+    )
     assert problem_ir["problem_meta"]["name"] == "scene-lowering-study"
     assert problem_ir["problem_meta"]["runtime_metadata"]["runtime_selection"] == (
         reference_ir["problem_meta"]["runtime_metadata"]["runtime_selection"]
@@ -405,6 +422,9 @@ study.stages.add_run(stage_id='run', until=1e-12)
         source_root=tmp_path,
     )
 
+    _assert_output_storage_source_stem_contract(
+        problem_ir, reference_ir, canonical_source.stem
+    )
     assert canonical_json_bytes(_without_source_identity(problem_ir)) == (
         canonical_json_bytes(_without_source_identity(reference_ir))
     )
@@ -836,6 +856,9 @@ def test_scene_document_problem_ir_preserves_parallel_execution_through_dsl(
         include_geometry_assets=False,
         runtime_device_override="cpu",
         source_root=tmp_path,
+    )
+    _assert_output_storage_source_stem_contract(
+        problem_ir, reference_ir, rendered.stem
     )
     assert canonical_json_bytes(_without_source_identity(problem_ir)) == (
         canonical_json_bytes(_without_source_identity(reference_ir))

@@ -1877,6 +1877,7 @@ mod tests {
             requested_mode: Some("strict".to_string()),
             cpu_threads: None,
             parallel_execution: None,
+            pbc: None,
             fem_demag_solver_policy: None,
             exchange_enabled: true,
             demag_enabled: true,

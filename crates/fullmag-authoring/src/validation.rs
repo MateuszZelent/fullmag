@@ -94,6 +94,26 @@ fn validate_scene_document_with_mode(
             ),
         ));
     }
+    if let Some(pbc) = &scene.study.pbc {
+        if pbc.demag != fullmag_ir::FdmDemagPeriodicityIR::TruncatedImages
+            && pbc.image_counts.is_some()
+        {
+            return Err(SceneDocumentValidationError::new(
+                "study.pbc.image_counts require demag='truncated_images'",
+            ));
+        }
+        if pbc.demag == fullmag_ir::FdmDemagPeriodicityIR::PeriodicAirboxK0
+            && pbc.axes != [
+                fullmag_ir::AxisBoundary::Periodic,
+                fullmag_ir::AxisBoundary::Periodic,
+                fullmag_ir::AxisBoundary::Open,
+            ]
+        {
+            return Err(SceneDocumentValidationError::new(
+                "study.pbc.demag='periodic_airbox_k0' requires x/y periodic axes and open z",
+            ));
+        }
+    }
     validate_solver_state(&scene.study.solver, false, "study.solver")?;
     validate_fdm_discretization(scene.study.fdm.as_ref())?;
     let fdm_lane = scene.study.requested_backend.eq_ignore_ascii_case("fdm")

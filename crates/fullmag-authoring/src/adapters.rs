@@ -101,6 +101,7 @@ pub fn scene_document_from_script_builder(builder: &ScriptBuilderState) -> Scene
                 .unwrap_or_else(|| "strict".to_string()),
             requested_cpu_threads: builder.cpu_threads,
             parallel_execution: builder.parallel_execution.clone().unwrap_or_default(),
+            pbc: builder.pbc.clone(),
             fem_demag_solver_policy: builder.fem_demag_solver_policy.clone(),
             exchange_enabled: builder.exchange_enabled,
             demag_enabled: builder.demag_enabled,
@@ -233,6 +234,7 @@ pub fn scene_document_to_script_builder(
         requested_mode: Some(normalized_scene.study.requested_mode.clone()),
         cpu_threads: normalized_scene.study.requested_cpu_threads,
         parallel_execution: Some(normalized_scene.study.parallel_execution.clone()),
+        pbc: normalized_scene.study.pbc.clone(),
         fem_demag_solver_policy: normalized_scene.study.fem_demag_solver_policy.clone(),
         exchange_enabled: normalized_scene.study.exchange_enabled,
         demag_enabled: normalized_scene.study.demag_enabled,
@@ -333,6 +335,7 @@ pub fn scene_document_to_script_builder_overrides(
                 || scene.study.parallel_execution
                     != fullmag_ir::ParallelExecutionPolicyIR::default(),
         },
+        "pbc": builder.pbc,
         "exchange_enabled": builder.exchange_enabled,
         "demag_enabled": builder.demag_enabled,
         "demag_realization": builder.demag_realization,
@@ -2249,6 +2252,52 @@ mod tests {
         assert_eq!(scene.study.requested_precision, "double");
     }
 
+    #[test]
+    fn scene_pbc_roundtrip_preserves_axes_demag_images_and_null_override() {
+        let mut builder = sample_builder();
+        builder.pbc = Some(fullmag_ir::FdmPeriodicityIR {
+            axes: [fullmag_ir::AxisBoundary::Periodic, fullmag_ir::AxisBoundary::Open,
+                   fullmag_ir::AxisBoundary::Periodic],
+            demag: fullmag_ir::FdmDemagPeriodicityIR::TruncatedImages,
+            image_counts: Some([4, 0, 7]),
+        });
+        let scene = scene_document_from_script_builder(&builder);
+        assert_eq!(scene.study.pbc, builder.pbc);
+        let restored = scene_document_to_script_builder(&scene).expect("valid PBC scene");
+        assert_eq!(restored.pbc, builder.pbc);
+        let overrides = scene_document_to_script_builder_overrides(&scene).unwrap();
+        assert_eq!(overrides["pbc"], serde_json::to_value(&builder.pbc).unwrap());
+        let encoded = serde_json::to_value(&scene).unwrap();
+        let decoded: SceneDocument = serde_json::from_value(encoded).unwrap();
+        assert_eq!(decoded.study.pbc, builder.pbc);
+
+        let mut cleared = decoded;
+        cleared.study.pbc = None;
+        assert!(scene_document_to_script_builder(&cleared).unwrap().pbc.is_none());
+        assert!(scene_document_to_script_builder_overrides(&cleared).unwrap()["pbc"].is_null());
+        let mut legacy = serde_json::to_value(&cleared).unwrap();
+        // Keep an explicit reset through serde; absence is not a clear override.
+        assert_eq!(legacy["study"].get("pbc"), Some(&serde_json::Value::Null));
+        legacy["study"].as_object_mut().unwrap().remove("pbc");
+        let legacy: SceneDocument = serde_json::from_value(legacy).unwrap();
+        assert!(legacy.study.pbc.is_none());
+    }
+
+    #[test]
+    fn scene_pbc_rejects_inconsistent_demag_policy() {
+        let mut scene = scene_document_from_script_builder(&sample_builder());
+        scene.study.pbc = Some(fullmag_ir::FdmPeriodicityIR {
+            axes: [fullmag_ir::AxisBoundary::Periodic, fullmag_ir::AxisBoundary::Open,
+                   fullmag_ir::AxisBoundary::Open],
+            demag: fullmag_ir::FdmDemagPeriodicityIR::PeriodicAirboxK0,
+            image_counts: None,
+        });
+        assert!(scene_document_to_script_builder(&scene).is_err());
+        scene.study.pbc.as_mut().unwrap().demag = fullmag_ir::FdmDemagPeriodicityIR::Open;
+        scene.study.pbc.as_mut().unwrap().image_counts = Some([1, 0, 0]);
+        assert!(scene_document_to_script_builder(&scene).is_err());
+    }
+
     fn sample_builder() -> ScriptBuilderState {
         ScriptBuilderState {
             revision: 7,
@@ -2259,6 +2308,7 @@ mod tests {
             requested_mode: Some("strict".to_string()),
             cpu_threads: Some(8),
             parallel_execution: None,
+            pbc: None,
             fem_demag_solver_policy: Some(fullmag_ir::FemLinearSolverPolicy::default()),
             exchange_enabled: true,
             demag_enabled: true,

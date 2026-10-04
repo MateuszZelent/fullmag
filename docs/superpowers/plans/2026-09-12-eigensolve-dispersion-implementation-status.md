@@ -1,3 +1,38 @@
+<!-- master-eae-scene-pbc-checkpoint-20261005 -->
+## Aktualny checkpoint — scalony master i zachowanie modelu w eksporcie
+
+Scalono master `eae25cc2b393f78e7ff0e9da727344f08c62ee41` przez commit
+`79a9dcb8b9d70651f8ae81442d1bc2ad0095e96f`; merge jest na branchu remote.
+Rozwiązano cztery konflikty, zachowując równoległość i nowy output storage.
+PR #97 jest OPEN/MERGEABLE; wymagane kontrole i kwalifikacja nie są zamknięte.
+
+Regresja integracyjna wykryła utratę jawnego PBC w dokumencie sceny.
+Naprawiono Python builder/scene/script/direct IR oraz typed Rust authoring
+przez istniejący FdmPeriodicityIR, bez zgadywania osi z k/FloquetBC.
+Null usuwa politykę i pozostaje jawny po Rust serde; brak override zachowuje
+źródłowe ustawienie. Osie, demag i images przechodzą walidację.
+Pusty authoring zachowuje PBC, lecz pusty ProblemIR nadal jest odrzucany.
+
+Druga regresja ujawniła techniczne `scene_document.py` jako źródło nazwy
+wyników. Direct Scene→IR usuwa ten basename; istniejący Python-core używa
+bezpiecznej nazwy modelu. Jawne katalogi i pozostała polityka output storage
+pozostają zachowane. Różnice nazw rzeczywistych plików referencyjnych są
+sprawdzane osobno przed porównaniem fizycznego IR.
+
+Dowody źródłowe: Scene→IR 59/59, PBC 6/6, parallel/storage export 6/6 PASS;
+łącznie 71 interpretowanych testów. Walidator noty i mapy źródeł PASS.
+Parser Rust: 31 plików PASS, bez kompilacji testów i bez dowodu typecheck.
+Produkcyjny TypeScript: 1002 wejścia, 0 jednostkowych, 0 błędów; API hygiene PASS.
+Hook merge React Doctor: 79/100, dwa ostrzeżenia await-in-loop w niezmienionym
+sekwencyjnym czytaniu fragmentów topologii; nie są nowymi zmianami tego merge.
+Native serde/regresje, pełny eksport OpenAPI i GUI wymagają nowego managed runtime.
+
+Następny krok: jeden build exact-commit w profilu fem-cpu-slepc-runtime-v2,
+bez targetów jednostkowych; następnie twardy błąd GMRES i kontrola FGMRES,
+PBC/API replay oraz kolejne bramki Γ/signed15/parity/zasobów/zbieżności/GUI/A1.
+S00–S12 nadal OPEN, w tym S09/provider, interakcje/GPU i pełna integracja PR.
+Analiza runs nie wdrożyła retencji: działająca usługa nadal ma tylko preview.
+
 <!-- air231-six-results-ksp-checkpoint-20261004 -->
 ## Aktualny checkpoint — sześć prób siatki powietrza i diagnostyka KSP
 

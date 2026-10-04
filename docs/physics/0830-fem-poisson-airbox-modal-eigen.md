@@ -1,3 +1,55 @@
+<!-- scene-pbc-roundtrip-contract-20261005 -->
+(scene-pbc-roundtrip-contract)=
+## Zachowanie jawnej periodyczności podczas eksportu dokumentu sceny
+
+Regresja po integracji mastera wykazała utratę `study.pbc(x=True, y=True)`
+w trasie Python → builder → SceneDocument → Python, mimo zachowania
+`EigenStudy` i jego `FloquetBC`. Nota poprzedza naprawę transportu danych.
+Nie zmienia istniejących równań, znaku fazy, operatorów ani reguł legalności
+backendu z noty [0710](0710-periodic-and-floquet-boundary-conditions.md).
+
+Jawne PBC modelu oraz dynamiczne `FloquetBC` pozostają odrębnymi wejściami.
+Eksport nie może odtwarzać osi PBC przez zgadywanie z wektora k, nazwy modelu
+lub dynamicznych par Floqueta. Publiczny `study.pbc(...)` i istniejące
+`ProblemIR.pbc` zachowują dotychczasową semantykę. Naprawa dodaje opcjonalne
+pole `pbc` do buildera i `SceneStudyState`, używając istniejącego typu
+`FdmPeriodicityIR` zamiast alternatywnej polityki.
+
+| Pole transportu | Typ / domyślnie | SI | Walidacja i mapowanie |
+| --- | --- | --- | --- |
+| `builder.pbc`, `scene.study.pbc` | istniejący obiekt PBC lub `null`; brak oznacza brak polityki | 1 | Python `FdmPbc.to_ir()` → typed Rust `FdmPeriodicityIR` → `ProblemIR.pbc`; jawny `null` w override usuwa politykę |
+| `pbc.axes` | trzy wartości `open`/`periodic` | 1 | zachowanie kolejności x/y/z; render jako jawne booleans `study.pbc(x=..., y=..., z=...)` |
+| `pbc.demag` | `open`, `truncated_images`, `periodic_airbox_k0` | 1 | wartość zachowana; nie przełącza niejawnie realizacji lub urządzenia |
+| `pbc.image_counts` | opcjonalne trzy nieujemne liczby całkowite | 1 | istniejąca semantyka `truncated_images`; renderer zachowuje jawne `images` |
+
+Brak pola w starym dokumencie i `null` dekodują się do `None`. Nie ustawiamy
+periodyczności domyślnie w otwartym modelu. Nieprawidłowe wartości muszą być
+odrzucone przed eksportem zamiast zmienione na otwarte osie. Adaptery Rust
+przekazują to samo pole w obie strony i do overrides. Python zachowuje je
+w bezpośredniej trasie SceneDocument → ProblemIR dla prawidłowego modelu.
+Pusty dokument sceny może przechowywać PBC jako stan authoringu, lecz nadal
+nie tworzy wykonywalnego Problem/ProblemIR bez magnesów; istniejąca odmowa
+pozostaje w mocy. Nie dodajemy sztucznej geometrii ani pustego modelu fizycznego.
+
+FDM CPU/GPU nadal używają swoich istniejących reguł local/demag periodicity.
+FEM CPU/GPU nadal wymagają właściwych operatorów i certyfikatów periodycznej
+siatki; obecność pola authoring nie stanowi nowej capability ani kwalifikacji.
+Requested intent pozostaje jawny, a resolved execution nie jest wyznaczane
+przez adapter dokumentu. Nie ma zmiany schematu wyników ani fallbacku.
+
+Kryteria odbioru: ponowne wczytanie obu eksportów zachowuje PBC, signed k,
+FloquetBC, równoległość i output storage; osobne kontrole obejmują wartości
+domyślne, null, images oraz odrzucenie błędnych danych. Native serde/adapters
+i integracja API wymagają produkcyjnego buildu i dowodów runtime. Regresje
+Rust przygotowuje się bez kompilacji testów jednostkowych.
+
+| ID | Źródło i symbol | Odpowiedzialność | Dowód |
+| --- | --- | --- | --- |
+| source-scene-pbc-state | `crates/fullmag-authoring/src/scene.rs` + `SceneStudyState` | Typed optional PBC in authored study | source; runtime pending |
+| source-scene-pbc-adapter | `crates/fullmag-authoring/src/adapters.rs` + `scene_document_to_script_builder` | Preserve PBC in the canonical Rust round-trip | source; native regression pending |
+| source-scene-pbc-python | `packages/fullmag-py/src/fullmag/runtime/scene_document.py` + `build_scene_document_from_builder` | Preserve explicit PBC through Python scene adapters | interpreted regression |
+| source-scene-pbc-script | `packages/fullmag-py/src/fullmag/runtime/script_builder.py` + `render_scene_document_as_script` | Recreate editable public script without losing PBC | interpreted round-trip regression |
+
 <!-- de-air-matrix231-observed-field-resolution-20261004 -->
 (de-air-matrix231-observed-field-resolution)=
 ## Rzeczywista macierz siatki powietrza i rozdzielczość porównania pól
