@@ -1,5 +1,10 @@
 # P8-53 — bezpieczne zastosowanie nowego backendu w workspace
 
+[P8-53AA](53aa-durable-handoff-acceptance.md) dodaje jednorazowe trwałe
+zatwierdzenie pod WRITER i blokuje zwykły abort po poprawnym lub uszkodzonym
+zapisie. Build i 129 kontroli natywnych przeszły. Konsument zatwierdzenia
+w owner-control, graceful shutdown oraz pełny restart pozostają otwarte.
+
 [P8-53Z](53z-scoped-accepted-store-positive-idle.md) zapewnia osobny magazyn
 UUID wewnątrz obecnego storage i pozytywny przebieg przejęcia, stagingu,
 readbacku oraz cold idle dla pustego workspace i modelu. Zarządzany build

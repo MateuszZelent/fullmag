@@ -2708,6 +2708,162 @@ pub(crate) fn verify_development_api_owner() -> Result<()> {
     Ok(())
 }
 
+/// Managed verifier only: accept an opaque handoff reference in its own store.
+/// This proves the durable latch, not capsule validation or process shutdown.
+pub(crate) fn verify_development_handoff_commit(
+    store_root: &Path,
+    corrupt_root: &Path,
+) -> Result<()> {
+    if std::env::var("FULLMAG_DEVELOPMENT_HANDOFF_COMMIT_PROBE").as_deref() != Ok("1") {
+        bail!("development handoff commit verification requires an explicit managed fixture");
+    }
+    let store = fullmag_session::SessionStore::open_existing(store_root.to_path_buf())?;
+    let owner = uuid::Uuid::new_v4().simple().to_string();
+    let nonce = uuid::Uuid::new_v4().to_string();
+    let fence = store.acquire_development_idle_fence(&owner, &nonce)?;
+    let api = uuid::Uuid::new_v4().to_string();
+    let handoff = uuid::Uuid::new_v4().to_string();
+    let snapshot = "a".repeat(64);
+    let target = "b".repeat(64);
+    let binding = fullmag_runtime_control::accepted_store::store_binding(store_root)
+        .context("handoff commit fixture binding is invalid")?;
+    let wrong_binding = "0".repeat(64);
+    for (selected_api, selected_handoff, selected_snapshot, selected_target, selected_binding) in [
+        (
+            "invalid",
+            handoff.as_str(),
+            snapshot.as_str(),
+            target.as_str(),
+            binding.as_str(),
+        ),
+        (
+            api.as_str(),
+            "00000000-0000-0000-0000-000000000000",
+            snapshot.as_str(),
+            target.as_str(),
+            binding.as_str(),
+        ),
+        (
+            api.as_str(),
+            handoff.as_str(),
+            "bad",
+            target.as_str(),
+            binding.as_str(),
+        ),
+        (
+            api.as_str(),
+            handoff.as_str(),
+            snapshot.as_str(),
+            "bad",
+            binding.as_str(),
+        ),
+        (
+            api.as_str(),
+            handoff.as_str(),
+            snapshot.as_str(),
+            target.as_str(),
+            "bad",
+        ),
+        (
+            api.as_str(),
+            handoff.as_str(),
+            snapshot.as_str(),
+            target.as_str(),
+            wrong_binding.as_str(),
+        ),
+    ] {
+        if store
+            .accept_development_handoff(
+                &fence,
+                selected_api,
+                selected_handoff,
+                selected_snapshot,
+                selected_target,
+                selected_binding,
+            )
+            .is_ok()
+            || store.read_development_handoff_commit()?.is_some()
+        {
+            bail!("invalid handoff commit identity was published");
+        }
+    }
+    let mut foreign_fence = fence.clone();
+    foreign_fence.nonce = uuid::Uuid::new_v4().to_string();
+    if store
+        .accept_development_handoff(&foreign_fence, &api, &handoff, &snapshot, &target, &binding)
+        .is_ok()
+    {
+        bail!("handoff commit accepted another admission fence");
+    }
+    let record =
+        store.accept_development_handoff(&fence, &api, &handoff, &snapshot, &target, &binding)?;
+    if store.read_development_handoff_commit()?.as_ref() != Some(&record)
+        || store
+            .accept_development_handoff(&fence, &api, &handoff, &snapshot, &target, &binding)
+            .is_ok()
+        || store.release_development_idle_fence(&fence).is_ok()
+        || store.read_development_idle_fence()?.as_ref() != Some(&fence)
+    {
+        bail!("accepted handoff did not retain its one-shot durable fence");
+    }
+    drop(store);
+    let reopened = fullmag_session::SessionStore::open_existing(store_root.to_path_buf())?;
+    if reopened.read_development_handoff_commit()?.as_ref() != Some(&record)
+        || reopened.release_development_idle_fence(&fence).is_ok()
+    {
+        bail!("handoff acceptance did not survive store reopen");
+    }
+    if std::fs::canonicalize(store_root)? == std::fs::canonicalize(corrupt_root)? {
+        bail!("corrupt commit fixture must use its own distinct store");
+    }
+    let corrupt = fullmag_session::SessionStore::open_existing(corrupt_root.to_path_buf())?;
+    let corrupt_fence =
+        corrupt.acquire_development_idle_fence(&owner, &uuid::Uuid::new_v4().to_string())?;
+    let corrupt_path = fullmag_session::repository_path::checked_path(
+        corrupt_root,
+        "development/HANDOFF-COMMIT.json",
+    )?;
+    let mut corrupt_file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(corrupt_path)?;
+    use std::io::Write;
+    corrupt_file.write_all(b"{incomplete fixture publication")?;
+    corrupt_file.sync_all()?;
+    drop(corrupt_file);
+    let corrupt_binding = fullmag_runtime_control::accepted_store::store_binding(corrupt_root)
+        .context("corrupt fixture binding is invalid")?;
+    if corrupt.read_development_handoff_commit().is_ok()
+        || corrupt
+            .release_development_idle_fence(&corrupt_fence)
+            .is_ok()
+        || corrupt
+            .accept_development_handoff(
+                &corrupt_fence,
+                &api,
+                &handoff,
+                &snapshot,
+                &target,
+                &corrupt_binding,
+            )
+            .is_ok()
+        || corrupt.read_development_idle_fence()?.as_ref() != Some(&corrupt_fence)
+    {
+        bail!("corrupt commit publication did not retain its durable fence");
+    }
+    println!(
+        "{}",
+        serde_json::json!({
+            "schema":"fullmag.development-handoff-commit-check.v1", "accepted":true,
+            "invalid_identities_refused":true,"foreign_fence_refused":true,
+            "repeat_refused":true,"abort_release_refused":true,"reopen_preserved":true,
+            "corrupt_publication_refused":true,"corrupt_abort_release_refused":true,
+            "record_sha256":fullmag_session::canonical_json_sha256(&serde_json::to_value(&record)?),
+        })
+    );
+    Ok(())
+}
+
 /// Managed verifier only: drain the explicitly selected isolated service.
 /// The production client's exact owner/config/fence validation is exercised;
 /// this receipt makes no claim about API shutdown or a workspace replacement.

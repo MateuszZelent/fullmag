@@ -107,6 +107,12 @@ fn main() -> Result<()> {
         Command::Runtime(RuntimeCommand::InitializeScopedAcceptedStore) => {
             control_room::initialize_scoped_accepted_store()?;
         }
+        Command::Runtime(RuntimeCommand::VerifyDevelopmentHandoffCommit {
+            store,
+            corrupt_store,
+        }) => {
+            control_room::verify_development_handoff_commit(&store, &corrupt_store)?;
+        }
         Command::Runtime(RuntimeCommand::VerifyDevelopmentColdIdle { config }) => {
             control_room::verify_development_cold_idle(&config)?;
         }

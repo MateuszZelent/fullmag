@@ -237,6 +237,14 @@ pub(crate) enum RuntimeCommand {
     /// Initialize only a new explicitly scoped accepted store.
     #[command(hide = true)]
     InitializeScopedAcceptedStore,
+    /// Internal managed proof of one-shot durable handoff acceptance.
+    #[command(hide = true)]
+    VerifyDevelopmentHandoffCommit {
+        #[arg(long)]
+        store: PathBuf,
+        #[arg(long)]
+        corrupt_store: PathBuf,
+    },
     /// Internal managed proof of an existing cold accepted-store reservation.
     #[command(hide = true)]
     VerifyDevelopmentColdIdle {

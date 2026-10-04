@@ -33,7 +33,7 @@ pub struct DevelopmentAdmissionFence {
 }
 
 impl DevelopmentAdmissionFence {
-    fn validate(&self) -> Result<()> {
+    pub(super) fn validate(&self) -> Result<()> {
         if self.schema != FENCE_SCHEMA {
             bail!("unsupported development admission fence schema");
         }
@@ -96,8 +96,9 @@ impl SessionStore {
         &self,
         expected: &DevelopmentAdmissionFence,
     ) -> Result<()> {
-        expected.validate()?;
         let _writer = self.write_transaction()?;
+        super::development_commit::ensure_handoff_commit_absent_unlocked(self)?;
+        expected.validate()?;
         let current = self
             .read_development_admission_fence_unlocked()?
             .context("development admission fence is absent")?;
@@ -140,7 +141,7 @@ impl SessionStore {
         Ok(Some(record))
     }
 
-    fn ensure_development_global_idle_unlocked(&self) -> Result<()> {
+    pub(super) fn ensure_development_global_idle_unlocked(&self) -> Result<()> {
         // Validate all compute and preparation metadata before existing scans
         // read it. Unknown entries, links and unbounded/nonregular files refuse
         // fencing even if they do not belong to a configured scheduler pool.

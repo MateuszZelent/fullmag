@@ -266,6 +266,48 @@ def exercise_service(repo: Path, run_root: Path, manifest: dict, receipt: dict, 
     (project / "main.py").write_text("# Empty development drain fixture\n", encoding="utf-8")
     env = {key: os.environ[key] for key in ("SYSTEMROOT", "WINDIR", "PATH", "PATHEXT", "TEMP", "TMP", "COMPUTERNAME", "HOSTNAME") if key in os.environ}
     env.update(FULLMAG_REPO_ROOT=str(repo), FULLMAG_STATE_ROOT=str(state_root))
+    commit_state = run_root / "handoff-commit-state"
+    commit_store = commit_state / "local-live/session-store"
+    commit_project = commit_store / "project"
+    commit_project.mkdir(parents=True)
+    (commit_project / "main.py").write_text("# Owned durable handoff latch fixture\n", encoding="utf-8")
+    commit_env = {**env, "FULLMAG_STATE_ROOT": str(commit_state),
+                  "FULLMAG_DEVELOPMENT_HANDOFF_COMMIT_PROBE": "1"}
+    corrupt_state = run_root / "handoff-corrupt-commit-state"
+    corrupt_store = corrupt_state / "local-live/session-store"
+    corrupt_project = corrupt_store / "project"
+    corrupt_project.mkdir(parents=True)
+    (corrupt_project / "main.py").write_text("# Owned partial publication fixture\n", encoding="utf-8")
+    for label, arguments, selected_env in (
+        ("handoff-commit-initialize", ["session", "save", str(run_root / "commit-empty.fms"), "--profile", "compact"], commit_env),
+        ("handoff-corrupt-commit-initialize", ["session", "save", str(run_root / "corrupt-commit-empty.fms"), "--profile", "compact"],
+         {**commit_env, "FULLMAG_STATE_ROOT": str(corrupt_state)}),
+        ("handoff-commit-native", ["runtime", "verify-development-handoff-commit", "--store", str(commit_store),
+                                   "--corrupt-store", str(corrupt_store)], commit_env),
+    ):
+        process = subprocess.Popen([str(binaries / "fullmag.exe"), *arguments],
+            cwd=repo, env=selected_env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            stdin=subprocess.DEVNULL, creationflags=subprocess.CREATE_NO_WINDOW)
+        record = dict(label=label, pid=process.pid, waited=False)
+        receipt["processes"].append(record)
+        try:
+            output, errors = process.communicate(timeout=30)
+        finally:
+            if process.poll() is None:
+                process.kill()  # Only this fixture process; the durable store remains untouched.
+                process.wait(timeout=10)
+            record.update(waited=True, exit_code=process.returncode)
+        (run_root / (label + ".log")).write_bytes(output + errors)
+        if process.returncode:
+            raise storage.StorageError(f"Production handoff latch fixture failed: {label}")
+    frames = [json.loads(line) for line in output.decode().splitlines() if line.startswith('{')]
+    assert len(frames) == 1 and frames[0]["schema"] == "fullmag.development-handoff-commit-check.v1"
+    for name in ("accepted", "invalid_identities_refused", "foreign_fence_refused", "repeat_refused",
+                 "abort_release_refused", "reopen_preserved", "corrupt_publication_refused", "corrupt_abort_release_refused"):
+        assert frames[0][name] is True
+        receipt["checks"].append("handoff-commit-" + name)
+    receipt["handoff_commit_fixture"] = dict(store_root=str(commit_store), corrupt_store_root=str(corrupt_store),
+                                            record_sha256=frames[0]["record_sha256"])
     for label, args, private_value, expected_error in (
         ("restore-cli-release", ["ui"], "1", "requires development UI without a script"),
         ("restore-cli-script", ["ui", "--dev", str(run_root / "missing-script.py")], "1", "requires development UI without a script"),

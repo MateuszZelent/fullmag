@@ -179,6 +179,15 @@ z UI, identyfikatorem fizyki ani zmianą uprawnień solvera. Zarządzana inicjal
 może utworzyć wyłącznie nowy scoped store; zastanych danych nie nadpisuje.
 Własna sonda zapisuje UUID i binding w receipt oraz zachowuje swój magazyn.
 
+Zatwierdzenie handoffu ma osobny jednorazowy zapis w accepted store:
+`development/HANDOFF-COMMIT.json`. Wiąże UUID starego API, nonce przejęcia,
+referencję i hash kapsuły, docelowy build, binding magazynu oraz pełny fence.
+Publikacja pod WRITER wymaga identycznego fence i ponownego globalnego idle.
+Zastany zapis, także uszkodzony lub o niepotwierdzonej publikacji, blokuje nowe
+zatwierdzenie. Po jego pojawieniu się zwykły abort nie zwalnia fence; potrzebna
+jest odrębna decyzja zakończenia lifecycle z dowodem nowego ownera. Sam zapis
+nie waliduje kapsuły ani nie upoważnia dowolnego klienta do shutdown API.
+
 Wymagane są: zgodność generated API, regresje błędnego/starego handoffu,
 odrzucenie aktywnego solve i wyścigu Start, ochrony szkiców i awarii restore,
 a także rzeczywisty przebieg Windows i przeglądarki z niepustą geometrią,
