@@ -1125,11 +1125,25 @@ pub(crate) struct ScriptSyncRequest {
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub(crate) struct ScriptSyncResponse {
+    /// Path of the file that received the canonical script. For a
+    /// `user_file` session this is the managed export copy, never the
+    /// user's own script.
     pub script_path: String,
     pub source_kind: String,
     pub entrypoint_kind: String,
     pub written: bool,
     pub bytes_written: usize,
+    /// `export_copy` (user file left untouched, copy written to managed
+    /// storage) or `script` (the session's managed script was written).
+    #[serde(default)]
+    pub written_to: String,
+    /// True only when the session's own source script file was rewritten.
+    /// Always false for `user_file` sessions.
+    #[serde(default)]
+    pub source_script_modified: bool,
+    /// Managed export copy path for `user_file` sessions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub managed_copy_path: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
@@ -1137,6 +1151,31 @@ pub(crate) struct ScriptSourceResponse {
     pub script_path: String,
     pub source: String,
     pub bytes: usize,
+    /// Script origin of the session: `user_file`, `generated` or `none`.
+    #[serde(default)]
+    pub origin: String,
+    /// Managed export copy path for `user_file` sessions (the response
+    /// carries the copy when it exists, otherwise the read-only original).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub managed_copy_path: Option<String>,
+}
+
+/// Where the current session's Python script comes from and whether Fullmag
+/// may write to it.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
+pub struct SessionScriptSummary {
+    /// `user_file` (a file the user owns; Fullmag never writes it),
+    /// `generated` (a script inside Fullmag-managed storage) or `none`.
+    pub origin: String,
+    pub path: String,
+    /// False for `user_file`: syncs go to `managed_copy_path` instead.
+    pub writable: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub managed_copy_path: Option<String>,
+    /// Content hash of the script at the time of the request; only present on
+    /// `GET /v2/sessions/current`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sha256: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

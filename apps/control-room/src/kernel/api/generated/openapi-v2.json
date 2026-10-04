@@ -30141,6 +30141,17 @@
             "minimum": 0,
             "type": "integer"
           },
+          "managed_copy_path": {
+            "description": "Managed export copy path for `user_file` sessions (the response\ncarries the copy when it exists, otherwise the read-only original).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "origin": {
+            "description": "Script origin of the session: `user_file`, `generated` or `none`.",
+            "type": "string"
+          },
           "script_path": {
             "type": "string"
           },
@@ -30170,14 +30181,30 @@
           "entrypoint_kind": {
             "type": "string"
           },
+          "managed_copy_path": {
+            "description": "Managed export copy path for `user_file` sessions.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "script_path": {
+            "description": "Path of the file that received the canonical script. For a\n`user_file` session this is the managed export copy, never the\nuser's own script.",
             "type": "string"
           },
           "source_kind": {
             "type": "string"
           },
+          "source_script_modified": {
+            "description": "True only when the session's own source script file was rewritten.\nAlways false for `user_file` sessions.",
+            "type": "boolean"
+          },
           "written": {
             "type": "boolean"
+          },
+          "written_to": {
+            "description": "`export_copy` (user file left untouched, copy written to managed\nstorage) or `script` (the session's managed script was written).",
+            "type": "string"
           }
         },
         "required": [
@@ -31481,6 +31508,41 @@
         ],
         "type": "string"
       },
+      "SessionScriptSummary": {
+        "description": "Where the current session's Python script comes from and whether Fullmag\nmay write to it.",
+        "properties": {
+          "managed_copy_path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "origin": {
+            "description": "`user_file` (a file the user owns; Fullmag never writes it),\n`generated` (a script inside Fullmag-managed storage) or `none`.",
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "sha256": {
+            "description": "Content hash of the script at the time of the request; only present on\n`GET /v2/sessions/current`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "writable": {
+            "description": "False for `user_file`: syncs go to `managed_copy_path` instead.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "origin",
+          "path",
+          "writable"
+        ],
+        "type": "object"
+      },
       "SessionSummary": {
         "properties": {
           "created_at": {
@@ -31492,6 +31554,17 @@
           "request_scope_epoch": {
             "description": "API-instance and transition identity for current-session HTTP/cache ownership.",
             "type": "string"
+          },
+          "script": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SessionScriptSummary",
+                "description": "Origin of the session's Python script. Absent when the session has none."
+              }
+            ]
           },
           "session_epoch": {
             "description": "Scientific session identity shared with observation frames.",

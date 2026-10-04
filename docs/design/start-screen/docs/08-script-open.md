@@ -12,7 +12,8 @@ rejected, `-X utf8` for helper children) and `fullmag script inspect <path>
 `inspect-script`. Deviations from 6.5: an explicit `FULLMAG_PYTHON`/`--python`
 that fails the probe is an error, never a fallthrough; discovered interpreters
 that lack numpy/zarr/h5py are rejected with that reason; the probe timeout is
-5 s. Phase 0b, Phase 1 and everything else here are not implemented. Every claim about
+5 s. **Phase 0b is implemented** (2026-10-05): see "Phase 0b as built" in 6.4.
+Phase 1 and everything else here are not implemented. Every claim about
 current behaviour was read in the source of this worktree (commit `688f1f23c`);
 what was *not* executed is marked **unverified**. Unit-test compilation is
 suspended (`AGENTS.md`), so no existing test was run for this document.
@@ -474,16 +475,44 @@ History view.
 
 ### 6.4 API (Phase 0b only; additive)
 
-- `GET /v2/sessions/current` and the session status resource gain
-  `script: { origin: "user_file" | "generated" | "none", path, sha256, writable }`.
+- `GET /v2/sessions/current` and `GET /v2/sessions/current/status`
+  (`session.script`) gain `script: { origin: "user_file" | "generated", path,
+  writable, managed_copy_path?, sha256? }`; the field is absent for a session
+  with no script (`origin: "none"` is never serialized). `sha256` is only
+  computed on `GET /v2/sessions/current`.
 - `POST /v2/sessions/current/model/syncs` for `origin == "user_file"` writes
   `<workspace_root>/exports/<name>.canonical.py` and returns
-  `{ script_path, written_to: "export_copy", source_script_modified: false }`;
-  `GET .../model/script` returns that copy. `rewrite-script --write` never
-  targets a user file again.
+  `{ script_path (= the copy), written_to: "export_copy",
+  source_script_modified: false, managed_copy_path }`;
+  `GET .../model/script` returns that copy (and the original, read-only, until a
+  copy exists) with `origin` and `managed_copy_path`. `rewrite-script --write`
+  never targets a user file again.
 - No operation that starts executing a file. Executing user code stays a host
   action behind native consent (R1, R2, fact 13). The API only reads/derives after
   a run was started by the host.
+
+**Phase 0b as built.**
+- `origin` is derived by the API, not stored in the manifest: a script path
+  inside the live workspace (`<state>/local-live/current`) or the session store
+  (`<state>/local-live/session-store`) is `generated` (managed, still rewritten
+  in place, `writable: true`); anything else is `user_file` (`writable:
+  false`). Scratch sessions render `scene_document.py` inside the workspace and
+  are unchanged.
+- The managed copy lives at `<workspace_root>/exports/<stem>.canonical.py`
+  (`workspace_root` is the API's `current_workspace_root`, resolved from
+  `FULLMAG_STATE_ROOT`/packaged state, never a hard-coded path). It is replaced
+  by each sync; one copy per script stem per session workspace.
+- The Python helper `rewrite-script` gained `--output <path>` (atomic write to
+  another file, source untouched; mutually exclusive with `--write`). The API
+  passes `--output` for `user_file` and keeps `--write` only for `generated`.
+- Control Room: command `workspace.export-python` keeps its id, is titled "Save
+  canonical copy as…" (File menu, command palette) and downloads
+  `<name>.canonical.py` built from the managed copy; the texture/region panels'
+  best-effort sync reaches the same endpoint, so it can only update the managed
+  copy.
+- Remaining limit: producing a sync still executes the user's script in the
+  helper (as before); a host dialog for the save location is not wired (the
+  browser download flow is kept).
 
 ### 6.5 Interpreter resolver (`fullmag-runtime-control::python_runtime`)
 
@@ -567,7 +596,7 @@ should still be written and left unrun, as for the rest of the start screen.
 | 0a | resolver probe on this host (`fullmag runtime python --json`, new) | resolves `python` (Miniconda 3.12.2) or `py`, never the Store alias; `tried` lists the alias as rejected |
 | 0a | source check (extend `scripts/verify_control_room_sources.py`-style script) | no `"python3"` fallback literal outside the resolver; CLI and API call it |
 | 0a | bundle fixture | a bundle marker with a missing `python.exe` returns `BundleBroken`, not a PATH fallback |
-| 0b | managed fixture: open a script-backed session, call `model/syncs` | source file bytes identical before/after; export copy exists and parses |
+| 0b | managed fixture: open a script-backed session, call `model/syncs` | source file bytes identical before/after; export copy exists and parses (covered by API test `authoring_script_sync_never_rewrites_user_file_and_writes_managed_copy`) |
 | 0b | browser fixture | "Export Python DSL" on a user-file session produces a download from the copy and a file unchanged on disk |
 | 0c | `inspect` on 5 examples incl. `mumax_standard_problem_5_fdm.py`, a syntax error, a BOM file | JSON schema valid; no marker file created by a script that writes on import (canary script) |
 | 1 | consent | renderer cannot start a run without the native dialog; `script_run` with an unknown ticket is `refused`; changed bytes after consent give exit 11 and no Python process |

@@ -6,6 +6,13 @@ import type { CommandContribution } from "../commands/commandTypes";
 import { applyAuthoringHistoryWorkspaceTransition } from "../authoring/authoringHistoryWorkspaceRestore";
 import { pickProjectArchive } from "../persistence/ProjectDocumentController";
 
+function canonicalCopyFileName(scriptPath: string): string {
+  const name = scriptPath.split(/[\\/]/).pop() || "fullmag-study.py";
+  return name.endsWith(".canonical.py")
+    ? name
+    : `${name.replace(/\.py$/, "")}.canonical.py`;
+}
+
 function disabledPlaceholder(
   id: string,
   title: string,
@@ -294,36 +301,40 @@ export const SHELL_COMMANDS: CommandContribution[] = [
   },
   {
     id: "workspace.export-python",
-    title: "Export Python DSL",
+    title: "Save canonical copy as…",
     group: "workspace",
     category: "File",
     scope: "workspace",
     isEnabled: (ctx) => Boolean(ctx.api),
     disabledReason: (ctx) =>
-      ctx.api ? null : "Export Python DSL requires an active workspace API.",
+      ctx.api ? null : "Save canonical copy requires an active workspace API.",
     run: async (ctx) => {
       if (!ctx.api) {
         return {
-          message: "Export Python DSL requires an active workspace API.",
+          message: "Save canonical copy requires an active workspace API.",
           status: "failed",
         };
       }
       const requestOptions = ctx.sessionScopeKey
         ? { sessionScopeKey: ctx.sessionScopeKey }
         : undefined;
-      await ctx.api.model.syncAuthoringScript({}, requestOptions);
+      // The API writes the canonical script to a managed copy when the session
+      // script is a user file; the user's own source is never overwritten.
+      const sync = await ctx.api.model.syncAuthoringScript({}, requestOptions);
       const script = await ctx.api.model.authoringScript(requestOptions);
       if (typeof document !== "undefined") {
         const blob = new Blob([script.source], { type: "text/x-python;charset=utf-8" });
         const href = URL.createObjectURL(blob);
         const anchor = document.createElement("a");
-        anchor.download = script.script_path.split(/[\\/]/).pop() || "fullmag-study.py";
+        anchor.download = canonicalCopyFileName(script.script_path);
         anchor.href = href;
         anchor.click();
         URL.revokeObjectURL(href);
       }
       return {
-        message: `Canonical Python exported from ${script.script_path}.`,
+        message: sync.source_script_modified
+          ? `Canonical Python saved from ${script.script_path}.`
+          : `Canonical copy saved; your script was not modified (managed copy: ${script.script_path}).`,
         status: "completed",
       };
     },

@@ -84,7 +84,7 @@ const MAIN_MENU_DEFINITIONS: AppMenuNode[] = [
       { id: "study.import-state", label: "Restore Runtime State", icon: <Upload size={14} />, shortcut: "Ctrl+Shift+O" },
       { id: "workspace.save-project", label: "Save Project", icon: <Save size={14} />, shortcut: "Ctrl+S" },
       { id: "workspace.close-project", label: "Close Project", icon: <X size={14} />, shortcut: "Ctrl+W" },
-      { id: "workspace.export-python", label: "Export Python DSL", icon: <FileCode2 size={14} /> },
+      { id: "workspace.export-python", label: "Save canonical copy as…", icon: <FileCode2 size={14} /> },
     ],
   },
   {
