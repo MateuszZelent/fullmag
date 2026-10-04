@@ -1,3 +1,15 @@
+<!-- de-air-grading-isolated-terminal-20261004 -->
+## Aktualny checkpoint — potwierdzony wkład siatki powietrza do rozbieżności DE
+
+Odczyt 2026-10-04T12:10:50.063820+00:00. Kontrolka source38fc4420bbc02454c4b74896ce8bd014b70643f5 jest na remote/PR97, review bezP1/P2,52interpreted pilot i35scientific-doc tests PASS. Testy kompilowane nadal NOT RUN.
+
+- Nowy +10 L2/3/growth1,15 na gotowym managed228: **11,216153905GHz**, full relative residual2,312e−11, exit0,81,399s. Postsolve bind/demag/seams/true KSP/potential PASS; model i runtime mają odrębne tożsamości. Nie wykonano nowego buildu ani zmiany progów.
+- Actual izolacja PASS: film396węzłów/1476tet i4płaszczyzny z, te same kanoniczne coordinates/connectivity przytol1e−20m; raw coordinate maxdiff3,309e−24m, m₀maxdiff4,784e−20. Air plane count62→76, total nodes6138→7524; squared consistent-mass profile overlap0,999999942484. To nie deklaracja body identity na podstawie nazwy L2.
+- Częstotliwość wzrosła o10,868580MHz; różnica wobec open-air1D basis16 spadła **0,204668%→0,107871%**. Dyskretyzacja powietrza wnosi część rozbieżności. Pełna mesh/airbox/mode-count convergence, Γ full window, shared signed15/serial-adaptive parity, GUI, A1/COMSOL, S09/provider i integracjaPR97 pozostają **OPEN**.
+- Następny eksperyment: dalszy kontrolowany air refinement, potem sekwencja body/thickness i padding; nie uznawać growth1,15 za zbieżny tylko dlatego, że przybliżył wynik do oracle. Baseline15punktów pozostaje jednorodny growth1,3; nowy punkt ma oddzielne oznaczenie/raport.
+
+[Raport izolacji air mesh](../../raports/2026-10-04-de-air-grading-isolation.md). Historyczne checkpointy poniżej zachowano.
+
 <!-- signed15-scatter-verified-checkpoint-20261004 -->
 ## Aktualny checkpoint — policzone 15 pozycji DE od −25 do +25 rad/µm
 
