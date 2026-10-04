@@ -1,3 +1,16 @@
+<!-- gamma227-accepted-selected-checkpoint-20261004 -->
+## Aktualny checkpoint — nowy punkt Γ po naprawie μ₀
+
+Odczyt 2026-10-04T07:41:36.154074+00:00. Cel S00–S12 nadal aktywny; ten przyrost potwierdza jeden wybrany mod Γ, bez kwalifikacji kompletnego widma lub solvera dyspersji.
+
+- Po zwolnieniu miejsca build #227 (`d2a6c2dd0c3c4a66a1e05fce10bb32c7`) zakończył się terminalnym `succeeded`, exit 0. Pakiet runtime-v2 przeszedł managed preflight źródeł, receipt i artefaktów. Źródło a8d67ac92002b884799119578a054b518cf40cbf / digest e848950d7d555f4d70d27a71421803fd2566d7e2f57d7e05b22f05da8123e8e6; brak kompilacji unit tests i brak buildu UI.
+- Nowa próba `gamma-nearest-canonical-mu0-job227-v1` zakończyła solver i driver kodem 0, `completed_unqualified`, w około 43.00 s. Rzeczywista częstotliwość wynosi 9.299249697067491 GHz; pełny względny residual 3.28252982656441e-11, certyfikowany przy niezmienionym progu 1e-8. μ₀ operatora i modelu są identyczne: 1.2566370614359173e-06. Demag, zgodność CSV/spectrum, potential-field reconstruction, źródłowa siatka, stan równowagi, linearization i authoring L2/trzy warstwy przeszły istniejące kontrole.
+- Analityka Γ dla tej samej płytki 10 nm, paddingu po 2 µm i zewnętrznego Dirichleta daje 9,299249697068401 GHz. Różnica wynosi około -0,000909 Hz (względnie -9,77e-14). To porównanie częstotliwości jednolitego modu; overlap/profil modu, nonzero-k oraz zbieżności pozostają NOT VERIFIED. Nie porównujemy tego punktu z granicą nieskończonego airboxu jako identycznym problemem.
+- Istniejący driver i niezależny odczyt końcowych artefaktów przeszły. W pomocniczym inspektorze v1 błędnie przekazano integer 3 zamiast istniejącej string choice '3' do walidatora grubości; raport v2 poprawia wyłącznie wywołanie inspektora, zachowuje v1 oraz nie modyfikuje wyniku, drivera ani progów. Dowód właściwy: `preview-state-checkpoint/gamma227-selected-result-inspection-v2.json` w wizualizacjach wątku.
+- Zakres tego wyniku: `selected_only`, `window_complete=false`, jeden punkt k=0. Nowych zaakceptowanych nonzero-k jest nadal zero; cztery dawne ±10/±25 zachowano. Nie wygenerowano nowego wykresu ani nie potwierdzono GUI/COMSOL.
+- Kolejny build #228 (`8df582e52a54410bae0387d2eaecd6a9`) ma odczytany stan `running`, profil runtime-v2, commit 57182911c6e8e721b8ee9705aa7f70491c70fe94, digest 1635883ea717cc5892970fabb872c70e6d94648da2b57234d6d3c857bbc9d326. Obejmuje zapisaną diagnostykę EPS termination/iterations i rzeczywistych dimensions oraz lokalne źródła S09. Zgłoszenie/stan running nie kwalifikuje tych źródeł. Kontroler `watch-gamma228-window.py`, sesja 90880, przygotowuje jedną nową próbę Γ full-window 8,5–16 GHz z tym samym modelem i ustawieniami FGMRES/restart 8/EPS 1e-9/KSP 1e-9 po terminalnym sukcesie i preflight. Nie zmieniono limitu preconditionera ani bramek residualu/kompletności.
+- Następny krok: odczytać rzeczywiste powody/iteracje/dimensions każdego nieudanego podokna, wykonać kontrolowaną korektę zbieżności i pełny sweep signed15; potem analityka, serial/adaptive parity i pomiary CPU/RAM oraz GUI. A1 61 próbek/8 pasm, DE/BV/COMSOL i zbieżności, całe S09/S10/GPU oraz PR97/integracja pozostają OPEN.
+
 <!-- waveguide-local-validation-checkpoint-20261004 -->
 ## Aktualny checkpoint — lokalna geometria i incydencja mesha S09
 
