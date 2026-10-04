@@ -38,6 +38,7 @@
     "smoke:scratch-authoring-fem": "node scripts/smoke-scratch-authoring-fem.mjs",
     "smoke:scratch-authoring-ui": "node scripts/smoke-scratch-authoring-ui.mjs",
     "docs:bundle": "node scripts/bundle-docs.mjs",
+    "check:start-screen-browser": "node scripts/check-start-screen-browser.mjs",
     "test:scratch-authoring-browser": "node --test scripts/lib/scratch-authoring-browser.node-test.mjs",
     "smoke:transport-authoring-ui": "node scripts/smoke-transport-authoring-ui-cdp.mjs",
     "verify:transport-managed-runtime": "node scripts/verify-transport-managed-runtime.mjs",
