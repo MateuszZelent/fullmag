@@ -4919,6 +4919,99 @@
         ],
         "type": "object"
       },
+      "DevelopmentRestartRequest": {
+        "additionalProperties": false,
+        "description": "Independent UI owners; the canonical scene is acquired privately by the launcher.",
+        "properties": {
+          "editor": {},
+          "project_document": {},
+          "request_id": {
+            "type": "string"
+          },
+          "schema": {
+            "type": "string"
+          },
+          "session_epoch": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "session_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "workspace": {}
+        },
+        "required": [
+          "schema",
+          "request_id",
+          "session_id",
+          "session_epoch",
+          "editor",
+          "workspace",
+          "project_document"
+        ],
+        "type": "object"
+      },
+      "DevelopmentRestartResource": {
+        "properties": {
+          "editor": {},
+          "new_api_instance_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "project_document": {},
+          "public_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "schema": {
+            "type": "string"
+          },
+          "session_epoch": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "session_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "$ref": "#/components/schemas/DevelopmentRestartState"
+          },
+          "workspace": {}
+        },
+        "required": [
+          "schema",
+          "request_id",
+          "state"
+        ],
+        "type": "object"
+      },
+      "DevelopmentRestartState": {
+        "enum": [
+          "pending",
+          "ready",
+          "failed",
+          "unknown"
+        ],
+        "type": "string"
+      },
       "DisplayPatch": {
         "properties": {
           "active_quantity_id": {
@@ -40392,6 +40485,111 @@
           },
           "304": {
             "description": "Development backend status has not changed"
+          }
+        },
+        "tags": [
+          "platform"
+        ]
+      }
+    },
+    "/v2/platform/development-restart-requests": {
+      "post": {
+        "operationId": "platform_post_platform_development_restart_requests",
+        "parameters": [
+          {
+            "description": "Bearer token generated before submission",
+            "in": "header",
+            "name": "Authorization",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Exact launcher UI origin",
+            "in": "header",
+            "name": "Origin",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Current API instance pin",
+            "in": "header",
+            "name": "x-fullmag-api-instance",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DevelopmentRestartRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DevelopmentRestartResource"
+                }
+              }
+            },
+            "description": "Restart intent durably queued; no process restart is implied"
+          },
+          "409": {
+            "description": "Restart coordinator unavailable or request conflicts"
+          }
+        },
+        "tags": [
+          "platform"
+        ]
+      }
+    },
+    "/v2/platform/development-restart-requests/{request_id}": {
+      "get": {
+        "operationId": "platform_get_platform_development_restart_requests_request_id",
+        "parameters": [
+          {
+            "description": "Opaque restart request identity",
+            "in": "path",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Bearer status token; omit stale API instance header",
+            "in": "header",
+            "name": "Authorization",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DevelopmentRestartResource"
+                }
+              }
+            },
+            "description": "Token-bound restart status and confirmed restore payload"
+          },
+          "404": {
+            "description": "Request unavailable"
           }
         },
         "tags": [

@@ -356,6 +356,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/platform/development-restart-requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["platform_post_platform_development_restart_requests"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/platform/development-restart-requests/{request_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["platform_get_platform_development_restart_requests_request_id"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/platform/docs/asyncapi": {
         parameters: {
             query?: never;
@@ -5461,6 +5493,32 @@ export interface components {
             id: string;
             source_sha256: string;
         };
+        /** @description Independent UI owners; the canonical scene is acquired privately by the launcher. */
+        DevelopmentRestartRequest: {
+            editor: unknown;
+            project_document: unknown;
+            request_id: string;
+            schema: string;
+            /** Format: int64 */
+            session_epoch: number;
+            session_id: string | null;
+            workspace: unknown;
+        };
+        DevelopmentRestartResource: {
+            editor?: unknown;
+            new_api_instance_id?: string | null;
+            project_document?: unknown;
+            public_reason?: string | null;
+            request_id: string;
+            schema: string;
+            /** Format: int64 */
+            session_epoch?: number | null;
+            session_id?: string | null;
+            state: components["schemas"]["DevelopmentRestartState"];
+            workspace?: unknown;
+        };
+        /** @enum {string} */
+        DevelopmentRestartState: "pending" | "ready" | "failed" | "unknown";
         DisplayPatch: {
             active_quantity_id?: string | null;
             auto_contrast?: boolean | null;
@@ -15018,6 +15076,77 @@ export interface operations {
             };
             /** @description Development backend status has not changed */
             304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    platform_post_platform_development_restart_requests: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Bearer token generated before submission */
+                Authorization: string;
+                /** @description Exact launcher UI origin */
+                Origin: string;
+                /** @description Current API instance pin */
+                "x-fullmag-api-instance": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DevelopmentRestartRequest"];
+            };
+        };
+        responses: {
+            /** @description Restart intent durably queued; no process restart is implied */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DevelopmentRestartResource"];
+                };
+            };
+            /** @description Restart coordinator unavailable or request conflicts */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    platform_get_platform_development_restart_requests_request_id: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Bearer status token; omit stale API instance header */
+                Authorization: string;
+            };
+            path: {
+                /** @description Opaque restart request identity */
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Token-bound restart status and confirmed restore payload */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DevelopmentRestartResource"];
+                };
+            };
+            /** @description Request unavailable */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

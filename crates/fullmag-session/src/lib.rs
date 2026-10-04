@@ -23,6 +23,7 @@ pub mod communication_policy;
 pub mod dataset_slice_adapter;
 mod durability;
 mod development_owner;
+pub mod development_restart_transport;
 pub mod fms;
 pub mod mesh_operation;
 pub mod materialized_dataset;
@@ -41,6 +42,10 @@ mod worker_inbox;
 mod writer;
 pub use worker_inbox::FmsWorkerInboxRecord;
 pub use development_owner::publish_managed_owner_record;
+pub use development_restart_transport::{
+    publish_request, publish_result, read_pending_request, read_request_for_status, read_result,
+    RestartRequest, RestartResult, RestartResultState,
+};
 
 // Re-export the most commonly used items at crate root.
 pub use capture::{

@@ -153,6 +153,10 @@ verify-windows-development-handoff:
 verify-windows-development-backend-api cross_build_bundle="":
     @{{storage_python}} "{{repo_root}}/scripts/verify_development_backend_api.py" --repo-root "{{repo_root}}" --cross-build-bundle "{{cross_build_bundle}}"
 
+# Native request transport proof; no unit-test compilation or user-session restart.
+verify-windows-development-restart-transport:
+    @{{storage_python}} "{{repo_root}}/scripts/verify_development_backend_api.py" --repo-root "{{repo_root}}" --restart-transport-only
+
 # Observe actual runtime-free project archives without compiling unit tests.
 verify-windows-project-document:
     @{{storage_python}} "{{repo_root}}/scripts/verify_development_backend_api.py" --repo-root "{{repo_root}}" --project-document-only

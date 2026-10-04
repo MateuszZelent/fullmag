@@ -1,5 +1,12 @@
 # P8-53 — bezpieczne zastosowanie nowego backendu w workspace
 
+[P8-53AN](53an-ui-restart-request-transport.md) dodaje trwałe żądanie z trzema
+niezależnymi właścicielami UI oraz wspólny koordynator natywny.
+Zarządzany build Windows, 20 kontroli transportu, 398 kontroli koordynatora
+oraz generacja/production TypeScript/API hygiene PASS. Konsument w pętli
+produkcyjnej, świeży pin i hydration paneli pozostają otwarte;
+`restart_available` nadal jest `false`.
+
 [P8-53AM](53am-pending-form-transition.md) chroni wszystkie zarejestrowane
 szkice i trwające Apply/Reset podczas przejścia. Produkcyjny New Problem nie
 czyści danych przy otwarciu/Cancel i odróżnia pozytywny ACK od błędu finalizacji.

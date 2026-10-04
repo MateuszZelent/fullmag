@@ -92,6 +92,44 @@ nie może przypisać starym wynikom swojej wersji lub rozstrzygnięcia urządzen
 
 ## Obowiązki implementacji i migracja
 
+### Transport danych UI do właściciela procesu
+
+Przeglądarka przekazuje wyłącznie osobne dane `editor`, `workspace` i
+`project_document` oraz oczekiwaną tożsamość sesji. Kanoniczną scenę pobiera
+prywatny właściciel API po zamknięciu admission. Dokument projektu nie jest
+automatycznie nadpisywany sceną sesji. Żądanie nie zawiera PID-u, portu,
+ścieżki EXE ani ścieżki magazynu; kandydat pochodzi z weryfikowanego pakietu.
+
+Control plane obejmuje `POST /v2/platform/development-restart-requests` i
+`GET /v2/platform/development-restart-requests/{request_id}`. POST wymaga
+bieżącego pina API, dokładnego lokalnego Origin ustalonego przez launcher
+oraz tokenu statusu wygenerowanego przed wysłaniem żądania. Token jest
+32-znakową losową wartością hex; storage zapisuje wyłącznie SHA-256.
+Przeglądarka zachowuje token także przy utracie ACK i najpierw odczytuje
+stan tego samego żądania. Sekret owner RPC nie trafia do przeglądarki.
+
+Żądanie i wynik są ograniczonymi, niezmiennymi rekordami pod kanonicznym
+`runtimes/<worktree>/development-restarts/<request_id>`. Jeden slot starej
+instancji API wiąże request, generację i SHA-256; inny request nie zastępuje
+slotu. Zapis payloadu poprzedza publikację slotu. Uszkodzony albo częściowy
+zapis pozostaje do uzgodnienia, bez automatycznego usuwania. Powtórzenie
+identycznego żądania może potwierdzić istniejący zapis, ale nie ponawia
+commitu ani wymiany procesu. Pierwszy przyrost nie zwalnia slotu po błędzie;
+ponowne zgłoszenie do tej samej instancji wymaga osobnej jawnej procedury.
+
+Odczyt statusu używa tokenu i nie wymaga starego pina HTTP, ponieważ wynik
+musi pozostać dostępny po wymianie API. Wysłanie starego pina nadal podlega
+zwykłemu `API_INSTANCE_MISMATCH`; wyjątek nie zmienia zachowania innych tras.
+Wynik `ready` wymaga zakończonego prywatnego completion i nowej tożsamości.
+Klient tworzy nową facade i zakres cache; nie zmienia pina starego klienta.
+POST bez uruchomionego koordynatora jest niedostępny. Rejestracja tras ani
+sam zapis requestu nie upoważniają do ustawienia `restart_available=true`.
+
+Implementacja tego transportu i połączenie koordynatora są w realizacji.
+Pełny przebieg UI, odtworzenie paneli i ponowne uruchomienie obserwatorów
+pozostają NOT VERIFIED; obecny działający workspace nie jest restartowany
+wskutek zakończenia kompilacji.
+
 P8-52 obejmuje profil kompilacji, watcher, integralność kopii EXE i lease
 procesów. P8-53 obejmuje nowy zasób/komendę v2, generację OpenAPI, facade/hook,
 guardy szkiców i admission, trwały handoff, odtworzenie i kontrolę nowego pina.

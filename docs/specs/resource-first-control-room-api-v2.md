@@ -74,6 +74,24 @@ The default frontend base path is `/v2/sessions/current`.
 
 ### Status kompilacji backendu developerskiego (P8-53)
 
+Transport kontrolowanego zastosowania wersji obejmuje
+`POST /v2/platform/development-restart-requests` i
+`GET /v2/platform/development-restart-requests/{request_id}`. Jest domyślnie
+niedostępny, dopóki launcher nie podłączy pełnego koordynatora. POST wymaga
+bieżącego `x-fullmag-api-instance`, dokładnego Origin lokalnego UI i
+`Authorization: Bearer <token>`; token statusu powstaje przed żądaniem.
+Storage zapisuje tylko jego hash. Strict request przenosi osobno `editor`,
+`workspace` i `project_document`, wymagane nullable `session_id` i epoch;
+autorytatywną scenę pobiera prywatny owner. Limit zakodowanego request/result
+wynosi 32 MiB. Żądanie nie zawiera ścieżek hosta ani parametrów procesów.
+
+Token-bound GET działa bez starego pina HTTP, aby odczyt był możliwy po
+wymianie API; podanie niezgodnego pina nadal powoduje zwykłą odmowę.
+Zasób ma stany `pending`, `ready`, `failed`, `unknown` i `Cache-Control:
+no-store`. Dopiero `ready` zawiera świeży UUID API i dane odtworzenia UI.
+Nowy klient i scope cache powstają wyłącznie po sprawdzonym handoffie.
+Sam ACK 202, zapis requestu ani stan kompilacji nie oznaczają restartu.
+
 `GET /v2/platform/development-backend` obserwuje prywatny status natywnego
 watchera. Konfiguracja jest przechwytywana raz przy starcie API z launchera
 Windows dev. Bez niej zasób zwraca `disabled`; częściowa lub błędna konfiguracja

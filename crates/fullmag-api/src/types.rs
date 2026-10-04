@@ -118,6 +118,8 @@ pub(crate) struct AppState {
     /// Immutable native launcher binding; ordinary API startup leaves it disabled.
     pub development_backend:
         crate::router_v2::handlers::platform::development_backend::DevelopmentBackendConfig,
+    pub development_restart_transport:
+        crate::router_v2::handlers::platform::development_restart_request::DevelopmentRestartTransportConfig,
     pub repo_root: PathBuf,
     /// Managed, project-owned run storage resolved before this API starts.
     pub submit_store_root: Option<PathBuf>,

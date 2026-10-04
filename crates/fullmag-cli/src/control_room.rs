@@ -314,6 +314,243 @@ enum GuardedApiProcess {
     Test(Box<dyn GuardedProcess>),
 }
 
+/// One validated UI intent consumed by the private native restart coordinator.
+/// Candidate paths and accepted-store configuration are deliberately absent.
+pub(crate) struct DevelopmentRestartInput<'a> {
+    pub(crate) request: &'a fullmag_session::development_restart_transport::RestartRequest,
+    pub(crate) candidate_bundle_root: &'a Path,
+}
+
+pub(crate) enum DevelopmentRestartProgress {
+    HandoffStaged { helper_pid: u32 },
+    OldApiExited { pid: u32, exit_code: Option<i32> },
+    RestorePreparationHelperWaited { helper_pid: u32 },
+    Replacement(crate::development_api_replacement::ReplacementLaunchEvent),
+}
+
+/// A replacement is ready only after the candidate owns the restored authoring
+/// state and the completion acknowledgement has reopened admission.
+pub(crate) struct CompletedDevelopmentRestart {
+    pub(crate) old_api_instance_id: String,
+    pub(crate) old_session_id: Option<String>,
+    pub(crate) old_session_epoch: u64,
+    pub(crate) new_api_instance_id: String,
+    pub(crate) session_id: Option<String>,
+    pub(crate) session_epoch: u64,
+    pub(crate) scene_document_sha256: String,
+    pub(crate) editor: serde_json::Value,
+    pub(crate) workspace: serde_json::Value,
+    pub(crate) project_document: serde_json::Value,
+    pub(crate) accepted: fullmag_session::store::DevelopmentHandoffCommit,
+    pub(crate) staged_acknowledgement: serde_json::Value,
+    pub(crate) commit_acknowledgement: Option<serde_json::Value>,
+    pub(crate) stage_helper_pid: u32,
+    pub(crate) readback_helper_pid: Option<u32>,
+    pub(crate) restore_helper_pid: u32,
+    pub(crate) old_api_terminal: std::process::ExitStatus,
+    pub(crate) completion: serde_json::Value,
+    pub(crate) replacement: crate::development_api_replacement::DevelopmentReplacementReceipt,
+}
+
+struct ColdIdleReservation {
+    proof: Option<fullmag_runtime_control::development_cold_idle::ColdIdleProof>,
+    retain_fence: bool,
+}
+
+impl ColdIdleReservation {
+    fn new(proof: fullmag_runtime_control::development_cold_idle::ColdIdleProof) -> Self {
+        Self {
+            proof: Some(proof),
+            retain_fence: false,
+        }
+    }
+
+    fn proof(&self) -> Result<&fullmag_runtime_control::development_cold_idle::ColdIdleProof> {
+        self.proof
+            .as_ref()
+            .context("cold idle reservation was already consumed")
+    }
+
+    fn retain_fence(&mut self) {
+        self.retain_fence = true;
+    }
+
+    fn abort_before_commit(&mut self) -> Result<()> {
+        self.retain_fence = true;
+        self.proof
+            .take()
+            .context("cold idle reservation was already consumed")?
+            .release_fence()
+    }
+
+    fn release_kernel_guards_retaining_fence(&mut self) {
+        self.retain_fence = true;
+        drop(self.proof.take());
+    }
+}
+
+impl Drop for ColdIdleReservation {
+    fn drop(&mut self) {
+        let Some(proof) = self.proof.take() else {
+            return;
+        };
+        if !self.retain_fence {
+            if let Err(error) = proof.release_fence() {
+                terminal_logger().emit(
+                    TerminalLogSource::Cli,
+                    format!("precommit cold idle abort could not confirm fence release: {error:#}"),
+                );
+            }
+        }
+    }
+}
+
+fn restart_lower_hex(value: &str, length: usize) -> bool {
+    value.len() == length
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+}
+
+fn restart_canonical_uuid(value: &str) -> bool {
+    uuid::Uuid::parse_str(value).is_ok_and(|parsed| !parsed.is_nil() && parsed.to_string() == value)
+}
+
+fn validate_development_restart_request(
+    request: &fullmag_session::development_restart_transport::RestartRequest,
+) -> Result<()> {
+    use fullmag_session::development_restart_transport::RESTART_REQUEST_SCHEMA;
+
+    if request.schema != RESTART_REQUEST_SCHEMA
+        || !restart_canonical_uuid(&request.request_id)
+        || !restart_lower_hex(&request.status_token_sha256, 64)
+        || !restart_canonical_uuid(&request.old_api_instance_id)
+        || !restart_lower_hex(&request.generation_id, 32)
+    {
+        bail!("development restart request has invalid identity pins");
+    }
+    if request.session_id.as_ref().is_some_and(|session_id| {
+        session_id.is_empty()
+            || session_id.len() > 512
+            || session_id.bytes().any(|byte| byte.is_ascii_control())
+    }) || (request.session_id.is_none() && request.session_epoch != 0)
+        || (request.session_id.is_some() && request.session_epoch == 0)
+    {
+        bail!("development restart request has invalid session pins");
+    }
+    if !request.editor.is_object()
+        || !request.workspace.is_object()
+        || !request.project_document.is_object()
+    {
+        bail!("development restart request must contain all three UI objects");
+    }
+    let request_value = serde_json::to_value(request)
+        .context("unable to encode development restart request for size validation")?;
+    if fullmag_session::canonical_json_bytes(&request_value).len() > 32 * 1024 * 1024 {
+        bail!("development restart request exceeds the 32 MiB transport limit");
+    }
+    Ok(())
+}
+
+fn validate_restart_acquisition(
+    request: &fullmag_session::development_restart_transport::RestartRequest,
+    old_api_instance_id: &str,
+    acquisition: &crate::development_api_owner::AuthoringAcquisition,
+) -> Result<(Option<String>, u64)> {
+    let workspace = acquisition.workspace();
+    let observed = match workspace.get("state").and_then(serde_json::Value::as_str) {
+        Some("no_session") => {
+            if workspace
+                .get("session_epoch")
+                .and_then(serde_json::Value::as_u64)
+                != Some(0)
+            {
+                bail!("empty acquired workspace has an invalid session epoch");
+            }
+            (None, 0)
+        }
+        Some("session") => {
+            let identity = workspace
+                .get("identity")
+                .and_then(serde_json::Value::as_object)
+                .context("acquired workspace identity is missing")?;
+            if identity
+                .get("api_instance_id")
+                .and_then(serde_json::Value::as_str)
+                != Some(old_api_instance_id)
+            {
+                bail!("acquired workspace is pinned to another API instance");
+            }
+            let session_id = identity
+                .get("session_id")
+                .and_then(serde_json::Value::as_str)
+                .context("acquired session identity is missing")?;
+            if session_id.is_empty()
+                || session_id.len() > 512
+                || session_id.bytes().any(|byte| byte.is_ascii_control())
+                || !workspace
+                    .get("scene_sha256")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|value| restart_lower_hex(value, 64))
+            {
+                bail!("acquired workspace session identity is invalid");
+            }
+            let epoch = identity
+                .get("session_epoch")
+                .and_then(serde_json::Value::as_u64)
+                .context("acquired session epoch is missing")?;
+            (Some(session_id.to_owned()), epoch)
+        }
+        _ => bail!("acquired workspace has an unknown state"),
+    };
+    if request.old_api_instance_id.as_str() != old_api_instance_id
+        || request.session_id.as_deref() != observed.0.as_deref()
+        || request.session_epoch != observed.1
+    {
+        bail!("restart request no longer matches the acquired authoring identity");
+    }
+    Ok(observed)
+}
+
+fn emit_replacement_probe_progress(
+    event: crate::development_api_replacement::ReplacementLaunchEvent,
+) {
+    use crate::development_api_replacement::ReplacementLaunchEvent;
+    let mut frame = match event {
+        ReplacementLaunchEvent::CandidateOwnerHelperWaited { pid } => serde_json::json!({
+            "event":"candidate_owner_helper_waited", "pid":pid,"waited":true,"exit_code":0
+        }),
+        ReplacementLaunchEvent::ApiStarted { pid, port } => serde_json::json!({
+            "event":"replacement_api_started", "pid":pid,"api_port":port,"waited":false
+        }),
+    };
+    frame["schema"] = serde_json::json!("fullmag.development-cli-replacement-progress.v1");
+    println!("{frame}");
+}
+
+fn emit_development_restart_probe_progress(event: DevelopmentRestartProgress) {
+    match event {
+        DevelopmentRestartProgress::HandoffStaged { .. } => {}
+        DevelopmentRestartProgress::OldApiExited { pid, exit_code } => println!(
+            "{}",
+            serde_json::json!({
+                "schema":"fullmag.development-cli-owned-api-exit.v1",
+                "api_pid":pid,"waited":true,"exit_code":exit_code,
+                "durable_commit_reconciled":true,
+            })
+        ),
+        DevelopmentRestartProgress::RestorePreparationHelperWaited { helper_pid } => println!(
+            "{}",
+            serde_json::json!({
+                "schema":"fullmag.development-cli-replacement-progress.v1",
+                "event":"restore_preparation_helper_waited","pid":helper_pid,
+                "waited":true,"exit_code":0,
+            })
+        ),
+        DevelopmentRestartProgress::Replacement(event) => emit_replacement_probe_progress(event),
+    }
+}
+
 impl GuardedProcess for GuardedApiProcess {
     fn terminate(&mut self) {
         match self {
@@ -404,6 +641,217 @@ impl ControlRoomGuard {
             .development_supervisor_mut()?
             .complete_restored_handoff(&mut restored.acquisition, prepared)?;
         Ok(restored.receipt)
+    }
+
+    /// Execute one validated UI intent while retaining custody of the exact
+    /// development API process. The candidate and accepted-store roots are
+    /// supplied only by the native launcher, never by the request payload.
+    pub(crate) fn restart_development_api(
+        &mut self,
+        repo_root: &Path,
+        input: DevelopmentRestartInput<'_>,
+        timeout: Duration,
+        observe: impl FnMut(DevelopmentRestartProgress),
+    ) -> Result<CompletedDevelopmentRestart> {
+        self.restart_development_api_inner(repo_root, input, timeout, false, observe)
+    }
+
+    /// The only acknowledgement-discarding coordinator entry point is a
+    /// managed diagnostic probe. Production request consumers use the normal
+    /// one-shot method above.
+    pub(crate) fn restart_development_api_lost_ack_probe(
+        &mut self,
+        repo_root: &Path,
+        input: DevelopmentRestartInput<'_>,
+        timeout: Duration,
+        observe: impl FnMut(DevelopmentRestartProgress),
+    ) -> Result<CompletedDevelopmentRestart> {
+        if std::env::var("FULLMAG_DEVELOPMENT_OWNER_PROBE").as_deref() != Ok("1")
+            || std::env::var("FULLMAG_DEVELOPMENT_OWNER_PROBE_LOST_ACK").as_deref() != Ok("1")
+            || std::env::var("FULLMAG_DEVELOPMENT_OWNER_PROBE_REPLACEMENT").as_deref() != Ok("1")
+        {
+            bail!("lost-ack restart requires the managed native replacement probe");
+        }
+        self.restart_development_api_inner(repo_root, input, timeout, true, observe)
+    }
+
+    fn restart_development_api_inner(
+        &mut self,
+        repo_root: &Path,
+        input: DevelopmentRestartInput<'_>,
+        timeout: Duration,
+        discard_acknowledgement: bool,
+        mut observe: impl FnMut(DevelopmentRestartProgress),
+    ) -> Result<CompletedDevelopmentRestart> {
+        validate_development_restart_request(input.request)?;
+        if !input.candidate_bundle_root.is_absolute() {
+            bail!("replacement candidate must be selected by the native launcher");
+        }
+
+        let (old_api_instance_id, mut acquisition) = {
+            let supervisor = self.development_supervisor_mut()?;
+            if supervisor.state()
+                != crate::development_api_supervisor::DevelopmentApiSupervisorState::Running
+            {
+                bail!("development restart requires the running owned API supervisor");
+            }
+            let owner = supervisor.owner();
+            let old_api_instance_id = owner.api_instance_id().to_owned();
+            if old_api_instance_id.as_str() != input.request.old_api_instance_id.as_str() {
+                bail!("restart request is pinned to another API instance");
+            }
+            let nonce = uuid::Uuid::new_v4().to_string();
+            (old_api_instance_id, owner.acquire(&nonce)?)
+        };
+
+        let (old_session_id, old_session_epoch) =
+            validate_restart_acquisition(input.request, &old_api_instance_id, &acquisition)?;
+        let frontend_payload = serde_json::json!({
+            "api_instance_id": old_api_instance_id,
+            "session_id": old_session_id,
+            "session_epoch": old_session_epoch,
+            "editor": input.request.editor,
+            "workspace": input.request.workspace,
+            "project_document": input.request.project_document,
+        });
+        let staged =
+            acquisition.stage_handoff(repo_root, input.candidate_bundle_root, &frontend_payload)?;
+        if staged.acknowledgement["binding"]["generation_id"].as_str()
+            != Some(input.request.generation_id.as_str())
+            || staged.acknowledgement["binding"]["api_instance_id"].as_str()
+                != Some(old_api_instance_id.as_str())
+        {
+            bail!("restart request generation does not match the acquired API owner");
+        }
+        observe(DevelopmentRestartProgress::HandoffStaged {
+            helper_pid: staged.helper_pid,
+        });
+
+        let state_root = runtime_state_root(repo_root);
+        let store_root = fullmag_runtime_control::accepted_store::configured_submit_store_root(
+            repo_root,
+            &state_root,
+        )
+        .context("development restart requires the configured scoped accepted store")?;
+        let proof = acquisition.acquire_cold_idle(&staged, &store_root)?;
+        let mut reservation = ColdIdleReservation::new(proof);
+
+        let outcome = {
+            let supervisor = self.development_supervisor_mut()?;
+            reservation.retain_fence();
+            if discard_acknowledgement {
+                supervisor.commit_and_wait_lost_ack_probe(
+                    repo_root,
+                    &mut acquisition,
+                    &staged,
+                    reservation.proof()?,
+                    &store_root,
+                    timeout,
+                )
+            } else {
+                supervisor.commit_and_wait(
+                    repo_root,
+                    &mut acquisition,
+                    &staged,
+                    reservation.proof()?,
+                    &store_root,
+                    timeout,
+                )
+            }
+        };
+        let outcome = match outcome {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                let state = self.development_supervisor_mut()?.state();
+                let definitely_unsent = matches!(
+                    state,
+                    crate::development_api_supervisor::DevelopmentApiSupervisorState::Running
+                        | crate::development_api_supervisor::DevelopmentApiSupervisorState::CommitNotSent
+                        | crate::development_api_supervisor::DevelopmentApiSupervisorState::ExitedBeforeCommit
+                );
+                if definitely_unsent {
+                    if let Err(release_error) = reservation.abort_before_commit() {
+                        return Err(error.context(format!(
+                            "cold commit was not sent, but explicit fence abort was not confirmed: {release_error:#}"
+                        )));
+                    }
+                }
+                return Err(error);
+            }
+        };
+        observe(DevelopmentRestartProgress::OldApiExited {
+            pid: self.development_supervisor_mut()?.owner().child_pid(),
+            exit_code: outcome.terminal.code(),
+        });
+
+        let prepared = self
+            .development_supervisor_mut()?
+            .prepare_committed_restore(
+                repo_root,
+                &acquisition,
+                &staged,
+                reservation.proof()?,
+                &store_root,
+                outcome.acknowledgement.as_ref(),
+            )?;
+        observe(DevelopmentRestartProgress::RestorePreparationHelperWaited {
+            helper_pid: prepared.helper_pid(),
+        });
+        let editor = prepared.editor().clone();
+        let workspace = prepared.workspace().clone();
+        let project_document = prepared.project_document().clone();
+        let old_api_terminal = outcome.terminal;
+        let accepted = outcome.accepted;
+        let commit_acknowledgement = outcome.acknowledgement;
+        let readback_helper_pid = outcome.readback_helper_pid;
+        let stage_helper_pid = staged.helper_pid;
+        let staged_acknowledgement = staged.acknowledgement.clone();
+        let restore_helper_pid = prepared.helper_pid();
+
+        // The API exit and accepted record are now confirmed. Release only the
+        // kernel reservations before starting the replacement; the durable
+        // fence remains until its authenticated completion acknowledgement.
+        drop(acquisition);
+        reservation.release_kernel_guards_retaining_fence();
+
+        let replacement_log_path = fullmag_session::repository_path::checked_path(
+            &state_root,
+            &format!("development-restart-{}.log", uuid::Uuid::new_v4().simple()),
+        )?;
+        let replacement_log = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(replacement_log_path)
+            .context("unable to create the replacement API log")?;
+        let replacement = self.replace_with_committed_candidate(
+            repo_root,
+            &prepared,
+            api_port(),
+            replacement_log,
+            |event| observe(DevelopmentRestartProgress::Replacement(event)),
+        )?;
+
+        Ok(CompletedDevelopmentRestart {
+            old_api_instance_id,
+            old_session_id,
+            old_session_epoch,
+            new_api_instance_id: replacement.api_instance_id.clone(),
+            session_id: replacement.session_id.clone(),
+            session_epoch: replacement.session_epoch,
+            scene_document_sha256: replacement.scene_sha256.clone(),
+            editor,
+            workspace,
+            project_document,
+            accepted,
+            staged_acknowledgement,
+            commit_acknowledgement,
+            stage_helper_pid,
+            readback_helper_pid,
+            restore_helper_pid,
+            old_api_terminal,
+            completion: replacement.completion.clone(),
+            replacement,
+        })
     }
 
     pub fn retain_terminal_failure_until_close(&mut self, wait_for_close: impl FnOnce() + 'static) {
@@ -3028,116 +3476,73 @@ pub(crate) fn verify_development_api_owner() -> Result<()> {
             bail!("rejected cold commit did not reopen authoring admission");
         }
     }
-    let mut final_acquisition = owner.acquire(&uuid::Uuid::new_v4().to_string())?;
-    let final_identity = final_acquisition.workspace()["identity"].clone();
-    let final_staged = final_acquisition.stage_handoff(
-        &root,
-        &candidate,
-        &serde_json::json!({
-            "api_instance_id":instance,"session_id":final_identity["session_id"],
-            "session_epoch":final_identity["session_epoch"],"editor":{"probe":"scene"},
-            "workspace":{},"project_document":{},
-        }),
-    )?;
-    let final_idle = final_acquisition.acquire_cold_idle(&final_staged, &accepted_store)?;
     let mut guarded_api = ControlRoomGuard::active(api_port(), Some(child.release().0), None);
     guarded_api.adopt_development_owner(owner)?;
-    let supervisor = guarded_api.development_supervisor_mut()?;
-    let outcome = if lose_commit_ack {
-        supervisor.commit_and_wait_lost_ack_probe(
-            &root,
-            &mut final_acquisition,
-            &final_staged,
-            &final_idle,
-            &accepted_store,
-            Duration::from_secs(20),
-        )?
-    } else {
-        supervisor.commit_and_wait(
-            &root,
-            &mut final_acquisition,
-            &final_staged,
-            &final_idle,
-            &accepted_store,
-            Duration::from_secs(20),
-        )?
-    };
-    let terminal = outcome.terminal;
-    println!(
-        "{}",
-        serde_json::json!({
-            "schema":"fullmag.development-cli-owned-api-exit.v1", "api_pid":pid,
-            "waited":true,"exit_code":terminal.code(),"durable_commit_reconciled":true,
-        })
-    );
-    let accepted = outcome.accepted;
-    let commit_acknowledgement = outcome.acknowledgement;
-    let readback_helper_pid = outcome
-        .readback_helper_pid
-        .context("managed commit probe must observe the waited readback helper")?;
-    let prepared = if launch_replacement {
-        Some(
-            guarded_api
-                .development_supervisor_mut()?
-                .prepare_committed_restore(
-                    &root,
-                    &final_acquisition,
-                    &final_staged,
-                    &final_idle,
-                    &accepted_store,
-                    commit_acknowledgement.as_ref(),
-                )?,
-        )
-    } else {
-        None
-    };
-    drop(final_idle); // Kernel reservations release; durable fence remains closed.
     let mut native_replacement = serde_json::Value::Null;
-    if let Some(prepared) = prepared.as_ref() {
-        println!(
-            "{}",
-            serde_json::json!({
-                "schema":"fullmag.development-cli-replacement-progress.v1",
-                "event":"restore_preparation_helper_waited", "pid":prepared.helper_pid(),
-                "waited":true,"exit_code":0,
-            })
-        );
-        let replacement_log = fs::OpenOptions::new().write(true).create_new(true).open(
-            fullmag_session::repository_path::checked_path(
-                &state_root,
-                &format!("replacement-probe-{}.log", uuid::Uuid::new_v4().simple()),
-            )?,
-        )?;
-        let restored = guarded_api.replace_with_committed_candidate(
-            &root, prepared, api_port(), replacement_log, |event| {
-                use crate::development_api_replacement::ReplacementLaunchEvent;
-                let frame = match event {
-                    ReplacementLaunchEvent::CandidateOwnerHelperWaited {pid} => serde_json::json!({
-                        "event":"candidate_owner_helper_waited", "pid":pid,"waited":true,"exit_code":0}),
-                    ReplacementLaunchEvent::ApiStarted {pid,port} => serde_json::json!({
-                        "event":"replacement_api_started", "pid":pid,"api_port":port,"waited":false}),
-                };
-                let mut frame = frame;
-                frame["schema"] = serde_json::json!("fullmag.development-cli-replacement-progress.v1");
-                println!("{frame}");
-            },
-        )?;
-        let expected_scene = prepared
-            .expected_scene()
-            .context("scene replacement fixture is empty")?;
+    let (
+        accepted,
+        committed_handoff,
+        commit_acknowledgement,
+        readback_helper_pid,
+        final_stage_helper_pid,
+        terminal,
+    ) = if launch_replacement {
+        let request = fullmag_session::development_restart_transport::RestartRequest {
+            schema: fullmag_session::development_restart_transport::RESTART_REQUEST_SCHEMA
+                .to_owned(),
+            request_id: uuid::Uuid::new_v4().to_string(),
+            status_token_sha256: "d".repeat(64),
+            old_api_instance_id: instance.clone(),
+            generation_id: scene_staged.acknowledgement["binding"]["generation_id"]
+                .as_str()
+                .context("scene staging has no generation pin")?
+                .to_owned(),
+            session_id: scene_staged.acknowledgement["binding"]["session_id"]
+                .as_str()
+                .map(str::to_owned),
+            session_epoch: scene_staged.acknowledgement["binding"]["session_epoch"]
+                .as_u64()
+                .context("scene staging has no session epoch")?,
+            editor: serde_json::json!({"probe":"scene"}),
+            workspace: serde_json::json!({}),
+            project_document: serde_json::json!({}),
+        };
+        let input = DevelopmentRestartInput {
+            request: &request,
+            candidate_bundle_root: &candidate,
+        };
+        let restarted = if lose_commit_ack {
+            guarded_api.restart_development_api_lost_ack_probe(
+                &root,
+                input,
+                Duration::from_secs(20),
+                emit_development_restart_probe_progress,
+            )?
+        } else {
+            guarded_api.restart_development_api(
+                &root,
+                input,
+                Duration::from_secs(20),
+                emit_development_restart_probe_progress,
+            )?
+        };
+        let readback_helper_pid = restarted
+            .readback_helper_pid
+            .context("managed commit probe must observe the waited readback helper")?;
         let exposed_scene: serde_json::Value = client
             .get(format!("{url}/v2/sessions/current/model/scene"))
-            .header("x-fullmag-api-instance", &restored.api_instance_id)
+            .header("x-fullmag-api-instance", &restarted.new_api_instance_id)
             .send()?
             .error_for_status()?
             .json()?;
-        if &exposed_scene != expected_scene {
+        if fullmag_session::canonical_json_sha256(&exposed_scene) != restarted.scene_document_sha256
+        {
             bail!("native replacement HTTP exposed a different authoring scene");
         }
         if client
             .put(format!("{url}/v2/sessions/current/model/scene"))
-            .header("x-fullmag-api-instance", &restored.api_instance_id)
-            .json(expected_scene)
+            .header("x-fullmag-api-instance", &restarted.new_api_instance_id)
+            .json(&exposed_scene)
             .send()?
             .status()
             .as_u16()
@@ -3153,14 +3558,79 @@ pub(crate) fn verify_development_api_owner() -> Result<()> {
         native_replacement = serde_json::json!({
             "schema":"fullmag.development-cli-native-replacement-check.v1",
             "restored_scene_document":exposed_scene,
-            "receipt":restored, "waited":true,"exit_code":replacement_terminal.code(),
+            "receipt":restarted.replacement, "waited":true,"exit_code":replacement_terminal.code(),
             "termination_reason":"owned verifier replacement cleanup; no compute submitted",
             "checks":["native-supervisor-prepares-accepted-capsule", "native-supervisor-spawns-sealed-candidate",
                 "native-supervisor-confirms-fresh-owner", "native-supervisor-restores-exact-authoring",
                 "native-supervisor-completes-admission", "native-supervisor-http-mutation-reopened",
                 "native-supervisor-waits-replacement-fixture"]
         });
-    }
+        (
+            restarted.accepted,
+            restarted.staged_acknowledgement,
+            restarted.commit_acknowledgement,
+            readback_helper_pid,
+            restarted.stage_helper_pid,
+            restarted.old_api_terminal,
+        )
+    } else {
+        let mut final_acquisition = guarded_api
+            .development_supervisor_mut()?
+            .owner()
+            .acquire(&uuid::Uuid::new_v4().to_string())?;
+        let final_identity = final_acquisition.workspace()["identity"].clone();
+        let final_staged = final_acquisition.stage_handoff(
+            &root,
+            &candidate,
+            &serde_json::json!({
+                "api_instance_id":instance,"session_id":final_identity["session_id"],
+                "session_epoch":final_identity["session_epoch"],"editor":{"probe":"scene"},
+                "workspace":{},"project_document":{},
+            }),
+        )?;
+        let final_idle = final_acquisition.acquire_cold_idle(&final_staged, &accepted_store)?;
+        let outcome = {
+            let supervisor = guarded_api.development_supervisor_mut()?;
+            if lose_commit_ack {
+                supervisor.commit_and_wait_lost_ack_probe(
+                    &root,
+                    &mut final_acquisition,
+                    &final_staged,
+                    &final_idle,
+                    &accepted_store,
+                    Duration::from_secs(20),
+                )?
+            } else {
+                supervisor.commit_and_wait(
+                    &root,
+                    &mut final_acquisition,
+                    &final_staged,
+                    &final_idle,
+                    &accepted_store,
+                    Duration::from_secs(20),
+                )?
+            }
+        };
+        println!(
+            "{}",
+            serde_json::json!({
+                "schema":"fullmag.development-cli-owned-api-exit.v1", "api_pid":pid,
+                "waited":true,"exit_code":outcome.terminal.code(),"durable_commit_reconciled":true,
+            })
+        );
+        let helper_pid = outcome
+            .readback_helper_pid
+            .context("managed commit probe must observe the waited readback helper")?;
+        drop(final_idle); // Kernel reservations release; durable fence remains closed.
+        (
+            outcome.accepted,
+            final_staged.acknowledgement,
+            outcome.acknowledgement,
+            helper_pid,
+            final_staged.helper_pid,
+            outcome.terminal,
+        )
+    };
     println!(
         "{}",
         serde_json::json!({
@@ -3181,7 +3651,7 @@ pub(crate) fn verify_development_api_owner() -> Result<()> {
                 "target_build_id":accepted.target_build_id,
                 "accepted_store_binding":accepted.accepted_store_binding,
             },
-            "committed_handoff":final_staged.acknowledgement,
+            "committed_handoff":committed_handoff,
             "graceful_exit":true,"durable_fence_retained":!launch_replacement,
             "capsule_receipt_state":"staged",
             "commit_rejection_helpers":rejection_helpers,
@@ -3191,7 +3661,7 @@ pub(crate) fn verify_development_api_owner() -> Result<()> {
                 {"pid":scene_staged.helper_pid,"waited":true,"exit_code":0},
                 {"pid":empty_checked.helper_pid,"waited":true,"exit_code":0},
                 {"pid":scene_checked.helper_pid,"waited":true,"exit_code":0},
-                {"pid":final_staged.helper_pid,"waited":true,"exit_code":0},
+                {"pid":final_stage_helper_pid,"waited":true,"exit_code":0},
                 {"pid":readback_helper_pid,"waited":true,"exit_code":0}
             ],
             "api_exit_code":terminal.code(), "checks":["production-supervisor-owned-api-custody",

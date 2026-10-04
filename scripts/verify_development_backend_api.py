@@ -25,7 +25,10 @@ from windows.development_status import verified_build_identity
 from windows.workspace_backend_identity import fingerprint
 
 
-def run(repo_root: str, cross_build_bundle: str = "", project_document_only: bool = False) -> int:
+def run(repo_root: str, cross_build_bundle: str = "", project_document_only: bool = False,
+        restart_transport_only: bool = False) -> int:
+    if restart_transport_only and (cross_build_bundle or project_document_only):
+        raise storage.StorageError("Restart transport observation is a separate verification scope")
     if project_document_only and cross_build_bundle:
         raise storage.StorageError("Project document observation does not use a cross-build candidate")
     if cross_build_bundle and not re.fullmatch(r"[0-9a-f]{32}", cross_build_bundle):
@@ -69,6 +72,8 @@ def run(repo_root: str, cross_build_bundle: str = "", project_document_only: boo
         receipt["project_document_only"] = project_document_only
         if project_document_only:
             receipt["scope"] = "runtime-free project archive create/open identity and canonical bytes; no UI hydration, restart, solver or release qualification"
+        if restart_transport_only:
+            receipt["scope"] = "owned native API restart request transport, immutable storage, identity and token guards; no process replacement, UI hydration, solver or release qualification"
         storage.atomic_json(receipt_path, receipt)
         code = 1
         try:
@@ -102,8 +107,9 @@ def run(repo_root: str, cross_build_bundle: str = "", project_document_only: boo
             binary_hash = hashlib.sha256(api.read_bytes()).hexdigest()
             if binary_hash != manifest["api_binary_sha256"] or hashlib.sha256(source_api.read_bytes()).hexdigest() != binary_hash:
                 raise storage.StorageError("Native API changed while sealing its diagnostic copy")
-            exercise(api, repo, run_root, receipt, project_document_only=project_document_only)
-            if not project_document_only:
+            exercise(api, repo, run_root, receipt, project_document_only=project_document_only,
+                     restart_transport_only=restart_transport_only)
+            if not project_document_only and not restart_transport_only:
                 exercise_service(repo, run_root, manifest, receipt, api.parent)
             # Use the canonical codegen branch rather than persisting the live
             # endpoint's process-specific accepted-store binding extension.
@@ -845,7 +851,8 @@ def exercise_service(repo: Path, run_root: Path, manifest: dict, receipt: dict, 
         receipt["checks"].append("admission-fence-survives-service-process-exit")
 
 
-def exercise(api: Path, repo: Path, run_root: Path, receipt: dict, *, project_document_only: bool = False) -> None:
+def exercise(api: Path, repo: Path, run_root: Path, receipt: dict, *, project_document_only: bool = False,
+             restart_transport_only: bool = False) -> None:
     generation, source, worktree = "1" * 32, "a" * 64, "fixture-worktree"
     fixture_storage = run_root / "fixture-storage"
     status = fixture_storage / "builds" / worktree / "windows-native-fdm-cpu-dev/backend-watch-status.json"
@@ -892,15 +899,17 @@ def exercise(api: Path, repo: Path, run_root: Path, receipt: dict, *, project_do
             receipt["processes"].append(record)
             base = f"http://127.0.0.1:{port}/v2/platform/"
 
-            def get(path="development-backend", etag=None, *, method="GET", payload=None, timeout=2):
+            def get(path="development-backend", etag=None, *, method="GET", payload=None, timeout=2, extra_headers=None):
                 url = f"http://127.0.0.1:{port}" + path if path.startswith("/") else base + path
                 headers = {"If-None-Match": etag} if etag else {}
+                headers.update(extra_headers or {})
                 if payload is not None:
                     headers["Content-Type"] = "application/json"
                 request = urllib.request.Request(url, method=method, headers=headers,
                                                  data=json.dumps(payload).encode("utf-8") if payload is not None else None)
                 try:
                     with urllib.request.urlopen(request, timeout=timeout) as response:
+                        get.instance_id = response.headers.get("x-fullmag-api-instance")
                         return response.status, response.headers.get("ETag"), None if response.status == 204 else json.load(response)
                 except urllib.error.HTTPError as error:
                     if error.code == 304:
@@ -1121,6 +1130,80 @@ def exercise(api: Path, repo: Path, run_root: Path, receipt: dict, *, project_do
             "source_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
             "scope": "runtime-free incomplete box then material/region authoring, accepted metadata extension, retained assets/opaque entries/source history; no solver execution",
         }
+
+    if restart_transport_only:
+        route = "/v2/platform/development-restart-requests"
+        origin = "http://localhost:3197"
+        def observe_transport(get):
+            get("health")
+            instance = get.instance_id
+            assert str(uuid.UUID(instance)) == instance
+            token = uuid.uuid4().hex
+            request_id = str(uuid.uuid4())
+            request = {"schema": "fullmag.development-ui-restart-request.v1",
+                       "request_id": request_id, "session_id": None, "session_epoch": 0,
+                       "editor": {"source": "unsaved editor"}, "workspace": {"inspector": False},
+                       "project_document": {"separate_document": True}}
+            headers = {"Authorization": "Bearer " + token, "Origin": origin,
+                       "x-fullmag-api-instance": instance}
+            def refused(label, status_code, *, body=request, sent_headers=headers, method="POST", path=route):
+                try:
+                    get(path, method=method, payload=body if method == "POST" else None,
+                        extra_headers=sent_headers)
+                    raise AssertionError("refused request was accepted: " + label)
+                except urllib.error.HTTPError as error:
+                    assert error.code == status_code, (label, error.code, error.read(4096))
+                    data = error.read(4096)
+                    assert str(fixture_storage).encode() not in data and token.encode() not in data
+                checks.append("restart-transport-" + label)
+            refused("foreign-origin", 409, sent_headers={**headers, "Origin": "https://foreign.invalid"})
+            refused("missing-pin", 409, sent_headers={key: value for key, value in headers.items() if key != "x-fullmag-api-instance"})
+            refused("stale-pin", 409, sent_headers={**headers, "x-fullmag-api-instance": str(uuid.uuid4())})
+            refused("wrong-epoch", 409, body={**request, "session_epoch": 1})
+            refused("foreign-session", 409, body={**request, "session_id": str(uuid.uuid4())})
+            refused("missing-nullable-session", 422, body={key: value for key, value in request.items() if key != "session_id"})
+            refused("nil-request-identity", 400, body={**request, "request_id": str(uuid.UUID(int=0))})
+            refused("missing-status-token", 404, sent_headers={key: value for key, value in headers.items() if key != "Authorization"})
+            refused("invalid-ui-shape", 400, body={**request, "editor": []})
+            refused("unknown-field", 422, body={**request, "pid": 123})
+            status_code, _, accepted = get(route, method="POST", payload=request, extra_headers=headers)
+            assert status_code == 202 and accepted["request_id"] == request_id and accepted["state"] == "pending"
+            assert accepted["editor"] is None and accepted["new_api_instance_id"] is None
+            checks.append("restart-transport-accepted-without-restart-claim")
+            record_path = fixture_storage / "runtimes" / worktree / "development-restarts" / request_id / "request.json"
+            raw_record = record_path.read_bytes()
+            record = json.loads(raw_record)
+            assert token.encode() not in raw_record
+            assert record["status_token_sha256"] == hashlib.sha256(token.encode()).hexdigest()
+            assert record["old_api_instance_id"] == instance and record["generation_id"] == generation
+            for owner_name in ("editor", "workspace", "project_document"):
+                assert record[owner_name] == request[owner_name]
+            checks.append("restart-transport-durable-independent-ui-owners-and-token-hash")
+            assert get(route, method="POST", payload=request, extra_headers=headers)[0] == 202
+            assert record_path.read_bytes() == raw_record
+            checks.append("restart-transport-identical-replay-keeps-bytes")
+            refused("changed-replay", 409, body={**request, "editor": {"source": "changed"}})
+            refused("second-request-slot", 409, body={**request, "request_id": str(uuid.uuid4())})
+            status_headers = {"Authorization": "Bearer " + token}
+            assert get(route + "/" + request_id, extra_headers=status_headers)[2]["state"] == "pending"
+            checks.append("restart-transport-status-without-old-http-pin")
+            refused("wrong-status-token", 404, sent_headers={"Authorization": "Bearer " + uuid.uuid4().hex},
+                    method="GET", path=route + "/" + request_id)
+            assert record_path.read_bytes() == raw_record
+            assert get()[2]["restart_available"] is False
+            checks.append("restart-transport-does-not-enable-unverified-ui-command")
+            _, _, spec = get("openapi.json")
+            assert route in spec["paths"] and route + "/{request_id}" in spec["paths"]
+            schema = spec["components"]["schemas"]["DevelopmentRestartRequest"]
+            assert "session_id" in schema["required"]
+            assert schema["additionalProperties"] is False
+            checks.append("restart-transport-openapi-strict-required-nullable-session")
+        frame()
+        transport_config = {**configured, "FULLMAG_DEVELOPMENT_OWNER_TOKEN": uuid.uuid4().hex,
+                            "FULLMAG_DEVELOPMENT_RESTART_COORDINATOR": "1",
+                            "FULLMAG_DEVELOPMENT_RESTART_UI_ORIGIN": origin}
+        with_api("restart-transport", transport_config, observe_transport)
+        return
 
     if project_document_only:
         with_api("project-document", {}, project_document)
@@ -1531,9 +1614,11 @@ if __name__ == "__main__":
     parser.add_argument("--repo-root", required=True)
     parser.add_argument("--cross-build-bundle", default="")
     parser.add_argument("--project-document-only", action="store_true")
+    parser.add_argument("--restart-transport-only", action="store_true")
     args = parser.parse_args()
     try:
-        raise SystemExit(run(args.repo_root, args.cross_build_bundle, args.project_document_only))
+        raise SystemExit(run(args.repo_root, args.cross_build_bundle, args.project_document_only,
+                             args.restart_transport_only))
     except Exception as error:
         print(f"Native development resource verification failed: {error}", file=sys.stderr)
         raise SystemExit(2)

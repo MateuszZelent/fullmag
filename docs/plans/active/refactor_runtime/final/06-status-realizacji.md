@@ -1,5 +1,15 @@
 # Status realizacji całego planu refaktoryzacji
 
+Checkpoint P8-53AN, 04.10.2026: [transport restartu i koordynator](p8/53an-ui-restart-request-transport.md).
+Zarządzany build Windows, 20 kontroli transportu i 398 kontroli natywnej
+próby koordynatora PASS; wszystkie 142 procesy próby mają terminalny wynik.
+Żądanie wiąże aktualne API/session/epoch oraz niezależne dane editor,
+workspace i project_document; replay nie zmienia zapisu, konflikt jest odrzucany.
+Koordynator CLI łączy istniejące acquisition/commit/restore/replacement.
+Generacja klienta, production TypeScript i API hygiene PASS.
+Produkcja nie udostępnia jeszcze konsumenta żądań ani hydration paneli;
+`restart_available=false`. Procenty całego planu bez awansu.
+
 Checkpoint P8-53AM, 04.10.2026: [guard szkiców i New Problem](p8/53am-pending-form-transition.md).
 Otwarcie/Cancel nie czyści historii ani szkiców; guard obejmuje wszystkich
 ownerów i callbacki Apply/Reset przed publikacją React. Po ACK zmienione wpisy

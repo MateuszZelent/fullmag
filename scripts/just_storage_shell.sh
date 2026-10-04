@@ -108,6 +108,10 @@ case "${recipe}" in
     exec "${python_cmd}" "${script_dir}/export_runner_openapi.py" --repo-root "${repo_root}" --job-id "${BASH_REMATCH[1]}" --expected-commit "${BASH_REMATCH[2]}"
     ;;
     *"scripts/verify_development_backend_api.py"*)
+      restart_transport_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_development_backend_api.py" --repo-root "[^"]+" --restart-transport-only$'
+      if [[ "${recipe}" =~ ${restart_transport_pattern} ]]; then
+        exec "${python_cmd}" "${script_dir}/verify_development_backend_api.py" --repo-root "${repo_root}" --restart-transport-only
+      fi
       project_document_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_development_backend_api.py" --repo-root "[^"]+" --project-document-only$'
       if [[ "${recipe}" =~ ${project_document_pattern} ]]; then
         exec "${python_cmd}" "${script_dir}/verify_development_backend_api.py" --repo-root "${repo_root}" --project-document-only
