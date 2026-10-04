@@ -65,7 +65,7 @@ import {
   createViewport3DInactiveResourcePauseController,
 } from "./resources/inactiveViewportResourcePolicy";
 import { useRuntimeCommandControlResourceData } from "./resources/studyRuntimeResources";
-import { confirmedSessionResourceIdentity, sessionRequestScopeKey, type SessionResourceIdentity } from "./resources/sessionResourceIdentity";
+import { confirmedSessionResourceIdentity, sessionRequestScopeKey, sessionScopedResourceKey, type SessionResourceIdentity } from "./resources/sessionResourceIdentity";
 import { useSessionResourceIdentity } from "./resources/useSessionStatus";
 import { useSessionCollection } from "./resources/useSessionCollection";
 import { isProjectWorkspaceCommand } from "./commands/projectWorkspaceCommandPolicy";
@@ -478,11 +478,24 @@ function CameraRegistrySyncConnector({ kernel, sessionScopeKey }: { kernel: Kern
 }
 
 function BrowserAuditConnector({ kernel }: { kernel: KernelApi }) {
+  const sessionIdentity = useSessionResourceIdentity();
+  const sessionIdentityRef = useRef(sessionIdentity);
+  useEffect(() => {
+    sessionIdentityRef.current = sessionIdentity;
+  }, [sessionIdentity]);
   useEffect(() => {
     // The browser driver is compiled only into the explicitly named audit
     // artifact. Ordinary production bundles never install this mutable hook.
     const auditBuild = process.env.NEXT_PUBLIC_AUDIT_BUILD === "1";
     if (process.env.NODE_ENV === "production" && !auditBuild) return;
+    // Audit drivers address resources by their canonical path; the store keys
+    // them by the confirmed session scope.
+    const auditScopedResourceKey = (resourceKey: string) => {
+      const identity = sessionIdentityRef.current;
+      return identity && !resourceKey.includes("|")
+        ? sessionScopedResourceKey(identity, resourceKey)
+        : resourceKey;
+    };
     const auditWindow = window as Window & {
       __FULLMAG_CONFIG__?: {
         allowMissingSessionSmoke?: boolean;
@@ -647,20 +660,31 @@ function BrowserAuditConnector({ kernel }: { kernel: KernelApi }) {
       readActiveViewportModule: () =>
         kernel.layout.get().activeViewportMainModuleId,
       publishVisualizationState: (state: VisualizationStateResource) => {
+        // Runtime resources are keyed by the confirmed session scope; an
+        // unscoped publication would never reach the mounted viewport.
+        const identity = sessionIdentityRef.current;
+        if (!identity) {
+          throw new Error("Browser audit publication requires a confirmed session identity.");
+        }
         sharedResourceRuntimeStore.updateData(
-          VISUALIZATION_STATE_PATH,
+          sessionScopedResourceKey(identity, VISUALIZATION_STATE_PATH),
           state,
           state.revision,
         );
       },
-      readViewportAuditRuntime: () => ({
-        listenerCounts: sharedResourceRuntimeStore.listenerCounts(),
-        resources: sharedResourceRuntimeStore.stats(),
-        visualizationRevision: sharedResourceRuntimeStore.getSnapshot(
-          VISUALIZATION_STATE_PATH,
-        ).revision,
-        workers: getViewport3DWorkerRuntimeSnapshot(),
-      }),
+      readViewportAuditRuntime: () => {
+        const identity = sessionIdentityRef.current;
+        return {
+          listenerCounts: sharedResourceRuntimeStore.listenerCounts(),
+          resources: sharedResourceRuntimeStore.stats(),
+          visualizationRevision: identity
+            ? sharedResourceRuntimeStore.getSnapshot(
+                sessionScopedResourceKey(identity, VISUALIZATION_STATE_PATH),
+              ).revision
+            : null,
+          workers: getViewport3DWorkerRuntimeSnapshot(),
+        };
+      },
       setPlanarMonitorFrameVisible: (visible: boolean) => {
         planarMonitorFramePreviewStore.setVisible(visible);
       },
@@ -678,7 +702,9 @@ function BrowserAuditConnector({ kernel }: { kernel: KernelApi }) {
         });
       },
       readViewportAuditResource: (resourceKey: string) => {
-        const snapshot = sharedResourceRuntimeStore.getSnapshot(resourceKey);
+        const snapshot = sharedResourceRuntimeStore.getSnapshot(
+          auditScopedResourceKey(resourceKey),
+        );
         return {
           data: snapshot.data,
           error: snapshot.error?.message ?? null,
@@ -687,7 +713,7 @@ function BrowserAuditConnector({ kernel }: { kernel: KernelApi }) {
         };
       },
       invalidateResource: (resourceKey: string, revision: ResourceRevision) => {
-        kernel.resources.invalidate(resourceKey, revision);
+        kernel.resources.invalidate(auditScopedResourceKey(resourceKey), revision);
       },
       injectViewportAuditListenerLeak: () => {
         // Deliberately retained only when an audit asks for a negative control.
