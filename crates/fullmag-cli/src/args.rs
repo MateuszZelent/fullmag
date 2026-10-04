@@ -136,6 +136,25 @@ pub(crate) enum Command {
     /// Project definition commands.  These never restore or start a runtime.
     #[command(subcommand)]
     Project(ProjectSubcommand),
+    /// Static operations on a Python script. These never execute the script.
+    #[command(subcommand)]
+    Script(ScriptSubcommand),
+}
+
+#[derive(Subcommand)]
+pub(crate) enum ScriptSubcommand {
+    /// Print static facts about a script (hash, syntax, imports, environment reads).
+    Inspect {
+        /// Path to the Python script; it is read and parsed, never executed.
+        path: PathBuf,
+        /// Print the `fullmag.script_inspect.v1` JSON document.
+        #[arg(long, default_value_t = false)]
+        json: bool,
+        /// Absolute path of the Python interpreter to use. Ignored, with a
+        /// note in the output, when a packaged bundle owns Python.
+        #[arg(long)]
+        python: Option<PathBuf>,
+    },
 }
 
 #[derive(Subcommand)]

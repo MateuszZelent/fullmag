@@ -72,6 +72,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     check_syntax.add_argument("--script", required=True, help="Path to Python script.")
 
+    inspect_script = subparsers.add_parser(
+        "inspect-script",
+        help="Print static facts about a Python script as JSON. Never executes the script.",
+    )
+    inspect_script.add_argument("--script", required=True, help="Path to Python script.")
+
     export_ir = subparsers.add_parser("export-ir", help="Load a Python script and print canonical ProblemIR.")
     export_ir.add_argument("--script", required=True, help="Path to Python script.")
     export_ir.add_argument(
@@ -204,6 +210,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         source = script_path.read_text(encoding="utf-8")
         compile(source, str(script_path), "exec")
         print(json.dumps({"status": "ok", "script": str(script_path.resolve())}))
+        return 0
+
+    if args.command == "inspect-script":
+        from fullmag.runtime.script_inspect import inspect_script as _inspect_script
+
+        _write_json(_inspect_script(args.script))
         return 0
 
     if args.command == "export-scene-ir":
