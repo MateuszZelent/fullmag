@@ -969,6 +969,7 @@ impl ControlRoomGuard {
             frontend_child,
             terminal_failure_lifetime: None,
             stop_frontend_on_drop: false,
+            development_restart_origin: None,
         }
     }
 }

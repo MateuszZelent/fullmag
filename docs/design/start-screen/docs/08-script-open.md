@@ -4,7 +4,15 @@ How a person opens a Fullmag Python script (`.py`) from the desktop start screen
 what the repository does today, four candidate architectures, a recommendation
 with phases, the exact new contracts, gates and the decisions still open.
 
-Status: **design** (2026-10-04). Nothing here is implemented. Every claim about
+Status: **design** (2026-10-04); **Phase 0a and 0c are implemented** (2026-10-05):
+one interpreter resolver in `fullmag-runtime-control::python_runtime`
+(`resolve_interpreter`, used by the CLI and the API; probe-based, Store alias
+rejected, `-X utf8` for helper children) and `fullmag script inspect <path>
+--json [--python <abs>]` backed by the never-executing helper command
+`inspect-script`. Deviations from 6.5: an explicit `FULLMAG_PYTHON`/`--python`
+that fails the probe is an error, never a fallthrough; discovered interpreters
+that lack numpy/zarr/h5py are rejected with that reason; the probe timeout is
+5 s. Phase 0b, Phase 1 and everything else here are not implemented. Every claim about
 current behaviour was read in the source of this worktree (commit `688f1f23c`);
 what was *not* executed is marked **unverified**. Unit-test compilation is
 suspended (`AGENTS.md`), so no existing test was run for this document.

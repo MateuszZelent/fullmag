@@ -23,6 +23,7 @@ import type {
   LivePreparationMaterializationResource,
   SimulationPreparationResource,
   AnalysisResultPageQuery,
+  OutputStorageSettings,
 } from "./apiTypes";
 import {
   ANALYSIS_RESULT_BRANCH_POINTS_PATH,
@@ -1113,6 +1114,7 @@ describe("ControlRoomApi", () => {
       backend: "fdm" | "fem";
       device: "cpu";
       name: string;
+      output_storage?: OutputStorageSettings | null;
       precision: "double";
       replace_current?: boolean;
     }>();

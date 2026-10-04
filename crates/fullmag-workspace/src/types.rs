@@ -180,6 +180,36 @@ impl RecordEvent {
     }
 }
 
+/// A file found by a scan rather than used by a person; see
+/// [`crate::Workspace::observe`].
+#[derive(Debug, Clone)]
+pub struct SeenItem {
+    pub kind: ItemKind,
+    pub path: PathBuf,
+    /// Display name; defaults to the file stem for a new item.
+    pub name: Option<String>,
+    /// Stable project id of a `.fms`; lets a moved project keep its row.
+    pub project_id: Option<String>,
+    /// State of the file as the scan read it. `missing` is derived from the
+    /// file system and never taken from here.
+    pub status: ItemStatus,
+    /// JSON merge patch (RFC 7396) applied to the item's `meta`.
+    pub meta_patch: Option<Value>,
+}
+
+impl SeenItem {
+    pub fn new(kind: ItemKind, path: impl Into<PathBuf>) -> Self {
+        Self {
+            kind,
+            path: path.into(),
+            name: None,
+            project_id: None,
+            status: ItemStatus::Ready,
+            meta_patch: None,
+        }
+    }
+}
+
 /// What [`crate::Workspace::record`] did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RecordReceipt {

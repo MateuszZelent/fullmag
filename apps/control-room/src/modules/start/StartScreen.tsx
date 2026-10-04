@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import { homeView } from "@/kernel/layout/homeView";
@@ -16,8 +16,11 @@ import { resolveScriptOpener, type ScriptOpener } from "./model/scriptOpen";
 import { useAuthorName } from "./model/useAuthorName";
 import { useComputeProbe } from "./model/useComputeProbe";
 import { useRecentIndex } from "./model/useRecentIndex";
+import { useWorkspaceScripts } from "./model/useWorkspaceScripts";
+import { workspaceHostAvailable } from "./model/workspaceHost";
 import { startActionDisabledReason } from "./model/startCommands";
 import { startScreenStore, type StartScreenHost } from "./model/startScreenState";
+import { startSettings } from "./model/startSettings";
 import type { RecentEntry } from "./model/types";
 import { StartRail } from "./rail/StartRail";
 import { StartStatusBar } from "./ui/StartStatusBar";
@@ -27,6 +30,10 @@ import { ImportSection } from "./sections/ImportSection";
 import { LearnSection } from "./sections/LearnSection";
 import { SettingsSection } from "./sections/SettingsSection";
 import { TemplatesSection } from "./sections/TemplatesSection";
+
+const OPEN_SCRIPT_NEEDS_DESKTOP = "Opening a script needs the desktop app.";
+
+const subscribeNever = () => () => undefined;
 
 const SESSION_UNCONFIRMED =
   "Fullmag could not confirm that no session is running. Retry the session list first.";
@@ -41,13 +48,19 @@ export function StartScreen({ kernel }: ModuleProps) {
   // enablement of workspace.open-project.
   useProjectDocumentSnapshot();
   const recent = useRecentIndex();
+  const scripts = useWorkspaceScripts();
+  // Server rendering and hydration agree on "no desktop"; the client snapshot
+  // then enables the picker.
+  const desktop = useSyncExternalStore(subscribeNever, workspaceHostAvailable, () => false);
+  const [scriptFlowNotice, setScriptFlowNotice] = useState<string | null>(null);
   const compute = useComputeProbe();
   const authorName = useAuthorName();
-  const { section, selectedProjectId, selectedTemplateId } = useSyncExternalStore(
-    startScreenStore.subscribe,
-    startScreenStore.getSnapshot,
-    startScreenStore.getServerSnapshot,
-  );
+  const { section, selectedProjectId, selectedScriptId, selectedTemplateId, openScriptNonce } =
+    useSyncExternalStore(
+      startScreenStore.subscribe,
+      startScreenStore.getSnapshot,
+      startScreenStore.getServerSnapshot,
+    );
   // Over an open workspace the tiles still create or open; the problem dialog
   // owns the "replace the current session" confirmation.
   const canCreateProblem = sessions.state === "no-session" || sessions.state === "ready";
@@ -55,13 +68,41 @@ export function StartScreen({ kernel }: ModuleProps) {
   const host = useMemo<StartScreenHost>(
     () => ({
       createProblemDisabledReason: canCreateProblem ? null : SESSION_UNCONFIRMED,
+      openScriptDisabledReason: desktop ? null : OPEN_SCRIPT_NEEDS_DESKTOP,
       disabledReason: (commandId, context) =>
         kernel.commands.get(commandId)?.disabledReason?.(context) ?? null,
       execute: (commandId, context) => kernel.commands.execute(commandId, context),
       isEnabled: (commandId, context) => kernel.commands.isEnabled(commandId, context),
     }),
-    [canCreateProblem, kernel.commands],
+    [canCreateProblem, desktop, kernel.commands],
   );
+
+  // One flow for the tile, the list buttons and the palette command: pick a
+  // script, make sure the list shows scripts, and select the result so the
+  // inspector describes it. Each request carries a new number; handle it once.
+  const handledOpenScript = useRef(openScriptNonce);
+  const pickAndOpen = scripts.pickAndOpen;
+  useEffect(() => {
+    if (openScriptNonce <= handledOpenScript.current) {
+      // The store restarts its counter when the screen detaches.
+      handledOpenScript.current = openScriptNonce;
+      return;
+    }
+    handledOpenScript.current = openScriptNonce;
+    startScreenStore.setSection("home");
+    setScriptFlowNotice(null);
+    void pickAndOpen().then(({ item, failure }) => {
+      if (failure) {
+        setScriptFlowNotice(failure);
+        return;
+      }
+      if (!item) return;
+      if (startSettings.getSnapshot().recentKind === "project") {
+        startSettings.update({ recentKind: "all" });
+      }
+      startScreenStore.setSelectedScript(item.id);
+    });
+  }, [openScriptNonce, pickAndOpen]);
 
   useEffect(() => {
     const detach = startScreenStore.attach(host);
@@ -146,6 +187,11 @@ export function StartScreen({ kernel }: ModuleProps) {
       }
     : null;
 
+  const selectedScript =
+    scripts.state.kind === "ready"
+      ? (scripts.state.items.find((item) => item.id === selectedScriptId) ?? null)
+      : null;
+
   const selectedEntry =
     recent.state.kind === "ready"
       ? (recent.state.index.entries.find((e) => e.projectId === selectedProjectId) ?? null)
@@ -182,6 +228,10 @@ export function StartScreen({ kernel }: ModuleProps) {
               initialFocusRef={initialFocusRef}
               name={authorName}
               recent={recent}
+              scripts={scripts}
+              canOpenScript={desktop}
+              onOpenScript={() => runCommand("start.open-script")}
+              scriptFlowNotice={scriptFlowNotice}
               compute={compute}
               onOpenRecent={openRecent}
               onResumeContinue={resumeContinue}
@@ -216,6 +266,18 @@ export function StartScreen({ kernel }: ModuleProps) {
         onOpen={openRecent}
         onTogglePin={(projectId, pinned) => void recent.pin(projectId, pinned)}
         openDisabledReason={browseDisabledReason}
+        script={selectedScript}
+        scriptActions={{
+          readOnly: scripts.readOnly,
+          onOpen: scripts.open,
+          onReveal: scripts.reveal,
+          onReadText: scripts.readText,
+          onTogglePin: scripts.pin,
+          onForget: (id) => {
+            startScreenStore.setSelectedScript(null);
+            void scripts.forget(id);
+          },
+        }}
         scriptOpener={scriptOpener}
         section={section}
         templateId={selectedTemplateId}

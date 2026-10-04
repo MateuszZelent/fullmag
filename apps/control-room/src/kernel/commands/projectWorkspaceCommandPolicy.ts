@@ -29,6 +29,7 @@ const PROJECT_WORKSPACE_COMMAND_IDS = new Set([
   "start.new-fdm",
   "start.new-fem",
   "start.browse",
+  "start.open-script",
   "start.search",
   "start.rebuild-index",
   "start.open-selected",

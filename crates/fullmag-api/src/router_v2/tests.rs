@@ -28738,7 +28738,8 @@ async fn uploaded_h5_field_state_can_be_inspected_and_applied() {
         .canonicalize()
         .expect("workspace root should resolve");
     let python_path = workspace_root.join("packages/fullmag-py/src");
-    let python_exe = crate::script::python_executable(&workspace_root);
+    let python_exe = crate::script::python_executable(&workspace_root)
+        .expect("Python interpreter should resolve");
     let python = std::process::Command::new(&python_exe)
         .arg("-c")
         .arg(format!(
@@ -28863,7 +28864,8 @@ async fn uploaded_zarr_zip_field_state_can_be_inspected_and_applied() {
         .canonicalize()
         .expect("workspace root should resolve");
     let python_path = workspace_root.join("packages/fullmag-py/src");
-    let python_exe = crate::script::python_executable(&workspace_root);
+    let python_exe = crate::script::python_executable(&workspace_root)
+        .expect("Python interpreter should resolve");
     let python = std::process::Command::new(&python_exe)
         .arg("-c")
         .arg(format!(
@@ -28981,7 +28983,8 @@ async fn uploaded_airbox_h5_field_state_can_be_attached_without_apply_shape_chec
         .canonicalize()
         .expect("workspace root should resolve");
     let python_path = workspace_root.join("packages/fullmag-py/src");
-    let python_exe = crate::script::python_executable(&workspace_root);
+    let python_exe = crate::script::python_executable(&workspace_root)
+        .expect("Python interpreter should resolve");
     let python = std::process::Command::new(&python_exe)
         .arg("-c")
         .arg(format!(
@@ -32882,7 +32885,8 @@ fn export_problem_ir_from_python_script(script_name: &str, source: &str) -> serd
     let script_path = script_dir.join(script_name);
     fs::write(&script_path, source).expect("failed to write Python script test fixture");
     let python_path = workspace_root.join("packages/fullmag-py/src");
-    let python_exe = crate::script::python_executable(&workspace_root);
+    let python_exe = crate::script::python_executable(&workspace_root)
+        .expect("Python interpreter should resolve");
     let python = std::process::Command::new(&python_exe)
         .arg("-c")
         .arg(

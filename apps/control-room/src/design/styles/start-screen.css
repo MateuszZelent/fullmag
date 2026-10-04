@@ -416,6 +416,7 @@
 .fm-start-tile--fem { --fm-start-tile-tone: var(--fm-solver-fem); }
 .fm-start-tile--template { --fm-start-tile-tone: var(--fm-chart-teal); }
 .fm-start-tile--import { --fm-start-tile-tone: var(--fm-chart-peach); }
+.fm-start-tile--script { --fm-start-tile-tone: var(--fm-chart-mauve); }
 
 .fm-start-tile:hover:not(:disabled) {
   border-color: var(--fm-border-strong);
@@ -1125,6 +1126,50 @@
 .fm-start-viewtoggle button[aria-pressed="true"] {
   background: var(--fm-bg-selected);
   color: var(--fm-start-nav-active);
+}
+
+.fm-start-viewtoggle button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+/* ── Scripts: kind switch, row glyph, badge, inspector actions ───────── */
+
+.fm-start-recent-kinds {
+  display: flex;
+  margin-bottom: var(--fm-space-2);
+}
+
+/* A script has no render: the thumbnail slot carries a file glyph instead. */
+.fm-start-thumb--script {
+  display: grid;
+  place-items: center;
+  color: var(--fm-start-meta);
+}
+
+/* Neutral, not a solver colour. Primary text: secondary text is only 4.28:1 on a
+   selected row in the light theme, and the badge sits on selected rows too. */
+.fm-start-badge--script {
+  --fm-start-badge-mark: var(--fm-text-secondary);
+  background: transparent;
+  color: var(--fm-text-primary);
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.fm-start-inspector__foot--script {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.fm-start-inspector__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--fm-space-2);
+}
+
+.fm-start-inspector__foot--script .fm-start-inspector__note {
+  font-size: var(--fm-font-size-xs);
 }
 
 .fm-start-list--grid {

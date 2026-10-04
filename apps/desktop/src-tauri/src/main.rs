@@ -5,10 +5,12 @@ mod commands;
 mod compute_probe;
 mod provenance;
 mod recent_index;
+mod workspace_commands;
 
 use api_sidecar::ApiSidecar;
 use commands::AppConfig;
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
+use workspace_commands::WorkspaceHost;
 
 fn main() {
     let launch_intent =
@@ -22,6 +24,7 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
         .setup(move |app| {
+            app.manage(WorkspaceHost::default());
             let (url, sidecar) = if let Some(ref url) = external_url {
                 let api_base = std::env::var("FULLMAG_API_BASE")
                     .unwrap_or_else(|_| "http://localhost:8083".into());
@@ -84,6 +87,14 @@ fn main() {
             commands::save_project_archive,
             commands::reveal_in_file_manager,
             commands::get_app_config,
+            workspace_commands::workspace_list,
+            workspace_commands::workspace_pin,
+            workspace_commands::workspace_forget,
+            workspace_commands::workspace_history,
+            workspace_commands::workspace_open_script_dialog,
+            workspace_commands::workspace_open_script,
+            workspace_commands::workspace_reveal,
+            workspace_commands::workspace_read_script_text,
         ])
         .run(tauri::generate_context!())
         .expect("error while running fullmag-ui");

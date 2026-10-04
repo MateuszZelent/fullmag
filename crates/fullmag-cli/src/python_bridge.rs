@@ -1,6 +1,6 @@
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
-use std::process::{Command as ProcessCommand, Stdio};
+use std::process::Stdio;
 
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::Value;
@@ -958,70 +958,20 @@ pub(crate) fn run_python_helper_with_progress(
     progress_callback: Option<PythonProgressCallback>,
 ) -> Result<std::process::Output> {
     let root = repo_root();
-    let local_python = if cfg!(windows) {
-        root.join(".fullmag")
-            .join("local")
-            .join("python")
-            .join("Scripts")
-            .join("python.exe")
-    } else {
-        root.join(".fullmag")
-            .join("local")
-            .join("python")
-            .join("bin")
-            .join("python")
-    };
-    let repo_python = if cfg!(windows) {
-        root.join(".venv").join("Scripts").join("python.exe")
-    } else {
-        root.join(".venv").join("bin").join("python")
-    };
-    let packaged_python_candidates = if cfg!(windows) {
-        vec![
-            root.join("python").join("python.exe"),
-            root.join("python").join("Scripts").join("python.exe"),
-            root.join(".fullmag")
-                .join("local")
-                .join("python")
-                .join("python.exe"),
-            root.join(".fullmag")
-                .join("local")
-                .join("python")
-                .join("Scripts")
-                .join("python.exe"),
-            root.join(".fullmag")
-                .join("local")
-                .join("python")
-                .join("bin")
-                .join("python.exe"),
-        ]
-    } else {
-        Vec::new()
-    };
-    let mut candidates = Vec::new();
-    let bundled_python = fullmag_runtime_control::python_runtime::packaged_windows_python(&root);
-    let uses_bundle = bundled_python.is_some();
+    let interpreter = fullmag_runtime_control::python_runtime::resolve_interpreter(&root)
+        .map_err(|error| anyhow!("{error}"))?;
+    run_python_helper_with_interpreter(&root, &interpreter, args, progress_callback)
+}
 
-    if let Some(bundled_python) = bundled_python {
-        candidates.push(bundled_python.display().to_string());
-    } else if let Ok(preferred) = std::env::var("FULLMAG_PYTHON") {
-        candidates.push(preferred);
-    } else {
-        for candidate in std::iter::once(local_python)
-            .chain(std::iter::once(repo_python))
-            .chain(packaged_python_candidates)
-        {
-            if candidate.is_file() {
-                candidates.push(candidate.display().to_string());
-            }
-        }
-    }
-
-    for fallback in ["python3", "python"] {
-        if !uses_bundle && !candidates.iter().any(|candidate| candidate == fallback) {
-            candidates.push(fallback.to_string());
-        }
-    }
+/// Run a helper child with an already resolved interpreter. The single place
+/// that spawns Python for the CLI; it never falls back to another interpreter.
+pub(crate) fn run_python_helper_with_interpreter(
+    root: &Path,
+    interpreter: &fullmag_runtime_control::python_runtime::ResolvedInterpreter,
+    args: &[String],
+    progress_callback: Option<PythonProgressCallback>,
+) -> Result<std::process::Output> {
+    let uses_bundle = interpreter.isolated;
 
     let pythonpath = root.join("packages").join("fullmag-py").join("src");
     let packaged_site_packages = root.join("python").join("site-packages");
@@ -1032,13 +982,10 @@ pub(crate) fn run_python_helper_with_progress(
         .join("fem_mesh_assets");
     let inherited_pythonpath = std::env::var("PYTHONPATH").ok();
 
-    let mut last_error = None;
-    for candidate in candidates {
-        let mut command = ProcessCommand::new(&candidate);
-        if uses_bundle {
-            fullmag_runtime_control::python_runtime::configure_packaged_python(&mut command, &root)
-                .context("bundled Python runtime is incomplete or invalid")?;
-        }
+    {
+        let mut command = interpreter
+            .command(root)
+            .context("bundled Python runtime is incomplete or invalid")?;
         command.args(args);
         command.stdout(Stdio::piped());
         command.stderr(Stdio::piped());
@@ -1069,64 +1016,58 @@ pub(crate) fn run_python_helper_with_progress(
             );
         }
 
-        match command.spawn() {
-            Ok(mut child) => {
-                let stdout = child
-                    .stdout
-                    .take()
-                    .ok_or_else(|| anyhow!("python helper stdout was not piped"))?;
-                let stderr = child
-                    .stderr
-                    .take()
-                    .ok_or_else(|| anyhow!("python helper stderr was not piped"))?;
-                let stdout_thread = std::thread::spawn(move || -> Result<Vec<u8>> {
-                    let mut stdout = stdout;
-                    let mut bytes = Vec::new();
-                    stdout.read_to_end(&mut bytes)?;
-                    Ok(bytes)
-                });
-                let stderr_progress = progress_callback.clone();
-                let stderr_thread = std::thread::spawn(move || -> Result<Vec<u8>> {
-                    let mut reader = BufReader::new(stderr);
-                    let mut collected = Vec::new();
-                    loop {
-                        let mut line = String::new();
-                        let read = reader.read_line(&mut line)?;
-                        if read == 0 {
-                            break;
-                        }
-                        collected.extend_from_slice(line.as_bytes());
-                        if let Some(callback) = stderr_progress.as_ref() {
-                            if let Some(message) =
-                                line.trim_end().strip_prefix(PYTHON_PROGRESS_PREFIX)
-                            {
-                                callback(parse_python_progress_event(message));
-                            }
-                        }
+        let mut child = command.spawn().with_context(|| {
+            format!(
+                "failed to spawn python helper ({})",
+                interpreter.path.display()
+            )
+        })?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| anyhow!("python helper stdout was not piped"))?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| anyhow!("python helper stderr was not piped"))?;
+        let stdout_thread = std::thread::spawn(move || -> Result<Vec<u8>> {
+            let mut stdout = stdout;
+            let mut bytes = Vec::new();
+            stdout.read_to_end(&mut bytes)?;
+            Ok(bytes)
+        });
+        let stderr_progress = progress_callback.clone();
+        let stderr_thread = std::thread::spawn(move || -> Result<Vec<u8>> {
+            let mut reader = BufReader::new(stderr);
+            let mut collected = Vec::new();
+            loop {
+                let mut line = String::new();
+                let read = reader.read_line(&mut line)?;
+                if read == 0 {
+                    break;
+                }
+                collected.extend_from_slice(line.as_bytes());
+                if let Some(callback) = stderr_progress.as_ref() {
+                    if let Some(message) = line.trim_end().strip_prefix(PYTHON_PROGRESS_PREFIX) {
+                        callback(parse_python_progress_event(message));
                     }
-                    Ok(collected)
-                });
-                let status = child.wait()?;
-                let stdout = stdout_thread
-                    .join()
-                    .map_err(|_| anyhow!("python helper stdout reader panicked"))??;
-                let stderr = stderr_thread
-                    .join()
-                    .map_err(|_| anyhow!("python helper stderr reader panicked"))??;
-                return Ok(std::process::Output {
-                    status,
-                    stdout,
-                    stderr,
-                });
+                }
             }
-            Err(error) => last_error = Some(format!("{}: {}", candidate, error)),
-        }
+            Ok(collected)
+        });
+        let status = child.wait()?;
+        let stdout = stdout_thread
+            .join()
+            .map_err(|_| anyhow!("python helper stdout reader panicked"))??;
+        let stderr = stderr_thread
+            .join()
+            .map_err(|_| anyhow!("python helper stderr reader panicked"))??;
+        Ok(std::process::Output {
+            status,
+            stdout,
+            stderr,
+        })
     }
-
-    Err(anyhow!(
-        "failed to spawn python helper ({})",
-        last_error.unwrap_or_else(|| "unknown error".to_string())
-    ))
 }
 
 pub(crate) fn check_script_syntax_via_python(script_path: &Path) -> Result<()> {

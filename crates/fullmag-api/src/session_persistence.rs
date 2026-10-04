@@ -3531,9 +3531,7 @@ fn convert_field_state_with_python(
         python_path_value.push(existing);
     }
 
-    let python_exe = crate::script::python_executable(repo_root);
-    let mut command = std::process::Command::new(&python_exe);
-    crate::script::configure_python_command(repo_root, &mut command)
+    let mut command = crate::script::python_command(repo_root)
         .map_err(|error| format!("configuring Python field-state loader failed: {error}"))?;
     command
         .arg("-m")
@@ -3583,9 +3581,7 @@ fn write_field_state_with_python(
         python_path_value.push(existing);
     }
 
-    let python_exe = crate::script::python_executable(repo_root);
-    let mut command = std::process::Command::new(&python_exe);
-    let output = crate::script::configure_python_command(repo_root, &mut command).and_then(|_| {
+    let output = crate::script::python_command(repo_root).and_then(|mut command| {
         command
             .arg("-m")
             .arg("fullmag.init.field_state_cli")
