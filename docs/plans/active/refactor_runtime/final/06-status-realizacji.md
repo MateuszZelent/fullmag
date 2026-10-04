@@ -1,5 +1,14 @@
 # Status realizacji całego planu refaktoryzacji
 
+Checkpoint P8-53AT, 04.10.2026: [jawna akcja restartu](p8/53at-development-restart-action.md).
+Trwały serwis hosta podłącza baner do pojedynczego intentu, sprawdza kandydata
+pod guardami i zachowuje niepotwierdzone cleanup. Regresja akcji 25 grup,
+kontroler 41 grup, Host 6 grup, lint własnych 10 plików, API hygiene oraz
+izolowany browser 12/12 PASS. Poprawka wymaganego P2 potwierdzona w źródłach
+i przeglądarce. Wspólne produkcyjne typowanie nadal ma 5 diagnostyk Start/About;
+pełny lint i natywny Windows/browser restart z niepustą sceną pozostają otwarte.
+`restart_available=false`; procenty całego planu bez awansu.
+
 Checkpoint P8-53AS, 04.10.2026: [wynik runu podczas restartu](p8/53as-run-outcome-handoff.md).
 Rezerwacja opóźnionego recordera i ochrona queued/flushing outcomes mają
 5 grup regresji, browser 9/9, lint 6 plików i wspólną API hygiene PASS.

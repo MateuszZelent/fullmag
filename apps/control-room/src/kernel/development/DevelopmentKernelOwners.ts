@@ -2,7 +2,7 @@ import type { DevelopmentRestartResource } from "../api/apiTypes";
 import type { KernelApi } from "../types";
 import type { LayoutState } from "../layout/layoutTypes";
 import { cloneBoundedProjectJsonObject, validateProjectDocumentDevelopmentHandoff } from "../persistence/ProjectDocumentDevelopmentHandoff";
-import type { DevelopmentRestartOwners } from "./DevelopmentRestartController";
+import { DevelopmentRestartCaptureError, type DevelopmentRestartOwners } from "./DevelopmentRestartController";
 
 const WORKSPACE_SCHEMA = "fullmag.development-layout-handoff.v1";
 const ABSENT_EDITOR = { schema: "fullmag.development-editor-handoff.v1", state: "absent" } as const;
@@ -26,8 +26,19 @@ export function createDevelopmentKernelOwners(
 ): DevelopmentRestartOwners {
   return {
     capture: async () => {
-      if (!kernel.pendingForms || !kernel.projectDocument) throw new Error("Workspace owners are unavailable.");
-      const forms = await kernel.pendingForms.prepareTransition({ applyPendingChanges: options.applyPendingChanges });
+      if (!kernel.pendingForms || !kernel.projectDocument) throw new DevelopmentRestartCaptureError(true);
+      const pending = kernel.pendingForms.getTransitionSnapshot();
+      // This synchronous rejection acquires no guard and never applies a form.
+      if (!options.applyPendingChanges && (pending.dirtyOwnerCount > 0 || pending.applyingOwnerCount > 0
+        || pending.preparing || pending.guarded)) throw new DevelopmentRestartCaptureError(true);
+      let forms: Awaited<ReturnType<NonNullable<OwnerKernel["pendingForms"]>["prepareTransition"]>>;
+      try {
+        forms = await kernel.pendingForms.prepareTransition({ applyPendingChanges: options.applyPendingChanges });
+      } catch {
+        // A preparation observer may throw during cleanup. Its message or final
+        // registry state cannot establish that cleanup was confirmed.
+        throw new DevelopmentRestartCaptureError(false);
+      }
       let document: ReturnType<NonNullable<OwnerKernel["projectDocument"]>["beginDevelopmentHandoff"]> | null = null;
       let resume: (() => void) | null = null;
       let released = false;
@@ -65,9 +76,9 @@ export function createDevelopmentKernelOwners(
           assertCurrent,
           release,
         };
-      } catch (error) {
-        try { release(); } catch { throw new Error("Workspace capture and owner cleanup failed. Keep input protected."); }
-        throw error;
+      } catch {
+        try { release(); } catch { throw new DevelopmentRestartCaptureError(false); }
+        throw new DevelopmentRestartCaptureError(true);
       }
     },
     hydrate: async (resource: DevelopmentRestartResource) => {

@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 import fullmag_storage as storage
 
 PROFILE = "windows-control-room-source-check"
-ROUTES = ("generate-client", "production-source", "api-hygiene", "lint", "openapi-import-check", "react-doctor", "development-restart-check", "resource-client-cache-check", "development-kernel-host-check", "development-transport-pause-check", "development-run-outcome-handoff-check", "development-run-outcome-handoff-lint")
+ROUTES = ("generate-client", "production-source", "api-hygiene", "lint", "openapi-import-check", "react-doctor", "development-restart-check", "resource-client-cache-check", "development-kernel-host-check", "development-transport-pause-check", "development-run-outcome-handoff-check", "development-run-outcome-handoff-lint", "development-restart-action-check", "development-restart-action-lint")
 
 
 def timestamp():
@@ -98,8 +98,8 @@ def run(repo: Path, route: str):
                 commands = [[node, "--experimental-vm-modules", "scripts/check-resource-client-cache-scope.mjs"]]
                 receipt["interpreted_node_checks"] = True
                 receipt["unit_tests"] = "none_native_type_erasure_of_production_source_only"
-            elif route in {"development-kernel-host-check", "development-transport-pause-check", "development-run-outcome-handoff-check"}:
-                check = {"development-kernel-host-check": "check-development-kernel-host.mjs", "development-transport-pause-check": "check-development-transport-pause.mjs", "development-run-outcome-handoff-check": "check-development-run-outcome-handoff.mjs"}[route]
+            elif route in {"development-kernel-host-check", "development-transport-pause-check", "development-run-outcome-handoff-check", "development-restart-action-check"}:
+                check = {"development-kernel-host-check": "check-development-kernel-host.mjs", "development-transport-pause-check": "check-development-transport-pause.mjs", "development-run-outcome-handoff-check": "check-development-run-outcome-handoff.mjs", "development-restart-action-check": "check-development-restart-action.mjs"}[route]
                 commands = [[node, "--experimental-vm-modules", "scripts/" + check]]
                 receipt["interpreted_node_checks"] = True
                 receipt["unit_tests"] = "none_native_type_erasure_of_production_source_only"
@@ -121,6 +121,22 @@ def run(repo: Path, route: str):
                 ]
                 commands = [cli("eslint", "bin/eslint.js") + checked_files + ["--max-warnings=0"]]
                 receipt["lint_scope"] = "development_run_outcome_handoff_only"
+                receipt["checked_files"] = checked_files
+            elif route == "development-restart-action-lint":
+                checked_files = [
+                    "src/kernel/development/DevelopmentRestartActionService.ts",
+                    "src/kernel/development/DevelopmentKernelHost.ts",
+                    "src/kernel/development/DevelopmentKernelOwners.ts",
+                    "src/kernel/development/DevelopmentRestartController.ts",
+                    "src/kernel/layout/DevelopmentBackendBanner.tsx",
+                    "scripts/check-development-restart-action.mjs",
+                    "scripts/check-development-kernel-host.mjs",
+                    "scripts/check-development-restart-controller.mjs",
+                    "scripts/fixtures/development-restart-action-page.tsx",
+                    "scripts/smoke-development-restart-action.mjs",
+                ]
+                commands = [cli("eslint", "bin/eslint.js") + checked_files + ["--max-warnings=0"]]
+                receipt["lint_scope"] = "development_restart_action_only"
                 receipt["checked_files"] = checked_files
             elif route == "react-doctor":
                 # Reuse the repository-pinned tool without installing or

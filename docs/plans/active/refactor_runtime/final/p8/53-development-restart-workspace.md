@@ -1,5 +1,14 @@
 # P8-53 — bezpieczne zastosowanie nowego backendu w workspace
 
+[P8-53AT](53at-development-restart-action.md) dodaje jawne wejście z banera
+do trwałego serwisu Host. Pending/unknown uzgadnia ten sam request; błędu
+cleanup nie uznaje za zakończony na podstawie wznowionego Host. Akcja 25 grup,
+kontroler 41 grup, Host 6 grup, lint 10 plików, API hygiene i browser 12/12 PASS.
+Wspólne typowanie nadal zgłasza 5 niezależnych błędów Start/About. Pełny lint,
+dostępność API oraz natywny restart z niepustą sceną pozostają otwarte;
+`restart_available=false` i procenty planu bez awansu. Poniżej wcześniejsze
+checkpointy dokumentują stan w chwili ich wykonania.
+
 [P8-53AS](53as-run-outcome-handoff.md) rezerwuje opóźniony recorder wyniku
 przed trackerem i thumbnail. Capture/guard/restore nie omijają kolejki
 ani flushu; po pauzie obserwacja jest rozpatrywana dokładnie raz.
