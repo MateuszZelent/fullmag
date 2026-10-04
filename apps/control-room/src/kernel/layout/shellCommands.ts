@@ -1,5 +1,4 @@
 import { requestThemeToggle } from "@/design/theme/themeEvents";
-import { startScreenStore } from "@/modules/start/model/startScreenState";
 
 import { homeView } from "./homeView";
 
@@ -142,21 +141,6 @@ export const SHELL_COMMANDS: CommandContribution[] = [
     scope: "global",
     run: () => {
       homeView.toggle();
-      return { status: "completed" };
-    },
-  },
-  {
-    id: "workspace.search-docs",
-    title: "Search Docs",
-    group: "workspace",
-    category: "Help",
-    scope: "global",
-    shortcut: "F1",
-    // Documentation lives in the start screen's Docs section; over an open
-    // workspace that screen is laid on top, so nothing is torn down.
-    run: () => {
-      startScreenStore.setSection("docs");
-      homeView.open();
       return { status: "completed" };
     },
   },

@@ -3,6 +3,7 @@ import type {
   CommandContribution,
   CommandResult,
 } from "@/kernel/commands/commandTypes";
+import { homeView } from "@/kernel/layout/homeView";
 
 import {
   startScreenStore,
@@ -187,4 +188,18 @@ export const START_COMMANDS: readonly CommandContribution[] = [
   selectionCommand("start.pin-selected", "Pin or unpin selected project", "pin"),
   selectionCommand("start.remove-selected", "Remove selected project from recent", "remove"),
   listCommand("start.rebuild-index", "Rebuild project index", () => startScreenStore.requestRebuild()),
+  {
+    id: "workspace.search-docs",
+    title: "Search Docs",
+    group: "workspace",
+    category: "Help",
+    scope: "global",
+    shortcut: "F1",
+    // Documentation opens as an overlay so the workspace remains mounted.
+    run: () => {
+      startScreenStore.setSection("docs");
+      homeView.open();
+      return { status: "completed" };
+    },
+  },
 ];
