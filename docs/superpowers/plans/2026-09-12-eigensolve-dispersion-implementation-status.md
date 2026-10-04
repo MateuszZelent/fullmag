@@ -1,3 +1,66 @@
+<!-- runner231-nearest-runtime-checkpoint-20261004 -->
+## Aktualny checkpoint — pakiet #231, eksport OpenAPI i rzeczywisty punkt +10
+
+Stan z 2026-10-04 po zakończeniu dwóch prób nearest: build #231
+(`3e3b5a6123934d8b8f63cfbf02ccad55`) zakończył się `succeeded`, exit 0.
+Receipt, CMake/runtime/dependency attestations potwierdzają FEM CPU/double,
+SLEPc, MFEM 4.10 i źródło `4b34ec7b91dadb18ac87d7f8b98b3a2cf5c8f574`.
+Nie kompilowano testów jednostkowych; sukces buildu nie zamyka kwalifikacji naukowej.
+Pakiet i ta sama kapsuła są używane ponownie, bez nowego przechwycenia źródeł.
+
+Merge mastera `6c0c76551b6095b064e996cbb4c80a4ba7952aa9` zapisano jako
+`f01644bd6cc16d99101deee52b7a951ed5292278`. Produkcyjny TypeScript:
+1000 wejść, 0 wejść jednostkowych, 0 błędów. Parser 14 scalonych plików,
+API hygiene i interpretowane kontrole handoff przeszły; nie jest to browser proof.
+Hook React Doctor: 73/100, 6 ostrzeżeń; ograniczone review nie potwierdziło
+błędu zachowania w tych ostrzeżeniach. Pełny audyt UI pozostaje osobną bramką.
+
+Dwie poprawki eksportera (`fb5f9510efcc3352e06387c8a981e12669a05676`,
+`a5dbff4b6930bf6dcdded5dfa4828430c114a342`) usuwają arbitralny wymóg
+15 artefaktów przy zachowaniu walidacji kompletnego receipt właściwego profilu
+oraz zachowują zadeklarowany CPU MFEM `LD_LIBRARY_PATH`. 30 interpretowanych
+regresji PASS. Rzeczywisty eksport z #231 zakończył się `succeeded`/0,
+zweryfikował hashe wejść, stamp oraz cleanup. To dowód eksportu, nie GUI.
+
+DE: k=(0,+10^7,0) rad/m, L2, 3 warstwy, air growth 1,3, nearest 11,2 GHz,
+EPS/KSP 1e-9, restart 8, fizyczna tolerancja 1e-8. GMRES zakończył się błędem
+różnicy między residualem rekurencyjnym i obliczonym wprost. Po review
+uruchomiony FGMRES zwrócił **11,205285324453773 GHz**. Certyfikat wybranego
+modu w `spectrum.v2.json` daje residual pełnej postaci słabej i szwów
+**1,8215819390878056e-13**, poniżej 1e-8. True KSP: 32/32 pomiary,
+0 naruszeń, 0 brakujących; maksymalny stosunek do tolerancji 0,9806801026.
+
+Obie próby mają identyczne bajty modelu, źródło, runtime i żądane sterowania
+poza typem KSP. Native shared operator digest jest identyczny. Failed GMRES
+nie publikuje oddzielnych hashy mesh/equilibrium/phase; nie raportujemy ich
+zgodności jako sprawdzonej. `solver.v1` nie agreguje certyfikatu bloków modu:
+jego summary ma null/false, podczas gdy zaakceptowany mod ma certyfikat true.
+Nie należy używać summary do zastąpienia certyfikatu konkretnego modu.
+
+Wynik jest `completed_unqualified`, `selected_only`, `window_complete=false`.
+Nie potwierdza pełnego okna, identyfikacji n0, zbieżności ani przypadku COMSOL A1.
+Sześć przygotowanych prób air growth 1,3/1,15/1,075 dla +10/+25 będzie używać
+tego samego pakietu. Stan wykonania zapisuje `air-matrix231-controller-state.json`;
+prepared lub dry-run nie jest wynikiem numerycznym.
+
+Korekty S05 do domknięcia: uzasadnić politykę GMRES/FGMRES wobec operatora/PC;
+zachować prawdziwy residual i tożsamości również przy błędzie solve;
+sprawdzić semantykę summary certyfikatów i `floquet_geometric_bc_certified=false`.
+Nie obniżono tolerancji ani nie zastosowano cichego fallbacku.
+
+Audyt storage: około 87% datowanego rozmiaru logicznego to execution/source.
+Policy ma tylko preview; wykonawca GC i deduplikacja CAS nie są wdrożone.
+Planer dodatkowo odrzuca całe drzewo zawierające link. Potrzebny jest bezpieczny
+kontrakt linków/mountów, a nie wyłączenie ochrony. Analiza nie usuwała danych.
+
+S00–S12 nadal OPEN: Γ full window, aktualny shared signed15 i serial/adaptive
+parity/zasoby, convergence, GUI/browser, COMSOL A1, S09/provider, interakcje/GPU
+oraz wymagane review/CI/integracja. PR97 OPEN; remote master ponownie przesunął
+się do `eae25cc2b393f78e7ff0e9da727344f08c62ee41`; odczyt PR zgłosił konflikty.
+Ten nowy master nie jest jeszcze scalony. Szczegóły i dowody:
+`docs/raports/2026-10-04-dispersion-master-merge-checkpoint.md`.
+Poniższe checkpointy opisują wcześniejsze obserwacje i nie zastępują tego stanu.
+
 <!-- runner231-storage-audit-checkpoint-20261004 -->
 ## Aktualny checkpoint — koordynator wdrożony, build #231 i audyt storage
 
@@ -3776,19 +3839,19 @@ Realizacja [planu S00–S12](2026-09-12-eigensolve-dispersion-nonzero-k-plan.md)
 
 | Etap | Stan | Pozostały warunek |
 |---|---|---|
-| S00 — baza K0 i dowody | W TRAKCIE | Γ selected-only #227 (9,299249697 GHz) zachowane; pełne okno #228 zakończyło 43/50 podokien. Wymagane pełne pokrycie okna oraz aktualny pakiet #231 i jego attestacja. |
+| S00 — baza K0 i dowody | W TRAKCIE | Γ selected-only #227 zachowane; pełne okno #228 zakończyło 43/50 podokien. Pakiet #231 i attestations PASS; pełne aktualne okno Γ, demag i dowody kompletności nadal OPEN. |
 | S01 — nauka, ADR, kontrakty | W TRAKCIE | Noty, mapy źródeł, walidatory i review |
 | S02 — Python/IR | W TRAKCIE | Walidacja k i selektorów, round-trip, testy konsumentów |
 | S03 — natywny operator magnetyczny Blocha | W TRAKCIE | Prolongacja i bounded sparse operator są w źródłach; geometry-aware tet/prism oraz ich rzeczywista kwadratura mają review. Wymagane są bieżący managed assembly/runtime i pełne certyfikaty deskryptora. |
 | S04 — dynamiczny demag-k CPU | W TRAKCIE | Sparse Schur/SLEPc i MFEM blocks są źródłowo zaimplementowane. Pozostają residual pełnego deskryptora/gauge/szwów, zbieżność airboxu i siatki oraz kwalifikacja nowego źródła; archiwalne punkty nie zastępują tych bramek. |
-| S05 — natywny solver spektralny | W TRAKCIE | Producent/consumer nearest telemetry i jawny GMRES/FGMRES trial są źródłowo gotowe. Trusted koordynator wdrożony; #231 running dla 4b34, parę nearest obserwuje PID270544. Terminalny runtime, wykonanie A/B, Γ full window, certyfikaty pokrycia/residuali i wznowienia nadal OPEN. |
+| S05 — natywny solver spektralny | W TRAKCIE | #231 succeeded; managed eksport OpenAPI PASS. Nearest +10: GMRES solve_error, FGMRES 11,205285324453773 GHz, pełny residual modu 1,82158e-13, true KSP 32/32 bez naruszeń. Selected-only nie jest pełnym oknem. Otwarta polityka KSP, diagnostyka błędów i summary certyfikatów, Γ/window/resume oraz zbieżność. |
 | S06 — śledzenie gałęzi | W TRAKCIE | Źródła mają Hungarian/gaps, spójną masę P1, kąty główne i transport Procrustesa podprzestrzeni; pozostają wykonanie/regresje runtime, fizyczny crossing/split/merge, stabilność kroku k i zgodność publikacji |
 | S07 — artefakty i API | W TRAKCIE | Exact producer/consumer/mesh/native input replay zapisano i zreviewowano. Nowe refs diagnostyki mają odrębny writer/consumer i coverage, 44 regresje przyrostu oraz 213 głównego verifiera PASS; historyczne 56 regresji nonshared pozostają osobnym dowodem. P1 oznaczania nonzero-k jako K0 naprawiony w źródłach bf25. Nadal potrzebne pełne native matrix/physical replay, managed publikacja nowych refs, aktualne binary fields/selektory i managed evidence. |
 | S08 — Control Room | W TRAKCIE | Źródła authoring/scatterplot, selekcji k/pola i linewidth zostały poprawione. Wymagane są bieżący managed frontend/runtime, browser/WebGL, FMS round-trip, dostępność pól i stabilność Inspectora. Historyczny #119 nie jest aktualnym buildem. |
 | S09 — falowód 2.5D | W TRAKCIE | Bounded provider i deterministyczny P1 assembler przekroju są zapisane; pozostają typed realization/routing, managed/MFEM owner, open-boundary convergence i porównania TetraX/3D |
 | S10 — interakcje | W TRAKCIE | Ku tangent terms i canonical/raw artifact v8/v7 mają implementację źródłową; guard/runtime i pełna kwalifikacja nadal otwarte. DMI, surface terms, niejednorodność, seam transport i damping `include` wymagają odpowiednich implementacji i walidacji bez osłabiania capability guards. |
 | S11 — GPU | DO WYKONANIA | Jawna trasa double bez fallbacku, residency i parytet |
-| S12 — kwalifikacja i integracja | W TRAKCIE | Source merge mastera do 01e1b113, scoped kontrole i push 4b34 wykonane. PR97 OPEN, bieżący merge status UNKNOWN. Pozostają managed runtime/science/browser, wymagane review/CI, merge, weryfikacja głównego checkoutu i kontrolowany cleanup. |
+| S12 — kwalifikacja i integracja | W TRAKCIE | Master 6c0c765 scalony jako f01644b; poprawki eksportera a5dbff4 wysłane, focused kontrole PASS. PR97 OPEN; master przesunął się do eae25cc, odczyt zgłosił konflikty. Pozostają aktualna integracja, science/browser, wymagane review/CI, merge PR, main fast-forward i kontrolowany cleanup. |
 
 ## Zweryfikowane warunki wykonania
 

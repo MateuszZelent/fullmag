@@ -228,3 +228,85 @@ W ramach analizy nie usuwano danych, nie wprowadzono GC ani migracji CAS.
 PR97 OPEN, bieżąca gotowość merge UNKNOWN. Nowych częstotliwości brak;
 Γ full window, shared signed15, serial/adaptive parity/zasoby, convergence,
 GUI, A1-COMSOL, S09/GPU i całe S00–S12 pozostają OPEN.
+
+## Pakiet #231, master PR127 i rzeczywiste porównanie nearest — 2026-10-04 21:00 UTC
+
+Poprzedni zapis #231 running jest historyczny. Job zakończył się succeeded/0;
+native-build trwał około 28 min 56 s. Receipt zawiera 29 artefaktów, attestations
+CMake/runtime/dependencies mają pass, requested/resolved FEM CPU/double/SLEPc.
+Źródło 4b34ec7b91dadb18ac87d7f8b98b3a2cf5c8f574, snapshot
+4371ba58265f3973d942eef85cb954b0d944832b4af4b12d9e54d25aeacd4f1b;
+pakiet CPU: MFEM 4.10, PETSc 3.24.6 i SLEPc 3.24.3, CUDA/FEM GPU OFF.
+Nie zbudowano unit targets ani frontendu. Nie jest to release qualification.
+
+Merge f01644bd6cc16d99101deee52b7a951ed5292278 zachowuje master
+6c0c76551b6095b064e996cbb4c80a4ba7952aa9 i nasze kontrakty modalne.
+Jedyny konflikt dotyczył nazwy zmiennej testowego fixture; zachowano dynamiczne ID.
+Produkcja TS: 1000 plików, zero unit inputs i błędów; parser 14 plików bez błędów,
+API hygiene i 6/13/5 grup interpretowanych kontroli kernel/transport/handoff PASS.
+Źródła nie zmieniły się podczas kontroli. Odczytano istniejące zależności main
+bez instalacji; package zgodny, lock zgodny po CRLF i semantycznej kontroli YAML.
+To source-only evidence, nie uruchomienie UI. Niezależny review pięciu plików
+produkcji nie znalazł P1/P2 w tym zakresie. Hook React Doctor 73/100 i 6 ostrzeżeń
+nie jest PASS. Przegląd ostrzeżeń: sekwencyjne bounded range reads zachowują offsety;
+sekwencyjny setup, JSON normalization cross-VM i guarded find są w lekkich fixture;
+URL jest walidacją wejścia smoke. Nie stwierdzono wymaganej poprawki zachowania
+w tym zestawie; nie wprowadzono suppressions ani nie przedstawiono tego jako audytu całego UI.
+
+Eksporter najpierw odrzucił poprawny runtime-v2 przez arbitralne 15-output gate.
+Commit fb5f9510efcc3352e06387c8a981e12669a05676 wymaga zadeklarowanego API
+po pełnej walidacji receipt właściwego profilu. 29 interpretowanych regresji PASS.
+Rzeczywisty eksport następnie ujawnił brak libmfem.so.4.10.0, exit 127.
+Commit a5dbff4b6930bf6dcdded5dfa4828430c114a342 zachowuje zaufany profilowy
+LD_LIBRARY_PATH, z /package/lib i /opt/fullmag-deps/lib; nie zmienia obrazu ani
+ochrony sieci/readonly/hash/source. 30 interpretowanych regresji PASS.
+Eksport edfb4def9e264f3fb3d51b2639377587: succeeded/0,
+input_hashes_verified=true, cleanup_confirmed=true. Surowe OpenAPI 1 496 225 B,
+SHA-256 1ec237b7976406815d464fba5db818e1cd287500f478302a4ba382cc3d6061ee.
+Zachowano wcześniejsze porażki i ich receipty. Native package nie przebudowano:
+zmiany dotyczyły eksportera, frontendu/fixture i dokumentacji, nie skompilowanego solvera.
+
+| Próba +10 rad/µm, nearest 11,2 GHz | Stan | Wynik i kontrola |
+|---|---|---|
+| GMRES, ba9776a1cb644316850b490d82b3259c | failed/1, około 39,91 s | PETSc: residual rekurencyjny 5,9689e-16 wobec obliczonego 4,6044e-11; brak zaakceptowanej częstotliwości. |
+| FGMRES, 8f3291c45ba34023a998349c6520d863 | completed_unqualified/0, około 50,89 s | 11,205285324453773 GHz; wybrany mod ma pełny certyfikat i residual 1,8215819390878056e-13. |
+
+Bajty model-input.py obu prób są identyczne (408492f3f19c852ff992776a6fb3b2d3934ac69a33dc668b740ebbe26a6f5b8b).
+Runtime, źródło, requested L2/3layers/growth1,3, EPS/KSP1e-9, restart8,
+nearest11,2GHz są identyczne poza typem KSP. Physical solver tolerance pozostała 1e-8;
+usunięto tylko redundantny diagnostyczny argument --solver-rtol, niedozwolony dla k10.
+Native shared operator digest obu prób:
+322ff24be7f9a115a585720a005178df0f2d5862493376e80f9ba88118e3be33.
+Failed GMRES nie eksportuje osobnych hashy mesh/equilibrium/phase; ich zgodność
+nie jest niezależnie potwierdzona. Oba dokładne kontenery sprawdzono jako nieobecne.
+
+FGMRES: 32 solve/32 true-residual measurements, 0 violations/0 unavailable,
+max tolerance ratio 0,9806801026128354, EPS reason1/KSP reason2. Row preflight pass,
+jeden mod i physical potential; rekonstrukcja pola zgadza się z zapisanym potencjałem.
+Certyfikat pochodzi z spectrum.v2 samples[0].modes[0].block_residuals,
+scope full_projected_weak_form_and_periodic_seams, eps_phi 3,77517e-14,
+seam residuale 0 lub około 1,67e-36. solver.v1 summary ma null/false dla tych bloków;
+nie zastępuje certyfikatu modu. geometric_bc_certified nadal false.
+Wynik selected_only/window_complete=false; pojedynczy sukces nie ustala przyczyny
+błędu GMRES, kompletności okna, n0 ani kwalifikacji demag. Zakres głównej symulacji
+to jednorodny film DE, a nie COMSOL A1 antidot.
+
+Nowe korekty planu: przejrzeć politykę KSP i linearność/zmienność PC, poprawić
+telemetry również przy hard-error, wyjaśnić summary block certificate i geometric BC.
+Następny eksperyment to sześć przygotowanych frequency-window prób +10/+25
+z growth1,3/1,15/1,075 na jednym #231; każdy dry-run i wynik wymaga własnej kontroli.
+Actual body/equilibrium/mode isolation i zbieżność pozostają NOT VERIFIED.
+
+Dowody lokalne w preview-state-checkpoint: master127-source-checks-v2/verification.json,
+merge-master127-ui-review.md, exporter-runtime-profile-verification.json,
+exporter-profile-loader-verification.json, nearest231-pair-artifact-audit.json,
+nearest231-comparison-v2.json oraz receipty/trial artifacts pod #231/comsol-dispersion.
+Rejestr i PR muszą odzwierciedlać ten stan. Remote master ponownie przesunął się
+do eae25cc2b393f78e7ff0e9da727344f08c62ee41; ten commit nie jest jeszcze scalony.
+PR97 pozostaje OPEN, odczyt zgłosił CONFLICTING/DIRTY. Nie wykonano merge PR.
+
+Audyt storage potwierdzono również przez bieżące API: mode preview,
+automatic_mode_available=false. Planer zachowuje drzewa z linkami jako unsafe;
+107 takich rekordów jest historycznym wynikiem podglądu, nie pomiarem aktualnego
+odzysku. Wykonawca GC, link-safe retention i deduplikacja CAS są propozycjami;
+w tym audycie ich nie wdrożono ani nie usuwano danych. S00–S12 pozostają OPEN.
