@@ -1,5 +1,14 @@
 # Status realizacji całego planu refaktoryzacji
 
+Checkpoint P8-53AL, 04.10.2026: [aktualizacja archiwum ze sceny](p8/53al-project-authoring-archive.md).
+Natywne API: 25 kontroli PASS; kontroler w przeglądarce: 15 grup PASS;
+production TypeScript, lint i API hygiene PASS. Import surowego OpenAPI
+zweryfikowano względem terminalnego receipt i zregenerowano klienta.
+Dokument zachowuje assets, metadane i historię źródła; niekompletny szkic
+nie zawiera nieaktualnego Pythona. Usunięto zależność kernel→Start.
+Powiązanie projektu z sesją, eksport Python niekompletnego szkicu,
+PendingForms i pełny restart pozostają otwarte; procenty bez awansu.
+
 Checkpoint P8-53AK, 04.10.2026: [odtworzenie dokumentu projektu](p8/53ak-project-document-handoff.md).
 Kontroler przenosi odrębne archiwum i kontekst pliku, waliduje reopen i zachowuje
 dirty/persisted revision. Natywne API: 11 kontroli PASS; browser: 9 grup PASS;

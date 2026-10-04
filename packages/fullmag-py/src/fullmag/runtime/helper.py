@@ -374,7 +374,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         temporary_path = output_path.with_name(
             f".{output_path.name}.{os.getpid()}.tmp"
         )
-        temporary_path.write_text(source, encoding="utf-8")
+        source_bytes = source.encode("utf-8")
+        temporary_path.write_bytes(source_bytes)
         os.replace(temporary_path, output_path)
         print(
             json.dumps(
@@ -383,7 +384,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "source_kind": "scene_document",
                     "entrypoint_kind": "flat_workspace",
                     "written": True,
-                    "bytes_written": len(source.encode("utf-8")),
+                    "bytes_written": len(source_bytes),
                 }
             )
         )

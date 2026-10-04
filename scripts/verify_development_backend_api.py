@@ -134,6 +134,8 @@ def run(repo_root: str, cross_build_bundle: str = "", project_document_only: boo
         except Exception as error:
             receipt["reason"] = type(error).__name__
             receipt["detail"] = str(error)[:1000]
+            if isinstance(error, urllib.error.HTTPError):
+                receipt["http_error_body"] = error.read(4096).decode("utf-8", errors="replace")
             receipt["traceback"] = traceback.format_exc(limit=8)
             raise
         finally:
@@ -877,7 +879,9 @@ def exercise(api: Path, repo: Path, run_root: Path, receipt: dict, *, project_do
             reservation.bind(("127.0.0.1", 0))
             port = reservation.getsockname()[1]
         env = {key: os.environ[key] for key in ("SYSTEMROOT", "WINDIR", "PATH", "PATHEXT", "TEMP", "TMP", "COMPUTERNAME") if key in os.environ}
-        env.update(FULLMAG_REPO_ROOT=str(repo), FULLMAG_STATE_ROOT=str(run_root / (label + "-state")), FULLMAG_API_PORT=str(port), FULLMAG_DISABLE_STATIC_CONTROL_ROOM="1")
+        native_layout = storage.resolve_layout(repo, "windows-native-fdm-cpu-dev")
+        env.update(FULLMAG_REPO_ROOT=str(repo), FULLMAG_STATE_ROOT=str(run_root / (label + "-state")), FULLMAG_API_PORT=str(port), FULLMAG_DISABLE_STATIC_CONTROL_ROOM="1",
+                   FULLMAG_PYTHON=str(Path(native_layout["build_root"]) / "python/fullmag/Scripts/python.exe"))
         env.update(config)
         log_path = run_root / (label + ".log")
         with log_path.open("w", encoding="utf-8") as log:
@@ -888,7 +892,7 @@ def exercise(api: Path, repo: Path, run_root: Path, receipt: dict, *, project_do
             receipt["processes"].append(record)
             base = f"http://127.0.0.1:{port}/v2/platform/"
 
-            def get(path="development-backend", etag=None, *, method="GET", payload=None):
+            def get(path="development-backend", etag=None, *, method="GET", payload=None, timeout=2):
                 url = f"http://127.0.0.1:{port}" + path if path.startswith("/") else base + path
                 headers = {"If-None-Match": etag} if etag else {}
                 if payload is not None:
@@ -896,7 +900,7 @@ def exercise(api: Path, repo: Path, run_root: Path, receipt: dict, *, project_do
                 request = urllib.request.Request(url, method=method, headers=headers,
                                                  data=json.dumps(payload).encode("utf-8") if payload is not None else None)
                 try:
-                    with urllib.request.urlopen(request, timeout=2) as response:
+                    with urllib.request.urlopen(request, timeout=timeout) as response:
                         return response.status, response.headers.get("ETag"), None if response.status == 204 else json.load(response)
                 except urllib.error.HTTPError as error:
                     if error.code == 304:
@@ -998,8 +1002,219 @@ def exercise(api: Path, repo: Path, run_root: Path, receipt: dict, *, project_do
             raise AssertionError("Malformed project archive was accepted")
         checks.append("project-reopen-rejects-malformed-archive")
 
+        # Exercise the production archive writer and canonical source renderer
+        # without installing the document into a session or running its Python.
+        import io
+        import zipfile
+        def entries(encoded):
+            with zipfile.ZipFile(io.BytesIO(base64.b64decode(encoded, validate=True))) as package:
+                return {name: package.read(name) for name in package.namelist()}
+        original_entries = entries(archive)
+        seeded_entries = dict(original_entries)
+        seeded_manifest = json.loads(seeded_entries["manifest/project.json"])
+        previous_source = b"# User-authored source retained verbatim\nvalue = 17\n"
+        seeded_manifest["source"] = "project/source.py"
+        seeded_manifest["assets"] = [{"path": "project/assets/retained.bin", "media_type": "application/octet-stream"}]
+        seeded_manifest["opaque_documents"] = ["project/notes/retained.txt"]
+        seeded_entries["manifest/project.json"] = json.dumps(seeded_manifest).encode()
+        seeded_entries["project/source.py"] = previous_source
+        seeded_entries["project/assets/retained.bin"] = bytes(range(256))
+        seeded_entries["project/notes/retained.txt"] = b"future project extension\n"
+        definition = json.loads(seeded_entries["project/definition.json"])
+        definition["future_project_metadata"] = {"intent": "auto", "value": 23}
+        seeded_entries["project/definition.json"] = json.dumps(definition).encode()
+        seeded_buffer = io.BytesIO()
+        with zipfile.ZipFile(seeded_buffer, "w", compression=zipfile.ZIP_DEFLATED) as package:
+            for name, data in seeded_entries.items():
+                package.writestr(name, data)
+        seeded_archive = base64.b64encode(seeded_buffer.getvalue()).decode("ascii")
+        scene = json.loads(original_entries["project/scene_document.json"])
+        scene["version"] = "scene.v2"
+        scene.setdefault("scene", {})["future_authoring_metadata"] = {"requested_intent": "auto", "label": "preserve raw JSON"}
+        scene["objects"] = [{"id": "archive-body", "name": "Unassigned draft", "material_ref": "",
+                             "geometry": {"geometry_kind": "box", "geometry_params": {"size": [1e-6, 1e-6, 1e-8]}}}]
+        request = dict(display_name="restart-project.fms", archive_base64=seeded_archive,
+                       expected_project_id=created["project_id"], expected_revision=created["revision"],
+                       scene_document=scene)
+        readonly_entries = dict(seeded_entries)
+        readonly_entries["project/definition.json"] = json.dumps({**definition, "schema": "project.future.v999"}).encode()
+        readonly_buffer = io.BytesIO()
+        with zipfile.ZipFile(readonly_buffer, "w", compression=zipfile.ZIP_DEFLATED) as package:
+            for name, data in readonly_entries.items():
+                package.writestr(name, data)
+        try:
+            get("/v2/persistence/projects/authoring", method="POST", payload={
+                **request, "archive_base64": base64.b64encode(readonly_buffer.getvalue()).decode("ascii")}, timeout=30)
+        except urllib.error.HTTPError as error:
+            assert error.code == 409, (error.code, error.read())
+        else:
+            raise AssertionError("Authoring accepted a read-only future project")
+        checks.append("project-authoring-rejects-read-only-before-rendering")
+        for label, changes, expected_status in (
+            ("wrong-project", {"expected_project_id": "project-wrong"}, 409),
+            ("wrong-revision", {"expected_revision": created["revision"] + 1}, 409),
+            ("wrong-scene-version", {"scene_document": {**scene, "version": "scene.v1"}}, 400),
+            ("unknown-request-field", {"unexpected": True}, 422),
+        ):
+            try:
+                get("/v2/persistence/projects/authoring", method="POST", payload={**request, **changes}, timeout=30)
+            except urllib.error.HTTPError as error:
+                assert error.code == expected_status, (label, error.code, error.read())
+            else:
+                raise AssertionError(f"Authoring accepted {label}")
+            checks.append("project-authoring-rejects-" + label)
+        status_code, _, updated = get("/v2/persistence/projects/authoring", method="POST", payload=request, timeout=30)
+        assert status_code == 200 and updated["project_id"] == created["project_id"]
+        assert updated["revision"] == created["revision"] + 1 and updated["dirty"] is True
+        assert updated["durability"] == "memory_only"
+        checks.append("project-authoring-increments-once-without-file-save")
+        updated_entries = entries(updated["archive_base64"])
+        assert updated_entries["project/assets/retained.bin"] == bytes(range(256))
+        assert updated_entries["project/notes/retained.txt"] == b"future project extension\n"
+        assert updated_entries[f"project/source-history/{hashlib.sha256(previous_source).hexdigest()}.py"] == previous_source
+        assert json.loads(updated_entries["project/definition.json"])["future_project_metadata"] == definition["future_project_metadata"]
+        checks.append("project-authoring-preserves-assets-opaque-definition-and-original-source-history")
+        assert json.loads(updated_entries["project/scene_document.json"]) == scene
+        checks.append("project-authoring-preserves-raw-scene-extensions")
+        manifest = json.loads(updated_entries["manifest/project.json"])
+        assert manifest.get("source") is None and "project/source.py" not in updated_entries
+        checks.append("project-authoring-incomplete-draft-removes-stale-current-source-without-placeholder")
+        _, _, repeated = get("/v2/persistence/projects/authoring", method="POST", payload={
+            **request, "archive_base64": updated["archive_base64"], "expected_revision": updated["revision"]}, timeout=30)
+        assert repeated["revision"] == updated["revision"] and repeated["archive_base64"] == updated["archive_base64"]
+        checks.append("project-authoring-noop-retains-revision-and-exact-archive")
+        material_scene = json.loads(json.dumps(scene))
+        material_scene["materials"] = [{"id": "archive-material", "name": "Permalloy draft",
+                                        "properties": {"Ms": 800000.0, "Aex": 1.3e-11, "alpha": 0.02}}]
+        material_scene["objects"][0]["material_ref"] = "archive-material"
+        material_scene["magnetization_assets"] = [{"id": "archive-initial", "name": "Uniform initial state",
+                                                  "kind": "uniform", "value": [1.0, 0.0, 0.0]}]
+        material_scene["objects"][0]["magnetization_ref"] = "archive-initial"
+        material_scene.setdefault("study", {}).update(backend="fdm", requested_backend="fdm", requested_device="cpu")
+        material_scene["objects"][0]["regions"] = [{
+            "region_id": "archive-region", "owner_object": "archive-body", "name": "Inner region",
+            "shape": {"kind": "box", "size": [1e-7, 1e-7, 1e-8], "center": [0.0, 0.0, 0.0]}}]
+        material_scene["objects"][0]["allocated_region_ids"] = ["archive-region"]
+        _, _, authored = get("/v2/persistence/projects/authoring", method="POST", payload={
+            **request, "archive_base64": updated["archive_base64"], "expected_revision": updated["revision"],
+            "scene_document": material_scene}, timeout=30)
+        authored_entries = entries(authored["archive_base64"])
+        assert authored["revision"] == updated["revision"] + 1
+        assert json.loads(authored_entries["project/scene_document.json"]) == material_scene
+        authored_manifest = json.loads(authored_entries["manifest/project.json"])
+        source = authored_entries[authored_manifest["source"]].decode("utf-8")
+        compile(source, "project/source.py", "exec")
+        assert "import fullmag as fm" in source
+        assert "archive-region" in source and "Inner region" in source and "800000" in source
+        assert "\r" not in source
+        assert authored_entries["project/assets/retained.bin"] == bytes(range(256))
+        checks.append("project-authoring-retains-box-material-and-region-with-canonical-source")
+        _, _, complete_noop = get("/v2/persistence/projects/authoring", method="POST", payload={
+            **request, "archive_base64": authored["archive_base64"], "expected_revision": authored["revision"],
+            "scene_document": material_scene}, timeout=30)
+        assert complete_noop["revision"] == authored["revision"] and complete_noop["archive_base64"] == authored["archive_base64"]
+        checks.append("project-authoring-complete-source-canonical-utf8-and-noop")
+        receipt["project_authoring_observation"] = {
+            "project_id": authored["project_id"], "revision": authored["revision"],
+            "incomplete_archive_sha256": hashlib.sha256(base64.b64decode(updated["archive_base64"])).hexdigest(),
+            "archive_sha256": hashlib.sha256(base64.b64decode(authored["archive_base64"])).hexdigest(),
+            "source_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+            "scope": "runtime-free incomplete box then material/region authoring, accepted metadata extension, retained assets/opaque entries/source history; no solver execution",
+        }
+
     if project_document_only:
         with_api("project-document", {}, project_document)
+        # Fault helpers live only in a verifier-owned source root. No user
+        # package or interpreter is modified, and no authored script executes.
+        for fault in ("deadline", "log-overflow"):
+            helper_root = run_root / ("renderer-fault-" + fault)
+            module_root = helper_root / "packages/fullmag-py/src/fullmag/runtime"
+            module_root.mkdir(parents=True)
+            (module_root.parent / "__init__.py").write_text("", encoding="utf-8")
+            (module_root / "__init__.py").write_text("", encoding="utf-8")
+            marker = helper_root / "helper-pid.txt"
+            helper_source = ("import os, pathlib, time\n"
+                             f"marker = pathlib.Path({str(marker)!r})\n"
+                             "temporary = marker.with_suffix('.tmp')\n"
+                             "temporary.write_text(str(os.getpid()))\n"
+                             "os.replace(temporary, marker)\n"
+                             "while not marker.with_suffix('.armed').is_file(): time.sleep(0.01)\n")
+            if fault == "log-overflow":
+                helper_source += "os.write(1, b'x' * (2 * 1024 * 1024))\n"
+            helper_source += "time.sleep(120)\n"
+            (module_root / "helper.py").write_text(helper_source, encoding="utf-8")
+
+            def renderer_fault(get, *, fault=fault, marker=marker, helper_source=helper_source):
+                import ctypes
+                from ctypes import wintypes
+                _, _, document = get("/v2/persistence/projects", method="POST", payload={"name": "Owned renderer fault"})
+                import base64
+                import io
+                import zipfile
+                with zipfile.ZipFile(io.BytesIO(base64.b64decode(document["archive_base64"]))) as package:
+                    scene = json.loads(package.read("project/scene_document.json"))
+                scene["objects"] = [{"id": "fault-body", "name": "Fault body", "material_ref": "fault-material",
+                                     "magnetization_ref": "fault-initial",
+                                     "geometry": {"geometry_kind": "box", "geometry_params": {"size": [1e-6, 1e-6, 1e-8]}}}]
+                scene["materials"] = [{"id": "fault-material", "name": "Fault material",
+                                       "properties": {"Ms": 800000.0, "Aex": 1.3e-11, "alpha": 0.02}}]
+                scene["magnetization_assets"] = [{"id": "fault-initial", "name": "Fault initial",
+                                                 "kind": "uniform", "value": [1.0, 0.0, 0.0]}]
+                outcome = {}
+                def submit():
+                    try:
+                        get("/v2/persistence/projects/authoring", method="POST", timeout=45, payload={
+                            "display_name": "fault.fms", "archive_base64": document["archive_base64"],
+                            "expected_project_id": document["project_id"], "expected_revision": document["revision"],
+                            "scene_document": scene})
+                    except urllib.error.HTTPError as error:
+                        outcome.update(status=error.code, body=error.read().decode("utf-8"))
+                    except Exception as error:
+                        outcome["error"] = repr(error)
+                    else:
+                        outcome["status"] = 200
+                started = time.monotonic()
+                request_thread = threading.Thread(target=submit, daemon=True)
+                request_thread.start()
+                deadline = started + 10
+                while not marker.is_file():
+                    assert request_thread.is_alive() and time.monotonic() < deadline, outcome
+                    time.sleep(0.01)
+                helper_pid = int(marker.read_text())
+                kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+                kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+                kernel.OpenProcess.restype = wintypes.HANDLE
+                kernel.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+                kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+                kernel.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
+                handle = kernel.OpenProcess(0x00100001, False, helper_pid)
+                assert handle, "Could not retain exact fault helper process handle"
+                helper_record = {"label": "renderer-fault-helper-" + fault, "pid": helper_pid, "waited": False}
+                receipt["processes"].append(helper_record)
+                try:
+                    marker.with_suffix(".armed").write_text("exact handle retained", encoding="utf-8")
+                    request_thread.join(timeout=40)
+                    assert not request_thread.is_alive() and outcome.get("status") == 500, outcome
+                    assert kernel.WaitForSingleObject(handle, 5000) == 0, "Fault helper remained alive after renderer error"
+                finally:
+                    if kernel.WaitForSingleObject(handle, 0) != 0:
+                        helper_record["stop_requested_by_verifier"] = True
+                        kernel.TerminateProcess(handle, 1)
+                    helper_record["waited"] = kernel.WaitForSingleObject(handle, 5000) == 0
+                    kernel.CloseHandle(handle)
+                elapsed = time.monotonic() - started
+                assert elapsed < 40, (fault, elapsed)
+                if fault == "deadline":
+                    assert "deadline" in outcome["body"], outcome
+                else:
+                    assert "log" in outcome["body"], outcome
+                assert get()[0] == 200
+                checks.append("project-renderer-" + fault + "-rejects-and-exact-helper-exits")
+                receipt.setdefault("renderer_fault_observations", []).append({
+                    "fault": fault, "helper_pid": helper_pid, "exact_process_handle_signaled": True,
+                    "elapsed_seconds": elapsed, "helper_source_sha256": hashlib.sha256(helper_source.encode()).hexdigest(),
+                    "http_status": outcome["status"]})
+            with_api("renderer-" + fault, {"FULLMAG_REPO_ROOT": str(helper_root)}, renderer_fault)
         return
     with_api("disabled", {}, disabled)
     with_api("partial", {"FULLMAG_DEVELOPMENT_BACKEND_GENERATION": generation}, lambda get: check("partial-configuration", get()[2], "unknown", "configuration_invalid"))

@@ -52,6 +52,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/persistence/projects/authoring": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["persistence_post_persistence_projects_authoring"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/persistence/projects/open": {
         parameters: {
             query?: never;
@@ -10160,6 +10176,28 @@ export interface components {
             /** @description Stable label used for diagnostics; it is not a filesystem path. */
             display_name: string;
         };
+        /**
+         * @description Runtime-free authoring update for a portable project archive.  The scene
+         *     map is parsed through the typed `fullmag_authoring::SceneDocument` contract
+         *     by the handler; the surrounding archive remains source-preserving.
+         */
+        ProjectAuthoringUpdateRequest: {
+            /** @description Base64-encoded `.fms` archive bytes. */
+            archive_base64: string;
+            /** @description Stable label used for diagnostics; it is not a filesystem path. */
+            display_name: string;
+            /** @description Project identity observed by the caller. */
+            expected_project_id: string;
+            /**
+             * Format: int64
+             * @description Definition revision observed by the caller.
+             */
+            expected_revision: number;
+            /** @description Complete typed `scene.v2` document supplied by the authoring surface. */
+            scene_document: {
+                [key: string]: unknown;
+            };
+        };
         ProjectCreateRequest: {
             /**
              * @description User-facing project name. It is the only authoring input accepted by
@@ -13980,6 +14018,51 @@ export interface operations {
             };
             /** @description Invalid project name or archive encoding */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    persistence_post_persistence_projects_authoring: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProjectAuthoringUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Updated runtime-free project document bytes */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectDocumentResource"];
+                };
+            };
+            /** @description Invalid project archive or scene document */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Project identity, revision, or read-only conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Canonical source rendering failed */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };

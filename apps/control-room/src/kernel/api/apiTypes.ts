@@ -820,6 +820,8 @@ export type ProjectCreateRequest =
   components["schemas"]["ProjectCreateRequest"];
 export type ProjectArchiveRequest =
   components["schemas"]["ProjectArchiveRequest"];
+export type ProjectAuthoringUpdateRequest =
+  components["schemas"]["ProjectAuthoringUpdateRequest"];
 export type ProjectDocumentResource =
   components["schemas"]["ProjectDocumentResource"];
 export type ProjectRunSubmitRequest =

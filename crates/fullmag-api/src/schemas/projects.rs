@@ -28,6 +28,24 @@ pub(crate) struct ProjectArchiveRequest {
     pub archive_base64: String,
 }
 
+/// Runtime-free authoring update for a portable project archive.  The scene
+/// map is parsed through the typed `fullmag_authoring::SceneDocument` contract
+/// by the handler; the surrounding archive remains source-preserving.
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ProjectAuthoringUpdateRequest {
+    /// Stable label used for diagnostics; it is not a filesystem path.
+    pub display_name: String,
+    /// Base64-encoded `.fms` archive bytes.
+    pub archive_base64: String,
+    /// Project identity observed by the caller.
+    pub expected_project_id: String,
+    /// Definition revision observed by the caller.
+    pub expected_revision: u64,
+    /// Complete typed `scene.v2` document supplied by the authoring surface.
+    pub scene_document: BTreeMap<String, serde_json::Value>,
+}
+
 /// Complete immutable submission inputs. The server parses the JSON objects
 /// into their versioned application, authoring and planner contracts.
 #[derive(Debug, Clone, Deserialize, ToSchema)]

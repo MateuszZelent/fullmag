@@ -23,6 +23,16 @@ export interface CaptureProjectDocumentDevelopmentHandoffOptions {
   readonly carryUnsaved?: boolean;
 }
 
+/** Validate and detach one bounded plain JSON object from caller-owned input. */
+export function cloneBoundedProjectJsonObject(
+  value: unknown,
+): Record<string, unknown> {
+  const detached = cloneJsonValue(value);
+  const record = requireRecord(detached, "project JSON object");
+  ensureBoundedJson(record);
+  return record;
+}
+
 /** Capture a detached, bounded snapshot of the current project document. */
 export function captureProjectDocumentDevelopmentHandoff(
   snapshot: ProjectDocumentSnapshot,

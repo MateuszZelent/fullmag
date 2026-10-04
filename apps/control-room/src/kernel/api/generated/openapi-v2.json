@@ -23968,6 +23968,46 @@
         ],
         "type": "object"
       },
+      "ProjectAuthoringUpdateRequest": {
+        "additionalProperties": false,
+        "description": "Runtime-free authoring update for a portable project archive.  The scene\nmap is parsed through the typed `fullmag_authoring::SceneDocument` contract\nby the handler; the surrounding archive remains source-preserving.",
+        "properties": {
+          "archive_base64": {
+            "description": "Base64-encoded `.fms` archive bytes.",
+            "type": "string"
+          },
+          "display_name": {
+            "description": "Stable label used for diagnostics; it is not a filesystem path.",
+            "type": "string"
+          },
+          "expected_project_id": {
+            "description": "Project identity observed by the caller.",
+            "type": "string"
+          },
+          "expected_revision": {
+            "description": "Definition revision observed by the caller.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "scene_document": {
+            "additionalProperties": {},
+            "description": "Complete typed `scene.v2` document supplied by the authoring surface.",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "display_name",
+          "archive_base64",
+          "expected_project_id",
+          "expected_revision",
+          "scene_document"
+        ],
+        "type": "object"
+      },
       "ProjectCreateRequest": {
         "properties": {
           "name": {
@@ -38953,6 +38993,45 @@
           },
           "400": {
             "description": "Invalid project name or archive encoding"
+          }
+        },
+        "tags": [
+          "persistence"
+        ]
+      }
+    },
+    "/v2/persistence/projects/authoring": {
+      "post": {
+        "operationId": "persistence_post_persistence_projects_authoring",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProjectAuthoringUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectDocumentResource"
+                }
+              }
+            },
+            "description": "Updated runtime-free project document bytes"
+          },
+          "400": {
+            "description": "Invalid project archive or scene document"
+          },
+          "409": {
+            "description": "Project identity, revision, or read-only conflict"
+          },
+          "500": {
+            "description": "Canonical source rendering failed"
           }
         },
         "tags": [

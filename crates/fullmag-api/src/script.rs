@@ -7,9 +7,17 @@ use fullmag_authoring::{
     ScriptBuilderState,
 };
 use serde_json::Value;
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
-use std::process::Command as ProcessCommand;
+use std::process::{Child, Command as ProcessCommand, Output, Stdio};
 use std::sync::Arc;
+use std::thread;
+use std::time::{Duration, Instant};
+
+const BOUNDED_PYTHON_HELPER_TIMEOUT: Duration = Duration::from_secs(30);
+const BOUNDED_PYTHON_HELPER_POLL_INTERVAL: Duration = Duration::from_millis(20);
+const BOUNDED_PYTHON_HELPER_LOG_LIMIT: u64 = 1024 * 1024;
 
 pub(crate) fn repo_root() -> PathBuf {
     if let Some(root) = std::env::current_exe().ok().and_then(|executable| {
@@ -251,9 +259,53 @@ pub(crate) fn render_scene_document_via_python_helper(
     output_path: &Path,
     scene_document: &SceneDocument,
 ) -> Result<ScriptSyncResponse, ApiError> {
+    render_scene_document_via_python_helper_with_policy(
+        repo_root,
+        workspace_root,
+        output_path,
+        scene_document,
+        PythonHelperOutputPolicy::Capture,
+    )
+}
+
+/// Render an authoring document through the Python helper with bounded,
+/// file-backed process output.  The authoring endpoint owns the private
+/// workspace, so the helper cannot leave an unbounded `Command::output`
+/// buffer on the API worker.
+pub(crate) fn render_scene_document_via_python_helper_bounded(
+    repo_root: &Path,
+    workspace_root: &Path,
+    output_path: &Path,
+    scene_document: &SceneDocument,
+) -> Result<ScriptSyncResponse, ApiError> {
+    render_scene_document_via_python_helper_with_policy(
+        repo_root,
+        workspace_root,
+        output_path,
+        scene_document,
+        PythonHelperOutputPolicy::Bounded { workspace_root },
+    )
+}
+
+struct TemporaryFileGuard(PathBuf);
+
+impl Drop for TemporaryFileGuard {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.0);
+    }
+}
+
+fn render_scene_document_via_python_helper_with_policy(
+    repo_root: &Path,
+    workspace_root: &Path,
+    output_path: &Path,
+    scene_document: &SceneDocument,
+    policy: PythonHelperOutputPolicy<'_>,
+) -> Result<ScriptSyncResponse, ApiError> {
     std::fs::create_dir_all(workspace_root)
         .map_err(|error| ApiError::internal(format!("failed to prepare workspace: {}", error)))?;
     let scene_path = workspace_root.join(format!("scene-export-{}.json", uuid_v4_hex()));
+    let _scene_guard = TemporaryFileGuard(scene_path.clone());
     let scene_body = serde_json::to_string_pretty(scene_document).map_err(|error| {
         ApiError::internal(format!("failed to serialize SceneDocument: {}", error))
     })?;
@@ -269,8 +321,7 @@ pub(crate) fn render_scene_document_via_python_helper(
         "--output".to_string(),
         output_path.display().to_string(),
     ];
-    let output = run_python_helper(repo_root, &helper_args);
-    let _ = std::fs::remove_file(&scene_path);
+    let output = run_python_helper_with_policy(repo_root, &helper_args, policy);
     let output = output?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -446,10 +497,21 @@ pub(crate) fn configure_python_command(
     Ok(())
 }
 
-pub(crate) fn run_python_helper(
+#[derive(Clone, Copy)]
+enum PythonHelperOutputPolicy<'a> {
+    Capture,
+    Bounded { workspace_root: &'a Path },
+}
+
+pub(crate) fn run_python_helper(repo_root: &Path, args: &[String]) -> Result<Output, ApiError> {
+    run_python_helper_with_policy(repo_root, args, PythonHelperOutputPolicy::Capture)
+}
+
+fn run_python_helper_with_policy(
     repo_root: &Path,
     args: &[String],
-) -> Result<std::process::Output, ApiError> {
+    policy: PythonHelperOutputPolicy<'_>,
+) -> Result<Output, ApiError> {
     let real_root = python_workspace_root(repo_root);
     let mut candidates = Vec::new();
     let bundled_python =
@@ -511,10 +573,21 @@ pub(crate) fn run_python_helper(
             );
         }
 
-        match command.output() {
-            Ok(output) => return Ok(output),
-            Err(error) => {
-                last_error = Some(format!("{}: {}", candidate, error));
+        match policy {
+            PythonHelperOutputPolicy::Capture => match command.output() {
+                Ok(output) => return Ok(output),
+                Err(error) => {
+                    last_error = Some(format!("{}: {}", candidate, error));
+                }
+            },
+            PythonHelperOutputPolicy::Bounded { workspace_root } => {
+                match run_bounded_python_helper(command, workspace_root) {
+                    Ok(output) => return Ok(output),
+                    Err(BoundedHelperError::Spawn(error)) => {
+                        last_error = Some(format!("{}: {}", candidate, error));
+                    }
+                    Err(BoundedHelperError::Started(error)) => return Err(error),
+                }
             }
         }
     }
@@ -523,6 +596,224 @@ pub(crate) fn run_python_helper(
         "failed to spawn python helper ({})",
         last_error.unwrap_or_else(|| "unknown error".to_string())
     )))
+}
+
+enum BoundedHelperError {
+    Spawn(io::Error),
+    Started(ApiError),
+}
+
+struct BoundedHelperLogGuard {
+    stdout_path: PathBuf,
+    stderr_path: PathBuf,
+}
+
+impl Drop for BoundedHelperLogGuard {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.stdout_path);
+        let _ = fs::remove_file(&self.stderr_path);
+    }
+}
+
+fn run_bounded_python_helper(
+    mut command: ProcessCommand,
+    workspace_root: &Path,
+) -> Result<Output, BoundedHelperError> {
+    let (stdout, stderr, logs) = match create_bounded_helper_logs(workspace_root) {
+        Ok(logs) => logs,
+        Err(error) => return Err(BoundedHelperError::Started(error)),
+    };
+    let stdout_path = logs.stdout_path.clone();
+    let stderr_path = logs.stderr_path.clone();
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(stdout))
+        .stderr(Stdio::from(stderr));
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(error) => return Err(BoundedHelperError::Spawn(error)),
+    };
+    let deadline = Instant::now() + BOUNDED_PYTHON_HELPER_TIMEOUT;
+    let status = loop {
+        if let Err(error) = bounded_helper_log_size(&stdout_path, &stderr_path) {
+            let cleanup = stop_bounded_helper(&mut child);
+            return Err(BoundedHelperError::Started(combine_bounded_error(
+                "Python helper log inspection failed",
+                error,
+                cleanup,
+            )));
+        }
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {
+                let now = Instant::now();
+                if now >= deadline {
+                    let cleanup = stop_bounded_helper(&mut child);
+                    return Err(BoundedHelperError::Started(
+                        bounded_helper_failure_with_cleanup(
+                            "Python helper exceeded the 30 second deadline",
+                            cleanup,
+                        ),
+                    ));
+                }
+                let remaining = deadline.saturating_duration_since(now);
+                thread::sleep(std::cmp::min(
+                    BOUNDED_PYTHON_HELPER_POLL_INTERVAL,
+                    remaining,
+                ));
+            }
+            Err(error) => {
+                let cleanup = stop_bounded_helper(&mut child);
+                return Err(BoundedHelperError::Started(combine_bounded_error(
+                    "Python helper status polling failed",
+                    error,
+                    cleanup,
+                )));
+            }
+        }
+    };
+    if let Err(error) = bounded_helper_log_size(&stdout_path, &stderr_path) {
+        return Err(BoundedHelperError::Started(ApiError::internal(format!(
+            "Python helper log inspection failed after exit: {error}"
+        ))));
+    }
+    let stdout = match read_bounded_helper_log(&stdout_path) {
+        Ok(bytes) => bytes,
+        Err(error) => return Err(BoundedHelperError::Started(error)),
+    };
+    let stderr = match read_bounded_helper_log(&stderr_path) {
+        Ok(bytes) => bytes,
+        Err(error) => return Err(BoundedHelperError::Started(error)),
+    };
+    drop(logs);
+    Ok(Output {
+        status,
+        stdout,
+        stderr,
+    })
+}
+
+fn create_bounded_helper_logs(
+    workspace_root: &Path,
+) -> Result<(File, File, BoundedHelperLogGuard), ApiError> {
+    let stdout_path = workspace_root.join(format!("python-helper-{}-stdout.log", uuid_v4_hex()));
+    let stderr_path = workspace_root.join(format!("python-helper-{}-stderr.log", uuid_v4_hex()));
+    let stdout = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&stdout_path)
+        .map_err(|error| {
+            ApiError::internal(format!(
+                "failed to create bounded Python helper stdout log: {error}"
+            ))
+        })?;
+    let stderr = match OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&stderr_path)
+    {
+        Ok(file) => file,
+        Err(error) => {
+            let _ = fs::remove_file(&stdout_path);
+            return Err(ApiError::internal(format!(
+                "failed to create bounded Python helper stderr log: {error}"
+            )));
+        }
+    };
+    Ok((
+        stdout,
+        stderr,
+        BoundedHelperLogGuard {
+            stdout_path,
+            stderr_path,
+        },
+    ))
+}
+
+fn bounded_helper_log_size(stdout_path: &Path, stderr_path: &Path) -> Result<u64, ApiError> {
+    let stdout_size = bounded_helper_log_metadata(stdout_path, "stdout")?;
+    let stderr_size = bounded_helper_log_metadata(stderr_path, "stderr")?;
+    let combined = stdout_size
+        .checked_add(stderr_size)
+        .ok_or_else(|| ApiError::internal("Python helper log size overflow"))?;
+    if combined > BOUNDED_PYTHON_HELPER_LOG_LIMIT {
+        return Err(ApiError::internal(format!(
+            "Python helper output exceeded the {} byte combined log limit",
+            BOUNDED_PYTHON_HELPER_LOG_LIMIT
+        )));
+    }
+    Ok(combined)
+}
+
+fn bounded_helper_log_metadata(path: &Path, stream: &str) -> Result<u64, ApiError> {
+    let metadata = fs::symlink_metadata(path).map_err(|error| {
+        ApiError::internal(format!(
+            "failed to inspect bounded Python helper {stream} log: {error}"
+        ))
+    })?;
+    if !metadata.file_type().is_file() {
+        return Err(ApiError::internal(format!(
+            "bounded Python helper {stream} log is not a regular file"
+        )));
+    }
+    Ok(metadata.len())
+}
+
+fn read_bounded_helper_log(path: &Path) -> Result<Vec<u8>, ApiError> {
+    bounded_helper_log_metadata(path, "captured")?;
+    let mut file = File::open(path).map_err(|error| {
+        ApiError::internal(format!("failed to read bounded Python helper log: {error}"))
+    })?;
+    let mut bytes = Vec::new();
+    file.take(BOUNDED_PYTHON_HELPER_LOG_LIMIT + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| {
+            ApiError::internal(format!("failed to read Python helper log: {error}"))
+        })?;
+    if bytes.len() as u64 > BOUNDED_PYTHON_HELPER_LOG_LIMIT {
+        return Err(ApiError::internal(
+            "Python helper log exceeded the bounded read limit",
+        ));
+    }
+    Ok(bytes)
+}
+
+fn stop_bounded_helper(child: &mut Child) -> Result<(), String> {
+    let kill_error = match child.kill() {
+        Ok(()) => None,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(error) => Some(format!("kill failed: {error}")),
+    };
+    let wait_error = child
+        .wait()
+        .err()
+        .map(|error| format!("wait failed: {error}"));
+    match (kill_error, wait_error) {
+        (None, None) => Ok(()),
+        (Some(kill), None) => Err(kill),
+        (None, Some(wait)) => Err(wait),
+        (Some(kill), Some(wait)) => Err(format!("{kill}; {wait}")),
+    }
+}
+
+fn bounded_helper_failure_with_cleanup(message: &str, cleanup: Result<(), String>) -> ApiError {
+    match cleanup {
+        Ok(()) => ApiError::internal(message),
+        Err(cleanup) => ApiError::internal(format!("{message}; process cleanup failed: {cleanup}")),
+    }
+}
+
+fn combine_bounded_error<E: std::fmt::Display>(
+    message: &str,
+    error: E,
+    cleanup: Result<(), String>,
+) -> ApiError {
+    match cleanup {
+        Ok(()) => ApiError::internal(format!("{message}: {error}")),
+        Err(cleanup) => ApiError::internal(format!(
+            "{message}: {error}; process cleanup failed: {cleanup}"
+        )),
+    }
 }
 
 fn python_path_candidates(repo_root: &Path) -> Vec<PathBuf> {

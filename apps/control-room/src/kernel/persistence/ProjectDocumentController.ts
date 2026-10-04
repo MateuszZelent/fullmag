@@ -1,5 +1,6 @@
 import type {
   ProjectArchiveRequest,
+  ProjectAuthoringUpdateRequest,
   ProjectCreateRequest,
   ProjectDocumentResource,
 } from "../api/apiTypes";
@@ -7,6 +8,7 @@ import type { ControlRoomApi } from "../api/ControlRoomApi";
 import {
   assertProjectDocumentReopenMatches,
   captureProjectDocumentDevelopmentHandoff,
+  cloneBoundedProjectJsonObject,
   validateProjectDocumentDevelopmentHandoff,
   validateProjectDocumentResource,
   type CaptureProjectDocumentDevelopmentHandoffOptions,
@@ -87,6 +89,9 @@ export interface ProjectDocumentApi {
         request: ProjectCreateRequest,
       ): Promise<ProjectDocumentResource>;
       open(request: ProjectArchiveRequest): Promise<ProjectDocumentResource>;
+      authoringUpdate(
+        request: ProjectAuthoringUpdateRequest,
+      ): Promise<ProjectDocumentResource>;
     };
   };
 }
@@ -102,7 +107,13 @@ export const EMPTY_PROJECT_DOCUMENT_SNAPSHOT: ProjectDocumentSnapshot = {
 export class ProjectDocumentController {
   private snapshot: ProjectDocumentSnapshot = EMPTY_PROJECT_DOCUMENT_SNAPSHOT;
   private readonly listeners = new Set<() => void>();
-  private activeOperation: "create" | "open" | "save" | "restore" | null = null;
+  private activeOperation:
+    | "create"
+    | "open"
+    | "save"
+    | "restore"
+    | "authoring"
+    | null = null;
 
   constructor(private readonly api: ProjectDocumentApi | ControlRoomApi) {}
 
@@ -234,6 +245,114 @@ export class ProjectDocumentController {
     }
   }
 
+  /**
+   * Synchronize an explicit scene document into the current portable archive.
+   * This updates only the in-memory project snapshot; durable Save remains a
+   * separate user action.
+   */
+  async synchronizeAuthoring(
+    sceneDocument: Record<string, unknown>,
+  ): Promise<ProjectDocumentResource> {
+    this.assertOperationAvailable();
+    const currentSnapshot = this.snapshot;
+    if (currentSnapshot.state !== "ready") {
+      throw new Error("No project document is open.");
+    }
+
+    const currentResource = validateProjectDocumentResource(
+      currentSnapshot.resource,
+    );
+    if (
+      currentResource.mode.kind !== "read_write" ||
+      !currentResource.migration.can_write
+    ) {
+      throw new Error(
+        currentResource.mode.kind === "read_only"
+          ? currentResource.mode.reason || "This project is read-only."
+          : "This project cannot be authored under its migration policy.",
+      );
+    }
+    if (!Number.isSafeInteger(currentResource.revision)) {
+      throw new Error("The current project revision is invalid.");
+    }
+
+    this.beginOperation("authoring");
+    try {
+      const detachedSceneDocument =
+        cloneBoundedProjectJsonObject(sceneDocument);
+      const request: ProjectAuthoringUpdateRequest = {
+        archive_base64: currentResource.archive_base64,
+        display_name: currentSnapshot.fileName,
+        expected_project_id: currentResource.project_id,
+        expected_revision: currentResource.revision,
+        scene_document: detachedSceneDocument,
+      };
+      const response = validateProjectDocumentResource(
+        await this.api.persistence.projects.authoringUpdate(request),
+      );
+      assertAuthoringUpdateStableMetadata(currentResource, response);
+
+      if (response.revision === currentResource.revision) {
+        if (response.archive_base64 !== currentResource.archive_base64) {
+          throw new Error(
+            "Project authoring returned changed archive bytes without advancing the revision.",
+          );
+        }
+        return currentSnapshot.resource;
+      }
+
+      const nextRevision = currentResource.revision + 1;
+      if (
+        !Number.isSafeInteger(nextRevision) ||
+        response.revision !== nextRevision
+      ) {
+        throw new Error(
+          "Project authoring must advance the project revision by exactly one.",
+        );
+      }
+      if (response.dirty !== true) {
+        throw new Error(
+          "Project authoring returned a changed archive that is not marked dirty.",
+        );
+      }
+      if (response.archive_base64 === currentResource.archive_base64) {
+        throw new Error(
+          "Project authoring advanced the revision without changing archive bytes.",
+        );
+      }
+
+      const preservedResource: ProjectDocumentResource = {
+        ...response,
+        dirty: true,
+      };
+      if (Object.hasOwn(currentResource, "persisted_revision")) {
+        preservedResource.persisted_revision =
+          currentResource.persisted_revision;
+      } else {
+        delete preservedResource.persisted_revision;
+      }
+      if (Object.hasOwn(currentResource, "source_hash")) {
+        preservedResource.source_hash = currentResource.source_hash;
+      } else {
+        delete preservedResource.source_hash;
+      }
+
+      const updatedResource =
+        validateProjectDocumentResource(preservedResource);
+      this.snapshot = {
+        error: null,
+        fileName: currentSnapshot.fileName,
+        hostPath: currentSnapshot.hostPath,
+        resource: updatedResource,
+        state: "ready",
+      };
+      this.notify();
+      return updatedResource;
+    } finally {
+      this.finishOperation("authoring");
+    }
+  }
+
   async save(): Promise<void> {
     this.assertOperationAvailable();
     if (this.snapshot.state !== "ready") {
@@ -303,12 +422,16 @@ export class ProjectDocumentController {
     }
   }
 
-  private beginOperation(operation: "create" | "open" | "save" | "restore"): void {
+  private beginOperation(
+    operation: "create" | "open" | "save" | "restore" | "authoring",
+  ): void {
     this.assertOperationAvailable();
     this.activeOperation = operation;
   }
 
-  private finishOperation(operation: "create" | "open" | "save" | "restore"): void {
+  private finishOperation(
+    operation: "create" | "open" | "save" | "restore" | "authoring",
+  ): void {
     if (this.activeOperation === operation) this.activeOperation = null;
   }
 
@@ -469,4 +592,22 @@ function downloadProjectArchive(bytes: Uint8Array, fileName: string): void {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "Project document operation failed.";
+}
+
+function assertAuthoringUpdateStableMetadata(
+  current: ProjectDocumentResource,
+  updated: ProjectDocumentResource,
+): void {
+  if (
+    updated.project_id !== current.project_id ||
+    updated.name !== current.name ||
+    updated.schema_version !== current.schema_version ||
+    updated.mode.kind !== current.mode.kind ||
+    updated.migration.can_write !== current.migration.can_write ||
+    updated.migration.target_schema !== current.migration.target_schema
+  ) {
+    throw new Error(
+      "Project authoring changed project identity or writable document metadata.",
+    );
+  }
 }

@@ -44,6 +44,7 @@ function apiFor(
       projects: {
         create: vi.fn(async () => createResponse),
         open: vi.fn(async () => openResponse),
+        authoringUpdate: vi.fn(async () => openResponse),
       },
     },
   };

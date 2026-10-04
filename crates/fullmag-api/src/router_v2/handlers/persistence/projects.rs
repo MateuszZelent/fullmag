@@ -13,19 +13,26 @@ use axum::{
 };
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use fullmag_application::{
-    CreateProjectRequest, DocumentMode, FileProjectRepository, ProjectApplication, ProjectId,
-    ProjectSource, RunId, RunIntent, RunSpecification, SubmitDisposition,
+    ApplicationError, CreateProjectRequest, DocumentMode, FileProjectRepository, OpaqueDocument,
+    ProjectApplication, ProjectId, ProjectSource, RawJsonEnvelope, RunId, RunIntent,
+    RunSpecification, SubmitDisposition,
 };
-use fullmag_authoring::StudyPlan;
+use fullmag_authoring::{
+    validate_scene_document, validate_scene_document_for_authoring, SceneDocument, StudyPlan,
+};
 use fullmag_plan::StudyProblemCatalog;
-use std::path::Path as FsPath;
+use serde_json::Value;
+use sha2::{Digest, Sha256};
+use std::fs::{self, File};
+use std::io::Read;
+use std::path::{Path as FsPath, PathBuf as FsPathBuf};
 use std::sync::Arc;
 
 use crate::error::ApiError;
 use crate::schemas::projects::{
-    ProjectArchiveDurability, ProjectArchiveRequest, ProjectCreateRequest, ProjectDocumentMode,
-    ProjectDocumentResource, ProjectMigrationResource, ProjectRunCatalogState,
-    ProjectRunExecutionState, ProjectRunListQuery, ProjectRunListResource,
+    ProjectArchiveDurability, ProjectArchiveRequest, ProjectAuthoringUpdateRequest,
+    ProjectCreateRequest, ProjectDocumentMode, ProjectDocumentResource, ProjectMigrationResource,
+    ProjectRunCatalogState, ProjectRunExecutionState, ProjectRunListQuery, ProjectRunListResource,
     ProjectRunMaterializationResource, ProjectRunMinimumResourceBudgetResource,
     ProjectRunRequestedExecutionResource, ProjectRunResource, ProjectRunSubmitDisposition,
     ProjectRunSubmitRequest, ProjectRunSubmitResource, ProjectRunSummaryResource,
@@ -34,6 +41,28 @@ use crate::schemas::projects::{
     PROJECT_ARCHIVE_MAX_BYTES,
 };
 use crate::types::AppState;
+
+const AUTHORING_SOURCE_MAX_BYTES: u64 = 8 * 1024 * 1024;
+
+/// Removes only the known generated source file.  The helper owns its
+/// `scene-export-*.json` lifecycle; any unexpected file left in the private
+/// directory is intentionally retained for diagnosis instead of being
+/// removed recursively.
+struct GeneratedSourceGuard {
+    dir: FsPathBuf,
+    path: FsPathBuf,
+}
+
+impl Drop for GeneratedSourceGuard {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+        // This is intentionally non-recursive.  The helper owns the known
+        // `scene-export-*.json` files; retaining any unexpected file keeps a
+        // diagnosis available and prevents us from deleting outside the
+        // private directory's known outputs.
+        let _ = fs::remove_dir(&self.dir);
+    }
+}
 
 fn map_run_store_error(
     error: anyhow::Error,
@@ -742,6 +771,325 @@ pub async fn open(
         opened.view,
         archive,
     )?))
+}
+
+#[utoipa::path(
+    post,
+    path = "/v2/persistence/projects/authoring",
+    request_body = ProjectAuthoringUpdateRequest,
+    responses(
+        (status = 200, description = "Updated runtime-free project document bytes", body = ProjectDocumentResource),
+        (status = 400, description = "Invalid project archive or scene document"),
+        (status = 409, description = "Project identity, revision, or read-only conflict"),
+        (status = 500, description = "Canonical source rendering failed")
+    ),
+    tag = "persistence"
+)]
+pub async fn authoring_update(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<ProjectAuthoringUpdateRequest>,
+) -> Result<Json<ProjectDocumentResource>, ApiError> {
+    let expected_project_id = ProjectId::parse(request.expected_project_id)
+        .map_err(|error| ApiError::bad_request(format!("invalid expected_project_id: {error}")))?;
+    let scene_value = Value::Object(request.scene_document.into_iter().collect());
+    if scene_value.get("version").and_then(Value::as_str) != Some("scene.v2") {
+        return Err(ApiError::bad_request(
+            "scene_document.version must explicitly be scene.v2",
+        ));
+    }
+    let scene_document: SceneDocument = serde_json::from_value(scene_value.clone())
+        .map_err(|error| ApiError::bad_request(format!("invalid scene_document: {error}")))?;
+    validate_scene_document_for_authoring(&scene_document)
+        .map_err(|error| ApiError::bad_request(format!("invalid scene_document: {error}")))?;
+
+    let repo_root = state.repo_root.clone();
+    let workspace_root = state.current_workspace_root.clone();
+    let display_name = request.display_name;
+    let archive_base64 = request.archive_base64;
+    let expected_revision = request.expected_revision;
+    let resource = tokio::task::spawn_blocking(move || {
+        authoring_update_blocking(
+            &repo_root,
+            &workspace_root,
+            display_name,
+            archive_base64,
+            expected_project_id,
+            expected_revision,
+            scene_value,
+            scene_document,
+        )
+    })
+    .await
+    .map_err(|error| ApiError::internal(format!("project authoring task failed: {error}")))??;
+    Ok(Json(resource))
+}
+
+fn authoring_update_blocking(
+    repo_root: &FsPath,
+    workspace_root: &FsPath,
+    display_name: String,
+    archive_base64: String,
+    expected_project_id: ProjectId,
+    expected_revision: u64,
+    scene_value: Value,
+    scene_document: SceneDocument,
+) -> Result<ProjectDocumentResource, ApiError> {
+    let source_bytes = decode_archive(&ProjectArchiveRequest {
+        display_name: display_name.clone(),
+        archive_base64,
+    })?;
+    let mut application = ProjectApplication::new(FileProjectRepository::new());
+    let opened = application
+        .open(ProjectSource::Bytes {
+            display_name,
+            bytes: source_bytes.clone(),
+        })
+        .map_err(map_authoring_application_error)?;
+    if !opened.view.mode.is_writable() {
+        return Err(ApiError::conflict(
+            "project archive is read-only and cannot be authored",
+        ));
+    }
+    if opened.view.project_id != expected_project_id {
+        return Err(ApiError::conflict(
+            "project identity differs from expected_project_id",
+        ));
+    }
+    if opened.view.revision != expected_revision {
+        return Err(ApiError::conflict(format!(
+            "project revision differs from expected_revision: expected {}, found {}",
+            expected_revision, opened.view.revision
+        )));
+    }
+
+    let current = application
+        .current_document()
+        .cloned()
+        .ok_or_else(|| ApiError::internal("project application has no current document"))?;
+    let raw_scene_matches = current.definition.scene.value() == &scene_value;
+    let renderable = scene_document
+        .objects
+        .iter()
+        .any(|object| object.role == "magnet")
+        && validate_scene_document(&scene_document).is_ok();
+    let generated_source = if renderable {
+        let private_dir = workspace_root.join(format!(
+            ".fullmag-authoring-update-{}",
+            crate::uuid_v4_hex()
+        ));
+        fs::create_dir_all(workspace_root).map_err(|error| {
+            ApiError::internal(format!("failed to prepare authoring workspace: {error}"))
+        })?;
+        fs::create_dir(&private_dir).map_err(|error| {
+            ApiError::internal(format!(
+                "failed to create private authoring workspace: {error}"
+            ))
+        })?;
+        let generated_source_path = private_dir.join("source.py");
+        let _generated_source_guard = GeneratedSourceGuard {
+            dir: private_dir.clone(),
+            path: generated_source_path.clone(),
+        };
+        let rendered = crate::script::render_scene_document_via_python_helper_bounded(
+            repo_root,
+            &private_dir,
+            &generated_source_path,
+            &scene_document,
+        )?;
+        if !rendered.written {
+            return Err(ApiError::internal(
+                "canonical SceneDocument render helper did not write source",
+            ));
+        }
+        let generated_source = read_generated_source(&generated_source_path)?;
+        if rendered.bytes_written != generated_source.len() {
+            return Err(ApiError::internal(
+                "canonical SceneDocument render helper byte count is inconsistent",
+            ));
+        }
+        Some(generated_source)
+    } else {
+        None
+    };
+    let source_matches =
+        current.source.as_ref().map(|source| source.bytes()) == generated_source.as_deref();
+    if raw_scene_matches && source_matches {
+        return Ok(resource_from_application(
+            &application,
+            opened.view,
+            source_bytes,
+        )?);
+    }
+
+    let mut draft = current;
+    let previous_source = draft
+        .source
+        .as_ref()
+        .map(|source| (source.path().to_string(), source.bytes().to_vec()));
+    if generated_source.is_none() {
+        draft.source = None;
+        if let Some((_, previous_bytes)) = previous_source.as_ref() {
+            preserve_source_history(&mut draft, previous_bytes)?;
+        }
+    } else {
+        let generated_source = generated_source
+            .as_ref()
+            .expect("renderable authoring scene has generated source");
+        let source_entry_path = draft
+            .source
+            .as_ref()
+            .map(|source| source.path().to_string())
+            .unwrap_or_else(|| "project/source.py".to_string());
+        if let Some((_, previous_bytes)) = previous_source.as_ref() {
+            if previous_bytes != generated_source {
+                preserve_source_history(&mut draft, previous_bytes)?;
+            }
+        }
+
+        if draft
+            .assets
+            .iter()
+            .any(|asset| asset.path() == source_entry_path.as_str())
+        {
+            return Err(ApiError::conflict(format!(
+                "asset conflicts with canonical source path {source_entry_path}"
+            )));
+        }
+        if let Some(conflict) = draft.opaque_documents.iter().find(|document| {
+            document.path() == source_entry_path.as_str()
+                && document.bytes() != generated_source.as_slice()
+        }) {
+            return Err(ApiError::conflict(format!(
+                "opaque document conflicts with canonical source path {}",
+                conflict.path()
+            )));
+        }
+        // If an older archive listed the selected source path as opaque,
+        // promote the exact entry to the source slot rather than emitting
+        // duplicate ZIP entries. A differing entry was rejected above.
+        draft
+            .opaque_documents
+            .retain(|document| document.path() != source_entry_path.as_str());
+        draft.source = Some(
+            OpaqueDocument::new(source_entry_path, generated_source.clone())
+                .map_err(|error| ApiError::bad_request(format!("invalid source path: {error}")))?,
+        );
+    }
+    let raw_scene = RawJsonEnvelope::from_value(scene_value)
+        .map_err(|error| ApiError::bad_request(format!("invalid scene document: {error}")))?;
+    draft
+        .replace_scene(raw_scene)
+        .map_err(|error| ApiError::bad_request(format!("invalid scene document: {error}")))?;
+    // Validate the complete envelope before handing it to the application
+    // writer.  This keeps duplicate source/asset/opaque paths and malformed
+    // preserved entries at the request boundary instead of mutating the
+    // in-memory document and discovering them only during ZIP encoding.
+    draft
+        .validate_for_save()
+        .map_err(|error| ApiError::bad_request(format!("invalid project archive: {error}")))?;
+    let view = application
+        .replace_draft(draft, opened.view.revision)
+        .map_err(map_authoring_application_error)?;
+    let archive = encode_current(&application)?;
+    if archive.len() > PROJECT_ARCHIVE_MAX_BYTES {
+        return Err(ApiError::bad_request(format!(
+            "updated project archive exceeds {} byte transport limit",
+            PROJECT_ARCHIVE_MAX_BYTES
+        )));
+    }
+    Ok(resource_from_application(&application, view, archive)?)
+}
+
+fn preserve_source_history(
+    envelope: &mut fullmag_application::ProjectEnvelope,
+    previous_bytes: &[u8],
+) -> Result<(), ApiError> {
+    let history_path = format!(
+        "project/source-history/{:x}.py",
+        Sha256::digest(previous_bytes)
+    );
+    if envelope
+        .source
+        .as_ref()
+        .is_some_and(|source| source.path() == history_path.as_str())
+        || envelope
+            .assets
+            .iter()
+            .any(|asset| asset.path() == history_path.as_str())
+    {
+        return Err(ApiError::conflict(format!(
+            "source history path {history_path} conflicts with an existing project entry"
+        )));
+    }
+    if let Some(existing) = envelope
+        .opaque_documents
+        .iter()
+        .find(|document| document.path() == history_path.as_str())
+    {
+        if existing.bytes() != previous_bytes {
+            return Err(ApiError::conflict(format!(
+                "source history path {} already contains different bytes",
+                history_path
+            )));
+        }
+        return Ok(());
+    }
+    envelope.opaque_documents.push(
+        OpaqueDocument::new(history_path, previous_bytes.to_vec())
+            .map_err(|error| ApiError::internal(format!("invalid source history path: {error}")))?,
+    );
+    Ok(())
+}
+
+fn read_generated_source(path: &FsPath) -> Result<Vec<u8>, ApiError> {
+    let metadata = fs::symlink_metadata(path).map_err(|error| {
+        ApiError::internal(format!("canonical source output is unavailable: {error}"))
+    })?;
+    if !metadata.file_type().is_file() || metadata.len() > AUTHORING_SOURCE_MAX_BYTES {
+        return Err(ApiError::internal(
+            "canonical source output is not a bounded regular file",
+        ));
+    }
+    let mut file = File::open(path).map_err(|error| {
+        ApiError::internal(format!("failed to read canonical source output: {error}"))
+    })?;
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    file.take(AUTHORING_SOURCE_MAX_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| ApiError::internal(format!("failed to read canonical source: {error}")))?;
+    if bytes.is_empty() || bytes.len() as u64 > AUTHORING_SOURCE_MAX_BYTES {
+        return Err(ApiError::internal(
+            "canonical source output is empty or exceeds the 8 MiB limit",
+        ));
+    }
+    String::from_utf8(bytes.clone()).map_err(|error| {
+        ApiError::internal(format!("canonical source output is not UTF-8: {error}"))
+    })?;
+    Ok(bytes)
+}
+
+fn map_authoring_application_error(
+    error: ApplicationError<fullmag_application::FileRepositoryError>,
+) -> ApiError {
+    match error {
+        ApplicationError::ReadOnly { reason, .. } => ApiError::conflict(format!(
+            "project archive is read-only and cannot be authored: {reason}"
+        )),
+        ApplicationError::RevisionConflict { expected, actual } => ApiError::conflict(format!(
+            "project revision conflict: expected {expected:?}, found {actual:?}"
+        )),
+        ApplicationError::ProjectIdMismatch => {
+            ApiError::conflict("project identity differs from the current document")
+        }
+        ApplicationError::Repository(error) => {
+            ApiError::bad_request(format!("invalid_project_document: {error}"))
+        }
+        ApplicationError::InvalidRequest(error) | ApplicationError::InvalidDefinition(error) => {
+            ApiError::bad_request(error)
+        }
+        ApplicationError::RepositoryContract(error) => ApiError::internal(error),
+        other => ApiError::internal(format!("project authoring application error: {other}")),
+    }
 }
 
 fn decode_archive(request: &ProjectArchiveRequest) -> Result<Vec<u8>, ApiError> {

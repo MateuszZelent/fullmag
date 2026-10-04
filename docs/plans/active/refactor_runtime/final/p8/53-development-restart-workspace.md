@@ -1,5 +1,12 @@
 # P8-53 — bezpieczne zastosowanie nowego backendu w workspace
 
+[P8-53AL](53al-project-authoring-archive.md) dodaje jawną aktualizację archiwum
+projektu z dokumentu sceny, z kontrolą ID/revision i zachowaniem assets,
+metadanych oraz historii źródła. Natywne API: 25 kontroli PASS; kontroler
+w przeglądarce: 15 grup PASS. Niekompletny szkic nie udaje wykonywalnego
+Pythona. Powiązanie projektu z sesją, PendingForms i pełny restart UI
+pozostają otwarte. Usunięto wcześniejszą zależność kernel→Start.
+
 [P8-53AK](53ak-project-document-handoff.md) dodaje capture i walidowane
 odtworzenie odrębnego dokumentu projektu w kontrolerze. Natywne otwarcie
 archiwum: 11 kontroli PASS; browser: 9 grup PASS, TypeScript i lint PASS.

@@ -186,6 +186,7 @@ import {
   PERSISTENCE_IMPORT_INSPECTIONS_PATH,
   PERSISTENCE_IMPORTS_PATH,
   PERSISTENCE_PROJECT_OPEN_PATH,
+  PERSISTENCE_PROJECT_AUTHORING_PATH,
   PERSISTENCE_PROJECTS_PATH,
   PROJECT_MATERIALIZED_DATASET_PATH,
   PROJECT_MATERIALIZED_DATASET_SLICE_PATH,
@@ -460,6 +461,7 @@ import type {
   SessionImportInspectRequest,
   SessionImportInspectResponse,
   ProjectArchiveRequest,
+  ProjectAuthoringUpdateRequest,
   ProjectCreateRequest,
   ProjectDocumentResource,
   ProjectRunSubmitRequest,
@@ -3094,6 +3096,12 @@ export class ControlRoomApi {
       open: (request: ProjectArchiveRequest, options?: RequestOptions) =>
         this.postJson<ProjectDocumentResource, ProjectArchiveRequest>(
           PERSISTENCE_PROJECT_OPEN_PATH,
+          request,
+          options,
+        ),
+      authoringUpdate: (request: ProjectAuthoringUpdateRequest, options?: RequestOptions) =>
+        this.postJson<ProjectDocumentResource, ProjectAuthoringUpdateRequest>(
+          PERSISTENCE_PROJECT_AUTHORING_PATH,
           request,
           options,
         ),

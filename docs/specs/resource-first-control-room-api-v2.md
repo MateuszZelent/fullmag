@@ -298,6 +298,18 @@ endpoints are not runtime-session import or restore aliases; durable Save,
 host file selection, and the UI document lifecycle remain separate follow-up
 work.
 
+`POST /v2/persistence/projects/authoring` aktualizuje dostarczone archiwum
+przez ten sam use case dokumentu. Wymaga oczekiwanego ProjectId i rewizji oraz
+pełnego `scene.v2`; konflikt i read-only dają odmowę. Zapisuje surową scenę
+po walidacji typowanej, zachowuje dodatkowe pola i istniejące assets, generuje
+kanoniczny Python kompletnej sceny bez wykonania źródła użytkownika ani Compute
+i zachowuje poprzednie źródło jako
+opaque history. Zmiana zwiększa rewizję raz; identyczna scena i źródło są no-op.
+Odpowiedź nadal ma `memory_only` durability. Operacja nie wybiera sesji,
+nie importuje nowych plików hosta i nie uruchamia przygotowania ani Compute.
+Niekompletny szkic pozostaje zapisywalny z brakiem bieżącego źródła; stary
+Python zostaje w historii. Eksport Python szkicu wymaga odrębnej bramki.
+
 The durable run read model is `GET
 /v2/persistence/projects/{project_id}/runs/{run_id}`. It reads the accepted
 RunIntent and optional task catalog from managed project storage, verifies the

@@ -1017,6 +1017,9 @@ export const PERSISTENCE_PROJECTS_PATH = openApiV2Path(
 export const PERSISTENCE_PROJECT_OPEN_PATH = openApiV2Path(
   "/v2/persistence/projects/open",
 );
+export const PERSISTENCE_PROJECT_AUTHORING_PATH = openApiV2Path(
+  "/v2/persistence/projects/authoring",
+);
 
 export const PROJECT_RUN_SUBMIT_PATH = openApiV2Path(
   "/v2/persistence/projects/{project_id}/runs",

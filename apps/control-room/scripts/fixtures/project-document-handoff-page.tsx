@@ -4,6 +4,7 @@ import { useEffect } from "react";
 
 import type {
   ProjectArchiveRequest,
+  ProjectAuthoringUpdateRequest,
   ProjectCreateRequest,
   ProjectDocumentResource,
 } from "@/kernel/api/apiTypes";
@@ -43,6 +44,10 @@ type OpenTransform = (
   resource: ProjectDocumentResource,
   request: ProjectArchiveRequest,
 ) => ProjectDocumentResource;
+type AuthoringTransform = (
+  resource: ProjectDocumentResource,
+  request: ProjectAuthoringUpdateRequest,
+) => ProjectDocumentResource;
 
 interface MockApiOptions {
   readonly createResource?: ProjectDocumentResource;
@@ -51,6 +56,10 @@ interface MockApiOptions {
   readonly openDeferred?: Deferred<ProjectDocumentResource>;
   readonly failOpen?: Error;
   readonly failOpenOnce?: Error;
+  readonly authoringResource?: ProjectDocumentResource;
+  readonly authoringTransform?: AuthoringTransform;
+  readonly authoringDeferred?: Deferred<ProjectDocumentResource>;
+  readonly failAuthoring?: Error;
 }
 
 interface MockApiState {
@@ -58,6 +67,7 @@ interface MockApiState {
   readonly calls: {
     readonly create: ProjectCreateRequest[];
     readonly open: ProjectArchiveRequest[];
+    readonly authoring: ProjectAuthoringUpdateRequest[];
   };
 }
 
@@ -158,7 +168,11 @@ function resource(
 }
 
 function makeMockApi(options: MockApiOptions = {}): MockApiState {
-  const calls = { create: [] as ProjectCreateRequest[], open: [] as ProjectArchiveRequest[] };
+  const calls = {
+    create: [] as ProjectCreateRequest[],
+    open: [] as ProjectArchiveRequest[],
+    authoring: [] as ProjectAuthoringUpdateRequest[],
+  };
   let failedOnce = false;
 
   const api: ProjectDocumentApi = {
@@ -189,6 +203,14 @@ function makeMockApi(options: MockApiOptions = {}): MockApiState {
             persisted_revision: returned.revision,
           };
           return clone(options.openTransform?.(normalized, request) ?? normalized);
+        },
+        authoringUpdate: async (request) => {
+          calls.authoring.push(clone(request));
+          const returned = options.authoringDeferred
+            ? await options.authoringDeferred.promise
+            : options.authoringResource ?? resource();
+          if (options.failAuthoring) throw options.failAuthoring;
+          return clone(options.authoringTransform?.(returned, request) ?? returned);
         },
       },
     },
@@ -713,6 +735,240 @@ async function checkFailedRestoreCanRetry(): Promise<void> {
   assertCondition(openCountAfterRetry === 2, "Explicit restore retry did not issue exactly one new open");
 }
 
+async function checkAuthoringUpdatePreservesSourceMetadata(): Promise<void> {
+  const updatedArchive = bytesToBase64(new Uint8Array([80, 75, 3, 4, 9, 8, 7]));
+  const state = makeMockApi({
+    openResource: resource({
+      migration: migration({
+        migrated: true,
+        preserved_paths: ["project/main.py", "project/assets/mesh.bin"],
+      }),
+      source_hash: "sha256:original-source",
+    }),
+    authoringResource: resource({
+      archive_base64: updatedArchive,
+      dirty: true,
+      migration: migration({
+        migrated: true,
+        preserved_paths: ["project/main.py", "project/assets/mesh.bin"],
+      }),
+      name: "Development handoff project",
+      persisted_revision: 8,
+      project_id: PROJECT_ID,
+      revision: 8,
+      source_hash: "sha256:transient-api-source",
+    }),
+  });
+  const controller = new ProjectDocumentController(state.api);
+  await controller.open({
+    bytes: ARCHIVE_BYTES,
+    fileName: "Source handoff.fms",
+    hostPath: HOST_PATH,
+  });
+  const before = controller.getSnapshot();
+  assertCondition(before.state === "ready", "Authoring source did not open");
+  const originalScene: Record<string, unknown> = {
+    version: "scene.v2",
+    objects: [{ id: "object-a", material: { saturation: 0.25 } }],
+  };
+  const callerSceneBefore = canonical(originalScene);
+
+  const updated = await controller.synchronizeAuthoring(originalScene);
+  const after = controller.getSnapshot();
+  assertCondition(after.state === "ready", "Authoring update did not leave a ready project");
+  assertCondition(updated.archive_base64 === updatedArchive, "Updated archive was not installed");
+  assertCondition(updated.revision === before.resource.revision + 1, "Updated revision did not advance once");
+  assertCondition(updated.dirty, "Updated archive was not marked dirty");
+  assertCondition(
+    updated.persisted_revision === before.resource.persisted_revision,
+    "Authoring update replaced the previous persisted revision",
+  );
+  assertCondition(
+    updated.source_hash === before.resource.source_hash,
+    "Authoring update replaced the original source hash",
+  );
+  assertCondition(after.fileName === before.fileName, "Authoring update changed the project file name");
+  assertCondition(after.hostPath === before.hostPath, "Authoring update changed the host file path");
+  assertCondition(
+    canonical(originalScene) === callerSceneBefore,
+    "Authoring update mutated the caller's scene object",
+  );
+
+  const request = state.calls.authoring[0];
+  assertCondition(state.calls.authoring.length === 1, "Authoring update was not sent exactly once");
+  assertCondition(request.archive_base64 === before.resource.archive_base64, "Authoring request archive differs");
+  assertCondition(request.display_name === before.fileName, "Authoring request display name differs");
+  assertCondition(request.expected_project_id === before.resource.project_id, "Authoring request project id differs");
+  assertCondition(request.expected_revision === before.resource.revision, "Authoring request revision differs");
+  assertCondition(canonical(request.scene_document) === callerSceneBefore, "Authoring request scene differs");
+}
+
+async function checkAuthoringNoOpRetainsSnapshot(): Promise<void> {
+  const state = makeMockApi({
+    authoringResource: resource({ name: "No-op project" }),
+    authoringTransform: (returned) => ({
+      ...returned,
+      // A stateless API response may normalize bookkeeping even when the
+      // canonical archive and definition revision are unchanged.
+      source_hash: "sha256:response-only-metadata",
+    }),
+  });
+  const controller = new ProjectDocumentController(state.api);
+  await controller.create("No-op project");
+  const before = controller.getSnapshot();
+  assertCondition(before.state === "ready", "No-op source project did not open");
+
+  const returned = await controller.synchronizeAuthoring({ version: "scene.v2" });
+  assertCondition(returned === before.resource, "No-op did not return the original resource");
+  assertCondition(controller.getSnapshot() === before, "No-op replaced or notified the controller snapshot");
+}
+
+async function checkAuthoringMismatchesFailClosed(): Promise<void> {
+  const updatedArchive = bytesToBase64(new Uint8Array([80, 75, 3, 4, 1]));
+  const state = makeMockApi({
+    authoringResource: resource({
+      archive_base64: updatedArchive,
+      dirty: true,
+      project_id: "project-foreign",
+      revision: 8,
+    }),
+  });
+  const controller = new ProjectDocumentController(state.api);
+  await controller.create("Mismatch project");
+  const before = controller.getSnapshot();
+  await expectRejected(
+    () => controller.synchronizeAuthoring({ version: "scene.v2" }),
+    "foreign authoring response",
+  );
+  assertCondition(controller.getSnapshot() === before, "Rejected authoring response changed the snapshot");
+}
+
+async function checkAuthoringBusyOperationGates(): Promise<void> {
+  const emptyPayload = capture(new ProjectDocumentController(makeMockApi().api), {
+    carryUnsaved: false,
+  });
+  const updatedArchive = bytesToBase64(new Uint8Array([80, 75, 3, 4, 4]));
+  const deferred = makeDeferred<ProjectDocumentResource>();
+  const state = makeMockApi({ authoringDeferred: deferred });
+  const controller = new ProjectDocumentController(state.api);
+  await controller.create("Busy authoring project");
+  const original = controller.getSnapshot();
+  assertCondition(original.state === "ready", "Busy authoring source did not open");
+  const authoring = controller.synchronizeAuthoring({ version: "scene.v2" });
+  await Promise.resolve();
+
+  await expectRejected(() => controller.create("blocked create"), "create while authoring pending");
+  await expectRejected(
+    () => controller.open({ bytes: ARCHIVE_BYTES, fileName: "blocked-open.fms" }),
+    "open while authoring pending",
+  );
+  await expectRejected(() => controller.save(), "save while authoring pending");
+  await expectRejected(() => controller.close(true), "close while authoring pending");
+  await expectRejected(() => capture(controller), "capture while authoring pending");
+  await expectRejected(
+    () => restore(controller, emptyPayload),
+    "restore while authoring pending",
+  );
+  await expectRejected(
+    () => controller.synchronizeAuthoring({ version: "scene.v2" }),
+    "second authoring while authoring pending",
+  );
+  assertCondition(controller.getSnapshot() === original, "Busy authoring changed the snapshot before validation");
+
+  deferred.resolve(
+    resource({
+      archive_base64: updatedArchive,
+      dirty: true,
+      name: "Busy authoring project",
+      persisted_revision: 7,
+      revision: 8,
+    }),
+  );
+  await authoring;
+}
+
+async function checkAuthoringFailuresLeaveSnapshotUnchanged(): Promise<void> {
+  const failure = new Error("fixture authoring transport failure");
+  const state = makeMockApi({ failAuthoring: failure });
+  const controller = new ProjectDocumentController(state.api);
+  await controller.create("Failure project");
+  const before = controller.getSnapshot();
+
+  let getterCalls = 0;
+  const getterScene: Record<string, unknown> = { version: "scene.v2" };
+  Object.defineProperty(getterScene, "trigger", {
+    enumerable: true,
+    get: () => {
+      getterCalls += 1;
+      controller.close(true);
+      return true;
+    },
+  });
+  let toJsonCalls = 0;
+  const toJsonScene: Record<string, unknown> = {
+    version: "scene.v2",
+    toJSON: () => {
+      toJsonCalls += 1;
+      controller.close(true);
+      return { version: "scene.v2" };
+    },
+  };
+  const symbolScene: Record<string, unknown> = { version: "scene.v2" };
+  Object.defineProperty(symbolScene, Symbol("extra"), {
+    enumerable: true,
+    value: true,
+  });
+  const circularScene: Record<string, unknown> = { version: "scene.v2" };
+  circularScene.self = circularScene;
+  const invalidScenes: Array<[string, Record<string, unknown>]> = [
+    ["accessor scene document", getterScene],
+    ["toJSON scene document", toJsonScene],
+    ["symbol-key scene document", symbolScene],
+    ["circular scene document", circularScene],
+    ["non-finite scene document", { version: "scene.v2", value: Number.NaN }],
+  ];
+  for (const [label, scene] of invalidScenes) {
+    await expectRejected(
+      () => controller.synchronizeAuthoring(scene),
+      label,
+    );
+    assertCondition(controller.getSnapshot() === before, `${label} changed the snapshot`);
+  }
+  assertCondition(getterCalls === 0, "Scene getter ran before input rejection");
+  assertCondition(toJsonCalls === 0, "Scene toJSON ran before input rejection");
+  assertCondition(state.calls.authoring.length === 0, "Invalid scene was sent to the API");
+
+  await expectRejected(
+    () => controller.synchronizeAuthoring({ version: "scene.v2" }),
+    "authoring API failure",
+  );
+  assertCondition(controller.getSnapshot() === before, "Authoring API failure changed the snapshot");
+  assertCondition(state.calls.authoring.slice().length === 1, "Authoring failure triggered an implicit retry");
+}
+
+async function checkAuthoringProxyReentryIsBusyGated(): Promise<void> {
+  const state = makeMockApi({
+    authoringResource: resource({ name: "Proxy project" }),
+  });
+  const controller = new ProjectDocumentController(state.api);
+  await controller.create("Proxy project");
+  let closeResult: boolean | null = null;
+  const proxyScene = new Proxy(
+    { version: "scene.v2" } as Record<string, unknown>,
+    {
+      getPrototypeOf(target) {
+        closeResult = controller.close(true);
+        return Reflect.getPrototypeOf(target);
+      },
+    },
+  );
+
+  await controller.synchronizeAuthoring(proxyScene);
+  assertCondition(closeResult === false, "Proxy trap closed the project during authoring validation");
+  assertCondition(controller.getSnapshot().state === "ready", "Proxy validation lost the project document");
+  assertCondition(state.calls.authoring.length === 1, "Valid proxy scene was not sent exactly once");
+}
+
 async function runChecks(): Promise<FixtureReport> {
   const checks: FixtureCheck[] = [];
   const cases: Array<[string, () => Promise<void>]> = [
@@ -725,6 +981,12 @@ async function runChecks(): Promise<FixtureReport> {
     ["malformed, extra-field, loading/error and bad-base64 payloads fail closed", checkMalformedPayloadsFailClosed],
     ["busy create/open/save/close/capture/restore operations are refused", checkBusyOperationGates],
     ["failed restore retries only after an explicit second call", checkFailedRestoreCanRetry],
+    ["authoring update preserves original source metadata and host context", checkAuthoringUpdatePreservesSourceMetadata],
+    ["same-revision authoring response is an exact no-op", checkAuthoringNoOpRetainsSnapshot],
+    ["foreign authoring identity is rejected without publishing", checkAuthoringMismatchesFailClosed],
+    ["authoring busy gate blocks concurrent document operations", checkAuthoringBusyOperationGates],
+    ["invalid input and API failure leave the snapshot unchanged", checkAuthoringFailuresLeaveSnapshotUnchanged],
+    ["proxy reentry cannot close the document during authoring validation", checkAuthoringProxyReentryIsBusyGated],
   ];
   for (const [name, check] of cases) {
     try {
