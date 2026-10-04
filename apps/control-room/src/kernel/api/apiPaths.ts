@@ -27,6 +27,37 @@ export const PLATFORM_DEVELOPMENT_BACKEND_PATH = openApiV2Path(
   "/v2/platform/development-backend",
 );
 
+export const PLATFORM_DEVELOPMENT_RESTART_REQUESTS_PATH = openApiV2Path(
+  "/v2/platform/development-restart-requests",
+);
+
+export const PLATFORM_DEVELOPMENT_RESTART_REQUEST_PATH = openApiV2Path(
+  "/v2/platform/development-restart-requests/{request_id}",
+);
+
+export function developmentRestartRequestPathParams(requestId: string) {
+  return { path: { request_id: requestId } };
+}
+
+export function isDevelopmentRestartRequestStatusPath(path: string): boolean {
+  const pathParameter = "{request_id}";
+  const parameterOffset = PLATFORM_DEVELOPMENT_RESTART_REQUEST_PATH.indexOf(
+    pathParameter,
+  );
+  if (parameterOffset < 0 || path.includes("?")) return false;
+
+  const prefix = PLATFORM_DEVELOPMENT_RESTART_REQUEST_PATH.slice(
+    0,
+    parameterOffset,
+  );
+  const requestId = path.slice(prefix.length);
+  return (
+    path.startsWith(prefix) &&
+    requestId.length > 0 &&
+    !requestId.includes("/")
+  );
+}
+
 export const PLATFORM_OPENAPI_PATH = openApiV2Path(
   "/v2/platform/openapi.json",
 );

@@ -1,5 +1,12 @@
 # Status realizacji całego planu refaktoryzacji
 
+Checkpoint P8-53AP, 04.10.2026: [rekoncyliacja restartu w UI](p8/53ap-frontend-restart-reconciliation.md).
+Koordynator zachowuje pojedynczy intent, po lost ACK odczytuje ten sam request
+i wymaga świeżego pinu oraz zgodnych payloadów przed hydration. 35 grup
+interpretowanych sprawdzeń, production TypeScript, API hygiene i lint PASS.
+Review źródeł bez otwartych Required findings. Konkretni ownerzy, przejęcie kernela/cache
+i pełny browser/native flow pozostają otwarte; procenty bez awansu.
+
 Checkpoint P8-53AO, 04.10.2026: [natywny konsument restartu](p8/53ao-native-restart-consumer.md).
 Pętla launchera konsumuje trwałe żądanie, selektor wiąże gotowy pakiet,
 a idle observers są pauzowane przed commitem i przypinane do świeżego API.

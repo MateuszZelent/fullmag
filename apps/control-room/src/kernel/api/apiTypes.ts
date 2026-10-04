@@ -213,6 +213,10 @@ export type GeometryValidationResource =
   components["schemas"]["GeometryValidationResource"];
 export type HealthResource = components["schemas"]["HealthResponse"];
 export type DevelopmentBackendResource = components["schemas"]["DevelopmentBackendResource"];
+export type DevelopmentRestartRequest =
+  components["schemas"]["DevelopmentRestartRequest"];
+export type DevelopmentRestartResource =
+  components["schemas"]["DevelopmentRestartResource"];
 export type ImportSessionAssetRequest =
   components["schemas"]["ImportSessionAssetRequest"];
 export type SessionAssetImportResponse =

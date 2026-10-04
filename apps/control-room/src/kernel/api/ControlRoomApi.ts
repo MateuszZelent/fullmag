@@ -205,6 +205,10 @@ import {
   PLATFORM_CAPABILITIES_PATH,
   PLATFORM_HEALTH_PATH,
   PLATFORM_DEVELOPMENT_BACKEND_PATH,
+  PLATFORM_DEVELOPMENT_RESTART_REQUESTS_PATH,
+  PLATFORM_DEVELOPMENT_RESTART_REQUEST_PATH,
+  developmentRestartRequestPathParams,
+  isDevelopmentRestartRequestStatusPath,
   SESSIONS_PATH,
   SESSION_EVENTS_COMMUNICATION_POLICY_PATH,
   SESSION_STATUS_PATH,
@@ -495,6 +499,8 @@ import type {
   SolverStatusResource,
   StageExecutionResource,
   StructuredCommandRequest,
+  DevelopmentRestartRequest,
+  DevelopmentRestartResource,
   StudyRuntimePatchRequest,
   StudyRuntimeResource,
   UniversePatchRequest,
@@ -796,6 +802,10 @@ export const MAX_TOPOLOGY_BYTES = 512 * 1024 * 1024;
 const FIELD_MATERIALIZATION_TIMEOUT_MS = 5_000;
 const FIELD_MATERIALIZATION_RETRY_MS = 250;
 const FIELD_MATERIALIZATION_REQUEST_KEY = "current-field-cache";
+const DEVELOPMENT_RESTART_STATUS_POLICY_HEADER =
+  "x-fullmag-internal-api-instance-policy";
+const DEVELOPMENT_RESTART_STATUS_POLICY = "token-bound-status";
+const DEVELOPMENT_RESTART_ACKNOWLEDGEMENT_TOKEN_PATTERN = /^[a-f0-9]{32}$/;
 
 const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f-\u009f]/;
 const PROJECT_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
@@ -816,6 +826,32 @@ function assertNonEmptyId(label: string, value: string): string {
     throw new Error(`Invalid ${label}.`);
   }
   return value;
+}
+
+function developmentRestartAuthorization(token: string): string {
+  if (!DEVELOPMENT_RESTART_ACKNOWLEDGEMENT_TOKEN_PATTERN.test(token)) {
+    throw new ControlRoomApiError(
+      "Invalid development restart acknowledgement token",
+      0,
+      null,
+      "DEVELOPMENT_RESTART_TOKEN_INVALID",
+    );
+  }
+  return `Bearer ${token}`;
+}
+
+function isTokenBoundDevelopmentRestartStatusRequest(
+  method: string,
+  url: string,
+  headers: Headers,
+): boolean {
+  const authorization = headers.get("authorization");
+  return (
+    method === "GET" &&
+    isDevelopmentRestartRequestStatusPath(pathFromUrl(url)) &&
+    authorization !== null &&
+    /^Bearer [a-f0-9]{32}$/.test(authorization)
+  );
 }
 
 export function assertSolutionSetProjectId(value: string): string {
@@ -1015,6 +1051,26 @@ export class ControlRoomApi {
   readonly platform = {
     developmentBackend: (options?: RequestOptions) =>
       this.requestJson<DevelopmentBackendResource>(PLATFORM_DEVELOPMENT_BACKEND_PATH, options),
+    submitDevelopmentRestartRequest: (
+      request: DevelopmentRestartRequest,
+      acknowledgementToken: string,
+      options?: RequestOptions,
+    ) =>
+      this.submitDevelopmentRestartRequest(
+        request,
+        acknowledgementToken,
+        options,
+      ),
+    developmentRestartRequest: (
+      requestId: string,
+      acknowledgementToken: string,
+      options?: RequestOptions,
+    ) =>
+      this.developmentRestartRequest(
+        requestId,
+        acknowledgementToken,
+        options,
+      ),
     capabilities: (options?: RequestOptions) =>
       this.requestJson<PlatformCapabilitiesResource>(
         PLATFORM_CAPABILITIES_PATH,
@@ -3371,6 +3427,50 @@ export class ControlRoomApi {
     }
   }
 
+  private async submitDevelopmentRestartRequest(
+    request: DevelopmentRestartRequest,
+    acknowledgementToken: string,
+    options: RequestOptions = {},
+  ): Promise<DevelopmentRestartResource> {
+    const result = await this.transport.POST(
+      PLATFORM_DEVELOPMENT_RESTART_REQUESTS_PATH as never,
+      {
+        body: request,
+        cache: "no-store",
+        headers: {
+          Authorization: developmentRestartAuthorization(acknowledgementToken),
+        },
+        signal: options.signal,
+      } as never,
+    );
+    this.requireApiInstanceCurrent();
+    return readOpenApiResult<DevelopmentRestartResource>(result);
+  }
+
+  private async developmentRestartRequest(
+    requestId: string,
+    acknowledgementToken: string,
+    options: RequestOptions = {},
+  ): Promise<DevelopmentRestartResource> {
+    assertNonEmptyId("development restart request id", requestId);
+    const result = await this.transport.GET(
+      PLATFORM_DEVELOPMENT_RESTART_REQUEST_PATH as never,
+      {
+        cache: "no-store",
+        headers: {
+          Authorization: developmentRestartAuthorization(acknowledgementToken),
+          [DEVELOPMENT_RESTART_STATUS_POLICY_HEADER]:
+            DEVELOPMENT_RESTART_STATUS_POLICY,
+        },
+        params: developmentRestartRequestPathParams(requestId),
+        signal: options.signal,
+      } as never,
+    );
+    // This bearer-only status read is the single authorized way to inspect a
+    // restart after the old API pin has stopped matching the replacement.
+    return readOpenApiResult<DevelopmentRestartResource>(result);
+  }
+
   private async requestJson<T>(
     path: OpenApiV2Path,
     options: RequestOptions = {},
@@ -4269,6 +4369,37 @@ export class ControlRoomApi {
     init: RequestInit | undefined,
   ): Promise<Response> {
     const request = await normalizeFetchInput(input, init);
+    const headers = new Headers(request.init.headers);
+    const apiInstancePolicy = headers.get(
+      DEVELOPMENT_RESTART_STATUS_POLICY_HEADER,
+    );
+    if (apiInstancePolicy !== null) {
+      headers.delete(DEVELOPMENT_RESTART_STATUS_POLICY_HEADER);
+      request.init.headers = headers;
+      if (
+        apiInstancePolicy !== DEVELOPMENT_RESTART_STATUS_POLICY ||
+        !isTokenBoundDevelopmentRestartStatusRequest(
+          request.method,
+          request.url,
+          headers,
+        )
+      ) {
+        throw new ControlRoomApiError(
+          "Invalid token-bound development restart status request",
+          0,
+          null,
+          "DEVELOPMENT_RESTART_STATUS_POLICY_INVALID",
+        );
+      }
+      return this.executeFetchRequest(
+        request.url,
+        request.method,
+        request.init,
+        new Set(),
+        false,
+        "token-bound-restart-status",
+      );
+    }
     return this.executeFetchRequest(request.url, request.method, request.init);
   }
 
@@ -4278,12 +4409,18 @@ export class ControlRoomApi {
     init: RequestInit,
     acceptedStatuses = new Set<number>(),
     allowMissingContractVersion = false,
+    apiInstancePolicy: "pinned" | "token-bound-restart-status" = "pinned",
   ): Promise<Response> {
-    if (this.apiInstanceMismatch) {
+    const enforceApiInstancePin = apiInstancePolicy === "pinned";
+    if (enforceApiInstancePin && this.apiInstanceMismatch) {
       throw new ControlRoomApiError("API instance changed; reopen Fullmag", 409, null, "API_INSTANCE_MISMATCH");
     }
     const headers = new Headers(init.headers);
-    if (this.expectedApiInstance) headers.set(API_INSTANCE_HEADER, this.expectedApiInstance);
+    if (enforceApiInstancePin && this.expectedApiInstance) {
+      headers.set(API_INSTANCE_HEADER, this.expectedApiInstance);
+    } else if (!enforceApiInstancePin) {
+      headers.delete(API_INSTANCE_HEADER);
+    }
     const requestId = this.requestIdFactory();
     headers.set("x-request-id", requestId);
 
@@ -4294,7 +4431,7 @@ export class ControlRoomApi {
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
-        if (this.apiInstanceMismatch) {
+        if (enforceApiInstancePin && this.apiInstanceMismatch) {
           throw new ControlRoomApiError("API instance changed; reopen Fullmag", 409, null, "API_INSTANCE_MISMATCH");
         }
         this.requestDiagnostics?.record({
@@ -4321,7 +4458,7 @@ export class ControlRoomApi {
           method,
         });
 
-        if (this.apiInstanceMismatch || (this.expectedApiInstance && response.headers.get(API_INSTANCE_HEADER) !== this.expectedApiInstance)) {
+        if (enforceApiInstancePin && (this.apiInstanceMismatch || (this.expectedApiInstance && response.headers.get(API_INSTANCE_HEADER) !== this.expectedApiInstance))) {
           this.apiInstanceMismatch = true;
           throw new ControlRoomApiError("API instance changed; reopen Fullmag", 409, response.headers.get("x-request-id"), "API_INSTANCE_MISMATCH");
         }
@@ -4338,7 +4475,7 @@ export class ControlRoomApi {
           path,
           response,
         });
-        this.requireApiInstanceCurrent();
+        if (enforceApiInstancePin) this.requireApiInstanceCurrent();
         this.requestDiagnostics?.record({
           byteLength: byteLengthFromHeaders(response.headers),
           channel: "http",

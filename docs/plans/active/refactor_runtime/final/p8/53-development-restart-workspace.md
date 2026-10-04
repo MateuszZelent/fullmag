@@ -1,5 +1,11 @@
 # P8-53 — bezpieczne zastosowanie nowego backendu w workspace
 
+[P8-53AP](53ap-frontend-restart-reconciliation.md) dodaje fasadę token-bound
+statusu i koordynator pojedynczego intentu UI. Lost ACK prowadzi do odczytu
+tego samego requestu, a błędne Ready nie zwalnia ochrony szkiców. Interpretowane
+sprawdzenia koordynatora PASS; konkretni ownerzy i pełna hydration UI pozostają
+otwarte. `restart_available=false`.
+
 [P8-53AO](53ao-native-restart-consumer.md) podłącza konsumenta w pętli CLI,
 zweryfikowany wybór EXE i pauzę/rebind observers. Build Windows, 39 kontroli
 konsumenta, 6 kontroli pauzy oraz 20 kontroli transportu PASS. Hydration UI,
