@@ -9,6 +9,7 @@
 //! Schema: `docs/design/start-screen/schema/recent-index.schema.json`.
 
 use crate::provenance;
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use fullmag_application::{ProjectRepository, ProjectSource};
 use fullmag_application::FileProjectRepository;
 use serde_json::{json, Map, Value};
@@ -23,6 +24,13 @@ const MAX_SCAN_DEPTH: usize = 6;
 const MAX_ENTRIES: usize = 2000;
 const MAX_PROJECT_ARCHIVE_BYTES: u64 = 64 * 1024 * 1024;
 pub const INDEX_FILE_NAME: &str = "recent-index.json";
+
+/// Where a project stores the preview of its last result (design §6.2).
+pub const THUMBNAIL_PATH: &str = "project/preview/thumb.png";
+/// The index inlines previews as data URIs, so the cap is the design's target
+/// size, not its hard limit: a larger preview is left out, never truncated.
+const MAX_INLINE_THUMBNAIL_BYTES: usize = 256 * 1024;
+const PNG_SIGNATURE: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
 
 /// The status strings the renderer understands.
 const STATUS_READY: &str = "ready";
@@ -326,6 +334,15 @@ pub fn entry_from_file(path: &Path, previous: Option<&Value>) -> Value {
             if !authors.is_empty() {
                 entry.insert("authors".into(), Value::Array(authors));
             }
+            if let Some(thumbnail) = opened
+                .envelope
+                .opaque_documents
+                .iter()
+                .find(|document| document.path() == THUMBNAIL_PATH)
+                .and_then(|document| thumbnail_data_uri(document.bytes()))
+            {
+                entry.insert("thumbnail".into(), Value::String(thumbnail));
+            }
             if let Some(summary) = summary_from_scene(definition.scene.value()) {
                 entry.insert("summary".into(), summary);
             }
@@ -376,6 +393,15 @@ pub fn entry_from_file(path: &Path, previous: Option<&Value>) -> Value {
         entry.insert("tags".into(), tags.clone());
     }
     Value::Object(entry)
+}
+
+/// A preview as a data URI, or `None` when it is not a PNG or is too large to
+/// inline. Checking the signature keeps arbitrary bytes out of an `<img>`.
+pub fn thumbnail_data_uri(bytes: &[u8]) -> Option<String> {
+    if bytes.len() > MAX_INLINE_THUMBNAIL_BYTES || !bytes.starts_with(&PNG_SIGNATURE) {
+        return None;
+    }
+    Some(format!("data:image/png;base64,{}", STANDARD.encode(bytes)))
 }
 
 /// `"1.2.0"` and `"project/1.2"` both read as `1.2`, the schema's pattern.
@@ -804,6 +830,27 @@ mod tests {
     #[test]
     fn an_empty_scene_has_no_summary() {
         assert!(summary_from_scene(&json!({})).is_none());
+    }
+
+    #[test]
+    fn a_png_preview_becomes_a_data_uri() {
+        let mut png = PNG_SIGNATURE.to_vec();
+        png.extend_from_slice(b"rest");
+        let uri = thumbnail_data_uri(&png).unwrap();
+        assert!(uri.starts_with("data:image/png;base64,"));
+        assert_eq!(
+            STANDARD.decode(uri.trim_start_matches("data:image/png;base64,")).unwrap(),
+            png
+        );
+    }
+
+    #[test]
+    fn previews_that_are_not_png_or_too_large_are_left_out() {
+        assert!(thumbnail_data_uri(b"GIF89a....").is_none());
+        assert!(thumbnail_data_uri(&[]).is_none());
+        let mut huge = PNG_SIGNATURE.to_vec();
+        huge.resize(MAX_INLINE_THUMBNAIL_BYTES + 1, 0);
+        assert!(thumbnail_data_uri(&huge).is_none());
     }
 
     #[test]
