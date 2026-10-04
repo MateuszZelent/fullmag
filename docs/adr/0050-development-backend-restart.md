@@ -1,6 +1,11 @@
 # ADR 0050 — kontrolowane zastosowanie backendu dev
 
 Status: accepted jako cel i kontrakt; implementacja restartu planned, runtime NOT VERIFIED.
+Cold commit, graceful exit i izolowany prelisten restore potwierdzono w
+[P8-53AC](../plans/active/refactor_runtime/final/p8/53ac-lost-ack-and-candidate-restore.md).
+Pełny lifecycle z UI, warm service i ponownym otwarciem admission pozostaje
+NOT VERIFIED. Utrata ACK wymaga potwierdzonego exit własnego API i zgodnego
+trwałego rekordu; nie upoważnia do ponowienia commit ani zwolnienia fence.
 Data: 03.10.2026.
 
 ## Kontekst

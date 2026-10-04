@@ -281,6 +281,51 @@ impl<P: GuardedProcess> Drop for BootstrapProcessGuard<P> {
     }
 }
 
+fn emit_owner_probe_process_started(api_pid: u32, api_port: u16) -> Result<()> {
+    let mut output = std::io::stdout().lock();
+    serde_json::to_writer(
+        &mut output,
+        &serde_json::json!({
+            "schema":"fullmag.development-cli-owner-progress.v1",
+            "event":"owned_api_started",
+            "api_pid":api_pid,
+            "api_port":api_port,
+        }),
+    )?;
+    output.write_all(b"\n")?;
+    output.flush()?;
+    Ok(())
+}
+
+/// Wait for the exact committed API child without allowing guard Drop to turn
+/// an unknown result into a force termination.
+fn wait_committed_api_exit(
+    mut child: BootstrapProcessGuard<ChildProcess>,
+    timeout: Duration,
+) -> Result<std::process::ExitStatus> {
+    let pid = child.process_mut().0.id();
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.process_mut().0.try_wait() {
+            Ok(Some(status)) => {
+                drop(child.release());
+                return Ok(status);
+            }
+            Ok(None) => {}
+            Err(error) => {
+                drop(child.release());
+                bail!("owned API exit outcome is unknown for pid {pid}: {error}");
+            }
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            drop(child.release());
+            bail!("owned API exit outcome is unknown for pid {pid}; process handle retained without termination");
+        }
+        std::thread::sleep(remaining.min(Duration::from_millis(25)));
+    }
+}
+
 pub(crate) struct ControlRoomGuard {
     web_port: Option<u16>,
     api_child: Option<Box<dyn GuardedProcess>>,
@@ -2407,6 +2452,11 @@ pub(crate) fn verify_development_api_owner() -> Result<()> {
     if std::env::var("FULLMAG_DEVELOPMENT_OWNER_PROBE").as_deref() != Ok("1") {
         bail!("development API owner verification requires an explicit managed fixture");
     }
+    let lose_commit_ack = match std::env::var_os("FULLMAG_DEVELOPMENT_OWNER_PROBE_LOST_ACK") {
+        None => false,
+        Some(value) if value == "1" => true,
+        Some(_) => bail!("invalid lost-ack owner probe configuration"),
+    };
     init_api_port()?;
     let launch = crate::development_api_owner::OwnerLaunch::from_environment(true, false)?
         .context("development API owner verification requires managed dev configuration")?;
@@ -2457,6 +2507,8 @@ pub(crate) fn verify_development_api_owner() -> Result<()> {
         false,
         Some(launch.token()),
     )?));
+    let pid = child.process_mut().0.id();
+    emit_owner_probe_process_started(pid, api_port())?;
     wait_for_api_ready(
         api_port(),
         &mut child.process_mut().0,
@@ -2477,7 +2529,6 @@ pub(crate) fn verify_development_api_owner() -> Result<()> {
         .context("owned API v2 resource lacks an instance pin")?
         .to_str()?
         .to_owned();
-    let pid = child.process_mut().0.id();
     if launch
         .confirm(pid.wrapping_add(1), api_port(), &instance)
         .is_ok()
@@ -2729,46 +2780,41 @@ pub(crate) fn verify_development_api_owner() -> Result<()> {
         }),
     )?;
     let final_idle = final_acquisition.acquire_cold_idle(&final_staged, &accepted_store)?;
-    let committed = final_acquisition.commit_cold_handoff(&root, &final_staged, &final_idle)?;
-    // The successful path never terminates the child. Retain the fence and
-    // observe this exact owned process, rather than treating ACK as exit proof.
-    let exit_deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
-    let terminal = loop {
-        if child
-            .process_mut()
-            .0
-            .try_wait()
-            .context("owned API exit outcome is unknown")?
-            .is_some()
-        {
-            break child
-                .process_mut()
-                .0
-                .wait()
-                .context("owned API terminal wait failed")?;
-        }
-        if std::time::Instant::now() >= exit_deadline {
-            bail!("committed owned API exit outcome is unknown; fence retained");
-        }
-        std::thread::sleep(std::time::Duration::from_millis(25));
+    let submission = if lose_commit_ack {
+        let lost =
+            final_acquisition.commit_cold_handoff_lost_ack_probe(&root, &final_staged, &final_idle);
+        lost.map(|value| (None, value.readback_helper_pid))
+    } else {
+        final_acquisition
+            .commit_cold_handoff(&root, &final_staged, &final_idle)
+            .map(|committed| {
+                (
+                    Some(committed.acknowledgement),
+                    committed.readback_helper_pid,
+                )
+            })
     };
-    child.release(); // Only release fixture cleanup after a confirmed terminal wait.
+    let (commit_acknowledgement, readback_helper_pid) = match submission {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            let api_pid = child.process_mut().0.id();
+            drop(child.release());
+            bail!("cold commit outcome is unknown; owned API pid {api_pid} retained for reconciliation: {error}");
+        }
+    };
+    // Once the one-shot request may have reached the API, unknown wait results
+    // must retain both the durable fence and the still-owned child process.
+    let terminal = wait_committed_api_exit(child, Duration::from_secs(20))?;
     if !terminal.success() {
         bail!("committed owned API did not exit successfully");
     }
-    final_idle.verify_current()?;
-    let accepted = fullmag_session::SessionStore::open_existing(accepted_store.clone())?
-        .read_development_handoff_commit()?
-        .context("committed handoff record is absent")?;
-    if accepted.api_instance_id != instance
-        || accepted.handoff_id
-            != committed.acknowledgement["handoff_id"]
-                .as_str()
-                .unwrap_or("")
-        || accepted.fence != final_idle.admission_fence
-    {
-        bail!("graceful API exit does not match its durable handoff acceptance");
-    }
+    let accepted = final_acquisition.reconcile_committed_handoff_after_exit(
+        &terminal,
+        &accepted_store,
+        &final_staged,
+        &final_idle,
+        commit_acknowledgement.as_ref(),
+    )?;
     drop(final_idle); // Kernel reservations release; durable fence remains closed.
     println!(
         "{}",
@@ -2776,9 +2822,22 @@ pub(crate) fn verify_development_api_owner() -> Result<()> {
             "schema":"fullmag.development-cli-owner-check.v1", "api_pid":pid,
             "api_instance_id":instance, "api_waited":true,
             "accepted_store_binding":fullmag_runtime_control::accepted_store::store_binding(&accepted_store),
-            "graceful_commit":committed.acknowledgement,
+            "commit_acknowledgement_observed":commit_acknowledgement.is_some(),
+            "commit_reconciliation":"durable_record_confirmed_after_owned_api_exit",
+            "durable_commit_reconciled":true,
+            "graceful_commit":commit_acknowledgement,
+            "durable_commit":{
+                "schema":accepted.schema,
+                "api_instance_id":accepted.api_instance_id,
+                "acquisition_nonce":accepted.acquisition_nonce,
+                "handoff_id":accepted.handoff_id,
+                "snapshot_sha256":accepted.snapshot_sha256,
+                "target_build_id":accepted.target_build_id,
+                "accepted_store_binding":accepted.accepted_store_binding,
+            },
             "committed_handoff":final_staged.acknowledgement,
             "graceful_exit":true,"durable_fence_retained":true,
+            "capsule_receipt_state":"staged",
             "commit_rejection_helpers":rejection_helpers,
             "handoffs":[empty_staged.acknowledgement,scene_staged.acknowledgement],
             "stage_helpers":[
@@ -2787,7 +2846,7 @@ pub(crate) fn verify_development_api_owner() -> Result<()> {
                 {"pid":empty_checked.helper_pid,"waited":true,"exit_code":0},
                 {"pid":scene_checked.helper_pid,"waited":true,"exit_code":0},
                 {"pid":final_staged.helper_pid,"waited":true,"exit_code":0},
-                {"pid":committed.readback_helper_pid,"waited":true,"exit_code":0}
+                {"pid":readback_helper_pid,"waited":true,"exit_code":0}
             ],
             "api_exit_code":terminal.code(), "checks":["owned-api-discovery",
             "static-script-owner-disabled", "unscoped-store-location-preserved",

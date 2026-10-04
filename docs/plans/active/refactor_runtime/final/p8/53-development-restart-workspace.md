@@ -1,9 +1,16 @@
 # P8-53 — bezpieczne zastosowanie nowego backendu w workspace
 
+[P8-53AC](53ac-lost-ack-and-candidate-restore.md) potwierdza natywne uzgodnienie
+zatwierdzenia po utracie ACK oraz odtworzenie sceny w nowym API kandydata.
+186 kontroli przeszło; wszystkie 60 procesów sondy odebrano. Fence pozostaje
+zamknięty. Koordynator produkcyjny, zakończenie lifecycle, warm drain i hydration
+UI są nadal otwarte; `restart_available` pozostaje `false`.
+
 [P8-53AA](53aa-durable-handoff-acceptance.md) dodaje jednorazowe trwałe
 zatwierdzenie pod WRITER i blokuje zwykły abort po poprawnym lub uszkodzonym
 zapisie. Build i 129 kontroli natywnych przeszły. Konsument zatwierdzenia
-w owner-control, graceful shutdown oraz pełny restart pozostają otwarte.
+w owner-control i graceful shutdown potwierdzono następnie w P8-53AB/AC;
+pełny restart pozostaje otwarty.
 
 [P8-53Z](53z-scoped-accepted-store-positive-idle.md) zapewnia osobny magazyn
 UUID wewnątrz obecnego storage i pozytywny przebieg przejęcia, stagingu,

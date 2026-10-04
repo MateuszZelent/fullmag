@@ -284,6 +284,7 @@ impl OwnedDevelopmentApi {
         Ok(AuthoringAcquisition {
             service_configured: self.service_configured,
             stream: Some(stream),
+            commit_attempted: false,
             owner_token: self.owner_token.clone(),
             api_port: self.api_port,
             api_instance_id: self.api_instance_id.clone(),
@@ -307,6 +308,7 @@ impl OwnedDevelopmentApi {
 pub(crate) struct AuthoringAcquisition {
     service_configured: bool,
     stream: Option<TcpStream>,
+    commit_attempted: bool,
     owner_token: String,
     api_port: u16,
     api_instance_id: String,
@@ -393,11 +395,66 @@ impl AuthoringAcquisition {
     /// One-shot private commit. A lost response is an unknown outcome; the
     /// borrowed durable idle proof is never released or retried by this method.
     pub(crate) fn commit_cold_handoff(
-        mut self,
+        &mut self,
         repo_root: &Path,
         staged: &StagedAuthoringHandoff,
         proof: &fullmag_runtime_control::development_cold_idle::ColdIdleProof,
     ) -> Result<CommittedColdHandoff> {
+        match self.submit_cold_handoff_commit(repo_root, staged, proof, false) {
+            Ok(ColdCommitSubmission::Acknowledged(committed)) => Ok(committed),
+            Ok(ColdCommitSubmission::AcknowledgementDiscarded { .. }) => {
+                self.invalidate_control_stream();
+                bail!("production cold commit unexpectedly discarded its acknowledgement")
+            }
+            Err(error) => {
+                self.invalidate_control_stream();
+                Err(error)
+            }
+        }
+    }
+
+    /// Probe-only transport mode for exercising a real committed request whose
+    /// acknowledgement is deliberately discarded. The durable store record,
+    /// not a retry, resolves the outcome after the exact API process exits.
+    pub(crate) fn commit_cold_handoff_lost_ack_probe(
+        &mut self,
+        repo_root: &Path,
+        staged: &StagedAuthoringHandoff,
+        proof: &fullmag_runtime_control::development_cold_idle::ColdIdleProof,
+    ) -> Result<LostAckColdCommit> {
+        if env::var("FULLMAG_DEVELOPMENT_OWNER_PROBE").as_deref() != Ok("1")
+            || env::var("FULLMAG_DEVELOPMENT_OWNER_PROBE_LOST_ACK").as_deref() != Ok("1")
+        {
+            bail!("lost-ack cold commit requires the managed owner probe")
+        }
+        match self.submit_cold_handoff_commit(repo_root, staged, proof, true) {
+            Ok(ColdCommitSubmission::AcknowledgementDiscarded {
+                readback_helper_pid,
+            }) => Ok(LostAckColdCommit {
+                readback_helper_pid,
+            }),
+            Ok(ColdCommitSubmission::Acknowledged(_)) => {
+                self.invalidate_control_stream();
+                bail!("lost-ack cold commit unexpectedly observed an acknowledgement")
+            }
+            Err(error) => {
+                self.invalidate_control_stream();
+                Err(error)
+            }
+        }
+    }
+
+    fn submit_cold_handoff_commit(
+        &mut self,
+        repo_root: &Path,
+        staged: &StagedAuthoringHandoff,
+        proof: &fullmag_runtime_control::development_cold_idle::ColdIdleProof,
+        discard_acknowledgement: bool,
+    ) -> Result<ColdCommitSubmission> {
+        if self.commit_attempted {
+            bail!("development API acquisition commit is already one-shot")
+        }
+        self.commit_attempted = true;
         if self.service_configured
             || proof.admission_fence.owner_token != self.owner_token
             || proof.admission_fence.nonce != self.nonce
@@ -440,6 +497,14 @@ impl AuthoringAcquisition {
             CONTROL_REQUEST_TIMEOUT,
             "development API commit request",
         )?;
+        if discard_acknowledgement {
+            stream
+                .shutdown(Shutdown::Both)
+                .context("unable to close the lost-ack commit connection")?;
+            return Ok(ColdCommitSubmission::AcknowledgementDiscarded {
+                readback_helper_pid: checked.helper_pid,
+            });
+        }
         let response = read_line_until(
             &mut stream,
             Duration::from_secs(20),
@@ -459,10 +524,136 @@ impl AuthoringAcquisition {
             bail!("development commit outcome is unknown: acknowledgement mismatch");
         }
         let _ = stream.shutdown(Shutdown::Both);
-        Ok(CommittedColdHandoff {
+        Ok(ColdCommitSubmission::Acknowledged(CommittedColdHandoff {
             acknowledgement: serde_json::to_value(committed)?,
             readback_helper_pid: checked.helper_pid,
-        })
+        }))
+    }
+
+    /// Reconcile one-shot acceptance only after the exact owned API child has
+    /// exited successfully. This never releases the durable fence.
+    pub(crate) fn reconcile_committed_handoff_after_exit(
+        &self,
+        terminal: &ExitStatus,
+        store_root: &Path,
+        staged: &StagedAuthoringHandoff,
+        proof: &fullmag_runtime_control::development_cold_idle::ColdIdleProof,
+        acknowledgement: Option<&Value>,
+    ) -> Result<fullmag_session::store::DevelopmentHandoffCommit> {
+        if !terminal.success() {
+            bail!("owned development API did not exit successfully")
+        }
+        if !self.commit_attempted || self.stream.is_some() {
+            bail!("cold handoff reconciliation requires the consumed acquisition")
+        }
+        if staged.source_nonce != self.nonce
+            || staged.source_api_instance_id != self.api_instance_id
+        {
+            bail!("staged handoff does not belong to this API acquisition")
+        }
+        if proof.admission_fence.owner_token != self.owner_token
+            || proof.admission_fence.nonce != self.nonce
+        {
+            bail!("durable idle fence does not belong to this API acquisition")
+        }
+        proof.verify_current()?;
+        let staged_ack: StageAcknowledgement =
+            serde_json::from_value(staged.acknowledgement.clone())?;
+        validate_stage_acknowledgement(&staged_ack, self)?;
+        let store = fullmag_session::SessionStore::open_existing(store_root.to_path_buf())?;
+        let accepted = store
+            .read_development_handoff_commit()?
+            .context("committed handoff record is absent after API exit")?;
+        let accepted_binding = fullmag_runtime_control::accepted_store::store_binding(store_root)
+            .context("accepted-store binding is invalid after API exit")?;
+        if accepted.api_instance_id != self.api_instance_id
+            || accepted.acquisition_nonce != self.nonce
+            || accepted.handoff_id != staged_ack.handoff.handoff_id
+            || accepted.snapshot_sha256 != staged_ack.handoff.snapshot_sha256
+            || accepted.target_build_id != staged_ack.binding.target_build_id
+            || accepted.accepted_store_binding != accepted_binding
+            || accepted.fence != proof.admission_fence
+            || store.read_development_idle_fence()?.as_ref() != Some(&proof.admission_fence)
+        {
+            bail!("durable handoff acceptance does not match the staged acquisition")
+        }
+        if let Some(bytes) = acknowledgement {
+            let response: CommitResponse = serde_json::from_value(bytes.clone())
+                .context("observed commit acknowledgement is invalid")?;
+            if response.schema != "fullmag.development-api-commit.v1"
+                || response.nonce != self.nonce
+                || response.api_instance_id != self.api_instance_id
+                || response.handoff_id != accepted.handoff_id
+                || response.snapshot_sha256 != accepted.snapshot_sha256
+                || response.target_build_id != accepted.target_build_id
+                || response.accepted_store_binding != accepted.accepted_store_binding
+            {
+                bail!("observed commit acknowledgement differs from durable acceptance")
+            }
+        }
+        self.verify_staged_receipt_after_exit(&staged_ack)?;
+        proof.verify_current()?;
+        Ok(accepted)
+    }
+
+    fn verify_staged_receipt_after_exit(&self, staged: &StageAcknowledgement) -> Result<()> {
+        let handoff_id = &staged.handoff.handoff_id;
+        if !canonical_uuid(handoff_id) {
+            bail!("staged handoff identity is invalid")
+        }
+        let snapshot_path = format!(
+            "runtimes/{}/development-handoffs/{handoff_id}/snapshot.json",
+            self.worktree
+        );
+        let receipt_path = format!(
+            "runtimes/{}/development-handoffs/{handoff_id}/receipt.json",
+            self.worktree
+        );
+        let snapshot_bytes = fullmag_session::repository_path::read_bounded_regular_file(
+            &self.storage_root,
+            &snapshot_path,
+            MAX_RESPONSE_BYTES,
+        )?;
+        if fullmag_session::hex_sha256(&snapshot_bytes) != staged.handoff.snapshot_sha256 {
+            bail!("staged handoff snapshot changed after API exit")
+        }
+        let snapshot: Value = serde_json::from_slice(&snapshot_bytes)
+            .context("staged handoff snapshot is invalid after API exit")?;
+        let expected_binding = serde_json::to_value(&staged.binding)?;
+        let observed_binding = snapshot
+            .get("binding")
+            .context("staged handoff snapshot binding is missing")?;
+        if snapshot.get("snapshot_id").and_then(Value::as_str) != Some(handoff_id)
+            || observed_binding != &expected_binding
+        {
+            bail!("staged handoff snapshot pin changed after API exit")
+        }
+        let binding_sha256 = fullmag_session::canonical_json_sha256(observed_binding);
+        let receipt_bytes = fullmag_session::repository_path::read_bounded_regular_file(
+            &self.storage_root,
+            &receipt_path,
+            16 * 1024,
+        )?;
+        let receipt: HandoffReceipt = serde_json::from_slice(&receipt_bytes)
+            .context("staged handoff receipt is invalid after API exit")?;
+        if receipt.schema != "fullmag.development-authoring-handoff-receipt.v1"
+            || receipt.snapshot_id != *handoff_id
+            || receipt.snapshot_sha256 != staged.handoff.snapshot_sha256
+            || receipt.binding_sha256 != binding_sha256
+            || receipt.state != "staged"
+            || !receipt.recorded_at.ends_with('Z')
+        {
+            bail!("staged handoff receipt changed after API exit")
+        }
+        let mut receipt_value = serde_json::to_value(&receipt)?;
+        let receipt_object = receipt_value
+            .as_object_mut()
+            .context("staged handoff receipt must be an object")?;
+        receipt_object.remove("receipt_sha256");
+        if fullmag_session::canonical_json_sha256(&receipt_value) != receipt.receipt_sha256 {
+            bail!("staged handoff receipt digest is invalid after API exit")
+        }
+        Ok(())
     }
 
     pub(crate) fn workspace(&self) -> &Value {
@@ -846,6 +1037,15 @@ pub(crate) struct CommittedColdHandoff {
     pub(crate) readback_helper_pid: u32,
 }
 
+pub(crate) struct LostAckColdCommit {
+    pub(crate) readback_helper_pid: u32,
+}
+
+enum ColdCommitSubmission {
+    Acknowledged(CommittedColdHandoff),
+    AcknowledgementDiscarded { readback_helper_pid: u32 },
+}
+
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct CommitResponse {
@@ -856,6 +1056,20 @@ struct CommitResponse {
     snapshot_sha256: String,
     target_build_id: String,
     accepted_store_binding: String,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct HandoffReceipt {
+    schema: String,
+    snapshot_id: String,
+    snapshot_sha256: String,
+    binding_sha256: String,
+    state: String,
+    #[serde(deserialize_with = "deserialize_present_option")]
+    detail: Option<String>,
+    recorded_at: String,
+    receipt_sha256: String,
 }
 
 #[derive(Serialize)]

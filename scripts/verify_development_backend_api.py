@@ -60,7 +60,7 @@ def run(repo_root: str) -> int:
                    "build_snapshot_sha256": manifest["source_snapshot_sha256"],
                    "build_commit": manifest["git_commit"],
                    "started_at": storage.now(), "checks": [], "processes": [],
-                   "scope": "native resource observation, private owner-authorized acquisition and admission freeze/abort/disconnect, cold handoff acceptance and graceful owned API exit, empty-service terminal drain; no replacement, full workspace restoration, solver or release qualification"}
+                   "scope": "native resource observation, private owner-authorized acquisition and admission freeze/abort/disconnect, cold handoff acceptance with ACK/lost-ACK reconciliation and graceful owned API exit, committed candidate prelisten authoring restore, empty-service terminal drain; no UI hydration, compute reopening, solver or release qualification"}
         storage.atomic_json(receipt_path, receipt)
         code = 1
         try:
@@ -135,10 +135,9 @@ def run(repo_root: str) -> int:
 
 
 def exercise_cli_owner(repo: Path, run_root: Path, manifest: dict, receipt: dict, binaries: Path, service_config: Path) -> None:
-    """Exercise the production native CLI client in its own empty API child."""
+    """Exercise ACK and lost-ACK reconciliation in fresh scoped API stores."""
     fixture = run_root / "cli-owner-fixture"
-    state = fixture / "state"
-    state.mkdir(parents=True)
+    fixture.mkdir(parents=True, exist_ok=False)
     native = storage.resolve_layout(repo, "windows-native-fdm-cpu-dev")
     checks = storage.resolve_layout(repo, "development-backend-api-checks")
     store = Path(native["storage_root"])
@@ -157,11 +156,8 @@ def exercise_cli_owner(repo: Path, run_root: Path, manifest: dict, receipt: dict
     storage.atomic_json(status, dict(schema="fullmag.backend-watch.v2", generation_id=generation,
         worktree_id=worktree, state="waiting", source_sha256=manifest["backend_source_sha256"],
         revision=1, updated_unix_ms=int(time.time() * 1000)))
-    with socket.socket() as reservation:
-        reservation.bind(("127.0.0.1", 0))
-        port = reservation.getsockname()[1]
-    env = {key: os.environ[key] for key in ("SYSTEMROOT", "WINDIR", "PATH", "PATHEXT", "TEMP", "TMP", "COMPUTERNAME") if key in os.environ}
-    env.update(FULLMAG_REPO_ROOT=str(repo), FULLMAG_STATE_ROOT=str(state), FULLMAG_API_PORT=str(port),
+    base_env = {key: os.environ[key] for key in ("SYSTEMROOT", "WINDIR", "PATH", "PATHEXT", "TEMP", "TMP", "COMPUTERNAME") if key in os.environ}
+    base_env.update(FULLMAG_REPO_ROOT=str(repo),
         FULLMAG_DEVELOPMENT_OWNER_PROBE="1", FULLMAG_NATIVE_RUNTIME_ACTIVE="1",
         FULLMAG_PYTHON=str(Path(native["build_root"]) / "python/fullmag/Scripts/python.exe"),
         FULLMAG_DEVELOPMENT_OWNER_PROBE_CANDIDATE=candidate["bundle_root"],
@@ -171,14 +167,23 @@ def exercise_cli_owner(repo: Path, run_root: Path, manifest: dict, receipt: dict
         FULLMAG_DEVELOPMENT_BACKEND_STATUS_FILE=str(status),
         FULLMAG_DEVELOPMENT_BACKEND_SOURCE=manifest["backend_source_sha256"],
         FULLMAG_DEVELOPMENT_BACKEND_VERSION=manifest["build_version"]["product_version"])
-    scope = str(uuid.uuid4())
-    accepted_store = Path(native["runs_root"]) / "workspaces" / scope / "session-store"
-    assert not os.path.lexists(accepted_store.parent)
-    env.update(FULLMAG_RUNS_ROOT=native["runs_root"], FULLMAG_ACCEPTED_STORE_SCOPE=scope)
-    receipt["accepted_store_scope"] = scope
-    receipt["accepted_store_root"] = str(accepted_store)
 
-    def initialize(label: str, selected_scope: str) -> tuple[int, bytes]:
+    def fixture_environment(label: str, scope: str, lost_ack: bool) -> tuple[dict[str, str], Path]:
+        with socket.socket() as reservation:
+            reservation.bind(("127.0.0.1", 0))
+            port = reservation.getsockname()[1]
+        state = fixture / f"{label}-state"
+        state.mkdir()
+        accepted_store = Path(native["runs_root"]) / "workspaces" / scope / "session-store"
+        assert not os.path.lexists(accepted_store.parent)
+        env = {**base_env, "FULLMAG_STATE_ROOT": str(state), "FULLMAG_API_PORT": str(port),
+               "FULLMAG_RUNS_ROOT": native["runs_root"],
+               "FULLMAG_ACCEPTED_STORE_SCOPE": scope}
+        if lost_ack:
+            env["FULLMAG_DEVELOPMENT_OWNER_PROBE_LOST_ACK"] = "1"
+        return env, accepted_store
+
+    def initialize(label: str, selected_scope: str, env: dict[str, str]) -> tuple[int, bytes]:
         process = subprocess.Popen(
             [str(binaries / "fullmag.exe"), "runtime", "initialize-scoped-accepted-store"],
             cwd=repo, env={**env, "FULLMAG_ACCEPTED_STORE_SCOPE": selected_scope},
@@ -196,71 +201,164 @@ def exercise_cli_owner(repo: Path, run_root: Path, manifest: dict, receipt: dict
         (fixture / (label + ".log")).write_bytes(output + errors)
         return process.returncode, output + errors
 
-    for invalid in ("../outside", str(uuid.UUID(int=0)), "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA"):
-        code, _ = initialize("scope-invalid-" + str(len(receipt["processes"])), invalid)
-        assert code != 0 and not os.path.lexists(accepted_store.parent)
-    code, output = initialize("scoped-store-initialize", scope)
-    assert code == 0
-    frames = [json.loads(line) for line in output.decode().splitlines() if line.startswith('{')]
-    assert len(frames) == 1 and frames[0]["schema"] == "fullmag.scoped-accepted-store-initialization.v1"
-    assert frames[0]["scope"] == scope and accepted_store.is_dir()
-    receipt["accepted_store_binding"] = frames[0]["binding"]
-    code, output = initialize("scoped-store-existing-refused", scope)
-    assert code != 0 and b"already exists; initialization refused" in output
-    receipt["checks"].extend(("scoped-store-invalid-identities-refused", "scoped-store-explicit-new-initialization",
-                              "scoped-store-existing-initialization-refused"))
-    log_path = fixture / "cli.log"
-    with log_path.open("w", encoding="utf-8") as log:
-        child = subprocess.Popen([str(binaries / "fullmag.exe"), "runtime", "verify-development-api-owner"],
-            cwd=repo, env=env, stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
-            creationflags=subprocess.CREATE_NO_WINDOW)
-        record = {"label":"cli-owner-client", "pid":child.pid, "waited":False}
-        receipt["processes"].append(record)
-        try:
-            code = child.wait(timeout=90)
-            record.update(waited=True, exit_code=code)
-        finally:
-            if child.poll() is None:
-                # This fixture owns the CLI and its API process tree.
-                subprocess.run(["taskkill", "/PID", str(child.pid), "/T", "/F"],
-                    capture_output=True, check=False, creationflags=subprocess.CREATE_NO_WINDOW)
-                record.update(waited=True, exit_code=child.wait(timeout=10))
-    if code != 0:
-        raise storage.StorageError(f"Native CLI owner client failed; see {log_path}")
-    frames = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines() if line.startswith('{')]
-    assert len(frames) == 1, frames
-    result = frames[0]
-    assert result["schema"] == "fullmag.development-cli-owner-check.v1" and result["api_waited"] is True
-    assert result["accepted_store_binding"] == receipt["accepted_store_binding"]
-    assert result["graceful_exit"] is True and result["durable_fence_retained"] is True
-    assert result["api_exit_code"] == 0
-    assert result["graceful_commit"]["api_instance_id"] == result["api_instance_id"]
-    assert result["graceful_commit"]["accepted_store_binding"] == receipt["accepted_store_binding"]
-    receipt["cli_graceful_commit"] = result["graceful_commit"]
-    receipt["checks"].append("staged-cold-idle-api-binding-matches-initialized-namespace")
-    receipt["processes"].append(dict(label="cli-owned-api", pid=result["api_pid"],
-        waited=True, exit_code=result["api_exit_code"]))
-    for item in result["stage_helpers"]:
-        assert item["waited"] is True and item["exit_code"] == 0
-        receipt["processes"].append(dict(label="cli-capsule-stage-helper", **item))
-    assert len(result["commit_rejection_helpers"]) == 6
-    for item in result["commit_rejection_helpers"]:
-        assert item["waited"] is True and item["exit_code"] == 0
-        receipt["processes"].append(dict(label="cli-commit-rejection-helper", **item))
-    from windows.development_scene_handoff import load_scene_handoff
-    committed_capsule = result["committed_handoff"]
-    loaded_commit = load_scene_handoff(str(repo), committed_capsule["handoff"]["handoff_id"], committed_capsule["binding"])
-    assert loaded_commit["snapshot_sha256"] == result["graceful_commit"]["snapshot_sha256"]
-    assert loaded_commit["receipt"]["state"] == "staged"  # Shutdown does not assert restoration.
-    receipt["committed_capsule"] = committed_capsule
-    assert len(result["handoffs"]) == 2
-    for ack in result["handoffs"]:
-        loaded = load_scene_handoff(str(repo), ack["handoff"]["handoff_id"], ack["binding"])
-        assert loaded["snapshot_sha256"] == ack["handoff"]["snapshot_sha256"]
-        assert loaded["receipt"]["state"] == "staged"
-        assert loaded["editor"]["probe"] == ("empty" if ack["workspace_state"] == "no_session" else "scene")
-    receipt["cli_handoffs"] = result["handoffs"]
-    receipt["checks"].extend("cli-owner-" + name for name in result["checks"])
+    def prepare_committed_restore(label: str, result: dict, env: dict[str, str], accepted_store: Path,
+                                  binding: dict, scope: str, loaded_capsule: dict) -> None:
+        from windows.prepare_committed_restore import REQUEST_SCHEMA, prepare_request
+        commit_path = accepted_store / "development/HANDOFF-COMMIT.json"
+        commit_bytes = commit_path.read_bytes()
+        manifest_bytes = (Path(candidate["bundle_root"]) / "manifest.json").read_bytes()
+        request = {
+            "schema": REQUEST_SCHEMA,
+            "accepted_store_scope": scope,
+            "accepted_store_binding": result["accepted_store_binding"],
+            "commit_sha256": hashlib.sha256(commit_bytes).hexdigest(),
+            "acquisition_nonce": result["durable_commit"]["acquisition_nonce"],
+            "binding": binding,
+            "candidate_bundle_root": candidate["bundle_root"],
+            "candidate_manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
+        }
+        prepared = prepare_request(str(repo), request)
+        preparation = prepared["preparation"]
+        assert prepared["accepted_store_binding"] == result["accepted_store_binding"]
+        assert preparation["workspace_state"] == "session"
+        assert preparation["handoff"]["snapshot_sha256"] == result["durable_commit"]["snapshot_sha256"]
+        assert preparation["envelope"] is not None
+        assert preparation["envelope"]["scene_document"] == loaded_capsule["scene"]
+        assert preparation["editor"] == loaded_capsule["editor"]
+        replacement_parent = fixture / f"{label}-replacement-parent"
+        replacement_parent.mkdir()
+        from windows.development_replacement_probe import run_probe
+        run_probe(repo, replacement_parent, env, prepared, result["api_instance_id"], receipt)
+        receipt_key = "committed_restore_preparations"
+        receipt.setdefault(receipt_key, {})[label] = {
+            "schema": prepared["schema"],
+            "commit_sha256": prepared["commit_sha256"],
+            "accepted_store_binding": prepared["accepted_store_binding"],
+            "binding": prepared["binding"],
+            "handoff_id": preparation["handoff"]["handoff_id"],
+            "snapshot_sha256": preparation["handoff"]["snapshot_sha256"],
+            "workspace_state": preparation["workspace_state"],
+        }
+
+    def run_fixture(label: str, lost_ack: bool, test_invalid_scopes: bool) -> None:
+        scope = str(uuid.uuid4())
+        env, accepted_store = fixture_environment(label, scope, lost_ack)
+        receipt[f"{label}_accepted_store_scope"] = scope
+        receipt[f"{label}_accepted_store_root"] = str(accepted_store)
+        if test_invalid_scopes:
+            for invalid in ("../outside", str(uuid.UUID(int=0)), "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA"):
+                code, _ = initialize("scope-invalid-" + str(len(receipt["processes"])), invalid, env)
+                assert code != 0 and not os.path.lexists(accepted_store.parent)
+        code, output = initialize(f"{label}-scoped-store-initialize", scope, env)
+        assert code == 0
+        store_frames = [json.loads(line) for line in output.decode().splitlines() if line.startswith('{')]
+        assert len(store_frames) == 1 and store_frames[0]["schema"] == "fullmag.scoped-accepted-store-initialization.v1"
+        assert store_frames[0]["scope"] == scope and accepted_store.is_dir()
+        binding = store_frames[0]["binding"]
+        receipt[f"{label}_accepted_store_binding"] = binding
+        if label == "cli_owner":
+            receipt["accepted_store_scope"] = scope
+            receipt["accepted_store_root"] = str(accepted_store)
+            receipt["accepted_store_binding"] = binding
+        code, output = initialize(f"{label}-scoped-store-existing-refused", scope, env)
+        assert code != 0 and b"already exists; initialization refused" in output
+        if test_invalid_scopes:
+            receipt["checks"].extend(("scoped-store-invalid-identities-refused", "scoped-store-explicit-new-initialization",
+                                      "scoped-store-existing-initialization-refused"))
+
+        log_path = fixture / f"{label}-cli.log"
+        timed_out = False
+        with log_path.open("w", encoding="utf-8") as log:
+            child = subprocess.Popen([str(binaries / "fullmag.exe"), "runtime", "verify-development-api-owner"],
+                cwd=repo, env=env, stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                creationflags=subprocess.CREATE_NO_WINDOW)
+            cli_record = {"label": f"{label}-cli-owner-client", "pid": child.pid, "waited": False}
+            receipt["processes"].append(cli_record)
+            try:
+                code = child.wait(timeout=120)
+                cli_record.update(waited=True, exit_code=code)
+            except subprocess.TimeoutExpired:
+                timed_out = True
+                cli_record.update(waited=False, outcome="unknown")
+                log.flush()
+        frames = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines() if line.startswith('{')]
+        progress = [frame for frame in frames if frame.get("schema") == "fullmag.development-cli-owner-progress.v1"]
+        for frame in progress:
+            assert frame["event"] == "owned_api_started" and isinstance(frame["api_pid"], int)
+            receipt["processes"].append(dict(label=f"{label}-cli-owned-api", pid=frame["api_pid"],
+                api_port=frame["api_port"], waited=False, outcome="unknown" if timed_out else "pending"))
+        if timed_out:
+            raise storage.StorageError(f"Native CLI owner outcome is unknown; no process was terminated; see {log_path}")
+        if code != 0:
+            for item in receipt["processes"]:
+                if item.get("label") == f"{label}-cli-owned-api" and item.get("outcome") == "pending":
+                    item.update(outcome="unknown", waited=False)
+            raise storage.StorageError(f"Native CLI owner client failed; see {log_path}")
+        result_frames = [frame for frame in frames if frame.get("schema") == "fullmag.development-cli-owner-check.v1"]
+        assert len(progress) == 1 and len(result_frames) == 1, frames
+        result = result_frames[0]
+        assert result["api_waited"] is True and result["api_pid"] == progress[0]["api_pid"]
+        assert result["accepted_store_binding"] == binding
+        assert result["graceful_exit"] is True and result["durable_fence_retained"] is True
+        assert result["api_exit_code"] == 0
+        assert result["durable_commit_reconciled"] is True
+        assert result["commit_reconciliation"] == "durable_record_confirmed_after_owned_api_exit"
+        assert result["commit_acknowledgement_observed"] is (not lost_ack)
+        assert result["capsule_receipt_state"] == "staged"
+        durable = result["durable_commit"]
+        assert durable["api_instance_id"] == result["api_instance_id"]
+        assert durable["accepted_store_binding"] == binding
+        assert durable["snapshot_sha256"] == result["committed_handoff"]["handoff"]["snapshot_sha256"]
+        if lost_ack:
+            assert result["graceful_commit"] is None
+            receipt["checks"].append("cold-commit-lost-ack-reconciled-from-durable-store")
+        else:
+            assert result["graceful_commit"]["api_instance_id"] == result["api_instance_id"]
+            assert result["graceful_commit"]["accepted_store_binding"] == binding
+            receipt["cli_graceful_commit"] = result["graceful_commit"]
+            receipt["checks"].append("staged-cold-idle-api-binding-matches-initialized-namespace")
+        receipt["processes"][-1].update(waited=True, exit_code=result["api_exit_code"], outcome="terminal")
+        receipt[f"{label}_commit_reconciliation"] = {
+            "acknowledgement_observed": result["commit_acknowledgement_observed"],
+            "api_instance_id": durable["api_instance_id"],
+            "handoff_id": durable["handoff_id"],
+            "snapshot_sha256": durable["snapshot_sha256"],
+            "target_build_id": durable["target_build_id"],
+            "accepted_store_binding": durable["accepted_store_binding"],
+            "fence_retained": result["durable_fence_retained"],
+            "receipt_state": result["capsule_receipt_state"],
+        }
+        for item in result["stage_helpers"]:
+            assert item["waited"] is True and item["exit_code"] == 0
+            receipt["processes"].append(dict(label=f"{label}-cli-capsule-stage-helper", **item))
+        assert len(result["commit_rejection_helpers"]) == 6
+        for item in result["commit_rejection_helpers"]:
+            assert item["waited"] is True and item["exit_code"] == 0
+            receipt["processes"].append(dict(label=f"{label}-cli-commit-rejection-helper", **item))
+        from windows.development_scene_handoff import load_scene_handoff
+        committed_capsule = result["committed_handoff"]
+        loaded_commit = load_scene_handoff(str(repo), committed_capsule["handoff"]["handoff_id"], committed_capsule["binding"])
+        assert loaded_commit["snapshot_sha256"] == durable["snapshot_sha256"]
+        assert loaded_commit["receipt"]["state"] == "staged"
+        assert loaded_commit["editor"]["probe"] == "scene"
+        if not lost_ack:
+            assert result["graceful_commit"]["snapshot_sha256"] == loaded_commit["snapshot_sha256"]
+            receipt["committed_capsule"] = committed_capsule
+        assert len(result["handoffs"]) == 2
+        for ack in result["handoffs"]:
+            loaded = load_scene_handoff(str(repo), ack["handoff"]["handoff_id"], ack["binding"])
+            assert loaded["snapshot_sha256"] == ack["handoff"]["snapshot_sha256"]
+            assert loaded["receipt"]["state"] == "staged"
+            assert loaded["editor"]["probe"] == ("empty" if ack["workspace_state"] == "no_session" else "scene")
+        if not lost_ack:
+            receipt["cli_handoffs"] = result["handoffs"]
+        prepare_committed_restore(label, result, env, accepted_store, committed_capsule["binding"],
+                                  scope, loaded_commit)
+        receipt["checks"].append(f"{label}-committed-restore-preparation-read-only")
+        receipt["checks"].extend(f"{label}-cli-owner-" + name for name in result["checks"])
+
+    run_fixture("cli_owner", lost_ack=False, test_invalid_scopes=True)
+    run_fixture("cli_owner_lost_ack", lost_ack=True, test_invalid_scopes=False)
 
 
 def exercise_service(repo: Path, run_root: Path, manifest: dict, receipt: dict, binaries: Path) -> None:
