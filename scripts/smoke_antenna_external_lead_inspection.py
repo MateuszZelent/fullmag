@@ -105,8 +105,9 @@ def json_body(response: HttpResult, status: int) -> dict:
 def validate_resource(resource: dict, stage_id: str) -> tuple[dict, str]:
     require(resource.get("runtime_stage_id") == stage_id, "runtime stage identity mismatch")
     require(resource.get("resource_id") == f"data/antenna/stages/{stage_id}/external-lead-inspection", "resource identity mismatch")
-    for key in ("session_id", "session_epoch", "run_id", "stage_id", "output_id", "port_mode_id"):
-        require(isinstance(resource.get(key), str) and bool(resource[key].strip()), f"missing {key}")
+    for key in ("session_id", "session_epoch", "request_scope_epoch", "run_id", "stage_id", "output_id", "port_mode_id"):
+        require(isinstance(resource.get(key), str) and bool(resource[key].strip())
+                and len(resource[key]) <= 4096 and "\0" not in resource[key], f"missing or invalid {key}")
     require(isinstance(resource.get("record_content_digest"), str) and re.fullmatch(r"sha256:[0-9a-f]{64}", resource["record_content_digest"]) is not None, "invalid record digest")
     require(type(resource.get("stage_revision")) is int and resource["stage_revision"] >= 0, "invalid stage revision")
     for key, expected in {
@@ -146,6 +147,14 @@ def validate_resource(resource: dict, stage_id: str) -> tuple[dict, str]:
     return manifest, digest
 
 
+def session_scope(resource: dict, request_scope_epoch: str) -> str:
+    # Match encodeURIComponent, not form encoding (which would use '+').
+    return "&".join(f"{key}=" + quote(value, safe="-_.!~*'()") for key, value in (
+        ("session", resource["session_id"]), ("epoch", resource["session_epoch"]),
+        ("request_scope_epoch", request_scope_epoch),
+    ))
+
+
 def verify(origin: str, stage_id: str) -> dict[str, object]:
     origin = validate_origin(origin)
     require(bool(stage_id.strip()) and len(stage_id) <= 4096 and "\0" not in stage_id, "invalid runtime stage ID")
@@ -154,11 +163,12 @@ def verify(origin: str, stage_id: str) -> dict[str, object]:
     resource = json_body(metadata, 200)
     metadata_etag = strong_etag(metadata)
     manifest, digest = validate_resource(resource, stage_id)
+    scope_headers = {"x-fullmag-session-scope": session_scope(resource, resource["request_scope_epoch"])}
     checked = []
     for kind in PAYLOADS:
         descriptor = manifest[kind]
         binary = f"{path}/payloads/{kind}?{urlencode({'content_digest': digest})}"
-        response = request(origin, binary, {}, descriptor["byte_count"])
+        response = request(origin, binary, scope_headers, descriptor["byte_count"])
         require(response.status == 200, f"{kind}: expected HTTP 200, received {response.status}")
         require(response.headers.get("content-type") == "application/octet-stream" and response.headers.get("accept-ranges") == "bytes", f"{kind}: invalid binary headers")
         etag = strong_etag(response)
@@ -166,32 +176,49 @@ def verify(origin: str, stage_id: str) -> dict[str, object]:
         require(sha256(response.body).hexdigest() == descriptor["sha256"], f"{kind}: SHA mismatch")
         if descriptor["scalar_type"] == "float64_le":
             require(all(math.isfinite(value) for (value,) in struct.iter_unpack("<d", response.body)), f"{kind}: non-finite float")
-        cached = request(origin, binary, {"If-None-Match": etag}, MAX_METADATA_BYTES)
+        cached = request(origin, binary, {**scope_headers, "If-None-Match": etag}, MAX_METADATA_BYTES)
         require(cached.status == 304 and not cached.body and strong_etag(cached) == etag, f"{kind}: invalid conditional response")
         end = min(15, len(response.body) - 1)
-        partial = request(origin, binary, {"Range": f"bytes=0-{end}"}, MAX_METADATA_BYTES)
+        partial = request(origin, binary, {**scope_headers, "Range": f"bytes=0-{end}"}, MAX_METADATA_BYTES)
         require(partial.status == 206 and partial.body == response.body[:end + 1]
                 and partial.headers.get("content-type") == "application/octet-stream"
                 and partial.headers.get("accept-ranges") == "bytes"
                 and partial.headers.get("content-range") == f"bytes 0-{end}/{len(response.body)}"
                 and strong_etag(partial) == etag, f"{kind}: invalid partial response")
-        outside = request(origin, binary, {"Range": f"bytes={len(response.body)}-"}, MAX_METADATA_BYTES)
+        outside = request(origin, binary, {**scope_headers, "Range": f"bytes={len(response.body)}-"}, MAX_METADATA_BYTES)
         require(outside.status == 416 and not outside.body and outside.headers.get("accept-ranges") == "bytes"
                 and outside.headers.get("content-range") == f"bytes */{len(response.body)}"
                 and strong_etag(outside) == etag, f"{kind}: invalid unsatisfiable range")
         checked.append({"kind": kind, "sha256": descriptor["sha256"], "byte_count": len(response.body), "unit": descriptor["unit"], "etag": etag})
     field_path = f"{path}/payloads/magnetic_field"
-    json_body(request(origin, field_path, {"If-None-Match": "*"}, MAX_METADATA_BYTES), 400)
+    json_body(request(origin, field_path, {**scope_headers, "If-None-Match": "*"}, MAX_METADATA_BYTES), 400)
     changed_digest = "sha256:" + ("0" if digest[7] != "0" else "1") + digest[8:]
     mismatch = f"{field_path}?{urlencode({'content_digest': changed_digest})}"
-    require(json_body(request(origin, mismatch, {"If-None-Match": "*"}, MAX_METADATA_BYTES), 409).get("code") == "inspection_digest_mismatch", "missing digest mismatch gate")
-    json_body(request(origin, f"{path}/payloads/RT0?{urlencode({'content_digest': digest})}", {"If-None-Match": "*"}, MAX_METADATA_BYTES), 400)
-    final = request(origin, path, {"If-None-Match": metadata_etag}, MAX_METADATA_BYTES)
+    require(json_body(request(origin, mismatch, {**scope_headers, "If-None-Match": "*"}, MAX_METADATA_BYTES), 409).get("code") == "inspection_digest_mismatch", "missing digest mismatch gate")
+    json_body(request(origin, f"{path}/payloads/RT0?{urlencode({'content_digest': digest})}", {**scope_headers, "If-None-Match": "*"}, MAX_METADATA_BYTES), 400)
+    stale_headers = {
+        "x-fullmag-session-scope": session_scope(resource, resource["request_scope_epoch"] + "-stale-smoke"),
+        "If-None-Match": "*", "Range": "bytes=0-7",
+    }
+    antenna_path = "/v2/sessions/current/data/antenna"
+    scope_paths = [
+        f"{antenna_path}/stages/{quote(stage_id, safe='')}/output-catalog",
+        f"{antenna_path}/field-solutions/scope-probe",
+        f"{antenna_path}/field-solutions/scope-probe/payloads/magnetic_field_per_ampere?port_mode_id=scope-probe",
+        f"{antenna_path}/source-spectra/scope-probe",
+        f"{antenna_path}/source-spectra/scope-probe/payloads/power",
+        path, f"{field_path}?{urlencode({'content_digest': digest})}",
+    ]
+    for scope_path in scope_paths:
+        rejected = json_body(request(origin, scope_path, stale_headers, MAX_METADATA_BYTES), 409)
+        require(rejected.get("error") == "request_context_stale", "missing stale request incarnation gate")
+    final = request(origin, path, {**scope_headers, "If-None-Match": metadata_etag}, MAX_METADATA_BYTES)
     require(final.status == 304 and not final.body and strong_etag(final) == metadata_etag, "inspection revision changed during smoke")
     return {
         "schema": "fullmag.antenna_external_lead_http_smoke.v1", "status": "pass",
         "scope": "http_inspection_integrity_only", "qualification": "NOT VERIFIED", "physics_qualified": False,
-        **{key: resource[key] for key in ("session_id", "session_epoch", "run_id", "runtime_stage_id", "stage_revision", "record_content_digest")},
+        **{key: resource[key] for key in ("session_id", "session_epoch", "request_scope_epoch", "run_id", "runtime_stage_id", "stage_revision", "record_content_digest")},
+        "stale_scope_routes_checked": len(scope_paths),
         "inspection_ref": resource["outputs"][0]["inspection_ref"], "metadata_etag": metadata_etag, "payloads": checked,
     }
 

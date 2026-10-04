@@ -9,7 +9,7 @@ z opublikowanymi descriptorami; **nie oznacza kwalifikacji fizycznej anteny**,
 aktualności wyniku względem zmienionej sceny ani zgodności natywnego buildu
 z obecnymi źródłami.
 
-Na 2026-10-04 sprawdzono 14 lekkich regresji Python, w tym rzeczywisty
+Na 2026-10-04 sprawdzono 17 lekkich regresji Python, w tym rzeczywisty
 transport do małego serwera loopback. Dane harnessu nie są poprawnym
 numerycznym bundle i nie zastępują native readera. Uruchomienie checkera
 przeciw nowemu API Fullmaga pozostaje **NOT VERIFIED**.
@@ -24,7 +24,10 @@ etapem inspekcji, zarejestrowany rekord etapu oraz komplet pięciu payloadów
 pod jej artifact root. Rekord musi mieć `inspection_only`,
 `external_electrode_truncation` i `NOT VERIFIED`. Etap failed/cancelled nie
 jest poprawnym wejściem pozytywnego smoke testu. Session/run/revision muszą
-pozostać niezmienne przez cały odczyt.
+pozostać niezmienne przez cały odczyt. Metadane muszą zawierać również
+`request_scope_epoch`. Pierwszy GET jest bootstrapem; wszystkie dalsze
+odczyty pozytywne używają kanonicznego `x-fullmag-session-scope` z tej
+odpowiedzi. Brak inkarnacji oznacza odmowę, nie zgodę na stary kontrakt.
 
 Uruchom wybranym interpreterem Python 3 skrypt z argumentami
 `--origin <rzeczywisty-origin-API>` i `--stage-id <dokładny-runtime-stage-id>`.
@@ -53,10 +56,14 @@ nie narzędzie do badania niezaufanych serwerów.
   zakresu poza końcem; wymagane nagłówki data plane i `no-cache`.
 - Brak digestu oraz samodzielny RT0: HTTP 400; inny digest: HTTP 409 z
   `inspection_digest_mismatch`, również przy `If-None-Match: *`.
+- Siedem odczytów antenowych musi odrzucić inny `request_scope_epoch`
+  przy niezmienionym session/epoch: HTTP 409 z `request_context_stale`,
+  również z `If-None-Match: *` i `Range: bytes=0-7`. Są to wyłącznie GET:
+  checker nie importuje ponownie ani nie zamyka sesji.
 - Końcowy conditional odczyt metadanych musi dać 304. Zmiana rewizji unieważnia
   cały przebieg; checker nie skleja dowodu z kilku sesji lub rewizji.
 
-Checker robi 25 żądań. Każdy binary GET może uruchomić pełny verifier
+Checker robi 32 żądania. Każdy poprawnie scoped binary GET może uruchomić pełny verifier
 wszystkich payloadów; to jednorazowa bramka na małym kontrolowanym artefakcie,
 nie benchmark ani wzorzec pobierania danych przez UI. Nie sprawdza samodzielnie
 wnętrza ordered bundle, nie przelicza H i nie certyfikuje globalnego błędu
@@ -69,8 +76,9 @@ Stdout zawiera jeden obiekt JSON: `fullmag.antenna_external_lead_http_smoke.v1`.
 Kod 0 oznacza przejście wyłącznie tego smoke testu, kod 1 jego niepowodzenie.
 W obu przypadkach pozostają `qualification="NOT VERIFIED"`,
 `physics_qualified=false` i `scope="http_inspection_integrity_only"`.
-Sukces zachowuje session/epoch/run/runtime stage/revision, record digest,
+Sukces zachowuje session/epoch/request scope/run/runtime stage/revision, record digest,
 inspection reference oraz SHA/size/unit/ETag każdego payloadu.
+Pole `stale_scope_routes_checked=7` określa zakres odmów starej inkarnacji.
 
 Zachowaj stdout obok dowodu buildu i uruchomienia w katalogu run wskazanym
 przez resolver storage; sam checker niczego nie zapisuje. Dopiero pełny

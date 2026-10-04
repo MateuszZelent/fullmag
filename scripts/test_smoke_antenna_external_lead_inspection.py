@@ -29,6 +29,7 @@ class InspectionHttpSmokeTests(unittest.TestCase):
         self.resource = {
             "resource_id": "data/antenna/stages/stage-000/external-lead-inspection",
             "session_id": "session", "session_epoch": "epoch", "run_id": "run",
+            "request_scope_epoch": "api-instance:0",
             "runtime_stage_id": "stage-000", "stage_revision": 3,
             "record_content_digest": "sha256:" + "b" * 64,
             "schema_version": "antenna_external_lead_stage_output.v1",
@@ -67,6 +68,10 @@ class InspectionHttpSmokeTests(unittest.TestCase):
 
     def serve(self, origin: str, path: str, headers: dict[str, str], limit: int) -> smoke.HttpResult:
         self.calls.append((path, headers))
+        expected_scope = smoke.session_scope(self.resource, self.resource["request_scope_epoch"])
+        if headers.get("x-fullmag-session-scope", expected_scope) != expected_scope:
+            return self.response(409, b'{"code":"conflict","error":"request_context_stale"}',
+                                 **{"content-type": "application/json"})
         parsed = urlsplit(path)
         if "/payloads/" not in parsed.path:
             if headers.get("If-None-Match") == '"metadata"':
@@ -103,8 +108,47 @@ class InspectionHttpSmokeTests(unittest.TestCase):
         self.assertEqual(result["qualification"], "NOT VERIFIED")
         self.assertFalse(result["physics_qualified"])
         self.assertEqual(len(result["payloads"]), 5)
-        self.assertEqual(len(self.calls), 25)
-        self.assertTrue(all(call[0].startswith("/v2/sessions/current/data/antenna/stages/stage-000/") for call in self.calls))
+        self.assertEqual(len(self.calls), 32)
+        self.assertEqual(result["request_scope_epoch"], "api-instance:0")
+        self.assertEqual(result["stale_scope_routes_checked"], 7)
+        self.assertTrue(all(call[0].startswith("/v2/sessions/current/data/antenna/") for call in self.calls))
+
+    def test_canonical_scope_encoding_and_all_followup_requests_are_bound(self) -> None:
+        self.assertEqual(smoke.session_scope({"session_id": "session/one", "session_epoch": "session/one@1700 +ą"}, "instance:7"),
+                         "session=session%2Fone&epoch=session%2Fone%401700%20%2B%C4%85&request_scope_epoch=instance%3A7")
+        self.run_smoke()
+        expected_scope = smoke.session_scope(self.resource, self.resource["request_scope_epoch"])
+        self.assertNotIn("x-fullmag-session-scope", self.calls[0][1])
+        stale = []
+        for path, headers in self.calls[1:]:
+            scope = headers["x-fullmag-session-scope"]
+            if scope != expected_scope:
+                self.assertEqual(scope, expected_scope + "-stale-smoke")
+                self.assertEqual(headers["If-None-Match"], "*")
+                self.assertEqual(headers["Range"], "bytes=0-7")
+                stale.append(path)
+        self.assertEqual(len(set(stale)), 7)
+
+    def test_missing_incarnation_fails_before_binary_io(self) -> None:
+        self.resource.pop("request_scope_epoch")
+        # The bootstrap response is unscoped, so do not use the scope-aware harness.
+        with self.assertRaisesRegex(smoke.SmokeError, "request_scope_epoch"):
+            self.run_smoke(lambda *_: self.response(200, json.dumps(self.resource).encode(),
+                           etag='"metadata"', **{"content-type": "application/json", "cache-control": "no-cache"}))
+
+    def test_every_stale_route_must_reject_before_cache_or_ranges(self) -> None:
+        for index in range(7):
+            stale_count = 0
+            def broken(*args):
+                nonlocal stale_count
+                response = self.serve(*args)
+                if "-stale-smoke" in args[2].get("x-fullmag-session-scope", ""):
+                    stale_count += 1
+                    if stale_count == index + 1:
+                        return self.response(304, etag='"metadata"', **{"cache-control": "no-cache"})
+                return response
+            with self.subTest(route=index), self.assertRaisesRegex(smoke.SmokeError, "409"):
+                self.run_smoke(broken)
 
     def test_invalid_manifest_units_counts_and_sizes_fail_before_binary_io(self) -> None:
         for key, value in [("unit", "A/m/A"), ("value_count", 4), ("byte_count", smoke.MAX_BINARY_BYTES + 1), ("sha256", "Z" * 64)]:
