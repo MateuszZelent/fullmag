@@ -46,6 +46,7 @@ import fullmag_storage  # noqa: E402  (the path setup above is intentional)
 from local_runner.build_executor import validate_build_receipt  # noqa: E402
 from local_runner.build_source import bind_identity  # noqa: E402
 from local_runner.worker_entrypoint import canonical, verify_source  # noqa: E402
+from local_runner.runtime_use import runtime_package_use  # noqa: E402
 from validate_comsol_dispersion_scientific_gate import (  # noqa: E402
     EVIDENCE_RELATIVE_PATH,
     EVIDENCE_SCHEMA,
@@ -1762,7 +1763,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
             )
             return 0
-        with fullmag_storage.build_lock(layout):
+        with runtime_package_use(layout), fullmag_storage.build_lock(layout):
             # Re-read under the lock so a coordinator cannot finish/reconcile
             # the source job between the preflight and the Compose bind setup.
             locked_job = _read_job(layout, args.job_id)

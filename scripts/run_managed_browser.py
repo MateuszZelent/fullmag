@@ -18,6 +18,7 @@ import uuid
 from pathlib import Path
 
 import fullmag_storage as storage
+from local_runner.runtime_use import runtime_package_use
 from local_runner.build_executor import validate_build_receipt
 from local_runner.worker_entrypoint import verify_source
 from verify_saved_fem_archive_roundtrip import check_stamp
@@ -142,6 +143,11 @@ def run(repo, job_id, commit, port):
     if not re.fullmatch(r"[0-9a-f]{32}", job_id):
         raise ValueError("Full managed job ID required")
     layout = storage.resolve_layout(repo, PROFILE)
+    with runtime_package_use(layout):
+        return _run_protected(layout, job_id, commit, port)
+
+
+def _run_protected(layout, job_id, commit, port):
     base = Path(layout["storage_root"])
     build = storage.validate_path(Path(layout["runs_root"]) / job_id, base)
     context, built = validate_managed_build(build, commit)

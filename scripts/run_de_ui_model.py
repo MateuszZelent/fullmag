@@ -156,6 +156,12 @@ def run(args):
     storage=managed.fullmag_storage
     layout=storage.resolve_layout(args.repo_root,"windows-native")
     storage.initialize(layout)
+    with managed.runtime_package_use(layout):
+        return _run_protected(args, layout)
+
+
+def _run_protected(args, layout):
+    storage=managed.fullmag_storage
     job=managed._read_job(layout,args.job_id)
     context=managed._validate_build_context(layout,job)
     data,identity=model_input.load_model(args.repo_root,args.model_ref)

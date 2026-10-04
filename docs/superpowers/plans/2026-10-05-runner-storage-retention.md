@@ -82,3 +82,19 @@ sprzątania produkcyjnego storage.
   na fixture, bez produkcyjnego Docker/delete. Zrzut zapisano w evidence wątku.
 - Produkcyjna migracja historycznych kapsuł i proof managed capture nadal
   NOT VERIFIED. Nie dopisujemy oszczędności fizycznych na podstawie liczby hashy.
+
+### Checkpoint ochrony użytkowników — 2026-10-05
+
+- R2 commit: `0b8d793263942a43eafa5ef1696f6b25623c8b09`, wypchnięty na branch.
+- COMSOL, DE, oba launchery UI oraz eksport OpenAPI publikują ticket przed
+  właściwym użyciem runtime i zachowują go do końca operacji lub utrwalenia
+  konsumenta. R1 sprawdza tickety pod tą samą bramką przed usuwaniem.
+- Zestaw admission/executor/OpenAPI: 55/55 PASS; po korekcie no-follow
+  admission: 8/8 PASS. Launchery: 98/98 PASS oraz 125 podtestów PASS.
+  Niezależne review: SOURCE PASS, brak otwartych P1/P2.
+- Probe na rzeczywistym mapowaniu storage Windows↔Docker Desktop potwierdził
+  wzajemne wykluczenie `mkdir` w obie strony. Dotyczył nowego katalogu testowego,
+  który po sprawdzeniu tokenu został usunięty; nie zmieniał jobów ani cache.
+  Dowód: `storage-admission-cross-host-proof-20261005.json` w evidence wątku.
+- Wdrożenie retencji produkcyjnej i usunięcie historycznych danych nadal OPEN;
+  #232 pozostaje aktywny. Ten probe nie zastępuje dowodu rzeczywistego cleanup.

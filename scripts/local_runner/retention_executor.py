@@ -17,6 +17,7 @@ import uuid
 from fullmag_storage import atomic_json, file_lock, validate_path
 from local_runner import retention
 from local_runner.build_executor import attest_build_container, validate_build_receipt
+from local_runner.runtime_use import retention_mutation_guard
 
 
 class CleanupBlocked(RuntimeError):
@@ -182,6 +183,7 @@ def apply_execution_plan(layout, plan, queue, *, owner, call, policy, now=None):
               'reclaimed_bytes': None, 'reclaim_measurement': 'disk_free_delta_not_attributed',
               'disk_free_before_bytes': shutil.disk_usage(storage).free}
     with ExitStack() as locks:
+        locks.enter_context(retention_mutation_guard(layout))
         for name in ('local-runner-coordinator', 'fullmag-heavy', 'retention'):
             lock = validate_path(storage / 'locks' / (name + '.lock'), storage)
             locks.enter_context(file_lock(lock, name))

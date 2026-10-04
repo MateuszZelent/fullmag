@@ -2555,7 +2555,7 @@ def main(argv=None):
                                   air_growth_rate=args.air_growth_rate,
                               )}, indent=2))
             return 0
-        with managed.fullmag_storage.build_lock(layout):
+        with managed.runtime_package_use(layout), managed.fullmag_storage.build_lock(layout):
             context = managed._validate_build_context(layout, managed._read_job(layout, args.job_id))
             if parallel_probe or signed_fifteen:
                 _validate_parallel_probe_build(context, args.probe_build_source_digest)

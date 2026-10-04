@@ -18,6 +18,8 @@ import unittest
 from unittest.mock import patch
 
 import export_runner_openapi as exporter
+from fullmag_storage import StorageError
+from local_runner.runtime_use import retention_mutation_guard
 from local_runner.build_entrypoint import HEADLESS_REQUIRED_OUTPUTS, required_outputs_for_profile
 from local_runner.worker_entrypoint import canonical
 
@@ -230,6 +232,43 @@ class ExportRunnerOpenApiTests(unittest.TestCase):
         self.assertNotIn("bash", self.command)
         self.assertEqual(before, sorted(path.relative_to(self.fixture.package).as_posix()
                                         for path in self.fixture.package.rglob("*")))
+
+    def test_retention_cannot_enter_during_capture_or_receipt_publication(self) -> None:
+        original_record = exporter._record_evidence
+        observed = []
+
+        def assert_protected(phase):
+            with self.assertRaises(StorageError):
+                with retention_mutation_guard(self.fixture.layout):
+                    self.fail("Retention acquired a live runtime package")
+            observed.append(phase)
+
+        def capture(command):
+            assert_protected("capture")
+            return self._capture(command)
+
+        def record(**kwargs):
+            assert_protected("receipt")
+            return original_record(**kwargs)
+
+        with patch.object(exporter, "_record_evidence", side_effect=record):
+            evidence = exporter.export_openapi(
+                Path("C:/fixture/fullmag"), JOB_ID, COMMIT,
+                layout=self.fixture.layout, image_inspect=self._image, capture=capture,
+            )
+        self.assertEqual(observed, ["capture", "receipt"])
+        with retention_mutation_guard(self.fixture.layout):
+            self.assertTrue((evidence / "receipt.json").is_file())
+
+    def test_retention_blocks_admission_before_package_validation(self) -> None:
+        with retention_mutation_guard(self.fixture.layout), \
+                patch.object(exporter, "_validate_managed_build") as validate:
+            with self.assertRaisesRegex(exporter.ExportError, "blocked by storage retention"):
+                exporter.export_openapi(
+                    Path("C:/fixture/fullmag"), JOB_ID, COMMIT,
+                    layout=self.fixture.layout, image_inspect=self._image, capture=self._capture,
+                )
+        validate.assert_not_called()
 
     def test_runtime_profile_exports_without_full_release_or_frontend(self) -> None:
         self.fixture.close()

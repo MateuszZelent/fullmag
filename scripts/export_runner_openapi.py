@@ -862,6 +862,15 @@ def export_openapi(repo_root: Path, job_id: str, expected_commit: str,
             layout = storage.resolve_layout(repo_root)
         except (OSError, ValueError, storage.StorageError) as error:
             raise ExportError("Cannot resolve the configured canonical Fullmag storage") from error
+    from local_runner.runtime_use import runtime_package_use
+    try:
+        with runtime_package_use(layout):
+            return _export_protected(layout, job_id, expected_commit, image_inspect, capture)
+    except storage.StorageError as error:
+        raise ExportError('Runtime package use is blocked by storage retention') from error
+
+
+def _export_protected(layout, job_id, expected_commit, image_inspect, capture):
     build = _validate_managed_build(layout, job_id, expected_commit)
     evidence = _new_evidence_root(layout)
     export_id = evidence.name

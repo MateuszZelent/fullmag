@@ -28,6 +28,12 @@ Powoduje to narastanie milionów plików niezależnie od ustawionego TTL.
 5. Jeden istniejący koordynator jest właścicielem automatycznej retencji.
    Blokady retencji i ciężkich operacji serializują decyzję z uruchomieniami.
    Tryb podglądu pozostaje dostępny; zmiana ustawienia nie omija walidacji.
+6. Uruchomienie publikujące konsumenta runtime używa krótkiej bramki `mkdir`
+   i własnego trwałego ticketu w `locks/runtime-users`. Niezależne obliczenia
+   mogą działać równolegle. Sprzątanie trzyma tę samą bramkę przez całą mutację
+   i odmawia przy dowolnym aktywnym lub nieznanym tickecie. Nie zakładamy
+   interoperacyjności blokad `msvcrt` i `flock` przez Docker Desktop.
+   Przerwany gate lub ticket wymaga sprawdzenia właściciela; sam wiek go nie wygasza.
 
 ## Zgodność i migracja
 
