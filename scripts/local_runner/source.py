@@ -127,10 +127,16 @@ _SECRET_SUFFIXES = frozenset(
         ".tokens",
     }
 )
-# This tracked stylesheet uses ``tokens`` as a design-system identifier, not
-# as credential material.  Keep the exception path-specific; the general
+# These tracked stylesheets use ``tokens`` as a design-system identifier, not
+# as credential material. Keep the exception path-specific; the general
 # token/credential heuristic remains fail-closed for all other paths.
-_SOURCE_IDENTIFIER_PATHS = frozenset({"apps/control-room/src/design/styles/tokens.css"})
+_SOURCE_IDENTIFIER_PATHS = frozenset(
+    {
+        "apps/control-room/src/design/styles/tokens.css",
+        "apps/control-room/src/design/styles/start-screen.tokens.css",
+        "docs/design/start-screen/tokens/start-screen.tokens.css",
+    }
+)
 
 
 class SourceError(RuntimeError):

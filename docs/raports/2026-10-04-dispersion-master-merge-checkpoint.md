@@ -57,3 +57,32 @@ sam ten merge nie jest dowodem pełnego cutoveru wszystkich producentów.
 15 punktów DE i dwa punkty diagnostyki airboxu pozostają wynikiem częściowym.
 Konwergencja, pełne okno Gamma, native grouped/adaptive parity, GUI, COMSOL,
 GPU i waveguide pozostają otwarte. Cały plan S00–S12 nie jest zakończony.
+
+## Zamknięcie konfliktów i poprawka capture
+
+Oba merge zapisano i wypchnięto: `9085b6a0242b3cde9737bfd87c854e278c537616`
+oraz `cfc3fc3d28f461543048b4bfac8c6a5e36b03878`.
+GitHub potwierdził PR #97 jako `MERGEABLE / CLEAN`; brak konfliktów.
+Drugi merge obejmuje tylko trzy pliki testowe z mastera; kontrola parserów przeszła.
+Pełny staged whitespace check pierwszego merge zgłasza jedynie niezmieniony patch
+`docs/validation/external-solver-patches/mumax3-sp4-local.diff` z mastera
+(blob `d8e11e7c67748b95dcdc73b3a68e8076ebcdb4b5`).
+Hook React Doctor zgłosił 60 ostrzeżeń, wynik 73/100; to nie jest potwierdzenie
+browser gate ani pełne zamknięcie diagnostyki frontendu.
+
+Koordynator zaktualizowano przy pustym aktywnym slocie przez graceful stop/replace/resume.
+Obraz: `sha256:17792f5bcba0515336bddd0f91073135cff75815bf6bb6b373b7fd170fa304aa`.
+Profile, sekret i konfiguracja buildów pozostały bez zmian.
+Trusted entrypoint ma hash `b049deb6ca0a74c225de176695442d688e3f57abec89c5b9f01a88943173325e`;
+CPU runtime-v2 jawnie deklaruje CUDA OFF, FEM_GPU OFF i brak unit test targets.
+
+Pierwsze zgłoszenie exact-SHA zostało odrzucone przed utworzeniem joba:
+`start-screen.tokens.css` błędnie sklasyfikowano jako plik z credential tokens.
+Rozszerzono istniejący wyjątek tylko o dwa przejrzane arkusze design tokens:
+`apps/control-room/src/design/styles/start-screen.tokens.css` i
+`docs/design/start-screen/tokens/start-screen.tokens.css`.
+Nie zastosowano wildcardów ani osłabienia reguł dla innych plików z sekretami.
+Regresje sprawdzają capture commit/snapshot oraz odrzucanie podobnych ścieżek.
+Build wymaga nowego, pełnego SHA poprawki; master merge i kwalifikacja pozostają otwarte.
+
+Weryfikacja poprawki capture: scripts/test_local_runner_source.py — 15 testów OK, exit 0 (60,4 s); bez kompilacji testów jednostkowych.
