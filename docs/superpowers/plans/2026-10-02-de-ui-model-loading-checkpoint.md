@@ -1,5 +1,19 @@
 # Naprawa ładowania modelu DE w UI
 
+<!-- canonical-mu0-source-checkpoint -->
+## Aktualny checkpoint — poprawka μ₀ na remote; nowy build w kolejce
+
+Odczyt 2026-10-04T04:01:49.824275+00:00. S00–S12 pozostają OPEN; brak nowych zaakceptowanych punktów.
+
+- Docker po restarcie: health OK, worker_alive=true, worker_error=null, przyjmowanie zadań włączone. Ostatni pomiar przed zgłoszeniem: 3 385 720 832 B (~3,15 GiB), poniżej progu admission 8 GiB. Nie usuwano cache, wyników ani kontenerów i nie uruchomiono ciężkiego buildu poza kolejką.
+- Γ #226: frequency_window zakończone błędem, 43/50 podokien OK; kompletność niezatwierdzona. Osobny selected-only nearest zakończył solver kodem 0 w 40,75 s: 9,299249697068216 GHz, full relative residual 6,396428791585744e-11. Driver prawidłowo odrzucił niespójną μ₀. Stary punkt pozostaje niezatwierdzony; nie poprawiano jego artefaktów.
+- Przyczyna potwierdzona: dwie własne stałe μ₀ w shared-domain C++ składały rzeczywisty operator i probe. Commit `a8d67ac92002b884799119578a054b518cf40cbf` zastępuje oba przypisania istniejącym `fullmag::fem::kMu0`. Model, metadata oraz próg spójności 1e-12 i residualu 1e-8 pozostają bez zmian. Source review bez nowych P1/P2, kontrola dokładnie staged dokumentacji naukowej PASS. Regresja importera/Floqueta przygotowana, testy C++ niekompilowane zgodnie z zakazem. Poprawiony runtime NOT VERIFIED.
+- Jeden managed build: job `d2a6c2dd0c3c4a66a1e05fce10bb32c7` (sekwencja 227), profil `fem-cpu-slepc-runtime-v2`, źródło commit `a8d67ac92002b884799119578a054b518cf40cbf`. Profil nie kompiluje unit tests ani frontendu. Zgłoszenie do kolejki nie dowodzi startu ani sukcesu. Admission jest blokowane dostępnym storage; po uzyskaniu terminalnego sukcesu i receipt należy wykonać nowy nearest Γ na niezmienionym modelu oraz zweryfikować stałą, residual, demag i binding siatki/równowagi. Nie używać pakietu #226 do kwalifikacji poprawki.
+- PreviewState strict raw JSON jest na remote w `17d614412672cf22e6dbb6c01a7375bdcaae5076`. Ochrona centralnego postępu etapów przed obcymi session_id/epoch/run_id jest na remote w `c9f8e78b098545f59603e73c329d855f895902c1`; produkcyjne TypeScript (896 wejść, 0 testów) i lint (7 plików, 0 błędów/ostrzeżeń) PASS. Nowy import FMS, lifecycle/session-switch i browser/WebGL pozostają NOT VERIFIED. Potrzebny osobny zgodny build API+UI po bramce runtime.
+- Nadal otwarte: 15 zaakceptowanych punktów signed DE, pełne okno Γ, serial/adaptive parity i pomiary CPU/RAM, API/GUI/FMS/Inspector, DE/BV/COMSOL A1 i zbieżność, S09/S10/GPU, PR #97 i integracja. Cztery wcześniejsze zaakceptowane punkty ±10/±25 nie kwalifikują nowego kodu.
+
+Dowody: `preview-state-checkpoint/mu0-fix-review.md`, `mu0-staged-scientific-validation.json`, `mu0-runtime-build-submit.json`, `gamma226-selected-result-inspection.json`; `adaptive-ui-checkpoint/stage-identity-production-types.json` i `stage-identity-production-eslint-evidence.json` w katalogu evidence tego wątku.
+
 <!-- gamma226-window-terminal-selected-mode -->
 ## Aktualny checkpoint — stan po restarcie Dockera
 
