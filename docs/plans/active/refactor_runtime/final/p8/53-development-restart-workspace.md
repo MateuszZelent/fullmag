@@ -120,6 +120,12 @@ kompilację i separację EXE. Niniejszy krok dodaje pełny lifecycle w UI.
 
 ## Stan — 03.10.2026
 
+Aktualizacja 04.10.2026: [P8-53AB](53ab-private-cold-commit-graceful-exit.md)
+łączy prywatne przejęcie, semantycznie zweryfikowaną kapsułę, cold-idle fence
+i trwałe zatwierdzenie z graceful exit własnego API. Zarządzany build i 139
+natywnych kontroli przeszły. Nie jest to jeszcze replacement ani odtworzenie
+workspace; pełny restart i `restart_available` pozostają niedostępne.
+
 P8-53 jest w realizacji. Dostępna jest wewnętrzna warstwa zapisu i odczytu
 handoffu authoring w `scripts/windows/development_handoff.py`: pełny JSON sceny,
 osobne dane edytora/workspace/dokumentu projektu, binding API/session/epoch/

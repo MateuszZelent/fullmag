@@ -324,6 +324,147 @@ pub(crate) struct AuthoringAcquisition {
 }
 
 impl AuthoringAcquisition {
+    /// Hidden native verifier only: submit a deliberately invalid commit to
+    /// exercise API validation, rather than the launcher's earlier preflight.
+    pub(crate) fn probe_rejected_cold_commit(
+        mut self,
+        staged: &StagedAuthoringHandoff,
+        case: &str,
+    ) -> Result<()> {
+        if env::var("FULLMAG_DEVELOPMENT_OWNER_PROBE").as_deref() != Ok("1")
+            || staged.source_nonce != self.nonce
+            || staged.source_api_instance_id != self.api_instance_id
+        {
+            bail!("invalid cold commit probe context");
+        }
+        let ack: StageAcknowledgement = serde_json::from_value(staged.acknowledgement.clone())?;
+        let candidate_id = staged
+            .candidate_bundle_root
+            .file_name()
+            .and_then(|value| value.to_str())
+            .context("invalid probe candidate identity")?;
+        let mut handoff = serde_json::json!({"handoff_id":ack.handoff.handoff_id,
+            "snapshot_sha256":ack.handoff.snapshot_sha256,"target_build_id":ack.binding.target_build_id,
+            "candidate_bundle_id":candidate_id,"candidate_manifest_sha256":staged.candidate_manifest_sha256});
+        match case {
+            "missing_fence" => {}
+            "snapshot" => handoff["snapshot_sha256"] = Value::String("0".repeat(64)),
+            "target" => handoff["target_build_id"] = Value::String("0".repeat(64)),
+            "candidate" => handoff["candidate_bundle_id"] = Value::String("0".repeat(32)),
+            "candidate_manifest" => {
+                handoff["candidate_manifest_sha256"] = Value::String("0".repeat(64))
+            }
+            "handoff" => handoff["handoff_id"] = Value::String(uuid::Uuid::new_v4().to_string()),
+            _ => bail!("unsupported cold commit probe case"),
+        }
+        let mut request = serde_json::to_vec(&serde_json::json!({
+            "schema":CONTROL_SCHEMA,"owner_token":self.owner_token,"api_instance_id":self.api_instance_id,
+            "nonce":self.nonce,"command":"commit_cold","handoff":handoff,
+        }))?;
+        if request.len() >= MAX_REQUEST_BYTES {
+            bail!("cold commit probe exceeds limit");
+        }
+        request.push(b'\n');
+        let mut stream = self
+            .stream
+            .take()
+            .context("cold commit probe connection is unavailable")?;
+        write_all_until(
+            &mut stream,
+            &request,
+            CONTROL_REQUEST_TIMEOUT,
+            "cold commit rejection probe",
+        )?;
+        let bytes = read_line_until(
+            &mut stream,
+            Duration::from_secs(20),
+            MAX_REQUEST_BYTES,
+            "cold commit rejection",
+        )?;
+        let result: Value = serde_json::from_slice(&bytes)?;
+        if result
+            != serde_json::json!({"schema":CONTROL_SCHEMA,"status":"rejected","reason":"development_owner_request_rejected"})
+        {
+            bail!("invalid cold commit was not rejected by the API");
+        }
+        Ok(())
+    }
+
+    /// One-shot private commit. A lost response is an unknown outcome; the
+    /// borrowed durable idle proof is never released or retried by this method.
+    pub(crate) fn commit_cold_handoff(
+        mut self,
+        repo_root: &Path,
+        staged: &StagedAuthoringHandoff,
+        proof: &fullmag_runtime_control::development_cold_idle::ColdIdleProof,
+    ) -> Result<CommittedColdHandoff> {
+        if self.service_configured
+            || proof.admission_fence.owner_token != self.owner_token
+            || proof.admission_fence.nonce != self.nonce
+        {
+            bail!("cold commit proof does not belong to this acquisition");
+        }
+        proof.verify_for_api(self.api_port, &self.api_instance_id)?;
+        let checked = self.revalidate_staged_handoff(repo_root, staged)?;
+        let expected_binding = proof.verify_for_api(self.api_port, &self.api_instance_id)?;
+        let ack: StageAcknowledgement = serde_json::from_value(checked.acknowledgement.clone())?;
+        let candidate_id = checked
+            .candidate_bundle_root
+            .file_name()
+            .and_then(|name| name.to_str())
+            .context("candidate bundle identity is missing")?;
+        if !lower_hex(candidate_id, 32) {
+            bail!("candidate bundle identity is invalid");
+        }
+        let request = serde_json::json!({
+            "schema":CONTROL_SCHEMA,"owner_token":self.owner_token,
+            "api_instance_id":self.api_instance_id,"nonce":self.nonce,"command":"commit_cold",
+            "handoff":{
+                "handoff_id":ack.handoff.handoff_id,"snapshot_sha256":ack.handoff.snapshot_sha256,
+                "target_build_id":ack.binding.target_build_id,"candidate_bundle_id":candidate_id,
+                "candidate_manifest_sha256":checked.candidate_manifest_sha256,
+            },
+        });
+        let mut bytes = serde_json::to_vec(&request)?;
+        if bytes.len() >= MAX_REQUEST_BYTES {
+            bail!("cold commit request exceeds its limit");
+        }
+        bytes.push(b'\n');
+        let mut stream = self
+            .stream
+            .take()
+            .context("development API acquisition is unavailable")?;
+        write_all_until(
+            &mut stream,
+            &bytes,
+            CONTROL_REQUEST_TIMEOUT,
+            "development API commit request",
+        )?;
+        let response = read_line_until(
+            &mut stream,
+            Duration::from_secs(20),
+            MAX_REQUEST_BYTES,
+            "development API commit acknowledgement; outcome must be reconciled on error",
+        )?;
+        let committed: CommitResponse = serde_json::from_slice(&response)
+            .context("development commit outcome is unknown: invalid acknowledgement")?;
+        if committed.schema != "fullmag.development-api-commit.v1"
+            || committed.nonce != self.nonce
+            || committed.api_instance_id != self.api_instance_id
+            || committed.handoff_id != ack.handoff.handoff_id
+            || committed.snapshot_sha256 != ack.handoff.snapshot_sha256
+            || committed.target_build_id != ack.binding.target_build_id
+            || committed.accepted_store_binding != expected_binding
+        {
+            bail!("development commit outcome is unknown: acknowledgement mismatch");
+        }
+        let _ = stream.shutdown(Shutdown::Both);
+        Ok(CommittedColdHandoff {
+            acknowledgement: serde_json::to_value(committed)?,
+            readback_helper_pid: checked.helper_pid,
+        })
+    }
+
     pub(crate) fn workspace(&self) -> &Value {
         &self.workspace
     }
@@ -356,6 +497,8 @@ impl AuthoringAcquisition {
         if self.stream.is_none() {
             bail!("development API acquisition connection is unavailable");
         }
+
+        let candidate_manifest_sha256 = self.candidate_manifest_digest(candidate_bundle_root)?;
 
         let repo_root = validated_directory_root(repo_root, "development handoff repository")?;
         let helper = checked_regular_file(
@@ -429,6 +572,11 @@ impl AuthoringAcquisition {
         if !exit_status.success() {
             bail!("development acquisition handoff helper failed");
         }
+        if self.candidate_manifest_digest(Path::new(candidate_bundle_root))?
+            != candidate_manifest_sha256
+        {
+            bail!("sealed candidate manifest changed during handoff validation");
+        }
         let acknowledgement: StageAcknowledgement = serde_json::from_slice(&ack_bytes)
             .context("invalid development acquisition handoff acknowledgement")?;
         validate_stage_acknowledgement(&acknowledgement, self).context(
@@ -446,7 +594,33 @@ impl AuthoringAcquisition {
             source_api_instance_id: self.api_instance_id.clone(),
             candidate_bundle_root: PathBuf::from(candidate_bundle_root),
             frontend_payload: frontend_payload.clone(),
+            candidate_manifest_sha256,
         })
+    }
+
+    fn candidate_manifest_digest(&self, candidate: &Path) -> Result<String> {
+        let identity = candidate
+            .file_name()
+            .and_then(|value| value.to_str())
+            .context("candidate bundle identity is missing")?;
+        if !candidate.is_absolute() || !lower_hex(identity, 32) {
+            bail!("candidate bundle identity is invalid");
+        }
+        let relative = format!("runtimes/{}/native-bundles/{identity}", self.worktree);
+        let expected =
+            fullmag_session::repository_path::checked_path(&self.storage_root, &relative)?;
+        validate_absolute_path_chain_no_reparse(candidate, "candidate bundle")?;
+        validated_directory_root(candidate, "candidate bundle")?;
+        validated_directory_root(&expected, "owned candidate bundle")?;
+        if fs::canonicalize(candidate)? != fs::canonicalize(&expected)? {
+            bail!("candidate bundle belongs to another namespace");
+        }
+        let bytes = fullmag_session::repository_path::read_bounded_regular_file(
+            &self.storage_root,
+            &format!("{relative}/manifest.json"),
+            256 * 1024,
+        )?;
+        Ok(fullmag_session::hex_sha256(&bytes))
     }
 
     /// Re-read the pending capsule and sealed candidate immediately before
@@ -463,12 +637,21 @@ impl AuthoringAcquisition {
                 bail!("staged handoff does not belong to this API acquisition");
             }
             self.confirm_held()?;
-            self.stage_handoff_inner(
+            if self.candidate_manifest_digest(&staged.candidate_bundle_root)?
+                != staged.candidate_manifest_sha256
+            {
+                bail!("sealed candidate manifest changed after staging");
+            }
+            let checked = self.stage_handoff_inner(
                 repo_root,
                 &staged.candidate_bundle_root,
                 &staged.frontend_payload,
                 Some(&staged.acknowledgement),
-            )
+            )?;
+            if checked.candidate_manifest_sha256 != staged.candidate_manifest_sha256 {
+                bail!("sealed candidate manifest changed during precommit readback");
+            }
+            Ok(checked)
         })();
         if result.is_err() {
             self.invalidate_control_stream();
@@ -655,6 +838,24 @@ pub(crate) struct StagedAuthoringHandoff {
     source_api_instance_id: String,
     candidate_bundle_root: PathBuf,
     frontend_payload: Value,
+    candidate_manifest_sha256: String,
+}
+
+pub(crate) struct CommittedColdHandoff {
+    pub(crate) acknowledgement: Value,
+    pub(crate) readback_helper_pid: u32,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct CommitResponse {
+    schema: String,
+    nonce: String,
+    api_instance_id: String,
+    handoff_id: String,
+    snapshot_sha256: String,
+    target_build_id: String,
+    accepted_store_binding: String,
 }
 
 #[derive(Serialize)]

@@ -188,6 +188,18 @@ zatwierdzenie. Po jego pojawieniu się zwykły abort nie zwalnia fence; potrzebn
 jest odrębna decyzja zakończenia lifecycle z dowodem nowego ownera. Sam zapis
 nie waliduje kapsuły ani nie upoważnia dowolnego klienta do shutdown API.
 
+Prywatny konsument zimnego magazynu sprawdza nonce aktualnego przejęcia,
+źródła/epokę/API, staged receipt, hash kapsuły i zgodność jej sceny z guardem,
+kandydata w namespace launchera oraz skopiowane pliki. Przed publikacją
+utrwala zamknięcie admission i zachowuje transition guard. Błąd publikacji
+jest stanem wymagającym uzgodnienia; nie otwiera ponownie starego workspace.
+Po poprawnym zatwierdzeniu graceful shutdown musi zostać zasygnalizowany
+także po utracie ACK lub anulowaniu kanału. ACK nie jest dowodem exit:
+launcher musi zaczekać na rzeczywisty własny proces, zachowując fence.
+Ta ścieżka nie obejmuje jeszcze działającego service ani udostępnienia
+komendy restartu frontendowi. Zwykły start API bez prywatnego ownera nie
+może zakończyć się wskutek braku kanału shutdown.
+
 Wymagane są: zgodność generated API, regresje błędnego/starego handoffu,
 odrzucenie aktywnego solve i wyścigu Start, ochrony szkiców i awarii restore,
 a także rzeczywisty przebieg Windows i przeglądarki z niepustą geometrią,

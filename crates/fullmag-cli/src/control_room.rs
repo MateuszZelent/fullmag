@@ -2672,24 +2672,122 @@ pub(crate) fn verify_development_api_owner() -> Result<()> {
     {
         bail!("commit preparation retained a foreign acquisition");
     }
-    // Only this fixture child is terminated; successful wait is recorded.
-    let mut process = child.release().0;
-    terminate_child_process(&mut process);
-    let terminal = process
-        .wait()
-        .context("failed to wait for the owned API fixture")?;
+    let mut rejection_helpers = Vec::new();
+    for case in [
+        "missing_fence",
+        "snapshot",
+        "target",
+        "candidate",
+        "candidate_manifest",
+        "handoff",
+    ] {
+        let mut probe_acquisition = owner.acquire(&uuid::Uuid::new_v4().to_string())?;
+        let probe_identity = probe_acquisition.workspace()["identity"].clone();
+        let probe_staged = probe_acquisition.stage_handoff(
+            &root,
+            &candidate,
+            &serde_json::json!({
+                "api_instance_id":instance,"session_id":probe_identity["session_id"],
+                "session_epoch":probe_identity["session_epoch"],"editor":{"probe":"scene"},
+                "workspace":{},"project_document":{},
+            }),
+        )?;
+        rejection_helpers
+            .push(serde_json::json!({"pid":probe_staged.helper_pid,"waited":true,"exit_code":0}));
+        let idle = if case == "missing_fence" {
+            None
+        } else {
+            Some(probe_acquisition.acquire_cold_idle(&probe_staged, &accepted_store)?)
+        };
+        probe_acquisition.probe_rejected_cold_commit(&probe_staged, case)?;
+        let store = fullmag_session::SessionStore::open_existing(accepted_store.clone())?;
+        if store.read_development_handoff_commit()?.is_some() {
+            bail!("rejected API commit published acceptance");
+        }
+        if let Some(idle) = idle {
+            idle.release_fence()?;
+        } // Explicit fixture abort after confirmed rejection.
+        if client
+            .get(format!("{url}/v2/sessions/current/model/scene"))
+            .send()?
+            .status()
+            .as_u16()
+            != 200
+        {
+            bail!("rejected cold commit did not reopen authoring admission");
+        }
+    }
+    let mut final_acquisition = owner.acquire(&uuid::Uuid::new_v4().to_string())?;
+    let final_identity = final_acquisition.workspace()["identity"].clone();
+    let final_staged = final_acquisition.stage_handoff(
+        &root,
+        &candidate,
+        &serde_json::json!({
+            "api_instance_id":instance,"session_id":final_identity["session_id"],
+            "session_epoch":final_identity["session_epoch"],"editor":{"probe":"scene"},
+            "workspace":{},"project_document":{},
+        }),
+    )?;
+    let final_idle = final_acquisition.acquire_cold_idle(&final_staged, &accepted_store)?;
+    let committed = final_acquisition.commit_cold_handoff(&root, &final_staged, &final_idle)?;
+    // The successful path never terminates the child. Retain the fence and
+    // observe this exact owned process, rather than treating ACK as exit proof.
+    let exit_deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    let terminal = loop {
+        if child
+            .process_mut()
+            .0
+            .try_wait()
+            .context("owned API exit outcome is unknown")?
+            .is_some()
+        {
+            break child
+                .process_mut()
+                .0
+                .wait()
+                .context("owned API terminal wait failed")?;
+        }
+        if std::time::Instant::now() >= exit_deadline {
+            bail!("committed owned API exit outcome is unknown; fence retained");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    };
+    child.release(); // Only release fixture cleanup after a confirmed terminal wait.
+    if !terminal.success() {
+        bail!("committed owned API did not exit successfully");
+    }
+    final_idle.verify_current()?;
+    let accepted = fullmag_session::SessionStore::open_existing(accepted_store.clone())?
+        .read_development_handoff_commit()?
+        .context("committed handoff record is absent")?;
+    if accepted.api_instance_id != instance
+        || accepted.handoff_id
+            != committed.acknowledgement["handoff_id"]
+                .as_str()
+                .unwrap_or("")
+        || accepted.fence != final_idle.admission_fence
+    {
+        bail!("graceful API exit does not match its durable handoff acceptance");
+    }
+    drop(final_idle); // Kernel reservations release; durable fence remains closed.
     println!(
         "{}",
         serde_json::json!({
             "schema":"fullmag.development-cli-owner-check.v1", "api_pid":pid,
             "api_instance_id":instance, "api_waited":true,
             "accepted_store_binding":fullmag_runtime_control::accepted_store::store_binding(&accepted_store),
+            "graceful_commit":committed.acknowledgement,
+            "committed_handoff":final_staged.acknowledgement,
+            "graceful_exit":true,"durable_fence_retained":true,
+            "commit_rejection_helpers":rejection_helpers,
             "handoffs":[empty_staged.acknowledgement,scene_staged.acknowledgement],
             "stage_helpers":[
                 {"pid":empty_staged.helper_pid,"waited":true,"exit_code":0},
                 {"pid":scene_staged.helper_pid,"waited":true,"exit_code":0},
                 {"pid":empty_checked.helper_pid,"waited":true,"exit_code":0},
-                {"pid":scene_checked.helper_pid,"waited":true,"exit_code":0}
+                {"pid":scene_checked.helper_pid,"waited":true,"exit_code":0},
+                {"pid":final_staged.helper_pid,"waited":true,"exit_code":0},
+                {"pid":committed.readback_helper_pid,"waited":true,"exit_code":0}
             ],
             "api_exit_code":terminal.code(), "checks":["owned-api-discovery",
             "static-script-owner-disabled", "unscoped-store-location-preserved",
@@ -2702,7 +2800,13 @@ pub(crate) fn verify_development_api_owner() -> Result<()> {
             "empty-capsule-precommit-readback", "scene-capsule-precommit-readback",
             "empty-staged-bound-api-cold-idle", "scene-staged-bound-api-cold-idle",
             "global-idle-unbound-api-store-refused", "failed-global-idle-invalidates-acquisition",
-            "global-idle-foreign-staging-refused", "precommit-foreign-staging-invalidates-acquisition"]
+            "global-idle-foreign-staging-refused", "precommit-foreign-staging-invalidates-acquisition",
+            "cold-commit-private-api-consumer", "cold-commit-owned-api-graceful-exit",
+            "cold-commit-exit-matches-durable-acceptance", "cold-commit-drop-retains-fence",
+            "cold-commit-missing-fence-refused", "cold-commit-wrong-snapshot-refused",
+            "cold-commit-wrong-target-refused", "cold-commit-foreign-candidate-refused",
+            "cold-commit-changed-candidate-manifest-refused",
+            "cold-commit-foreign-capsule-refused"]
         })
     );
     Ok(())

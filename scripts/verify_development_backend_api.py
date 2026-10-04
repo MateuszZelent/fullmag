@@ -60,7 +60,7 @@ def run(repo_root: str) -> int:
                    "build_snapshot_sha256": manifest["source_snapshot_sha256"],
                    "build_commit": manifest["git_commit"],
                    "started_at": storage.now(), "checks": [], "processes": [],
-                   "scope": "native resource observation, private owner-authorized authoring acquisition and admission freeze/abort/disconnect, production CLI owner client in owned empty API, empty-service terminal drain; no process replacement, full workspace restart, solver or release qualification"}
+                   "scope": "native resource observation, private owner-authorized acquisition and admission freeze/abort/disconnect, cold handoff acceptance and graceful owned API exit, empty-service terminal drain; no replacement, full workspace restoration, solver or release qualification"}
         storage.atomic_json(receipt_path, receipt)
         code = 1
         try:
@@ -232,13 +232,27 @@ def exercise_cli_owner(repo: Path, run_root: Path, manifest: dict, receipt: dict
     result = frames[0]
     assert result["schema"] == "fullmag.development-cli-owner-check.v1" and result["api_waited"] is True
     assert result["accepted_store_binding"] == receipt["accepted_store_binding"]
+    assert result["graceful_exit"] is True and result["durable_fence_retained"] is True
+    assert result["api_exit_code"] == 0
+    assert result["graceful_commit"]["api_instance_id"] == result["api_instance_id"]
+    assert result["graceful_commit"]["accepted_store_binding"] == receipt["accepted_store_binding"]
+    receipt["cli_graceful_commit"] = result["graceful_commit"]
     receipt["checks"].append("staged-cold-idle-api-binding-matches-initialized-namespace")
     receipt["processes"].append(dict(label="cli-owned-api", pid=result["api_pid"],
         waited=True, exit_code=result["api_exit_code"]))
     for item in result["stage_helpers"]:
         assert item["waited"] is True and item["exit_code"] == 0
         receipt["processes"].append(dict(label="cli-capsule-stage-helper", **item))
+    assert len(result["commit_rejection_helpers"]) == 6
+    for item in result["commit_rejection_helpers"]:
+        assert item["waited"] is True and item["exit_code"] == 0
+        receipt["processes"].append(dict(label="cli-commit-rejection-helper", **item))
     from windows.development_scene_handoff import load_scene_handoff
+    committed_capsule = result["committed_handoff"]
+    loaded_commit = load_scene_handoff(str(repo), committed_capsule["handoff"]["handoff_id"], committed_capsule["binding"])
+    assert loaded_commit["snapshot_sha256"] == result["graceful_commit"]["snapshot_sha256"]
+    assert loaded_commit["receipt"]["state"] == "staged"  # Shutdown does not assert restoration.
+    receipt["committed_capsule"] = committed_capsule
     assert len(result["handoffs"]) == 2
     for ack in result["handoffs"]:
         loaded = load_scene_handoff(str(repo), ack["handoff"]["handoff_id"], ack["binding"])

@@ -79,6 +79,15 @@ pub(crate) struct WorkspaceRestartAcquisition<'a> {
     pub(crate) workspace: RestartableWorkspace,
 }
 
+impl<'a> WorkspaceRestartAcquisition<'a> {
+    /// Only the private owner coordinator calls this before attempting durable
+    /// acceptance. An uncertain publication must not reopen HTTP mutations.
+    pub(crate) fn retain_closed_admission(self) -> MutexGuard<'a, ()> {
+        self._freeze.keep_closed_until_shutdown();
+        self._transition
+    }
+}
+
 /// Acquire a stable workspace snapshot for the future restart coordinator.
 ///
 /// The call order is part of the safety contract: admission is closed and

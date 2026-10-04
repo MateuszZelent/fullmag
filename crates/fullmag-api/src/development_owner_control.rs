@@ -1,7 +1,12 @@
 //! Private, owner-authenticated acquisition transport for development launches.
 //! A disconnected or cancelled connection releases acquisition through RAII.
 
-use std::{net::Ipv4Addr, path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    net::Ipv4Addr,
+    path::PathBuf,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
@@ -10,6 +15,7 @@ use sha2::{Digest, Sha256};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
+    sync::oneshot,
     task::JoinHandle,
     time::timeout,
 };
@@ -36,11 +42,15 @@ pub(crate) struct PreparedOwnerControl {
     owner_token: String,
     storage_root: PathBuf,
     relative_ready: String,
+    shutdown: Mutex<Option<oneshot::Sender<()>>>,
 }
 
 /// Validate and bind before the HTTP listener is opened. Ordinary launches
 /// without an owner token do not create a listener or filesystem record.
-pub(crate) fn prepare(state: Arc<AppState>) -> Result<Option<PreparedOwnerControl>> {
+pub(crate) fn prepare(
+    state: Arc<AppState>,
+    shutdown: oneshot::Sender<()>,
+) -> Result<Option<PreparedOwnerControl>> {
     let Some(token) = std::env::var_os("FULLMAG_DEVELOPMENT_OWNER_TOKEN") else {
         return Ok(None);
     };
@@ -85,6 +95,7 @@ pub(crate) fn prepare(state: Arc<AppState>) -> Result<Option<PreparedOwnerContro
         owner_token,
         storage_root: root,
         relative_ready,
+        shutdown: Mutex::new(Some(shutdown)),
     }))
 }
 
@@ -132,8 +143,13 @@ impl PreparedOwnerControl {
     }
 
     async fn handle(&self, stream: &mut TcpStream) -> Result<()> {
+        let started = std::time::Instant::now();
         let request = match read_request(stream, READ_TIMEOUT).await {
-            Ok(request) if self.authenticated(&request) && request.command == Command::Acquire => {
+            Ok(request)
+                if self.authenticated(&request)
+                    && request.command == Command::Acquire
+                    && request.handoff.is_none() =>
+            {
                 request
             }
             _ => return reject(stream).await,
@@ -196,6 +212,10 @@ impl PreparedOwnerControl {
             };
             match control.command {
                 Command::Confirm => {
+                    if control.handoff.is_some() {
+                        drop(acquisition);
+                        return reject(stream).await;
+                    }
                     write_response(
                         stream,
                         &json!({
@@ -207,6 +227,10 @@ impl PreparedOwnerControl {
                     .await?;
                 }
                 Command::Abort => {
+                    if control.handoff.is_some() {
+                        drop(acquisition);
+                        return reject(stream).await;
+                    }
                     drop(acquisition);
                     return write_response(
                         stream,
@@ -221,6 +245,56 @@ impl PreparedOwnerControl {
                 Command::Acquire => {
                     drop(acquisition);
                     return reject(stream).await;
+                }
+                Command::CommitCold => {
+                    let Some(handoff) = control.handoff else {
+                        drop(acquisition);
+                        return reject(stream).await;
+                    };
+                    let validated =
+                        match crate::development_handoff_validation::validate_cold_commit(
+                            &self.state,
+                            &acquisition.workspace,
+                            &control.nonce,
+                            &self.owner_token,
+                            &handoff,
+                            started + HOLD_TIMEOUT,
+                        ) {
+                            Ok(validated) => validated,
+                            Err(_) => {
+                                drop(acquisition);
+                                return reject(stream).await;
+                            }
+                        };
+                    if started.elapsed() >= HOLD_TIMEOUT {
+                        drop(acquisition);
+                        return reject(stream).await;
+                    }
+                    // Close permanently before entering publication, and retain
+                    // transition ownership across it. Errors, panic or task
+                    // cancellation must not reopen an uncertain old workspace.
+                    let _committed_transition = acquisition.retain_closed_admission();
+                    let accepted = validated.store.accept_development_handoff(
+                        &validated.fence,
+                        &self.state.request_scope_instance_id,
+                        &handoff.handoff_id,
+                        &handoff.snapshot_sha256,
+                        &handoff.target_build_id,
+                        &validated.accepted_store_binding,
+                    );
+                    let Ok(record) = accepted else {
+                        return reject(stream).await;
+                    };
+                    // Cancellation or a lost ACK must still signal shutdown once
+                    // acceptance succeeded; it must never reopen the old workspace.
+                    let _shutdown = ShutdownAfterCommit(&self.shutdown);
+                    return write_response(stream, &json!({
+                        "schema":"fullmag.development-api-commit.v1",
+                        "nonce":control.nonce, "api_instance_id":self.state.request_scope_instance_id,
+                        "handoff_id":record.handoff_id,"snapshot_sha256":record.snapshot_sha256,
+                        "target_build_id":record.target_build_id,
+                        "accepted_store_binding":record.accepted_store_binding,
+                    })).await;
                 }
             }
         }
@@ -242,6 +316,8 @@ struct ControlRequest {
     api_instance_id: String,
     nonce: String,
     command: Command,
+    #[serde(default)]
+    handoff: Option<crate::development_handoff_validation::ColdCommitRequest>,
 }
 
 #[derive(Deserialize, PartialEq, Eq)]
@@ -250,6 +326,18 @@ enum Command {
     Acquire,
     Confirm,
     Abort,
+    CommitCold,
+}
+
+struct ShutdownAfterCommit<'a>(&'a Mutex<Option<oneshot::Sender<()>>>);
+
+impl Drop for ShutdownAfterCommit<'_> {
+    fn drop(&mut self) {
+        let mut shutdown = self.0.lock().unwrap_or_else(|error| error.into_inner());
+        if let Some(sender) = shutdown.take() {
+            let _ = sender.send(());
+        }
+    }
 }
 
 fn canonical_uuid(value: &str) -> bool {

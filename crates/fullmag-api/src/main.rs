@@ -42,6 +42,7 @@ mod artifacts;
 mod assets;
 mod build_info;
 mod coordinator_persistence;
+mod development_handoff_validation;
 mod development_owner_control;
 mod error;
 mod fdm_planar_grid_overlay;
@@ -2497,7 +2498,8 @@ async fn main() {
         .await
         .expect("private development authoring restore must succeed before API startup");
 
-    let owner_control = development_owner_control::prepare(state.clone())
+    let (owner_shutdown_tx, owner_shutdown_rx) = tokio::sync::oneshot::channel();
+    let owner_control = development_owner_control::prepare(state.clone(), owner_shutdown_tx)
         .expect("private development owner configuration must be valid before API startup");
 
     let cors = router_v2::middleware::cors::cors_layer();
@@ -2588,11 +2590,19 @@ async fn main() {
         .expect("binding API listener should succeed");
 
     let owner_control_task = owner_control.map(|control| {
-        control.start(listener.local_addr().expect("API listener address").port())
+        control
+            .start(listener.local_addr().expect("API listener address").port())
             .expect("publishing private development owner must succeed")
     });
 
-    let result = axum::serve(listener, app).await;
+    let result = axum::serve(listener, app)
+        .with_graceful_shutdown(async move {
+            // An absent or failed private owner must not stop an ordinary API.
+            if owner_shutdown_rx.await.is_err() {
+                std::future::pending::<()>().await;
+            }
+        })
+        .await;
     if let Some(task) = owner_control_task {
         task.abort();
         let _ = task.await;

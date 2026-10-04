@@ -17,6 +17,8 @@ import fullmag_storage as storage
 
 
 SOURCE_PATHS = (
+    "scripts/windows/validate_commit_handoff.py",
+    "scripts/test_windows_development_commit_consumer.py",
     "scripts/windows/stage_acquisition_handoff.py",
     "scripts/test_windows_development_stage_consumer.py",
     "scripts/windows/development_acquisition_handoff.py",

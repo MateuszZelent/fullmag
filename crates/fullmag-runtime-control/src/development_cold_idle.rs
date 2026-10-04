@@ -23,6 +23,16 @@ pub struct ColdIdleProof {
 }
 
 impl ColdIdleProof {
+    pub fn verify_for_api(&self, port: u16, instance: &str) -> Result<String> {
+        self.verify_current()?;
+        let observed = crate::runtime_service_client::verify_api_store(port, self.store.root())?;
+        if observed != instance {
+            bail!("cold idle proof is bound to another API instance");
+        }
+        crate::accepted_store::store_binding(self.store.root())
+            .context("cold idle proof store binding is invalid")
+    }
+
     pub fn verify_current(&self) -> Result<()> {
         require_no_service_metadata(&self.store)?;
         if self.store.read_development_idle_fence()?.as_ref() != Some(&self.admission_fence) {
