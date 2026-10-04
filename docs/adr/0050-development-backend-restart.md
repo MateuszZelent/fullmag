@@ -297,3 +297,15 @@ odrzucenie aktywnego solve i wyścigu Start, ochrony szkiców i awarii restore,
 a także rzeczywisty przebieg Windows i przeglądarki z niepustą geometrią,
 regionami oraz materiałami. Nowy API UUID i hash modelu trzeba potwierdzić
 po restarcie. Te bramki pozostają NOT VERIFIED do wykonania.
+
+P8-53AO podłącza trwały transport do natywnej pętli launchera. Ready selector
+wiąże status/source/raw manifest i zapieczętowany pakiet; kanoniczne położenie
+jest sprawdzane w Rust, a helper otrzymuje zapis ścieżki z zatwierdzonego rootu
+środowiska. Idle observers są pauzowane po zimnej rezerwacji i przed commitem.
+Znany abort wznawia obserwację starego API; unknown zachowuje owner guard,
+pauzę i fence. Zamknięcie okna przy unknown nie porzuca żywego launchera.
+Znany exit przed commitem nie uruchamia replacement. Publikacja rezultatu
+ponawia jedynie identyczny zapis, nigdy wykonanie requestu. Dowody cold native
+empty/scene opisuje [raport P8-53AO](../plans/active/refactor_runtime/final/p8/53ao-native-restart-consumer.md).
+Nie promuje to hydration, warm-service restart ani crash/force-kill recovery;
+publiczne `restart_available` pozostaje `false`.

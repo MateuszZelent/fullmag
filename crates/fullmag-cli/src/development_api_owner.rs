@@ -50,6 +50,10 @@ const MAX_COMMITTED_RESTORE_REQUEST_BYTES: usize = 16 * 1024;
 const MAX_COMMITTED_RESTORE_OUTPUT_BYTES: usize = 128 * 1024 * 1024;
 const MAX_PRELISTEN_ENVELOPE_BYTES: usize = 64 * 1024 * 1024;
 const MAX_CANDIDATE_OWNER_REQUEST_BYTES: usize = 16 * 1024;
+const READY_CANDIDATE_REQUEST_SCHEMA: &str = "fullmag.development-ready-candidate-request.v1";
+const READY_CANDIDATE_ACK_SCHEMA: &str = "fullmag.development-ready-candidate-ack.v1";
+const MAX_READY_CANDIDATE_REQUEST_BYTES: usize = 4 * 1024;
+const MAX_READY_CANDIDATE_OUTPUT_BYTES: usize = 4 * 1024;
 const BACKEND_ENV_KEYS: [&str; 4] = [
     "FULLMAG_DEVELOPMENT_BACKEND_GENERATION",
     "FULLMAG_DEVELOPMENT_BACKEND_STATUS_FILE",
@@ -456,6 +460,21 @@ pub(crate) struct OwnedDevelopmentApi {
     owner_token: String,
 }
 
+/// A source-pinned native development bundle selected from a fresh watcher
+/// ready state. Helper process ids are retained as evidence that both bounded
+/// helper calls were waited to completion.
+pub(crate) struct SelectedDevelopmentCandidate {
+    pub(crate) bundle_root: PathBuf,
+    pub(crate) candidate_bundle_id: String,
+    pub(crate) candidate_manifest_sha256: String,
+    pub(crate) ready_build_id: String,
+    pub(crate) ready_source_sha256: String,
+    pub(crate) generation_id: String,
+    pub(crate) worktree_id: String,
+    pub(crate) selector_helper_pid: u32,
+    pub(crate) owner_verifier_helper_pid: u32,
+}
+
 impl OwnedDevelopmentApi {
     pub(crate) fn child_pid(&self) -> u32 {
         self.child_pid
@@ -463,6 +482,129 @@ impl OwnedDevelopmentApi {
 
     pub(crate) fn api_instance_id(&self) -> &str {
         &self.api_instance_id
+    }
+
+    /// Return the non-secret owner scope used to correlate a restart pump.
+    pub(crate) fn restart_transport_scope(&self) -> (PathBuf, String, String, String) {
+        (
+            self.storage_root.clone(),
+            self.worktree.clone(),
+            self.generation.clone(),
+            self.api_instance_id.clone(),
+        )
+    }
+
+    /// Select and validate a sealed candidate for the latest ready watcher
+    /// generation. The helper never builds; it only verifies and bundles the
+    /// already-published native development executables.
+    pub(crate) fn select_ready_candidate(
+        &self,
+        repo_root: &Path,
+    ) -> Result<SelectedDevelopmentCandidate> {
+        if self.service_configured {
+            bail!("ready candidate selection requires a cold development API");
+        }
+        if !lower_hex(&self.generation, 32) {
+            bail!("ready candidate owner scope is invalid");
+        }
+        fullmag_session::repository_path::validate_store_id(&self.worktree)
+            .context("ready candidate owner worktree is invalid")?;
+
+        let repo_root = validated_directory_root(repo_root, "ready candidate repository")?;
+        let helper = checked_regular_file(
+            &repo_root,
+            "scripts/windows/select_development_candidate.py",
+            "ready candidate selection helper",
+        )?;
+        let python = managed_development_python(&self.storage_root, &self.worktree)?;
+        let storage_root = self
+            .storage_root
+            .to_str()
+            .context("managed development storage root is not valid UTF-8")?;
+        let request = ReadyCandidateRequest {
+            schema: READY_CANDIDATE_REQUEST_SCHEMA,
+            storage_root,
+            worktree_id: &self.worktree,
+            generation_id: &self.generation,
+        };
+        let request_bytes = serde_json::to_vec(&request)
+            .context("unable to encode ready candidate selection request")?;
+        if request_bytes.len() > MAX_READY_CANDIDATE_REQUEST_BYTES {
+            bail!("ready candidate selection request exceeds its limit");
+        }
+
+        let (ack_bytes, selector_helper_pid, selector_status) = run_stage_helper_with_output_limit(
+            &python,
+            &helper,
+            &repo_root,
+            request_bytes,
+            MAX_READY_CANDIDATE_OUTPUT_BYTES,
+        )?;
+        if !selector_status.success() {
+            bail!("ready candidate selection helper failed");
+        }
+        let acknowledgement: ReadyCandidateAcknowledgement = serde_json::from_slice(&ack_bytes)
+            .context("invalid ready candidate selection acknowledgement")?;
+        if acknowledgement.schema != READY_CANDIDATE_ACK_SCHEMA
+            || acknowledgement.worktree_id != self.worktree
+            || acknowledgement.generation_id != self.generation
+            || !lower_hex(&acknowledgement.ready_build_id, 64)
+            || !lower_hex(&acknowledgement.ready_source_sha256, 64)
+            || !lower_hex(&acknowledgement.candidate_bundle_id, 32)
+            || !lower_hex(&acknowledgement.candidate_manifest_sha256, 64)
+        {
+            bail!("ready candidate selection acknowledgement does not match the owner scope");
+        }
+
+        let bundles_root = self
+            .storage_root
+            .join("runtimes")
+            .join(&self.worktree)
+            .join("native-bundles");
+        validate_absolute_path_chain_no_reparse(&bundles_root, "native candidate bundle root")?;
+        let bundles_root = validated_directory_root(&bundles_root, "native candidate bundle root")?;
+        let candidate_path = self
+            .environment_storage_root
+            .join("runtimes")
+            .join(&self.worktree)
+            .join("native-bundles")
+            .join(&acknowledgement.candidate_bundle_id);
+        validate_absolute_path_chain_no_reparse(&candidate_path, "ready candidate bundle")?;
+        let candidate_root = validated_directory_root(&candidate_path, "ready candidate bundle")?;
+        let canonical_bundles_root = fs::canonicalize(&bundles_root)
+            .context("unable to resolve native candidate bundle root")?;
+        let canonical_candidate_root = fs::canonicalize(&candidate_root)
+            .context("unable to resolve ready candidate bundle")?;
+        if canonical_candidate_root.parent() != Some(canonical_bundles_root.as_path()) {
+            bail!("ready candidate bundle is outside its canonical native namespace");
+        }
+
+        let (candidate_owner, owner_verifier_helper_pid) = self.candidate_owner(
+            &repo_root,
+            &acknowledgement.candidate_bundle_id,
+            &acknowledgement.candidate_manifest_sha256,
+        )?;
+        if candidate_owner.worktree != acknowledgement.worktree_id
+            || candidate_owner.generation != acknowledgement.generation_id
+            || candidate_owner.source != acknowledgement.ready_source_sha256
+        {
+            bail!("candidate owner verification differs from the ready source identity");
+        }
+
+        Ok(SelectedDevelopmentCandidate {
+            // Canonicalization proves physical containment, but Windows adds
+            // a verbatim prefix. Keep the verified managed spelling at the
+            // Python boundary, whose storage contract rejects that alias.
+            bundle_root: candidate_root,
+            candidate_bundle_id: acknowledgement.candidate_bundle_id,
+            candidate_manifest_sha256: acknowledgement.candidate_manifest_sha256,
+            ready_build_id: acknowledgement.ready_build_id,
+            ready_source_sha256: acknowledgement.ready_source_sha256,
+            generation_id: acknowledgement.generation_id,
+            worktree_id: acknowledgement.worktree_id,
+            selector_helper_pid,
+            owner_verifier_helper_pid,
+        })
     }
 
     pub(crate) fn candidate_owner(
@@ -2404,6 +2546,26 @@ struct OwnerRecord {
     owner_token_sha256: String,
     build_commit: String,
     build_snapshot: String,
+}
+
+#[derive(Serialize)]
+struct ReadyCandidateRequest<'a> {
+    schema: &'static str,
+    storage_root: &'a str,
+    worktree_id: &'a str,
+    generation_id: &'a str,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReadyCandidateAcknowledgement {
+    schema: String,
+    worktree_id: String,
+    generation_id: String,
+    ready_build_id: String,
+    ready_source_sha256: String,
+    candidate_bundle_id: String,
+    candidate_manifest_sha256: String,
 }
 
 #[derive(Serialize)]

@@ -79,6 +79,12 @@ impl DevelopmentApiSupervisor {
         self.state == DevelopmentApiSupervisorState::OutcomeUnknown
     }
 
+    pub(crate) fn retain_unknown_outcome(&mut self) {
+        // An unconfirmed precommit fence abort is also an unknown outcome.
+        // Preserve child custody and refuse an implicit shutdown/restart.
+        self.state = DevelopmentApiSupervisorState::OutcomeUnknown;
+    }
+
     pub(crate) fn terminal_status(&self) -> Option<ExitStatus> {
         self.terminal
     }

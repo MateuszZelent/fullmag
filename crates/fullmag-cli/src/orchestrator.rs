@@ -6966,9 +6966,28 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
     // The bridge ignores this script-backed session and only attaches a fresh
     // runtime after the browser explicitly replaces it with a runnable scene.
     let _scratch_runtime = if !args.headless {
-        std::env::current_exe().ok().map(|executable| {
-            crate::scratch_runtime::spawn(api_port(), executable, Some(session_id.clone()))
-        })
+        std::env::current_exe()
+            .ok()
+            .map(|executable| {
+                fullmag_runtime_control::application_attach::prepare_for_authoring(
+                    &crate::control_room::repo_root(),
+                    &crate::control_room::runtime_state_root(&crate::control_room::repo_root()),
+                    api_port(),
+                )
+                .map(|binding| {
+                    crate::scratch_runtime::spawn(
+                        api_port(),
+                        executable,
+                        Some(session_id.clone()),
+                        binding.api_instance_id().to_owned(),
+                    )
+                })
+                .map_err(|error| {
+                    eprintln!("[fullmag] scratch observer identity unavailable: {error:#}")
+                })
+                .ok()
+            })
+            .flatten()
     } else {
         None
     };

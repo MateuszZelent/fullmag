@@ -231,6 +231,12 @@ pub(crate) struct UiCli {
 
 #[derive(Subcommand)]
 pub(crate) enum RuntimeCommand {
+    /// Internal native-thread proof of the observer pause protocol.
+    #[command(hide = true)]
+    VerifyDevelopmentObserverPause,
+    /// Internal managed end-to-end proof of the native restart consumer.
+    #[command(hide = true)]
+    VerifyDevelopmentRestartConsumer,
     /// Internal managed diagnostic for the native CLI owner protocol.
     #[command(hide = true)]
     VerifyDevelopmentApiOwner,

@@ -46,6 +46,7 @@ pub(crate) fn launch_committed_replacement(
     prepared: &PreparedDevelopmentRestore,
     api_port: u16,
     log: File,
+    restart_origin: Option<&str>,
     mut observe: impl FnMut(ReplacementLaunchEvent),
 ) -> Result<PreparedReplacementApi> {
     if old.state() != crate::development_api_supervisor::DevelopmentApiSupervisorState::Accepted
@@ -71,10 +72,17 @@ pub(crate) fn launch_committed_replacement(
         .env("FULLMAG_DISABLE_STATIC_CONTROL_ROOM", "1")
         .env_remove("FULLMAG_DEVELOPMENT_RESTORE_STDIN")
         .env_remove("FULLMAG_DEVELOPMENT_OWNER_PROBE_TOKEN")
+        .env_remove("FULLMAG_DEVELOPMENT_RESTART_COORDINATOR")
+        .env_remove("FULLMAG_DEVELOPMENT_RESTART_UI_ORIGIN")
         .stdin(Stdio::piped())
         .stdout(log.try_clone()?)
         .stderr(log);
     launch.configure_candidate_command(&mut command, prepared.accepted_store_scope())?;
+    if let Some(origin) = restart_origin {
+        command
+            .env("FULLMAG_DEVELOPMENT_RESTART_COORDINATOR", "1")
+            .env("FULLMAG_DEVELOPMENT_RESTART_UI_ORIGIN", origin);
+    }
     if prepared.envelope_bytes().is_some() {
         command.env("FULLMAG_DEVELOPMENT_RESTORE_STDIN", "1");
     }

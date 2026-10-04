@@ -1,5 +1,14 @@
 # Status realizacji całego planu refaktoryzacji
 
+Checkpoint P8-53AO, 04.10.2026: [natywny konsument restartu](p8/53ao-native-restart-consumer.md).
+Pętla launchera konsumuje trwałe żądanie, selektor wiąże gotowy pakiet,
+a idle observers są pauzowane przed commitem i przypinane do świeżego API.
+Finalny build Windows, 39 kontroli konsumenta (empty/scene), 6 kontroli pauzy
+i 20 kontroli transportu PASS. Wszystkie 20 procesów próby konsumenta odebrane.
+Review lifecycle bez otwartych Required findings; fault-injection gałęzi błędów,
+hydration paneli, warm-service restart oraz pełny browser flow pozostają otwarte.
+`restart_available=false`; procenty całego planu bez awansu.
+
 Checkpoint P8-53AN, 04.10.2026: [transport restartu i koordynator](p8/53an-ui-restart-request-transport.md).
 Zarządzany build Windows, 20 kontroli transportu i 398 kontroli natywnej
 próby koordynatora PASS; wszystkie 142 procesy próby mają terminalny wynik.

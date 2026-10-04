@@ -153,6 +153,14 @@ verify-windows-development-handoff:
 verify-windows-development-backend-api cross_build_bundle="":
     @{{storage_python}} "{{repo_root}}/scripts/verify_development_backend_api.py" --repo-root "{{repo_root}}" --cross-build-bundle "{{cross_build_bundle}}"
 
+# Native observer protocol proof; no unit-test compilation or user-session restart.
+verify-windows-development-observer-pause:
+    @{{storage_python}} "{{repo_root}}/scripts/verify_development_backend_api.py" --repo-root "{{repo_root}}" --observer-pause-only
+
+# Owned empty/scene consumer proof; never restarts a user's workspace.
+verify-windows-development-restart-consumer:
+    @{{storage_python}} "{{repo_root}}/scripts/verify_development_backend_api.py" --repo-root "{{repo_root}}" --restart-consumer-only
+
 # Native request transport proof; no unit-test compilation or user-session restart.
 verify-windows-development-restart-transport:
     @{{storage_python}} "{{repo_root}}/scripts/verify_development_backend_api.py" --repo-root "{{repo_root}}" --restart-transport-only

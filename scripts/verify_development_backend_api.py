@@ -26,7 +26,12 @@ from windows.workspace_backend_identity import fingerprint
 
 
 def run(repo_root: str, cross_build_bundle: str = "", project_document_only: bool = False,
-        restart_transport_only: bool = False) -> int:
+        restart_transport_only: bool = False, observer_pause_only: bool = False,
+        restart_consumer_only: bool = False) -> int:
+    if restart_consumer_only and (cross_build_bundle or project_document_only or restart_transport_only or observer_pause_only):
+        raise storage.StorageError("Restart consumer is a separate verification scope")
+    if observer_pause_only and (cross_build_bundle or project_document_only or restart_transport_only):
+        raise storage.StorageError("Observer pause is a separate verification scope")
     if restart_transport_only and (cross_build_bundle or project_document_only):
         raise storage.StorageError("Restart transport observation is a separate verification scope")
     if project_document_only and cross_build_bundle:
@@ -74,6 +79,10 @@ def run(repo_root: str, cross_build_bundle: str = "", project_document_only: boo
             receipt["scope"] = "runtime-free project archive create/open identity and canonical bytes; no UI hydration, restart, solver or release qualification"
         if restart_transport_only:
             receipt["scope"] = "owned native API restart request transport, immutable storage, identity and token guards; no process replacement, UI hydration, solver or release qualification"
+        if observer_pause_only:
+            receipt["scope"] = "native observer pause protocol with actual threads; no API, process replacement, UI hydration, solver or release qualification"
+        if restart_consumer_only:
+            receipt["scope"] = "owned native API durable restart consumer, UI payload restoration, fresh API identity, stale-pin rejection and authoring editability; no solver or release qualification"
         storage.atomic_json(receipt_path, receipt)
         code = 1
         try:
@@ -107,9 +116,15 @@ def run(repo_root: str, cross_build_bundle: str = "", project_document_only: boo
             binary_hash = hashlib.sha256(api.read_bytes()).hexdigest()
             if binary_hash != manifest["api_binary_sha256"] or hashlib.sha256(source_api.read_bytes()).hexdigest() != binary_hash:
                 raise storage.StorageError("Native API changed while sealing its diagnostic copy")
-            exercise(api, repo, run_root, receipt, project_document_only=project_document_only,
-                     restart_transport_only=restart_transport_only)
-            if not project_document_only and not restart_transport_only:
+            if observer_pause_only:
+                exercise_observer_pause(repo, receipt, api.parent)
+            elif restart_consumer_only:
+                exercise_restart_consumer(repo, run_root, manifest, receipt, api.parent)
+            else:
+                exercise(api, repo, run_root, receipt, project_document_only=project_document_only,
+                         restart_transport_only=restart_transport_only)
+            if (not project_document_only and not restart_transport_only and not observer_pause_only
+                    and not restart_consumer_only):
                 exercise_service(repo, run_root, manifest, receipt, api.parent)
             # Use the canonical codegen branch rather than persisting the live
             # endpoint's process-specific accepted-store binding extension.
@@ -149,6 +164,371 @@ def run(repo_root: str, cross_build_bundle: str = "", project_document_only: boo
             storage.atomic_json(receipt_path, receipt)
             print(json.dumps({"state": receipt["state"], "exit_code": code, "checks": len(receipt["checks"]), "receipt": str(receipt_path)}))
         return code
+
+
+def exercise_observer_pause(repo: Path, receipt: dict, binaries: Path) -> None:
+    env = {key: os.environ[key] for key in
+           ("SYSTEMROOT", "WINDIR", "PATH", "PATHEXT", "TEMP", "TMP") if key in os.environ}
+    env["FULLMAG_DEVELOPMENT_OWNER_PROBE"] = "1"
+    process = subprocess.Popen(
+        [str(binaries / "fullmag.exe"), "runtime", "verify-development-observer-pause"],
+        cwd=repo, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        stdin=subprocess.DEVNULL, creationflags=subprocess.CREATE_NO_WINDOW)
+    record = dict(label="native-observer-pause", pid=process.pid, waited=False)
+    receipt["processes"].append(record)
+    try:
+        output, errors = process.communicate(timeout=20)
+    except subprocess.TimeoutExpired:
+        # This diagnostic creates threads only, never API/service children.
+        process.kill()
+        output, errors = process.communicate(timeout=5)
+        record.update(waited=True, exit_code=process.returncode, termination_reason="owned thread-only diagnostic timeout")
+        raise storage.StorageError("Native observer pause diagnostic timed out")
+    record.update(waited=True, exit_code=process.returncode)
+    if process.returncode or len(output) > 8192:
+        raise storage.StorageError("Native observer pause diagnostic failed")
+    result = json.loads(output)
+    expected = {"busy_refusal_preserves_progress", "timeout_revokes_late_request",
+                "stopped_worker_does_not_ack_paused_request", "guard_drop_resumes_worker",
+                "paused_shutdown_joins_worker"}
+    if (result.get("schema") != "fullmag.scratch_runtime.pause_control_diagnostic.v1"
+            or result.get("status") != "passed" or set(result.get("checks", {})) != expected
+            or any(value is not True for value in result["checks"].values())):
+        raise storage.StorageError("Native observer pause diagnostic returned invalid evidence")
+    receipt["observer_pause"] = result
+    receipt["checks"].extend(sorted(expected))
+
+
+def exercise_restart_consumer(repo: Path, run_root: Path, manifest: dict, receipt: dict,
+                              binaries: Path) -> None:
+    """Run the owned durable restart consumer against fresh empty and scene APIs."""
+    from windows.development_status import DevelopmentStatusPublisher, StatusHeartbeat
+
+    fixture = run_root / "restart-consumer-fixture"
+    fixture.mkdir(parents=True, exist_ok=False)
+    native = storage.resolve_layout(repo, "windows-native-fdm-cpu-dev")
+    checks = storage.resolve_layout(repo, "development-backend-api-checks")
+    storage_root = Path(native["storage_root"])
+    worktree = native["worktree_id"]
+    runs_root = Path(native["runs_root"])
+    status = storage.validate_path(Path(checks["build_root"]) / "backend-watch-status.json",
+                                   checks["storage_root"], "restart consumer diagnostic status")
+    native_status = Path(native["build_root"]) / "backend-watch-status.json"
+    if os.path.normcase(os.path.abspath(status)) == os.path.normcase(os.path.abspath(native_status)):
+        raise storage.StorageError("Restart consumer diagnostic status aliases the native watcher")
+    if os.path.lexists(status) and (status.is_symlink() or not status.is_file()):
+        raise storage.StorageError("Restart consumer diagnostic status is not a regular file")
+
+    original_status = status.read_bytes() if status.exists() else None
+    status_backup = fixture / "preexisting-diagnostic-status.json"
+    if original_status is not None:
+        status_backup.write_bytes(original_status)
+        receipt["restart_consumer_prior_status_sha256"] = hashlib.sha256(original_status).hexdigest()
+
+    manifest_path = storage.validate_path(
+        Path(native["build_root"]) / "windows-runtime/build-manifest.json",
+        checks["storage_root"], "restart consumer build manifest")
+    raw_manifest = manifest_path.read_bytes()
+    ready_build_id = hashlib.sha256(raw_manifest).hexdigest()
+    ready_source_sha256 = manifest["backend_source_sha256"]
+    if (ready_build_id != receipt["verified_build_id"]
+            or ready_source_sha256 != receipt["source_sha256"]):
+        raise storage.StorageError("Restart consumer fixture does not match the verified native build")
+    ready_identity = verified_build_identity(
+        native["build_root"], native["runtime_root"], manifest_path, ready_source_sha256)
+    if (ready_identity["ready_build_id"] != ready_build_id
+            or ready_identity["ready_source_sha256"] != ready_source_sha256):
+        raise storage.StorageError("Restart consumer ready identity failed native manifest verification")
+
+    base_env = {key: os.environ[key] for key in
+                ("SYSTEMROOT", "WINDIR", "PATH", "PATHEXT", "TEMP", "TMP", "COMPUTERNAME")
+                if key in os.environ}
+    base_env.update(
+        FULLMAG_REPO_ROOT=str(repo),
+        FULLMAG_DEVELOPMENT_OWNER_PROBE="1",
+        FULLMAG_NATIVE_RUNTIME_ACTIVE="1",
+        FULLMAG_PYTHON=str(Path(native["build_root"]) / "python/fullmag/Scripts/python.exe"),
+        FULLMAG_STORAGE_PROFILE="windows-native-fdm-cpu-dev",
+        FULLMAG_PROJECT_STORAGE_ROOT=str(storage_root),
+        FULLMAG_WORKTREE_ID=worktree,
+        FULLMAG_RUNS_ROOT=str(runs_root),
+        FULLMAG_DEVELOPMENT_BACKEND_SOURCE=ready_source_sha256,
+        FULLMAG_DEVELOPMENT_BACKEND_VERSION=manifest["build_version"]["product_version"],
+        FULLMAG_DEVELOPMENT_BACKEND_STATUS_FILE=str(status),
+    )
+    receipt["restart_consumer_cases"] = {}
+    candidate_contract_checks_recorded = False
+
+    def restore_diagnostic_status(generation: str) -> None:
+        if (not os.path.lexists(status) or status.is_symlink() or not status.is_file()):
+            raise storage.StorageError("Restart consumer diagnostic status changed before restoration")
+        try:
+            current = json.loads(status.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            raise storage.StorageError("Restart consumer diagnostic status changed before restoration") from error
+        if current.get("generation_id") != generation or current.get("worktree_id") != worktree:
+            raise storage.StorageError("Restart consumer diagnostic status is no longer owned by this fixture")
+        if original_status is None:
+            status.unlink()
+            return
+        restore_path = status.with_name(status.name + ".restore-" + uuid.uuid4().hex + ".tmp")
+        with restore_path.open("xb") as stream:
+            stream.write(original_status)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(restore_path, status)
+
+    def run_case(case: str) -> str:
+        nonlocal candidate_contract_checks_recorded
+        generation = uuid.uuid4().hex
+        scope = str(uuid.uuid4())
+        case_root = fixture / case
+        state_root = case_root / "state"
+        state_root.mkdir(parents=True, exist_ok=False)
+        with socket.socket() as reservation:
+            reservation.bind(("127.0.0.1", 0))
+            port = reservation.getsockname()[1]
+        env = {**base_env,
+               "FULLMAG_STATE_ROOT": str(state_root),
+               "FULLMAG_API_PORT": str(port),
+               "FULLMAG_ACCEPTED_STORE_SCOPE": scope,
+               "FULLMAG_DEVELOPMENT_BACKEND_GENERATION": generation,
+               "FULLMAG_DEVELOPMENT_RESTART_PROBE_CASE": case}
+        accepted_store = runs_root / "workspaces" / scope / "session-store"
+        if os.path.lexists(accepted_store.parent):
+            raise storage.StorageError("Restart consumer accepted-store scope already exists")
+
+        publisher = DevelopmentStatusPublisher(status, generation, worktree)
+        publisher.publish({"state": "ready", "source_sha256": ready_source_sha256,
+                           "ready_build_id": ready_build_id,
+                           "ready_source_sha256": ready_source_sha256})
+        heartbeat = StatusHeartbeat(publisher, interval_seconds=2.0).start()
+        receipt[f"restart_consumer_{case}_accepted_store_scope"] = scope
+        receipt[f"restart_consumer_{case}_accepted_store_root"] = str(accepted_store)
+
+        try:
+            if not candidate_contract_checks_recorded:
+                from windows.check_development_candidate import run_contract_regressions
+                previous_environment = {key: os.environ.get(key) for key in env}
+                try:
+                    os.environ.update(env)
+                    candidate_checks = run_contract_regressions(str(repo))
+                finally:
+                    for key, value in previous_environment.items():
+                        if value is None:
+                            os.environ.pop(key, None)
+                        else:
+                            os.environ[key] = value
+                if not candidate_checks:
+                    raise storage.StorageError("Restart consumer candidate selector checks returned no evidence")
+                receipt["candidate_selector_contract_checks"] = candidate_checks
+                receipt["checks"].extend(candidate_checks)
+                candidate_contract_checks_recorded = True
+
+            initializer = subprocess.Popen(
+                [str(binaries / "fullmag.exe"), "runtime", "initialize-scoped-accepted-store"],
+                cwd=repo, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                stdin=subprocess.DEVNULL, creationflags=subprocess.CREATE_NO_WINDOW)
+            initializer_record = {"label": f"restart-consumer-{case}-accepted-store-initializer",
+                                 "pid": initializer.pid, "waited": False}
+            receipt["processes"].append(initializer_record)
+            try:
+                output, _ = initializer.communicate(timeout=20)
+            except subprocess.TimeoutExpired:
+                initializer.kill()
+                output, _ = initializer.communicate(timeout=10)
+                initializer_record.update(waited=True, exit_code=initializer.returncode,
+                                          termination_reason="owned accepted-store initializer timeout")
+                (case_root / "accepted-store-initializer.log").write_bytes(output)
+                raise storage.StorageError("Restart consumer accepted-store initializer timed out")
+            initializer_record.update(waited=True, exit_code=initializer.returncode)
+            (case_root / "accepted-store-initializer.log").write_bytes(output)
+            if initializer.returncode != 0:
+                raise storage.StorageError("Restart consumer accepted-store initialization failed")
+            init_frames = [json.loads(line) for line in output.decode(errors="replace").splitlines()
+                           if line.startswith("{")]
+            if (len(init_frames) != 1
+                    or init_frames[0].get("schema") != "fullmag.scoped-accepted-store-initialization.v1"
+                    or init_frames[0].get("scope") != scope or not accepted_store.is_dir()):
+                raise storage.StorageError("Restart consumer accepted-store initialization evidence is invalid")
+            receipt[f"restart_consumer_{case}_accepted_store_binding"] = init_frames[0]["binding"]
+
+            log_path = case_root / "restart-consumer.log"
+            timed_out = False
+            code = None
+            with log_path.open("w", encoding="utf-8") as log:
+                process = subprocess.Popen(
+                    [str(binaries / "fullmag.exe"), "runtime", "verify-development-restart-consumer"],
+                    cwd=repo, env=env, stdout=log, stderr=subprocess.STDOUT,
+                    stdin=subprocess.DEVNULL, creationflags=subprocess.CREATE_NO_WINDOW)
+                cli_record = {"label": f"restart-consumer-{case}-cli", "pid": process.pid, "waited": False}
+                receipt["processes"].append(cli_record)
+                try:
+                    code = process.wait(timeout=180)
+                    cli_record.update(waited=True, exit_code=code)
+                except subprocess.TimeoutExpired:
+                    timed_out = True
+                    cli_record.update(waited=False, outcome="unknown")
+                    log.flush()
+
+            frames = []
+            for line in log_path.read_text(encoding="utf-8", errors="replace").splitlines():
+                if not line.startswith("{"):
+                    continue
+                try:
+                    frame = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(frame, dict):
+                    frames.append(frame)
+            starts = [frame for frame in frames
+                      if frame.get("schema") == "fullmag.development-cli-owner-progress.v1"]
+            old_exits = [frame for frame in frames
+                         if frame.get("schema") == "fullmag.development-cli-owned-api-exit.v1"]
+            replacement = [frame for frame in frames
+                           if frame.get("schema") == "fullmag.development-cli-replacement-progress.v1"]
+            results = [frame for frame in frames
+                       if frame.get("schema") == "fullmag.development-cli-restart-consumer-check.v1"]
+
+            old_records = {}
+            for frame in starts:
+                if (frame.get("event") != "owned_api_started" or type(frame.get("api_pid")) is not int
+                        or type(frame.get("api_port")) is not int or frame.get("api_port") != port):
+                    raise storage.StorageError("Restart consumer emitted invalid owned API progress")
+                pid = frame["api_pid"]
+                if pid in old_records:
+                    raise storage.StorageError("Restart consumer emitted duplicate owned API PIDs")
+                record = {"label": f"restart-consumer-{case}-old-api", "pid": pid,
+                          "api_port": frame["api_port"], "waited": False,
+                          "outcome": "unknown" if timed_out else "pending"}
+                old_records[pid] = record
+                receipt["processes"].append(record)
+            terminal_pids = set()
+            for terminal in old_exits:
+                pid = terminal.get("api_pid")
+                if (pid not in old_records or pid in terminal_pids
+                        or terminal.get("waited") is not True):
+                    raise storage.StorageError("Restart consumer old API terminal record has no matching start")
+                terminal_pids.add(pid)
+                old_records[pid].update(waited=True, exit_code=terminal.get("exit_code"), outcome="terminal")
+                if terminal.get("durable_commit_reconciled") is not True:
+                    raise storage.StorageError("Restart consumer old API exit lacks durable request reconciliation")
+
+            replacement_records = {}
+            helper_evidence = {}
+            for frame in replacement:
+                event = frame.get("event")
+                pid = frame.get("pid")
+                if event == "replacement_api_started":
+                    if (type(pid) is not int or type(frame.get("api_port")) is not int
+                            or frame.get("api_port") != port or frame.get("waited") is not False
+                            or pid in replacement_records):
+                        raise storage.StorageError("Restart consumer emitted invalid replacement API progress")
+                    record = {"label": f"restart-consumer-{case}-replacement-api", "pid": pid,
+                              "api_port": frame["api_port"], "waited": False,
+                              "outcome": "unknown" if timed_out else "pending"}
+                    replacement_records[pid] = record
+                    receipt["processes"].append(record)
+                elif event in {"restore_preparation_helper_waited", "candidate_owner_helper_waited"}:
+                    if (type(pid) is not int or frame.get("waited") is not True
+                            or frame.get("exit_code") != 0):
+                        raise storage.StorageError("Restart consumer emitted invalid helper terminal progress")
+                    helper_evidence[pid] = {"pid": pid, "waited": True, "exit_code": 0,
+                                            "event": event}
+                else:
+                    raise storage.StorageError("Restart consumer emitted an unknown replacement progress event")
+
+            result = results[0] if len(results) == 1 else None
+            result_helper_pids = set()
+            if result is not None:
+                helpers = result.get("helper_processes")
+                if not isinstance(helpers, list):
+                    raise storage.StorageError("Restart consumer result lacks helper process evidence")
+                for helper in helpers:
+                    if (not isinstance(helper, dict) or type(helper.get("pid")) is not int
+                            or helper.get("waited") is not True or helper.get("exit_code") != 0):
+                        raise storage.StorageError("Restart consumer result has invalid helper process evidence")
+                    pid = helper["pid"]
+                    if pid in result_helper_pids:
+                        raise storage.StorageError("Restart consumer result duplicated a helper PID")
+                    result_helper_pids.add(pid)
+                    prior = helper_evidence.get(pid)
+                    if prior is not None and (prior["waited"] is not helper["waited"]
+                                              or prior["exit_code"] != helper["exit_code"]):
+                        raise storage.StorageError("Restart consumer helper progress conflicts with its result")
+                    helper_evidence[pid] = {"pid": pid, "waited": True, "exit_code": 0}
+            for helper in helper_evidence.values():
+                receipt["processes"].append({"label": f"restart-consumer-{case}-helper", **helper})
+
+            if timed_out:
+                raise storage.StorageError(
+                    f"Restart consumer outcome is unknown; no API or helper process was terminated; see {log_path}")
+            if code != 0:
+                for record in [*old_records.values(), *replacement_records.values()]:
+                    if not record["waited"]:
+                        record.update(waited=False, outcome="unknown")
+                raise storage.StorageError(f"Restart consumer CLI failed with exit code {code}; see {log_path}")
+
+            expected_checks = {
+                "durable_request_consumed", "exact_ui_payload_restored", "fresh_api_identity",
+                "duplicate_request_not_reexecuted", "old_api_pin_rejected",
+                "restored_authoring_editable", "replacement_waited",
+            }
+            if (len(starts) != 1 or len(old_exits) != 1 or len(replacement_records) != 1
+                    or len(results) != 1):
+                raise storage.StorageError("Restart consumer did not produce exactly one complete process/result trace")
+            checks_object = result.get("checks")
+            expected_result_fields = {"schema", "status", "api_pid", "old_api_pid",
+                                      "replacement_exit_code", "helper_processes", "session_id",
+                                      "session_epoch", "checks"}
+            if set(result) != expected_result_fields:
+                raise storage.StorageError("Restart consumer result fields differ from the pinned contract")
+            if (result.get("status") != "passed" or not isinstance(checks_object, dict)
+                    or set(checks_object) != expected_checks
+                    or any(value is not True for value in checks_object.values())):
+                raise storage.StorageError("Restart consumer result does not satisfy its exact check contract")
+            if (result.get("old_api_pid") != next(iter(old_records))
+                    or result.get("api_pid") != next(iter(replacement_records))
+                    # The fixture calls the owned supervisor's explicit
+                    # kill-and-wait shutdown after proving authoring. Windows
+                    # TerminateProcess reports 1; this is not a build/run crash.
+                    or result.get("replacement_exit_code") != 1
+                    or old_records[result["old_api_pid"]].get("exit_code") != 0):
+                raise storage.StorageError("Restart consumer result PIDs or terminal exit codes do not match progress")
+            replacement_records[result["api_pid"]].update(
+                waited=True, exit_code=result["replacement_exit_code"], outcome="terminal",
+                termination_reason="explicit owned verifier shutdown after authoring proof; no compute submitted")
+            if result.get("session_epoch") != (1 if case == "scene" else 0):
+                raise storage.StorageError("Restart consumer restored an unexpected session epoch")
+            if case == "scene":
+                if not isinstance(result.get("session_id"), str) or not result["session_id"]:
+                    raise storage.StorageError("Scene restart consumer did not report its fresh session")
+            elif result.get("session_id") is not None:
+                raise storage.StorageError("Empty restart consumer unexpectedly restored a session")
+            started_helper_pids = {frame["pid"] for frame in replacement
+                                   if frame.get("event") in {
+                                       "restore_preparation_helper_waited", "candidate_owner_helper_waited"}}
+            if not started_helper_pids.issubset(result_helper_pids):
+                raise storage.StorageError("Restart consumer omitted a progress helper from terminal evidence")
+            if any(not process_record.get("waited") for process_record in
+                   [cli_record, *old_records.values(), *replacement_records.values(),
+                    *[item for item in receipt["processes"]
+                      if item.get("label") == f"restart-consumer-{case}-helper"]]):
+                raise storage.StorageError("Restart consumer receipt has a process without terminal evidence")
+
+            receipt["restart_consumer_cases"][case] = result
+            receipt["checks"].extend(f"restart-consumer-{case}-{name}" for name in sorted(expected_checks))
+            heartbeat.raise_if_failed()
+            return generation
+        finally:
+            heartbeat.stop()
+
+    last_generation = None
+    for case in ("empty", "scene"):
+        last_generation = run_case(case)
+    if last_generation is None:
+        raise storage.StorageError("Restart consumer did not execute its required cases")
+    restore_diagnostic_status(last_generation)
 
 
 def exercise_cli_owner(repo: Path, run_root: Path, manifest: dict, receipt: dict, binaries: Path, service_config: Path) -> None:
@@ -1615,10 +1995,13 @@ if __name__ == "__main__":
     parser.add_argument("--cross-build-bundle", default="")
     parser.add_argument("--project-document-only", action="store_true")
     parser.add_argument("--restart-transport-only", action="store_true")
+    parser.add_argument("--observer-pause-only", action="store_true")
+    parser.add_argument("--restart-consumer-only", action="store_true")
     args = parser.parse_args()
     try:
         raise SystemExit(run(args.repo_root, args.cross_build_bundle, args.project_document_only,
-                             args.restart_transport_only))
+                             args.restart_transport_only, args.observer_pause_only,
+                             args.restart_consumer_only))
     except Exception as error:
         print(f"Native development resource verification failed: {error}", file=sys.stderr)
         raise SystemExit(2)

@@ -15,6 +15,7 @@ mod dev_smoke;
 mod development_api_owner;
 mod development_api_replacement;
 mod development_api_supervisor;
+mod development_restart;
 mod diagnostics;
 mod feature_flags;
 mod formatting;
@@ -103,8 +104,17 @@ fn main() -> Result<()> {
         }) => {
             saved_fem_snapshot_gate::verify(&store, &source, &source_artifact_id)?;
         }
+        Command::Runtime(RuntimeCommand::VerifyDevelopmentObserverPause) => {
+            if std::env::var("FULLMAG_DEVELOPMENT_OWNER_PROBE").as_deref() != Ok("1") {
+                anyhow::bail!("observer pause verification requires an explicit managed fixture");
+            }
+            println!("{}", scratch_runtime::verify_idle_pause_control()?);
+        }
         Command::Runtime(RuntimeCommand::VerifyDevelopmentApiOwner) => {
             control_room::verify_development_api_owner()?;
+        }
+        Command::Runtime(RuntimeCommand::VerifyDevelopmentRestartConsumer) => {
+            control_room::verify_development_restart_consumer()?;
         }
         Command::Runtime(RuntimeCommand::VerifyDevelopmentCompletionOwner) => {
             control_room::verify_development_completion_owner()?;
@@ -700,36 +710,81 @@ fn launch_ui(ui: UiCli) -> Result<()> {
     };
     if let Some(owner) = development_owner {
         control_room_guard.adopt_development_owner(owner)?;
+        control_room_guard.enable_development_restart_transport(ready.web_port)?;
     }
     if !owns_api {
         runtime_binding.disable_automatic_attach(
             fullmag_runtime_control::application_attach::ApplicationAttachBlockReason::ApiNotOwned,
         );
     }
+    let initial_api_instance = runtime_binding.api_instance_id().to_owned();
     let mut ui_child =
         crate::control_room::open_in_tauri(&ready, intent, runtime_binding.api_instance_id())?;
     // Native startup has an owned observer and cannot delay opening the window.
-    let runtime_attach = match runtime_binding.start() {
+    let mut runtime_attach = match runtime_binding.start() {
         Ok(attach) => attach,
         Err(error) => {
             eprintln!("Native runtime attach unavailable: {error:#}");
             None
         }
     };
-    let scratch_runtime = if live_workspace.is_none() {
+    let mut scratch_runtime = if live_workspace.is_none() {
         let executable = std::env::current_exe().context("failed to resolve fullmag executable")?;
         Some(crate::scratch_runtime::spawn(
             crate::control_room::api_port(),
             executable,
             None,
+            initial_api_instance,
         ))
     } else {
         None
     };
-    let _ = ui_child.wait();
+    let mut restart_pump = crate::development_restart::NativeRestartPump::default();
+    let mut last_restart_error = None;
+    let mut ui_closed = false;
+    let mut retention_reported = false;
+    loop {
+        if !ui_closed {
+            match ui_child.try_wait() {
+                Ok(Some(_)) => ui_closed = true,
+                Ok(None) => {}
+                Err(error) => {
+                    eprintln!("UI process observation unavailable: {error}");
+                    let _ = ui_child.wait();
+                    ui_closed = true;
+                }
+            }
+        }
+        if ui_closed {
+            if !control_room_guard.retains_unknown_development_custody() {
+                break;
+            }
+            if !retention_reported {
+                eprintln!("Development restart outcome is unknown; retaining launcher and API ownership after UI close for explicit recovery");
+                retention_reported = true;
+            }
+        }
+        match restart_pump.step(
+            &root,
+            &mut control_room_guard,
+            &mut runtime_attach,
+            &mut scratch_runtime,
+        ) {
+            Ok(()) => last_restart_error = None,
+            Err(error) => {
+                let message = format!("{error:#}");
+                if last_restart_error.as_ref() != Some(&message) {
+                    eprintln!("Native restart observation unavailable: {message}");
+                    last_restart_error = Some(message);
+                }
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
     // Join the observer before shutting down the API it is pinned to.
     drop(runtime_attach);
     drop(scratch_runtime);
+    drop(restart_pump);
     drop(control_room_guard);
     Ok(())
 }

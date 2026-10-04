@@ -1,5 +1,11 @@
 # P8-53 — bezpieczne zastosowanie nowego backendu w workspace
 
+[P8-53AO](53ao-native-restart-consumer.md) podłącza konsumenta w pętli CLI,
+zweryfikowany wybór EXE i pauzę/rebind observers. Build Windows, 39 kontroli
+konsumenta, 6 kontroli pauzy oraz 20 kontroli transportu PASS. Hydration UI,
+warm service, fault injection i pełny Windows/browser flow pozostają otwarte;
+`restart_available=false`.
+
 [P8-53AN](53an-ui-restart-request-transport.md) dodaje trwałe żądanie z trzema
 niezależnymi właścicielami UI oraz wspólny koordynator natywny.
 Zarządzany build Windows, 20 kontroli transportu, 398 kontroli koordynatora
