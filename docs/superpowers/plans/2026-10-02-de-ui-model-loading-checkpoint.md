@@ -1,5 +1,20 @@
 # Naprawa ładowania modelu DE w UI
 
+<!-- eps-dimensions-analytic-checkpoint-20261004 -->
+## Aktualny checkpoint — wymiary EPS i analityka Γ
+
+Odczyt 2026-10-04T05:29:59.287034+00:00. Całe S00–S12 pozostają OPEN; ten etap nie dodaje zaakceptowanych punktów ani nowego wykresu.
+
+- Commit źródeł `d95053982f3b0447d81df240663d1c9bec721b79` zapisuje rzeczywisty EPSGetDimensions (NEV/NCV/MPD) w istniejących fazach diagnostyki. Signed zera i sentinele są zachowane, nieudany odczyt daje false/null. Odbiornik zachowuje opcjonalne dane osobno w raporcie globalnym, próbce i każdym podoknie; brak historycznego pola nie tworzy pomiaru. Wymiary mogą różnić się między oknami. Operator, konfiguracja EPS/KSP, residual i kryteria akceptacji nie zostały zmienione.
+- Natywne oraz Python source review: brak nowych P1/P2. Dokładnie staged nota/mapa naukowa, Python AST i whitespace PASS. 19 interpretowanych testów Pythona PASS; nowe przypadki wykrywają brak zachowania danych w starym odbiorniku (oczekiwany RED). Test C++ actual formattera przygotowano bez kompilacji zgodnie z zakazem. Native getter, świeży pakiet i managed runtime tego przyrostu NOT VERIFIED.
+- Niezależna kontrola wcześniejszego Γ #226: raw 9,299249697068216 GHz wobec analityki jednorodnej warstwy 9,299249697068401 GHz, różnica około −0,000185 Hz. Referencja używa tego samego t=10 nm, p=2 µm po każdej stronie, B=0,1 T, Ms=800 kA/m i demag Nz=2p/(2p+t). Model otwartej nieskończonej warstwy daje 9,309813711433354 GHz i nie jest tym samym warunkiem brzegowym. Zgodność częstotliwości nie dowodzi tożsamości modu, nonzero-k ani zbieżności. Kandydat pozostaje odrzucony przez pierwotną bramkę μ₀; artefaktów ani tolerancji nie zmieniono.
+- Runner po zgłoszonym restarcie: running=True, worker_alive=True, accepting_jobs=True, worker_error=None. Wolne 2110935040 B (~1.97 GiB) wobec progu 8 GiB; aktywne joby [], ostatni stan koordynatora waiting_for_disk. Ten sam #227 ma stan obserwatora `queued` / `waiting_for_build`. Żywy uchwyt 81829/PID 243032 potwierdzono; nie zgłoszono duplikatu i nie usuwano danych.
+- #227 pozostaje przypięty do a8d67ac92002b884799119578a054b518cf40cbf, digest e848950d7d555f4d70d27a71421803fd2566d7e2f57d7e05b22f05da8123e8e6: zawiera poprawkę μ₀, bez późniejszych EPS termination/dimensions ani S09. Po terminalnym sukcesie publiczny managed dry-run ma poprzedzić pojedynczy Γ nearest; przyjęcie wymaga rzeczywistych artefaktów. Pełne frequency_window wymaga później świeżego pakietu z diagnostyką i kontrolowanego strojenia.
+- S09 pozostaje OPEN: atomiczny typed cutover musi objąć ProblemIRV04/Wire.study, StudyIR wraz z pozostałymi payloadami, migrację i round-trip, obecność BC, planner, geometryczne certyfikaty siatki/regionów/ramy oraz MFEM 2.5D. Dotychczasowe guardy i propozycje kontraktu nie są produkcyjnym providerem. API/UI/FMS/WebGL, serial/adaptive parity i pomiar puli, signed15, DE/BV/COMSOL A1, zbieżność, S10/GPU oraz PR97/integracja nadal OPEN.
+
+Dowody w katalogu preview-state-checkpoint wizualizacji wątku: eps-dimensions-final-staged-validation.json, eps-dimensions-native-review.md, eps-dimensions-consumer-review.md, eps-dimensions-consumer-source.md, eps-dimensions-regression-baseline.json, gamma226-finite-air-analytic-comparison.json i gamma226-finite-air-analytic-audit.md. To osobne dowody źródeł i kontroli wcześniejszego raw wyniku, bez nowej kwalifikacji solvera.
+
+
 <!-- eps-termination-spatial-checkpoint-20261004 -->
 ## Aktualny checkpoint — diagnostyka podokien i S09 na remote
 
