@@ -40,7 +40,9 @@ describe("AppMenuBar", () => {
     expect(html).toContain("fm-button");
     expect(html).toContain("fm-header__nav-item");
     expect(html).toContain("fm-header__action-btn");
-    expect(html).toContain("fm-header__app-trigger");
+    // Home leads the main menu; the brand no longer opens a menu of its own.
+    expect(html).toContain('aria-current="page"');
+    expect(html).not.toContain("fm-header__app-trigger");
     expect(html).toContain("Command search");
     expect(html).toContain("Runtime controls");
     expect(html).toContain('aria-label="Switch to light theme"');

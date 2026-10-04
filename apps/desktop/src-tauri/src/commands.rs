@@ -680,4 +680,70 @@ mod tests {
         assert_eq!(result.project_id, "project-desktop");
         assert_eq!(result.revision, 1);
     }
+
+    #[test]
+    fn changed_saves_append_history_taken_from_the_file_on_disk() {
+        let directory = tempdir().unwrap();
+        let target = directory.path().join("history.fms");
+        let repository = FileProjectRepository::new();
+        let id = || ProjectId::parse("project-history").unwrap();
+
+        let first = ProjectEnvelope::blank(id(), "First").unwrap();
+        save_project_archive_to_target(
+            request(
+                STANDARD.encode(repository.encode_archive(&first).unwrap()),
+                target.display().to_string(),
+            ),
+            target.clone(),
+        )
+        .unwrap();
+        // A new file records nothing: it has no earlier state to differ from.
+        assert!(crate::provenance::read_from_archive(&target).unwrap()["history"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+
+        let mut second = ProjectEnvelope::blank(id(), "Second").unwrap();
+        second.rewrite_known_fields().unwrap();
+        let mut save = request(
+            STANDARD.encode(repository.encode_archive(&second).unwrap()),
+            target.display().to_string(),
+        );
+        save.expected_project_id = Some("project-history".into());
+        save.expected_revision = Some(0);
+        assert_eq!(
+            save_project_archive_to_target(save, target.clone())
+                .unwrap()
+                .revision,
+            1
+        );
+
+        // The archive a webview holds after that save predates it: it carries no
+        // provenance. The history on disk must survive the next save anyway.
+        let mut third = ProjectEnvelope::blank(id(), "Third").unwrap();
+        third.definition.revision = 1;
+        third.rewrite_known_fields().unwrap();
+        let mut save = request(
+            STANDARD.encode(repository.encode_archive(&third).unwrap()),
+            target.display().to_string(),
+        );
+        save.expected_project_id = Some("project-history".into());
+        save.expected_revision = Some(1);
+        assert_eq!(
+            save_project_archive_to_target(save, target.clone())
+                .unwrap()
+                .revision,
+            2
+        );
+
+        let provenance = crate::provenance::read_from_archive(&target).unwrap();
+        let revisions: Vec<u64> = provenance["history"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| entry["revision"].as_u64().unwrap())
+            .collect();
+        assert_eq!(revisions, vec![1, 2]);
+        assert_eq!(provenance["history"][0]["summary"], "Saved revision 1");
+    }
 }
