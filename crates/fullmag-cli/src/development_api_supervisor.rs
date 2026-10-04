@@ -49,6 +49,7 @@ pub(crate) struct DevelopmentApiSupervisor {
     child: Child,
     owner: OwnedDevelopmentApi,
     state: DevelopmentApiSupervisorState,
+    terminal: Option<ExitStatus>,
 }
 
 impl DevelopmentApiSupervisor {
@@ -62,6 +63,7 @@ impl DevelopmentApiSupervisor {
             child,
             owner,
             state: DevelopmentApiSupervisorState::Running,
+            terminal: None,
         })
     }
 
@@ -75,6 +77,62 @@ impl DevelopmentApiSupervisor {
 
     pub(crate) fn is_outcome_unknown(&self) -> bool {
         self.state == DevelopmentApiSupervisorState::OutcomeUnknown
+    }
+
+    pub(crate) fn terminal_status(&self) -> Option<ExitStatus> {
+        self.terminal
+    }
+
+    pub(crate) fn complete_restored_handoff(
+        &mut self,
+        acquisition: &mut AuthoringAcquisition,
+        prepared: &crate::development_api_owner::PreparedDevelopmentRestore,
+    ) -> Result<Value> {
+        if self.state != DevelopmentApiSupervisorState::Running
+            || !acquisition.is_owned_by(&self.owner)
+            || self.owner.api_instance_id() == prepared.old_api_instance_id()
+        {
+            bail!("replacement completion requires this supervisor's fresh acquisition");
+        }
+        // The guard already owns this supervisor. An error cannot discard its
+        // exact child handle or implicitly kill a possibly reopened API.
+        self.state = DevelopmentApiSupervisorState::OutcomeUnknown;
+        let completion = acquisition.complete_cold_handoff(
+            prepared.accepted_commit(),
+            prepared.commit_sha256(),
+            prepared.candidate_bundle_id(),
+            prepared.candidate_manifest_sha256(),
+        )?;
+        self.state = DevelopmentApiSupervisorState::Running;
+        Ok(completion)
+    }
+
+    pub(crate) fn prepare_committed_restore(
+        &self,
+        repo_root: &Path,
+        acquisition: &AuthoringAcquisition,
+        staged: &StagedAuthoringHandoff,
+        proof: &ColdIdleProof,
+        store_root: &Path,
+        acknowledgement: Option<&Value>,
+    ) -> Result<crate::development_api_owner::PreparedDevelopmentRestore> {
+        if self.state != DevelopmentApiSupervisorState::Accepted
+            || !acquisition.is_owned_by(&self.owner)
+        {
+            bail!("restore preparation requires this supervisor's accepted acquisition");
+        }
+        let terminal = self
+            .terminal
+            .as_ref()
+            .context("accepted supervisor has no exact child terminal outcome")?;
+        acquisition.prepare_committed_restore(
+            repo_root,
+            store_root,
+            staged,
+            proof,
+            terminal,
+            acknowledgement,
+        )
     }
 
     /// Send the normal one-shot commit, wait for this exact child to exit, then
@@ -243,7 +301,8 @@ impl DevelopmentApiSupervisor {
         };
         match observed {
             None => Ok(()),
-            Some(_) => {
+            Some(status) => {
+                self.terminal = Some(status);
                 self.state = DevelopmentApiSupervisorState::ExitedBeforeCommit;
                 bail!("owned development API exited before cold commit; commit was not sent")
             }
@@ -253,7 +312,10 @@ impl DevelopmentApiSupervisor {
     fn wait_for_child(&mut self, deadline: Instant) -> Result<ExitStatus> {
         loop {
             match self.child.try_wait() {
-                Ok(Some(status)) => return Ok(status),
+                Ok(Some(status)) => {
+                    self.terminal = Some(status);
+                    return Ok(status);
+                }
                 Ok(None) => {}
                 Err(error) => {
                     return Err(error).context(
@@ -292,7 +354,8 @@ impl DevelopmentApiSupervisor {
             }
         };
         match observed {
-            Some(_) => {
+            Some(status) => {
+                self.terminal = Some(status);
                 self.state = DevelopmentApiSupervisorState::ExitedBeforeCommit;
                 return Ok(());
             }
@@ -304,7 +367,8 @@ impl DevelopmentApiSupervisor {
             return Err(error).context("unable to stop the exact owned development API child");
         }
         match self.child.wait() {
-            Ok(_) => {
+            Ok(status) => {
+                self.terminal = Some(status);
                 self.state = DevelopmentApiSupervisorState::Shutdown;
                 Ok(())
             }

@@ -43,6 +43,12 @@ const STAGE_REQUEST_SCHEMA: &str = "fullmag.development-acquisition-stage-reques
 const STAGE_ACK_SCHEMA: &str = "fullmag.development-acquisition-handoff.v1";
 const MAX_STAGE_REQUEST_BYTES: usize = 128 * 1024 * 1024;
 const MAX_STAGE_OUTPUT_BYTES: usize = 16 * 1024;
+const COMMITTED_RESTORE_REQUEST_SCHEMA: &str = "fullmag.development-committed-restore-request.v1";
+const COMMITTED_RESTORE_RESULT_SCHEMA: &str =
+    "fullmag.development-committed-restore-preparation.v1";
+const MAX_COMMITTED_RESTORE_REQUEST_BYTES: usize = 16 * 1024;
+const MAX_COMMITTED_RESTORE_OUTPUT_BYTES: usize = 128 * 1024 * 1024;
+const MAX_PRELISTEN_ENVELOPE_BYTES: usize = 64 * 1024 * 1024;
 const MAX_CANDIDATE_OWNER_REQUEST_BYTES: usize = 16 * 1024;
 const BACKEND_ENV_KEYS: [&str; 4] = [
     "FULLMAG_DEVELOPMENT_BACKEND_GENERATION",
@@ -56,6 +62,7 @@ const BACKEND_ENV_KEYS: [&str; 4] = [
 pub(crate) struct OwnerLaunch {
     service_configured: bool,
     storage_root: PathBuf,
+    environment_storage_root: PathBuf,
     worktree: String,
     generation: String,
     source: String,
@@ -103,14 +110,14 @@ impl OwnerLaunch {
             bail!("invalid development API owner configuration");
         };
 
-        let storage_root = required_environment_path("FULLMAG_PROJECT_STORAGE_ROOT")?;
+        let environment_storage_root = required_environment_path("FULLMAG_PROJECT_STORAGE_ROOT")?;
         let worktree = required_environment_value("FULLMAG_WORKTREE_ID")?;
         let storage_root = validate_launch_configuration(
             generation,
             status_file,
             source,
             version,
-            storage_root,
+            environment_storage_root.clone(),
             &worktree,
         )?;
         let build = fullmag_build_info::identity();
@@ -118,6 +125,7 @@ impl OwnerLaunch {
         Ok(Some(Self {
             service_configured: env::var_os("FULLMAG_RUNTIME_SERVICE_CONFIG").is_some(),
             storage_root,
+            environment_storage_root,
             worktree,
             generation: generation.clone(),
             source: source.clone(),
@@ -183,35 +191,7 @@ impl OwnerLaunch {
             .to_str()
             .context("managed storage root is not valid UTF-8")?;
 
-        let python_relative = format!(
-            "builds/{}/windows-native-fdm-cpu-dev/python/fullmag/Scripts/python.exe",
-            self.worktree
-        );
-        let python =
-            fullmag_session::repository_path::checked_path(&self.storage_root, &python_relative)
-                .context("invalid managed development Python path")?;
-        if !python.is_absolute() {
-            bail!("managed development Python path must be absolute");
-        }
-        let configured_python = env::var_os("FULLMAG_PYTHON")
-            .map(PathBuf::from)
-            .context("managed development Python is not configured")?;
-        validate_absolute_path_chain_no_reparse(
-            &configured_python,
-            "configured managed development Python",
-        )?;
-        validate_regular_file_no_reparse(
-            &configured_python,
-            "configured managed development Python",
-        )?;
-        let canonical_python =
-            fs::canonicalize(&python).context("unable to resolve managed development Python")?;
-        let canonical_configured_python = fs::canonicalize(&configured_python)
-            .context("unable to resolve configured managed development Python")?;
-        if canonical_configured_python != canonical_python {
-            bail!("FULLMAG_PYTHON does not identify the managed development Python");
-        }
-        validate_regular_file_no_reparse(&python, "managed development Python")?;
+        let python = managed_development_python(&self.storage_root, &self.worktree)?;
 
         let request = CandidateOwnerRequest {
             schema: CANDIDATE_OWNER_REQUEST_SCHEMA,
@@ -261,6 +241,7 @@ impl OwnerLaunch {
             Self {
                 service_configured: false,
                 storage_root: self.storage_root.clone(),
+                environment_storage_root: self.environment_storage_root.clone(),
                 worktree: self.worktree.clone(),
                 generation: self.generation.clone(),
                 source: acknowledgement.backend_source_sha256,
@@ -298,6 +279,59 @@ impl OwnerLaunch {
     /// Return the secret for explicit injection into the owned API child only.
     pub(crate) fn token(&self) -> &str {
         &self.owner_token
+    }
+
+    /// Inject already verified candidate owner identity into one child command.
+    /// This does not modify the launcher process environment.
+    pub(crate) fn configure_candidate_command(
+        &self,
+        command: &mut Command,
+        accepted_store_scope: Option<&str>,
+    ) -> Result<()> {
+        if accepted_store_scope.is_some_and(|scope| !canonical_uuid(scope)) {
+            bail!("candidate accepted-store scope must be a canonical nonzero UUID");
+        }
+        validate_absolute_path_chain_no_reparse(
+            &self.environment_storage_root,
+            "candidate environment storage root",
+        )?;
+        validated_directory_root(
+            &self.environment_storage_root,
+            "candidate environment storage root",
+        )?;
+        let canonical_environment_storage_root =
+            fs::canonicalize(&self.environment_storage_root)
+                .context("unable to resolve candidate environment storage root")?;
+        let canonical_storage_root = fs::canonicalize(&self.storage_root)
+            .context("unable to resolve candidate security storage root")?;
+        if canonical_environment_storage_root != canonical_storage_root {
+            bail!("candidate environment storage root differs from validated storage");
+        }
+        let runs_root = self
+            .environment_storage_root
+            .join("runs")
+            .join(&self.worktree);
+        command
+            .env("FULLMAG_NATIVE_RUNTIME_ACTIVE", "1")
+            .env("FULLMAG_STORAGE_PROFILE", NATIVE_DEV_PROFILE)
+            .env(
+                "FULLMAG_PROJECT_STORAGE_ROOT",
+                &self.environment_storage_root,
+            )
+            .env("FULLMAG_WORKTREE_ID", &self.worktree)
+            .env("FULLMAG_RUNS_ROOT", runs_root)
+            .env("FULLMAG_DEVELOPMENT_OWNER_TOKEN", &self.owner_token)
+            .env("FULLMAG_DEVELOPMENT_BACKEND_GENERATION", &self.generation)
+            .env("FULLMAG_DEVELOPMENT_BACKEND_SOURCE", &self.source)
+            .env("FULLMAG_DEVELOPMENT_BACKEND_VERSION", &self.version)
+            .env_remove("FULLMAG_RUNTIME_SERVICE_CONFIG")
+            .env_remove("FULLMAG_DEVELOPMENT_OWNER_PROBE_TOKEN");
+        if let Some(scope) = accepted_store_scope {
+            command.env("FULLMAG_ACCEPTED_STORE_SCOPE", scope);
+        } else {
+            command.env_remove("FULLMAG_ACCEPTED_STORE_SCOPE");
+        }
+        Ok(())
     }
 
     pub(crate) fn expects_launcher_build(&self) -> bool {
@@ -385,11 +419,14 @@ impl OwnerLaunch {
             api_build: fullmag_runtime_control::development_cold_idle::PinnedApiBuildIdentity::from_pinned_build(
                 &self.expected_build_commit, &self.expected_build_snapshot,
             )?,
+            api_build_commit: self.expected_build_commit.clone(),
+            api_build_snapshot: self.expected_build_snapshot.clone(),
             service_configured: self.service_configured,
             control_address: address,
             api_port,
             api_instance_id: record.api_instance_id,
             storage_root: self.storage_root.clone(),
+            environment_storage_root: self.environment_storage_root.clone(),
             worktree: self.worktree.clone(),
             generation: self.generation.clone(),
             source: self.source.clone(),
@@ -404,11 +441,14 @@ impl OwnerLaunch {
 pub(crate) struct OwnedDevelopmentApi {
     child_pid: u32,
     api_build: fullmag_runtime_control::development_cold_idle::PinnedApiBuildIdentity,
+    api_build_commit: String,
+    api_build_snapshot: String,
     service_configured: bool,
     control_address: SocketAddrV4,
     api_port: u16,
     api_instance_id: String,
     storage_root: PathBuf,
+    environment_storage_root: PathBuf,
     worktree: String,
     generation: String,
     source: String,
@@ -419,6 +459,31 @@ pub(crate) struct OwnedDevelopmentApi {
 impl OwnedDevelopmentApi {
     pub(crate) fn child_pid(&self) -> u32 {
         self.child_pid
+    }
+
+    pub(crate) fn api_instance_id(&self) -> &str {
+        &self.api_instance_id
+    }
+
+    pub(crate) fn candidate_owner(
+        &self,
+        repo_root: &Path,
+        candidate_bundle_id: &str,
+        candidate_manifest_sha256: &str,
+    ) -> Result<(OwnerLaunch, u32)> {
+        let base = OwnerLaunch {
+            service_configured: self.service_configured,
+            storage_root: self.storage_root.clone(),
+            environment_storage_root: self.environment_storage_root.clone(),
+            worktree: self.worktree.clone(),
+            generation: self.generation.clone(),
+            source: self.source.clone(),
+            version: self.version.clone(),
+            expected_build_commit: self.api_build_commit.clone(),
+            expected_build_snapshot: self.api_build_snapshot.clone(),
+            owner_token: self.owner_token.clone(),
+        };
+        base.for_candidate(repo_root, candidate_bundle_id, candidate_manifest_sha256)
     }
     /// Acquire the API's stable authoring snapshot over its private loopback
     /// channel. The returned value retains the connection until abort or drop.
@@ -953,6 +1018,192 @@ impl AuthoringAcquisition {
         Ok(accepted)
     }
 
+    /// Prepare replacement inputs from a confirmed durable handoff. The
+    /// semantic helper is read-only: this method does not restore a receipt,
+    /// release the admission fence, or launch the candidate API.
+    pub(crate) fn prepare_committed_restore(
+        &self,
+        repo_root: &Path,
+        store_root: &Path,
+        staged: &StagedAuthoringHandoff,
+        proof: &fullmag_runtime_control::development_cold_idle::ColdIdleProof,
+        terminal: &ExitStatus,
+        acknowledgement: Option<&Value>,
+    ) -> Result<PreparedDevelopmentRestore> {
+        if self.service_configured || !self.commit_may_have_been_sent {
+            bail!("committed restore preparation requires a sent cold commit");
+        }
+        let accepted = self.reconcile_committed_handoff_after_exit(
+            terminal,
+            store_root,
+            staged,
+            proof,
+            acknowledgement,
+        )?;
+
+        let accepted_store_binding =
+            fullmag_runtime_control::accepted_store::store_binding(store_root)
+                .context("accepted-store binding is invalid for committed restore")?;
+        if accepted.accepted_store_binding != accepted_store_binding {
+            bail!("durable commit accepted-store binding differs from the selected store");
+        }
+        let commit_bytes = fullmag_session::repository_path::read_bounded_regular_file(
+            store_root,
+            "development/HANDOFF-COMMIT.json",
+            16 * 1024,
+        )
+        .context("unable to read durable commit bytes for restore preparation")?;
+        let commit_sha256 = fullmag_session::hex_sha256(&commit_bytes);
+        let store = fullmag_session::SessionStore::open_existing(store_root.to_path_buf())?;
+        if store.read_development_handoff_commit()?.as_ref() != Some(&accepted) {
+            bail!("typed durable commit changed before restore preparation");
+        }
+
+        let staged_ack: StageAcknowledgement =
+            serde_json::from_value(staged.acknowledgement.clone())
+                .context("invalid staged handoff acknowledgement")?;
+        validate_stage_acknowledgement(&staged_ack, self)?;
+        let candidate_bundle_id = staged
+            .candidate_bundle_root
+            .file_name()
+            .and_then(|value| value.to_str())
+            .context("candidate bundle identity is missing")?;
+        if !lower_hex(candidate_bundle_id, 32)
+            || self.candidate_manifest_digest(&staged.candidate_bundle_root)?
+                != staged.candidate_manifest_sha256
+        {
+            bail!("staged candidate identity or manifest digest changed");
+        }
+        let candidate_manifest_relative = format!(
+            "runtimes/{}/native-bundles/{candidate_bundle_id}/manifest.json",
+            self.worktree
+        );
+        let candidate_manifest_bytes = fullmag_session::repository_path::read_bounded_regular_file(
+            &self.storage_root,
+            &candidate_manifest_relative,
+            256 * 1024,
+        )
+        .context("unable to read sealed candidate manifest")?;
+        if fullmag_session::hex_sha256(&candidate_manifest_bytes)
+            != staged.candidate_manifest_sha256
+        {
+            bail!("candidate manifest bytes do not match the staged pin");
+        }
+        let candidate_manifest: Value = serde_json::from_slice(&candidate_manifest_bytes)
+            .context("sealed candidate manifest is invalid JSON")?;
+        let candidate_pins = candidate_restore_pins(
+            &candidate_manifest,
+            candidate_bundle_id,
+            &self.worktree,
+            &staged_ack.binding.target_build_id,
+        )?;
+
+        let repo_root = validated_directory_root(repo_root, "committed restore repository")?;
+        let helper = checked_regular_file(
+            &repo_root,
+            "scripts/windows/prepare_committed_restore.py",
+            "committed restore preparation helper",
+        )?;
+        let python = managed_development_python(&self.storage_root, &self.worktree)?;
+        let candidate_bundle_root = staged
+            .candidate_bundle_root
+            .to_str()
+            .context("candidate bundle root is not valid UTF-8")?;
+        let accepted_store_scope = configured_accepted_store_scope()?;
+        let request = CommittedRestoreRequest {
+            schema: COMMITTED_RESTORE_REQUEST_SCHEMA,
+            accepted_store_scope: accepted_store_scope.as_deref(),
+            accepted_store_binding: &accepted_store_binding,
+            commit_sha256: &commit_sha256,
+            acquisition_nonce: &self.nonce,
+            binding: &staged_ack.binding,
+            candidate_bundle_root,
+            candidate_manifest_sha256: &staged.candidate_manifest_sha256,
+        };
+        let request_bytes = serde_json::to_vec(&request)
+            .context("unable to encode committed restore preparation request")?;
+        if request_bytes.len() > MAX_COMMITTED_RESTORE_REQUEST_BYTES {
+            bail!("committed restore preparation request exceeds its limit");
+        }
+        let (response_bytes, helper_pid, helper_status) = run_stage_helper_with_output_limit(
+            &python,
+            &helper,
+            &repo_root,
+            request_bytes,
+            MAX_COMMITTED_RESTORE_OUTPUT_BYTES,
+        )?;
+        if !helper_status.success() {
+            bail!("committed restore preparation helper failed");
+        }
+        let response: CommittedRestoreResponse = serde_json::from_slice(&response_bytes)
+            .context("invalid committed restore preparation response")?;
+        validate_committed_restore_response(
+            &response,
+            &accepted,
+            &accepted_store_binding,
+            &commit_sha256,
+            &staged_ack,
+            &staged.candidate_bundle_root,
+            candidate_bundle_id,
+            &staged.candidate_manifest_sha256,
+            &candidate_pins,
+            &self.worktree,
+        )?;
+
+        let current_commit_bytes = fullmag_session::repository_path::read_bounded_regular_file(
+            store_root,
+            "development/HANDOFF-COMMIT.json",
+            16 * 1024,
+        )
+        .context("unable to confirm durable commit after restore preparation")?;
+        if current_commit_bytes != commit_bytes
+            || fullmag_session::hex_sha256(&current_commit_bytes) != commit_sha256
+            || store.read_development_handoff_commit()?.as_ref() != Some(&accepted)
+            || self.candidate_manifest_digest(&staged.candidate_bundle_root)?
+                != staged.candidate_manifest_sha256
+        {
+            bail!("committed restore inputs changed during helper validation");
+        }
+        let confirmed = self.reconcile_committed_handoff_after_exit(
+            terminal,
+            store_root,
+            staged,
+            proof,
+            acknowledgement,
+        )?;
+        if confirmed != accepted {
+            bail!("durable commit changed during restore preparation");
+        }
+
+        let envelope_bytes = match response.preparation.envelope.as_ref() {
+            Some(envelope) => {
+                let value = serde_json::to_value(envelope)
+                    .context("unable to materialize pre-listener restore envelope")?;
+                let bytes = fullmag_session::canonical_json_bytes(&value);
+                if bytes.len() > MAX_PRELISTEN_ENVELOPE_BYTES {
+                    bail!("pre-listener restore envelope exceeds its limit");
+                }
+                Some(bytes)
+            }
+            None => None,
+        };
+
+        Ok(PreparedDevelopmentRestore {
+            accepted_commit: accepted,
+            accepted_store_scope,
+            accepted_store_binding,
+            commit_sha256,
+            old_api_instance_id: self.api_instance_id.clone(),
+            candidate_bundle_root: staged.candidate_bundle_root.clone(),
+            candidate_bundle_id: candidate_bundle_id.to_owned(),
+            candidate_manifest_sha256: staged.candidate_manifest_sha256.clone(),
+            binding: staged_ack.binding,
+            preparation: response.preparation,
+            envelope_bytes,
+            helper_pid,
+        })
+    }
+
     fn verify_staged_receipt_after_exit(&self, staged: &StageAcknowledgement) -> Result<()> {
         let handoff_id = &staged.handoff.handoff_id;
         if !canonical_uuid(handoff_id) {
@@ -1054,35 +1305,7 @@ impl AuthoringAcquisition {
             "scripts/windows/stage_acquisition_handoff.py",
             "development acquisition handoff helper",
         )?;
-        let python_relative = format!(
-            "builds/{}/windows-native-fdm-cpu-dev/python/fullmag/Scripts/python.exe",
-            self.worktree
-        );
-        let python =
-            fullmag_session::repository_path::checked_path(&self.storage_root, &python_relative)
-                .context("invalid managed development Python path")?;
-        if !python.is_absolute() {
-            bail!("managed development Python path must be absolute");
-        }
-        let configured_python = env::var_os("FULLMAG_PYTHON")
-            .map(PathBuf::from)
-            .context("managed development Python is not configured")?;
-        validate_absolute_path_chain_no_reparse(
-            &configured_python,
-            "configured managed development Python",
-        )?;
-        validate_regular_file_no_reparse(
-            &configured_python,
-            "configured managed development Python",
-        )?;
-        let canonical_python =
-            fs::canonicalize(&python).context("unable to resolve managed development Python")?;
-        let canonical_configured_python = fs::canonicalize(&configured_python)
-            .context("unable to resolve configured managed development Python")?;
-        if canonical_configured_python != canonical_python {
-            bail!("FULLMAG_PYTHON does not identify the managed development Python");
-        }
-        validate_regular_file_no_reparse(&python, "managed development Python")?;
+        let python = managed_development_python(&self.storage_root, &self.worktree)?;
 
         if !candidate_bundle_root.is_absolute() {
             bail!("development candidate bundle path must be absolute");
@@ -1478,7 +1701,7 @@ struct StageAcknowledgement {
     handoff: StageHandoffReference,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 struct StageBinding {
     api_instance_id: String,
@@ -1497,6 +1720,173 @@ struct StageHandoffReference {
     handoff_id: String,
     snapshot_sha256: String,
     state: String,
+}
+
+#[derive(Serialize)]
+struct CommittedRestoreRequest<'a> {
+    schema: &'static str,
+    accepted_store_scope: Option<&'a str>,
+    accepted_store_binding: &'a str,
+    commit_sha256: &'a str,
+    acquisition_nonce: &'a str,
+    binding: &'a StageBinding,
+    candidate_bundle_root: &'a str,
+    candidate_manifest_sha256: &'a str,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CommittedRestoreResponse {
+    schema: String,
+    commit_sha256: String,
+    accepted_store_binding: String,
+    binding: StageBinding,
+    candidate_manifest_sha256: String,
+    preparation: CommittedRestorePreparation,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CommittedRestorePreparation {
+    #[serde(deserialize_with = "deserialize_present_option")]
+    envelope: Option<PrelistenRestoreEnvelope>,
+    workspace_state: String,
+    editor: Value,
+    workspace: Value,
+    project_document: Value,
+    handoff: PreparedRestoreHandoff,
+    candidate: PreparedRestoreCandidate,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct PrelistenRestoreEnvelope {
+    schema: String,
+    target_build_id: String,
+    target_source_sha256: String,
+    old_session_id: String,
+    scene_document: Value,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PreparedRestoreHandoff {
+    handoff_id: String,
+    snapshot_sha256: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PreparedRestoreCandidate {
+    bundle_id: String,
+    bundle_root: String,
+    workspace_namespace: String,
+    profile: String,
+    manifest_sha256: String,
+    backend_source_sha256: String,
+}
+
+struct CandidateRestorePins {
+    product_version: String,
+    backend_source_sha256: String,
+}
+
+/// Private, read-only payload produced from a confirmed cold commit.
+/// Dropping it has no lifecycle effects.
+pub(crate) struct PreparedDevelopmentRestore {
+    accepted_commit: fullmag_session::store::DevelopmentHandoffCommit,
+    accepted_store_scope: Option<String>,
+    accepted_store_binding: String,
+    commit_sha256: String,
+    old_api_instance_id: String,
+    candidate_bundle_root: PathBuf,
+    candidate_bundle_id: String,
+    candidate_manifest_sha256: String,
+    binding: StageBinding,
+    preparation: CommittedRestorePreparation,
+    envelope_bytes: Option<Vec<u8>>,
+    helper_pid: u32,
+}
+
+impl PreparedDevelopmentRestore {
+    pub(crate) fn accepted_commit(&self) -> &fullmag_session::store::DevelopmentHandoffCommit {
+        &self.accepted_commit
+    }
+
+    pub(crate) fn accepted_store_scope(&self) -> Option<&str> {
+        self.accepted_store_scope.as_deref()
+    }
+
+    pub(crate) fn accepted_store_binding(&self) -> &str {
+        &self.accepted_store_binding
+    }
+
+    pub(crate) fn commit_sha256(&self) -> &str {
+        &self.commit_sha256
+    }
+
+    pub(crate) fn old_api_instance_id(&self) -> &str {
+        &self.old_api_instance_id
+    }
+
+    pub(crate) fn candidate_bundle_root(&self) -> &Path {
+        &self.candidate_bundle_root
+    }
+
+    pub(crate) fn candidate_bundle_id(&self) -> &str {
+        &self.candidate_bundle_id
+    }
+
+    pub(crate) fn candidate_manifest_sha256(&self) -> &str {
+        &self.candidate_manifest_sha256
+    }
+
+    pub(crate) fn envelope_bytes(&self) -> Option<&[u8]> {
+        self.envelope_bytes.as_deref()
+    }
+
+    pub(crate) fn expected_scene(&self) -> Option<&Value> {
+        self.preparation
+            .envelope
+            .as_ref()
+            .map(|envelope| &envelope.scene_document)
+    }
+
+    pub(crate) fn old_session_id(&self) -> Option<&str> {
+        self.binding.session_id.as_deref()
+    }
+
+    pub(crate) fn helper_pid(&self) -> u32 {
+        self.helper_pid
+    }
+
+    pub(crate) fn editor(&self) -> &Value {
+        &self.preparation.editor
+    }
+
+    pub(crate) fn workspace(&self) -> &Value {
+        &self.preparation.workspace
+    }
+
+    pub(crate) fn project_document(&self) -> &Value {
+        &self.preparation.project_document
+    }
+
+    pub(crate) fn workspace_state(&self) -> &str {
+        &self.preparation.workspace_state
+    }
+
+    pub(crate) fn target_build_id(&self) -> &str {
+        &self.binding.target_build_id
+    }
+
+    pub(crate) fn handoff_id(&self) -> &str {
+        &self.preparation.handoff.handoff_id
+    }
+
+    pub(crate) fn snapshot_sha256(&self) -> &str {
+        &self.preparation.handoff.snapshot_sha256
+    }
 }
 
 enum StageHelperEvent {
@@ -1531,6 +1921,119 @@ fn validate_stage_acknowledgement(
     Ok(())
 }
 
+fn configured_accepted_store_scope() -> Result<Option<String>> {
+    let Some(value) = env::var_os("FULLMAG_ACCEPTED_STORE_SCOPE") else {
+        return Ok(None);
+    };
+    let value = value
+        .into_string()
+        .map_err(|_| anyhow::anyhow!("accepted-store scope is not valid UTF-8"))?;
+    if !canonical_uuid(&value) {
+        bail!("accepted-store scope must be a canonical nonzero UUID");
+    }
+    Ok(Some(value))
+}
+
+fn candidate_restore_pins(
+    manifest: &Value,
+    expected_bundle_id: &str,
+    expected_worktree: &str,
+    expected_target_build_id: &str,
+) -> Result<CandidateRestorePins> {
+    let source = manifest
+        .get("source")
+        .and_then(Value::as_object)
+        .context("candidate manifest source identity is missing")?;
+    let build_version = source
+        .get("build_version")
+        .and_then(Value::as_object)
+        .context("candidate manifest build version is missing")?;
+    let product_version = build_version
+        .get("product_version")
+        .and_then(Value::as_str)
+        .context("candidate product version is missing")?;
+    let backend_source_sha256 = source
+        .get("backend_source_sha256")
+        .and_then(Value::as_str)
+        .context("candidate backend source digest is missing")?;
+    if manifest.get("bundle_id").and_then(Value::as_str) != Some(expected_bundle_id)
+        || manifest.get("profile").and_then(Value::as_str) != Some("dev")
+        || source.get("workspace_namespace").and_then(Value::as_str) != Some(expected_worktree)
+        || source.get("target_triple").and_then(Value::as_str) != Some("x86_64-pc-windows-msvc")
+        || source.get("manifest_sha256").and_then(Value::as_str) != Some(expected_target_build_id)
+        || !lower_hex(backend_source_sha256, 64)
+        || product_version.is_empty()
+        || product_version.len() > 128
+        || !product_version
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b".-+".contains(&byte))
+    {
+        bail!("candidate manifest does not match the staged native build pins");
+    }
+    Ok(CandidateRestorePins {
+        product_version: product_version.to_owned(),
+        backend_source_sha256: backend_source_sha256.to_owned(),
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn validate_committed_restore_response(
+    response: &CommittedRestoreResponse,
+    accepted: &fullmag_session::store::DevelopmentHandoffCommit,
+    accepted_store_binding: &str,
+    commit_sha256: &str,
+    staged: &StageAcknowledgement,
+    candidate_bundle_root: &Path,
+    candidate_bundle_id: &str,
+    candidate_manifest_sha256: &str,
+    candidate_pins: &CandidateRestorePins,
+    expected_worktree: &str,
+) -> Result<()> {
+    let candidate_bundle_root = candidate_bundle_root
+        .to_str()
+        .context("candidate bundle path is not valid UTF-8")?;
+    if response.schema != COMMITTED_RESTORE_RESULT_SCHEMA
+        || response.commit_sha256 != commit_sha256
+        || response.accepted_store_binding != accepted_store_binding
+        || response.binding != staged.binding
+        || response.candidate_manifest_sha256 != candidate_manifest_sha256
+        || response.preparation.workspace_state != staged.workspace_state
+        || response.preparation.handoff.handoff_id != accepted.handoff_id
+        || response.preparation.handoff.snapshot_sha256 != accepted.snapshot_sha256
+    {
+        bail!("committed restore response does not match durable acceptance and staged binding");
+    }
+
+    let candidate = &response.preparation.candidate;
+    if candidate.bundle_id != candidate_bundle_id
+        || candidate.bundle_root != candidate_bundle_root
+        || candidate.workspace_namespace != expected_worktree
+        || candidate.profile != "dev"
+        || candidate.manifest_sha256 != staged.binding.target_build_id
+        || candidate.backend_source_sha256 != candidate_pins.backend_source_sha256
+    {
+        bail!("committed restore candidate identity differs from the sealed native bundle");
+    }
+
+    match (
+        response.preparation.workspace_state.as_str(),
+        staged.binding.session_id.as_deref(),
+        staged.binding.session_epoch,
+        response.preparation.envelope.as_ref(),
+    ) {
+        ("no_session", None, 0, None) => {}
+        ("session", Some(old_session_id), epoch, Some(envelope))
+            if epoch > 0
+                && envelope.schema == "fullmag.development-prelisten-restore.v1"
+                && envelope.target_build_id == candidate_pins.product_version
+                && envelope.target_source_sha256 == candidate_pins.backend_source_sha256
+                && envelope.old_session_id == old_session_id
+                && envelope.scene_document.is_object() => {}
+        _ => bail!("committed restore envelope does not match the staged workspace"),
+    }
+    Ok(())
+}
+
 fn validated_directory_root(path: &Path, operation: &str) -> Result<PathBuf> {
     if !path.is_absolute() {
         bail!("{operation} path must be absolute");
@@ -1548,6 +2051,33 @@ fn validated_directory_root(path: &Path, operation: &str) -> Result<PathBuf> {
         }
     }
     Ok(path.to_path_buf())
+}
+
+fn managed_development_python(storage_root: &Path, worktree: &str) -> Result<PathBuf> {
+    let relative =
+        format!("builds/{worktree}/windows-native-fdm-cpu-dev/python/fullmag/Scripts/python.exe");
+    let python = fullmag_session::repository_path::checked_path(storage_root, &relative)
+        .context("invalid managed development Python path")?;
+    if !python.is_absolute() {
+        bail!("managed development Python path must be absolute");
+    }
+    let configured_python = env::var_os("FULLMAG_PYTHON")
+        .map(PathBuf::from)
+        .context("managed development Python is not configured")?;
+    validate_absolute_path_chain_no_reparse(
+        &configured_python,
+        "configured managed development Python",
+    )?;
+    validate_regular_file_no_reparse(&configured_python, "configured managed development Python")?;
+    let canonical_python =
+        fs::canonicalize(&python).context("unable to resolve managed development Python")?;
+    let canonical_configured_python = fs::canonicalize(&configured_python)
+        .context("unable to resolve configured managed development Python")?;
+    if canonical_configured_python != canonical_python {
+        bail!("FULLMAG_PYTHON does not identify the managed development Python");
+    }
+    validate_regular_file_no_reparse(&python, "managed development Python")?;
+    Ok(python)
 }
 
 fn checked_regular_file(root: &Path, relative: &str, operation: &str) -> Result<PathBuf> {
@@ -1642,6 +2172,16 @@ fn run_stage_helper(
     repo_root: &Path,
     request: Vec<u8>,
 ) -> Result<(Vec<u8>, u32, ExitStatus)> {
+    run_stage_helper_with_output_limit(python, helper, repo_root, request, MAX_STAGE_OUTPUT_BYTES)
+}
+
+fn run_stage_helper_with_output_limit(
+    python: &Path,
+    helper: &Path,
+    repo_root: &Path,
+    request: Vec<u8>,
+    output_limit: usize,
+) -> Result<(Vec<u8>, u32, ExitStatus)> {
     let deadline = Instant::now() + STAGE_HELPER_TIMEOUT;
     let mut command = Command::new(python);
     command
@@ -1698,7 +2238,7 @@ fn run_stage_helper(
     let reader = match thread::Builder::new()
         .name("development-handoff-stdout".to_owned())
         .spawn(move || {
-            let output = read_bounded_helper_output(stdout);
+            let output = read_bounded_helper_output(stdout, output_limit);
             let _ = output_sender.send(StageHelperEvent::OutputRead(output));
         }) {
         Ok(reader) => reader,
@@ -1792,13 +2332,16 @@ fn run_stage_helper(
     Ok((output, helper_pid, exit_status))
 }
 
-fn read_bounded_helper_output(stdout: impl Read) -> std::result::Result<Vec<u8>, ()> {
+fn read_bounded_helper_output(
+    stdout: impl Read,
+    output_limit: usize,
+) -> std::result::Result<Vec<u8>, ()> {
     let mut output = Vec::new();
     stdout
-        .take((MAX_STAGE_OUTPUT_BYTES + 1) as u64)
+        .take((output_limit + 1) as u64)
         .read_to_end(&mut output)
         .map_err(|_| ())?;
-    if output.len() > MAX_STAGE_OUTPUT_BYTES {
+    if output.len() > output_limit {
         return Err(());
     }
     Ok(output)
@@ -1973,13 +2516,14 @@ struct ConfirmResponse {
     api_instance_id: String,
 }
 
-fn deserialize_present_option<'de, D>(
+fn deserialize_present_option<'de, D, T>(
     deserializer: D,
-) -> std::result::Result<Option<String>, D::Error>
+) -> std::result::Result<Option<T>, D::Error>
 where
     D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
 {
-    Option::<String>::deserialize(deserializer)
+    Option::<T>::deserialize(deserializer)
 }
 
 fn validate_acquisition_response(

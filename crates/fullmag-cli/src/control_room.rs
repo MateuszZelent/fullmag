@@ -383,6 +383,29 @@ impl ControlRoomGuard {
         }
     }
 
+    fn replace_with_committed_candidate(
+        &mut self,
+        repo_root: &Path,
+        prepared: &crate::development_api_owner::PreparedDevelopmentRestore,
+        api_port: u16,
+        log: fs::File,
+        observe: impl FnMut(crate::development_api_replacement::ReplacementLaunchEvent),
+    ) -> Result<crate::development_api_replacement::DevelopmentReplacementReceipt> {
+        let mut restored = crate::development_api_replacement::launch_committed_replacement(
+            self.development_supervisor_mut()?,
+            repo_root,
+            prepared,
+            api_port,
+            log,
+            observe,
+        )?;
+        self.api_child = Some(GuardedApiProcess::Development(restored.supervisor));
+        restored.receipt.completion = self
+            .development_supervisor_mut()?
+            .complete_restored_handoff(&mut restored.acquisition, prepared)?;
+        Ok(restored.receipt)
+    }
+
     pub fn retain_terminal_failure_until_close(&mut self, wait_for_close: impl FnOnce() + 'static) {
         if self.api_child.is_none() && self.frontend_child.is_none() {
             return;
@@ -2672,6 +2695,11 @@ pub(crate) fn verify_development_api_owner() -> Result<()> {
         Some(value) if value == "1" => true,
         Some(_) => bail!("invalid lost-ack owner probe configuration"),
     };
+    let launch_replacement = match std::env::var_os("FULLMAG_DEVELOPMENT_OWNER_PROBE_REPLACEMENT") {
+        None => false,
+        Some(value) if value == "1" => true,
+        Some(_) => bail!("invalid native replacement probe configuration"),
+    };
     init_api_port()?;
     let launch = crate::development_api_owner::OwnerLaunch::from_environment(true, false)?
         .context("development API owner verification requires managed dev configuration")?;
@@ -3035,16 +3063,109 @@ pub(crate) fn verify_development_api_owner() -> Result<()> {
         )?
     };
     let terminal = outcome.terminal;
+    println!(
+        "{}",
+        serde_json::json!({
+            "schema":"fullmag.development-cli-owned-api-exit.v1", "api_pid":pid,
+            "waited":true,"exit_code":terminal.code(),"durable_commit_reconciled":true,
+        })
+    );
     let accepted = outcome.accepted;
     let commit_acknowledgement = outcome.acknowledgement;
     let readback_helper_pid = outcome
         .readback_helper_pid
         .context("managed commit probe must observe the waited readback helper")?;
+    let prepared = if launch_replacement {
+        Some(
+            guarded_api
+                .development_supervisor_mut()?
+                .prepare_committed_restore(
+                    &root,
+                    &final_acquisition,
+                    &final_staged,
+                    &final_idle,
+                    &accepted_store,
+                    commit_acknowledgement.as_ref(),
+                )?,
+        )
+    } else {
+        None
+    };
     drop(final_idle); // Kernel reservations release; durable fence remains closed.
+    let mut native_replacement = serde_json::Value::Null;
+    if let Some(prepared) = prepared.as_ref() {
+        println!(
+            "{}",
+            serde_json::json!({
+                "schema":"fullmag.development-cli-replacement-progress.v1",
+                "event":"restore_preparation_helper_waited", "pid":prepared.helper_pid(),
+                "waited":true,"exit_code":0,
+            })
+        );
+        let replacement_log = fs::OpenOptions::new().write(true).create_new(true).open(
+            fullmag_session::repository_path::checked_path(
+                &state_root,
+                &format!("replacement-probe-{}.log", uuid::Uuid::new_v4().simple()),
+            )?,
+        )?;
+        let restored = guarded_api.replace_with_committed_candidate(
+            &root, prepared, api_port(), replacement_log, |event| {
+                use crate::development_api_replacement::ReplacementLaunchEvent;
+                let frame = match event {
+                    ReplacementLaunchEvent::CandidateOwnerHelperWaited {pid} => serde_json::json!({
+                        "event":"candidate_owner_helper_waited", "pid":pid,"waited":true,"exit_code":0}),
+                    ReplacementLaunchEvent::ApiStarted {pid,port} => serde_json::json!({
+                        "event":"replacement_api_started", "pid":pid,"api_port":port,"waited":false}),
+                };
+                let mut frame = frame;
+                frame["schema"] = serde_json::json!("fullmag.development-cli-replacement-progress.v1");
+                println!("{frame}");
+            },
+        )?;
+        let expected_scene = prepared
+            .expected_scene()
+            .context("scene replacement fixture is empty")?;
+        let exposed_scene: serde_json::Value = client
+            .get(format!("{url}/v2/sessions/current/model/scene"))
+            .header("x-fullmag-api-instance", &restored.api_instance_id)
+            .send()?
+            .error_for_status()?
+            .json()?;
+        if &exposed_scene != expected_scene {
+            bail!("native replacement HTTP exposed a different authoring scene");
+        }
+        if client
+            .put(format!("{url}/v2/sessions/current/model/scene"))
+            .header("x-fullmag-api-instance", &restored.api_instance_id)
+            .json(expected_scene)
+            .send()?
+            .status()
+            .as_u16()
+            != 200
+        {
+            bail!("native replacement completion did not reopen authoring mutation");
+        }
+        let replacement_supervisor = guarded_api.development_supervisor_mut()?;
+        replacement_supervisor.shutdown()?; // Only this fixture, no compute was submitted.
+        let replacement_terminal = replacement_supervisor
+            .terminal_status()
+            .context("native replacement fixture shutdown has no waited terminal outcome")?;
+        native_replacement = serde_json::json!({
+            "schema":"fullmag.development-cli-native-replacement-check.v1",
+            "restored_scene_document":exposed_scene,
+            "receipt":restored, "waited":true,"exit_code":replacement_terminal.code(),
+            "termination_reason":"owned verifier replacement cleanup; no compute submitted",
+            "checks":["native-supervisor-prepares-accepted-capsule", "native-supervisor-spawns-sealed-candidate",
+                "native-supervisor-confirms-fresh-owner", "native-supervisor-restores-exact-authoring",
+                "native-supervisor-completes-admission", "native-supervisor-http-mutation-reopened",
+                "native-supervisor-waits-replacement-fixture"]
+        });
+    }
     println!(
         "{}",
         serde_json::json!({
             "schema":"fullmag.development-cli-owner-check.v1", "api_pid":pid,
+            "native_replacement":native_replacement,
             "api_instance_id":instance, "api_waited":true,
             "accepted_store_binding":fullmag_runtime_control::accepted_store::store_binding(&accepted_store),
             "commit_acknowledgement_observed":commit_acknowledgement.is_some(),
@@ -3061,7 +3182,7 @@ pub(crate) fn verify_development_api_owner() -> Result<()> {
                 "accepted_store_binding":accepted.accepted_store_binding,
             },
             "committed_handoff":final_staged.acknowledgement,
-            "graceful_exit":true,"durable_fence_retained":true,
+            "graceful_exit":true,"durable_fence_retained":!launch_replacement,
             "capsule_receipt_state":"staged",
             "commit_rejection_helpers":rejection_helpers,
             "handoffs":[empty_staged.acknowledgement,scene_staged.acknowledgement],

@@ -1,5 +1,13 @@
 # Status realizacji całego planu refaktoryzacji
 
+Checkpoint P8-53AJ, 04.10.2026: [natywny replacement supervisor](p8/53aj-native-replacement-supervisor.md).
+Koordynator uruchamia zapieczętowany kandydat, odtwarza scenę i kończy admission
+po przejęciu nowego Child. Build i 398 kontroli runtime PASS, wszystkie 142
+procesy próby odebrano; wariant między buildami i lost ACK potwierdzony.
+UI, dokument projektu, kolejny pełny restart i Compute pozostają otwarte.
+Wcześniejsza nieudana próba zachowana z fence; procenty bez awansu.
+
+
 Checkpoint P8-53AI, 04.10.2026: [właściciel procesu podczas commit i exit](p8/53ai-owned-api-commit-exit-supervisor.md).
 Launcher przejmuje Child do supervisora; diagnostic używa tej samej ścieżki.
 Build i 306 kontroli natywnych PASS, wszystkie 104 procesy odebrano.

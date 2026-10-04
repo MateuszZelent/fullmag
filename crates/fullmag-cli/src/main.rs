@@ -13,6 +13,7 @@ mod communication_policy;
 mod control_room;
 mod dev_smoke;
 mod development_api_owner;
+mod development_api_replacement;
 mod development_api_supervisor;
 mod diagnostics;
 mod feature_flags;

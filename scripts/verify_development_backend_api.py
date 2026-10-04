@@ -250,9 +250,12 @@ def exercise_cli_owner(repo: Path, run_root: Path, manifest: dict, receipt: dict
             "workspace_state": preparation["workspace_state"],
         }
 
-    def run_fixture(label: str, lost_ack: bool, test_invalid_scopes: bool, target_bundle: str | None = None) -> None:
+    def run_fixture(label: str, lost_ack: bool, test_invalid_scopes: bool, target_bundle: str | None = None,
+                    native_replacement: bool = False) -> None:
         scope = str(uuid.uuid4())
         env, accepted_store = fixture_environment(label, scope, lost_ack)
+        if native_replacement:
+            env["FULLMAG_DEVELOPMENT_OWNER_PROBE_REPLACEMENT"] = "1"
         if target_bundle is not None:
             env["FULLMAG_DEVELOPMENT_OWNER_PROBE_CANDIDATE"] = target_bundle
         receipt[f"{label}_accepted_store_scope"] = scope
@@ -287,7 +290,7 @@ def exercise_cli_owner(repo: Path, run_root: Path, manifest: dict, receipt: dict
             cli_record = {"label": f"{label}-cli-owner-client", "pid": child.pid, "waited": False}
             receipt["processes"].append(cli_record)
             try:
-                code = child.wait(timeout=120)
+                code = child.wait(timeout=180 if native_replacement else 120)
                 cli_record.update(waited=True, exit_code=code)
             except subprocess.TimeoutExpired:
                 timed_out = True
@@ -299,6 +302,26 @@ def exercise_cli_owner(repo: Path, run_root: Path, manifest: dict, receipt: dict
             assert frame["event"] == "owned_api_started" and isinstance(frame["api_pid"], int)
             receipt["processes"].append(dict(label=f"{label}-cli-owned-api", pid=frame["api_pid"],
                 api_port=frame["api_port"], waited=False, outcome="unknown" if timed_out else "pending"))
+        exits = [frame for frame in frames if frame.get("schema") == "fullmag.development-cli-owned-api-exit.v1"]
+        for terminal in exits:
+            assert terminal["waited"] is True and terminal["exit_code"] == 0
+            assert terminal["durable_commit_reconciled"] is True
+            owned = [item for item in receipt["processes"]
+                if item.get("label") == f"{label}-cli-owned-api" and item["pid"] == terminal["api_pid"]]
+            assert len(owned) == 1
+            owned[0].update(waited=True, exit_code=0, outcome="terminal")
+        replacement_progress = [frame for frame in frames
+            if frame.get("schema") == "fullmag.development-cli-replacement-progress.v1"]
+        for helper in replacement_progress:
+            if helper.get("event") in {"restore_preparation_helper_waited", "candidate_owner_helper_waited"}:
+                assert helper["waited"] is True and helper["exit_code"] == 0
+                receipt["processes"].append(dict(label=f"{label}-{helper['event']}",
+                    pid=helper["pid"], waited=True, exit_code=0))
+        if timed_out or code != 0:
+            for frame in replacement_progress:
+                if frame.get("event") == "replacement_api_started":
+                    receipt["processes"].append(dict(label=f"{label}-native-replacement-api", pid=frame["pid"],
+                        api_port=frame["api_port"], waited=False, outcome="unknown"))
         if timed_out:
             raise storage.StorageError(f"Native CLI owner outcome is unknown; no process was terminated; see {log_path}")
         if code != 0:
@@ -307,11 +330,11 @@ def exercise_cli_owner(repo: Path, run_root: Path, manifest: dict, receipt: dict
                     item.update(outcome="unknown", waited=False)
             raise storage.StorageError(f"Native CLI owner client failed; see {log_path}")
         result_frames = [frame for frame in frames if frame.get("schema") == "fullmag.development-cli-owner-check.v1"]
-        assert len(progress) == 1 and len(result_frames) == 1, frames
+        assert len(progress) == 1 and len(exits) == 1 and len(result_frames) == 1, frames
         result = result_frames[0]
         assert result["api_waited"] is True and result["api_pid"] == progress[0]["api_pid"]
         assert result["accepted_store_binding"] == binding
-        assert result["graceful_exit"] is True and result["durable_fence_retained"] is True
+        assert result["graceful_exit"] is True and result["durable_fence_retained"] is (not native_replacement)
         assert result["api_exit_code"] == 0
         assert result["durable_commit_reconciled"] is True
         assert result["commit_reconciliation"] == "durable_record_confirmed_after_owned_api_exit"
@@ -364,13 +387,57 @@ def exercise_cli_owner(repo: Path, run_root: Path, manifest: dict, receipt: dict
             assert loaded["editor"]["probe"] == ("empty" if ack["workspace_state"] == "no_session" else "scene")
         if not lost_ack:
             receipt["cli_handoffs"] = result["handoffs"]
-        prepare_committed_restore(label, result, env, accepted_store, committed_capsule["binding"],
-                                  scope, loaded_commit)
-        receipt["checks"].append(f"{label}-committed-restore-preparation-read-only")
+        if native_replacement:
+            native_result = result["native_replacement"]
+            assert native_result["schema"] == "fullmag.development-cli-native-replacement-check.v1"
+            assert native_result["waited"] is True and isinstance(native_result["exit_code"], int)
+            restored = native_result["receipt"]
+            started = [frame for frame in replacement_progress if frame["event"] == "replacement_api_started"]
+            helpers = [frame for frame in replacement_progress if frame["event"].endswith("helper_waited")]
+            assert len(started) == 1 and len(helpers) == 2
+            assert started[0]["pid"] == restored["api_pid"]
+            assert restored["api_instance_id"] != result["api_instance_id"]
+            assert restored["session_id"] != committed_capsule["binding"]["session_id"]
+            assert restored["session_epoch"] == 1
+            assert native_result["restored_scene_document"] == loaded_commit["scene"]
+            completion = restored["completion"]
+            assert completion["admission_reopened"] is True
+            assert completion["old_api_instance_id"] == result["api_instance_id"]
+            assert completion["api_instance_id"] == restored["api_instance_id"]
+            assert completion["scene_document_sha256"] == restored["scene_sha256"]
+            assert completion["handoff_id"] == durable["handoff_id"]
+            assert completion["accepted_store_binding"] == binding
+            for name in ("HANDOFF-COMMIT.json", "ADMISSION-FENCE.json", "HANDOFF-COMPLETION.json"):
+                assert not os.path.lexists(accepted_store / "development" / name)
+            history = json.loads((accepted_store / "development/completion-authorizations" /
+                (durable["handoff_id"] + ".json")).read_text(encoding="utf-8"))
+            assert history["schema"] == "fullmag.development-handoff-completion.v1"
+            assert history["commit"]["api_instance_id"] == result["api_instance_id"]
+            assert history["commit"]["handoff_id"] == durable["handoff_id"]
+            assert history["commit"]["snapshot_sha256"] == durable["snapshot_sha256"]
+            assert history["commit"]["accepted_store_binding"] == binding
+            assert history["replacement"]["api_instance_id"] == restored["api_instance_id"]
+            assert history["replacement"]["session_id"] == restored["session_id"]
+            assert history["replacement"]["scene_document_sha256"] == restored["scene_sha256"]
+            for helper in helpers:
+                assert helper["waited"] is True and helper["exit_code"] == 0
+            assert [helper["pid"] for helper in helpers if helper["event"] == "candidate_owner_helper_waited"] == [restored["candidate_owner_helper_pid"]]
+            receipt["processes"].append(dict(label=f"{label}-native-replacement-api", pid=restored["api_pid"],
+                api_port=started[0]["api_port"], waited=True, exit_code=native_result["exit_code"],
+                termination_reason=native_result["termination_reason"]))
+            receipt[f"{label}_native_replacement"] = native_result
+            receipt["checks"].extend(f"{label}-" + name for name in native_result["checks"])
+        else:
+            assert result["native_replacement"] is None and not replacement_progress
+            prepare_committed_restore(label, result, env, accepted_store, committed_capsule["binding"],
+                                      scope, loaded_commit)
+            receipt["checks"].append(f"{label}-committed-restore-preparation-read-only")
         receipt["checks"].extend(f"{label}-cli-owner-" + name for name in result["checks"])
 
     run_fixture("cli_owner", lost_ack=False, test_invalid_scopes=True)
     run_fixture("cli_owner_lost_ack", lost_ack=True, test_invalid_scopes=False)
+    run_fixture("cli_owner_native_replacement", lost_ack=False, test_invalid_scopes=False,
+                native_replacement=True)
     cross_build_id = receipt.get("cross_build_bundle", "")
     if cross_build_id:
         from windows.runtime_bundle import validate_bundle
@@ -381,6 +448,8 @@ def exercise_cli_owner(repo: Path, run_root: Path, manifest: dict, receipt: dict
             raise storage.StorageError("Cross-build gate requires a different verified build in this workspace")
         receipt["cross_build_identity"] = cross_manifest["source"]
         run_fixture("cli_owner_cross_build", lost_ack=False, test_invalid_scopes=False, target_bundle=str(target))
+        run_fixture("cli_owner_native_cross_build", lost_ack=True, test_invalid_scopes=False,
+                    target_bundle=str(target), native_replacement=True)
         receipt["checks"].append("native-launcher-confirms-different-verified-api-build")
 
 

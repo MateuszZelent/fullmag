@@ -1,5 +1,13 @@
 # P8-53 — bezpieczne zastosowanie nowego backendu w workspace
 
+[P8-53AJ](53aj-native-replacement-supervisor.md) dodaje uruchomienie
+replacement przez natywnego koordynatora, odtworzenie kapsuły i completion
+po przejęciu custody nowego Child. Build i 398 kontroli runtime PASS;
+wszystkie 142 procesy próby odebrano. Potwierdzono również inny build i lost ACK.
+UI, dokument projektu, drugi restart i Compute pozostają otwarte.
+Nieudana wcześniejsza próba pozostaje odseparowana z zamkniętym magazynem.
+
+
 [P8-53AI](53ai-owned-api-commit-exit-supervisor.md) integruje custody Child
 z launcherem oraz commit/wait/readback z produkcyjnym supervisorem.
 Build i 306 kontroli przeszły, wszystkie 104 procesy odebrano. Replacement
