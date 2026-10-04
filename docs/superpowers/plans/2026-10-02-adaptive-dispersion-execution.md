@@ -1,3 +1,23 @@
+<!-- integration-current-evidence-20261004 -->
+## Bieżący stan przed integracją — 2026-10-04
+
+Ten checkpoint zastępuje niższe deklaracje bieżącej liczby punktów,
+aktywnych jobów i lokalnych/niewypchniętych zmian. Zachowujemy je jako
+datowaną historię, także tabelę statusu wykonania i końcowe wpisy #219.
+
+Istnieje 15 rzeczywistych punktów DE (14 nonzero z managed#228 oraz
+Gamma selected-only #227) i dwa osobne dodatnie refinements air1,15.
+Raport: [baseline15](../../raports/2026-10-04-de-signed15-runtime.md),
+[air refinement](../../raports/2026-10-04-de-air-grading-two-points.md).
+Nie są to ukończony wspólny signed15 ani serial/adaptive parity; Gamma
+full window, convergence, GUI i A1/COMSOL pozostają OPEN. Wyniki są
+completed_unqualified, bez promocji GPU lub produkcyjnego waveguide.
+
+Użytkownik zlecił commit/push całości worktree, synchronizację najnowszego
+origin/master i integracjęPR97. Ten etap Git nie kończy naukowego S00–S12.
+Runner jest idle/healthy, około1,80GiB wolnego; nie ma aktywnej symulacji
+ani nowego buildu nearest. Kompilowane unit tests nadal NOT RUN.
+
 # Adaptacyjne obliczenia dyspersji — wykonanie i bramki
 
 <!-- eps-dimensions-analytic-checkpoint-20261004 -->
@@ -59,7 +79,7 @@ CPU percent oznacza procent efektywnego przydziału Fullmaga: minimum affinity, 
 | Worker procesowy | izolacja kontekstu, immutable equilibrium, cancellation i czyste namespaces | Źródła i review gotowe; runtime otwarty |
 | Python/IR/UI round-trip | ustawienie UI trafia do skryptu, IR i wykonania | Python i produkcyjny TypeScript PASS; OpenAPI/build/browser otwarte |
 | Telemetria UI | obciążenie, resolved workers, target i powód oczekiwania | Źródła i produkcyjny TypeScript PASS; managed UI/browser otwarte |
-| Managed build | build produkcyjny bez kompilowania unit tests, źródło przypięte | #211 native-build PASS, availability timeout120s; #213 queued, waiting_for_disk |
+| Managed build | build produkcyjny bez kompilowania unit tests, źródło przypięte | #211 native-build PASS, availability timeout120s; #213 cancelled exit143; nowe sparowane obrazy wdrożone, #216 zgłoszony |
 | Runtime parity | serial/adaptive ten sam model i k: residual, częstotliwości, hashe siatki/równowagi | Otwarte |
 | Browser proof | działające ustawienia i rzeczywiste wyniki, widoczny canvas/WebGL | Otwarte |
 | Wydajność | porównanie czasu i szczytu RAM; brak deklaracji speedup bez pomiaru | Otwarte |
@@ -339,3 +359,259 @@ Zmiana jest późniejsza od kapsuły #213 i wymaga przyszłej weryfikacji runtim
 Ostatni odczyt runnera: 6765400064 B wolnego, waiting_for_disk, zero aktywnych
 jobów. Nie zmieniono FIFO ani danych. CPU90% pozostaje celem admission,
 nie gwarancją twardego limitu chwilowego zużycia procesora.
+
+### Pojedynczy snapshot dostępności FEM
+
+Lokalny commit 3ccd540c22b2ef2c848f5424b724af9f00d9a837 używa jednego
+NativeFemGpuStatus do CPU i GPU w odpowiedzi runtime fem-availability.
+Pola JSON pozostają identyczne; oba konstruktory fixture typu zaktualizowano.
+Jednorazowa kontrola źródeł2/2 i staged diff check PASS. Nie kompilowano
+testów Rust. Globalny rustfmt --check trzech plików zgłosił istniejące
+rozbieżności formatowania; formattera nie uruchomiono na pozostałych zmianach.
+Nie twierdzimy, że usunięcie drugiego probe rozwiązuje hang #211.
+
+
+### Review zasobów i zabezpieczenia puli — 2026-10-03
+
+W kolejnym review źródeł poprawiono:
+
+- Limit wątków jest przekazywany przez środowisko dziecka przed exec, aby
+  konstruktory bibliotek także widziały budżet. Wspólna lista obejmuje
+  OMP_THREAD_LIMIT, OMP_DYNAMIC=FALSE i MKL_DYNAMIC=FALSE; nie modyfikuje
+  środowiska rodzica.
+- Odczyt końcówki logu używa seek/take i alokuje najwyżej 1 MiB, zamiast
+  czytać cały plik do RAM. Limit dotyczy końcowego dowodu, nie rozmiaru
+  pliku podczas aktywnego wykonania.
+- Kolejne błędy rozgrzewania/resetu telemetrii mają 30 s limitu ponawiania.
+  Poprawny pomiar resetuje ten licznik. Przekroczenie zamyka admission;
+  aktywne procesy kończą się, a pozostałe próbki nie są uruchamiane.
+  To limit operacyjny samplera, bez zmiany tolerancji solvera.
+- Terminalny CPU getrusage jest średnią interwału, a RSS szczytem procesu.
+  Jeśli brak okresowej próbki CPU krótkiego workera, admission rezerwuje
+  pełny budżet jego wątków przyjęty przez rodzica. Nie nazywa średniej
+  zmierzonym szczytem. Brak terminalnych danych nadal blokuje kalibrację.
+- Provenance uwzględnia cgroup_v2_cpu_usage także przy cpu.max=max.
+  Limit pamięci ze zmiennych Slurm wymaga SLURM_JOB_ID.
+
+Rustfmt trzech zmienionych plików oraz git diff --check PASS. Regresje Rust
+zapisano, ale zgodnie z zakazem nie kompilowano ani nie wykonywano ich.
+Zmiany są późniejsze od kapsuły #213. Managed runtime, pomiar przyspieszenia,
+serial/adaptive parity i nowe ustawienia w działającym GUI pozostają otwarte.
+
+Rzeczywista diagnostyka startupu #211 wykazała timeout także dla --help,
+przed stemplem wejścia do main; log loadera kończy się na inicjalizacji
+cublasLt. Nie dowodzi to błędu operatora eigensolve ani wewnętrznej przyczyny
+NVIDIA. Szczegóły: [audyt zależności startupu](../../audits/2026-10-03-fem-cpu-startup-cuda-dependency-audit.md).
+Rozszerzenie o izolowane CDLL CUDA/HYPRE odrzucił auto-review jako dodatkowy
+zakres; pytanie o jawne zatwierdzenie jest otwarte. Nie obchodzono odmowy.
+
+Bieżący runner health: worker_alive/accepting_jobs=true, brak aktywnych
+jobów, waiting_for_disk, storage_free_bytes=6782971904. Kolejka FIFO nie
+została zmieniona. Nie usunięto danych. Źródła nie są dowodem wdrożonego UI.
+
+Końcowy read-only review przyrostu admission nie znalazł nowego P1/P2.
+Budżet CPU krótkiego workera pochodzi z wartości zapisanej przez rodzica;
+przy natychmiastowym zamknięciu telemetrii journal zachowuje przyczynę.
+CPU90% pozostaje celem alokacji Fullmaga, nie globalną gwarancją użycia
+całego węzła przez wszystkich konsumentów. Regresje Rust pozostają nieuruchomione.
+
+Lokalny checkpoint diagnostyki: 237243e13e665fee237513da480e0e656066615d (5 plików).
+Osiem interpretowanych regresji PASS; walidacja realnego zatrzymanego
+kontenera Docker PASS bez startu i bez nowych sond. Nie opublikowano
+niezweryfikowanego przyrostu adaptive; full runtime/UI/science nadal otwarte.
+
+Live admission jest samplowany także po przyjęciu ostatniego punktu,
+a ostatnie zdarzenie puli ma aktualne active/pending counts. Review nie
+wykazał ryzyka dodatkowego spawn/indexowania przy pending=0. Jeśli końcowy
+pomiar jest niedostępny, raport zachowuje terminal_telemetry_unavailable;
+nie tworzy sztucznego CPU/RAM. Przygotowano regresję no_pending_samples,
+bez kompilacji. UI review wskazało stale dane podczas invalidation oraz
+maskowanie malformed import — poprawki źródłowe są w toku. Wygenerowany
+OpenAPI wymaga przyszłego eksportu z nowego managed API i nie jest
+ręcznie podmieniany. Browser/runtime pozostają NOT VERIFIED.
+
+
+### Końcowy checkpoint źródeł UI/API — 2026-10-03
+
+Poprawiono stale zasób etapów: loading/stale/error wygasza dane, a ready
+wymaga zgodnych session_id/session_epoch/run_id. Backend publikuje te
+identyfikatory z tego samego snapshotu co stage records; wspólny helper
+zachowuje dotychczasową semantykę epoch. Brak identity w starym API jest
+niedostępnością, nie podstawą do wymyślania identyfikatorów klienta.
+Review źródłowe identity/epoch/scope PASS. Regresje API/React przygotowano,
+ale zgodnie z zakazem nie kompilowano ani nie wykonywano ich.
+
+Malformed policy import pozostaje błędem: bool/whitespace/zły kształt/
+nieznany mode nie stają się domyślnym serial ani liczbą. UI wyjaśnia,
+że CPU/RAM/reserve/workers sterują wyłącznie adaptive i następnym runem.
+W trakcie kontroli produkcyjnej poprawiono brakującą nazwę zmiennej
+w komponencie (używa stageExecution zwróconego już po scope guardzie).
+
+Produkcja TypeScript PASS: 799 plików, zero test/spec, niezmienione hashe
+czterech źródeł w trakcie kontroli. Zachowano poprzedni failed wynik.
+Dowód: adaptive-ui-scope-production-types-20261003-v2.json w wizualizacjach
+wątku. React Doctor 0.9.12, scope changed vs HEAD: exit0, complete=true,
+14 źródeł (lint/AST, bez kompilacji testów), brak nowych diagnostyk; brak
+sieci i wysyłania telemetrii. Dowód: adaptive-ui-react-doctor-20261003.json.
+
+Generated OpenAPI JSON/types nadal nie zawiera nowych identity/pól
+parallel_execution/schematu telemetry. To blocker zgodności kontraktu,
+nie naprawiamy go ręcznie. Wymaga eksportu z nowego managed API.
+#213 nie zawiera późniejszych poprawek admission ani identity; przyszła
+kwalifikacja musi przypiąć nową kapsułę aktualnych źródeł. Nie wykonano
+serial/adaptive runtime, nowego browser proof ani pomiaru przyspieszenia.
+Pełny cel S00–S12 pozostaje aktywny; dwa punkty ±10 nie są pełną dyspersją.
+
+### Kontrakt tożsamości OpenAPI — 2026-10-03
+
+Odczyt kodu generatora utoipa 5.5.0 potwierdził, że `serde(default)` oraz
+`Option` domyślnie wyłączają wymagalność pola w schemacie. Dodano jawne
+`schema(required = true)` dla session_id/session_epoch/run_id zasobu
+StageExecutionResource; run_id pozostaje nullable i jest zawsze serializowane.
+Historyczny odczyt przez serde nadal akceptuje brakujące pola, natomiast żywe
+UI wymaga pełnej tożsamości. Przygotowano regresję schematu; nie kompilowano
+ani nie uruchamiano testów jednostkowych. Eksport z nowego produkcyjnego API
+oraz regeneracja klienta pozostają NOT VERIFIED; nie edytowano ręcznie
+wygenerowanych plików.
+
+### Warunek kwalifikacji runtime — 2026-10-03
+
+Lokalny commit c8394a502f4326f83808e9cd537fb717a5af6cd5 domyka pełny stos modalny CPU w operatorowym wrapperze i kontraktach receiptów; 67 lekkich kontroli PASS. Nie wdrożono obrazu. Adaptacyjny scheduler i ustawienia UI pozostają źródłowo przygotowane, bez dowodu działania nowych procesów, eksportu OpenAPI, browsera i przyspieszenia. Aktualny blocker wykonania: waiting_for_disk (6,656 GB, próg 8 GiB). CPU 90% pozostaje miękkim celem w alokacji Fullmaga, nie twardym limitem całego węzła.
+
+### Zachowanie pomiarów admission — 2026-10-03
+
+W raporcie adaptive znaleziono utratę danych: deduplikacja porównywała obciążenie CPU i RAM, lecz pomijała cpu_available_cores i worker_peak. Zmiana wolnej mocy w hierarchii cgroup albo nowy peak CPU/RSS mogła więc nie trafić do raportu, choć live callback dostawał próbkę. Wydzielono same_admission_state, który uwzględnia te wielkości; same timestampy nadal są deduplikowane, a limit 2048 zdarzeń pozostaje.
+
+Parser rustfmt PASS; przygotowano regression admission_deduplication_retains_free_capacity_and_worker_peak_changes (timestamp-only, free cores, pojawienie peak, zmiana CPU i RSS). Nie kompilowano ani nie uruchomiono testu Rust. Dowód source-change: adaptive-admission-report-dedup-20261003.json. Przyrost jest częścią niezakwalifikowanego pakietu adaptive, bez osobnego commita oderwanego od zależności. Runner nadal waiting_for_disk (6 649 659 392 B); nowe obliczenia i browser proof pozostają OPEN.
+
+### HPC: nieograniczony przodek cgroup — 2026-10-03
+
+Sampler przypisywał nieograniczonemu przodkowi pojemność leaf affinity i odejmował usage wszystkich jego potomków. Dla alokacji 4 CPU i 12 CPU zużytych przez obce zadania poza affinity dawało to fałszywe zero. Dokumentacja jądra potwierdza, że cpu.stat obejmuje potomków, a cpu.max=max nie jest skończonym limitem. Źródła teraz rozróżniają leaf accounting i przodków z finite quota; konkurencja na przydzielonych rdzeniach pozostaje mierzona przez proc/stat affinity. Wszystkie skończone limity CPU i limity pamięci pozostają obowiązujące. Historia usuniętej quota jest odrzucana; ponowne włączenie finite wymaga nowego okresu pomiaru.
+
+Parser Rust PASS; native regression przygotowana, bez kompilacji/runtime. Źródłowe review wcześniejszej poprawki deduplikacji raportu: bez P1/P2; rozszerzono test także o append, limit 2048, events_truncated i zachowanie pierwszego/najnowszego zdarzenia. Nowe review HPC trwa. Dowód: adaptive-hpc-cpu-scope-20261003.json. Zaktualizowano ADR 0034 zgodnie z semantyką kernel. Brak nowych wyników dyspersji; zdrowy runner nadal waiting_for_disk (6 644 613 120 B).
+
+### Review HPC/admission — 2026-10-03
+
+Niezależne review zakończone: brak P1/P2 dla selekcji domen CPU, zachowania finitequota i wszystkich limitów pamięci oraz resetu historii po zmianie quota. Potwierdzono też bezpośrednią regresję append_admission_event: deduplikacja, 2048 zdarzeń, events_truncated, first/latest. Dowód: adaptive-hpc-cpu-scope-20261003-reviewed.json. Nadal source-only: test Rust niekompilowany, nowy obraz, solver, serial/adaptive i GUI NOT VERIFIED.
+
+### Korekta pełnego budżetu puli — 2026-10-03
+
+W `AdaptiveAdmission::decide` historyczna reguła `active + floor(current_headroom / worker_peak)` pozwalała przyjmować dodatkowe procesy podczas niskiego chwilowego zużycia aktywnych workerów. Dodano równorzędny limit całej puli: `floor(cpu_target_cores / (peak_cpu * 1.10))` oraz `floor((memory_target_bytes - reserve_bytes) / (peak_rss * 1.25))`. Aktualny headroom i ograniczenia domen nadal obowiązują; nie odejmujemy niesynchronizowanych próbek własnego CPU/RSS od obciążenia hosta. Wyjątek jednego niepodzielnego workera na małym przydziale zachowuje wcześniejsze guardy presji. Zmniejszenie desired_workers nie zabija aktywnych punktów.
+
+Przykłady algebraiczne odtworzyły problem: 7 idle workerów przy przydziale 8 CPU i celu 90% mogło dopuścić ósmy mimo skalibrowanego kosztu 1.1 CPU; limit całej puli wynosi 6. Dla przydziału 16 GiB, celu 80%, rezerwy 1 GiB i peak envelope 5 GiB limit wynosi 2, choć chwilowe zwolnienie stron dopuszczało trzeci proces. To kontrola przykładów, nie wykonanie regulatora Rust.
+
+Dodano dwie regresje Rust `idle_active_workers_cannot_overcommit_the_calibrated_cpu_envelope` i `idle_active_workers_cannot_overcommit_the_calibrated_memory_envelope`. `rustfmt --check` PASS. Regresje pozostają nieskompilowane zgodnie z AGENTS.md; managed runtime/parity/browser nadal NOT VERIFIED. Odczyt runnera z 2026-10-03 01:44 UTC: worker_alive=true, accepting_jobs=true, active_jobs=[], waiting_for_disk, 6 350 381 056 B wolnych poniżej 8 GiB. Nie zgłoszono kolejnego starego buildu ani nie zmieniono kolejki. Nowa poprawka wymaga kapsuły po wdrożeniu kompletnego stosu CPU.
+
+
+### Bieżący szczyt aktywnego procesu — 2026-10-03
+
+Znaleziono opóźnienie adaptacji: `record_peak` zbierał CPU/RSS aktywnych workerów, lecz envelope regulatora i raport `worker_peak` były aktualizowane dopiero po zakończeniu procesu. Nowy punkt k o większym workspace mógł więc dopuścić kolejne zadanie z kosztem starego punktu kalibracyjnego. Wspólny `observe_admission_peak` aktualizuje oba stany bezpośrednio po poprawnym pomiarze procesu, przed reapingiem i kolejną decyzją. Scalenie końcowe zachowuje pomiar terminalny i jawny fallback CPU krótkiego procesu. Pomiar live nie zatwierdza kalibracji: pierwszy punkt nadal musi zakończyć się poprawnie.
+
+Przygotowano regresję `live_worker_peak_closes_admission_before_completion_and_keeps_calibration_closed`: większy live peak zamyka nowe admission przed zakończeniem, późniejsza bezczynność nie obniża szczytu, a NaN nie zmienia raportu. Parser Rust PASS, bez kompilowania testów jednostkowych. Kontrole interpretowane Python: 68 PASS. Hashe czterech źródeł UI są zgodne z wcześniejszym produkcyjnym TypeScript PASS; nie ponawiano niezmienionej kontroli.
+
+Odczyt runnera 2026-10-03: zdrowy worker, 17 916 764 160 B wolnych, obcy build #212 running. Poprzedni blocker miejsca ustąpił; aktualizacja obrazu czeka na pusty aktywny slot. Nie wdrożono nowego obrazu, nie wygenerowano OpenAPI i nie wykonano serial/adaptive parity ani browser proof. Źródła ustawień CPU 90%, RAM 80%, rezerwy, liczby procesów i wątków są przygotowane, ale funkcja nie jest jeszcze zakwalifikowana runtime. Dowód: `adaptive-live-peak-source-20261003.json` w wizualizacjach wątku.
+
+
+### Domknięcie review zasobów — 2026-10-03
+
+Niezależne review zaakceptowało live peak, rozdzielenie domen CPU i limity całej puli. Wskazało dwa P2, które poprawiono:
+
+- Dodatni, ale krótki pomiar CPU nie wystarcza już do obniżenia kosztu workera. Prywatny `WorkerCpuCoverage` wymaga co najmniej trzech poprawnych interwałów o łącznej długości co najmniej jednej sekundy; pojedynczy interwał musi być dodatni i nie dłuższy niż jedna sekunda. Pierwszy odczyt liczników ma interval=None. Przy braku takiego pokrycia koszt obejmuje cały rzeczywisty resolved_threads oraz pomiar terminalny. To polityka jakości obserwacji schedulera, nie tolerancja solvera ani gwarancja wykrycia krótszych pików. Parametry CPU 90% pozostają miękkim celem.
+- `execute` porównuje pełną politykę każdego requestu z polityką poola przed utworzeniem journala, katalogów i procesów. Różny mode, CPU/RAM, rezerwa, limit procesów lub threads powoduje błąd zamiast rozbieżnego raportu i wykonania.
+
+Raport puli ma `cpu_observations` dla każdego zakończonego punktu: sample_index, valid_intervals, observed_seconds, demand_source, sampled_peak_cpu_cores, terminal_average_cpu_cores, resolved_threads i demand_cpu_cores. Odnotowuje też zespół każdego workera w thread_bindings. Zespół może być zmniejszony przy wzroście puli; koszt wyznaczony z pierwszego punktu jest konserwatywnym envelope dla późniejszych mniejszych zespołów. Zmiana nie dodaje endpointu ani nie zmienia fizyki/IR.
+
+Przygotowano regresje krótkiego dodatniego pomiaru, niewłaściwej długości interwału, warunku pokrycia i mismatch polityki. Parsowanie trzech plików Rust PASS; testy Rust pozostają nieskompilowane. Re-review nie wykryło P1/P2 w poprawkach. Hipotetyczny finding dotyczący null został wycofany: rzeczywisty typed SceneStudyState i adapter nie mają wskazanego surowego bypassu. Nie wprowadzono na tej podstawie zbędnej migracji API. Runtime/build, serial/adaptive parity, eksport OpenAPI i browser pozostają OPEN.
+
+
+### Adaptive: aktualny build i próba porównawcza — 2026-10-03
+
+Próba `de-smoke-parallel-probe` nie jest już związana z historycznym jobem #211.
+Wymaga jawnego `--probe-build-source-digest <SHA256>` zgodnego z wybranym,
+zweryfikowanym managed kontekstem, profilu CPU `fem-cpu-slepc-runtime-v2`
+i obecności sześciu źródeł adaptive w niezmiennej kapsule. Oba uruchomienia
+serial/adaptive muszą wskazać ten sam job i digest. Model, siatka, equilibrium,
+manifest wejściowy i polityka próby zachowują dotychczasowe hashe i parametry.
+Historyczny commit modelu jest provenance wejścia, nie wersją runtime.
+
+Naprawiono też brakujący import `PARALLEL_PROBE_VECTORS_RAD_PER_M`: jego użycie
+w walidacji po zakończeniu solvera powodowałoby NameError. `_parallel_probe_root`
+używa kanonicznego `fullmag_storage.validate_path`, który odrzuca przekierowanie
+przez symlink/junction, także w pośrednim katalogu. Regresja symuluje przekierowany
+ancestor; nie jest dowodem utworzenia rzeczywistego Windows junction.
+
+Kontrole interpretowane: 13 testów probe + 36 drivera PASS. Zachowany aktualny
+wynik 58 testów walidatora wierszy PASS; jego źródło i zależności walidacyjne
+nie zmieniły się po tym wykonaniu. Razem 107 kontroli. Próba unittest dla pliku
+pytest zgłosiła NO TESTS RAN; następnie właściwe pytest wykonało wszystkie 58.
+Review nie wykryło P1; finding P2 dotyczący storage naprawiono. Żaden test
+jednostkowy Rust/native/React nie został skompilowany.
+
+#212 zakończył się `succeeded`, exit0. Wstrzymano admission na czas autoryzowanej
+aktualizacji obrazu i anulowano wyłącznie własny nieaktualny #213; journal
+potwierdza `cancelled`, exit143. Dane obu zadań zachowane. Przed budową obrazu
+potwierdzono brak aktywnych jobów, brak worker_error i 14 364 770 304 B wolnych.
+Worker nie działa podczas świadomej pauzy; nie oznaczamy tego jako worker_alive PASS.
+
+Uruchomiono `just runner-build-image` z CPU_MFEM_ONLY=1. Bazowy obraz:
+`sha256:8a508319a68c4116da81b745fdd1b084015b665d92b36b2241e1e245b5febf89`,
+lokalny alias `fullmag/toolchain-pinned:8a508319a68c-adaptive-20261003`.
+Docelowy tag: `fullmag/local-runner-build:slepc-cpu-complete-adaptive-20261003`.
+Dwie próby zakończyły się przed kompilacją: BuildKit nie obsługuje bridge jako
+build network, a surowe sha256 w FROM interpretował jako repozytorium.
+Właściwa próba używa network=default i zweryfikowanego lokalnego aliasu.
+Build obrazu trwa (sesja narzędzia 82647); hypre CPU rozpoczął kompilację.
+Nie ma jeszcze końcowego ID/receiptu obrazu ani aktualnego builda Fullmaga.
+
+Następne kroki: odczytać terminalny wynik budowy obrazu, zweryfikować immutable ID,
+skonfigurować runtime-v2 zachowując pozostałe profile, wznowić FIFO i zgłosić
+aktualny snapshot ze wszystkimi wymaganymi untracked wejściami. Następnie
+wyeksportować OpenAPI, zregenerować klienta, uruchomić identyczne wejścia
+serial/adaptive i sprawdzić wyniki, raport procesów, faktyczną równoległość,
+zużycie zasobów oraz UI. Kampanijne skrypty plan-only w storage nadal wymagają
+aktualizacji wywołania (digest zamiast #211); nie wolno traktować ich jako wykonanego runtime.
+Managed runtime, browser proof, przyspieszenie i pełny cel S00–S12 pozostają OPEN.
+
+Re-review poprawki ścieżki: P2 zamknięte, brak nowych P1/P2. Budowa obrazu przeszła hypre i libCEED; konfiguracja PETSc zakończona, trwa kompilacja jego biblioteki. Sesja 82647 pozostaje aktywna; nie ma jeszcze końcowego sukcesu obrazu ani nowego runtime Fullmaga.
+
+## Adaptacyjne wykonanie — wdrożenie pary obrazów, 2026-10-03
+
+Obraz CPU `sha256:7139ca2622b622ca934e53a573372b41c3c2c48b7ba67bc128883b36eb541d6e` zbudowano z kodem po poprawce prefix-based SLEPc (lokalny commit `fc3d8246db2f3f77f830d97a95197222b0a2de02`). Koordynator `sha256:9923f33b147b52b6534a9f2161bf4a00c4b138679575035676bffb52512da0db` zachowuje guard ograniczonych instancji browser oraz pozostałe profile; guard/executor: 26 interpretowanych kontroli PASS. Wymianę wykonano przy pustym aktywnym slocie i wstrzymanym przyjmowaniu. FIFO wznowiono; nie zmieniono kolejności obcych zadań. Runtime-v2 zachował limit buildu 2 CPU/8 GiB.
+
+Nowy build **#216**: `a1d3dfd0c1914c5bb63d0179c113d01b`, digest kapsuły `8dda784a98471ee52e4e09b6cabb00a80bf5eb565c30673f0dd9bbe98b49f960`, snapshot HEAD `fc3d8246db2f3f77f830d97a95197222b0a2de02` z bieżącymi zmianami i jawnymi nowymi źródłami adaptive. Stan przy przyjęciu: queued. Recepta próby wymaga teraz jawnego job_id oraz source_digest zamiast starego nieudanego #211; probe/driver: 49 interpretowanych kontroli PASS.
+
+Budowa obrazu nie dowodzi jeszcze działania Fullmaga ani scheduler parity. Następnie: terminalny receipt #216 i CPU dependency closure, eksport OpenAPI/client, rzeczywiste serial/adaptive z tymi samymi wejściami, raport puli z dowodem równoległości i obciążenia, managed UI/browser. Brak nowych punktów naukowych; pełne S00–S12 pozostają otwarte. Log obrazu i stan przejścia zapisano w wizualizacjach wątku.
+
+## Kontrola raportu adaptacyjnego — checkpoint lokalny, 2026-10-03
+
+Commit `51da8c43b0e3e3f5fc375d269ca9963ac240847b` dodaje wyłącznie interpretowany walidator rzeczywistego ProcessPoolReportV1 i admission journal oraz jego regresje (12 PASS). Kontrola obejmuje bounded JSON, politykę, bindingi, CPU coverage/envelope, zgodność resolved threads i status wykonania. Timestamped active_workers≥2 dowodzi wyłącznie chwilowej współaktywności procesów schedulera; nie dowodzi overlap EPSSolve ani speedup. Bezpośredni raport nie zawiera terminal_state, więc wymaga osobnego powiązania z zakończonym execution — nadal OPEN. Serial może nie emitować raportu puli; porównanie częstotliwości/mesh/equilibrium korzysta z rzeczywistych artefaktów benchmarku, bez syntetycznego serial reportu.
+
+#216 pozostaje queued za #214/#215 według ostatniego odczytu. Nowy commit jest hostowym narzędziem analizy po przechwyceniu kapsuły; nie zmienia przypiętego HEAD/digestu ani źródeł natywnego buildu #216. Brak nowych punktów solvera, kwalifikacji adaptive i browser proof. Wykryty HTTP500 pełnej historii dotyczy starszego /jobs; stronicowane /api/v1/jobs działa. Klient CLI pełnej historii wymaga osobnej korekty, bez zwiększania limitów odpowiedzi.
+
+
+### 2026-10-03 — priorytet użytkownika: adaptacyjna kampania i rzeczywiste punkty
+
+Brak nowych wyników: na dotychczasowym wykresie pozostają dwa zaakceptowane punkty ±10 rad/µm. Przygotowany backend puli nie jest jeszcze dowodem równoległego wykonania. Dotychczasowy zewnętrzny kontroler signed15 wykonywał pojedyncze piloty seryjnie; został zastąpiony nową trasą jednej grupowanej ścieżki.
+
+Model `71ba0d18225ffcc83f7f18e676de8dc051e87fd1` definiuje 15 punktów DE: −25, −20, −15, −10, −7, −5, −2, 0, 2, 5, 7, 10, 15, 20, 25 rad/µm. Jawne `--parallel-mode adaptive` uruchamia publiczną pulę; limit CPU 90%, RAM 80%, rezerwa 1 GiB, jeden wątek na proces i dobór liczby procesów przez pomiary. Sterownik wiąże wersję modelu i digest buildu; wynik ma zawierać rzeczywisty raport puli z SHA256. Nie rozluźniono residualu 10⁻⁸ ani kontroli demag przy Gamma. Lekkie kontrole: 52 sterownika/probe, 4 modelu oraz 59 kontroli wierszy PASS.
+
+Build #216 (`a1d3dfd0c1914c5bb63d0179c113d01b`) jest aktywny; jego kontener rozpoczął pracę o 04:51 UTC. Jednorazowy kontroler (sesja 34636) oczekuje na sukces i weryfikację receipt; następnie uruchomi `signed15-adaptive-v1` w kanonicznym storage. Pierwsza próba kontrolera zakończyła się przed wywołaniem solvera; poprawiona v2 sprawdza stan przez API i nie powiela buildu. Symulacja i nowy wykres pozostają OPEN.
+
+Kontynuacja: terminalny build → rzeczywiste 15 próbek → kontrola artefaktów i pomiarów puli → wykres scatter oraz analityka → oddzielny parytet serial/adaptive i dowód GUI. S09/2.5D zachowano jako WIP poza kapsułą #216; parser/review nie dowodzą kompilacji ani runtime. Pozostałe S00–S12, zbieżność, COMSOL, GPU i integracja PR #97 pozostają otwarte.
+
+
+## Checkpoint wykonania — 2026-10-03, 05:40 UTC
+
+Ten wpis zastępuje wcześniejsze deklaracje bieżącego stanu #216. Pełny cel S00–S12 pozostaje otwarty.
+
+- #216 zakończył się failed/exit 2: E0063, brak cpu_observations w FEM serial_bootstrap_only. Dodano pustą listę, bo ta gałąź nie uruchamia procesu potomnego. Parser i niezależne review PASS; nowa kompilacja nadal OPEN.
+- Aktualny snapshot #219: 358349e2f1d74e6c9c4cb6af148d47b0, digest 8bdb22ee937e3c16bdebd080c0239296da03d8834cb42fea461ee5b709e34267, profil fem-cpu-slepc-runtime-v2, model commit 71ba0d18225ffcc83f7f18e676de8dc051e87fd1. Job queued; nie wystartowała symulacja.
+- Współdzielony runner został wymieniony zewnętrznie: obecny kontener 7f20873de2b1e21335b7399afa8436ce6ed0e0503dcd69d2fa366917fa3bdef2, obraz sha256:1aa31b600114e35dac112821bfe0ee1317a00641077bf4ecee546e0747550665. Health: worker_alive=true, accepting_jobs=true, worker_error=null, brak aktywnych jobów, waiting_for_disk; wolne 8 080 265 216 B, wymagane co najmniej 8 589 934 592 B. Nie zmieniono konfiguracji ani FIFO.
+- Obserwator #219 v2 zakończył się przy WinError 10061 podczas wymiany runnera. V3 ponawia wyłącznie odczyty po błędach transportu; nie ponawia błędów autoryzacji ani nie zgłasza/anuluje jobów. Cztery regresje PASS. Aktualny uchwyt obserwatora: 75831; renderer oczekujący na rzeczywisty wynik: 11268.
+- Naprawiono model_source_commit (rzeczywisty klucz commit) oraz walidację orientation/sampling/k_vectors dla signed-fifteen. Kontrole interpretowane driver/probe/rows/model/plot/parity: 131 PASS +45 subtests; pomocnicza obsługa kontenera: 22 PASS +15 subtests. To dowody źródeł, nie wykonania solvera. Testów jednostkowych Rust/native/React nie kompilowano.
+- Generator scripts/plot_signed_de_campaign.py zapisuje PNG/PDF/receipt dopiero po zaakceptowaniu 15 rzeczywistych wierszy; bez lustrzanego kopiowania FEM lub interpolacji. Jest przygotowany, ale nowy wykres nie powstał. Nadal dostępne są wyłącznie dwa wcześniejsze punkty ±10 rad/µm.
+
+Następna sekwencja: zwolnienie miejsca przez operatora → terminalny sukces i atestacja #219 → jedna adaptacyjna kampania 15 punktów → rzeczywisty raport puli i artefakty solvera → wykres i kontrola renderu → parytet serial/adaptive oraz GUI. Zbieżności, COMSOL, GPU, S09/2.5D i integracja PR #97 pozostają OPEN. Nie usunięto żadnych danych; operator został poproszony o zwolnienie miejsca.
+
+
+Checkpoint źródeł: commit `c1ec5c797730430d95738912260017cc5417f9d7` obejmuje 11 skryptów/testów kampanii, bound receipt, serial/adaptive parity i generatora. Review korekt P1/P2 oraz helpera cleanup PASS. 153 testy interpretowane +60 subtests PASS; kompilacji unit tests nie wykonywano. Commit nie zastępuje wykonania #219 i nie zmienia jego modelu/digestu. Nie wykonano push/merge; wymagane bramki runtime/UI/nauki pozostają otwarte.

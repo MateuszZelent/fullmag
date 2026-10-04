@@ -1492,6 +1492,8 @@ B_{e,a}=\gamma_{104}
  |H^{\mathrm{reconstructed}}_{e,a}|,s_0\right)+B_{e,a}.
 ```
 
+| Symbol | Meaning | SI unit |
+|---|---|---|
 | $u=2^{-53}$ | IEEE-754 binary64 unit roundoff | $1$ |
 | $\gamma_n=nu/(1-nu)$ | standard finite-operation forward-error factor | $1$ |
 | $B_{e,a}$ | local P1 gradient reconstruction roundoff bound | $\mathrm{A\,m^{-1}}$ |
@@ -1764,6 +1766,7 @@ API Python, ProblemIR i wire artefaktów nie otrzymują nowych pól ani norm. Im
 | source-modal-interval-metric | crates/fullmag-runner/src/fem/eigen_mass_metric.rs + ModalMassMetric | Osobne dense/sparse iteratory bez materializacji | FEM postprocess | source-only; runtime NOT VERIFIED |
 | source-modal-interval-oracle | scripts/test_modal_norm_interval_source.py + class ModalNormIntervalOracleTests | Dokładne rational counterexamples i enclosure | algebraic verification | 9 interpretowanych kontroli PASS; nie jest runtime Rust |
 
+
 (modal-equilibrium-field-replay-domain)=
 ## Replay pola równowagi: dziedzina magnetyczna i airbox
 
@@ -1830,6 +1833,7 @@ Python `equilibrium_source="artifact"` / `equilibrium_artifact` oraz ProblemIR `
 | source-static-demag-replay-preimage | crates/fullmag-runner/src/fem/eigen_shared_domain.rs + shared_domain_static_demag_signature | dokładny persisted preimage; odrębna kontrola numeryczna w build_shared_domain_linearization_state |
 
 Dodatkowa kontrola fail-closed: `max_vector_field_difference` i `max_scalar_field_difference` odrzucają również puste, różnej długości oraz nieskończone/NaN tablice po obu stronach porównania, na całej domenie. Zapobiega to pominięciu NaN przez `f64::max` podczas replay demag/phi0. Piąta przygotowana regresja obejmuje NaN na drugim węźle, obie strony, puste/krótsze tablice i nieskończoność; niekompilowana zgodnie z zakazem.
+
 
 ## Spójna stała przenikalności w shared-domain FEM CPU
 

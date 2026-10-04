@@ -1,3 +1,31 @@
+<!-- integration-checkpoint-20261004 -->
+## Integracja zmian do mastera — checkpoint 2026-10-04
+
+Użytkownik zlecił zapis i push wszystkich pozostałych zmian tego worktree,
+pobranie najnowszego origin/master, rozwiązanie konfliktów oraz integrację
+PR97 do mastera. To osobny etap Git; cały cel S00–S12 nadal OPEN.
+Historyczne checkpointy poniżej opisują stan w chwili odczytu i nie są
+bieżącą listą procesów, jobów ani niewypchniętych commitów.
+
+Aktualny dowód naukowy: 15 rzeczywistych punktów DE (14 nonzero z #228,
+Gamma selected-only z #227) oraz dwa izolowane refinements air1,15.
+Wszystkie raw wyniki i receipt-y zachowano. Zbieżność, Gamma full window,
+wspólny signed15/serial-adaptive parity i zasoby, GUI/A1-COMSOL/GPU/S09
+nadal wymagają osobnych dowodów. Integracja źródeł nie nadaje tym bramkom PASS.
+
+Przed implementacją waveguide registry-binding odkryto brak kontroli
+pustych/duplikowanych nazw materiałów i region_id oraz dangling owner w
+walidatorze V04. Nota0104/material-regions-v04-registry-identities zapisuje
+istniejące wymagania; poprawka guardów NIE jest zaimplementowana i została
+przesunięta zgodnie z nowym priorytetem użytkownika. Nie aktywowano providera.
+
+Kontrole dokumentacji: 35 interpretowanych PASS. Zakaz kompilowania unit
+tests pozostaje w mocy; nie zgłaszamy takich zadań. Aktualny runner jest
+zdrowy/idle, bez aktywnych jobów, około1,80GiB wolnego przy progu8GiB.
+Nearest runtime-v2 i przygotowane air1,075 triale nie są jeszcze wykonane.
+Audyt całego storage wskazał dwa stare incremental API do potencjalnego
+zwolnienia21,84GiB; dane nie zostały usunięte.
+
 <!-- nearest-floquet-consumer-source-checkpoint-20261004 -->
 ## S05 — konsument nearest i jawny trial GMRES/FGMRES
 
@@ -270,7 +298,181 @@ Odczyt 2026-10-03T23:56:09.765678+00:00. Ten checkpoint zastępuje niższe dekla
 
 Dowód failure: `C:\Users\Mateusz\.codex\visualizations\2026\09\14\01a09ee1-29e6-7d51-98f0-082c5539a0d6\gamma-error-contract\signed15-job223-failure.json` oraz oryginalny run-result.json i runtime.log w kanonicznym storage. Dane zachowano.
 
-## Aktualny stan wykonania — 2026-10-03, po buildach #203–#213
+<!-- modal-progress-api-generation-checkpoint -->
+## Aktualny checkpoint — telemetria solvera na remote; klient API wygenerowany
+
+Odczyt 2026-10-03T23:19:02.439990+00:00. Commit telemetrii i potwierdzony remote: `fa41f067e1ab88a674066672073f49a1b3074882`. Ten checkpoint zastępuje niższe bieżące deklaracje o braku generacji API i review telemetry, nie historyczne dowody runów.
+
+- Źródłowo rozdzielono surową normę KSP od fizycznego względnego residualu modu, z jawnymi role/type/linear iteration. Callback tagged `ksp_norm` publikuje physical residual i outer EPS iteration jako null. Nieznana/niefinity/ujemna norma nie staje się zerowym residualem. Konsument i obie ścieżki CLI zachowują osobne EPS iteration oraz subwindow index; cancellation i kryterium stop pozostają niezmienione.
+- Dziewięć plików stage'owano selektywnie względem zachowanych .before. Source review przyrostu nie znalazło nowych P1/P2; parser czterech staged plików Rust, parser JSON, scoped whitespace i nota/mapa naukowa PASS. Przygotowane regresje C++/Rust niekompilowane i nieuruchomione zgodnie z zakazem. Managed callback/API/UI tej poprawki NOT VERIFIED; #223 jej nie zawiera.
+- Nowa konkretna pozycja P2: K0 po niezerowym `EPSSolve` może odpytywać EPS/ST/KSP po błędzie, wykonywać teardown lifetime-sensitive grafu i kontynuować kolejne podokna. Dotychczasowy guard nie zapewnia pełnej retencji: `ProductionCpuWindowOperatorScope` i owned scope bezwarunkowo niszczą kontekst. To istniejący problem poza commitem telemetry; historyczne „review bez P1/P2” nie zamyka tej nowej pozycji. Naprawa musi najpierw rozstrzygnąć bezpieczne ownership/retention całego grafu, następnie ominąć gettery po twardym błędzie, zatrzymać pozostałe podokna, zachować pierwotny kod i cancellation oraz przygotować regression failure-path. Nie wystarczy sam warunek wokół query ani wyłączenie EPSDestroy.
+- Generacja OpenAPI jest wykonana w worktree: 28 zmienionych plików API/authoring/UI porównano byte-identical z kapsułą #223; eksport z rzeczywistego fullmag-api SHA `8bfc2260e2638b80d0c93add6e03b053d3a3c2bdb80bf88862e22d15f110fd46` zawiera wymagane session_id/session_epoch/run_id i parallel execution schemas. Zastosowano istniejące generatory, bez ręcznej edycji schematu, cargo ani instalacji. JSON jest semantycznie równy eksportowi po kanonicznej normalizacji build identity. API hygiene PASS.
+- Produkcyjne typy UI: TypeScript5.8.3/noEmit PASS, 896 wejść/895 plików aplikacji, zero test/spec, stabilne hashe. Pierwsza kontrola zatrzymała się na brakującej ścieżce deklaracji react-dom w readonly SDK; poprawiono tylko konfigurację narzędzia walidacyjnego. Wygenerowane pliki pozostają WIP razem z producentami adaptive/API, aby nie commitować niezgodnego osobnego kontraktu. To nie dowód browser/WebGL ani odtworzenia modelu.
+- Docker i runner zdrowe po restarcie: worker_alive/accepting_jobs true, worker_error null. Ten sam serial signed15 działa, kontroler24460/obserwator2543, brak finalnego receipt i nowych zaakceptowanych punktów. Wcześniejsze cztery unikalne −25,−10,+10,+25 rad/µm pozostają jedynymi zaakceptowanymi danymi. Ostatni log Γ/refinement21/50 zawiera normy wewnętrzne; nie są pełnym residualem ani dowodem stagnacji. Nie restartowano solvera, nie uruchomiono nowego ciężkiego buildu przy aktywnym lease i nie usunięto danych.
+- Następne konkretne podzadania: pełny K0 hard-error lifetime fix; dopuszczenie kontrolowanego standalone Γ common tuning z osobną walidacją effective query (obecny driver wymaga niezerowego k dla trial), z zachowaniem rygorystycznego istniejącego Floquet true-residual gate; final signed15/postsolve/wykres; runtime-v2 dla aktualnego spójnego pakietu przez FIFO po zwolnieniu lease. Następnie serial/adaptive parity i pomiar zasobów. Całe S00–S12, UI/WebGL/FMS, COMSOL A1, DE/BV/zbieżność, S09/GPU i integracja PR97 pozostają OPEN.
+
+Dowody: `C:\Users\Mateusz\.codex\visualizations\2026\09\14\01a09ee1-29e6-7d51-98f0-082c5539a0d6\modal-progress-semantics\telemetry-review.md`, `C:\Users\Mateusz\.codex\visualizations\2026\09\14\01a09ee1-29e6-7d51-98f0-082c5539a0d6\modal-progress-semantics\staged-source-verification.json`, `C:\Users\Mateusz\.codex\visualizations\2026\09\14\01a09ee1-29e6-7d51-98f0-082c5539a0d6\modal-progress-semantics\generated-api-job223-receipt.json`, `C:\Users\Mateusz\.codex\visualizations\2026\09\14\01a09ee1-29e6-7d51-98f0-082c5539a0d6\modal-progress-semantics\generated-api-production-types-v2.json`, `C:\Users\Mateusz\.codex\visualizations\2026\09\14\01a09ee1-29e6-7d51-98f0-082c5539a0d6\modal-progress-semantics\progress.json`. Pięć źródeł aktywnego obserwatora wykresu pozostaje niezmienionych.
+
+<!-- gamma-common-krylov-source-checkpoint -->
+## Aktualny checkpoint — wspólne strojenie Γ/Floquet zapisane na remote
+
+Odczyt 2026-10-03T22:30:37.416017+00:00; commit źródeł i potwierdzony remote `991f24cbe0eaf72c29fa9e52f3e2a8537bb874b7`.
+
+- Zrealizowano źródłowo wspólny resolver czterech `FULLMAG_MODAL_*` dla FEM CPU K0 i Floquet. Legacy `FULLMAG_FLOQUET_*` pozostają zgodnymi aliasami tylko w Floquet. Konflikty i niepoprawne tokeny są odrzucane; dotychczasowe defaulty obu adapterów zachowano.
+- Naprawiono K0: jawny dodatni limit iteracji liniowych nie jest już podnoszony do 1000 w ST ani korekcji Ritz. Budżety sprawdza się przed setup native względem `PetscInt`. K0 zapisuje rzeczywiście odczytane ustawienia EPS/KSP przed i po EPS oraz w każdym subwindow; nierozwiązany limit EPS jest null. Nowy before/after snapshot dotyczy K0; Floquet zachowuje wcześniejsze pre-query.
+- Driver eksportuje wspólne parametry razem ze zgodnymi aliasami i zapisuje requested tuning z rzeczywistego polecenia. Publiczny residual acceptance, operator, demag i harmonogram okna pozostają bez zmiany. Poprawka nie stanowi kwalifikacji fizyki ani GPU.
+- Weryfikacja: 45 interpretowanych testów drivera PASS; 35 kontroli walidatora dokumentacji PASS; nota i mapa źródeł PASS; scoped whitespace PASS; niezależne native source review bez otwartych P1/P2. Przygotowane testy C++ nie były kompilowane zgodnie z zakazem. Managed runtime tej poprawki NOT VERIFIED: #223 jest starszy.
+- Kontroler24460 i obserwator2543 pozostają żywe; ten sam kontener signed15 jest running. Ostatni log dotyczy Γ/refinement21/50 z aktywnymi residualami wewnętrznymi. Siedem wcześniejszych zwrotów native nie jest dowodem akceptacji artefaktów. Nowych zaakceptowanych punktów0; wcześniejsze cztery unikalne ±10/±25 zachowano.
+- Następne kroki: dokończyć istniejący sweep i ścisłą walidację/wykres; po zwolnieniu aktywnych zasobów zbudować aktualny pakiet runtime-v2 przez FIFO; potwierdzić konfigurację i pełne residuale Γ/nonzero-k; następnie serial/adaptive parity i zasoby. Telemetria źródła residualu i rozdzielenie shift index/EPS iteration pozostają OPEN. S00–S12, UI/WebGL/FMS, COMSOL A1, DE/BV/zbieżność, S09/GPU i integracja PR97 nadal OPEN.
+
+Dowody: `C:\Users\Mateusz\.codex\visualizations\2026\09\14\01a09ee1-29e6-7d51-98f0-082c5539a0d6\gamma-tuning-fix\native-review.md`, `C:\Users\Mateusz\.codex\visualizations\2026\09\14\01a09ee1-29e6-7d51-98f0-082c5539a0d6\gamma-tuning-fix\progress.json`; pięć źródeł obserwatora wykresu pozostaje niezmienionych.
+
+<!-- checkpoint-attempt-roots-review -->
+## Aktualny checkpoint — korzeń i ponowienia checkpointów; sweep nadal trwa
+
+Odczyt 2026-10-03T21:53:52.227366+00:00; HEAD `c2fc778d9ccebee96244813fea8f792e04e68580`. Ten blok aktualizuje stan źródeł, nie kwalifikuje runtime ani nauki.
+
+- Naprawiono źródłowo dwa P2: względny output root jest rozwiązywany i sprawdzany przed pierwszym native solve; każda próba dostaje świeży exclusive namespace zachowujący wcześniejsze checkpointy. Symlinki/reparse są odrzucane także przed normalizacją parent traversal. Bezpośredni writer i manifest v1 pozostają zgodne z poprzednim konsumentem.
+- Helper oraz instrukcja stanowią osobny dwup­likowy commit `c2fc778d9ccebee96244813fea8f792e04e68580`, potwierdzony na remote. Hooki serial/bootstrap pozostają w zależnym dirty pakiecie adaptive; bieżący #223 nie zawiera helpera. Parser/rustfmt i scoped whitespace PASS; niezależne review bez nowych P1/P2. Sześć dodatkowych regresji Rust przygotowano, bez kompilacji zgodnie z zakazem. Rzeczywiste IO na managed mount, Windows reparse, przerwany sweep i integracja hooków NOT VERIFIED.
+- Publiczny serial signed15 jest nadal uruchomiony (kontroler24460, ten sam kontener `fullmag-dispersion-7e6eb49e8c63cff21bd4883a93929fcf`). Log odnotował siedem zwrotów punktowych, ale finalny receipt i postsolve nie powstały: nowych zaakceptowanych punktów0. Dotychczasowe cztery unikalne ±10/±25 pozostają jedynymi zaakceptowanymi danymi. Obserwator2543 wygeneruje wykres dopiero po ścisłej walidacji.
+- Γ poprawnie redukuje się do osobnego solvera K0; diagnostyczne ustawienia `FULLMAG_FLOQUET_*` nie obejmują tej gałęzi. Z trace źródeł #223: EPS1e-11/max2000; ST GMRES, rtol1e-13, restart do256, max1000; pełny residual acceptance nadal1e-8. Okno K0 obejmuje50 subwindows (16base+34refinement). To rozpoznana różnica konfiguracji i kosztu, a nie dowód błędnej fizyki. Następne podpunkty: zapisać effective tuning per sample; uzgodnić kontrolowane parametry Γ/nonzero-k bez osłabiania residualu ani kompletności okna; sprawdzić respektowanie jawnego `max_linear_iterations` przez obecne `max(1000, requested)`; oznaczyć źródło residualu/typ KSP w telemetrii i oddzielić indeks subwindow od liczby iteracji. Trace: `gamma-window-route-trace.md` w katalogu wizualizacji tego wątku.
+- W porównaniu z kapsułą #223 28 sprawdzonych plików core jest byte-identical, a pięć różni się; ten pomiar nie dowodzi zbudowania nowych zmian. Nowy managed runtime build jest potrzebny dla aktualnego pakietu i poprawki replay; nie uruchomiono równoległego ciężkiego buildu przy aktywnym sweepie.
+- Całe S00–S12, serial/adaptive parity, API/UI/WebGL, COMSOL A1, zbieżność, S09/GPU i integracja PR97 pozostają OPEN. Szczegóły: `C:\Users\Mateusz\.codex\visualizations\2026\09\14\01a09ee1-29e6-7d51-98f0-082c5539a0d6\checkpoint-attempt-root-fix\progress.json` oraz review `helper-review.md`.
+
+<!-- signed15-serial-after-operator-docker-restart -->
+## Aktualny checkpoint — Docker odzyskany, serial signed15 rzeczywiście uruchomiony
+
+Odczyt 2026-10-03T21:14:03.082289+00:00; zastępuje niższe deklaracje bieżącego stanu infrastruktury.
+
+- Użytkownik zrestartował Docker Desktop. Silnik odpowiada; istniejący wspólny runner jest zdrowy, bez błędu wykonawcy i bez aktywnego joba builda. Ten sam #224 został uzgodniony przez runner jako failed/exit2. Nie zmieniono ręcznie kolejki ani nie zlecono duplikatu buildu.
+- Ponownie zweryfikowano terminalny sukces #223, kapsułę źródeł i closure artefaktów FEM CPU double/SLEPc. Publiczny managed driver uruchomił jeden serial Relax→Eigen KPath z modelu `71ba0d18225ffcc83f7f18e676de8dc051e87fd1`. Potwierdzono running kontenera `fullmag-dispersion-7e6eb49e8c63cff21bd4883a93929fcf` i proces fullmag-bin; kontroler24460. To start solvera, nie akceptacja wyników.
+- Zakres15: −25,−20,−15,−10,−7,−5,−2,0,+2,+5,+7,+10,+15,+20,+25 rad/µm; L2/t3, full demag, EPS/KSP1e-9, FGMRES restart8, okno8.5–16GHz. Artefakty: `C:\git\fullmag\storage\runs\eigensolve-dispersion-plan-20260-c5dfad6d7f548079\scientific-batches\nonzero-k-validation\65b2729aeb5245c3beb38dae0a88c71b\signed15-fgmres-serial-job223-v1`. Serial zachowuje bezpośredni certified Relax handoff; poprawka replay gałęzi Artifact wymaga odrębnego nowego buildu i parity.
+- Dotychczasowe cztery zaakceptowane unikalne ±10/±25 pozostają jedynym wynikiem. Nowych0 w chwili checkpointu. Oczekujemy zakończenia15 i walidacji residual/Floquet/demag; wykres będzie zawierał wyłącznie rzeczywiste zaakceptowane punkty.
+- W dirty worktree naprawiono publiczny eksport polityki: błędne override nie mogą nadpisać skryptu, explicit null przywraca domyślne serial. Cztery nowe regresje i cztery związane kontrole Pythona PASS. To dowód źródeł, nie runtime adaptive ani GUI; poprawka nie jest jeszcze zacommitowana.
+- S00–S12, parity, browser/GUI, COMSOL, zbieżność, S09/GPU i PR97 integration OPEN. Dowód: `C:\Users\Mateusz\.codex\visualizations\2026\09\14\01a09ee1-29e6-7d51-98f0-082c5539a0d6\static-demag-replay-runtime-v2\signed15-serial-restart-checkpoint.json`.
+
+
+<!-- single-k-checkpoint-source-committed -->
+## Aktualny checkpoint — surowy zapis punktu; nowych wyników brak
+
+Odczyt 2026-10-03T20:37:24.877075+00:00. Commit i potwierdzony remote `ce2744719c8dea0f2565f2cf66a47f951d74b24c`.
+
+- Pięcioplikowy commit zachowuje samodzielny helper IO, rejestrację modułu, konsument read-only, jego testy i instrukcję. Pełne bajty planu i artefaktów mają SHA/size; końcowy marker jest no-replace hard link. Nie zmienia operatora, progów residualu ani akceptacji punktów.
+- 16 interpretowanych kontroli konsumenta PASS, parser/rustfmt i scoped whitespace PASS; review helpera bez nowych P1/P2. Przygotowane regresje Rust niekompilowane zgodnie z zakazem. Managed mount/hardlinks, writer i przerwany rzeczywisty sweep NOT VERIFIED.
+- Hooki serial oraz bootstrap adaptive są wyłącznie w dirty worktree, zależne od nieukończonego pakietu adaptive/API/runtime. Ten commit nie aktywuje ich na remote ani w istniejącym #223.
+- Aktualny koordynator: reconciling, TimeoutError, error_count81; API #224 nadal running mimo zweryfikowanego failed receipt I/O. Nie wystartował nowy solver. Rozważana droga po odzyskaniu silnika: atestowany #223 i publiczny serial Relax→Eigen KPath; źródłowe ominięcie błędnej gałęzi Artifact nie jest dowodem runtime.
+- Nadal cztery zaakceptowane unikalne punkty −25,−10,+10,+25 rad/µm; nowych0. Sweep15, Γ, parity, GUI, COMSOL, zbieżność, S09/GPU i cały S00–S12 OPEN. PR97 bez merge. Nie usunięto danych ani nie restartowano współdzielonego Dockera.
+- Dowód: `C:\Users\Mateusz\.codex\visualizations\2026\09\14\01a09ee1-29e6-7d51-98f0-082c5539a0d6\single-k-checkpoint-candidate\committed-checkpoint.json`; instrukcja [checkpoint pojedynczego punktu](../../guides/eigensolve-single-k-checkpoints.md).
+
+
+<!-- waveguide-frame-foundation-committed -->
+## Aktualny checkpoint — rama falowodu i signed-k S09 zapisane na remote
+
+Odczyt 2026-10-03T19:53:32.211097+00:00. Commit i remote `33b86550eda212a82e83972f10b5916ddc6d1a38`; PR97 OPEN z tym HEAD.
+
+- Addytywny helper IR wymaga jawnej prawoskrętnej ramy, zapisuje requested/canonical osie i rzeczywiste metryki, zachowuje znak k oraz odrzuca składową poprzeczną. Guard gradual-underflow działa przy walidacji i każdej projekcji; nie zmienia środowiska FP. Nie aktywuje providera ani publicznego cutoveru.
+- 18 niezależnych przypadków Decimal, exact Fraction counterexample scalar air island (25 dodatnich pivotów), rustfmt/parser/linki i scoped staged whitespace PASS. Review przyrostu: bez nowych P1/P2. Testy Rust niekompilowane zgodnie z zakazem; native/hardware/runtime NOT VERIFIED.
+- Pozostają: typed mesh/half-edge/regions/interaction fields, fingerprint 2D+frame, V04/planner, MFEM 2.5D, equilibrium/residual i wszystkie bramki runtime/zbieżności. Helper nie jest ukończeniem S09.
+- Bieżący runner: coordinator reconciling z timeoutem, accepting_jobs=true; API nadal wskazuje #224 running mimo failed receipt I/O. Nie uruchomiono następcy, solvera ani restartu Docker. Nowych zaakceptowanych punktów0; zachowane tylko cztery unikalne ±10/±25. Całe S00–S12, parity, UI, COMSOL, GPU i integration OPEN.
+- Dowód: `C:\Users\Mateusz\.codex\visualizations\2026\09\14\01a09ee1-29e6-7d51-98f0-082c5539a0d6\waveguide-frame-candidate\committed-checkpoint.json`. Pozostałe dirty/untracked zmiany zachowane poza commitem.
+
+<!-- current-execution -->
+<!-- frozen-v2-managed-driver-committed -->
+## Aktualny checkpoint — konsument frozen-v2 zapisany i wysłany
+
+Odczyt 2026-10-03T18:52:22.867217+00:00; status #224 i nauki pozostaje opisany w następnym bloku.
+
+- Commit i potwierdzony remote `13405dac3347cb6ac0c902c7517215aa586e3de5` obejmuje tylko sześć nowych plików: managed driver frozen-v2, walidator bieżących artefaktów, walidator serial/adaptive parity, ich testy i instrukcję użycia. 33 interpretowane kontrole PASS; scope to źródła/payloady/lifecycle na fixture, bez kompilacji unit tests. Scoped staged whitespace, parser i lokalne linki PASS. Pozostałe dirty/untracked zmiany nie są objęte tym commitem.
+- Review domknięte: błędna przestrzeń ścieżki EQ (oddzielny source i canonical output sidecar), obowiązkowy exact replay consumer-plan dla0/1/2, fail-closed os.walk i limit hashowania rosnącego pliku. Parzystość fizyczna wiąże50 pól identity; consumer-plan/full identity digest różnią się per mode, ale pełne identity i dokładne preimages są walidowane osobno. Nie ma nowych P1/P2 w tym przyroście.
+- Rzeczywisty accepted15 bundle i wykonanie serial/adaptive nadal OPEN. Gate dostępny źródłowo nie dowodzi uruchomienia solvera ani przyspieszenia. #224 ma failed receipt przez I/O, API nadal running; koordynator przeszedł w `error`, `accepting_jobs=false` i 37 timeoutów w odczycie 2026-10-03T18:53:04.474220+00:00; obserwator zakończony przed solverem, zgoda na restart Docker oczekuje. Nowych zaakceptowanych punktów0.
+- PR97 potwierdzony OPEN z tym HEAD, bez merge. Pełne S00–S12, nauka, GUI i lifecycle pozostają OPEN. Dowód: `C:\Users\Mateusz\.codex\visualizations\2026\09\14\01a09ee1-29e6-7d51-98f0-082c5539a0d6\static-demag-replay-runtime-v2\frozen-v2-committed-checkpoint.json`. Instrukcja: [frozen-v2 parity](../../guides/eigensolve-frozen-v2-parity.md).
+
+<!-- job224-io-failure -->
+## Aktualny checkpoint — #224 nieudany build przez I/O
+
+Odczyt 2026-10-03T18:38:26.761046+00:00; zastępuje deklaracje aktywnego kontrolera i oczekiwania na sukces #224 poniżej.
+
+- Failed receipt #224 został odczytany z artifacts/build-receipt.json; source digest i native identity zgodne z kapsułą, oba logi sprawdzone względem receipt SHA/size. native-build exit2, koniec 2026-10-03T17:56:56.619361Z. Rust nie zapisał archiwów fullmag-ir/fullmag-application: `Input/output error (os error 5)`. To awaria infrastruktury zapisu, nie wynik solvera.
+- API kolejki nadal running i coordinator reconciling przez timeout Dockera. Terminalny stan kontenera niepotwierdzony; nie zmieniono ręcznie kolejki, nie restartowano silnika i nie zgłoszono duplikatu. Własny obserwator v4/72469 zakończony po potwierdzeniu failed receiptu, przed solverem.
+- Potrzebne odzyskanie kontaktu z Dockerem, uzgodnienie terminalnego stanu tego samego joba, następnie nowy atestowany build i pojedynczy sweep15. O osobną zgodę na restart współdzielonego Docker Desktop poproszono operatora; brak odpowiedzi nie jest zgodą.
+- Review nowych konsumentów frozen-v2 wykryło output EQ path, brak obowiązkowego consumer-plan replay i ciche pominięcie błędów os.walk. Poprawki w toku; nie zacommitowano nieukończonego gate. 26 dotychczasowych interpretowanych kontroli PASS nie zastępuje nowych regresji ani runtime.
+- Nowych zaakceptowanych punktów 0; cztery istniejące ±10/±25 zachowane. Pełne S00–S12 OPEN. Dowód: `C:\Users\Mateusz\.codex\visualizations\2026\09\14\01a09ee1-29e6-7d51-98f0-082c5539a0d6\static-demag-replay-runtime-v2\job224-io-failure-checkpoint.json`.
+
+<!-- job224-controller-recovery -->
+## Aktualny checkpoint — odczyt runnera i kontroler sweepa
+
+Odczyt 2026-10-03T18:14:40.614558+00:00; zastępuje niżej zachowane deklaracje aktywnego kontrolera84659.
+
+- Kontroler v3/84659 terminalnie failed z timeoutem odczytu API przed uruchomieniem symulacji; receipt zachowany. Potwierdzono żywy kontroler v4/72469 dla tego samego joba #224. Ponawia wyłącznie przejściowe błędy transportu; nie ponawia autoryzacji/preflight, nie zgłasza drugiego buildu ani solvera. Cztery interpretowane regresje transportu PASS.
+- #224 API running/exit null. Koordynator ma heartbeat i stan reconciling, zgłasza timeouty obserwacji Dockera. Trzy bounded read-only sondy engine/inspect/top również timeout; nie jest to dowód terminalnego zakończenia worker. Silnika ani runnera nie restartowano. Terminalny receipt/ABI i start sweepa pozostają OPEN.
+- Nowych zaakceptowanych punktów 0; istnieją tylko cztery unikalne ±10/±25. Po sukcesie i atestacji tego buildu kontroler uruchomi jeden signed15 adaptive, postsolve i wykres/freeze. Pełne S00–S12, Γ/parity/UI/COMSOL/zbieżności/GPU/S09/integracja OPEN.
+- Dowód: `C:\Users\Mateusz\.codex\visualizations\2026\09\14\01a09ee1-29e6-7d51-98f0-082c5539a0d6\static-demag-replay-runtime-v2\controller-recovery-checkpoint.json`.
+
+<!-- job224-static-demag-preimage-fix -->
+## Najnowszy checkpoint — poprawka preimage statycznego demag
+
+Odczyt 2026-10-03T17:17:06.430772+00:00; ten wpis zastępuje niżej zachowane deklaracje bieżące.
+
+- #223 succeeded/exit0 i runtime FEM CPU double/SLEPc PASS. Sweep signed15 adaptive-v2 rzeczywiście wykonał bootstrap −25, ale sample1/−20 odrzucono `equilibrium_static_demag_hash_mismatch`; kampania failed/exit1, kontener verified_absent, dane zachowane. Brak nowych zaakceptowanych punktów.
+- Commit i remote `128a7e309c7faf0f9b3045298a40df7839a2a8be`: dokładny subdigest h_demag/phi liczony z persisted source fields, aktualna realization z bieżącego planu; nowe artefakty z fresh fields. Wszystkie porównania numeryczne i dokładne signatures/content digests zachowane. Dodatkowo pełnodomenowe comparers odrzucają empty/shape/NaN/Inf po obu stronach. 45 interpretowanych testów artefaktów +35 validatora dokumentacji PASS, source-map/changed-page/parser PASS, bounded review bez P1/P2. Pięć regresji Rust przygotowanych, kompilacja zakazana i NOT VERIFIED.
+- Nowy #224 `77962caa007c4666b861445277f33ab4`, profile runtime-v2, API running, digest `edd79229b6ad415581acb56579ee83ab83d020fed846b25df73309d09fc1d848`, snapshot `c57ca1faee7b99ec64f894903bfca5596a9ed73f236d2d13c44156b124609b78`, capture `201ac8f1bd154b529af4dacfcb7da5ff`. Aktualizacja 2026-10-03T17:45:37.739973+00:00: worker `53054223a283` running; docker top potwierdza Cargo/CMake i kompilatory C++/cc1plus. Kontroler84659 ponownie potwierdzony żywy. Nadal brak terminalnego receipt i nowych wyników solvera.
+- Żywy one-shot controller handle84659 czeka na sukces i pełną atestację tego joba. Następnie uruchomi jeden adaptive sweep15 (−25,−20,−15,−10,−7,−5,−2,0,2,5,7,10,15,20,25rad/µm), a dopiero po postsolve PASS wygeneruje wykres oraz realny frozen bundle. Nie zastępuje to parity, nauki i UI.
+- Pełny S00–S12, Γ, source-state replay, serial/adaptive parity, GUI/OpenAPI/browser, COMSOL A1, zbieżności, GPU, S09 i integracja PR97 OPEN. Dowód `C:\Users\Mateusz\.codex\visualizations\2026\09\14\01a09ee1-29e6-7d51-98f0-082c5539a0d6\static-demag-replay-runtime-v2\source-and-build-checkpoint.json`; niczego nie usunięto.
+
+<!-- frozen-v2-parity-candidate-source -->
+- Przyrost S05: osobny kandydat walidatora frozen-v2 serial/adaptive z 10 interpretowanymi kontrolami PASS; wiąże build, bundle, source/modal mesh, EQ, Floquet i częstotliwości −10,+10,−10. Residual wymaga osobnego fizycznego progu; scheduler co-activity i speedup nie są utożsamiane z parity. Kandydat jest w wizualizacjach, review trwa, nie został jeszcze przeniesiony do repo ani zacommitowany. Driver/linked native state replay, rzeczywista próba i cały S00–S12 OPEN. Dowód: `C:\Users\Mateusz\.codex\visualizations\2026\09\14\01a09ee1-29e6-7d51-98f0-082c5539a0d6\static-demag-replay-runtime-v2\frozen-v2-parity-source-checkpoint.json`.
+
+## Aktualny priorytet wykonania — replay równowagi
+
+Odczyt: 2026-10-03T16:02:03.997430+00:00. Najnowszy przyrost zastępuje niżej zachowane statusy bieżące; pełny S00–S12 pozostaje otwarty.
+
+- Commit `ed0ccc18c63493f90b7529e4f0b101a811b16c37`: porównanie H_eff0 certyfikatu obejmuje dokładnie węzły z magnetic_node_volumes>0; pełne tablice muszą mieć zgodne długości, skończone pola i skończone nieujemne wagi. Pusty support i overflow są odrzucane. Próg 1e-8 A/m oraz pełne m0, h_demag0, phi0 i signatures bez zmian. Dokumentacja fizyczna przed kodem; sześć przygotowanych regresji Rust niekompilowanych z powodu zakazu użytkownika. Rustfmt parse, source-map validator i35 interpretowanych testów validatora PASS. Niezależne bounded review: bez P1/P2.
+- Nowy managed job #223 `65b2729aeb5245c3beb38dae0a88c71b`, profil `fem-cpu-slepc-runtime-v2`, stan API `running`, exit=None; digest `798904f41f474f5a782942a5dceeaa2f29bee9066ce65d411808f3536634cef6`, snapshot `7fccac6c9bd4bb39400adc9a4b9f972e34a5b31037a9b2fe9536f180a70d31fd`, capture `8a32e07a4d73469785de8e44bfa2b417`. Zgłoszenie zawiera wszystkie nieśledzone wejścia potrzebne bieżącemu kodowi. Worker `8d91c4ab9a7f` running/OOM=false; żywe docker-init i python3 potwierdzone przez docker top. Późniejszy odczyt 2026-10-03T16:24:04.510571+00:00: natywna kompilacja rozpoczęta; docker top potwierdza Cargo/CMake i kompilatory C++ (wcześniej również rustc). Istnieją logs/native-build.stdout.log i stderr.log; bieżący stderr pokazuje kompilację fullmag-application. Terminalny receipt i ABI pozostają OPEN. Kontroler one-shot v2 (handle98860) czeka na succeeded i pełną atestację, następnie uruchomi `signed15-fgmres-adaptive-v2`. Pierwszy kontroler zakończył się przed symulacją przez użycie terminal-only preflight podczas oczekiwania; jego receipt zachowano. Żaden nowy solver jeszcze nie wystartował.
+- Frozen v2 adapter i generator: 23 interpretowane testy PASS (16generator+7adapter), bounded review adaptera: bez nowych P1/P2. Brak zaakceptowanego realnego bundle signed15; physical source-state replay oraz serial/adaptive parity nadal NOT VERIFIED. Adapter nie jest jeszcze podłączony do istniejącego drivera.
+- Wykres użytkownika ±25 z czterema rzeczywistymi punktami ±10/±25 i dwiema krzywymi analitycznymi już zapisany i sprawdzony (PNG/PDF/receipt hash PASS); żaden dodatkowy punkt nie został dopisany na podstawie symetrii.
+- Następne: terminalny receipt i ABI nowego joba → rzeczywisty adaptive seed/replay i artefakty15 punktów (w tym Γ) → frozen v2 serial/adaptive parity → spójny OpenAPI/frontend/runtime i browser. Pozostają convergence, COMSOL A1, GPU, S09 i integracja PR97; nie zmieniono zależności ani nie usunięto danych.
+
+- Aktualizacja 2026-10-03T16:15:27.429340+00:00: commit poprawki i wcześniejsze zweryfikowane commity wysłane na origin; remote branch potwierdzony pełnym SHA `ed0ccc18c63493f90b7529e4f0b101a811b16c37`. Pozostałe dirty/untracked zmiany nie są tym dowodem objęte. PR97 pozostaje otwarty, bez merge.
+
+- Frozen v2 generator/adapter zapisany osobno w `687bc7956649d9abbc4508ac31606089bc31d197` i push potwierdzony tym samym SHA na origin. Cztery pliki mają byte-identyczne SHA z kapsułą #223 (jej HEAD nadal ed0ccc18c63493f90b7529e4f0b101a811b16c37). 23 testy i review obejmują kod/fixture, nie wykonanie realnego replay. Podłączenie do drivera, zaakceptowany15-punktowy bundle, serial/adaptive parity i nauka pozostają OPEN.
+
+<!-- job223-terminal-campaign-launch -->
+- Aktualizacja 2026-10-03T17:02:48.059945+00:00: #223 terminalnie `succeeded`/exit0 z API kolejki. Receipt obejmuje 19 hash-bound artefaktów; runtime FEM CPU double/SLEPc, bez unit-test targets i bez frontend stages. Istniejący kontroler98860 przeszedł pełny `_validate_build_context` i uruchomił driver `signed15-fgmres-adaptive-v2` (PID 177312) z 15 punktami −25…+25rad/µm, w tym Γ, w jednym runie. Natywny bootstrap solve ukończony; worker sample1 (−20rad/µm) odrzucony `equilibrium_static_demag_hash_mismatch`, cała kampania failed/exit1, cleanup verified_absent. Dokładny preimage źródłowych h_demag/phi odtworzony i zgodny ze stored SHA; podpis był błędnie porównywany z przeliczeniem pól dopuszczającym roundoff. Poprawka źródeł zachowuje wszystkie progi i digests; nowy build i runtime OPEN. Nie ma nowych zaakceptowanych punktów; odtworzenie równowagi, parytet i cały S00–S12 OPEN. Dowód: `C:\Users\Mateusz\.codex\visualizations\2026\09\14\01a09ee1-29e6-7d51-98f0-082c5539a0d6\magnetic-replay-runtime-v2\job223-campaign-launch-checkpoint.json`.
+
+### Poprzedni odczyt #222 — historia
+
+## Aktualny priorytet wykonania
+
+Odczyt: 2026-10-03T15:29:59.184367+00:00. Ten blok zastępuje starsze deklaracje bieżącego stanu, zachowane poniżej jako historia.
+
+- Build #222 `15418192c13e4a119e6f75d14dde9c88`: terminalne succeeded/exit0 z API kolejki. Pełny digest `19e38280b5da573d6fc193a09c04b6578727ddd149234d755af1beeb725559f8`, commit runtime `f7ecb100648b57fb69fe2de4a932efba02717190`, source snapshot `0b77866746b2037869f8cdf5c93a810e9748129286f6ed771da721efec93faf7`. Receipt/ABI PASS: MFEM4.10, PETSc3.24.6, SLEPc3.24.3, FEM CPU double; native-build około17m58s. Bez kompilacji testów jednostkowych; GPU NOT VERIFIED.
+- Próba `fgmres-km25-restart8-v2`: rzeczywisty solver completed/exit0, k=(0,-25e6,0)rad/m, f=13.557588586290586GHz. Fizyczny residual pełnego projected weak form/seams `1.926591054747952e-10 < 1e-8`, full_descriptor_certified=true dla tego modu. Trzy podokna, 169 shifted solves: wszystkie measured, zero violations/unavailable, maksymalny stosunek do progu KSP0.9964145193323742. Dynamic demag probes i potencjał/source mesh/mode binding PASS; L2/t3 PASS. To poprawny punkt numeryczny, nie kwalifikacja krzywej, pasma n0 ani zbieżności.
+- Oryginalny run-result nadal failed z powodu konsumenta: błędny wymagany token schema i niewłaściwe traktowanie prawidłowego exhausted subwindow jako awarii KSP. Native producent eksportuje `frequency_domain_modal_solver_diagnostics.v1`; puste podokno wymaga dodatniego EPS/KSP, converged candidates i zerowych wszystkich liczników odrzuceń/awarii. Naprawa zachowuje pełne kryterium każdego solve. Schur action zachowany osobno dla wszystkich3 indeksowanych podokien. 15 konsument +42 driver testów PASS. Oryginalny result nie nadpisany; pełna rewalidacja i hashe w `fgmres-km25-restart8-v2/posthoc-validation-v1.json`, status completed_unqualified. Korekta z domkniętym review zapisana w commicie d8d1101b70cc11c1d29e714fbe292207f664cd7d.
+- Kampania signed15-fgmres-adaptive-v1 terminalnie failed/exit1 na replay stanu równowagi: equilibrium_h_eff0_comparison_failed, różnica7.958e4A/m. Bootstrapped -25 completed, ale kampania nie ma zaakceptowanego15-punktowego produktu. Hipoteza potwierdzona w danych: h_eff0 certyfikatu ma pole zewnętrzne we wszystkich6138 węzłach; source m0 jest zerowe w5742 węzłach airboxu. Referencyjny FemLlgProblem external field zeruje węzły niemagnetyczne; porównanie pełnej tablicy h_eff0 wymaga korekty zakresu fizycznego z zachowaniem progów i całodomenowego phi0. Naprawa source/runtime tej ścieżki pozostaje OPEN.
+- Serial signed15-fgmres-serial-v1 ukończył7 ujemnych przypadków w logu, następnie długo liczyłΓ. W celu wykonania jawnego priorytetu użytkownika ±25 zatrzymano wyłącznie własny kontener po weryfikacji labels/mountów: return143, cleanup verified_absent, wszystkie dane zachowane. Nie jest to dowód rozbieżności ani zaakceptowana kampania. Pierwsza osobna próba +25 została odrzucona przed solverem przez storage lease; właściwa druga próba po jego zwolnieniu zakończyła się sukcesem.
+- Generator frozen v2: typed MeshIR, pełne52pola identity, snapshot bytes, onerror i osobne source/modal MeshIR; review P1 PASS,16 testów interpretowanych PASS. Realny accepted bundle i serial/adaptive replay nadal OPEN. Prywatny adapter v2 jest implementowany w odrębnych plikach bez zmiany wykonywanej kampanii.
+- Następne: poprawić fizyczny zakres replay h_eff0 i zweryfikować nowym managed runtime; doprowadzićΓ oraz15 punktów do terminalnego produktu → frozen-state serial/adaptive parity → sparowane GUI/OpenAPI/browser. Całe S00–S12, COMSOL A1, zbieżności siatki/airboxu/liczby modów, GPU, S09 i integracja PR97 OPEN. PETSc/SLEPc3.26 nie wdrożono; storage/cache nie usuwano.
+
+- Priorytetowy +25: f=13.557589545332079GHz, full relative residual2.0705177355335623e-10, full_descriptor_certified=true dla modu, row/KSP/demag/potential/source-binding PASS. Run-result completed_unqualified, solver exit0. Razem cztery różne rzeczywiste wektory ±10/±25, bez sztucznego odbicia.
+- Wykres z analityką: `de-priority-k25-validated-v3/de-dispersion-plus-minus25.png` i `.pdf`, osobny plot-receipt wiąże wszystkie wejścia i oba oracles. Model sprzężonych modów N32 przy±25 daje13.641746349GHz; FEM niżej o około0.61691%. Różnica między+25 i-25 wynosi959.0415Hz. To porównanie diagnostyczne, nie dowód zbieżności ani pełnej weryfikacji solvera.
+<!-- /current-execution -->
+
+
+## Checkpoint wykonania — 2026-10-03, 05:40 UTC
+
+Ten wpis zastępuje wcześniejsze deklaracje bieżącego stanu #216. Pełny cel S00–S12 pozostaje otwarty.
+
+- #216 zakończył się failed/exit 2: E0063, brak cpu_observations w FEM serial_bootstrap_only. Dodano pustą listę, bo ta gałąź nie uruchamia procesu potomnego. Parser i niezależne review PASS; nowa kompilacja nadal OPEN.
+- Aktualny snapshot #219: 358349e2f1d74e6c9c4cb6af148d47b0, digest 8bdb22ee937e3c16bdebd080c0239296da03d8834cb42fea461ee5b709e34267, profil fem-cpu-slepc-runtime-v2, model commit 71ba0d18225ffcc83f7f18e676de8dc051e87fd1. Job queued; nie wystartowała symulacja.
+- Współdzielony runner został wymieniony zewnętrznie: obecny kontener 7f20873de2b1e21335b7399afa8436ce6ed0e0503dcd69d2fa366917fa3bdef2, obraz sha256:1aa31b600114e35dac112821bfe0ee1317a00641077bf4ecee546e0747550665. Health: worker_alive=true, accepting_jobs=true, worker_error=null, brak aktywnych jobów, waiting_for_disk; wolne 8 080 265 216 B, wymagane co najmniej 8 589 934 592 B. Nie zmieniono konfiguracji ani FIFO.
+- Obserwator #219 v2 zakończył się przy WinError 10061 podczas wymiany runnera. V3 ponawia wyłącznie odczyty po błędach transportu; nie ponawia błędów autoryzacji ani nie zgłasza/anuluje jobów. Cztery regresje PASS. Aktualny uchwyt obserwatora: 75831; renderer oczekujący na rzeczywisty wynik: 11268.
+- Naprawiono model_source_commit (rzeczywisty klucz commit) oraz walidację orientation/sampling/k_vectors dla signed-fifteen. Kontrole interpretowane driver/probe/rows/model/plot/parity: 131 PASS +45 subtests; pomocnicza obsługa kontenera: 22 PASS +15 subtests. To dowody źródeł, nie wykonania solvera. Testów jednostkowych Rust/native/React nie kompilowano.
+- Generator scripts/plot_signed_de_campaign.py zapisuje PNG/PDF/receipt dopiero po zaakceptowaniu 15 rzeczywistych wierszy; bez lustrzanego kopiowania FEM lub interpolacji. Jest przygotowany, ale nowy wykres nie powstał. Nadal dostępne są wyłącznie dwa wcześniejsze punkty ±10 rad/µm.
+
+Następna sekwencja: zwolnienie miejsca przez operatora → terminalny sukces i atestacja #219 → jedna adaptacyjna kampania 15 punktów → rzeczywisty raport puli i artefakty solvera → wykres i kontrola renderu → parytet serial/adaptive oraz GUI. Zbieżności, COMSOL, GPU, S09/2.5D i integracja PR #97 pozostają OPEN. Nie usunięto żadnych danych; operator został poproszony o zwolnienie miejsca.
+
+
+## Aktualny stan wykonania — 2026-10-03, nowe obrazy wdrożone, build #216 zgłoszony
 
 Ten checkpoint zastępuje wcześniejsze deklaracje bieżącego stanu jobów i
 liczby punktów; poniższe sekcje zachowują historię. Pełny zakres S00–S12
@@ -287,12 +489,14 @@ rozszerzeniem S05/S08, nie zamiennikiem fizyki ani kwalifikacji całego celu.
 | Signed15 | ±2 nie przeszły shifted GMRES; 13 dodatkowych punktów nieukończone | OPEN; bez tworzenia punktów przez symetrię |
 | Reader #208 | Import kopii rzeczywistego FMS i spectrum +10; WebGL działa, topology nie przyjęte wskutek deadline | Częściowy browser proof; S08 OPEN |
 | PreviewState / viewport | Poprawki źródeł importu i lokalnego topology deadline 15 s | Managed frontend i browser po poprawce OPEN |
-| Adaptive CPU/RAM | Polityka Python/IR/API/UI, Linux sampler i osobne procesy; wcześniejsze kontrole produkcyjnego TypeScript/React Doctor PASS; 64 interpretowane regresje sterownika prób i 3 publicznego DSL PASS; aktualny produkcyjny TypeScript: 799 wejść, zero test/spec | Runtime i zgodność serial/adaptive OPEN |
-| Telemetria puli na żywo | Próbka regulatora → istniejący zasób etapów Study → Inspector; active/admission/limit są rozdzielone | Źródła i review domen CPU oraz wire PASS; poza kapsułą #211, w kapsule #213; runtime/UI OPEN |
+| Adaptive CPU/RAM | Polityka Python/IR/API/UI, Linux sampler, osobne procesy, live peak, pełny budżet puli, CPU coverage i zgodność request/pool; 107 interpretowanych kontroli próby/drivera/wierszy PASS; wcześniejsze produkcyjne TypeScript/React Doctor PASS | Runtime, OpenAPI i zgodność serial/adaptive OPEN |
+| Telemetria puli na żywo | Próbka regulatora → istniejący zasób etapów Study → Inspector; active/admission/limit są rozdzielone | Źródła i review PASS; #213 nie zawiera późniejszych poprawek; nowy snapshot i runtime/UI OPEN |
 | Diagnostyka awarii ±2 | Zapis konfiguracji KSP przed EPSSolve; review źródłowe PASS, przygotowana regresja natywna | Native build/runtime OPEN; poza kapsułą #211 |
 | SLEPc #209 | Terminal failed, exit 2; osiem błędów Rust, cztery przyczyny poprawione i reviewed | Nie jest dopuszczonym runtime |
 | SLEPc #211 | c554c5361f014228a301380b8ed3487c, terminal failed, exit 2; native-build exit 0; runtime fem-availability timeout 120 s | Kompilacja PASS; runtime/receipt niezaliczone; nie uruchomiono prób solvera |
-| SLEPc #213 | 9e4d278669bc4d92a8895294b7e19db6, queued; aktualny CPU-domain sampler, live telemetry oraz opt-in Schur diagnostics | Receipt/runtime OPEN; bez zmiany FIFO |
+| SLEPc #213 | 9e4d278669bc4d92a8895294b7e19db6, cancelled, exit143; własna starsza kapsuła; journal terminalny, wszystkie dane zachowane | Nie jest dopuszczonym runtime; nowa kapsuła wymagana |
+| CPU dependency closure | 67 kontroli źródłowych PASS; obraz CPU 7139ca26… zbudowany exit0, SLEPc i MFEM 4.10 zainstalowane; sparowany koordynator 9923f33b… wdrożony; FIFO wznowione | Budowa obrazu PASS; atestacja ELF, build #216 i runtime OPEN |
+| Tożsamość API/UI | Wymagane session_id/session_epoch/run_id (nullable) w schemacie; źródłowe scope guards | Rzeczywisty eksport OpenAPI/client i browser OPEN |
 | S09 nodalne Ms | Dokładne momenty P1 w bounded assemblerze, 9 interpretowanych kontroli; commit 1cee2db614fcd920dbc0cfd4293df9dd3098c70d | Source-only; native regression nieskompilowana; produkcyjny MFEM/TetraX/3D OPEN |
 | Pełna nauka i integracja | Γ/signed DE/BV, COMSOL A1, zbieżności, pełne pola/tracking, falowód, interakcje, GPU i integration cycle | S00–S12 nadal OPEN |
 
@@ -310,10 +514,12 @@ Nie jest to zanik obserwacji ani dowód dostępności CPU/SLEPc. Timeout 120 s
 zakończył sam executor. Brakuje partial stdout/stderr tej sondy, gdyż obecny
 trusted helper gubi je w obsłudze TimeoutExpired; poprawka diagnostyczna
 jest w lokalnym commicie 4bb7c3736808ca7e194782292cc9beda99e0356f
-(42 interpretowane regresje PASS), bez wdrożenia do aktywnego koordynatora.
-#213 pozostaje osobną zamrożoną kapsułą w FIFO. Próby serial/adaptive nie
-wystartują na failed #211; przed kolejnym ponowieniem potrzebna jest diagnoza
-startupu zamiast automatycznego zwiększania timeoutu.
+(42 interpretowane regresje PASS), obecnie zawarta we wdrożonym koordynatorze 9923f33b…; zachowanie timeoutu wymaga nowego runtime proof.
+#213 anulowano po zakończeniu #212, aby nie budować nieaktualnej kapsuły na
+starym obrazie. Aktualizacja obrazów zakończyła się i FIFO wznowiono.
+Aktualny snapshot przyjęto jako #216. Próby serial/adaptive nie
+wystartują na failed #211 ani cancelled #213; użyją nowego zweryfikowanego
+builda runtime-v2 i jawnego digestu tej samej kapsuły.
 
 Build #211 jest niezmiennym snapshotem
 b85acbd0d354acf7f554f72e8697c06c1508de8ff9d51fcbd8831aa38aad452c,
@@ -332,6 +538,24 @@ Szczegóły regulatora i osobne bramki:
 [plan adaptacyjnego wykonania](2026-10-02-adaptive-dispersion-execution.md).
 Zakaz kompilowania unit tests zachowany; nie wykonano końcowego merge ani
 cleanup worktree, gdyż wymagane bramki całego zadania pozostają otwarte.
+
+## S06/S12 — kontrola roundoff normy modalnej, 2026-10-03
+
+Lokalny commit `81cb6bcb475112aa1abe8bcc9e5e9128e5486351` domyka źródłowy P2 pozostały po wspólnej skali q/potencjału: istotnie zespolona norma nie jest już akceptowana wyłącznie dzięki dodatniej części rzeczywistej. Nowy evaluator przechodzi przez rzeczywiste wkłady dense/sparse, zachowuje powtórzenia sparse i liczy obwiednię outward next_down/next_up. Wymaga dodatniej dolnej granicy real oraz objęcia zera przez imaginary. To roundoff-compatible kontrola konkretnej normy, bez dowodu globalnej Hermitowskości/PD ani dokładności assembly.
+
+Chronione są finite dane, overflow, wymiary i indeksy oraz gradual underflow (FTZ/DAZ odrzucane). Skala pochodzi z jawnej bezpośredniej sumy wkładów; legacy obserwacje grupujące wiersze pozostają odrębne. Nie zmieniono operatora, demaga, residualu 1e-8, jednostek ani wire API/IR. Sparse nie tworzy macierzy dense. Normy małe dodatnie nie są zastępowane floorem.
+
+Weryfikacja: independent source review bez P1/P2; parser Rust PASS; exact Fraction oracle 9 PASS; source-map working/index PASS; changed-page validator dla dokładnego commita PASS. Przygotowano cztery regresje Rust (meaningful imaginary, subnormal, niepewna dodatniość wskutek cancellation, rectangular metric z atomową ochroną wejścia), bez ich kompilacji. Native/JSON consumer execution i pomiar wydajności pozostają OPEN. Commit lokalny; bez push/merge.
+
+Dowód: modal-norm-interval-checkpoint-20261003.json, wiąże SHA256 dziewięciu plików dokładnego commita. Odczyt runnera: worker_alive=true, worker_error=null, #212 running, 15 786 156 032 B wolnych. Nowy obraz CPU dependency closure nadal nie wdrożony; nowe punkty signed15, serial/adaptive parity, OpenAPI/browser i pozostałe S00–S12 nie są ukończone.
+
+## S05/S08 — review adaptacyjnych zasobów, 2026-10-03
+
+Domknięto źródłowe korekty regulatora: live peak aktywnych workerów trafia do admission przed zakończeniem, dodatni krótki pomiar nie zastępuje pełnego resolved-team envelope, a cała polityka requestu musi odpowiadać parent pool przed side effects. Raport cpu_observations zapisuje pokrycie czasowe, źródło kosztu oraz zespół każdego zakończonego punktu. Re-review: bez P1/P2 w ocenianym przyroście; hipotetyczny finding null wycofano po sprawdzeniu typed producer. Regresje Rust przygotowane, parser trzech plików PASS, bez kompilacji unit tests. Kontrole driver/DSL 68 PASS oraz wcześniejszy produkcyjny TypeScript dla niezmienionych plików UI pozostają aktualne.
+
+Runner ma 17 599 401 984 B wolnych i zdrowego workera. #212 jest potwierdzonym aktywnym kontenerem 2115dff64051 (Up 14 min; ok. 816% CPU, 806 MiB RAM), więc nie wymieniono wspólnego obrazu podczas obcego buildu. Poprzedni blocker storage ustąpił. Wdrożenie CPU dependency closure, nowa kapsuła bieżącego kodu, eksport OpenAPI/client, serial/adaptive parity i browser proof pozostają OPEN. Nie wykonano nowych punktów dyspersji ani nie zmieniono statusu naukowego S00–S12.
+
+Dowód: adaptive-resource-review-20261003.json w katalogu wizualizacji wątku. Pełne reguły i dowody w [planie adaptacyjnego wykonania](2026-10-02-adaptive-dispersion-execution.md).
 
 ## Priorytet DE ±10 — naprawa kompilacji i ponowienie, 2026-10-02
 
@@ -6165,3 +6389,251 @@ build i oba obserwatory są aktywne, kwalifikacja całego celu pozostaje OPEN.
 ## S09 — nodalne Ms i jednostki źródła, 2026-10-03
 
 Lokalny commit `1cee2db614fcd920dbc0cfd4293df9dd3098c70d` naprawia całkowanie nodalnego Ms w bounded assemblerze przekroju. Zamiast Ms w węźle źródła razy mass używa dokładnych momentów P1 stopnia drugiego i trzeciego. Gałąź bez nodalnego bufora zachowuje dotychczasową arytmetykę uniform. Nota [0832](../../physics/0832-fem-waveguide-nodal-ms-quadrature.md) rozróżnia bezwymiarowe delta_m od delta_M [A/m] oraz A_phiq_perp [A] od A_phiq_axial [A m]. Review domknęło błędy oznaczeń i jednostek. Dziewięć interpretowanych kontroli PASS; regresja odróżnia historyczną błędną regułę, mapa JSON ma poprawne referencje i jednostki. Native test przygotowano, bez kompilacji. To nie jest ukończone S09: typed production routing, owner MFEM, exchange k², rekonstrukcja pól, boundary/k→0, TetraX i extruded3D nadal OPEN.
+
+
+### Checkpoint 2026-10-03 — admission i diagnostyka przed main
+
+Pełny cel S00–S12 pozostaje aktywny. Nowa adaptacyjna pula i ustawienia UI
+nie zastępują walidacji Γ/DE/BV/COMSOL, zbieżności, waveguide ani GPU.
+Źródłowe review poprawiło nieograniczone ponawianie telemetrii, kalibrację
+krótkiego workera z samej średniej CPU, deklarację źródeł cgroup, stare
+zmienne pamięci Slurm, limit wątków ustawiany dopiero po exec oraz
+nieograniczony odczyt RAM przy przycinaniu logów. Rustfmt/diff PASS;
+przygotowane regresje Rust nie były kompilowane. Te poprawki nie należą
+jeszcze do kapsuły #213.
+
+Działający nowy sterownik diagnostyczny wykonał sondy --help/availability
+na runtime #211 w osobnym kontenerze 1 CPU/1 GiB. Wszystkie sondy Fullmaga
+zatrzymały się przed main; loader kończy log na inicjalizacji cublasLt.
+To lokalizacja awarii, nie dowód wewnętrznej przyczyny ani PASS solvera.
+Raport i kontener zachowano; sześć interpretowanych kontroli sterownika PASS.
+Audyt: docs/audits/2026-10-03-fem-cpu-startup-cuda-dependency-audit.md.
+Izolowane dodatkowe sondy bibliotek wymagają odpowiedzi na otwarte pytanie
+po odrzuceniu tego rozszerzenia przez auto-review. Nie uruchomiono ich.
+
+Runner jest zdrowy, ale ma 6782971904 B wolnego, poniżej bramki 8 GiB.
+#212/#213 czekają w niezmienionej FIFO. Nie usunięto danych. Po odblokowaniu
+runtime potrzeba przypiętej próby serial/adaptive, nowego GUI i dalszej
+kampanii naukowej. Wykres nadal zawiera dwa zaakceptowane punkty ±10 z #203.
+
+Końcowy read-only review przyrostu admission nie znalazł nowego P1/P2.
+Budżet CPU krótkiego workera pochodzi z wartości zapisanej przez rodzica;
+przy natychmiastowym zamknięciu telemetrii journal zachowuje przyczynę.
+CPU90% pozostaje celem alokacji Fullmaga, nie globalną gwarancją użycia
+całego węzła przez wszystkich konsumentów. Regresje Rust pozostają nieuruchomione.
+
+Lokalny checkpoint diagnostyki: 237243e13e665fee237513da480e0e656066615d (5 plików).
+Osiem interpretowanych regresji PASS; walidacja realnego zatrzymanego
+kontenera Docker PASS bez startu i bez nowych sond. Nie opublikowano
+niezweryfikowanego przyrostu adaptive; full runtime/UI/science nadal otwarte.
+
+Live admission jest samplowany także po przyjęciu ostatniego punktu,
+a ostatnie zdarzenie puli ma aktualne active/pending counts. Review nie
+wykazał ryzyka dodatkowego spawn/indexowania przy pending=0. Jeśli końcowy
+pomiar jest niedostępny, raport zachowuje terminal_telemetry_unavailable;
+nie tworzy sztucznego CPU/RAM. Przygotowano regresję no_pending_samples,
+bez kompilacji. UI review wskazało stale dane podczas invalidation oraz
+maskowanie malformed import — poprawki źródłowe są w toku. Wygenerowany
+OpenAPI wymaga przyszłego eksportu z nowego managed API i nie jest
+ręcznie podmieniany. Browser/runtime pozostają NOT VERIFIED.
+
+
+### Końcowy checkpoint źródeł UI/API — 2026-10-03
+
+Poprawiono stale zasób etapów: loading/stale/error wygasza dane, a ready
+wymaga zgodnych session_id/session_epoch/run_id. Backend publikuje te
+identyfikatory z tego samego snapshotu co stage records; wspólny helper
+zachowuje dotychczasową semantykę epoch. Brak identity w starym API jest
+niedostępnością, nie podstawą do wymyślania identyfikatorów klienta.
+Review źródłowe identity/epoch/scope PASS. Regresje API/React przygotowano,
+ale zgodnie z zakazem nie kompilowano ani nie wykonywano ich.
+
+Malformed policy import pozostaje błędem: bool/whitespace/zły kształt/
+nieznany mode nie stają się domyślnym serial ani liczbą. UI wyjaśnia,
+że CPU/RAM/reserve/workers sterują wyłącznie adaptive i następnym runem.
+W trakcie kontroli produkcyjnej poprawiono brakującą nazwę zmiennej
+w komponencie (używa stageExecution zwróconego już po scope guardzie).
+
+Produkcja TypeScript PASS: 799 plików, zero test/spec, niezmienione hashe
+czterech źródeł w trakcie kontroli. Zachowano poprzedni failed wynik.
+Dowód: adaptive-ui-scope-production-types-20261003-v2.json w wizualizacjach
+wątku. React Doctor 0.9.12, scope changed vs HEAD: exit0, complete=true,
+14 źródeł (lint/AST, bez kompilacji testów), brak nowych diagnostyk; brak
+sieci i wysyłania telemetrii. Dowód: adaptive-ui-react-doctor-20261003.json.
+
+Generated OpenAPI JSON/types nadal nie zawiera nowych identity/pól
+parallel_execution/schematu telemetry. To blocker zgodności kontraktu,
+nie naprawiamy go ręcznie. Wymaga eksportu z nowego managed API.
+#213 nie zawiera późniejszych poprawek admission ani identity; przyszła
+kwalifikacja musi przypiąć nową kapsułę aktualnych źródeł. Nie wykonano
+serial/adaptive runtime, nowego browser proof ani pomiaru przyspieszenia.
+Pełny cel S00–S12 pozostaje aktywny; dwa punkty ±10 nie są pełną dyspersją.
+
+## S05/S12 — oddzielenie pełnego stosu modalnego CPU, 2026-10-03
+
+[Przyrost zależności CPU](../../audits/2026-10-03-fem-cpu-dependency-stack-remediation.md)
+usuwa mieszany wybór CPU MFEM/HYPRE oraz CUDA PETSc/libCEED z konfiguracji
+nowego obrazu. 45 interpretowanych regresji preflightu i składnia czterech RUN
+PASS. Nie zbudowano obrazu ani nie zmieniono koordynatora/FIFO. Nowy image ID,
+receipt, rzeczywisty startup i kwalifikacja ELF pozostają NOT VERIFIED.
+Odczyt runnera w tej turze: worker_alive=true, accepting_jobs=true, brak
+active jobs, waiting_for_disk, storage_free_bytes=6693638144 < 8 GiB.
+Błąd początkowego odczytu Docker był błędem uprawnień sandboxa, nie dowodem
+zatrzymania runnera. #213 nadal jest starszą, niezmienną kapsułą.
+
+Checkpoint źródeł CPU: lokalny commit `e0ac047f38410b41c0139fcfe07b383b2ff48621`,
+4 pliki, 45 interpretowanych regresji PASS. Indeks po commicie pusty.
+Pozostałe zmiany adaptacyjne/API/UI/pilota pozostają w worktree. Nie wykonano
+push, merge, nowego obrazu ani runtime; review niezależne tego przyrostu
+pozostaje w toku. Ten checkpoint nie zamyka żadnej bramki naukowej.
+
+### Follow-up CPU stack — cztery punkty review
+
+Domknięto źródła wrappera operatorowego, pełne CPU library binding w
+producencie/konsumencie atestacji, obsługę disabled macro0 i ponowne
+rozstrzygnięcie cache PETSc/SLEPc/MFEM. 47+18 interpretowanych regresji PASS;
+CMake NONE cache regression PASS bez kompilacji. Szczegóły w raporcie CPU
+remediation. Nowy obraz i managed runtime pozostają NOT VERIFIED; nie
+uruchomiono dodatkowych diagnostycznych sond wymagających zgody.
+
+### Checkpoint CPU modal — c8394a502f4326f83808e9cd537fb717a5af6cd5
+
+Domknięto rzeczywisty wrapper obrazu runtime-v2, pełne wiązanie pięciu bibliotek CPU i discovery PETSc/SLEPc, parser makr z wartością 0 oraz invalidation cache CMake. Niezależne review nie znalazło blokującego P1; dwie dodatkowe uwagi także poprawiono (puste listy preloadu CUDA, cache CMAKE_PREFIX_PATH). 47+19+1 lekkich kontroli PASS, bez kompilacji testów. Dowód hash-bound: cpu-modal-stack-followup-20261003-final.json.
+
+Runner zdrowy, zero aktywnych wykonań, waiting_for_disk; 6 656 266 240 bajtów wolnych poniżej 8 GiB. Nie zbudowano ani nie wdrożono nowego obrazu. #213 zawiera starszą kapsułę. Następny krok: operatorowo zbudować i dopuścić nowy obraz przy bezpiecznym zasobie storage, uzyskać receipt runtime-v2 z nową kapsułą, wyeksportować OpenAPI i wykonać serial/adaptive wraz z rzeczywistym browser proof. Pełny cel S00–S12 nadal aktywny; źródłowa poprawka nie zamyka nauki ani integracji.
+
+### Zachowanie pomiarów admission — 2026-10-03
+
+W raporcie adaptive znaleziono utratę danych: deduplikacja porównywała obciążenie CPU i RAM, lecz pomijała cpu_available_cores i worker_peak. Zmiana wolnej mocy w hierarchii cgroup albo nowy peak CPU/RSS mogła więc nie trafić do raportu, choć live callback dostawał próbkę. Wydzielono same_admission_state, który uwzględnia te wielkości; same timestampy nadal są deduplikowane, a limit 2048 zdarzeń pozostaje.
+
+Parser rustfmt PASS; przygotowano regression admission_deduplication_retains_free_capacity_and_worker_peak_changes (timestamp-only, free cores, pojawienie peak, zmiana CPU i RSS). Nie kompilowano ani nie uruchomiono testu Rust. Dowód source-change: adaptive-admission-report-dedup-20261003.json. Przyrost jest częścią niezakwalifikowanego pakietu adaptive, bez osobnego commita oderwanego od zależności. Runner nadal waiting_for_disk (6 649 659 392 B); nowe obliczenia i browser proof pozostają OPEN.
+
+### HPC: nieograniczony przodek cgroup — 2026-10-03
+
+Sampler przypisywał nieograniczonemu przodkowi pojemność leaf affinity i odejmował usage wszystkich jego potomków. Dla alokacji 4 CPU i 12 CPU zużytych przez obce zadania poza affinity dawało to fałszywe zero. Dokumentacja jądra potwierdza, że cpu.stat obejmuje potomków, a cpu.max=max nie jest skończonym limitem. Źródła teraz rozróżniają leaf accounting i przodków z finite quota; konkurencja na przydzielonych rdzeniach pozostaje mierzona przez proc/stat affinity. Wszystkie skończone limity CPU i limity pamięci pozostają obowiązujące. Historia usuniętej quota jest odrzucana; ponowne włączenie finite wymaga nowego okresu pomiaru.
+
+Parser Rust PASS; native regression przygotowana, bez kompilacji/runtime. Źródłowe review wcześniejszej poprawki deduplikacji raportu: bez P1/P2; rozszerzono test także o append, limit 2048, events_truncated i zachowanie pierwszego/najnowszego zdarzenia. Nowe review HPC trwa. Dowód: adaptive-hpc-cpu-scope-20261003.json. Zaktualizowano ADR 0034 zgodnie z semantyką kernel. Brak nowych wyników dyspersji; zdrowy runner nadal waiting_for_disk (6 644 613 120 B).
+
+### Review HPC/admission — 2026-10-03
+
+Niezależne review zakończone: brak P1/P2 dla selekcji domen CPU, zachowania finitequota i wszystkich limitów pamięci oraz resetu historii po zmianie quota. Potwierdzono też bezpośrednią regresję append_admission_event: deduplikacja, 2048 zdarzeń, events_truncated, first/latest. Dowód: adaptive-hpc-cpu-scope-20261003-reviewed.json. Nadal source-only: test Rust niekompilowany, nowy obraz, solver, serial/adaptive i GUI NOT VERIFIED.
+
+### S09: granica typed representation — 2026-10-03
+
+Odebrano niezależny source audit: obecny Python/IR/planner/native ABI 19 nie ma osi/przekroju/reprezentacji waveguide; bounded assembler nie jest produkcyjnym providerem MFEM. Wymagana jest decyzja ProblemIR z ADR 0031. Przygotowano ADR 0035 z konkretną propozycją full_3d | waveguide_2p5d, zachowaniem historycznego K0, signed k, jawnej ramy/przekroju, producer certificate oraz osobnego ownera 2D i per-length norms. Nie aktywowano fikcyjnego publicznego API ani capability. Kontrakt pozostaje proposed/review; format przekroju/ramy/tolerancji i brzegu musi być domknięty przed publicznym kodem.
+
+CPU3D S00–S08 nadal jest pierwszym kamieniem milowym. Runner zdrowy, #213 queued, waiting_for_disk; 6 383 943 680 B wolnych. Nie ma nowych wyników solvera, nowego obrazu ani serial/adaptive/runtime UI proof. Pełny cel S00–S12 zachowany.
+
+Lokalny checkpoint propozycji kontraktu S09: `0ca640b0d94d2ed0171cf7a1b10b19a3c17c41f1`; kontrola 4 odnośników i 10 istniejących ścieżek PASS, staged whitespace check PASS. Review trwa. Kontrakt/owner 2D nie jest zaimplementowany ani dostępny; pełna nauka i integracja pozostają otwarte.
+
+### S09: uszczegółowienie po review kontraktu — 2026-10-03
+
+Review ADR0035 wskazało brak BC, schematu invariance, migracji Γ, normy, frame/k serializacji i topologii. Spec fem-waveguide-spatial-representation-v1 wybiera jawny finite-air Dirichlet model, natural free exchange z osobnym capability guardem, trzy odrębne Γ przypadki, structural_2d certificate z pełnymi immutable input bindings i osobnym equilibrium certificate, frame/signed k/projection errors oraz nowy triangle/edge descriptor. Wspólna tolerance 1e-12 dotyczy geometrii, nie solvera. Zapisano lokalne linki i source hashes; review spec oraz osobna naukowa nota normalizacji trwają. To dokumenty proposed, bez aktywowanego public API/ABI/provider. Pełny S09 i S00–S12 nadal OPEN.
+
+### S06/S09 — spójna skala pól sprzężonego modu, 2026-10-03
+
+Przegląd aktualnej normalizacji ujawnił istniejący błąd pełnego 3D: dense consumer skalował q przez sqrt(max(I,1e-30)), a certyfikat potencjału przez max(sqrt(max(I,0)),1e-30). Dla I=1e-40 skale różnią się o 100000. Wspólny `normalize_complex_mode_and_scale` liczy skalę raz; block consumer również zwraca tę samą skalę. Zero, ujemna/niefinitywna norma, błędny wymiar i overflow znormalizowanych współczynników są błędem, bez sztucznego floor. `mode_phi_*` korzysta z tego samego checked helpera, co zamyka P1 overflow ujawnione w review. Zapisano trzy regresje Rust; nie kompilowano ich. Parser rustfmt PASS, focused map0830 PASS, 35 interpretowanych testów walidatora PASS. Niezależne przykłady odtworzyły rozbieżność i overflow, ale nie wykonują regulatora ani solvera Rust.
+
+Otwarty podpunkt normy: znacząca urojona część q†Mq musi być odrzucona na podstawie error bound wyprowadzonego z rzeczywistych wkładów i liczby operacji dense/sparse. Sam finite check i re>0 nie wystarczają do certyfikatu Hermitowskiej normy. Nie dodano arbitralnego epsilon. Runtime tej korekty pozostaje NOT VERIFIED i wymaga nowej kapsuły po wdrożeniu kompletnego stosu CPU.
+
+Review proposed kontraktu S09 pozostawiło dwa P1 przed authoring/IR: (1) jawny dyskryminator wersji nowego payloadu i migracja obecnego IR0.3.0 z zachowaniem obecności legacy BC, (2) dokładny wire descriptor mesha/regionów/outer-boundary z kompletnym mapping do świata i object_id. Potrzebne także oddzielne nazwy tolerancji frame/collinearity i triangle roundoff. Provider nadal unavailable. Nie promujemy proponowanej noty normalizacji ani bounded oracle do produkcyjnej realizacji. Pełny S00–S12 pozostaje aktywny.
+
+Checkpoint lokalny naprawy wspólnej skali: `b45736bfda2fae3470555b510034f99542506bfa` (6 plików; scoped stage nowej sekcji 0830 zachował wcześniejsze working edits). Re-review zamknęło P1 overflow mode_phi źródłowo; P2 Hermitian roundoff-bound pozostaje OPEN. Bez push/merge i bez kompilacji testów. Nota 0833 i mapa są przygotowane: poprawna continuous tangency do m0, oddzielona nodalna tangency, norma geometryczna P1 z Ti^T Tj, Cartesian nodal max, wspólna skala q/phi/gauge oraz jednostki 2D/3D. Dowód agenta: focused validator exit0, 7 interpretowanych kontroli OK. Nie jest to dostępny provider ani jego runtime. Kolejny krok źródłowy: dokładny wire/version contract S09 oraz błąd normy wyprowadzony z sumowania; bramki obrazu/runtime/OpenAPI/browser/signed DE/BV/COMSOL/zbieżności nadal OPEN.
+
+
+### Adaptive: aktualny build i próba porównawcza — 2026-10-03
+
+Próba `de-smoke-parallel-probe` nie jest już związana z historycznym jobem #211.
+Wymaga jawnego `--probe-build-source-digest <SHA256>` zgodnego z wybranym,
+zweryfikowanym managed kontekstem, profilu CPU `fem-cpu-slepc-runtime-v2`
+i obecności sześciu źródeł adaptive w niezmiennej kapsule. Oba uruchomienia
+serial/adaptive muszą wskazać ten sam job i digest. Model, siatka, equilibrium,
+manifest wejściowy i polityka próby zachowują dotychczasowe hashe i parametry.
+Historyczny commit modelu jest provenance wejścia, nie wersją runtime.
+
+Naprawiono też brakujący import `PARALLEL_PROBE_VECTORS_RAD_PER_M`: jego użycie
+w walidacji po zakończeniu solvera powodowałoby NameError. `_parallel_probe_root`
+używa kanonicznego `fullmag_storage.validate_path`, który odrzuca przekierowanie
+przez symlink/junction, także w pośrednim katalogu. Regresja symuluje przekierowany
+ancestor; nie jest dowodem utworzenia rzeczywistego Windows junction.
+
+Kontrole interpretowane: 13 testów probe + 36 drivera PASS. Zachowany aktualny
+wynik 58 testów walidatora wierszy PASS; jego źródło i zależności walidacyjne
+nie zmieniły się po tym wykonaniu. Razem 107 kontroli. Próba unittest dla pliku
+pytest zgłosiła NO TESTS RAN; następnie właściwe pytest wykonało wszystkie 58.
+Review nie wykryło P1; finding P2 dotyczący storage naprawiono. Żaden test
+jednostkowy Rust/native/React nie został skompilowany.
+
+#212 zakończył się `succeeded`, exit0. Wstrzymano admission na czas autoryzowanej
+aktualizacji obrazu i anulowano wyłącznie własny nieaktualny #213; journal
+potwierdza `cancelled`, exit143. Dane obu zadań zachowane. Przed budową obrazu
+potwierdzono brak aktywnych jobów, brak worker_error i 14 364 770 304 B wolnych.
+Worker nie działa podczas świadomej pauzy; nie oznaczamy tego jako worker_alive PASS.
+
+Uruchomiono `just runner-build-image` z CPU_MFEM_ONLY=1. Bazowy obraz:
+`sha256:8a508319a68c4116da81b745fdd1b084015b665d92b36b2241e1e245b5febf89`,
+lokalny alias `fullmag/toolchain-pinned:8a508319a68c-adaptive-20261003`.
+Docelowy tag: `fullmag/local-runner-build:slepc-cpu-complete-adaptive-20261003`.
+Dwie próby zakończyły się przed kompilacją: BuildKit nie obsługuje bridge jako
+build network, a surowe sha256 w FROM interpretował jako repozytorium.
+Właściwa próba używa network=default i zweryfikowanego lokalnego aliasu.
+Build obrazu trwa (sesja narzędzia 82647); hypre CPU rozpoczął kompilację.
+Nie ma jeszcze końcowego ID/receiptu obrazu ani aktualnego builda Fullmaga.
+
+Następne kroki: odczytać terminalny wynik budowy obrazu, zweryfikować immutable ID,
+skonfigurować runtime-v2 zachowując pozostałe profile, wznowić FIFO i zgłosić
+aktualny snapshot ze wszystkimi wymaganymi untracked wejściami. Następnie
+wyeksportować OpenAPI, zregenerować klienta, uruchomić identyczne wejścia
+serial/adaptive i sprawdzić wyniki, raport procesów, faktyczną równoległość,
+zużycie zasobów oraz UI. Kampanijne skrypty plan-only w storage nadal wymagają
+aktualizacji wywołania (digest zamiast #211); nie wolno traktować ich jako wykonanego runtime.
+Managed runtime, browser proof, przyspieszenie i pełny cel S00–S12 pozostają OPEN.
+
+Re-review poprawki ścieżki: P2 zamknięte, brak nowych P1/P2. Budowa obrazu przeszła hypre i libCEED; konfiguracja PETSc zakończona, trwa kompilacja jego biblioteki. Sesja 82647 pozostaje aktywna; nie ma jeszcze końcowego sukcesu obrazu ani nowego runtime Fullmaga.
+
+## Adaptacyjne wykonanie — wdrożenie pary obrazów, 2026-10-03
+
+Obraz CPU `sha256:7139ca2622b622ca934e53a573372b41c3c2c48b7ba67bc128883b36eb541d6e` zbudowano z kodem po poprawce prefix-based SLEPc (lokalny commit `fc3d8246db2f3f77f830d97a95197222b0a2de02`). Koordynator `sha256:9923f33b147b52b6534a9f2161bf4a00c4b138679575035676bffb52512da0db` zachowuje guard ograniczonych instancji browser oraz pozostałe profile; guard/executor: 26 interpretowanych kontroli PASS. Wymianę wykonano przy pustym aktywnym slocie i wstrzymanym przyjmowaniu. FIFO wznowiono; nie zmieniono kolejności obcych zadań. Runtime-v2 zachował limit buildu 2 CPU/8 GiB.
+
+Nowy build **#216**: `a1d3dfd0c1914c5bb63d0179c113d01b`, digest kapsuły `8dda784a98471ee52e4e09b6cabb00a80bf5eb565c30673f0dd9bbe98b49f960`, snapshot HEAD `fc3d8246db2f3f77f830d97a95197222b0a2de02` z bieżącymi zmianami i jawnymi nowymi źródłami adaptive. Stan przy przyjęciu: queued. Recepta próby wymaga teraz jawnego job_id oraz source_digest zamiast starego nieudanego #211; probe/driver: 49 interpretowanych kontroli PASS.
+
+Budowa obrazu nie dowodzi jeszcze działania Fullmaga ani scheduler parity. Następnie: terminalny receipt #216 i CPU dependency closure, eksport OpenAPI/client, rzeczywiste serial/adaptive z tymi samymi wejściami, raport puli z dowodem równoległości i obciążenia, managed UI/browser. Brak nowych punktów naukowych; pełne S00–S12 pozostają otwarte. Log obrazu i stan przejścia zapisano w wizualizacjach wątku.
+
+## Kontrola raportu adaptacyjnego — checkpoint lokalny, 2026-10-03
+
+Commit `51da8c43b0e3e3f5fc375d269ca9963ac240847b` dodaje wyłącznie interpretowany walidator rzeczywistego ProcessPoolReportV1 i admission journal oraz jego regresje (12 PASS). Kontrola obejmuje bounded JSON, politykę, bindingi, CPU coverage/envelope, zgodność resolved threads i status wykonania. Timestamped active_workers≥2 dowodzi wyłącznie chwilowej współaktywności procesów schedulera; nie dowodzi overlap EPSSolve ani speedup. Bezpośredni raport nie zawiera terminal_state, więc wymaga osobnego powiązania z zakończonym execution — nadal OPEN. Serial może nie emitować raportu puli; porównanie częstotliwości/mesh/equilibrium korzysta z rzeczywistych artefaktów benchmarku, bez syntetycznego serial reportu.
+
+#216 pozostaje queued za #214/#215 według ostatniego odczytu. Nowy commit jest hostowym narzędziem analizy po przechwyceniu kapsuły; nie zmienia przypiętego HEAD/digestu ani źródeł natywnego buildu #216. Brak nowych punktów solvera, kwalifikacji adaptive i browser proof. Wykryty HTTP500 pełnej historii dotyczy starszego /jobs; stronicowane /api/v1/jobs działa. Klient CLI pełnej historii wymaga osobnej korekty, bez zwiększania limitów odpowiedzi.
+
+
+### 2026-10-03 — priorytet użytkownika: adaptacyjna kampania i rzeczywiste punkty
+
+Brak nowych wyników: na dotychczasowym wykresie pozostają dwa zaakceptowane punkty ±10 rad/µm. Przygotowany backend puli nie jest jeszcze dowodem równoległego wykonania. Dotychczasowy zewnętrzny kontroler signed15 wykonywał pojedyncze piloty seryjnie; został zastąpiony nową trasą jednej grupowanej ścieżki.
+
+Model `71ba0d18225ffcc83f7f18e676de8dc051e87fd1` definiuje 15 punktów DE: −25, −20, −15, −10, −7, −5, −2, 0, 2, 5, 7, 10, 15, 20, 25 rad/µm. Jawne `--parallel-mode adaptive` uruchamia publiczną pulę; limit CPU 90%, RAM 80%, rezerwa 1 GiB, jeden wątek na proces i dobór liczby procesów przez pomiary. Sterownik wiąże wersję modelu i digest buildu; wynik ma zawierać rzeczywisty raport puli z SHA256. Nie rozluźniono residualu 10⁻⁸ ani kontroli demag przy Gamma. Lekkie kontrole: 52 sterownika/probe, 4 modelu oraz 59 kontroli wierszy PASS.
+
+Build #216 (`a1d3dfd0c1914c5bb63d0179c113d01b`) jest aktywny; jego kontener rozpoczął pracę o 04:51 UTC. Jednorazowy kontroler (sesja 34636) oczekuje na sukces i weryfikację receipt; następnie uruchomi `signed15-adaptive-v1` w kanonicznym storage. Pierwsza próba kontrolera zakończyła się przed wywołaniem solvera; poprawiona v2 sprawdza stan przez API i nie powiela buildu. Symulacja i nowy wykres pozostają OPEN.
+
+Kontynuacja: terminalny build → rzeczywiste 15 próbek → kontrola artefaktów i pomiarów puli → wykres scatter oraz analityka → oddzielny parytet serial/adaptive i dowód GUI. S09/2.5D zachowano jako WIP poza kapsułą #216; parser/review nie dowodzą kompilacji ani runtime. Pozostałe S00–S12, zbieżność, COMSOL, GPU i integracja PR #97 pozostają otwarte.
+
+Checkpoint źródeł: commit `c1ec5c797730430d95738912260017cc5417f9d7` obejmuje 11 skryptów/testów kampanii, bound receipt, serial/adaptive parity i generatora. Review korekt P1/P2 oraz helpera cleanup PASS. 153 testy interpretowane +60 subtests PASS; kompilacji unit tests nie wykonywano. Commit nie zastępuje wykonania #219 i nie zmienia jego modelu/digestu. Nie wykonano push/merge; wymagane bramki runtime/UI/nauki pozostają otwarte.
+
+### Powtarzająca się blokada storage — 2026-10-03, 05:42 UTC
+
+Job #219 nadal queued; runner healthy, active_job_ids=[], waiting_for_disk. Wolne 8 071 225 344 B wobec minimum 8 589 934 592 B. Ten sam warunek utrzymuje się trzeci kolejny raz. Źródła kampanii zapisano w c1ec5c797730430d95738912260017cc5417f9d7; wymagane wykonanie solvera, eksport OpenAPI i GUI nie mogą być uznane za zaliczone. Rejestr worktree: blocked; pełny zakres S00–S12 pozostaje niezakończony. Obserwator 75831 i renderer 11268 są potwierdzone live; nie ponowiono ani nie anulowano joba. Następny krok wymaga zewnętrznego zwolnienia miejsca lub jawnej zgody na dokładne katalogi execution, po ponownych kontrolach bezpieczeństwa. Read-only lista kandydatów #209/#206/#196: 911 641 541 B, brak aktywnych mountów, niczego nie usunięto; taki odzysk przekracza próg admission, ale nie dowodzi wystarczającej pojemności dla szczytu buildu. PR97 i integracja nadal OPEN.
+
+### Zwolnienie miejsca i wznowienie FIFO — 2026-10-03, 09:13 CEST
+
+Operator zgłosił zwalnianie 20 GB. Health runnera potwierdza 11 433 320 448 B wolnych (około 10,65 GiB), ponad próg 8 GiB. Bieżący stan kolejki: #218 running, #219 queued, #217 blocked. Worker_alive=true, accepting_jobs=true, worker_error=null. Poprzednia blokada storage przestała blokować admission; rejestr worktree ponownie active. Uchwyty 75831 i 11268 są live. Nie zgłoszono nowego joba ani nie zmieniono FIFO; model, digest i wyjście kampanii #219 zachowane. Nowych punktów i wykresu nadal brak. Przekroczenie progu nie dowodzi wystarczającego miejsca dla szczytowego zużycia buildu. Następny krok: terminalny sukces #219 i rzeczywista kampania signed15.
+
+### Autoryzowane sprzątanie starych wykonań — 2026-10-03
+
+Po jawnym zleceniu operatora usunięto wyłącznie execution nieudanych jobów #184/#185/#186/#194/#196/#206/#209, razem 2 129 378 727 B plików. Dry-run sprawdził matching job/journal/owner/source, stan terminalny, brak pin, containment i brak reparse; bezpośrednio przed usunięciem ponownie sprawdzono procesy hosta, zatrzymane kontenery i brak aktywnych mountów tych execution. Artefakty, logi, journal, kapsuły źródeł, cache oraz wyniki solvera zachowane. Receipt: authorized-storage-cleanup-20261003-receipt.json w wizualizacjach wątku. Wolne po operacji: 24 631 119 872 B; różnica wolnego miejsca obejmuje też równoległe zwalnianie danych przez operatora, więc nie jest miarą odzysku wyłącznie tej operacji. #219 nadal queued; nie zgłoszono kolejnego joba.
+
+### Weryfikacja oczekiwania za #218 — 2026-10-03, 10:11 CEST
+
+#218 jest rzeczywiście live: kontener e7eae2be9f8a, native-build exit0, trwa frontend-dependencies. Odczyt Docker: CPU13,58%, RAM554,7MiB/8GiB; brak ingerencji w obcy job. #219 nadal queued z tym samym digestem; wolne 24 147 927 040 B. Obserwator 75831 zakończył się terminalnym dwugodzinnym timeoutem bez zgłoszenia/anulowania joba. Wznowiono wyłącznie obserwację jako v4/uchwyt64900 z ośmiogodzinnym limitem, tym samym modelem i katalogiem wyjścia; renderer11268 pozostaje live. Nie restartowano buildu ani symulacji. Brak nowych punktów. Po sukcesie/atestacji #219 nadal ma nastąpić kampania15 → walidacja → rzeczywisty wykres → parytet i GUI.
+
+### Korekta powiązania obserwatora wykresu z kampanią
+
+Obserwator11268 śledził historyczny signed15-controller-v2.json, zamiast aktualnego v4; nie wykryłby terminalnego błędu obecnej kampanii. Po potwierdzeniu dokładnego procesu54376, stanu waiting_for_actual_result i braku run-result/renderu zatrzymano wyłącznie ten własny obserwator. Uchwyt11268 potwierdził terminal exit1. Nowy obserwator55231 czyta signed15-controller-v4.json; AST i kontrola zachowania samego wyjścia oraz wymogu completed_unqualified/return0 PASS. Generator, tolerancje, job/digest, solver i FIFO bez zmian. Kontroler64900 pozostaje live; #219 nadal queued za live #218 (frontend-dependencies, odczyt CPU15,03%). Nie powstał nowy wykres ani nowe punkty solvera.

@@ -111,6 +111,12 @@ diagnose-managed-fem-startup job_id:
 run-de-smoke job_id sampling="two" model_ref="":
     {{storage_python}} "{{repo_root}}/scripts/run_de_100nm_pilot.py" --repo-root "{{repo_root}}" --job-id {{quote(job_id)}} --pilot {{quote("de-smoke-" + sampling)}} {{if model_ref == "" { "" } else { "--model-ref " + quote(model_ref) }}}
 
+# Closed serial/adaptive parity probe. The driver verifies the completed
+# managed runtime job and source digest against the pinned input manifest.
+# Build FIFO and runtime execution remain separate contracts.
+run-de-smoke-parallel-probe job_id source_digest mode="serial":
+    {{storage_python}} "{{repo_root}}/scripts/run_de_100nm_pilot.py" --repo-root "{{repo_root}}" --job-id {{quote(job_id)}} --probe-build-source-digest {{quote(source_digest)}} --pilot de-smoke-parallel-probe --parallel-mode {{quote(mode)}}
+
 runner-configure-build profile image_id:
     {{storage_python}} scripts/local_runner_cli.py configure-build --profile {{quote(profile)}} --image-id {{quote(image_id)}}
 
