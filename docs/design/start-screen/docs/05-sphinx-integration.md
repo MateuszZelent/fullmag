@@ -209,9 +209,11 @@ The probe is a single `HEAD /docs/index.html` with `cache: "no-store"`.
 
 ## 10. Extending it
 
-- **Context-sensitive help.** `docsPageUrl("physics/…")` already addresses a page;
-  an inspector can offer a *Read more* link by passing a documented path. Keep the
-  mapping in the model and verify the path exists in the built site.
+- **Context-sensitive help.** Done for templates: each `StudyTemplate` carries a
+  `docsPage`, the template inspector offers *Read the documentation*
+  (`startScreenStore.requestDocs(page)`), and `templates.test.ts` checks that every
+  page exists in the Sphinx source. Further inspectors can do the same: keep the
+  mapping in the model and check it against the source.
 - **Release bundling.** Produce `docs:bundle` in the release job that already
   builds the site, and ship `public/docs/` with the app.
 - **Versioned docs.** The site is built with `FULLMAG_DOCS_VERSION`; bundling the

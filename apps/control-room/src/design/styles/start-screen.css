@@ -1646,6 +1646,13 @@
   margin-left: var(--fm-space-2);
 }
 
+.fm-start-template__docs {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--fm-space-1);
+  margin-top: var(--fm-space-2);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .fm-start *,
   .fm-start *::before,

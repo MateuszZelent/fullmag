@@ -1,5 +1,8 @@
+import { BookOpen } from "lucide-react";
+
 import { Button } from "@/shared/ui/Button";
 
+import { startScreenStore } from "../model/startScreenState";
 import { estimateFor, type StudyTemplate } from "../model/templates";
 import type { ComputeProbeState } from "../model/types";
 import { SolverBadge } from "../ui/SolverBadge";
@@ -43,6 +46,13 @@ export function TemplateDetails({
         <section className="fm-start-kv">
           <h3 className="fm-start-kv__title">Reproduces</h3>
           <p className="fm-start-inspector__note">{template.reference}</p>
+          <button
+            className="fm-start-link fm-start-template__docs"
+            onClick={() => startScreenStore.requestDocs(template.docsPage)}
+            type="button"
+          >
+            <BookOpen aria-hidden="true" size={12} /> Read the documentation
+          </button>
         </section>
         <p className="fm-start-inspector__note">{estimate.note}</p>
       </div>

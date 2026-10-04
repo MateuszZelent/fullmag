@@ -16,6 +16,8 @@ export interface StudyTemplate {
   readonly estimate: TemplateEstimate;
   /** What the study reproduces, so a result can be checked against it. */
   readonly reference: string;
+  /** The documentation page that explains it, relative to the docs root. */
+  readonly docsPage: string;
   readonly model: readonly { readonly label: string; readonly value: string }[];
 }
 
@@ -35,6 +37,7 @@ export const STUDY_TEMPLATES: readonly StudyTemplate[] = [
     solver: "FDM",
     estimate: { gpuMinutes: 2, vramGb: 0.4, cpuMinutes: 25 },
     reference: "µMAG Standard Problem #1 (NIST), hysteresis loop of a thin Permalloy rectangle.",
+    docsPage: "validation/mumag-standard-problems.html",
     model: [
       { label: "Geometry", value: "1 × 2 µm × 20 nm rectangle" },
       { label: "Material", value: "Permalloy" },
@@ -48,6 +51,7 @@ export const STUDY_TEMPLATES: readonly StudyTemplate[] = [
     solver: "FDM",
     estimate: { gpuMinutes: 1, vramGb: 0.3, cpuMinutes: 12 },
     reference: "µMAG Standard Problem #4 (NIST), dynamic switching of a Permalloy strip.",
+    docsPage: "validation/mumag-standard-problems.html",
     model: [
       { label: "Geometry", value: "500 × 125 × 3 nm strip" },
       { label: "Material", value: "Permalloy" },
@@ -61,6 +65,7 @@ export const STUDY_TEMPLATES: readonly StudyTemplate[] = [
     solver: "FDM",
     estimate: { gpuMinutes: 25, vramGb: 6, cpuMinutes: 420 },
     reference: "Magnetostatic spin-wave dispersion of a YIG waveguide.",
+    docsPage: "python-api/outputs/dispersion-and-response.html",
     model: [
       { label: "Material", value: "YIG" },
       { label: "Excitation", value: "sinc, fc = 20 GHz" },
@@ -74,6 +79,7 @@ export const STUDY_TEMPLATES: readonly StudyTemplate[] = [
     solver: "FEM",
     estimate: { gpuMinutes: 90, vramGb: 10, cpuMinutes: 120 },
     reference: "Band structure of a one-dimensional magnonic crystal.",
+    docsPage: "python-api/boundary-conditions/floquet-boundary-conditions.html",
     model: [{ label: "Study", value: "Bloch-periodic eigenmodes" }],
   },
   {
@@ -84,6 +90,7 @@ export const STUDY_TEMPLATES: readonly StudyTemplate[] = [
     solver: "FDM",
     estimate: { gpuMinutes: 60, vramGb: 8, cpuMinutes: 900 },
     reference: "Phase diagram of interfacial-DMI skyrmions in a thin film.",
+    docsPage: "physics/interactions/dmi/interfacial.html",
     model: [{ label: "Sweep", value: "D × B_z grid" }],
   },
   {
@@ -94,6 +101,7 @@ export const STUDY_TEMPLATES: readonly StudyTemplate[] = [
     solver: "FDM",
     estimate: { gpuMinutes: 20, vramGb: 4, cpuMinutes: 300 },
     reference: "Field-swept ferromagnetic resonance absorption map.",
+    docsPage: "python-api/studies/frequency-response.html",
     model: [{ label: "Study", value: "field sweep, S11" }],
   },
   {
@@ -104,6 +112,7 @@ export const STUDY_TEMPLATES: readonly StudyTemplate[] = [
     solver: "FDM",
     estimate: { gpuMinutes: 35, vramGb: 5, cpuMinutes: 520 },
     reference: "Current-driven domain-wall motion in a nanostrip (Zhang-Li).",
+    docsPage: "python-api/interactions/spin-transfer-torque.html",
     model: [{ label: "Drive", value: "Zhang-Li spin-transfer torque" }],
   },
   {
@@ -114,6 +123,7 @@ export const STUDY_TEMPLATES: readonly StudyTemplate[] = [
     solver: "FEM",
     estimate: { gpuMinutes: 45, vramGb: 7, cpuMinutes: 240 },
     reference: "Gyrotropic mode of a magnetic vortex in a Permalloy disc.",
+    docsPage: "python-api/studies/eigenmodes.html",
     model: [
       { label: "Geometry", value: "Py disc" },
       { label: "Excitation", value: "field pulse" },
