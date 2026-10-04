@@ -1,3 +1,5 @@
+import { existsSync } from "node:fs";
+
 import { describe, expect, it } from "vitest";
 
 import { STUDY_TEMPLATES, estimateFor } from "./templates";
@@ -27,6 +29,19 @@ describe("STUDY_TEMPLATES", () => {
   it("ships the eight studies with unique ids", () => {
     expect(STUDY_TEMPLATES).toHaveLength(8);
     expect(new Set(STUDY_TEMPLATES.map((t) => t.id)).size).toBe(8);
+  });
+});
+
+describe("template documentation links", () => {
+  // The links are only worth showing while the page exists in the docs source.
+  const docsSource = new URL("../../../../../../public_docs/site/", import.meta.url);
+
+  it("point at pages that exist in the Sphinx source", () => {
+    for (const t of STUDY_TEMPLATES) {
+      expect(t.docsPage.endsWith(".html"), t.id).toBe(true);
+      const source = new URL(t.docsPage.replace(/\.html$/, ".md"), docsSource);
+      expect(existsSync(source), `${t.id} -> ${t.docsPage}`).toBe(true);
+    }
   });
 });
 
