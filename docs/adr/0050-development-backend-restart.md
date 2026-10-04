@@ -8,6 +8,18 @@ NOT VERIFIED. Utrata ACK wymaga potwierdzonego exit własnego API i zgodnego
 trwałego rekordu; nie upoważnia do ponowienia commit ani zwolnienia fence.
 Data: 03.10.2026.
 
+### Zamontowany kernel — P8-53AR
+
+[Dowód P8-53AR](../plans/active/refactor_runtime/final/p8/53ar-mounted-kernel-handoff.md)
+obejmuje produkcyjny KernelProvider z odpowiedziami fixture. Pauza zachowuje
+zamontowane dzieci; nowa generacja otrzymuje świeżych właścicieli i scoped
+cache. Registry, API i zasoby nowej generacji są chronione do potwierdzenia
+mount i aktualizacji pinu URL. Stary transport pozostaje retired, także po
+zwolnieniu capture lease. Token-bound status może pominąć stary pin,
+ale musi potwierdzić wersję kontraktu. Browser 13/13 PASS nie kwalifikuje
+natywnego restartu, warm-service ani utraty zasilania. Komenda UI i pełny
+restart z niepustą sceną pozostają NOT VERIFIED; `restart_available=false`.
+
 ### Tożsamość i właściciele frontendu — P8-53AQ
 
 Zasób `development-backend` w zarządzanym trybie dev zawiera cienkie

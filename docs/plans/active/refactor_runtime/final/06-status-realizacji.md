@@ -1,5 +1,16 @@
 # Status realizacji całego planu refaktoryzacji
 
+Checkpoint P8-53AR, 04.10.2026: [zamontowany kernel](p8/53ar-mounted-kernel-handoff.md).
+Produkcyjny KernelProvider zachowuje dzieci podczas pauzy i publikuje nową
+generację po odtworzeniu ownerów. Registry, transport oraz scoped resources
+chronią także nową generację przed ACK; stary klient pozostaje retired.
+Host 6 grup, transport 13 grup, production TypeScript/API hygiene/lint oraz
+browser fixture 13/13 PASS. Pełny natywny restart z niepustą sceną, komenda UI,
+warm-service i fault qualification pozostają otwarte; `restart_available=false`.
+Po równoległych merge'ach review wykrył otwartą ochronę opóźnionych i queued
+wyników runu na starym właścicielu dokumentu; wymaga poprawki przed nonempty restart.
+Procenty całego planu bez awansu.
+
 Checkpoint P8-53AQ, 04.10.2026: [właściciele workspace i cache klienta](p8/53aq-workspace-owners-and-client-cache.md).
 Dokładna tożsamość API/session/globalnego epoch, guard dokumentu i adapter
 odtworzenia wymagają świeżych właścicieli. Hooki oraz wydawcy danych mają

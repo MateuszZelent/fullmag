@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useMemo, useRef, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useSyncExternalStore, type ReactNode } from "react";
 
 import { SESSION_EVENTS_WS_PATH, VISUALIZATION_STATE_PATH } from "./api/apiPaths";
 import { planarMonitorFramePreviewStore } from "./workspace/planarMonitorFramePreview";
@@ -92,6 +92,8 @@ import { PendingFormRegistry } from "./authoring/PendingFormRegistry";
 import { ProjectDocumentController } from "./persistence/ProjectDocumentController";
 import { RunOutcomeConnector } from "./persistence/RunOutcomeConnector";
 import { resolveControlRoomModules } from "@/modules";
+import { DevelopmentKernelHost, type DevelopmentKernelFactoryOptions } from "./development/DevelopmentKernelHost";
+import { developmentReplacementUrl } from "./api/apiInstancePin";
 
 installPerformanceMeasureGuard();
 
@@ -99,7 +101,7 @@ interface KernelProviderProps {
   children: ReactNode;
 }
 
-function createKernel(): KernelApi {
+function createKernel(options: DevelopmentKernelFactoryOptions, developmentWorkspace: DevelopmentKernelHost): KernelApi {
   const bus = new EventBus<KernelEventMap>();
   const diagnostics = new RequestDiagnosticsController();
   const browserConfig =
@@ -119,7 +121,8 @@ function createKernel(): KernelApi {
     },
   });
   const api = new ControlRoomApi({
-    baseUrl: resolveControlRoomApiBase(),
+    baseUrl: options.baseUrl ?? resolveControlRoomApiBase(),
+    expectedApiInstance: options.expectedApiInstance,
     binaryDecodeScheduler,
     diagnostics,
   });
@@ -216,6 +219,7 @@ function createKernel(): KernelApi {
   }
 
   return {
+    developmentWorkspace,
     api,
     analysisFieldOverlay,
     authoringHistory,
@@ -309,12 +313,12 @@ function DiagnosticRecorderConnector({ kernel }: { kernel: KernelApi }) {
   return null;
 }
 
-function RealtimeConnector({ kernel, sessionIdentity }: { kernel: KernelApi; sessionIdentity: SessionResourceIdentity }) {
+function RealtimeConnector({ kernel, sessionIdentity, paused }: { kernel: KernelApi; sessionIdentity: SessionResourceIdentity; paused: boolean }) {
   const sessionScopeKey = sessionRequestScopeKey(sessionIdentity);
   const expectedRequestScopeEpoch = sessionIdentity?.requestScopeEpoch ?? null;
   const expectedSessionId = sessionIdentity?.sessionId ?? null;
   useEffect(() => {
-    if (!expectedSessionId || !expectedRequestScopeEpoch || controlRoomRealtimeDisabledFromBrowser()) {
+    if (paused || !expectedSessionId || !expectedRequestScopeEpoch || controlRoomRealtimeDisabledFromBrowser()) {
       return;
     }
 
@@ -353,6 +357,8 @@ function RealtimeConnector({ kernel, sessionIdentity }: { kernel: KernelApi; ses
         kernel.realtime.handleReconnect();
       },
       onStatusChange: (status) => {
+        const host = kernel.developmentWorkspace?.getSnapshot();
+        if (host && (host.paused || host.kernel !== kernel)) return;
         kernel.realtimeConnection.update(status);
         kernel.bus.emit("session:status-changed", { status });
       },
@@ -360,7 +366,7 @@ function RealtimeConnector({ kernel, sessionIdentity }: { kernel: KernelApi; ses
     });
     client.connect();
     return () => client.close();
-  }, [kernel, sessionScopeKey, expectedRequestScopeEpoch, expectedSessionId]);
+  }, [kernel, sessionScopeKey, expectedRequestScopeEpoch, expectedSessionId, paused]);
 
   return null;
 }
@@ -372,7 +378,7 @@ function controlRoomRealtimeDisabledFromBrowser(): boolean {
   return auditWindow.__FULLMAG_CONFIG__?.disableRealtime === true;
 }
 
-function CommandShortcutConnector({ kernel }: { kernel: KernelApi }) {
+function CommandShortcutConnector({ kernel, paused }: { kernel: KernelApi; paused: boolean }) {
   const startupVisible = useSimulationStartupOverlayVisibility();
   const sessionIdentity = useSessionResourceIdentity();
   const sessionScopeKey = sessionRequestScopeKey(sessionIdentity);
@@ -386,11 +392,12 @@ function CommandShortcutConnector({ kernel }: { kernel: KernelApi }) {
   }, [runtimeResourceData]);
 
   useEffect(() => {
-    if (startupVisible) {
+    if (startupVisible || paused) {
       return;
     }
 
     function handleKeyDown(event: KeyboardEvent): void {
+      if (kernel.developmentWorkspace?.getSnapshot().paused) return;
       const context = createCommandContext("shortcut", kernel, {
         resourceData: runtimeResourceDataRef.current,
         sessionScopeKey,
@@ -401,7 +408,7 @@ function CommandShortcutConnector({ kernel }: { kernel: KernelApi }) {
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [kernel, sessionScopeKey, startupVisible]);
+  }, [kernel, sessionScopeKey, startupVisible, paused]);
 
   return null;
 }
@@ -409,11 +416,14 @@ function CommandShortcutConnector({ kernel }: { kernel: KernelApi }) {
 function ProjectWorkspaceShortcutConnector({
   kernel,
   canCreateSession,
+  paused,
 }: {
   kernel: KernelApi;
   canCreateSession: boolean;
+  paused: boolean;
 }) {
   useEffect(() => {
+    if (paused) return;
     const commands = {
       all: () => kernel.commands.all().filter((command) =>
         isProjectWorkspaceCommand(command.id) &&
@@ -422,6 +432,7 @@ function ProjectWorkspaceShortcutConnector({
       execute: (id: string, context: Parameters<typeof kernel.commands.execute>[1]) => kernel.commands.execute(id, context),
     };
     const handleKeyDown = (event: KeyboardEvent) => {
+      if (kernel.developmentWorkspace?.getSnapshot().paused) return;
       dispatchShortcutCommand(commands, event, createCommandContext("shortcut", kernel, {
         sessionScopeKey: null,
         sourceDetail: "project-workspace",
@@ -429,20 +440,21 @@ function ProjectWorkspaceShortcutConnector({
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [kernel, canCreateSession]);
+  }, [kernel, canCreateSession, paused]);
   return null;
 }
 
-function SessionRuntimeConnectors({ kernel }: { kernel: KernelApi }) {
+function SessionRuntimeConnectors({ kernel, paused }: { kernel: KernelApi; paused: boolean }) {
   const sessions = useSessionCollection();
   if (sessions.state !== "ready") {
-    return <ProjectWorkspaceShortcutConnector kernel={kernel} canCreateSession={sessions.state === "no-session"} />;
+    return <ProjectWorkspaceShortcutConnector kernel={kernel} paused={paused} canCreateSession={sessions.state === "no-session"} />;
   }
-  return <AvailableSessionRuntimeConnectors kernel={kernel} collection={sessions.resource.data} />;
+  return <AvailableSessionRuntimeConnectors kernel={kernel} paused={paused} collection={sessions.resource.data} />;
 }
 
-function AvailableSessionRuntimeConnectors({ kernel, collection }: {
+function AvailableSessionRuntimeConnectors({ kernel, collection, paused }: {
   kernel: KernelApi;
+  paused: boolean;
   collection: ReturnType<typeof useSessionCollection>["resource"]["data"];
 }) {
   const identity = useSessionResourceIdentity();
@@ -458,30 +470,33 @@ function AvailableSessionRuntimeConnectors({ kernel, collection }: {
   if (!confirmedIdentity) return null;
   return (
     <>
-      <RealtimeConnector kernel={kernel} sessionIdentity={confirmedIdentity} />
-      <CommandShortcutConnector kernel={kernel} />
-      <VisualizationRegistrySyncConnector kernel={kernel} />
-      <CameraRegistrySyncConnector kernel={kernel} sessionScopeKey={scopeKey!} />
+      <RealtimeConnector kernel={kernel} paused={paused} sessionIdentity={confirmedIdentity} />
+      <CommandShortcutConnector kernel={kernel} paused={paused} />
+      <VisualizationRegistrySyncConnector kernel={kernel} paused={paused} />
+      <CameraRegistrySyncConnector kernel={kernel} paused={paused} sessionScopeKey={scopeKey!} />
       <RunOutcomeConnector kernel={kernel} sessionIdentity={confirmedIdentity} />
     </>
   );
 }
 
-function VisualizationRegistrySyncConnector({ kernel }: { kernel: KernelApi }) {
+function VisualizationRegistrySyncConnector({ kernel, paused }: { kernel: KernelApi; paused: boolean }) {
   useEffect(() => {
-    kernel.visualizationSync.start();
+    if (!paused) kernel.visualizationSync.start();
     return () => kernel.visualizationSync.stop();
-  }, [kernel]);
+  }, [kernel, paused]);
 
   return null;
 }
 
-function CameraRegistrySyncConnector({ kernel, sessionScopeKey }: { kernel: KernelApi; sessionScopeKey: string }) {
+function CameraRegistrySyncConnector({ kernel, sessionScopeKey, paused }: { kernel: KernelApi; sessionScopeKey: string; paused: boolean }) {
   useEffect(() => {
     kernel.cameraRegistry.setSessionScopeKey(sessionScopeKey);
-    kernel.cameraRegistry.start();
     return () => { kernel.cameraRegistry.stop(); kernel.cameraRegistry.setSessionScopeKey(null); };
   }, [kernel, sessionScopeKey]);
+  useEffect(() => {
+    if (!paused) kernel.cameraRegistry.start();
+    return () => kernel.cameraRegistry.stop();
+  }, [kernel, sessionScopeKey, paused]);
 
   return null;
 }
@@ -799,11 +814,18 @@ function Viewport3DResourceLifecycleConnector({
 }
 
 export function KernelProvider({ children }: KernelProviderProps) {
-  const kernel = useMemo(() => createKernel(), []);
+  const host = useMemo(() => new DevelopmentKernelHost(createKernel), []);
+  const { kernel, generation, paused } = useSyncExternalStore(host.subscribe, host.getSnapshot, host.getSnapshot);
+  useEffect(() => {
+    host.confirmMounted(kernel, (previous, replacement) => {
+      const url = developmentReplacementUrl(window.location.href, previous.api.getExpectedApiInstance(), replacement.api.getExpectedApiInstance());
+      window.history.replaceState(window.history.state, "", url);
+    });
+  }, [host, kernel]);
 
   return (
-    <KernelContext.Provider value={kernel}>
-      <SessionRuntimeConnectors kernel={kernel} />
+    <KernelContext.Provider key={generation} value={kernel}>
+      <SessionRuntimeConnectors kernel={kernel} paused={paused} />
       <BrowserAuditConnector kernel={kernel} />
       <DiagnosticRecorderConnector kernel={kernel} />
       <PerformanceDiagnosticsConnector kernel={kernel} />

@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 import fullmag_storage as storage
 
 PROFILE = "windows-control-room-source-check"
-ROUTES = ("generate-client", "production-source", "api-hygiene", "lint", "openapi-import-check", "react-doctor", "development-restart-check", "resource-client-cache-check")
+ROUTES = ("generate-client", "production-source", "api-hygiene", "lint", "openapi-import-check", "react-doctor", "development-restart-check", "resource-client-cache-check", "development-kernel-host-check", "development-transport-pause-check")
 
 
 def timestamp():
@@ -96,6 +96,11 @@ def run(repo: Path, route: str):
                 receipt["unit_tests"] = "none_native_type_erasure_of_production_source_only"
             elif route == "resource-client-cache-check":
                 commands = [[node, "--experimental-vm-modules", "scripts/check-resource-client-cache-scope.mjs"]]
+                receipt["interpreted_node_checks"] = True
+                receipt["unit_tests"] = "none_native_type_erasure_of_production_source_only"
+            elif route in {"development-kernel-host-check", "development-transport-pause-check"}:
+                check = "check-development-kernel-host.mjs" if route == "development-kernel-host-check" else "check-development-transport-pause.mjs"
+                commands = [[node, "--experimental-vm-modules", "scripts/" + check]]
                 receipt["interpreted_node_checks"] = True
                 receipt["unit_tests"] = "none_native_type_erasure_of_production_source_only"
             elif route == "api-hygiene":

@@ -16,3 +16,17 @@ export function resolveApiInstancePin(search?: string): string | null {
   }
   return values[0];
 }
+
+/** Update navigation only for a confirmed, explicit handoff from this exact pin. */
+export function developmentReplacementUrl(currentUrl: string, previousPin: string | null, replacementPin: string | null): string {
+  if (!previousPin || !replacementPin || !isApiInstanceId(previousPin) || !isApiInstanceId(replacementPin) || previousPin === replacementPin) {
+    throw new Error("Invalid development replacement navigation pin.");
+  }
+  const url = new URL(currentUrl);
+  const currentPin = resolveApiInstancePin(url.search);
+  if (currentPin !== previousPin && currentPin !== replacementPin) {
+    throw new Error("Navigation no longer belongs to the captured workspace.");
+  }
+  url.searchParams.set(INSTANCE_QUERY, replacementPin);
+  return url.href;
+}

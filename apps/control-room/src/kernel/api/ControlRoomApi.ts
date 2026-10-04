@@ -849,9 +849,14 @@ function isTokenBoundDevelopmentRestartStatusRequest(
   return (
     method === "GET" &&
     isDevelopmentRestartRequestStatusPath(pathFromUrl(url)) &&
-    authorization !== null &&
-    /^Bearer [a-f0-9]{32}$/.test(authorization)
+    isDevelopmentRestartAuthorization(authorization)
   );
+}
+
+function isDevelopmentRestartAuthorization(
+  authorization: string | null,
+): boolean {
+  return authorization !== null && /^Bearer [a-f0-9]{32}$/.test(authorization);
 }
 
 export function assertSolutionSetProjectId(value: string): string {
@@ -1004,6 +1009,13 @@ interface ControlRoomApiOptions {
   requestIdFactory?: () => string;
 }
 
+interface DevelopmentTransportAdmission {
+  readonly apiInstancePolicy: "pinned" | "token-bound-restart-status";
+  readonly isRestartStatusRead: boolean;
+  readonly pauseAllowed: boolean;
+  release(): void;
+}
+
 export class ControlRoomApiError extends Error {
   constructor(
     message: string,
@@ -1030,6 +1042,10 @@ export class ControlRoomApi {
   private readonly retryDelayMs: number;
   private readonly requestIdFactory: () => string;
   private readonly transport: OpenApiV2Transport;
+  private developmentHandoffTransportPauseCount = 0;
+  private developmentHandoffTransportRetired = false;
+  private ordinaryFacadeOperationsInFlight = 0;
+  private ordinaryTransportOperationsInFlight = 0;
   private readonly fieldMaterializationRequests = new Map<string, Promise<void>>();
   private readonly meshFreshnessRequests = new Map<string, Promise<boolean>>();
 
@@ -3411,6 +3427,45 @@ export class ControlRoomApi {
       fetch: (input: Request, init?: RequestInit) =>
         this.executeOpenApiFetch(input, init),
     });
+    this.wrapOpenApiTransportOperations();
+    this.wrapPublicApiOperations();
+  }
+
+  beginDevelopmentHandoffTransportPause(): () => void {
+    if (this.developmentHandoffTransportRetired) {
+      throw new ControlRoomApiError(
+        "Development handoff transport has been retired",
+        0,
+        null,
+        "DEVELOPMENT_TRANSPORT_RETIRED",
+      );
+    }
+    if (
+      this.ordinaryFacadeOperationsInFlight > 0 ||
+      this.ordinaryTransportOperationsInFlight > 0
+    ) {
+      throw new ControlRoomApiError(
+        "Cannot pause development handoff transport while an ordinary request is in flight",
+        0,
+        null,
+        "DEVELOPMENT_TRANSPORT_BUSY",
+      );
+    }
+
+    this.developmentHandoffTransportPauseCount += 1;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.developmentHandoffTransportPauseCount = Math.max(
+        0,
+        this.developmentHandoffTransportPauseCount - 1,
+      );
+    };
+  }
+
+  retireDevelopmentHandoffTransport(): void {
+    this.developmentHandoffTransportRetired = true;
   }
 
   getBaseUrl(): string {
@@ -3419,6 +3474,312 @@ export class ControlRoomApi {
 
   getExpectedApiInstance(): string | null {
     return this.expectedApiInstance;
+  }
+
+  private wrapOpenApiTransportOperations(): void {
+    const transport = this.transport as unknown as Record<string, unknown>;
+    for (const method of [
+      "GET",
+      "POST",
+      "PATCH",
+      "PUT",
+      "DELETE",
+      "OPTIONS",
+      "HEAD",
+      "TRACE",
+    ]) {
+      const member = transport[method];
+      if (typeof member !== "function") continue;
+      const original = member as (...args: unknown[]) => unknown;
+      transport[method] = this.wrapTrackedOperation(
+        original,
+        this.transport,
+        (args) =>
+          !this.isHandoffProtocolTransportOperation(method, args) ||
+          this.developmentHandoffTransportPauseCount === 0,
+      );
+    }
+  }
+
+  private isHandoffProtocolTransportOperation(
+    method: string,
+    args: readonly unknown[],
+  ): boolean {
+    const [rawPath, rawOptions] = args;
+    if (
+      typeof rawPath !== "string" ||
+      !isPlainRecord(rawOptions) ||
+      rawOptions.fetch !== undefined
+    ) {
+      return false;
+    }
+
+    let url: URL;
+    let headers: Headers;
+    try {
+      url = new URL(rawPath, this.baseUrl);
+      headers = new Headers(rawOptions.headers as HeadersInit | undefined);
+    } catch {
+      return false;
+    }
+    if (!this.isSameApiOrigin(url.toString()) || url.search !== "") {
+      return false;
+    }
+
+    if (
+      method === "GET" &&
+      rawPath === PLATFORM_DEVELOPMENT_BACKEND_PATH
+    ) {
+      return true;
+    }
+
+    if (
+      method === "POST" &&
+      rawPath === PLATFORM_DEVELOPMENT_RESTART_REQUESTS_PATH &&
+      isDevelopmentRestartAuthorization(headers.get("authorization"))
+    ) {
+      return true;
+    }
+
+    const params = rawOptions.params;
+    const pathParams = isPlainRecord(params) ? params.path : undefined;
+    const requestId = isPlainRecord(pathParams)
+      ? pathParams.request_id
+      : undefined;
+    if (
+      method !== "GET" ||
+      rawPath !== PLATFORM_DEVELOPMENT_RESTART_REQUEST_PATH ||
+      typeof requestId !== "string" ||
+      requestId.length === 0 ||
+      headers.get(DEVELOPMENT_RESTART_STATUS_POLICY_HEADER) !==
+        DEVELOPMENT_RESTART_STATUS_POLICY
+    ) {
+      return false;
+    }
+
+    const resolvedStatusPath = PLATFORM_DEVELOPMENT_RESTART_REQUEST_PATH.replace(
+      "{request_id}",
+      encodeURIComponent(requestId),
+    );
+    return isTokenBoundDevelopmentRestartStatusRequest(
+      method,
+      new URL(resolvedStatusPath, this.baseUrl).toString(),
+      headers,
+    );
+  }
+
+  private wrapPublicApiOperations(): void {
+    // Keep each facade promise in flight through JSON parsing and binary decoding,
+    // after the transport-level Response has already returned.
+    const groups: Array<[string, Record<string, unknown>]> = [
+      ["sessions", this.sessions],
+      ["platform", this.platform],
+      ["events", this.events],
+      ["commands", this.commands],
+      ["analysis", this.analysis],
+      ["data", this.data],
+      ["diagnostics", this.diagnostics],
+      ["meshing", this.meshing],
+      ["model", this.model],
+      ["persistence", this.persistence],
+      ["simulation", this.simulation],
+      ["visualization", this.visualization],
+    ];
+    for (const [name, group] of groups) {
+      this.wrapPublicApiOperationTree(group, name, new WeakSet());
+    }
+  }
+
+  private wrapPublicApiOperationTree(
+    value: Record<string, unknown>,
+    parentPath: string,
+    visited: WeakSet<object>,
+  ): void {
+    if (visited.has(value)) return;
+    visited.add(value);
+
+    for (const [key, member] of Object.entries(value)) {
+      const operationPath = `${parentPath}.${key}`;
+      if (typeof member === "function") {
+        const original = member as (...args: unknown[]) => unknown;
+        value[key] = this.wrapTrackedOperation(original, value, () => {
+          const isHandoffProtocolOperation =
+            operationPath === "platform.developmentBackend" ||
+            operationPath === "platform.submitDevelopmentRestartRequest" ||
+            operationPath === "platform.developmentRestartRequest";
+          return (
+            !isHandoffProtocolOperation ||
+            this.developmentHandoffTransportPauseCount === 0
+          );
+        });
+      } else if (isPlainRecord(member)) {
+        this.wrapPublicApiOperationTree(member, operationPath, visited);
+      }
+    }
+  }
+
+  private wrapTrackedOperation(
+    original: (...args: unknown[]) => unknown,
+    thisArg: unknown,
+    shouldTrack: (args: readonly unknown[]) => boolean,
+  ): (...args: unknown[]) => unknown {
+    return (...args: unknown[]) => {
+      const release = shouldTrack(args)
+        ? this.beginOrdinaryFacadeOperation()
+        : () => undefined;
+      let result: unknown;
+      try {
+        result = original.apply(thisArg, args);
+      } catch (error) {
+        release();
+        throw error;
+      }
+
+      let thenable = false;
+      if (
+        (typeof result === "object" && result !== null) ||
+        typeof result === "function"
+      ) {
+        try {
+          thenable = typeof (result as { then?: unknown }).then === "function";
+        } catch (error) {
+          release();
+          throw error;
+        }
+      }
+      if (thenable) return Promise.resolve(result).finally(release);
+
+      release();
+      return result;
+    };
+  }
+
+  private beginOrdinaryFacadeOperation(): () => void {
+    this.ordinaryFacadeOperationsInFlight += 1;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.ordinaryFacadeOperationsInFlight = Math.max(
+        0,
+        this.ordinaryFacadeOperationsInFlight - 1,
+      );
+    };
+  }
+
+  private admitTransportOperation(
+    input: RequestInfo | URL,
+    init: RequestInit | undefined,
+  ): DevelopmentTransportAdmission {
+    const identity = fetchRequestIdentity(input, init);
+    const policy = identity.headers.get(
+      DEVELOPMENT_RESTART_STATUS_POLICY_HEADER,
+    );
+    let apiInstancePolicy: DevelopmentTransportAdmission["apiInstancePolicy"] =
+      "pinned";
+    if (policy !== null) {
+      if (
+        policy !== DEVELOPMENT_RESTART_STATUS_POLICY ||
+        !this.isSameApiOrigin(identity.url) ||
+        !isTokenBoundDevelopmentRestartStatusRequest(
+          identity.method,
+          identity.url,
+          identity.headers,
+        )
+      ) {
+        throw new ControlRoomApiError(
+          "Invalid token-bound development restart status request",
+          0,
+          null,
+          "DEVELOPMENT_RESTART_STATUS_POLICY_INVALID",
+        );
+      }
+      apiInstancePolicy = "token-bound-restart-status";
+    }
+
+    const path = pathFromUrl(identity.url);
+    const isRestartStatusRead =
+      apiInstancePolicy === "token-bound-restart-status" &&
+      this.isSameApiOrigin(identity.url) &&
+      isTokenBoundDevelopmentRestartStatusRequest(
+        identity.method,
+        identity.url,
+        identity.headers,
+      );
+    const isDevelopmentBackendRead =
+      this.isSameApiOrigin(identity.url) &&
+      identity.method === "GET" && path === PLATFORM_DEVELOPMENT_BACKEND_PATH;
+    const isRestartSubmission =
+      this.isSameApiOrigin(identity.url) &&
+      identity.method === "POST" &&
+      path === PLATFORM_DEVELOPMENT_RESTART_REQUESTS_PATH &&
+      isDevelopmentRestartAuthorization(
+        identity.headers.get("authorization"),
+      );
+    const pauseAllowed =
+      isRestartStatusRead || isDevelopmentBackendRead || isRestartSubmission;
+
+    this.assertTransportAdmission({
+      isRestartStatusRead,
+      pauseAllowed,
+    });
+
+    const trackOperation = !pauseAllowed;
+    if (trackOperation) this.ordinaryTransportOperationsInFlight += 1;
+    let released = false;
+    return {
+      apiInstancePolicy,
+      isRestartStatusRead,
+      pauseAllowed,
+      release: () => {
+        if (released) return;
+        released = true;
+        if (trackOperation) {
+          this.ordinaryTransportOperationsInFlight = Math.max(
+            0,
+            this.ordinaryTransportOperationsInFlight - 1,
+          );
+        }
+      },
+    };
+  }
+
+  private isSameApiOrigin(url: string): boolean {
+    try {
+      return new URL(url, this.baseUrl).origin === new URL(this.baseUrl).origin;
+    } catch {
+      return false;
+    }
+  }
+
+  private assertTransportAdmission(
+    admission: Pick<
+      DevelopmentTransportAdmission,
+      "isRestartStatusRead" | "pauseAllowed"
+    >,
+  ): void {
+    if (
+      this.developmentHandoffTransportRetired &&
+      !admission.isRestartStatusRead
+    ) {
+      throw new ControlRoomApiError(
+        "Development handoff transport has been retired",
+        0,
+        null,
+        "DEVELOPMENT_TRANSPORT_RETIRED",
+      );
+    }
+    if (
+      this.developmentHandoffTransportPauseCount > 0 &&
+      !admission.pauseAllowed
+    ) {
+      throw new ControlRoomApiError(
+        "Development handoff transport is paused",
+        0,
+        null,
+        "DEVELOPMENT_TRANSPORT_PAUSED",
+      );
+    }
   }
 
   private requireApiInstanceCurrent(): void {
@@ -4354,62 +4715,59 @@ export class ControlRoomApi {
     input: RequestInfo | URL,
     init: RequestInit | undefined,
   ): Promise<Response> {
-    const request = await normalizeFetchInput(input, init);
-    return this.executeFetchRequest(
-      request.url,
-      request.method,
-      request.init,
-      new Set([204, 304]),
-      true,
-    );
+    const admission = this.admitTransportOperation(input, init);
+    try {
+      const request = await normalizeFetchInput(input, init);
+      return await this.executeFetchRequest(
+        request.url,
+        request.method,
+        request.init,
+        new Set([204, 304]),
+        true,
+        admission.apiInstancePolicy,
+        admission,
+      );
+    } finally {
+      admission.release();
+    }
   }
 
   private async executeOpenApiFetch(
     input: RequestInfo | URL,
     init: RequestInit | undefined,
   ): Promise<Response> {
-    const request = await normalizeFetchInput(input, init);
-    const headers = new Headers(request.init.headers);
-    const apiInstancePolicy = headers.get(
-      DEVELOPMENT_RESTART_STATUS_POLICY_HEADER,
-    );
-    if (apiInstancePolicy !== null) {
-      headers.delete(DEVELOPMENT_RESTART_STATUS_POLICY_HEADER);
-      request.init.headers = headers;
+    const admission = this.admitTransportOperation(input, init);
+    try {
+      const request = await normalizeFetchInput(input, init);
+      const headers = new Headers(request.init.headers);
       if (
-        apiInstancePolicy !== DEVELOPMENT_RESTART_STATUS_POLICY ||
-        !isTokenBoundDevelopmentRestartStatusRequest(
-          request.method,
-          request.url,
-          headers,
-        )
+        admission.apiInstancePolicy === "token-bound-restart-status"
       ) {
-        throw new ControlRoomApiError(
-          "Invalid token-bound development restart status request",
-          0,
-          null,
-          "DEVELOPMENT_RESTART_STATUS_POLICY_INVALID",
-        );
+        headers.delete(DEVELOPMENT_RESTART_STATUS_POLICY_HEADER);
+        request.init.headers = headers;
       }
-      return this.executeFetchRequest(
+      return await this.executeFetchRequest(
         request.url,
         request.method,
         request.init,
         new Set(),
         false,
-        "token-bound-restart-status",
+        admission.apiInstancePolicy,
+        admission,
       );
+    } finally {
+      admission.release();
     }
-    return this.executeFetchRequest(request.url, request.method, request.init);
   }
 
   private async executeFetchRequest(
     url: string,
     method: string,
     init: RequestInit,
-    acceptedStatuses = new Set<number>(),
-    allowMissingContractVersion = false,
-    apiInstancePolicy: "pinned" | "token-bound-restart-status" = "pinned",
+    acceptedStatuses: Set<number>,
+    allowMissingContractVersion: boolean,
+    apiInstancePolicy: "pinned" | "token-bound-restart-status",
+    admission: DevelopmentTransportAdmission,
   ): Promise<Response> {
     const enforceApiInstancePin = apiInstancePolicy === "pinned";
     if (enforceApiInstancePin && this.apiInstanceMismatch) {
@@ -4431,6 +4789,7 @@ export class ControlRoomApi {
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
+        this.assertTransportAdmission(admission);
         if (enforceApiInstancePin && this.apiInstanceMismatch) {
           throw new ControlRoomApiError("API instance changed; reopen Fullmag", 409, null, "API_INSTANCE_MISMATCH");
         }
@@ -4654,6 +5013,30 @@ async function normalizeFetchInput(
     method: init?.method ?? "GET",
     url: String(input),
   };
+}
+
+function fetchRequestIdentity(
+  input: RequestInfo | URL,
+  init: RequestInit | undefined,
+): { headers: Headers; method: string; url: string } {
+  if (typeof Request !== "undefined" && input instanceof Request) {
+    return {
+      headers: new Headers(init?.headers ?? input.headers),
+      method: init?.method ?? input.method,
+      url: input.url,
+    };
+  }
+  return {
+    headers: new Headers(init?.headers),
+    method: init?.method ?? "GET",
+    url: String(input),
+  };
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== "object" || value === null) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
 }
 
 function pathFromUrl(url: string): string {

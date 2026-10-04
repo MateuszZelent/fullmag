@@ -408,6 +408,12 @@ verify-control-room-development-restart:
 verify-control-room-resource-client-cache:
     {{storage_python}} "{{repo_root}}/scripts/verify_control_room_sources.py" --route resource-client-cache-check --repo-root "{{repo_root}}"
 
+verify-control-room-development-kernel-host:
+    {{storage_python}} "{{repo_root}}/scripts/verify_control_room_sources.py" --route development-kernel-host-check --repo-root "{{repo_root}}"
+
+verify-control-room-development-transport-pause:
+    {{storage_python}} "{{repo_root}}/scripts/verify_control_room_sources.py" --route development-transport-pause-check --repo-root "{{repo_root}}"
+
 # Actual browser interaction on an isolated managed frontend source snapshot.
 # Responses are fixtures; this is neither a backend runtime nor a solver gate.
 verify-pinned-dataset-browser:
@@ -416,6 +422,9 @@ verify-pinned-dataset-browser:
 # Production project controller in an isolated Next browser fixture; no unit builds.
 verify-project-document-handoff-browser:
     {{storage_python}} "{{repo_root}}/scripts/verify_pinned_dataset_browser.py" --repo-root "{{repo_root}}" --port 3251 --scenario project-document-handoff
+
+verify-development-kernel-host-browser:
+    {{storage_python}} "{{repo_root}}/scripts/verify_pinned_dataset_browser.py" --repo-root "{{repo_root}}" --port 3252 --scenario development-kernel-host
 
 lint-control-room-source:
     {{storage_python}} "{{repo_root}}/scripts/verify_control_room_sources.py" --route lint --repo-root "{{repo_root}}"
