@@ -119,6 +119,11 @@ pub(crate) fn create_empty_scene_document(
     if name.is_empty() {
         return Err(ApiError::bad_request("session name must not be empty"));
     }
+    let output_storage = request
+        .output_storage
+        .as_ref()
+        .map(|settings| settings.validated_ir().map_err(ApiError::bad_request))
+        .transpose()?;
     Ok(SceneDocument {
         version: "scene.v2".to_string(),
         revision: 0,
@@ -152,6 +157,7 @@ pub(crate) fn create_empty_scene_document(
             requested_device: request.device.clone(),
             requested_precision: request.precision.clone(),
             requested_mode: "strict".to_string(),
+            output_storage,
             ..Default::default()
         },
         outputs: Default::default(),
@@ -245,6 +251,7 @@ mod tests {
             device: "cpu".to_string(),
             precision: "double".to_string(),
             replace_current: false,
+            output_storage: None,
         };
 
         let scene = create_empty_scene_document(&request).expect("request must create a scene");
@@ -265,6 +272,7 @@ mod tests {
             device: "cpu".to_string(),
             precision: "double".to_string(),
             replace_current: false,
+            output_storage: None,
         };
         let execution = validated_execution(&request).expect("scratch execution must validate");
         let scene = create_empty_scene_document(&request).expect("scene must be created");
@@ -288,6 +296,7 @@ mod tests {
             device: "cpu".to_string(),
             precision: "double".to_string(),
             replace_current: false,
+            output_storage: None,
         };
         let execution = validated_execution(&request).expect("scratch execution must validate");
         let scene = create_empty_scene_document(&request).expect("scene must be created");

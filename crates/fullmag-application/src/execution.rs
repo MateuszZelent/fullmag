@@ -11,7 +11,8 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use uuid::Uuid;
 
-pub const RESOLVED_TASK_INPUT_SCHEMA: &str = "resolved_task_input.v2";
+pub const LEGACY_RESOLVED_TASK_INPUT_SCHEMA: &str = "resolved_task_input.v2";
+pub const RESOLVED_TASK_INPUT_SCHEMA: &str = "resolved_task_input.v3";
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -1098,14 +1099,21 @@ impl TaskRecord {
             Sha256::digest(crate::run_spec::canonical_json_bytes(&plan_value))
         );
 
-        self.resolve_input_with_fingerprint(
+        let mut resolved = self.resolve_input_with_fingerprint(
             claim,
             specification,
             &fingerprint,
             plan_fingerprint,
             preparation,
             inputs,
-        )
+        )?;
+        resolved.schema_version = RESOLVED_TASK_INPUT_SCHEMA.into();
+        resolved.requested_execution = specification
+            .requested_execution
+            .for_problem(problem)
+            .map_err(|error| ExecutionError::Invalid(error.to_string()))?;
+        resolved.validate()?;
+        Ok(resolved)
     }
 
     /// For run-wide tasks. Materialized study tasks use resolved_study_input.
@@ -1163,7 +1171,7 @@ impl TaskRecord {
             ));
         }
         Ok(ResolvedTaskInput {
-            schema_version: RESOLVED_TASK_INPUT_SCHEMA.into(),
+            schema_version: LEGACY_RESOLVED_TASK_INPUT_SCHEMA.into(),
             run_id: self.run_id.clone(),
             task_id: self.task_id.clone(),
             attempt_id: claim.attempt_id.clone(),
@@ -1280,6 +1288,8 @@ pub struct ResolvedTaskInput {
     pub ownership_epoch: OwnershipEpoch,
     pub specification_fingerprint: String,
     pub plan_fingerprint: String,
+    /// v2 copies the global RunSpec request; v3 projects its constraints onto
+    /// the immutable study ProblemIR. Loading must replay the matching version.
     pub requested_execution: RequestedExecution,
     pub preparation: PreparationBinding,
     pub inputs: BTreeMap<String, ResolvedInput>,
@@ -1345,10 +1355,44 @@ impl ResourceLeaseRegistry {
 }
 
 impl ResolvedTaskInput {
+    /// Replay the versioned execution intent before dispatch. The caller must
+    /// supply the ProblemIR pinned by this run's catalog, not a mutable draft.
+    pub fn validate_execution_for_problem(
+        &self,
+        specification: &RunSpecification,
+        problem: &fullmag_ir::ProblemIR,
+    ) -> Result<(), ExecutionError> {
+        self.validate()?;
+        let fingerprint = specification
+            .fingerprint()
+            .map_err(|error| ExecutionError::Invalid(error.to_string()))?;
+        if self.run_id != specification.run_id || self.specification_fingerprint != fingerprint {
+            return Err(ExecutionError::Invalid(
+                "task execution differs from the accepted RunSpec identity".into(),
+            ));
+        }
+        let expected = if self.schema_version == LEGACY_RESOLVED_TASK_INPUT_SCHEMA {
+            specification.requested_execution.clone()
+        } else {
+            specification
+                .requested_execution
+                .for_problem(problem)
+                .map_err(|error| ExecutionError::Invalid(error.to_string()))?
+        };
+        if self.requested_execution != expected {
+            return Err(ExecutionError::Invalid(
+                "task execution differs from its versioned immutable request".into(),
+            ));
+        }
+        Ok(())
+    }
+
     pub fn validate(&self) -> Result<(), ExecutionError> {
-        if self.schema_version != RESOLVED_TASK_INPUT_SCHEMA {
+        if self.schema_version != RESOLVED_TASK_INPUT_SCHEMA
+            && self.schema_version != LEGACY_RESOLVED_TASK_INPUT_SCHEMA
+        {
             return Err(ExecutionError::Invalid(format!(
-                "schema_version must be {RESOLVED_TASK_INPUT_SCHEMA}"
+                "schema_version must be {RESOLVED_TASK_INPUT_SCHEMA} or {LEGACY_RESOLVED_TASK_INPUT_SCHEMA}"
             )));
         }
         validate_identifier(self.run_id.as_str(), "run_id")?;
@@ -1703,7 +1747,43 @@ mod tests {
             )
             .unwrap();
         assert_eq!(resolved.ownership_epoch.value(), 1);
+        assert_eq!(resolved.schema_version, LEGACY_RESOLVED_TASK_INPUT_SCHEMA);
         resolved.validate().unwrap();
+        let mut current = resolved.clone();
+        current.schema_version = RESOLVED_TASK_INPUT_SCHEMA.into();
+        current.validate().unwrap();
+        current.schema_version = "resolved_task_input.v99".into();
+        assert!(current.validate().is_err());
+
+        let mut auto_spec = specification.clone();
+        auto_spec.requested_execution.backend = "auto".into();
+        auto_spec.requested_execution.device = "auto".into();
+        let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
+        problem.backend_policy.requested_backend = fullmag_ir::BackendTarget::Fdm;
+        problem.backend_policy.execution_precision = fullmag_ir::ExecutionPrecision::Double;
+        problem
+            .problem_meta
+            .runtime_metadata
+            .insert("runtime_selection".into(), json!({"device": "cpu"}));
+        let mut legacy = resolved.clone();
+        legacy.specification_fingerprint = auto_spec.fingerprint().unwrap();
+        legacy.requested_execution = auto_spec.requested_execution.clone();
+        legacy
+            .validate_execution_for_problem(&auto_spec, &problem)
+            .unwrap();
+        let mut per_step = legacy.clone();
+        per_step.schema_version = RESOLVED_TASK_INPUT_SCHEMA.into();
+        assert!(per_step
+            .validate_execution_for_problem(&auto_spec, &problem)
+            .is_err());
+        per_step.requested_execution = auto_spec.requested_execution.for_problem(&problem).unwrap();
+        per_step
+            .validate_execution_for_problem(&auto_spec, &problem)
+            .unwrap();
+        per_step.schema_version = LEGACY_RESOLVED_TASK_INPUT_SCHEMA.into();
+        assert!(per_step
+            .validate_execution_for_problem(&auto_spec, &problem)
+            .is_err());
 
         for (field, invalid_value) in [
             ("run_id", serde_json::json!("../other-run")),

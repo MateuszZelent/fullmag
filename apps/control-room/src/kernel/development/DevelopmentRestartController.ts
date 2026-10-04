@@ -2,6 +2,17 @@ import type { DevelopmentRestartRequest, DevelopmentRestartResource } from "../a
 import type { ControlRoomApi } from "../api/ControlRoomApi";
 import { isApiInstanceId } from "../api/apiInstancePin";
 
+/** An owner may confirm a rejected capture only after its own cleanup succeeds. */
+export class DevelopmentRestartCaptureError extends Error {
+  readonly cleanupConfirmed: boolean;
+
+  constructor(cleanupConfirmed: boolean) {
+    super(cleanupConfirmed ? "Workspace capture was rejected after confirmed cleanup." : "Workspace capture cleanup is unconfirmed.");
+    this.name = "DevelopmentRestartCaptureError";
+    this.cleanupConfirmed = cleanupConfirmed;
+  }
+}
+
 export interface DevelopmentRestartOwners {
   /** Acquire all owner guards before capturing; retain them through uncertain outcomes. */
   capture(): Promise<{
@@ -26,11 +37,13 @@ export interface DevelopmentRestartSnapshot {
   readonly state: "idle" | "capturing" | "pending" | "unknown" | "hydrating" | "restored" | "failed";
   readonly requestId: string | null;
   readonly message: string | null;
+  readonly captureCleanup: "confirmed" | "unconfirmed" | null;
 }
 
 /** One durable intent. A lost POST response permits reconciliation, never resubmission. */
 export class DevelopmentRestartController {
-  private snapshot: DevelopmentRestartSnapshot = { state: "idle", requestId: null, message: null };
+  private snapshot: DevelopmentRestartSnapshot = { state: "idle", requestId: null, message: null, captureCleanup: null };
+  private captureCleanup: DevelopmentRestartSnapshot["captureCleanup"] = null;
   private readonly listeners = new Set<() => void>();
   private intent: { request: DevelopmentRestartRequest; token: string; release(): void } | null = null;
   private busy = false;
@@ -92,11 +105,13 @@ export class DevelopmentRestartController {
       } else if (this.intent) {
         this.update("unknown", "Restart outcome is unconfirmed. Reconcile the existing request.");
       } else {
-        let message = "Workspace capture failed; no restart was submitted.";
-        try { captured?.release(); } catch {
-          message = "Workspace capture failed and guard cleanup is unconfirmed. Keep the workspace protected.";
-        }
-        this.update("failed", message);
+        let cleanupConfirmed = captured !== null
+          || (error instanceof DevelopmentRestartCaptureError && error.cleanupConfirmed);
+        try { captured?.release(); } catch { cleanupConfirmed = false; }
+        this.captureCleanup = cleanupConfirmed ? "confirmed" : "unconfirmed";
+        this.update("failed", cleanupConfirmed
+          ? "Workspace capture failed; no restart was submitted."
+          : "Workspace capture failed and guard cleanup is unconfirmed. Keep the workspace protected.");
       }
     } finally {
       this.busy = false;
@@ -159,7 +174,7 @@ export class DevelopmentRestartController {
   }
 
   private update(state: DevelopmentRestartSnapshot["state"], message: string | null): void {
-    this.snapshot = { state, requestId: this.intent?.request.request_id ?? null, message };
+    this.snapshot = { state, requestId: this.intent?.request.request_id ?? null, message, captureCleanup: this.captureCleanup };
     for (const listener of this.listeners) {
       try { listener(); } catch { /* Subscribers cannot change a confirmed restart outcome. */ }
     }

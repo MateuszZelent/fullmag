@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://fullmag.org/schema/recent-index-1.0.json",
   "title": "Fullmag recent-project index",
-  "description": "Host-side cache that backs the start screen's recent list. It is derived state: every field can be rebuilt by rescanning the configured project locations, so a corrupt or missing index must never block creating or opening a project. Written by the Tauri host, read by the control-room renderer. Location: %APPDATA%/Fullmag/recent-index.json (Windows), ~/.config/fullmag/recent-index.json (Linux), ~/Library/Application Support/Fullmag/recent-index.json (macOS).",
+  "description": "Host-side cache that backs the start screen's recent list. It is derived state: every field can be rebuilt by rescanning the configured project locations, so a corrupt or missing index must never block creating or opening a project. Produced by the Tauri host, read by the control-room renderer. Since 2026-10-04 the host builds this document from the projects of the per-user workspace database (docs/07-workspace-database.md); the former recent-index.json file is read once by the legacy import and is no longer written.",
   "type": "object",
   "required": ["format_version", "generated_at", "entries"],
   "additionalProperties": false,

@@ -1,0 +1,14 @@
+{
+  "schema_version": "execution_profile.v1",
+  "profile_id": "exec:interactive",
+  "version": "1",
+  "description": "Profil żółć / CPU",
+  "defaults": {
+    "backend": "fdm",
+    "device": "cpu",
+    "resources": {
+      "cpu": {"threads": 4, "affinity": "compact"},
+      "ram": {"reservation_bytes": 1073741824}
+    }
+  }
+}

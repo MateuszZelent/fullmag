@@ -118,6 +118,8 @@ from fullmag.model.planar_monitor import (
     PlanarMonitor,
     StudyMonitorRegistry,
 )
+from fullmag.model.output_storage import OutputStorage
+from fullmag.model.compute_resources import ComputeResources
 from fullmag.model.study import (
     DEFAULT_RELAXATION_TORQUE_TOLERANCE_T,
     AdaptiveRefinement,
@@ -5598,6 +5600,60 @@ class StudyEnergyTermRegistry:
         return tuple(_state._explicit_energy_terms)
 
 
+def _validate_compute_resources_runtime_intent(
+    compute_resources: object,
+    *,
+    device: str,
+    cpu_threads: int | None,
+    gpu_count: int,
+    device_index: int | None,
+) -> None:
+    """Reject contradictory typed resource and legacy runtime requests."""
+    if not isinstance(compute_resources, dict):
+        return
+
+    cpu = compute_resources.get("cpu")
+    if cpu_threads is not None and isinstance(cpu, dict):
+        if cpu.get("threads") != cpu_threads:
+            raise ValueError(
+                "execution_intent_conflict: runtime_selection.cpu_threads differs "
+                "from compute_resources.cpu.threads"
+            )
+
+    gpu = compute_resources.get("gpu")
+    if not isinstance(gpu, dict):
+        return
+    if device == "cpu":
+        raise ValueError(
+            "execution_intent_conflict: GPU resources contradict runtime_selection.device=cpu"
+        )
+    if gpu_count > 0 and gpu.get("devices_per_task") != gpu_count:
+        raise ValueError(
+            "execution_intent_conflict: runtime_selection.gpu_count differs from "
+            "compute_resources.gpu.devices_per_task"
+        )
+    device_uuids = gpu.get("device_uuids")
+    if (
+        isinstance(device_uuids, (list, tuple))
+        and device_uuids
+        and device_index is not None
+    ):
+        raise ValueError(
+            "execution_intent_conflict: GPU UUID selector and legacy ordinal require "
+            "explicit inventory resolution"
+        )
+
+
+def _validate_current_compute_resources_runtime_intent() -> None:
+    _validate_compute_resources_runtime_intent(
+        _state._extra_runtime_metadata.get("compute_resources"),
+        device=_state._device,
+        cpu_threads=_state._cpu_threads,
+        gpu_count=_state._gpu_count,
+        device_index=_state._device_index,
+    )
+
+
 class StudyBuilder:
     """Study-root facade over the current script-local world state."""
 
@@ -5797,7 +5853,23 @@ class StudyBuilder:
         return self
 
     def device(self, spec: str, *, precision: str | None = None) -> "StudyBuilder":
-        device(spec, precision=precision)
+        previous = (
+            _state._device,
+            _state._gpu_count,
+            _state._device_index,
+            _state._precision,
+        )
+        try:
+            device(spec, precision=precision)
+            _validate_current_compute_resources_runtime_intent()
+        except Exception:
+            (
+                _state._device,
+                _state._gpu_count,
+                _state._device_index,
+                _state._precision,
+            ) = previous
+            raise
         return self
 
     def mode(self, execution_mode: str) -> "StudyBuilder":
@@ -5805,7 +5877,59 @@ class StudyBuilder:
         return self
 
     def threads(self, cpu_threads: int) -> "StudyBuilder":
-        threads(cpu_threads)
+        previous = _state._cpu_threads
+        try:
+            threads(cpu_threads)
+            _validate_current_compute_resources_runtime_intent()
+        except Exception:
+            _state._cpu_threads = previous
+            raise
+        return self
+
+    def resources(self, value: ComputeResources) -> "StudyBuilder":
+        """Set the typed compute-resource request preserved in ProblemIR."""
+        if not isinstance(value, ComputeResources):
+            raise TypeError("resources() requires a ComputeResources value")
+        request = value.to_ir()
+        _validate_compute_resources_runtime_intent(
+            request,
+            device=_state._device,
+            cpu_threads=_state._cpu_threads,
+            gpu_count=_state._gpu_count,
+            device_index=_state._device_index,
+        )
+        _state._extra_runtime_metadata["compute_resources"] = request
+        return self
+
+    def storage(
+        self,
+        output_storage: OutputStorage | None = None,
+        *,
+        output_dir: str | None = None,
+        temp_dir: str | None = None,
+        data_format: str | None = None,
+        cleanup: str | None = None,
+        existing_output: str | None = None,
+    ) -> "StudyBuilder":
+        """Set this study's result directory, data format, and scratch policy."""
+        if output_storage is not None and any(
+            value is not None
+            for value in (output_dir, temp_dir, data_format, cleanup, existing_output)
+        ):
+            raise ValueError("pass either OutputStorage or storage fields, not both")
+        if output_storage is None:
+            output_storage = OutputStorage(
+                output_dir=output_dir,
+                temp_dir=temp_dir,
+                data_format=data_format if data_format is not None else "zarr",
+                cleanup=cleanup if cleanup is not None else "on_success",
+                existing_output=(
+                    existing_output if existing_output is not None else "timestamp"
+                ),
+            )
+        elif not isinstance(output_storage, OutputStorage):
+            raise TypeError("output_storage must be an OutputStorage value")
+        _state._extra_runtime_metadata["output_storage"] = output_storage.to_ir()
         return self
 
     def fem_demag_solver(
@@ -9004,6 +9128,8 @@ def _build_problem(
 ) -> Problem:
     """Construct a Problem from the current world state."""
     s = _state
+
+    _validate_current_compute_resources_runtime_intent()
 
     # ── Validate ──
     if not s._magnets:

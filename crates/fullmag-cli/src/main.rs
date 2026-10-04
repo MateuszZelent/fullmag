@@ -28,6 +28,7 @@ mod python_bridge;
 mod runtime_service_client;
 mod runtime_supervisor;
 mod saved_fem_snapshot_gate;
+mod script_inspect;
 mod scratch_runtime;
 mod simulation_preparation;
 mod solver_profile_persistence;
@@ -408,6 +409,7 @@ fn main() -> Result<()> {
             }
         }
         Command::Project(cmd) => handle_project(cmd)?,
+        Command::Script(cmd) => script_inspect::handle_script(cmd)?,
         Command::Session(cmd) => handle_session(cmd)?,
     }
 
@@ -888,6 +890,7 @@ fn is_script_mode(raw_args: &[OsString]) -> bool {
         "resolve-runtime-invocation",
         "session",
         "project",
+        "script",
     ];
     const FLAG_ONLY: &[&str] = &["-i", "--interactive", "--headless", "--dev", "--json"];
     const VALUE_FLAGS: &[&str] = &[

@@ -1,0 +1,447 @@
+/* Start-screen compute telemetry. All colours resolve through the shared theme tokens. */
+
+.fm-start-env {
+  position: sticky;
+  z-index: 1;
+  bottom: 0;
+  display: flex;
+  flex: 0 1 auto;
+  flex-direction: column;
+  gap: var(--fm-space-2);
+  min-height: 0;
+  max-height: min(38vh, 22rem);
+  overflow: hidden;
+  overscroll-behavior: contain;
+}
+
+.fm-start-env__heading,
+.fm-start-env__gpu-head,
+.fm-start-env__metric-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--fm-space-2);
+  min-width: 0;
+}
+
+.fm-start-env__heading {
+  flex: none;
+  padding-inline: var(--fm-space-1);
+}
+
+.fm-start-env__title {
+  min-width: 0;
+  padding: 0;
+}
+
+.fm-start-env--observed .fm-start-env__dot {
+  background: var(--fm-accent);
+}
+
+.fm-start-env__refresh.fm-button--icon {
+  flex: none;
+}
+
+.fm-start-env__body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: var(--fm-space-2);
+  min-height: 0;
+  max-height: min(28vh, 16rem);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.fm-start-env__state {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--fm-space-2);
+  min-width: 0;
+  color: var(--fm-text-secondary);
+  font-size: var(--fm-font-size-xs);
+}
+
+.fm-start-env__state .fm-start-env__note {
+  grid-column: 2 / -1;
+  margin: 0;
+}
+
+.fm-start-env__meta {
+  color: var(--fm-start-meta);
+  font-size: var(--fm-font-size-2xs);
+  line-height: var(--fm-line-height-normal);
+  overflow-wrap: anywhere;
+}
+
+.fm-start-env__gpu-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--fm-space-2);
+  min-width: 0;
+}
+
+.fm-start-env__gpu {
+  display: flex;
+  flex-direction: column;
+  gap: var(--fm-space-1);
+  min-width: 0;
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-sm);
+  background: var(--fm-bg-panel-raised);
+  padding: var(--fm-space-2);
+}
+
+.fm-start-env__gpu-head {
+  align-items: flex-start;
+}
+
+.fm-start-env__name,
+.fm-start-env__cpu-name {
+  min-width: 0;
+  overflow: visible;
+  overflow-wrap: anywhere;
+  text-overflow: clip;
+  white-space: normal;
+}
+
+.fm-start-env__gpu-head .fm-start-env__meta {
+  flex: none;
+  text-align: right;
+}
+
+.fm-start-env__meter {
+  height: var(--fm-space-1);
+  margin-top: 0;
+  overflow: hidden;
+  border-radius: var(--fm-radius-pill);
+  background: var(--fm-bg-panel-raised);
+}
+
+.fm-start-env__meter-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--fm-accent);
+}
+
+.fm-start-env__metric-line {
+  align-items: baseline;
+  font-variant-numeric: tabular-nums;
+}
+
+.fm-start-env__metric-line .fm-start-env__val {
+  overflow-wrap: anywhere;
+  text-align: right;
+  white-space: normal;
+}
+
+.fm-start-env__cpu {
+  display: flex;
+  align-items: center;
+  gap: var(--fm-space-2);
+  min-width: 0;
+  color: var(--fm-text-secondary);
+  font-size: var(--fm-font-size-xs);
+}
+
+.fm-start-env__cpu-name {
+  flex: 1;
+}
+
+.fm-start-env__ram {
+  display: flex;
+  flex-direction: column;
+  gap: var(--fm-space-1);
+  min-width: 0;
+}
+
+.fm-start-env__note {
+  margin: 0;
+  color: var(--fm-start-meta);
+  font-size: var(--fm-font-size-2xs);
+  line-height: var(--fm-line-height-normal);
+  overflow-wrap: anywhere;
+}
+
+.fm-start-env__note--error {
+  color: var(--fm-project-failed-text);
+}
+
+.fm-start-env--degraded .fm-start-env__note--error {
+  color: var(--fm-project-failed-text);
+}
+
+.fm-start-env__cfg {
+  flex: none;
+  justify-content: flex-start;
+  width: 100%;
+  min-height: var(--fm-control-height-compact);
+  margin-top: 0;
+  white-space: normal;
+}
+
+.fm-start-compute-settings__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--fm-space-4);
+  min-width: 0;
+  margin-bottom: var(--fm-space-3);
+}
+
+.fm-start-compute-settings__head > div {
+  min-width: 0;
+}
+
+.fm-start-compute-settings__head .fm-button {
+  flex: none;
+}
+
+.fm-start-compute-settings__intro,
+.fm-start-compute-settings__policy,
+.fm-start-compute-settings__lane-note,
+.fm-start-compute-settings__notice,
+.fm-start-compute-settings__error {
+  margin: var(--fm-space-2) 0 0;
+  color: var(--fm-text-secondary);
+  font-size: var(--fm-font-size-sm);
+  line-height: var(--fm-line-height-normal);
+}
+
+.fm-start-compute-settings__notice {
+  border-left: 2px solid var(--fm-degraded);
+  background: color-mix(in srgb, var(--fm-degraded) 8%, transparent);
+  padding: var(--fm-space-2) var(--fm-space-3);
+}
+
+.fm-start-compute-settings__error {
+  border-left: 2px solid var(--fm-danger);
+  background: color-mix(in srgb, var(--fm-danger) 8%, transparent);
+  color: var(--fm-project-failed-text);
+  padding: var(--fm-space-2) var(--fm-space-3);
+}
+
+.fm-start-compute-settings__details {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 24rem), 1fr));
+  gap: var(--fm-space-3);
+  min-width: 0;
+}
+
+.fm-start-compute-settings__panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--fm-space-2);
+  min-width: 0;
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-md);
+  background: var(--fm-bg-panel);
+  padding: var(--fm-space-3);
+}
+
+.fm-start-compute-settings__panel--runtimes {
+  grid-column: 1 / -1;
+}
+
+.fm-start-compute-settings__panel-head,
+.fm-start-compute-settings__gpu-head,
+.fm-start-compute-settings__lane-head {
+  display: flex;
+  align-items: center;
+  gap: var(--fm-space-2);
+  min-width: 0;
+}
+
+.fm-start-compute-settings__panel-head h3,
+.fm-start-compute-settings__gpu-head h4,
+.fm-start-compute-settings__lane-head h4 {
+  min-width: 0;
+  margin: 0;
+  color: var(--fm-text-primary);
+  font-size: var(--fm-font-size-sm);
+  font-weight: var(--fm-font-weight-semibold);
+  overflow-wrap: anywhere;
+}
+
+.fm-start-compute-settings__panel-head h3 {
+  flex: 1;
+}
+
+.fm-start-compute-settings__status,
+.fm-start-compute-settings__version {
+  flex: none;
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-pill);
+  background: var(--fm-bg-panel-raised);
+  color: var(--fm-text-secondary);
+  font-size: var(--fm-font-size-2xs);
+  line-height: var(--fm-line-height-normal);
+  padding: 0 var(--fm-space-2);
+  text-align: center;
+}
+
+.fm-start-compute-settings__status[data-state="available"],
+.fm-start-compute-settings__status[data-state="ready"] {
+  border-color: color-mix(in srgb, var(--fm-success) 45%, var(--fm-border-subtle));
+  color: var(--fm-project-ready-text);
+}
+
+.fm-start-compute-settings__status[data-state="unavailable"] {
+  border-color: color-mix(in srgb, var(--fm-danger) 45%, var(--fm-border-subtle));
+  color: var(--fm-project-failed-text);
+}
+
+.fm-start-compute-settings__status[data-state="unknown"] {
+  border-color: color-mix(in srgb, var(--fm-degraded) 45%, var(--fm-border-subtle));
+  color: var(--fm-project-migrate-text);
+}
+
+.fm-start-compute-settings__metrics {
+  display: grid;
+  gap: var(--fm-space-2);
+  min-width: 0;
+  margin: 0;
+}
+
+.fm-start-compute-settings__metric {
+  display: grid;
+  grid-template-columns: minmax(6rem, 0.7fr) minmax(0, 1.3fr);
+  gap: var(--fm-space-3);
+  min-width: 0;
+  font-size: var(--fm-font-size-xs);
+}
+
+.fm-start-compute-settings__metric dt {
+  color: var(--fm-start-meta);
+}
+
+.fm-start-compute-settings__metric dd {
+  min-width: 0;
+  margin: 0;
+  color: var(--fm-text-primary);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.fm-start-compute-settings__gpu-list,
+.fm-start-compute-settings__lanes {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 18rem), 1fr));
+  gap: var(--fm-space-2);
+  min-width: 0;
+}
+
+.fm-start-compute-settings__gpu-card,
+.fm-start-compute-settings__lane {
+  display: flex;
+  flex-direction: column;
+  gap: var(--fm-space-2);
+  min-width: 0;
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-sm);
+  background: var(--fm-bg-panel-raised);
+  padding: var(--fm-space-3);
+}
+
+.fm-start-compute-settings__gpu-head {
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.fm-start-compute-settings__gpu-head > div {
+  min-width: 0;
+}
+
+.fm-start-compute-settings__gpu-head p,
+.fm-start-compute-settings__precision,
+.fm-start-compute-settings__reason,
+.fm-start-compute-settings__telemetry p,
+.fm-start-compute-settings__run {
+  margin: 0;
+  color: var(--fm-start-meta);
+  font-size: var(--fm-font-size-xs);
+  line-height: var(--fm-line-height-normal);
+  overflow-wrap: anywhere;
+}
+
+.fm-start-compute-settings__gpu-head p {
+  margin-top: var(--fm-space-1);
+}
+
+.fm-start-compute-settings__metrics--gpu {
+  gap: var(--fm-space-1);
+}
+
+.fm-start-compute-settings__metrics--gpu .fm-start-compute-settings__metric {
+  grid-template-columns: minmax(6rem, 0.7fr) minmax(0, 1.3fr);
+}
+
+.fm-start-compute-settings__meter-wrap {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--fm-space-2);
+  min-width: 0;
+  color: var(--fm-text-secondary);
+  font-size: var(--fm-font-size-2xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.fm-start-compute-settings__meter {
+  height: var(--fm-space-2);
+  overflow: hidden;
+  border-radius: var(--fm-radius-pill);
+  background: var(--fm-bg-app);
+}
+
+.fm-start-compute-settings__meter-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--fm-accent);
+}
+
+.fm-start-compute-settings__telemetry {
+  display: flex;
+  flex-direction: column;
+  gap: var(--fm-space-1);
+}
+
+.fm-start-compute-settings__lane-head {
+  justify-content: space-between;
+}
+
+.fm-start-compute-settings__precision {
+  color: var(--fm-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.fm-start-compute-settings__reason {
+  color: var(--fm-start-meta);
+}
+
+.fm-start-compute-settings__run {
+  color: var(--fm-project-migrate-text);
+}
+
+.fm-start-compute-settings__policy {
+  border-top: 1px solid var(--fm-border-subtle);
+  margin-top: var(--fm-space-3);
+  padding-top: var(--fm-space-3);
+}
+
+@media (max-width: 40rem) {
+  .fm-start-compute-settings__head {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .fm-start-compute-settings__head .fm-button {
+    align-self: flex-start;
+  }
+
+  .fm-start-compute-settings__panel-head {
+    flex-wrap: wrap;
+  }
+}

@@ -196,6 +196,12 @@ jobs:
           pnpm --dir apps/control-room run smoke:inspector
           ./scripts/ci/run_frontend3d_required_gate.sh browser-fixture-source-verify-post-write
 
+      - name: Run start screen stylesheet browser check
+        # Static CSS plus inline markup: no server and no audit build are needed.
+        env:
+          CONTROL_ROOM_BROWSER_CHANNEL: chromium
+        run: pnpm --dir apps/control-room run check:start-screen-browser
+
       - name: Upload browser fixture smoke artifacts
         if: always()
         uses: actions/upload-artifact@v7

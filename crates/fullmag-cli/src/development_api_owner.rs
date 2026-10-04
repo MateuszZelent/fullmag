@@ -25,6 +25,8 @@ const ACQUISITION_SCHEMA: &str = "fullmag.development-authoring-acquisition.v1";
 const CONFIRM_SCHEMA: &str = "fullmag.development-api-confirm.v1";
 const ABORT_SCHEMA: &str = "fullmag.development-api-abort.v1";
 const CONTROL_SCHEMA: &str = "fullmag.development-api-control.v1";
+const CONSUMER_READINESS_SCHEMA: &str = "fullmag.development-consumer-readiness.v1";
+const MAX_CANDIDATE_MANIFEST_BYTES: usize = 256 * 1024;
 const MAX_OWNER_RECORD_BYTES: usize = 8 * 1024;
 const MAX_REQUEST_BYTES: usize = 4 * 1024;
 const MAX_RESPONSE_BYTES: usize = 64 * 1024 * 1024;
@@ -475,6 +477,21 @@ pub(crate) struct SelectedDevelopmentCandidate {
     pub(crate) owner_verifier_helper_pid: u32,
 }
 
+/// Private observation from the exact owned API. It never proves that a
+/// workspace or resident service is idle and cannot authorize a handoff.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ConsumerReadinessStatus {
+    schema: String,
+    nonce: String,
+    api_instance_id: String,
+    worktree_id: Option<String>,
+    generation_id: Option<String>,
+    pub(crate) ready_build_id: Option<String>,
+    pub(crate) ready_source_sha256: Option<String>,
+    pub(crate) readiness_confirmed: bool,
+}
+
 impl OwnedDevelopmentApi {
     pub(crate) fn child_pid(&self) -> u32 {
         self.child_pid
@@ -492,6 +509,111 @@ impl OwnedDevelopmentApi {
             self.generation.clone(),
             self.api_instance_id.clone(),
         )
+    }
+
+    pub(crate) fn consumer_status(&self) -> Result<ConsumerReadinessStatus> {
+        self.consumer_control("consumer_status", None)
+    }
+
+    /// Renew only a sealed candidate selected by this owner. Checking its
+    /// immutable manifest again prevents renewing after removal or replacement.
+    pub(crate) fn confirm_consumer_readiness(
+        &self,
+        candidate: Option<&SelectedDevelopmentCandidate>,
+    ) -> Result<ConsumerReadinessStatus> {
+        if let Some(candidate) = candidate {
+            if self.service_configured
+                || candidate.worktree_id != self.worktree
+                || candidate.generation_id != self.generation
+                || candidate.ready_source_sha256 == self.source
+                || !lower_hex(&candidate.ready_build_id, 64)
+                || !lower_hex(&candidate.ready_source_sha256, 64)
+                || !lower_hex(&candidate.candidate_bundle_id, 32)
+                || !lower_hex(&candidate.candidate_manifest_sha256, 64)
+            {
+                bail!("consumer readiness candidate differs from the owned API scope");
+            }
+            let manifest = fullmag_session::repository_path::read_bounded_regular_file(
+                &self.storage_root,
+                &format!(
+                    "runtimes/{}/native-bundles/{}/manifest.json",
+                    self.worktree, candidate.candidate_bundle_id,
+                ),
+                MAX_CANDIDATE_MANIFEST_BYTES,
+            )
+            .context("consumer readiness candidate manifest is unavailable")?;
+            if fullmag_session::hex_sha256(&manifest) != candidate.candidate_manifest_sha256 {
+                bail!("consumer readiness candidate manifest changed after selection");
+            }
+        }
+        let response = self.consumer_control("consumer_readiness", candidate)?;
+        if let Some(candidate) = candidate {
+            if !response.readiness_confirmed
+                || response.ready_build_id.as_deref() != Some(candidate.ready_build_id.as_str())
+                || response.ready_source_sha256.as_deref()
+                    != Some(candidate.ready_source_sha256.as_str())
+            {
+                bail!("consumer readiness was not confirmed for the selected candidate");
+            }
+        } else if response.readiness_confirmed {
+            bail!("consumer readiness withdrawal was not confirmed");
+        }
+        Ok(response)
+    }
+
+    fn consumer_control(
+        &self,
+        command: &str,
+        candidate: Option<&SelectedDevelopmentCandidate>,
+    ) -> Result<ConsumerReadinessStatus> {
+        let nonce = uuid::Uuid::new_v4().to_string();
+        let readiness = candidate.map(|candidate| serde_json::json!({
+            "worktree_id": candidate.worktree_id,
+            "generation_id": candidate.generation_id,
+            "ready_build_id": candidate.ready_build_id,
+            "ready_source_sha256": candidate.ready_source_sha256,
+            "candidate_bundle_id": candidate.candidate_bundle_id,
+            "candidate_manifest_sha256": candidate.candidate_manifest_sha256,
+        }));
+        let mut request = serde_json::to_vec(&serde_json::json!({
+            "schema": CONTROL_SCHEMA,
+            "owner_token": self.owner_token,
+            "api_instance_id": self.api_instance_id,
+            "nonce": nonce,
+            "command": command,
+            "readiness": readiness,
+        }))?;
+        if request.len() >= MAX_REQUEST_BYTES {
+            bail!("consumer readiness request exceeds its limit");
+        }
+        request.push(b'\n');
+        let mut stream = TcpStream::connect_timeout(
+            &SocketAddr::V4(self.control_address), CONTROL_CONNECT_TIMEOUT,
+        ).context("unable to connect to consumer readiness control")?;
+        stream.set_nodelay(true)?;
+        write_all_until(
+            &mut stream, &request, CONTROL_REQUEST_TIMEOUT, "consumer readiness request",
+        )?;
+        let bytes = read_line_until(
+            &mut stream, CONFIRM_RESPONSE_TIMEOUT, MAX_REQUEST_BYTES, "consumer readiness response",
+        )?;
+        let response: ConsumerReadinessStatus = serde_json::from_slice(&bytes)
+            .context("invalid consumer readiness response")?;
+        if response.schema != CONSUMER_READINESS_SCHEMA
+            || response.nonce != nonce
+            || response.api_instance_id != self.api_instance_id
+            || response.worktree_id.as_deref() != Some(self.worktree.as_str())
+            || response.generation_id.as_deref() != Some(self.generation.as_str())
+        {
+            bail!("consumer readiness response differs from the owned API identity");
+        }
+        match (&response.ready_build_id, &response.ready_source_sha256) {
+            (None, None) if !response.readiness_confirmed => {}
+            (Some(build), Some(source))
+                if lower_hex(build, 64) && lower_hex(source, 64) && source != &self.source => {}
+            _ => bail!("consumer readiness response has an invalid candidate identity"),
+        }
+        Ok(response)
     }
 
     /// Select and validate a sealed candidate for the latest ready watcher

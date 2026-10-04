@@ -754,6 +754,7 @@ mod tests {
             device: "cpu".to_string(),
             precision: "double".to_string(),
             replace_current: false,
+            output_storage: None,
         })
         .expect("scene fixture should be valid")
     }

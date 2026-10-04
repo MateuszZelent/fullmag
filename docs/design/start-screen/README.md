@@ -24,6 +24,8 @@ command registry. No new colour system, no new control geometry.
 | **Docs in the app** | `docs/05-sphinx-integration.md` — the Sphinx documentation inside the app, with search |
 | **Status** | `docs/06-implementation-status.md` — what is built, how it was verified, what is left |
 | **Store it** | `docs/07-workspace-database.md` — the per-user SQLite database behind the recent list (projects and scripts) |
+| **Host obliczeniowy** | `docs/09-compute-environment.md` — odczyty runtime, szczegóły urządzeń i jawne stany niedostępności |
+| **Zasoby i równoległe zadania — projekt** | [Settings, profile i wiele urządzeń](docs/10-compute-settings-and-multi-device.md) — docelowa architektura CPU/GPU, solver settings i sweeps; nie deklaracja wdrożenia |
 
 The mockup has a control bar at the bottom (hover to reveal) for switching
 theme, screen state and section. Rendered stills of every combination are in
@@ -43,6 +45,8 @@ docs/
   05-sphinx-integration.md           the public Sphinx docs inside the app: contract, search, bundling
   06-implementation-status.md        what is built, evidence, known gaps
   07-workspace-database.md           per-user workspace database: schema, identity, concurrency, migration
+  09-compute-environment.md          odczyty hosta, szczegóły urządzeń, stany i dowody weryfikacji
+  10-compute-settings-and-multi-device.md projekt Settings, CPU/GPU placement i równoległych sweeps
 mockups/
   start-screen.html                  interactive mockup (single file, 231 kB)
   start-screen.template.html         source; thumbnails injected by scripts/build_mockup.py

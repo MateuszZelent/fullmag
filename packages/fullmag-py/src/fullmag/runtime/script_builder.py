@@ -72,6 +72,7 @@ from fullmag.model.geometry import (
     Translate,
     Union,
 )
+from fullmag.model.output_storage import OutputStorage
 from fullmag.model.outputs import (
     SaveDispersion,
     SaveField,
@@ -319,6 +320,7 @@ def export_builder_draft(loaded: LoadedProblem) -> dict[str, object]:
         ],
         "study_pipeline": export_study_pipeline_document(loaded),
         "table_autosave": _export_table_autosave(base_problem),
+        "output_storage": _export_output_storage(base_problem),
         "initial_state": _export_initial_state(base_problem),
         "geometries": [
             *[
@@ -388,22 +390,35 @@ def rewrite_loaded_problem_script(
     *,
     overrides: dict[str, object] | None = None,
     write: bool = False,
+    output_path: Path | None = None,
 ) -> dict[str, object]:
+    """Render the canonical script and optionally persist it.
+
+    ``write`` replaces the loaded source file in place and is only meant for
+    scripts Fullmag itself manages.  ``output_path`` writes the canonical copy
+    to a different file and never touches the loaded source, which is how a
+    user-owned script is exported.  The two options are mutually exclusive.
+    """
+    if write and output_path is not None:
+        raise ValueError("write and output_path are mutually exclusive")
     rendered = render_loaded_problem_as_script(loaded, overrides=overrides)
     script_path = loaded.source_path
+    target_path = script_path if write else output_path
 
-    if write:
-        temp_path = script_path.with_name(f"{script_path.name}.fullmag.tmp")
+    if target_path is not None:
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = target_path.with_name(f"{target_path.name}.fullmag.tmp")
         temp_path.write_text(rendered, encoding="utf-8")
-        temp_path.replace(script_path)
+        temp_path.replace(target_path)
 
+    persisted = target_path is not None
     return {
-        "script_path": str(script_path),
+        "script_path": str(target_path if target_path is not None else script_path),
         "source_kind": _builder_source_kind(loaded.entrypoint_kind),
         "entrypoint_kind": loaded.entrypoint_kind,
-        "written": write,
-        "bytes_written": len(rendered.encode("utf-8")) if write else 0,
-        **({"rendered_source": rendered} if not write else {}),
+        "written": persisted,
+        "bytes_written": len(rendered.encode("utf-8")) if persisted else 0,
+        **({"rendered_source": rendered} if not persisted else {}),
     }
 
 
@@ -727,6 +742,7 @@ def _render_scene_document_bootstrap(builder: Mapping[str, object]) -> str:
     cpu_threads = _positive_int(builder.get("cpu_threads"))
     if cpu_threads is not None:
         lines.append(f"study.threads({cpu_threads})")
+    lines.extend(_render_output_storage(builder.get("output_storage"), surface="study"))
 
     solver = builder.get("solver")
     if isinstance(solver, Mapping):
@@ -1929,6 +1945,12 @@ def _render_runtime(
                 )
 
     runtime_metadata = _normalize_mapping(problem.runtime_metadata)
+    output_storage = (
+        overrides.get("output_storage")
+        if "output_storage" in overrides
+        else runtime_metadata.get("output_storage")
+    )
+    lines.extend(_render_output_storage(output_storage, surface=surface))
     if surface == "study":
         universe = _resolve_universe(problem, overrides=overrides)
         if universe is not None:
@@ -8500,6 +8522,9 @@ def _script_api_surface(
 ) -> str:
     runtime_metadata = _normalize_mapping(problem.runtime_metadata)
     surface = runtime_metadata.get("script_api_surface")
+    overrides = overrides or {}
+    if runtime_metadata.get("output_storage") is not None or overrides.get("output_storage") is not None:
+        return "study"
     couplings_override = (overrides or {}).get("couplings")
     monitors_override = (overrides or {}).get("planar_monitors")
     rotated_dmi_override = (overrides or {}).get("rotated_interfacial_dmi")
@@ -8517,6 +8542,35 @@ def _script_api_surface(
     ) or has_rotated_dmi:
         return "study"
     return "study" if surface == "study" else "flat"
+
+
+def _render_output_storage(value: object, *, surface: str) -> list[str]:
+    if value is None:
+        return []
+    if surface != "study":
+        raise ValueError("output_storage requires the canonical study API surface")
+    if not isinstance(value, Mapping):
+        raise ValueError("output_storage must be an object")
+    storage = OutputStorage.from_ir(value)
+    wire = storage.to_ir()
+    defaults = {
+        "output_dir": None,
+        "temp_dir": None,
+        "data_format": "zarr",
+        "cleanup": "on_success",
+        "existing_output": "timestamp",
+    }
+    kwargs = [
+        f"{key}={_py_repr(value)}"
+        for key, default in defaults.items()
+        if (value := wire[key]) != default
+    ]
+    return [f"study.storage({', '.join(kwargs)})"]
+
+
+def _export_output_storage(problem: Problem) -> dict[str, object] | None:
+    raw = _normalize_mapping(problem.runtime_metadata).get("output_storage")
+    return OutputStorage.from_ir(raw).to_ir() if raw is not None else None
 
 
 def _render_study_binding(problem: Problem) -> list[str]:
@@ -9441,6 +9495,7 @@ def _stage_signature(problem: Problem) -> dict[str, object]:
         else None,
         "discretization": problem.discretization.to_ir() if problem.discretization else None,
         "mesh_workflow": runtime_metadata.get("mesh_workflow"),
+        "output_storage": runtime_metadata.get("output_storage"),
         "interactive": runtime_metadata.get("interactive_session_requested"),
         "wait_for_solve": runtime_metadata.get("wait_for_solve"),
         "domain_frame": runtime_metadata.get("domain_frame"),

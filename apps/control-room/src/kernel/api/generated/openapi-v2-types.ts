@@ -436,6 +436,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/platform/output-storage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["platform_get_platform_output_storage"];
+        put: operations["platform_put_platform_output_storage"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/platform/runtime-service": {
         parameters: {
             query?: never;
@@ -5713,6 +5729,7 @@ export interface components {
             backend: components["schemas"]["ScratchSessionBackend"];
             device: components["schemas"]["ScratchSessionDevice"];
             name: string;
+            output_storage?: null | components["schemas"]["OutputStorageSettingsSchema"];
             precision: components["schemas"]["ScratchSessionPrecision"];
             replace_current?: boolean;
         };
@@ -6069,6 +6086,8 @@ export interface components {
             revision: number;
             total: number;
         };
+        /** @enum {string} */
+        ExistingOutputSchema: "timestamp" | "error";
         FdmCommonTransformLayoutResource: {
             cell_size: number[];
             fft_shape: number[];
@@ -10036,6 +10055,37 @@ export interface components {
             resource: components["schemas"]["SceneOerstedField"];
         };
         /** @enum {string} */
+        OutputDataFormatSchema: "zarr" | "hdf5";
+        OutputStorageDefaultsRequest: {
+            cleanup?: components["schemas"]["TempCleanupSchema"];
+            data_format?: components["schemas"]["OutputDataFormatSchema"];
+            existing_output?: components["schemas"]["ExistingOutputSchema"];
+            output_parent: string;
+            temp_parent?: string | null;
+        };
+        OutputStorageDefaultsResource: {
+            cleanup: components["schemas"]["TempCleanupSchema"];
+            data_format: components["schemas"]["OutputDataFormatSchema"];
+            existing_output: components["schemas"]["ExistingOutputSchema"];
+            hdf5_unavailable_reason: string | null;
+            output_parent: string;
+            supported_formats: components["schemas"]["OutputDataFormatSchema"][];
+            temp_parent: string | null;
+        };
+        /** @description Per-session output storage overrides. Omitted fields retain safe defaults. */
+        OutputStorageSettingsSchema: {
+            /** @default on_success */
+            cleanup: components["schemas"]["TempCleanupSchema"];
+            /** @default zarr */
+            data_format: components["schemas"]["OutputDataFormatSchema"];
+            /** @default timestamp */
+            existing_output: components["schemas"]["ExistingOutputSchema"];
+            /** @default null */
+            output_dir: string | null;
+            /** @default null */
+            temp_dir: string | null;
+        };
+        /** @enum {string} */
         PeriodicValidationStatus: "valid" | "invalid" | "stale" | "unavailable";
         /** @enum {string} */
         PhysicsGraphActivationResource: "configured" | "active" | "inactive" | "blocked" | "unsupported" | "unresolved";
@@ -10718,7 +10768,7 @@ export interface components {
             study_plan: {
                 [key: string]: unknown;
             };
-            /** @description Versioned `study_problem_catalog.v1` object bound to the exact study digest. */
+            /** @description Immutable study catalog: legacy v1, or v2 with pinned execution profiles and field origins. */
             study_problem_catalog: {
                 [key: string]: unknown;
             };
@@ -12094,6 +12144,13 @@ export interface components {
         };
         ScriptSourceResponse: {
             bytes: number;
+            /**
+             * @description Managed export copy path for `user_file` sessions (the response
+             *     carries the copy when it exists, otherwise the read-only original).
+             */
+            managed_copy_path?: string | null;
+            /** @description Script origin of the session: `user_file`, `generated` or `none`. */
+            origin?: string;
             script_path: string;
             source: string;
         };
@@ -12103,9 +12160,26 @@ export interface components {
         ScriptSyncResponse: {
             bytes_written: number;
             entrypoint_kind: string;
+            /** @description Managed export copy path for `user_file` sessions. */
+            managed_copy_path?: string | null;
+            /**
+             * @description Path of the file that received the canonical script. For a
+             *     `user_file` session this is the managed export copy, never the
+             *     user's own script.
+             */
             script_path: string;
             source_kind: string;
+            /**
+             * @description True only when the session's own source script file was rewritten.
+             *     Always false for `user_file` sessions.
+             */
+            source_script_modified?: boolean;
             written: boolean;
+            /**
+             * @description `export_copy` (user file left untouched, copy written to managed
+             *     storage) or `script` (the session's managed script was written).
+             */
+            written_to?: string;
         };
         SelectionBoundaryMembershipSchema: {
             /** Format: double */
@@ -12421,11 +12495,32 @@ export interface components {
          * @enum {string}
          */
         SessionRestoreMode: "visualization_only" | "replace_project" | "resume";
+        /**
+         * @description Where the current session's Python script comes from and whether Fullmag
+         *     may write to it.
+         */
+        SessionScriptSummary: {
+            managed_copy_path?: string | null;
+            /**
+             * @description `user_file` (a file the user owns; Fullmag never writes it),
+             *     `generated` (a script inside Fullmag-managed storage) or `none`.
+             */
+            origin: string;
+            path: string;
+            /**
+             * @description Content hash of the script at the time of the request; only present on
+             *     `GET /v2/sessions/current`.
+             */
+            sha256?: string | null;
+            /** @description False for `user_file`: syncs go to `managed_copy_path` instead. */
+            writable: boolean;
+        };
         SessionSummary: {
             created_at: string;
             name: string;
             /** @description API-instance and transition identity for current-session HTTP/cache ownership. */
             request_scope_epoch: string;
+            script?: null | components["schemas"]["SessionScriptSummary"];
             /** @description Scientific session identity shared with observation frames. */
             session_epoch: string;
             session_id: string;
@@ -13580,6 +13675,8 @@ export interface components {
          * @enum {string}
          */
         TargetFieldAvailabilityState: "supported" | "materializing" | "ready" | "stale" | "unavailable";
+        /** @enum {string} */
+        TempCleanupSchema: "on_success" | "always" | "never";
         TimeDependenceResource: {
             /** @enum {string} */
             kind: "constant";
@@ -15564,6 +15661,71 @@ export interface operations {
         responses: {
             /** @description OpenAPI v2 document */
             200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    platform_get_platform_output_storage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Resolved output storage defaults and runtime format capabilities */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OutputStorageDefaultsResource"];
+                };
+            };
+            /** @description Storage defaults could not be read */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    platform_put_platform_output_storage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OutputStorageDefaultsRequest"];
+            };
+        };
+        responses: {
+            /** @description Output storage defaults saved */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OutputStorageDefaultsResource"];
+                };
+            };
+            /** @description Invalid output storage defaults */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Output storage defaults could not be saved */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };

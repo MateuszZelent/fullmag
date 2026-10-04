@@ -8,6 +8,66 @@ NOT VERIFIED. Utrata ACK wymaga potwierdzonego exit własnego API i zgodnego
 trwałego rekordu; nie upoważnia do ponowienia commit ani zwolnienia fence.
 Data: 03.10.2026.
 
+### Prywatne potwierdzenie konsumenta — P8-53AU
+
+Gotowości konsumenta nie wyprowadzamy z konfiguracji transportu ani heartbeat
+watchera. Uwierzytelniony owner odnawia pojedynczy, przypięty do API/generacji/
+worktree/kandydata rekord w pamięci z ważnością 5 sekund monotonicznego czasu.
+Odczyt nie odnawia; niezgodna obserwacja unieważnia dawny rekord. Potwierdzenie
+nie jest idle proof ani zgodą na handoff. Selekcja dla jednej niezmienionej
+tożsamości ma najwyżej jedną próbę; cache przejmuje kandydata przed renewal,
+aby lost ACK nie tworzył kolejnych bundle. Publiczna flaga pozostaje `false`
+do odrębnych bramek native/browser i odczytu z ETag uwzględniającym wygaśnięcie.
+Stan implementacji i ograniczenia:
+[P8-53AU](../plans/active/refactor_runtime/final/p8/53au-private-consumer-readiness.md).
+
+### Jawna akcja w trwałym hoście — P8-53AT
+
+Serwis akcji należy do `DevelopmentKernelHost`, a baner subskrybuje jego
+stan. Remount banera i publikacja nowej generacji nie tworzą nowego
+kontrolera dla niepotwierdzonego requestu. Start jest wyłącznie jawny;
+wymaga świeżego `ready`, `restart_available=true`, pinu i zgodnej tożsamości
+workspace oraz różnego od aktualnego źródła gotowego buildu. Status jest
+ponownie sprawdzany przed capture i po zdobyciu guardów. Nie stosujemy
+automatycznie pending forms; carry brudnego dokumentu jest jawne.
+Pending/unknown pozwala tylko odczytać ten sam request z prywatnym tokenem.
+Błąd hydration lub cleanup nie pozwala ponowić przejęcia ownerów.
+Retry po odrzuconym capture wymaga jawnego dowodu zakończonego cleanup
+od właściciela oraz braku requestu. Nietypowane odrzucenie traktujemy jako
+niepotwierdzone. Wznowiony Host i tekst komunikatu nie zastępują tego dowodu;
+błąd obserwatora release może wystąpić także po wznowieniu Host. Serwis
+zachowuje taki kontroler i blokuje nowe przejęcie.
+Pierwsze wejście to baner poza registry komend, aby sama aktywna komenda
+nie blokowała zdobycia pause guard. Nie zmieniamy capability w backendzie;
+pełny native/browser flow pozostaje odrębną bramką.
+Zakres implementacji i dowody:
+[P8-53AT](../plans/active/refactor_runtime/final/p8/53at-development-restart-action.md).
+
+### Wynik runu jako praca właściciela dokumentu — P8-53AS
+
+Okno oczekiwania na końcową klatkę i thumbnail również należy do pracy
+właściciela dokumentu. Connector rezerwuje je synchronicznie przed
+konsumowaniem obserwacji runu. Capture/guard/restore nie omijają rezerwacji,
+queued outcomes ani flushu. Pauza lub guard nie konsumują obserwacji;
+po zwolnieniu można ją rozpatrzyć ponownie. Ogólna operacja Save zachowuje
+możliwość opróżnienia kolejki. Nie rozszerza to payloadu handoff ani nie
+pozwala wyczyścić kolejki przy restore. Wykonanie i granice dowodów:
+[P8-53AS](../plans/active/refactor_runtime/final/p8/53as-run-outcome-handoff.md).
+
+### Zamontowany kernel — P8-53AR
+
+[Dowód P8-53AR](../plans/active/refactor_runtime/final/p8/53ar-mounted-kernel-handoff.md)
+obejmuje produkcyjny KernelProvider z odpowiedziami fixture. Pauza zachowuje
+zamontowane dzieci; nowa generacja otrzymuje świeżych właścicieli i scoped
+cache. Registry, API i zasoby nowej generacji są chronione do potwierdzenia
+mount i aktualizacji pinu URL. Stary transport pozostaje retired, także po
+zwolnieniu capture lease. Token-bound status może pominąć stary pin,
+ale musi potwierdzić wersję kontraktu. Browser 13/13 PASS nie kwalifikuje
+natywnego restartu, warm-service ani utraty zasilania. Komenda UI i pełny
+restart z niepustą sceną były otwarte w checkpointcie P8-53AR; akcję banera
+sprawdzono następnie w izolowanym P8-53AT. Pełny restart pozostaje NOT VERIFIED;
+`restart_available=false`.
+
 ### Tożsamość i właściciele frontendu — P8-53AQ
 
 Zasób `development-backend` w zarządzanym trybie dev zawiera cienkie

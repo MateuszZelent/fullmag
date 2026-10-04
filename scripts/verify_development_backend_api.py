@@ -27,7 +27,10 @@ from windows.workspace_backend_identity import fingerprint
 
 def run(repo_root: str, cross_build_bundle: str = "", project_document_only: bool = False,
         restart_transport_only: bool = False, observer_pause_only: bool = False,
-        restart_consumer_only: bool = False) -> int:
+        restart_consumer_only: bool = False, consumer_readiness_only: bool = False) -> int:
+    if consumer_readiness_only and (cross_build_bundle or project_document_only or restart_transport_only
+                                   or observer_pause_only or restart_consumer_only):
+        raise storage.StorageError("Consumer readiness is a separate verification scope")
     if restart_consumer_only and (cross_build_bundle or project_document_only or restart_transport_only or observer_pause_only):
         raise storage.StorageError("Restart consumer is a separate verification scope")
     if observer_pause_only and (cross_build_bundle or project_document_only or restart_transport_only):
@@ -51,13 +54,34 @@ def run(repo_root: str, cross_build_bundle: str = "", project_document_only: boo
         raise storage.StorageError("Native development checks require an active registered owner")
     storage.initialize(layout)
     with storage.build_lock(layout):
-        manifest_path = storage.validate_path(Path(native["build_root"]) / "windows-runtime/build-manifest.json", layout["storage_root"], "native build manifest")
-        verified = verified_build_identity(native["build_root"], native["runtime_root"], manifest_path, source_before)
-        raw_manifest = manifest_path.read_bytes()
-        if hashlib.sha256(raw_manifest).hexdigest() != verified["ready_build_id"]:
-            raise storage.StorageError("Native build manifest changed after verification")
-        manifest = json.loads(raw_manifest)
-        source_api = storage.validate_path(manifest["api_binary"], native["build_root"], "verified native API")
+        preflight_started = storage.now()
+        try:
+            manifest_path = storage.validate_path(Path(native["build_root"]) / "windows-runtime/build-manifest.json", layout["storage_root"], "native build manifest")
+            verified = verified_build_identity(native["build_root"], native["runtime_root"], manifest_path, source_before)
+            raw_manifest = manifest_path.read_bytes()
+            if hashlib.sha256(raw_manifest).hexdigest() != verified["ready_build_id"]:
+                raise storage.StorageError("Native build manifest changed after verification")
+            manifest = json.loads(raw_manifest)
+            source_api = storage.validate_path(manifest["api_binary"], native["build_root"], "verified native API")
+        except Exception as error:
+            # A refused package is terminal diagnostic evidence, never permission
+            # to execute partially rebuilt files or replace the last good manifest.
+            refused_root = storage.validate_path(Path(layout["build_root"]) / "checks" / uuid.uuid4().hex,
+                                                 layout["build_storage_root"], "refused native API checks")
+            refused_root.mkdir(parents=True, exist_ok=False)
+            refused_receipt = refused_root / "receipt.json"
+            storage.atomic_json(refused_receipt, {
+                "schema": "fullmag.development-backend-api-checks.v1", "state": "blocked",
+                "head": storage.git(repo, "rev-parse", "HEAD"), "task_id": owner["task_id"],
+                "owner": owner["owner"], "source_sha256": source_before, "verifier_sha256": verifier_hash,
+                "started_at": preflight_started, "finished_at": storage.now(), "exit_code": 2,
+                "phase": "native_package_preflight", "qualification": "not_assessed",
+                "consumer_readiness_only": consumer_readiness_only,
+                "unit_tests": "not_compiled_not_run", "checks": [], "processes": [],
+                "scope": "package admission refusal; no native API or runtime verification",
+                "public_reason": "verified_native_package_unavailable",
+            })
+            raise storage.StorageError(f"Native package preflight refused; receipt: {refused_receipt}") from error
         run_root = storage.validate_path(Path(layout["build_root"]) / "checks" / uuid.uuid4().hex, layout["build_storage_root"], "native API checks")
         run_root.mkdir(parents=True, exist_ok=False)
         from windows.runtime_bundle import _check_path_chain, _require_directory, _require_regular_file
@@ -83,6 +107,8 @@ def run(repo_root: str, cross_build_bundle: str = "", project_document_only: boo
             receipt["scope"] = "native observer pause protocol with actual threads; no API, process replacement, UI hydration, solver or release qualification"
         if restart_consumer_only:
             receipt["scope"] = "owned native API durable restart consumer, UI payload restoration, fresh API identity, stale-pin rejection and authoring editability; no solver or release qualification"
+        if consumer_readiness_only:
+            receipt["scope"] = "private owner-authenticated expiring readiness lease in owned native APIs with controlled watcher and candidate pins; no selector, cross-build, UI availability, hydration, solver or release qualification"
         storage.atomic_json(receipt_path, receipt)
         code = 1
         try:
@@ -122,9 +148,10 @@ def run(repo_root: str, cross_build_bundle: str = "", project_document_only: boo
                 exercise_restart_consumer(repo, run_root, manifest, receipt, api.parent)
             else:
                 exercise(api, repo, run_root, receipt, project_document_only=project_document_only,
-                         restart_transport_only=restart_transport_only)
+                         restart_transport_only=restart_transport_only,
+                         consumer_readiness_only=consumer_readiness_only)
             if (not project_document_only and not restart_transport_only and not observer_pause_only
-                    and not restart_consumer_only):
+                    and not restart_consumer_only and not consumer_readiness_only):
                 exercise_service(repo, run_root, manifest, receipt, api.parent)
             # Use the canonical codegen branch rather than persisting the live
             # endpoint's process-specific accepted-store binding extension.
@@ -1232,7 +1259,7 @@ def exercise_service(repo: Path, run_root: Path, manifest: dict, receipt: dict, 
 
 
 def exercise(api: Path, repo: Path, run_root: Path, receipt: dict, *, project_document_only: bool = False,
-             restart_transport_only: bool = False) -> None:
+             restart_transport_only: bool = False, consumer_readiness_only: bool = False) -> None:
     generation, source, worktree = "1" * 32, "a" * 64, "fixture-worktree"
     fixture_storage = run_root / "fixture-storage"
     status = fixture_storage / "builds" / worktree / "windows-native-fdm-cpu-dev/backend-watch-status.json"
@@ -1510,6 +1537,14 @@ def exercise(api: Path, repo: Path, run_root: Path, receipt: dict, *, project_do
             "source_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
             "scope": "runtime-free incomplete box then material/region authoring, accepted metadata extension, retained assets/opaque entries/source history; no solver execution",
         }
+
+    if consumer_readiness_only:
+        from windows.verify_consumer_readiness import exercise as exercise_readiness
+        exercise_readiness(frame=frame, with_api=with_api, configured=configured,
+                           fixture_storage=fixture_storage, run_root=run_root,
+                           worktree=worktree, generation=generation, source=source,
+                           checks=checks, receipt=receipt)
+        return
 
     if restart_transport_only:
         route = "/v2/platform/development-restart-requests"
@@ -2019,11 +2054,12 @@ if __name__ == "__main__":
     parser.add_argument("--restart-transport-only", action="store_true")
     parser.add_argument("--observer-pause-only", action="store_true")
     parser.add_argument("--restart-consumer-only", action="store_true")
+    parser.add_argument("--consumer-readiness-only", action="store_true")
     args = parser.parse_args()
     try:
         raise SystemExit(run(args.repo_root, args.cross_build_bundle, args.project_document_only,
                              args.restart_transport_only, args.observer_pause_only,
-                             args.restart_consumer_only))
+                             args.restart_consumer_only, args.consumer_readiness_only))
     except Exception as error:
         print(f"Native development resource verification failed: {error}", file=sys.stderr)
         raise SystemExit(2)

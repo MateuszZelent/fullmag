@@ -4,8 +4,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 pub mod antenna;
 pub mod constraint;
+pub mod compute_resources;
 pub mod eigen_contract;
 pub mod execution;
+pub mod execution_profile;
 pub mod field_drive_validation;
 pub mod frequency_response_contract;
 pub mod mechanics;
@@ -15,6 +17,7 @@ pub mod mesh_policy;
 pub mod mixed_certificate;
 pub mod native_indexed_geometry;
 pub mod model;
+pub mod output_storage;
 pub mod physics_object;
 pub mod plan;
 pub mod planar_monitor;
@@ -26,8 +29,10 @@ pub mod study;
 mod validation;
 pub use antenna::*;
 pub use constraint::*;
+pub use compute_resources::*;
 pub use eigen_contract::*;
 pub use execution::*;
+pub use execution_profile::*;
 pub use field_drive_validation::*;
 pub use frequency_response_contract::*;
 pub use mechanics::*;
@@ -36,6 +41,7 @@ pub use mesh_hints::*;
 pub use mesh_policy::*;
 pub use mixed_certificate::*;
 pub use model::*;
+pub use output_storage::*;
 pub use physics_object::*;
 pub use plan::*;
 pub use planar_monitor::*;
@@ -773,7 +779,31 @@ impl ProblemIR {
         if self.problem_meta.entrypoint_kind.trim().is_empty() {
             errors.push("problem_meta.entrypoint_kind must not be empty".to_string());
         }
+        if let Some(storage) = self.problem_meta.runtime_metadata.get("output_storage") {
+            match serde_json::from_value::<OutputStorageIR>(storage.clone()) {
+                Ok(storage) => {
+                    if let Err(storage_errors) = storage.validate() {
+                        errors.extend(storage_errors);
+                    }
+                }
+                Err(error) => errors.push(format!(
+                    "problem_meta.runtime_metadata.output_storage is invalid: {error}"
+                )),
+            }
+        }
         validate_runtime_selection(self, &mut errors);
+        match ComputeResourcesIR::from_problem(self) {
+            Ok(Some(resources)) => {
+                if let Err(resource_errors) = resources.validate() {
+                    errors.extend(resource_errors);
+                }
+                if let Err(conflicts) = resources.validate_legacy_selection(self) {
+                    errors.extend(conflicts);
+                }
+            }
+            Ok(None) => {}
+            Err(error) => errors.push(error),
+        }
         validate_problem_magnetization_constraints(self, &mut errors);
         if self.geometry.entries.is_empty() {
             errors.push("at least one geometry entry is required".to_string());

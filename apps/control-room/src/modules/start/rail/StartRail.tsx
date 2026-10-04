@@ -42,12 +42,25 @@ export const RAIL_SECTIONS: readonly RailEntry[] = [
 
 export interface StartRailProps {
   readonly compute: ComputeProbeState;
+  readonly refreshing?: boolean;
+  readonly stale?: boolean;
+  readonly computeError?: string | null;
+  readonly onRefreshCompute?: () => void;
   readonly onRunCommand: (commandId: string) => void;
   readonly ref?: Ref<HTMLDivElement>;
   readonly section: StartSection;
 }
 
-export function StartRail({ compute, onRunCommand, ref, section }: StartRailProps) {
+export function StartRail({
+  compute,
+  refreshing = false,
+  stale = false,
+  computeError = null,
+  onRefreshCompute,
+  onRunCommand,
+  ref,
+  section,
+}: StartRailProps) {
   const itemRefs = useRef<Array<HTMLButtonElement | null>>([]);
 
   // One tab stop for the whole rail: arrows move focus, Enter or click navigates.
@@ -107,7 +120,11 @@ export function StartRail({ compute, onRunCommand, ref, section }: StartRailProp
       <div aria-hidden="true" className="fm-start-rail__sep" />
       <ComputeEnvironmentWidget
         compute={compute}
+        error={computeError}
         onConfigure={() => onRunCommand("start.section.settings")}
+        onRefresh={onRefreshCompute}
+        refreshing={refreshing}
+        stale={stale}
       />
     </div>
   );

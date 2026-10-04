@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import { homeView } from "@/kernel/layout/homeView";
@@ -11,17 +11,17 @@ import type { ModuleProps } from "@/kernel/types";
 import { HomeSection } from "./home/HomeSection";
 import { LAUNCH_TILES } from "./home/LaunchTiles";
 import { ProjectInspector } from "./inspector/ProjectInspector";
-import {
-  discardCheckpoint,
-  readProjectArchiveAtPath,
-  resumeRun,
-} from "./model/recentIndexHost";
+import { readProjectArchiveAtPath } from "./model/recentIndexHost";
+import { resolveScriptOpener, type ScriptOpener } from "./model/scriptOpen";
 import { useAuthorName } from "./model/useAuthorName";
 import { useComputeProbe } from "./model/useComputeProbe";
 import { useRecentIndex } from "./model/useRecentIndex";
+import { useWorkspaceScripts } from "./model/useWorkspaceScripts";
+import { workspaceHostAvailable } from "./model/workspaceHost";
 import { startActionDisabledReason } from "./model/startCommands";
 import { startScreenStore, type StartScreenHost } from "./model/startScreenState";
-import type { ContinueSession, RecentEntry } from "./model/types";
+import { startSettings } from "./model/startSettings";
+import type { RecentEntry } from "./model/types";
 import { StartRail } from "./rail/StartRail";
 import { StartStatusBar } from "./ui/StartStatusBar";
 import { AboutSection } from "./sections/AboutSection";
@@ -30,6 +30,10 @@ import { ImportSection } from "./sections/ImportSection";
 import { LearnSection } from "./sections/LearnSection";
 import { SettingsSection } from "./sections/SettingsSection";
 import { TemplatesSection } from "./sections/TemplatesSection";
+
+const OPEN_SCRIPT_NEEDS_DESKTOP = "Opening a script needs the desktop app.";
+
+const subscribeNever = () => () => undefined;
 
 const SESSION_UNCONFIRMED =
   "Fullmag could not confirm that no session is running. Retry the session list first.";
@@ -44,13 +48,20 @@ export function StartScreen({ kernel }: ModuleProps) {
   // enablement of workspace.open-project.
   useProjectDocumentSnapshot();
   const recent = useRecentIndex();
-  const compute = useComputeProbe();
+  const scripts = useWorkspaceScripts();
+  // Server rendering and hydration agree on "no desktop"; the client snapshot
+  // then enables the picker.
+  const desktop = useSyncExternalStore(subscribeNever, workspaceHostAvailable, () => false);
+  const [scriptFlowNotice, setScriptFlowNotice] = useState<string | null>(null);
+  const computeProbe = useComputeProbe();
+  const { compute } = computeProbe;
   const authorName = useAuthorName();
-  const { section, selectedProjectId, selectedTemplateId } = useSyncExternalStore(
-    startScreenStore.subscribe,
-    startScreenStore.getSnapshot,
-    startScreenStore.getServerSnapshot,
-  );
+  const { section, selectedProjectId, selectedScriptId, selectedTemplateId, openScriptNonce } =
+    useSyncExternalStore(
+      startScreenStore.subscribe,
+      startScreenStore.getSnapshot,
+      startScreenStore.getServerSnapshot,
+    );
   // Over an open workspace the tiles still create or open; the problem dialog
   // owns the "replace the current session" confirmation.
   const canCreateProblem = sessions.state === "no-session" || sessions.state === "ready";
@@ -58,13 +69,41 @@ export function StartScreen({ kernel }: ModuleProps) {
   const host = useMemo<StartScreenHost>(
     () => ({
       createProblemDisabledReason: canCreateProblem ? null : SESSION_UNCONFIRMED,
+      openScriptDisabledReason: desktop ? null : OPEN_SCRIPT_NEEDS_DESKTOP,
       disabledReason: (commandId, context) =>
         kernel.commands.get(commandId)?.disabledReason?.(context) ?? null,
       execute: (commandId, context) => kernel.commands.execute(commandId, context),
       isEnabled: (commandId, context) => kernel.commands.isEnabled(commandId, context),
     }),
-    [canCreateProblem, kernel.commands],
+    [canCreateProblem, desktop, kernel.commands],
   );
+
+  // One flow for the tile, the list buttons and the palette command: pick a
+  // script, make sure the list shows scripts, and select the result so the
+  // inspector describes it. Each request carries a new number; handle it once.
+  const handledOpenScript = useRef(openScriptNonce);
+  const pickAndOpen = scripts.pickAndOpen;
+  useEffect(() => {
+    if (openScriptNonce <= handledOpenScript.current) {
+      // The store restarts its counter when the screen detaches.
+      handledOpenScript.current = openScriptNonce;
+      return;
+    }
+    handledOpenScript.current = openScriptNonce;
+    startScreenStore.setSection("home");
+    setScriptFlowNotice(null);
+    void pickAndOpen().then(({ item, failure }) => {
+      if (failure) {
+        setScriptFlowNotice(failure);
+        return;
+      }
+      if (!item) return;
+      if (startSettings.getSnapshot().recentKind === "project") {
+        startSettings.update({ recentKind: "all" });
+      }
+      startScreenStore.setSelectedScript(item.id);
+    });
+  }, [openScriptNonce, pickAndOpen]);
 
   useEffect(() => {
     const detach = startScreenStore.attach(host);
@@ -120,15 +159,39 @@ export function StartScreen({ kernel }: ModuleProps) {
     return openArchive(archive, `Could not open ${entry.name}`);
   };
 
-  const resumeContinue = async (session: ContinueSession, entry: RecentEntry) =>
-    openArchive(await resumeRun(session.projectId, session.runId), `Could not resume ${entry.name}`);
-
-  const discardContinue = async (session: ContinueSession): Promise<string | null> => {
-    const result = await discardCheckpoint(session.projectId, session.runId);
-    if (!result.ok) return `Could not discard the checkpoint: ${result.reason}`;
-    await recent.refresh();
-    return null;
+  // The runtime restores a checkpoint into the open session that owns the run
+  // (study.restore-checkpoint -> POST .../persistence/checkpoints/{id}/restore),
+  // leaving it paused; the workspace behind Home takes over from there.
+  const resumeContinue = async (checkpointId: string, entry: RecentEntry): Promise<string | null> => {
+    const result = await kernel.commands.execute(
+      "study.restore-checkpoint",
+      createCommandContext("menu", kernel, {
+        input: { checkpointId },
+        sourceDetail: "start-screen",
+      }),
+    );
+    if (result.status === "completed") {
+      homeView.close();
+      return null;
+    }
+    return result.message ?? `Could not restore the checkpoint of ${entry.name}.`;
   };
+
+  // A script opens as a project only where the API has such an operation; the
+  // closure leaves Home on success, exactly like opening an archive.
+  const baseOpener = resolveScriptOpener();
+  const scriptOpener: ScriptOpener | null = baseOpener
+    ? async (request) => {
+        const failure = await baseOpener(request);
+        if (failure === null) homeView.close();
+        return failure;
+      }
+    : null;
+
+  const selectedScript =
+    scripts.state.kind === "ready"
+      ? (scripts.state.items.find((item) => item.id === selectedScriptId) ?? null)
+      : null;
 
   const selectedEntry =
     recent.state.kind === "ready"
@@ -156,7 +219,16 @@ export function StartScreen({ kernel }: ModuleProps) {
 
   return (
     <div className="fm-start" data-section={section}>
-      <StartRail compute={compute} onRunCommand={runCommand} ref={railRef} section={section} />
+      <StartRail
+        compute={compute}
+        computeError={computeProbe.error}
+        refreshing={computeProbe.refreshing}
+        stale={computeProbe.stale}
+        onRefreshCompute={computeProbe.refresh}
+        onRunCommand={runCommand}
+        ref={railRef}
+        section={section}
+      />
       <main className="fm-start__content" id="fm-main-content" ref={mainRef} tabIndex={-1}>
         <div className="fm-start__content-inner">
           {section === "home" ? (
@@ -166,7 +238,11 @@ export function StartScreen({ kernel }: ModuleProps) {
               initialFocusRef={initialFocusRef}
               name={authorName}
               recent={recent}
-              onDiscardContinue={discardContinue}
+              scripts={scripts}
+              canOpenScript={desktop}
+              onOpenScript={() => runCommand("start.open-script")}
+              scriptFlowNotice={scriptFlowNotice}
+              compute={compute}
               onOpenRecent={openRecent}
               onResumeContinue={resumeContinue}
               onRunCommand={runCommand}
@@ -174,13 +250,24 @@ export function StartScreen({ kernel }: ModuleProps) {
           ) : section === "templates" ? (
             <TemplatesSection compute={compute} />
           ) : section === "import" ? (
-            <ImportSection onOpenFile={openFile} openDisabledReason={browseDisabledReason} />
+            <ImportSection
+              onOpenFile={openFile}
+              onOpenScript={scriptOpener}
+              openDisabledReason={browseDisabledReason}
+            />
           ) : section === "docs" ? (
             <DocsSection />
           ) : section === "learn" ? (
             <LearnSection />
           ) : section === "settings" ? (
-            <SettingsSection recent={recent} />
+            <SettingsSection
+              compute={compute}
+              computeError={computeProbe.error}
+              refreshing={computeProbe.refreshing}
+              stale={computeProbe.stale}
+              onRefreshCompute={computeProbe.refresh}
+              recent={recent}
+            />
           ) : (
             <AboutSection compute={compute} index={recent.state} />
           )}
@@ -196,9 +283,23 @@ export function StartScreen({ kernel }: ModuleProps) {
         onOpen={openRecent}
         onTogglePin={(projectId, pinned) => void recent.pin(projectId, pinned)}
         openDisabledReason={browseDisabledReason}
+        script={selectedScript}
+        scriptActions={{
+          readOnly: scripts.readOnly,
+          onOpen: scripts.open,
+          onReveal: scripts.reveal,
+          onReadText: scripts.readText,
+          onTogglePin: scripts.pin,
+          onForget: (id) => {
+            startScreenStore.setSelectedScript(null);
+            void scripts.forget(id);
+          },
+        }}
+        scriptOpener={scriptOpener}
         section={section}
         templateId={selectedTemplateId}
         session={recent.state.kind === "ready" ? recent.state.index.continue : undefined}
+        index={recent.state}
       />
       <StartStatusBar compute={compute} index={recent.state} />
     </div>

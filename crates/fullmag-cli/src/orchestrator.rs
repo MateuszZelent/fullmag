@@ -1,8 +1,9 @@
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Parser, ValueEnum};
 use fullmag_ir::{
-    BackendPlanIR, BackendTarget, DiscretizationHintsIR, DynamicsIR, ExecutionPlanIR, FdmHintsIR,
-    FemHintsIR, GeometryEntryIR, MagnetIR, MaterialIR, ObjectRegionIR, ProblemIR, RegionIR,
+    AutosaveFormatIR, BackendPlanIR, BackendTarget, DiscretizationHintsIR, DynamicsIR,
+    ExecutionPlanIR, FdmHintsIR, FemHintsIR, GeometryEntryIR, MagnetIR,
+    MaterialIR, ObjectRegionIR, OutputDataFormatIR, OutputStorageIR, ProblemIR, RegionIR,
     RelaxationAlgorithmIR, StudyIR,
 };
 use std::collections::HashMap;
@@ -43,6 +44,154 @@ const DEFERRED_DOMAIN_COMPLETION_DETAIL: &str =
     "Domain completed during deferred materialization; timing unavailable";
 const DEFERRED_MESH_COMPLETION_DETAIL: &str =
     "Mesh completed during deferred materialization; timing unavailable";
+
+struct ScriptOutputStorageLease {
+    lease: Option<fullmag_runner::project_storage::ProjectStorageLease>,
+}
+
+impl ScriptOutputStorageLease {
+    fn new(lease: fullmag_runner::project_storage::ProjectStorageLease) -> Self {
+        Self { lease: Some(lease) }
+    }
+
+    fn resolved(&self) -> &fullmag_runner::project_storage::ResolvedOutputStorage {
+        self.lease
+            .as_ref()
+            .expect("script storage lease is active")
+            .resolved()
+    }
+
+    fn finish(&mut self, success: bool) -> Result<()> {
+        let Some(mut lease) = self.lease.take() else {
+            bail!("script storage lease is already finalized");
+        };
+        lease
+            .finish(success)
+            .map_err(|error| anyhow!("failed to finalize project output storage: {error}"))
+    }
+}
+
+fn collect_authored_output_storage(config: &ScriptExecutionConfig) -> Result<Option<OutputStorageIR>> {
+    let mut candidates = Vec::new();
+    for problem in std::iter::once(&config.ir).chain(config.stages.iter().map(|stage| &stage.ir)) {
+        if let Some(value) = problem
+            .problem_meta
+            .runtime_metadata
+            .get("output_storage")
+        {
+            candidates.push(
+                serde_json::from_value::<OutputStorageIR>(value.clone())
+                    .context("invalid output_storage metadata")?,
+            );
+        }
+    }
+    let Some(first) = candidates.first().cloned() else {
+        return Ok(None);
+    };
+    if candidates.iter().any(|candidate| candidate != &first) {
+        bail!("script stages declare conflicting output_storage policies");
+    }
+    Ok(Some(first))
+}
+
+fn explicit_stage_output_format(problem: &ProblemIR) -> Option<OutputDataFormatIR> {
+    match problem.study.sampling().stage_autosave.as_ref()?.format {
+        AutosaveFormatIR::Zarr => Some(OutputDataFormatIR::Zarr),
+        AutosaveFormatIR::Hdf5 => Some(OutputDataFormatIR::Hdf5),
+        AutosaveFormatIR::Txt => None,
+    }
+}
+
+fn prepare_script_output_storage(
+    config: &mut ScriptExecutionConfig,
+    args: &ScriptCli,
+    script_path: &Path,
+    run_id: &str,
+) -> Result<(ScriptOutputStorageLease, OutputStorageIR, serde_json::Value)> {
+    let authored = collect_authored_output_storage(config)?;
+    let mut settings = authored.clone().unwrap_or_default();
+    if authored.is_none() && args.data_format.is_none() {
+        let mut stage_formats = std::iter::once(&config.ir)
+            .chain(config.stages.iter().map(|stage| &stage.ir))
+            .filter_map(explicit_stage_output_format);
+        if let Some(format) = stage_formats.next() {
+            if stage_formats.any(|other| other != format) {
+                bail!("script stages declare conflicting primary autosave formats");
+            }
+            settings.data_format = format;
+        }
+    }
+
+    if let Some(output_dir) = args.output_dir.as_ref() {
+        let path = if output_dir.is_absolute() {
+            output_dir.clone()
+        } else {
+            std::env::current_dir()?.join(output_dir)
+        };
+        settings.output_dir = Some(path.to_string_lossy().into_owned());
+    }
+    if let Some(temp_dir) = args.temp_dir.as_ref() {
+        let path = if temp_dir.is_absolute() {
+            temp_dir.clone()
+        } else {
+            std::env::current_dir()?.join(temp_dir)
+        };
+        settings.temp_dir = Some(path.to_string_lossy().into_owned());
+    }
+    if let Some(data_format) = args.data_format {
+        settings.data_format = data_format.into();
+    }
+    if let Some(cleanup) = args.temp_cleanup {
+        settings.cleanup = cleanup.into();
+    }
+    if let Some(existing_output) = args.existing_output {
+        settings.existing_output = existing_output.into();
+    }
+    settings
+        .validate()
+        .map_err(|errors| anyhow!(errors.join("; ")))?;
+
+    let script_dir = script_path.parent().unwrap_or_else(|| Path::new("."));
+    let extension = match settings.data_format {
+        OutputDataFormatIR::Zarr => "zarr",
+        OutputDataFormatIR::Hdf5 => "results",
+    };
+    let default_output_dir = script_path.with_extension(extension);
+    let lease = fullmag_runner::project_storage::ProjectStorageLease::prepare(
+        &settings,
+        &default_output_dir,
+        script_dir,
+        run_id,
+    )
+    .map_err(|error| anyhow!("failed to prepare project output storage: {error}"))?;
+    let storage_lease = ScriptOutputStorageLease::new(lease);
+    let resolved = serde_json::to_value(storage_lease.resolved())?;
+    let settings_value = serde_json::to_value(&settings)?;
+    let source_dir = script_dir.canonicalize()?.to_string_lossy().into_owned();
+    let source_stem = script_path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("fullmag_script")
+        .to_string();
+    let attach_storage_metadata = |problem: &mut ProblemIR| {
+        let metadata = &mut problem.problem_meta.runtime_metadata;
+        metadata.insert("output_storage".to_string(), settings_value.clone());
+        metadata.insert("resolved_output_storage".to_string(), resolved.clone());
+        metadata.insert(
+            "output_storage_source_dir".to_string(),
+            serde_json::Value::String(source_dir.clone()),
+        );
+        metadata.insert(
+            "output_storage_source_stem".to_string(),
+            serde_json::Value::String(source_stem.clone()),
+        );
+    };
+    attach_storage_metadata(&mut config.ir);
+    for stage in &mut config.stages {
+        attach_storage_metadata(&mut stage.ir);
+    }
+    Ok((storage_lease, settings, resolved))
+}
 
 fn attached_session_id_or(generated: String) -> String {
     std::env::var("FULLMAG_ATTACHED_SESSION_ID")
@@ -7632,23 +7781,18 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
     } else {
         args.session_root.as_path()
     };
-    let output_paths = resolve_script_output_paths(
-        &script_path,
-        args.output_dir.as_deref(),
-        session_root,
-        &session_id,
-    );
-    let workspace_dir = output_paths.workspace_dir.clone();
-    let artifact_dir = output_paths.artifact_dir.clone();
-
-    if output_paths.is_sibling_zarr_bundle {
-        replace_and_initialize_script_result_bundle(&output_paths, &script_path, &session_id)?;
-        eprintln!("- result_bundle: {}", workspace_dir.display());
-    } else {
-        fs::create_dir_all(&workspace_dir).with_context(|| {
-            format!("failed to create workspace dir {}", workspace_dir.display())
-        })?;
-    }
+    // Keep preparation state in its session directory until authored storage has
+    // been captured and the shared lease reserves the actual result directory.
+    let mut output_paths = ScriptOutputPaths {
+        workspace_dir: session_root.join(&session_id),
+        artifact_dir: session_root.join(&session_id).join("artifacts"),
+        is_sibling_zarr_bundle: false,
+    };
+    let mut workspace_dir = output_paths.workspace_dir.clone();
+    let mut artifact_dir = output_paths.artifact_dir.clone();
+    fs::create_dir_all(&artifact_dir).with_context(|| {
+        format!("failed to create session artifact directory {}", artifact_dir.display())
+    })?;
     // When 3D preview is disabled, set field_every_n to infinity to skip expensive computations.
     // Keep FEM cadence aligned with interactive control-room expectations:
     // too-large step intervals make 3D magnetization look "stuck" even while
@@ -8030,7 +8174,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         )
     };
     let script_export = authoritative_preflight_error.map_or_else(export_full_script, Err);
-    let script_config = match script_export {
+    let mut script_config = match script_export {
         Ok(config) => config,
         Err(error) => {
             let error =
@@ -8090,6 +8234,40 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             return Err(error);
         }
     };
+    let (mut storage_lease, storage_settings, resolved_storage) =
+        prepare_script_output_storage(&mut script_config, &args, &script_path, &run_id)?;
+    workspace_dir = storage_lease.resolved().output_dir.clone();
+    artifact_dir = workspace_dir.join("artifacts");
+    output_paths = ScriptOutputPaths {
+        workspace_dir: workspace_dir.clone(),
+        artifact_dir: artifact_dir.clone(),
+        is_sibling_zarr_bundle: storage_settings.data_format == OutputDataFormatIR::Zarr,
+    };
+    fs::create_dir_all(&artifact_dir).with_context(|| {
+        format!("failed to create project artifact directory {}", artifact_dir.display())
+    })?;
+    fs::create_dir_all(workspace_dir.join("stages")).with_context(|| {
+        format!("failed to create project stage directory {}", workspace_dir.join("stages").display())
+    })?;
+    if output_paths.is_sibling_zarr_bundle {
+        initialize_zarr_group(
+            &artifact_dir,
+            serde_json::json!({"fullmag_role": "final_stage_artifacts"}),
+        )?;
+        initialize_zarr_group(
+            &workspace_dir.join("stages"),
+            serde_json::json!({"fullmag_role": "stage_artifacts"}),
+        )?;
+        eprintln!("- result_bundle: {}", workspace_dir.display());
+    }
+    live_workspace.update(|state| {
+        state.session.artifact_dir = artifact_dir.display().to_string();
+        state.run.artifact_dir = artifact_dir.display().to_string();
+        state.metadata = Some(serde_json::json!({
+            "output_storage": storage_settings,
+            "resolved_output_storage": resolved_storage,
+        }));
+    });
     let mut stages = run_active_preparation_operation(
         &live_workspace,
         "script_materialization_failed",
@@ -12488,6 +12666,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
     } else {
         print_script_summary(&summary);
     }
+    storage_lease.finish(true)?;
 
     Ok(())
 }
@@ -17543,6 +17722,10 @@ mod tests {
             mode: None,
             precision: None,
             output_dir: None,
+            temp_dir: None,
+            data_format: None,
+            temp_cleanup: None,
+            existing_output: None,
             initial_magnetization_state: Some(state_path.clone()),
             initial_magnetization_state_format: Some("json".to_string()),
             initial_magnetization_state_dataset: None,

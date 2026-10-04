@@ -1129,3 +1129,5 @@ export const PROJECT_RUN_TASK_CANCELLATION_PATH = openApiV2Path(
 export const PERSISTENCE_RECOVERY_PATH = openApiV2Path(
   "/v2/sessions/current/persistence/recovery",
 );
+
+export const PLATFORM_OUTPUT_STORAGE_PATH = openApiV2Path("/v2/platform/output-storage");

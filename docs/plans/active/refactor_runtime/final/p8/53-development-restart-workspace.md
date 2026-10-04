@@ -1,5 +1,35 @@
 # P8-53 — bezpieczne zastosowanie nowego backendu w workspace
 
+[P8-53AU](53au-private-consumer-readiness.md) przygotowuje prywatne, wygasające
+potwierdzenie gotowości konsumenta przez kanał ownera. Status nie odnawia
+ważności; pompa zachowuje kandydata po lost ACK i ogranicza selekcję dla tej
+samej tożsamości. Próby na masterze zatrzymały równoległy import IR oraz
+aktualizacja źródeł podczas kompilacji. Trwa build zarejestrowanej kopii
+weryfikacyjnej 18 plików zadania; runtime pozostaje NOT VERIFIED.
+Publiczne `restart_available=false`.
+
+[P8-53AT](53at-development-restart-action.md) dodaje jawne wejście z banera
+do trwałego serwisu Host. Pending/unknown uzgadnia ten sam request; błędu
+cleanup nie uznaje za zakończony na podstawie wznowionego Host. Akcja 25 grup,
+kontroler 41 grup, Host 6 grup, lint 10 plików, API hygiene i browser 12/12 PASS.
+Wspólne typowanie nadal zgłasza 5 niezależnych błędów Start/About. Pełny lint,
+dostępność API oraz natywny restart z niepustą sceną pozostają otwarte;
+`restart_available=false` i procenty planu bez awansu. Poniżej wcześniejsze
+checkpointy dokumentują stan w chwili ich wykonania.
+
+[P8-53AS](53as-run-outcome-handoff.md) rezerwuje opóźniony recorder wyniku
+przed trackerem i thumbnail. Capture/guard/restore nie omijają kolejki
+ani flushu; po pauzie obserwacja jest rozpatrywana dokładnie raz.
+Regresja 5 grup, browser 9/9, lint 6 plików i API hygiene PASS.
+Wspólne typowanie/pełny lint blokują niezależne zmiany Start/About.
+Komenda UI i pełny natywny restart pozostają otwarte; `restart_available=false`.
+
+[P8-53AR](53ar-mounted-kernel-handoff.md) podłącza pauzę i publikację do
+zamontowanego KernelProvider, chroni stare i nowe registry/transport/cache
+oraz potwierdza zmianę pinu dopiero po mount. Browser fixture 13/13 PASS;
+host 6 grup i transport 13 grup PASS. Komenda UI oraz pełny natywny restart
+z niepustym modelem i szkicami pozostają otwarte; `restart_available=false`.
+
 [P8-53AQ](53aq-workspace-owners-and-client-cache.md) dodaje dokładną tożsamość
 workspace, guard dokumentu, adapter właścicieli oraz odrębny cache klientów.
 Natywny build i 24 kontrole API PASS; frontend: 39 grup koordynatora,

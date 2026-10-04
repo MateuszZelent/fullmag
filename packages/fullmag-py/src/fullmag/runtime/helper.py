@@ -72,6 +72,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     check_syntax.add_argument("--script", required=True, help="Path to Python script.")
 
+    inspect_script = subparsers.add_parser(
+        "inspect-script",
+        help="Print static facts about a Python script as JSON. Never executes the script.",
+    )
+    inspect_script.add_argument("--script", required=True, help="Path to Python script.")
+
     export_ir = subparsers.add_parser("export-ir", help="Load a Python script and print canonical ProblemIR.")
     export_ir.add_argument("--script", required=True, help="Path to Python script.")
     export_ir.add_argument(
@@ -127,7 +133,11 @@ def build_parser() -> argparse.ArgumentParser:
     rewrite_script.add_argument(
         "--write",
         action="store_true",
-        help="Write the canonical script back to the original path.",
+        help="Write the canonical script back to the original path (managed scripts only).",
+    )
+    rewrite_script.add_argument(
+        "--output",
+        help="Write the canonical script to this path and leave the source script untouched.",
     )
 
     export_builder = subparsers.add_parser(
@@ -206,6 +216,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(json.dumps({"status": "ok", "script": str(script_path.resolve())}))
         return 0
 
+    if args.command == "inspect-script":
+        from fullmag.runtime.script_inspect import inspect_script as _inspect_script
+
+        _write_json(_inspect_script(args.script))
+        return 0
+
     if args.command == "export-scene-ir":
         emit_progress("Lowering SceneDocument through the canonical Python DSL")
         scene_document = json.loads(Path(args.scene_json).read_text(encoding="utf-8"))
@@ -273,6 +289,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 execution_precision=execution_precision,
                 script_source=loaded.script_source,
                 source_root=loaded.source_path.parent,
+                source_stem=loaded.source_path.stem,
+                until_seconds=stage.default_until_seconds,
                 asset_cache=asset_cache,
                 include_geometry_assets=(
                     not getattr(args, "skip_geometry_assets", False)
@@ -327,6 +345,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     loaded,
                     overrides=overrides,
                     write=bool(args.write),
+                    output_path=Path(args.output) if args.output else None,
                 )
             )
         )

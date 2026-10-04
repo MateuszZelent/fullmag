@@ -37,6 +37,7 @@ mod accepted_fem_state;
 #[path = "accepted_fem_study_worker.rs"]
 mod accepted_fem_study_worker;
 mod accepted_study_worker;
+mod accepted_project_storage;
 mod analysis;
 mod artifacts;
 mod assets;
@@ -44,6 +45,7 @@ mod build_info;
 mod coordinator_persistence;
 mod development_handoff_validation;
 mod development_owner_control;
+mod development_consumer_readiness;
 mod error;
 mod fdm_planar_grid_overlay;
 mod feature_flags;
@@ -1602,6 +1604,7 @@ mod scratch_session_lifecycle_tests {
                 device: "cpu".to_string(),
                 precision: "double".to_string(),
                 replace_current: false,
+                output_storage: None,
             }),
         )
         .await
@@ -1614,6 +1617,7 @@ mod scratch_session_lifecycle_tests {
                 device: "cpu".to_string(),
                 precision: "double".to_string(),
                 replace_current: true,
+                output_storage: None,
             }),
         )
         .await
@@ -1674,6 +1678,7 @@ mod scratch_session_lifecycle_tests {
                 device: "cpu".to_string(),
                 precision: "double".to_string(),
                 replace_current: false,
+                output_storage: None,
             }),
         )
         .await
@@ -1740,6 +1745,7 @@ mod scratch_session_lifecycle_tests {
                     device: "cpu".to_string(),
                     precision: "double".to_string(),
                     replace_current: true,
+                    output_storage: None,
                 }),
             )
             .await
@@ -2446,6 +2452,7 @@ async fn main() {
         development_restored_authoring: Default::default(),
         development_backend: router_v2::handlers::platform::development_backend::DevelopmentBackendConfig::from_environment(),
         development_restart_transport: router_v2::handlers::platform::development_restart_request::DevelopmentRestartTransportConfig::from_environment(),
+        development_consumer_readiness: Default::default(),
         repo_root: repo_root.clone(),
         submit_store_root: run_intent_persistence::configured_submit_store_root(
             &repo_root,

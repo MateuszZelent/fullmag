@@ -1,5 +1,6 @@
 from .discretization import DiscretizationHints, FDM, FDMDemag, FDMGrid, FEM, FemLinearSolverPolicy, Hybrid, MeshOperation, MeshSizeControls, PerObjectMeshRecipe, SharedMeshAssemblyPolicy, SweepDistribution, SweptMeshControls
 from .absorbing_boundary import AbsorbingBoundaryLayer
+from .output_storage import OutputStorage
 from .antenna import (
     AntennaFieldSolveStage,
     AntennaFieldSolutionRef,
@@ -222,6 +223,7 @@ __all__ = [
     "CubicAnisotropy",
     "ThermalNoise",
     "FieldAutosave",
+    "OutputStorage",
     "StageAutosave",
     "TableAutosave",
     "GammaResponseAnalysis",

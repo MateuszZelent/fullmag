@@ -95,6 +95,9 @@ pub struct SessionSummary {
     pub name: String,
     pub created_at: String,
     pub workspace_root: String,
+    /// Origin of the session's Python script. Absent when the session has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub script: Option<crate::types::SessionScriptSummary>,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]

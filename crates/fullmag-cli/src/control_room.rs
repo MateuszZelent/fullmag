@@ -650,6 +650,35 @@ impl ControlRoomGuard {
         }
     }
 
+    pub(crate) fn development_consumer_status(
+        &self,
+    ) -> Result<crate::development_api_owner::ConsumerReadinessStatus> {
+        match self.api_child.as_ref() {
+            Some(GuardedApiProcess::Development(supervisor))
+                if supervisor.state()
+                    == crate::development_api_supervisor::DevelopmentApiSupervisorState::Running =>
+            {
+                supervisor.owner().consumer_status()
+            }
+            _ => bail!("consumer readiness requires the running owned API"),
+        }
+    }
+
+    pub(crate) fn confirm_development_consumer_readiness(
+        &self,
+        candidate: Option<&crate::development_api_owner::SelectedDevelopmentCandidate>,
+    ) -> Result<crate::development_api_owner::ConsumerReadinessStatus> {
+        match self.api_child.as_ref() {
+            Some(GuardedApiProcess::Development(supervisor))
+                if supervisor.state()
+                    == crate::development_api_supervisor::DevelopmentApiSupervisorState::Running =>
+            {
+                supervisor.owner().confirm_consumer_readiness(candidate)
+            }
+            _ => bail!("consumer readiness requires the running owned API"),
+        }
+    }
+
     pub(crate) fn restart_failure_is_precommit(&self, old_api_instance_id: &str) -> bool {
         match self.api_child.as_ref() {
             Some(GuardedApiProcess::Development(supervisor)) => {
@@ -969,6 +998,7 @@ impl ControlRoomGuard {
             frontend_child,
             terminal_failure_lifetime: None,
             stop_frontend_on_drop: false,
+            development_restart_origin: None,
         }
     }
 }

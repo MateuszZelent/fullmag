@@ -6,6 +6,8 @@ export interface ImportFormat {
   readonly fidelity: string;
   /** Null when this build can read it; otherwise why it cannot yet. */
   readonly unavailableReason: string | null;
+  /** True when the importer maps a subset and reports the rest, so the status says so. */
+  readonly partial?: boolean;
 }
 
 const NO_IMPORTER = "No importer for this format ships in this build yet.";
@@ -22,8 +24,10 @@ export const IMPORT_FORMATS: readonly ImportFormat[] = [
     id: "mx3",
     label: "mumax³",
     extensions: [".mx3"],
-    fidelity: "Full: grid, regions, material parameters and run script; ext_ calls are flagged.",
-    unavailableReason: NO_IMPORTER,
+    fidelity:
+      "Subset: grid, cell size, PBC, simple geometry, uniform material parameters, B_ext, m, Relax and Run. Every other statement is listed with its line, never dropped silently.",
+    unavailableReason: null,
+    partial: true,
   },
   {
     id: "mif",
