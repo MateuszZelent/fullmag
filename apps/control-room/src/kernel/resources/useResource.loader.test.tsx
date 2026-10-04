@@ -374,4 +374,59 @@ describe("useResource loader callback", () => {
       dom.restore();
     }
   });
+
+  it("keeps optional resource errors visible without emitting a global failure notification", async () => {
+    vi.useFakeTimers();
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    dom.document.body.appendChild(container);
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const kernel = {
+      api: {},
+      bus,
+      diagnosticRecorder: new DiagnosticRecorderController({ config: { enabled: false } }),
+      resources,
+    } as unknown as KernelApi;
+    const failures: KernelEventMap["resource:load-failed"][] = [];
+    const unsubscribeFailure = bus.on("resource:load-failed", (event) => {
+      failures.push(event);
+    });
+    const load = vi.fn(async () => {
+      const error = new Error("optional overlay timed out");
+      error.name = "TimeoutError";
+      throw error;
+    });
+    const notifyOnError = (error: unknown) =>
+      !(error instanceof Error && error.name === "TimeoutError");
+    const root = createRoot(container as unknown as Element);
+
+    function Harness() {
+      const resource = useResource({
+        load,
+        notifyOnError,
+        resourceKey: "meshing/periodic_pairs.v1",
+      });
+      return <div>{resource.status}</div>;
+    }
+
+    try {
+      await act(async () => {
+        root.render(
+          <KernelContext.Provider value={kernel}>
+            <Harness />
+          </KernelContext.Provider>,
+        );
+        await vi.runOnlyPendingTimersAsync();
+      });
+
+      expect(load).toHaveBeenCalledTimes(1);
+      expect(container.textContent).toContain("error");
+      expect(failures).toEqual([]);
+    } finally {
+      await act(async () => root.unmount());
+      unsubscribeFailure();
+      dom.restore();
+    }
+  });
 });

@@ -173,6 +173,15 @@ export function ignoreMissingResource<T>(error: unknown): T | null {
   throw error;
 }
 
+function shouldNotifyMeshPeriodicPairsFailure(error: unknown): boolean {
+  return !(
+    error &&
+    typeof error === "object" &&
+    "name" in error &&
+    (error as { name?: unknown }).name === "TimeoutError"
+  );
+}
+
 function ignoreMissingFieldMetaResource<T>({
   bus,
   error,
@@ -808,6 +817,11 @@ export function useMeshPeriodicPairsResource({
   return useResource<MeshPeriodicPairsResource | null>({
     enabled,
     load,
+    // Periodic pairs are an optional overlay. Keep the error state for
+    // degraded/unavailable consumers without turning its timeout into a
+    // viewport-wide resource failure notification. Other failures remain
+    // visible to the global error surface.
+    notifyOnError: shouldNotifyMeshPeriodicPairsFailure,
     resolveRevision: (data) => data?.revision ?? null,
     resourceKey: MESHING_PERIODIC_PAIRS_PATH,
   });

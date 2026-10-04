@@ -33,11 +33,17 @@ interface LoadContext {
   signal: AbortSignal;
 }
 
+type ResourceErrorNotificationPolicy =
+  | boolean
+  | ((error: unknown) => boolean);
+
 interface UseResourceOptions<TData> {
   abortStaleInflight?: boolean;
   enabled?: boolean;
   load: (context: LoadContext) => Promise<TData>;
   minRefetchIntervalMs?: number;
+  /** Keep resource state/diagnostics while selecting global error notifications. */
+  notifyOnError?: ResourceErrorNotificationPolicy;
   pauseLoad?: boolean;
   retryPolicy?: ResourceRetryPolicy | null;
   resolveRevision?: (data: TData) => ResourceRevision | null;
@@ -82,6 +88,7 @@ export function useResource<TData>({
   enabled = true,
   load,
   minRefetchIntervalMs,
+  notifyOnError = true,
   pauseLoad = false,
   retryPolicy,
   resolveRevision,
@@ -146,6 +153,7 @@ export function useResource<TData>({
     load,
     loadedRefreshToken,
     minRefetchIntervalMs,
+    notifyOnError,
     pauseLoad,
     retryPolicy: effectiveRetryPolicy,
     refreshToken,
@@ -187,6 +195,7 @@ export function useResourceSelector<TData, TSelected>({
   isEqual = Object.is,
   load,
   minRefetchIntervalMs,
+  notifyOnError = true,
   pauseLoad = false,
   retryPolicy,
   resolveRevision,
@@ -293,6 +302,7 @@ export function useResourceSelector<TData, TSelected>({
     load,
     loadedRefreshToken,
     minRefetchIntervalMs,
+    notifyOnError,
     pauseLoad,
     retryPolicy: effectiveRetryPolicy,
     refreshToken,
@@ -315,6 +325,7 @@ function useResourceLoader<TData>({
   load,
   loadedRefreshToken,
   minRefetchIntervalMs = 0,
+  notifyOnError = true,
   pauseLoad = false,
   retryPolicy,
   refreshToken,
@@ -332,6 +343,7 @@ function useResourceLoader<TData>({
   load: (context: LoadContext) => Promise<TData>;
   loadedRefreshToken: number;
   minRefetchIntervalMs?: number;
+  notifyOnError?: ResourceErrorNotificationPolicy;
   pauseLoad?: boolean;
   retryPolicy?: ResourceRetryPolicy;
   refreshToken: number;
@@ -425,12 +437,14 @@ function useResourceLoader<TData>({
               snapshot.error ??
               new Error("Resource load failed without error detail");
             const failure = normalizeResourceLoadFailure(error);
-            emitResourceLoadFailed({
-              bus,
-              error,
-              resourceKey,
-              revision: externalRevision,
-            });
+            if (shouldNotifyResourceLoadFailure(notifyOnError, error)) {
+              emitResourceLoadFailed({
+                bus,
+                error,
+                resourceKey,
+                revision: externalRevision,
+              });
+            }
             recordResourceHookDiagnostic({
               action: "miss",
               diagnosticRecorder,
@@ -473,6 +487,7 @@ function useResourceLoader<TData>({
     externalRevision,
     loadedRefreshToken,
     minRefetchIntervalMs,
+    notifyOnError,
     pauseLoad,
     retryPolicy,
     refreshToken,
@@ -480,6 +495,13 @@ function useResourceLoader<TData>({
     runtimeStore,
     setLoadedRefreshToken,
   ]);
+}
+
+function shouldNotifyResourceLoadFailure(
+  policy: ResourceErrorNotificationPolicy,
+  error: unknown,
+): boolean {
+  return typeof policy === "function" ? policy(error) : policy;
 }
 
 function resolveResourceRetryPolicy(
