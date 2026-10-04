@@ -111,10 +111,12 @@ def run(repo: Path, route: str):
                     raise storage.StorageError("Repository-pinned React Doctor is unavailable")
                 env["NODE_DISABLE_COMPILE_CACHE"] = "1"
                 commands = [[node, str(doctor), ".", "--verbose", "--scope", "changed",
-                             "--base", "HEAD", "--no-score", "--no-supply-chain",
+                             "--base", "HEAD", "--include-untracked", "--no-cache", "--no-score", "--no-supply-chain",
                              "--no-dead-code", "--no-parallel", "--yes",
                              "--output-dir", str(run_root / "diagnostics")]]
                 receipt["scope"] = "changed_against_HEAD"
+                receipt["include_untracked"] = True
+                receipt["scan_cache"] = "disabled"
                 receipt["online_services"] = "disabled_score_and_supply_chain"
             else:
                 # This is source checking, not compilation of test targets. UI
