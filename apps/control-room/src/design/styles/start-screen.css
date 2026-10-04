@@ -1011,9 +1011,9 @@
 }
 .fm-start-run-field select {
   min-height: var(--fm-control-height-md, 28px);
-  border: 1px solid var(--fm-border);
+  border: 1px solid var(--fm-border-default);
   border-radius: var(--fm-radius-control, 4px);
-  background: var(--fm-raised);
+  background: var(--fm-bg-panel-raised);
   color: var(--fm-text-primary, inherit);
   font: inherit;
 }
