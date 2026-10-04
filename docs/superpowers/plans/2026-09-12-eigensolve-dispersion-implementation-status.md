@@ -1,3 +1,58 @@
+<!-- runner231-storage-audit-checkpoint-20261004 -->
+## Aktualny checkpoint — koordynator wdrożony, build #231 i audyt storage
+
+Stan z 2026-10-04: parser startup stamp jest wdrożony w trusted koordynatorze
+`sha256:69760bc41867c5f0c55b107c077a9ac762f29a16706cda2ff2c151da44706851`.
+Odczyt hashy potwierdził zgodność helpera z worktree i zachowanie profili,
+sekretu oraz konfiguracji buildów. Jest to dowód wdrożenia koordynatora;
+nowa attestacja pakietu i solve nie otrzymują przez to PASS.
+
+#230 (`37cb64f57d94459ba82de02f187ef5be`) został zablokowany przed utworzeniem
+job root/kontenera po spadku wolnego miejsca poniżej admission 8 GiB.
+Po zewnętrznym zwolnieniu miejsca zwykłe API kolejki przyjęło #231
+(`3e3b5a6123934d8b8f63cfbf02ccad55`) dla źródła
+`4b34ec7b91dadb18ac87d7f8b98b3a2cf5c8f574`, digestu
+`860b3872cce76d190bd18076edf039d66299933a8aa4cdf31e2d44aa1e3153c7`
+i profilu `fem-cpu-slepc-runtime-v2`. Ponownie użyto kapsuły
+`9756cdb852ce42ff9d2dc6d7ee7f8f21`; nie utworzono nowej kopii źródeł.
+Failed #229 i blocked #230 zachowują historyczne stany i dowody.
+
+#231 jest running, exit code null. Docker potwierdził żywy kontener
+`1044d9bc59a9543e16abfd459f047dbbd8096f02ac3981324df6201238f13ca7`
+i rozpoczęty native-build. Obserwator PID270544 oczekuje na sukces,
+eksport/weryfikację OpenAPI i dry-run; potem wykona przygotowaną parę nearest
+GMRES/FGMRES dla k=+10 rad/µm. Po porażce próby wstrzyma kolejną do kontroli
+artefaktów i cleanup kontenera. Obserwacja dotyczy tego samego joba;
+timeout nie oznacza anulowania ani zgody na ponowne zgłoszenie.
+
+Przygotowano osobną macierz sześciu prób zbieżności: k=+10/+25 rad/µm
+oraz air growth 1,3/1,15/1,075, wszystkie na pakiecie #231. Baseline 1,3/1,15
+trzeba policzyć ponownie, aby nie przypisać zmian nowego runtime wyłącznie
+siatce powietrza. Model hash i dziewięć pinów drivera sprawdzono; wewnątrz
+każdej grupy k zmienia się tylko żądany air growth i katalog wyniku.
+Managed dry-run, actual mesh/equilibrium isolation i wykonanie są NOT VERIFIED.
+Nie uruchomiono tych prób równolegle z buildem ani obserwatorem nearest.
+
+Audyt konieczności danych potwierdza brak wykonawcy retencji: policy ma tylko
+preview, apply zwraca cleanup_executor_not_enabled i reclaimed_bytes=0.
+Skan rzeczywistych korzeni 19:17–19:18 UTC obserwował około 154,13 GB logicznie:
+87,29 GB execution, 46,36 GB source, 10,83 GB artifacts, 7,53 GB benchmarków
+i 1,88 GB results. Zmiany zewnętrzne i 32 błędy brakujących podkatalogów starego
+execution wykluczają traktowanie skanu jako jednoczesnego pomiaru fizycznego.
+154 manifesty źródeł deklarują 45,62 GB danych; unikalne hashe treści 0,86 GB.
+To potencjał deduplikacji, nie dowód fizycznego odzysku ani zgoda na usuwanie.
+Raport i JSON-y: audyt-koniecznosci-danych-i-lista-sprzatania.md w katalogu
+preview-state-checkpoint/storage-cleanup-list-20261004 artefaktów tego wątku.
+W tym audycie nie usunięto danych i nie wdrożono automatycznego GC/CAS.
+
+S00–S12 pozostają OPEN. Piętnaście historycznych punktów DE i dwa refinements
+zachowują swoje tożsamości; nowych częstotliwości w tym checkpointcie brak.
+Najbliższy krok: terminalny #231 i kontrola nearest, następnie aktualny Γ full
+window, wspólny signed15/parytet/zasoby i zbieżność. GUI, A1-COMSOL,
+S09/provider, interakcje/GPU, wymagane kontrole PR97 i integracja pozostają otwarte.
+PR97 jest OPEN; bieżący odczyt mergeable/mergeStateStatus był UNKNOWN.
+Poniższe checkpointy opisują odczyty historyczne.
+
 <!-- master125-integration-checkpoint-20261004 -->
 ## Kolejny merge aktualnego mastera — 2026-10-04
 
@@ -3721,19 +3776,19 @@ Realizacja [planu S00–S12](2026-09-12-eigensolve-dispersion-nonzero-k-plan.md)
 
 | Etap | Stan | Pozostały warunek |
 |---|---|---|
-| S00 — baza K0 i dowody | W TRAKCIE | #193 zachował mod Γ 9,299249697 GHz z full backward error 2,01e-13 i zgodnością finite-airbox analityki, ale pełne okno było niekompletne. Wymagane oficjalne artefakty i zaakceptowany handoff bieżącego runtime. |
+| S00 — baza K0 i dowody | W TRAKCIE | Γ selected-only #227 (9,299249697 GHz) zachowane; pełne okno #228 zakończyło 43/50 podokien. Wymagane pełne pokrycie okna oraz aktualny pakiet #231 i jego attestacja. |
 | S01 — nauka, ADR, kontrakty | W TRAKCIE | Noty, mapy źródeł, walidatory i review |
 | S02 — Python/IR | W TRAKCIE | Walidacja k i selektorów, round-trip, testy konsumentów |
 | S03 — natywny operator magnetyczny Blocha | W TRAKCIE | Prolongacja i bounded sparse operator są w źródłach; geometry-aware tet/prism oraz ich rzeczywista kwadratura mają review. Wymagane są bieżący managed assembly/runtime i pełne certyfikaty deskryptora. |
 | S04 — dynamiczny demag-k CPU | W TRAKCIE | Sparse Schur/SLEPc i MFEM blocks są źródłowo zaimplementowane. Pozostają residual pełnego deskryptora/gauge/szwów, zbieżność airboxu i siatki oraz kwalifikacja nowego źródła; archiwalne punkty nie zastępują tych bramek. |
-| S05 — natywny solver spektralny | W TRAKCIE | #193: 14/50 podokien rozbieżnych, niekompletne okno; pojedynczy mod Γ zaakceptowany. #195 build succeeded, pilot Γ failed przed eigensolve na granicy build identity; poprawka raw64 jest na origin. Przyrost reuse/lifetime ma review i kontrole źródeł; #196 queued, sterownik sześciu punktów żywy. Nadal wymagane świeży runtime nearest, naprawa pełnego okna, certyfikat pokrycia/residuali i wznowienia; nearest nie zastępuje tej bramki. |
+| S05 — natywny solver spektralny | W TRAKCIE | Producent/consumer nearest telemetry i jawny GMRES/FGMRES trial są źródłowo gotowe. Trusted koordynator wdrożony; #231 running dla 4b34, parę nearest obserwuje PID270544. Terminalny runtime, wykonanie A/B, Γ full window, certyfikaty pokrycia/residuali i wznowienia nadal OPEN. |
 | S06 — śledzenie gałęzi | W TRAKCIE | Źródła mają Hungarian/gaps, spójną masę P1, kąty główne i transport Procrustesa podprzestrzeni; pozostają wykonanie/regresje runtime, fizyczny crossing/split/merge, stabilność kroku k i zgodność publikacji |
 | S07 — artefakty i API | W TRAKCIE | Exact producer/consumer/mesh/native input replay zapisano i zreviewowano. Nowe refs diagnostyki mają odrębny writer/consumer i coverage, 44 regresje przyrostu oraz 213 głównego verifiera PASS; historyczne 56 regresji nonshared pozostają osobnym dowodem. P1 oznaczania nonzero-k jako K0 naprawiony w źródłach bf25. Nadal potrzebne pełne native matrix/physical replay, managed publikacja nowych refs, aktualne binary fields/selektory i managed evidence. |
 | S08 — Control Room | W TRAKCIE | Źródła authoring/scatterplot, selekcji k/pola i linewidth zostały poprawione. Wymagane są bieżący managed frontend/runtime, browser/WebGL, FMS round-trip, dostępność pól i stabilność Inspectora. Historyczny #119 nie jest aktualnym buildem. |
 | S09 — falowód 2.5D | W TRAKCIE | Bounded provider i deterministyczny P1 assembler przekroju są zapisane; pozostają typed realization/routing, managed/MFEM owner, open-boundary convergence i porównania TetraX/3D |
 | S10 — interakcje | W TRAKCIE | Ku tangent terms i canonical/raw artifact v8/v7 mają implementację źródłową; guard/runtime i pełna kwalifikacja nadal otwarte. DMI, surface terms, niejednorodność, seam transport i damping `include` wymagają odpowiednich implementacji i walidacji bez osłabiania capability guards. |
 | S11 — GPU | DO WYKONANIA | Jawna trasa double bez fallbacku, residency i parytet |
-| S12 — kwalifikacja i integracja | W TRAKCIE | Managed benchmarki, review, commity, PR, merge, weryfikacja mastera |
+| S12 — kwalifikacja i integracja | W TRAKCIE | Source merge mastera do 01e1b113, scoped kontrole i push 4b34 wykonane. PR97 OPEN, bieżący merge status UNKNOWN. Pozostają managed runtime/science/browser, wymagane review/CI, merge, weryfikacja głównego checkoutu i kontrolowany cleanup. |
 
 ## Zweryfikowane warunki wykonania
 

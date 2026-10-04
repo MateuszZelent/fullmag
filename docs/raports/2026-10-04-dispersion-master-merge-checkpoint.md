@@ -185,3 +185,46 @@ Ograniczony przegląd dziewięciu plików backendu/infrastruktury nie znalazł
 otwartego błędu specyficznego dla merge: zachowano ukrytego workera eigensolve,
 kontrakty parallel execution, modalne recepty i integrację workspace DB mastera.
 To review źródłowe; nowy native typecheck, runtime i fizyka pozostają NOT VERIFIED.
+
+## Wdrożenie parsera, build #231 i konieczność danych storage
+
+Trusted koordynator otrzymał parser startup stamp przy pustym aktywnym slocie.
+Obraz sha256:69760bc41867c5f0c55b107c077a9ac762f29a16706cda2ff2c151da44706851;
+Hash helpera: 3a55adeb3598b9af2ddb7584905b42846e03feb4d1fa39adb45e37e882be2461.
+Profile, sekret i konfiguracja buildów zachowane; health po resume potwierdził
+worker_alive/accepting_jobs i brak błędu. Wdrożenie nie zastępuje attestacji.
+
+Po blocked #230 przed utworzeniem kontenera zgłoszono #231 przez API kolejki,
+z tym samym źródłem 4b34ec7b91dadb18ac87d7f8b98b3a2cf5c8f574, digestem
+860b3872cce76d190bd18076edf039d66299933a8aa4cdf31e2d44aa1e3153c7 i kapsułą
+9756cdb852ce42ff9d2dc6d7ee7f8f21. Nowej kopii źródeł nie wykonano.
+Docker potwierdził running/bez OOM dla kontenera 1044d9bc59a9543e16abfd459f047dbbd8096f02ac3981324df6201238f13ca7;
+native-build rozpoczął się 2026-10-04T19:23:32Z. Cały build, receipt i nowy runtime
+pozostają NOT VERIFIED przed terminalnym sukcesem. PID270544 obserwuje ten sam
+job; nearest GMRES/FGMRES rozpocznie się po bramkach builda/OpenAPI/dry-run.
+Porażka pierwszego trialu zatrzymuje drugą próbę do review, bez ślepego retry.
+
+Osobno przypięto sześć niewysłanych prób air-mesh: +10/+25 i growth 1,3/1,15/1,075.
+Zachowano model 408492f3f19c852ff992776a6fb3b2d3934ac69a33dc668b740ebbe26a6f5b8b,
+dziewięć hashy drivera i solver controls. Trzy poziomy należy wykonać na jednym
+runtime; historyczne baseline nie zapewniają izolacji różnic pakietu. Kontrola
+przygotowania PASS, managed dry-run i actual isolation/solve NOT VERIFIED.
+
+Audyt storage nie wykazał konieczności utrzymywania wszystkich pełnych kopii.
+Prywatne execution są potrzebne podczas kompilacji; późniejszy benchmark bierze
+źródła z source/tree i runtime z artifacts/outputs/.fullmag/local. Usunięcie
+terminalnego execution wymaga sprawdzenia aktualnych użytkowników, pinów,
+lease i mountów. Wyniki, wejścia, mesh/equilibrium/modes, manifesty i receipty
+zachowują odrębne wymagania i nie podlegają ogólnemu TTL buildu.
+
+Kod policy/apply ma tylko preview i nie ma wykonawcy ani schedulera usuwania.
+Ostatni skan strukturalny obserwował 154,13 GB logicznie/2,98 mln plików,
+w tym 87,29 GB execution i 46,36 GB source. 154 manifesty deklarują 45,62 GB treści
+i 0,86 GB unikalnych hashy. To historyczne pomiary z ograniczeniami opisanymi
+w audyt-koniecznosci-danych-i-lista-sprzatania.md oraz JSON-ach w artefaktach
+wątku; nie są jednoczesnym stanem ani gwarantowanym fizycznym odzyskiem.
+W ramach analizy nie usuwano danych, nie wprowadzono GC ani migracji CAS.
+
+PR97 OPEN, bieżąca gotowość merge UNKNOWN. Nowych częstotliwości brak;
+Γ full window, shared signed15, serial/adaptive parity/zasoby, convergence,
+GUI, A1-COMSOL, S09/GPU i całe S00–S12 pozostają OPEN.
