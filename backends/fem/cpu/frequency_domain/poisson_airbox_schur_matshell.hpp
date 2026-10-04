@@ -3,6 +3,7 @@
 #include "cpu/frequency_domain/poisson_airbox_modal_eigen.hpp"
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <cmath>
 #include <limits>
@@ -122,6 +123,13 @@ struct PoissonAirboxSchurMatShellCertificationResult {
 FrequencyDomainStatus certify_poisson_airbox_schur_matshell_cpu(
     const PoissonAirboxEigenBlockProblem &problem,
     PoissonAirboxSchurMatShellCertificationResult *out_result) noexcept;
+
+// Formats the measured per-subwindow EPS termination fields as JSON members.
+// Unavailable, hard-error, or invalid-context snapshots remain false/null.
+bool format_poisson_airbox_subwindow_termination_json(
+    const PoissonAirboxModalEigenResult &result,
+    char *destination,
+    std::size_t destination_size) noexcept;
 
 // Production shared-domain K0 lane.  The scalar Poisson block is eliminated
 // through a persistent PETSc factorization and SLEPc operates on the

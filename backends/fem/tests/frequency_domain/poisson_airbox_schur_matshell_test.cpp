@@ -499,6 +499,121 @@ void ModalKspProgressUsesLinearResidualSemanticsAndValidJson()
         "non-finite generic telemetry values must be JSON null, not zero or invalid tokens");
 }
 
+void SubwindowTerminationFormatterPreservesMeasuredNullableEpsFields()
+{
+    const int reason_codes[] = {-1, -2, 0};
+    const std::uint32_t outer_iterations[] = {0u, 23u};
+    for (const int reason_code : reason_codes) {
+        for (const std::uint32_t iteration_count : outer_iterations) {
+            fd::PoissonAirboxModalEigenResult result{};
+            result.eps_reason_available = true;
+            result.slepc_converged_reason_code = reason_code;
+            result.outer_iterations = iteration_count;
+            char fields[128]{};
+            check(fd::format_poisson_airbox_subwindow_termination_json(
+                      result, fields, sizeof(fields)),
+                "available EPS termination must format into the bounded buffer");
+            char json[192]{};
+            std::snprintf(json, sizeof(json), "{%s}", fields);
+            check(is_valid_flat_progress_json(json),
+                "available EPS termination fields must form valid JSON");
+            check(contains(json, "\"eps_reason_available\":true"),
+                "queried EPS termination must report availability");
+            char expected_reason[64]{};
+            std::snprintf(
+                expected_reason,
+                sizeof(expected_reason),
+                "\"slepc_converged_reason_code\":%d",
+                reason_code);
+            check(contains(json, expected_reason),
+                "signed EPS reason, including known zero, must be preserved");
+            char expected_iterations[48]{};
+            std::snprintf(
+                expected_iterations,
+                sizeof(expected_iterations),
+                "\"outer_iterations\":%u",
+                iteration_count);
+            check(contains(json, expected_iterations),
+                "known EPS iteration count, including zero, must be preserved");
+        }
+    }
+
+    fd::PoissonAirboxModalEigenResult unknown{};
+    char fields[128]{};
+    check(fd::format_poisson_airbox_subwindow_termination_json(
+              unknown, fields, sizeof(fields)),
+        "unknown EPS termination must remain serializable");
+    char json[192]{};
+    std::snprintf(json, sizeof(json), "{%s}", fields);
+    check(is_valid_flat_progress_json(json) &&
+              contains(json, "\"eps_reason_available\":false") &&
+              json_field_is_null(json, "slepc_converged_reason_code") &&
+              json_field_is_null(json, "outer_iterations"),
+        "unknown EPS termination must be false/null rather than synthetic zero");
+
+    fd::PoissonAirboxModalEigenResult hard_error{};
+    hard_error.eps_reason_available = true;
+    hard_error.eps_solve_error_code_available = true;
+    hard_error.eps_solve_error_code = 17;
+    hard_error.slepc_process_quarantined = true;
+    hard_error.eps_lifetime_unsafe = true;
+    check(fd::format_poisson_airbox_subwindow_termination_json(
+              hard_error, fields, sizeof(fields)),
+        "hard EPS error guard must remain serializable");
+    std::snprintf(json, sizeof(json), "{%s}", fields);
+    check(is_valid_flat_progress_json(json) &&
+              contains(json, "\"eps_reason_available\":false") &&
+              json_field_is_null(json, "slepc_converged_reason_code") &&
+              json_field_is_null(json, "outer_iterations"),
+        "hard EPS error must not expose a termination snapshot");
+
+    fd::PoissonAirboxModalEigenResult zero_error_code_available{};
+    zero_error_code_available.eps_reason_available = true;
+    zero_error_code_available.eps_solve_error_code_available = true;
+    zero_error_code_available.eps_solve_error_code = 0;
+    zero_error_code_available.slepc_converged_reason_code = -1;
+    zero_error_code_available.outer_iterations = 2000u;
+    check(fd::format_poisson_airbox_subwindow_termination_json(
+              zero_error_code_available, fields, sizeof(fields)),
+        "available zero EPS error code must not suppress a valid reason snapshot");
+    std::snprintf(json, sizeof(json), "{%s}", fields);
+    check(is_valid_flat_progress_json(json) &&
+              contains(json, "\"eps_reason_available\":true") &&
+              contains(json, "\"slepc_converged_reason_code\":-1") &&
+              contains(json, "\"outer_iterations\":2000"),
+        "zero-valued available error code must preserve EPS reason and iterations");
+
+    fd::PoissonAirboxModalEigenResult invalid_context{};
+    invalid_context.eps_reason_available = true;
+    invalid_context.operator_context_invalidated = true;
+    invalid_context.slepc_converged_reason_code = -2;
+    invalid_context.outer_iterations = 23u;
+    check(fd::format_poisson_airbox_subwindow_termination_json(
+              invalid_context, fields, sizeof(fields)),
+        "invalid-context guard must remain serializable");
+    std::snprintf(json, sizeof(json), "{%s}", fields);
+    check(is_valid_flat_progress_json(json) &&
+              contains(json, "\"eps_reason_available\":false") &&
+              json_field_is_null(json, "slepc_converged_reason_code") &&
+              json_field_is_null(json, "outer_iterations"),
+        "invalid context must not be presented as a usable EPS snapshot");
+
+    fd::PoissonAirboxModalEigenResult cancelled{};
+    cancelled.eps_reason_available = true;
+    cancelled.eps_cancellation_observed = true;
+    cancelled.slepc_converged_reason_code = -1;
+    cancelled.outer_iterations = 0u;
+    check(fd::format_poisson_airbox_subwindow_termination_json(
+              cancelled, fields, sizeof(fields)),
+        "cancelled solve with successful EPS queries must remain serializable");
+    std::snprintf(json, sizeof(json), "{%s}", fields);
+    check(is_valid_flat_progress_json(json) &&
+              contains(json, "\"eps_reason_available\":true") &&
+              contains(json, "\"slepc_converged_reason_code\":-1") &&
+              contains(json, "\"outer_iterations\":0"),
+        "cancellation must preserve successfully queried EPS termination");
+}
+
 void CertifiesSchurMatShellAgainstFullCoupledSparseReference()
 {
     TinySparseFixture fixture = make_tiny_full_coupled_fixture();
@@ -841,6 +956,7 @@ int main()
     ModalKrylovTuningRejectsConflictingAliases();
     ModalKrylovTuningRejectsMalformedValuesAndInvalidDefaults();
     ModalKspProgressUsesLinearResidualSemanticsAndValidJson();
+    SubwindowTerminationFormatterPreservesMeasuredNullableEpsFields();
     CertifiesSchurMatShellAgainstFullCoupledSparseReference();
     PlannerRequiresExplicitCertifiedSchurSelection();
     RejectsInvalidGaugeWeightsBeforeSchurCertification();

@@ -3686,6 +3686,42 @@ FrequencyDomainStatus fail_production_schur(
 
 } // namespace
 
+bool format_poisson_airbox_subwindow_termination_json(
+    const PoissonAirboxModalEigenResult &result,
+    char *destination,
+    std::size_t destination_size) noexcept
+{
+    if (destination == nullptr || destination_size == 0u) {
+        return false;
+    }
+    const bool available = result.eps_reason_available &&
+        !(result.eps_solve_error_code_available &&
+          result.eps_solve_error_code != 0) &&
+        !result.slepc_process_quarantined &&
+        !result.operator_context_invalidated &&
+        !result.eps_lifetime_unsafe;
+    const int written = available
+        ? std::snprintf(
+              destination,
+              destination_size,
+              "\"eps_reason_available\":true,"
+              "\"slepc_converged_reason_code\":%d,"
+              "\"outer_iterations\":%u",
+              result.slepc_converged_reason_code,
+              result.outer_iterations)
+        : std::snprintf(
+              destination,
+              destination_size,
+              "\"eps_reason_available\":false,"
+              "\"slepc_converged_reason_code\":null,"
+              "\"outer_iterations\":null");
+    if (written < 0 || static_cast<std::size_t>(written) >= destination_size) {
+        destination[0] = '\0';
+        return false;
+    }
+    return true;
+}
+
 FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
     const PoissonAirboxEigenBlockProblem &problem,
     PoissonAirboxModalEigenResult *out_result) noexcept
@@ -4378,15 +4414,22 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                     out_result->window_certificate_json[0] = '\0';
                     const int failure_code =
                         static_cast<int>(failed_result.eps_solve_error_code);
+                    char termination_fields_json[128]{};
+                    const bool termination_fields_formatted =
+                        format_poisson_airbox_subwindow_termination_json(
+                            failed_result,
+                            termination_fields_json,
+                            sizeof(termination_fields_json));
                     append_subwindow_json(
                         "%s{\"pass\":\"%s\",\"subwindow_index\":%u,"
                         "\"status\":\"failed\",\"stop_reason\":\"%s\","
                         "\"eps_solve_error_code_available\":%s,"
                         "\"eps_solve_error_code\":%d,"
+                        "%s,"
                         "\"slepc_process_quarantined\":true,"
                         "\"operator_context_invalidated\":true,"
                         "\"eps_lifetime_unsafe\":true,"
-                        "\"accepted_mode_count\":0,\"outer_iterations\":null,"
+                        "\"accepted_mode_count\":0,"
                         "\"window_complete\":false}",
                         executed_subwindows_size == 1u ? "" : ",",
                         pass_index == 0u ? "base" : "refinement",
@@ -4394,7 +4437,12 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                         failure_stop_reason,
                         failed_result.eps_solve_error_code_available
                             ? "true" : "false",
-                        failure_code);
+                        failure_code,
+                        termination_fields_formatted
+                            ? termination_fields_json
+                            : "\"eps_reason_available\":false,"
+                              "\"slepc_converged_reason_code\":null,"
+                              "\"outer_iterations\":null");
                     finalize_subwindow_json();
                     return fail_production_schur(
                         problem,
@@ -4533,12 +4581,19 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                     sizeof(subwindow_eps_solve_seconds_json),
                     shifted_result.eps_solve_timing_available,
                     shifted_result.eps_solve_seconds);
+                char termination_fields_json[128]{};
+                const bool termination_fields_formatted =
+                    format_poisson_airbox_subwindow_termination_json(
+                        shifted_result,
+                        termination_fields_json,
+                        sizeof(termination_fields_json));
                 append_subwindow_json(
                     "%s{\"pass\":\"%s\",\"subwindow_index\":%u,"
                     "\"shift_frequency_hz\":%.17g,\"requested_nev\":%llu,"
                     "\"requested_ncv\":%llu,"
                     "\"modal_krylov_tuning\":%s,"
                     "\"status\":\"%s\",\"converged_eigenpair_count\":%u,"
+                    "%s,"
                     "\"candidate_mode_count\":%u,"
                     "\"candidate_mode_count_kind\":\"raw_ritz_in_window\","
                     "\"raw_ritz_in_window_count\":%u,"
@@ -4604,6 +4659,11 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                         ? "ok"
                         : "failed",
                     shifted_result.converged_eigenpair_count,
+                    termination_fields_formatted
+                        ? termination_fields_json
+                        : "\"eps_reason_available\":false,"
+                          "\"slepc_converged_reason_code\":null,"
+                          "\"outer_iterations\":null",
                     shifted_result.raw_ritz_in_window_count,
                     shifted_result.raw_ritz_in_window_count,
                     shifted_result.action_residual_evaluated_count,
@@ -6155,6 +6215,7 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
             solve_interrupted ? "cancel_requested" : "slepc_solve_failed");
     }
     out_result->slepc_converged_reason_code = static_cast<int>(eps_reason);
+    out_result->eps_reason_available = true;
     copy_message(
         out_result->slepc_converged_reason,
         sizeof(out_result->slepc_converged_reason),

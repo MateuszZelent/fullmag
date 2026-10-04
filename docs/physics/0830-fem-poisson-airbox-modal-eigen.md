@@ -1749,3 +1749,37 @@ zbieżność i GPU pozostają osobnymi otwartymi bramkami.
 | source-shared-domain-mu0-payload | backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp + assemble_poisson_airbox_shared_domain_payload | Sprzężenie, masa i probe; source review, runtime NOT VERIFIED |
 | source-shared-domain-mu0-regression | backends/fem/tests/frequency_domain/poisson_airbox_shared_domain_test.cpp + main | Przygotowany test prawdziwego importera; niekompilowany |
 | source-shared-domain-mu0-gate | scripts/validate_de_smoke_rows.py + validate_gamma_demag_probe | Niezmieniona bramka zgodności z zamrożonym modelem |
+
+## Zakończenie EPS osobno dla każdego podokna
+
+Status: przygotowany przyrost diagnostyki źródłowej; wykonanie poprawionego runtime
+**NOT VERIFIED**. Nie zmienia operatora, kryterium certyfikacji, tolerancji,
+budżetów iteracji, wymiaru bazy ani limitu dokładnego preconditionera.
+
+Run Γ #226 zakończył poprawnie 43 z 50 podokien. Siedem otrzymało
+`slepc_diverged`, lecz obecny zapis podokna pomija odczytany kod zakończenia
+EPS i liczbę wykonanych iteracji. Globalny kod i suma iteracji nie opisują
+przyczyny zakończenia konkretnego przesunięcia. Nie dowodzi to wyczerpania
+budżetu KSP ani konieczności zwiększenia limitu preconditionera.
+
+Każde podokno ma zachować `eps_reason_available`, signed
+`slepc_converged_reason_code` i `outer_iterations` z tej samej próby EPS.
+Dostępność ustawiamy dopiero po udanym odczycie wyników EPS; znane zero jest
+liczbą, a nie brakiem. Brak konfiguracji/odczytu albo hard error EPSSolve
+pozostawia brak danych (`null`) i fałszywą dostępność. Nie wolno dodawać
+getterów, teardown ani retry po hard error tylko w celu uzupełnienia metryk.
+Przygotowana regresja ma badać rzeczywisty formatter i rozróżnić known zero,
+ujemny reason, nieznane dane oraz stan hard error. Jest source-only, bez
+kompilacji testów C++ do odwołania zakazu użytkownika.
+
+To diagnostyka obserwowanego wykonania, nie osobna bramka fizyczna. Zapis
+ujemnego kodu nie może promować częściowej zbieżności do certyfikacji okna.
+Po świeżym managed buildzie trzeba powtórzyć identyczny eksperyment i dopiero
+na podstawie kodów, liczników oraz effective Krylov configuration wybrać
+następne strojenie. FEM GPU/FDM nie otrzymują przez ten przyrost kwalifikacji.
+
+| Source ID | Path + symbol | Odpowiedzialność i dowód |
+| --- | --- | --- |
+| source-cpu-schur | backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.hpp + solve_poisson_airbox_modal_eigen_cpu_schur | K0 EPS i agregacja podokien w sąsiednim .cpp; przygotowana poprawka źródeł, runtime NOT VERIFIED |
+| source-k0-subwindow-termination-format | backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.hpp + format_poisson_airbox_subwindow_termination_json | Rzeczywisty formatter nullable EPS termination, bez getterów; runtime NOT VERIFIED |
+| source-k0-subwindow-termination-test | backends/fem/tests/frequency_domain/poisson_airbox_schur_matshell_test.cpp + main | Przygotowana regresja formattera; niekompilowana |

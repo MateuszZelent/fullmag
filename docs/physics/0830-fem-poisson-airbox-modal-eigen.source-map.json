@@ -1249,6 +1249,22 @@
       "responsibility": "Unchanged strict comparison against frozen model metadata.",
       "lane": "FEM CPU",
       "evidence_status": "source review only; fixed managed runtime NOT VERIFIED"
+    },
+    {
+      "id": "source-k0-subwindow-termination-format",
+      "path": "backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.hpp",
+      "symbol": "format_poisson_airbox_subwindow_termination_json",
+      "responsibility": "Format actual nullable per-window EPS termination fields without querying native contexts.",
+      "lane": "FEM CPU",
+      "evidence_status": "source prepared; fixed runtime NOT VERIFIED"
+    },
+    {
+      "id": "source-k0-subwindow-termination-test",
+      "path": "backends/fem/tests/frequency_domain/poisson_airbox_schur_matshell_test.cpp",
+      "symbol": "main",
+      "responsibility": "Prepared regression of actual termination formatter; not compiled or run.",
+      "lane": "FEM CPU",
+      "evidence_status": "test source prepared; not compiled or run"
     }
   ],
   "public_api": {
