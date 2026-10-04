@@ -447,6 +447,4 @@ export const SHELL_COMMANDS: CommandContribution[] = [
   disabledPlaceholder("workspace.diagnostics", "Diagnostics", "Tools"),
   disabledPlaceholder("workspace.api-console", "API Console", "Tools"),
   disabledPlaceholder("workspace.script-view", "Script View", "Tools"),
-  disabledPlaceholder("workspace.reference", "Reference", "Help"),
-  disabledPlaceholder("workspace.about-help", "About", "Help"),
 ];

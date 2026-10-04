@@ -15,7 +15,7 @@ registered command, so it also appears in `Ctrl K`.
 | New FDM simulation | `Ctrl N` | always |
 | New FEM simulation | `Ctrl ⇧ N` | always |
 | Open project… | `Ctrl O` | always |
-| Open recent (quick switch) | `Ctrl ⇧ O` | index has ≥ 1 entry |
+| Open recent (quick switch) | `Ctrl Alt O` (the design's `Ctrl ⇧ O` is already Restore Runtime State) | Home section |
 | Browse templates | `Ctrl T` | always |
 | Import model | `Ctrl I` | always |
 | Settings | `Ctrl ,` | always |

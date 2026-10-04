@@ -61,7 +61,8 @@ start screen › Docs section ── <iframe src="/docs/…"> ◀── postMess
 |---|---|
 | Rail → **Docs** | `start.section.docs`; the section takes the full content width and hides the inspector |
 | `F1`, **Help → Search Docs** | `workspace.search-docs`: selects the Docs section and lays the start screen over an open workspace (`homeView.open()`), so reading never closes a project |
-| Command palette | both commands appear in `Ctrl ⇧ P` |
+| **Help → Reference** | `workspace.reference` opens the Docs section at `python-api/index.html` (a deep link: `startScreenStore.requestDocs(page)`) |
+| Command palette | all of these commands appear in `Ctrl ⇧ P` |
 | About → *Open the documentation* | switches to the Docs section |
 
 Over a workspace the start screen is a visit, not a mode: opening a project or a
