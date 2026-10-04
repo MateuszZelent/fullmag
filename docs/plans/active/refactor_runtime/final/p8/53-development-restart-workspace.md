@@ -1,5 +1,11 @@
 # P8-53 — bezpieczne zastosowanie nowego backendu w workspace
 
+[P8-53AG](53ag-cross-build-candidate-owner.md) oddziela oczekiwaną tożsamość
+replacement API od kompilacji launchera przez pełną weryfikację kandydata.
+284 natywne kontrole potwierdzają również rzeczywisty przebieg z dwoma różnymi
+buildami; wszystkie 101 procesów odebrano. Produkcyjny supervisor, kolejny live
+restart, Compute i hydration UI pozostają otwarte; `restart_available=false`.
+
 [P8-53AF](53af-native-completion-client.md) dodaje produkcyjnego natywnego
 klienta ownera dla `complete_cold`. 227 kontroli potwierdza odmowę obcego PID,
 rozbieżnej sceny i fałszywego ACK oraz rzeczywiste completion w obu wariantach

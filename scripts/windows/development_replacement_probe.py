@@ -19,7 +19,7 @@ from windows import development_scene_handoff as semantic
 from windows.accepted_store_identity import store_binding
 
 
-def run_probe(repo, fixture, env, prepared_result, old_api_instance_id, receipt):
+def run_probe(repo, fixture, env, prepared_result, old_api_instance_id, receipt, native_client=None):
     prepared = prepared_result["preparation"]
     layout = capsule._STORAGE.resolve_layout(repo, "windows-native-fdm-cpu-dev")
     runtime = capsule._validate_runtime_root(layout["runtime_root"])
@@ -187,7 +187,7 @@ def run_probe(repo, fixture, env, prepared_result, old_api_instance_id, receipt)
             complete_live_restore(host, int(control_port), owner_token, pin, port,
                                   prepared_result, accepted, before_commit, before_fence,
                                   receipt_path, before_capsule_receipt, process_record, receipt,
-                                  repo, child_env, child.pid, root, owner_path)
+                                  repo, child_env, child.pid, root, owner_path, native_client)
         finally:
             # Only this fresh verifier API is stopped, after no compute command
             # was submitted. No user runtime is involved in this cleanup.
@@ -202,7 +202,7 @@ def run_probe(repo, fixture, env, prepared_result, old_api_instance_id, receipt)
 def complete_live_restore(host, control_port, owner_token, pin, http_port,
                           prepared_result, accepted, before_commit, before_fence,
                           receipt_path, before_capsule_receipt, process_record, receipt,
-                          repo, child_env, api_pid, probe_root, owner_path):
+                          repo, child_env, api_pid, probe_root, owner_path, native_client=None):
     prepared = prepared_result["preparation"]
     candidate_id = Path(prepared["candidate"]["bundle_root"]).name
     completion = {"handoff_id": prepared["handoff"]["handoff_id"],
@@ -274,7 +274,7 @@ def complete_live_restore(host, control_port, owner_token, pin, http_port,
                   "FULLMAG_DEVELOPMENT_OWNER_PROBE_TOKEN": owner_token}
     native_env.pop("FULLMAG_DEVELOPMENT_OWNER_TOKEN", None)
     native_env.pop("FULLMAG_DEVELOPMENT_RESTORE_STDIN", None)
-    native_cli = Path(prepared["candidate"]["bundle_root"]) / "bin/fullmag.exe"
+    native_cli = Path(native_client) if native_client is not None else Path(prepared["candidate"]["bundle_root"]) / "bin/fullmag.exe"
 
     def invoke_native(payload, label):
         helper = subprocess.Popen([str(native_cli), "runtime", "verify-development-completion-owner"],
@@ -292,7 +292,19 @@ def complete_live_restore(host, control_port, owner_token, pin, http_port,
         (probe_root / (label + ".log")).write_bytes(output + errors)
         if len(output) > 4096:
             raise capsule.HandoffError("Native completion client output exceeds limit")
-        return helper.returncode, output
+        frames = [capsule._strict_json(line, "native completion frame") for line in output.splitlines() if line.strip()]
+        if not frames:
+            raise capsule.HandoffError("Native candidate owner validation produced no confirmation")
+        progress = frames.pop(0)
+        if (set(progress) != {"schema", "helper_pid", "helper_waited", "helper_exit_code"}
+                or progress["schema"] != "fullmag.development-cli-candidate-owner-progress.v1"
+                or type(progress["helper_pid"]) is not int or progress["helper_pid"] <= 0
+                or progress["helper_waited"] is not True or progress["helper_exit_code"] != 0):
+            raise capsule.HandoffError("Native candidate owner validator confirmation is invalid")
+        receipt["processes"].append({"label": "native-candidate-owner-validator", "pid": progress["helper_pid"], "waited": True, "exit_code": 0})
+        if len(frames) > 1 or (helper.returncode == 0 and len(frames) != 1):
+            raise capsule.HandoffError("Native completion has an unexpected frame count")
+        return helper.returncode, b"" if not frames else capsule._canonical_json(frames[0], "native completion result", 4096)
 
     for field, invalid in (("api_pid", api_pid + 1), ("expected_scene_sha256", "0" * 64)):
         code, _ = invoke_native({**request, field: invalid}, "native-completion-invalid-" + field)

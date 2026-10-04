@@ -2484,7 +2484,19 @@ pub(crate) fn verify_development_completion_owner() -> Result<()> {
     if input.schema != "fullmag.development-cli-completion-request.v1" {
         bail!("unknown development completion probe schema");
     }
-    let launch = crate::development_api_owner::OwnerLaunch::from_probe_environment()?;
+    let (launch, helper_pid) =
+        crate::development_api_owner::OwnerLaunch::from_probe_environment_for_candidate(
+            &repo_root(),
+            &input.candidate_bundle_id,
+            &input.candidate_manifest_sha256,
+        )?;
+    println!(
+        "{}",
+        serde_json::json!({
+            "schema":"fullmag.development-cli-candidate-owner-progress.v1",
+            "helper_pid":helper_pid, "helper_waited":true, "helper_exit_code":0
+        })
+    );
     let owner = launch.confirm(input.api_pid, input.api_port, &input.api_instance_id)?;
     let mut acquired = owner.acquire(&uuid::Uuid::new_v4().to_string())?;
     let workspace = acquired.workspace();

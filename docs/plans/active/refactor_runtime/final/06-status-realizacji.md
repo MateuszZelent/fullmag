@@ -1,5 +1,13 @@
 # Status realizacji całego planu refaktoryzacji
 
+Checkpoint P8-53AG, 04.10.2026: [owner API z innego buildu](p8/53ag-cross-build-candidate-owner.md).
+Zweryfikowany kandydat wyznacza oczekiwaną tożsamość replacement API;
+początkowe API pozostaje przypięte do kompilacji launchera. Build Windows,
+133 kontrole interpretowane i 284 kontrole natywne PASS; wszystkie 101 procesów
+odebrano. Dowód obejmuje dwa różne buildy, asset-backed restore i mutację HTTP.
+Produkcyjny supervisor, kolejny live restart, Compute i hydration UI nadal
+otwarte. Procenty całego planu bez awansu.
+
 Checkpoint P8-53W, 04.10.2026: [bramka globalnego idle](p8/53w-staged-global-idle-consumer.md).
 Staged nonce/API binding, aktualne przejęcie i zgodność magazynu API poprzedzają
 drain. Natywny build i 105 sprawdzeń runtime PASS, 21 własnych procesów waited.

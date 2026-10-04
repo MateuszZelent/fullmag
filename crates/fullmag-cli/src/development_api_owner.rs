@@ -20,6 +20,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 const OWNER_SCHEMA: &str = "fullmag.development-api-owner.v1";
+const CANDIDATE_OWNER_REQUEST_SCHEMA: &str = "fullmag.development-candidate-owner-request.v1";
 const ACQUISITION_SCHEMA: &str = "fullmag.development-authoring-acquisition.v1";
 const CONFIRM_SCHEMA: &str = "fullmag.development-api-confirm.v1";
 const ABORT_SCHEMA: &str = "fullmag.development-api-abort.v1";
@@ -42,6 +43,7 @@ const STAGE_REQUEST_SCHEMA: &str = "fullmag.development-acquisition-stage-reques
 const STAGE_ACK_SCHEMA: &str = "fullmag.development-acquisition-handoff.v1";
 const MAX_STAGE_REQUEST_BYTES: usize = 128 * 1024 * 1024;
 const MAX_STAGE_OUTPUT_BYTES: usize = 16 * 1024;
+const MAX_CANDIDATE_OWNER_REQUEST_BYTES: usize = 16 * 1024;
 const BACKEND_ENV_KEYS: [&str; 4] = [
     "FULLMAG_DEVELOPMENT_BACKEND_GENERATION",
     "FULLMAG_DEVELOPMENT_BACKEND_STATUS_FILE",
@@ -58,6 +60,8 @@ pub(crate) struct OwnerLaunch {
     generation: String,
     source: String,
     version: String,
+    expected_build_commit: String,
+    expected_build_snapshot: String,
     owner_token: String,
 }
 
@@ -109,6 +113,7 @@ impl OwnerLaunch {
             storage_root,
             &worktree,
         )?;
+        let build = fullmag_build_info::identity();
 
         Ok(Some(Self {
             service_configured: env::var_os("FULLMAG_RUNTIME_SERVICE_CONFIG").is_some(),
@@ -117,6 +122,8 @@ impl OwnerLaunch {
             generation: generation.clone(),
             source: source.clone(),
             version: version.clone(),
+            expected_build_commit: build.git_commit.to_owned(),
+            expected_build_snapshot: build.source_snapshot_sha256.to_owned(),
             owner_token: uuid::Uuid::new_v4().simple().to_string(),
         }))
     }
@@ -135,6 +142,157 @@ impl OwnerLaunch {
         }
         launch.owner_token = token;
         Ok(launch)
+    }
+
+    /// Create a fresh owner identity for a bundle validated by the managed
+    /// candidate helper. The bundle's compiled identity is kept separate from
+    /// the current launcher identity used by ordinary owner confirmation.
+    pub(crate) fn for_candidate(
+        &self,
+        repo_root: &Path,
+        candidate_bundle_id: &str,
+        candidate_manifest_sha256: &str,
+    ) -> Result<(Self, u32)> {
+        if self.service_configured {
+            bail!("candidate owner confirmation requires a cold development API");
+        }
+        if !lower_hex(candidate_bundle_id, 32) || !lower_hex(candidate_manifest_sha256, 64) {
+            bail!("candidate owner pins are invalid");
+        }
+
+        let repo_root = validated_directory_root(repo_root, "candidate owner repository")?;
+        let helper = checked_regular_file(
+            &repo_root,
+            "scripts/windows/validate_candidate_owner.py",
+            "candidate owner validation helper",
+        )?;
+        let candidate_relative = format!(
+            "runtimes/{}/native-bundles/{candidate_bundle_id}",
+            self.worktree
+        );
+        let candidate_bundle_root =
+            fullmag_session::repository_path::checked_path(&self.storage_root, &candidate_relative)
+                .context("invalid candidate bundle root")?;
+        validate_absolute_path_chain_no_reparse(&candidate_bundle_root, "candidate bundle root")?;
+        validated_directory_root(&candidate_bundle_root, "candidate bundle root")?;
+        let candidate_bundle_root = candidate_bundle_root
+            .to_str()
+            .context("candidate bundle root is not valid UTF-8")?;
+        let storage_root = self
+            .storage_root
+            .to_str()
+            .context("managed storage root is not valid UTF-8")?;
+
+        let python_relative = format!(
+            "builds/{}/windows-native-fdm-cpu-dev/python/fullmag/Scripts/python.exe",
+            self.worktree
+        );
+        let python =
+            fullmag_session::repository_path::checked_path(&self.storage_root, &python_relative)
+                .context("invalid managed development Python path")?;
+        if !python.is_absolute() {
+            bail!("managed development Python path must be absolute");
+        }
+        let configured_python = env::var_os("FULLMAG_PYTHON")
+            .map(PathBuf::from)
+            .context("managed development Python is not configured")?;
+        validate_absolute_path_chain_no_reparse(
+            &configured_python,
+            "configured managed development Python",
+        )?;
+        validate_regular_file_no_reparse(
+            &configured_python,
+            "configured managed development Python",
+        )?;
+        let canonical_python =
+            fs::canonicalize(&python).context("unable to resolve managed development Python")?;
+        let canonical_configured_python = fs::canonicalize(&configured_python)
+            .context("unable to resolve configured managed development Python")?;
+        if canonical_configured_python != canonical_python {
+            bail!("FULLMAG_PYTHON does not identify the managed development Python");
+        }
+        validate_regular_file_no_reparse(&python, "managed development Python")?;
+
+        let request = CandidateOwnerRequest {
+            schema: CANDIDATE_OWNER_REQUEST_SCHEMA,
+            storage_root,
+            worktree_id: &self.worktree,
+            candidate_bundle_root,
+            candidate_manifest_sha256,
+        };
+        let request_bytes = serde_json::to_vec(&request)
+            .context("unable to encode candidate owner validation request")?;
+        if request_bytes.len() > MAX_CANDIDATE_OWNER_REQUEST_BYTES {
+            bail!("candidate owner validation request exceeds its limit");
+        }
+        let (ack_bytes, helper_pid, exit_status) =
+            run_stage_helper(&python, &helper, &repo_root, request_bytes)?;
+        if !exit_status.success() {
+            bail!("candidate owner validation helper failed");
+        }
+        let acknowledgement: CandidateOwnerAcknowledgement = serde_json::from_slice(&ack_bytes)
+            .context("invalid candidate owner validation acknowledgement")?;
+        if acknowledgement.schema != "fullmag.development-candidate-owner-ack.v1"
+            || acknowledgement.worktree_id != self.worktree
+            || acknowledgement.candidate_bundle_id != candidate_bundle_id
+            || acknowledgement.candidate_manifest_sha256 != candidate_manifest_sha256
+            || !lower_hex(&acknowledgement.git_commit, 40)
+            || !lower_hex(&acknowledgement.source_snapshot_sha256, 64)
+            || !lower_hex(&acknowledgement.backend_source_sha256, 64)
+            || acknowledgement.product_version.is_empty()
+            || acknowledgement.product_version.len() > 128
+            || !acknowledgement
+                .product_version
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || b".-+".contains(&byte))
+        {
+            bail!("candidate owner validation acknowledgement does not match the request");
+        }
+        let acknowledged_storage = PathBuf::from(&acknowledgement.storage_root);
+        validate_absolute_path_chain_no_reparse(
+            &acknowledged_storage,
+            "candidate owner storage root acknowledgement",
+        )?;
+        if fs::canonicalize(&acknowledged_storage)? != fs::canonicalize(&self.storage_root)? {
+            bail!("candidate owner validation storage root differs from managed storage");
+        }
+
+        Ok((
+            Self {
+                service_configured: false,
+                storage_root: self.storage_root.clone(),
+                worktree: self.worktree.clone(),
+                generation: self.generation.clone(),
+                source: acknowledgement.backend_source_sha256,
+                version: acknowledgement.product_version,
+                expected_build_commit: acknowledgement.git_commit,
+                expected_build_snapshot: acknowledgement.source_snapshot_sha256,
+                owner_token: uuid::Uuid::new_v4().simple().to_string(),
+            },
+            helper_pid,
+        ))
+    }
+
+    /// Probe-only candidate owner factory. The helper validation remains the
+    /// same as production; only the token is replaced for the isolated fixture.
+    pub(crate) fn from_probe_environment_for_candidate(
+        repo_root: &Path,
+        candidate_bundle_id: &str,
+        candidate_manifest_sha256: &str,
+    ) -> Result<(Self, u32)> {
+        if env::var("FULLMAG_DEVELOPMENT_OWNER_PROBE").as_deref() != Ok("1") {
+            bail!("development API probe is not enabled");
+        }
+        let base = Self::from_environment(true, false)?
+            .context("managed native development API probe is unavailable")?;
+        let (mut launch, helper_pid) =
+            base.for_candidate(repo_root, candidate_bundle_id, candidate_manifest_sha256)?;
+        let token = required_environment_value("FULLMAG_DEVELOPMENT_OWNER_PROBE_TOKEN")?;
+        if !lower_hex(&token, 32) {
+            bail!("invalid development API probe token");
+        }
+        launch.owner_token = token;
+        Ok((launch, helper_pid))
     }
 
     /// Return the secret for explicit injection into the owned API child only.
@@ -197,13 +355,12 @@ impl OwnerLaunch {
             bail!("development API owner record does not match the launched child");
         }
 
-        let build = fullmag_build_info::identity();
-        if !lower_hex(build.git_commit, 40)
-            || !lower_hex(build.source_snapshot_sha256, 64)
-            || record.build_commit != build.git_commit
-            || record.build_snapshot != build.source_snapshot_sha256
+        if !lower_hex(&self.expected_build_commit, 40)
+            || !lower_hex(&self.expected_build_snapshot, 64)
+            || record.build_commit != self.expected_build_commit
+            || record.build_snapshot != self.expected_build_snapshot
         {
-            bail!("development API owner record build identity does not match the launcher");
+            bail!("development API owner record does not match the expected API build identity");
         }
 
         let address: SocketAddr = record
@@ -1453,7 +1610,8 @@ fn run_stage_helper(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
-        .env_remove("FULLMAG_DEVELOPMENT_OWNER_TOKEN");
+        .env_remove("FULLMAG_DEVELOPMENT_OWNER_TOKEN")
+        .env_remove("FULLMAG_DEVELOPMENT_OWNER_PROBE_TOKEN");
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -1661,6 +1819,29 @@ struct OwnerRecord {
     owner_token_sha256: String,
     build_commit: String,
     build_snapshot: String,
+}
+
+#[derive(Serialize)]
+struct CandidateOwnerRequest<'a> {
+    schema: &'static str,
+    storage_root: &'a str,
+    worktree_id: &'a str,
+    candidate_bundle_root: &'a str,
+    candidate_manifest_sha256: &'a str,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CandidateOwnerAcknowledgement {
+    schema: String,
+    storage_root: String,
+    worktree_id: String,
+    candidate_bundle_id: String,
+    candidate_manifest_sha256: String,
+    git_commit: String,
+    source_snapshot_sha256: String,
+    backend_source_sha256: String,
+    product_version: String,
 }
 
 #[derive(Serialize)]

@@ -7,6 +7,7 @@ import http.client
 import json
 import msvcrt
 import os
+import re
 from pathlib import Path
 import shutil
 import socket
@@ -24,7 +25,9 @@ from windows.development_status import verified_build_identity
 from windows.workspace_backend_identity import fingerprint
 
 
-def run(repo_root: str) -> int:
+def run(repo_root: str, cross_build_bundle: str = "") -> int:
+    if cross_build_bundle and not re.fullmatch(r"[0-9a-f]{32}", cross_build_bundle):
+        raise storage.StorageError("Cross-build candidate must be a canonical bundle ID")
     if not __debug__:
         raise storage.StorageError("Native API verification must not run with Python assertions disabled")
     layout = storage.resolve_layout(repo_root, "development-backend-api-checks")
@@ -58,7 +61,7 @@ def run(repo_root: str) -> int:
                    "verified_build_id": verified["ready_build_id"], "api_sha256": manifest["api_binary_sha256"],
                    "verifier_sha256": verifier_hash, "stable_executable_root": str(api.parent),
                    "build_snapshot_sha256": manifest["source_snapshot_sha256"],
-                   "build_commit": manifest["git_commit"],
+                   "build_commit": manifest["git_commit"], "cross_build_bundle": cross_build_bundle,
                    "started_at": storage.now(), "checks": [], "processes": [],
                    "scope": "native resource observation, private owner-authorized acquisition and admission freeze/abort/disconnect, cold handoff acceptance with ACK/lost-ACK reconciliation and graceful owned API exit, committed candidate prelisten asset-backed authoring restore and live cold completion with HTTP mutation admission, interrupted store completion journals and repeated store cycles, empty-service terminal drain; no UI hydration, end-to-end compute reopening, solver or release qualification"}
         storage.atomic_json(receipt_path, receipt)
@@ -206,7 +209,8 @@ def exercise_cli_owner(repo: Path, run_root: Path, manifest: dict, receipt: dict
         from windows.prepare_committed_restore import REQUEST_SCHEMA, prepare_request
         commit_path = accepted_store / "development/HANDOFF-COMMIT.json"
         commit_bytes = commit_path.read_bytes()
-        manifest_bytes = (Path(candidate["bundle_root"]) / "manifest.json").read_bytes()
+        selected_candidate = env["FULLMAG_DEVELOPMENT_OWNER_PROBE_CANDIDATE"]
+        manifest_bytes = (Path(selected_candidate) / "manifest.json").read_bytes()
         request = {
             "schema": REQUEST_SCHEMA,
             "accepted_store_scope": scope,
@@ -214,7 +218,7 @@ def exercise_cli_owner(repo: Path, run_root: Path, manifest: dict, receipt: dict
             "commit_sha256": hashlib.sha256(commit_bytes).hexdigest(),
             "acquisition_nonce": result["durable_commit"]["acquisition_nonce"],
             "binding": binding,
-            "candidate_bundle_root": candidate["bundle_root"],
+            "candidate_bundle_root": selected_candidate,
             "candidate_manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
         }
         prepared = prepare_request(str(repo), request)
@@ -233,7 +237,8 @@ def exercise_cli_owner(repo: Path, run_root: Path, manifest: dict, receipt: dict
         replacement_parent = fixture / f"{label}-replacement-parent"
         replacement_parent.mkdir()
         from windows.development_replacement_probe import run_probe
-        run_probe(repo, replacement_parent, env, prepared, result["api_instance_id"], receipt)
+        run_probe(repo, replacement_parent, env, prepared, result["api_instance_id"], receipt,
+                  native_client=binaries / "fullmag.exe")
         receipt_key = "committed_restore_preparations"
         receipt.setdefault(receipt_key, {})[label] = {
             "schema": prepared["schema"],
@@ -245,9 +250,11 @@ def exercise_cli_owner(repo: Path, run_root: Path, manifest: dict, receipt: dict
             "workspace_state": preparation["workspace_state"],
         }
 
-    def run_fixture(label: str, lost_ack: bool, test_invalid_scopes: bool) -> None:
+    def run_fixture(label: str, lost_ack: bool, test_invalid_scopes: bool, target_bundle: str | None = None) -> None:
         scope = str(uuid.uuid4())
         env, accepted_store = fixture_environment(label, scope, lost_ack)
+        if target_bundle is not None:
+            env["FULLMAG_DEVELOPMENT_OWNER_PROBE_CANDIDATE"] = target_bundle
         receipt[f"{label}_accepted_store_scope"] = scope
         receipt[f"{label}_accepted_store_root"] = str(accepted_store)
         if test_invalid_scopes:
@@ -364,6 +371,17 @@ def exercise_cli_owner(repo: Path, run_root: Path, manifest: dict, receipt: dict
 
     run_fixture("cli_owner", lost_ack=False, test_invalid_scopes=True)
     run_fixture("cli_owner_lost_ack", lost_ack=True, test_invalid_scopes=False)
+    cross_build_id = receipt.get("cross_build_bundle", "")
+    if cross_build_id:
+        from windows.runtime_bundle import validate_bundle
+        target = Path(native["runtime_root"]) / "native-bundles" / cross_build_id
+        cross_manifest, _ = validate_bundle(target, native["runtime_root"], "dev")
+        if (cross_manifest["source"]["workspace_namespace"] != worktree
+                or cross_manifest["source"]["source_snapshot_sha256"] == manifest["source_snapshot_sha256"]):
+            raise storage.StorageError("Cross-build gate requires a different verified build in this workspace")
+        receipt["cross_build_identity"] = cross_manifest["source"]
+        run_fixture("cli_owner_cross_build", lost_ack=False, test_invalid_scopes=False, target_bundle=str(target))
+        receipt["checks"].append("native-launcher-confirms-different-verified-api-build")
 
 
 def exercise_service(repo: Path, run_root: Path, manifest: dict, receipt: dict, binaries: Path) -> None:
@@ -1180,9 +1198,10 @@ def exercise(api: Path, repo: Path, run_root: Path, receipt: dict) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo-root", required=True)
+    parser.add_argument("--cross-build-bundle", default="")
     args = parser.parse_args()
     try:
-        raise SystemExit(run(args.repo_root))
+        raise SystemExit(run(args.repo_root, args.cross_build_bundle))
     except Exception as error:
         print(f"Native development resource verification failed: {error}", file=sys.stderr)
         raise SystemExit(2)

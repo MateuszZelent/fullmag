@@ -17,6 +17,8 @@ import fullmag_storage as storage
 
 
 SOURCE_PATHS = (
+    "scripts/windows/validate_candidate_owner.py",
+    "scripts/test_windows_development_candidate_owner.py",
     "scripts/windows/accepted_store_identity.py",
     "scripts/windows/prepare_committed_restore.py",
     "scripts/test_windows_development_committed_restore.py",
