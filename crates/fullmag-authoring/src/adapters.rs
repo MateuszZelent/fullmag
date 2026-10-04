@@ -116,6 +116,7 @@ pub fn scene_document_from_script_builder(builder: &ScriptBuilderState) -> Scene
             stages: builder.stages.clone(),
             study_pipeline: builder.study_pipeline.clone(),
             table_autosave: builder.table_autosave.clone(),
+            output_storage: builder.output_storage.clone(),
             initial_state: builder.initial_state.clone(),
         },
         outputs: SceneOutputsState::default(),
@@ -129,6 +130,11 @@ pub fn scene_document_to_script_builder(
     let mut normalized_scene = scene.clone();
     normalize_scene_document_study_pipeline_labels(&mut normalized_scene);
     migrate_legacy_fdm_demag_realization(&mut normalized_scene);
+    if let Some(storage) = normalized_scene.study.output_storage.as_ref() {
+        storage
+            .validate()
+            .map_err(|errors| SceneDocumentValidationError::new(errors.join("; ")))?;
+    }
     validate_scene_document(&normalized_scene)?;
     let materials = scene
         .materials
@@ -240,6 +246,7 @@ pub fn scene_document_to_script_builder(
         stages: normalized_scene.study.stages.clone(),
         study_pipeline: normalized_scene.study.study_pipeline.clone(),
         table_autosave: normalized_scene.study.table_autosave.clone(),
+        output_storage: normalized_scene.study.output_storage.clone(),
         initial_state: normalized_scene.study.initial_state.clone(),
         geometries,
         mesh_interfaces: normalized_scene
@@ -2333,6 +2340,7 @@ mod tests {
                 ],
             }),
             table_autosave: None,
+            output_storage: None,
             initial_state: Some(ScriptBuilderInitialState {
                 magnet_name: Some("flower".to_string()),
                 source_path: "/tmp/m0.ovf".to_string(),

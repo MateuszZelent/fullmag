@@ -62,6 +62,7 @@
   --fm-bp-inspector: 390px; /* inspector @container narrow breakpoint */
 
   /* Dialog / panel spatial constraints */
+  --fm-dialog-new-problem-width: 860px;
   --fm-dialog-mesh-build-width: 680px;
   --fm-dialog-mesh-build-width-compact: 480px;
   --fm-dialog-mesh-build-section-max-height: 168px;

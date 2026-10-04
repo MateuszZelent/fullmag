@@ -19,6 +19,7 @@ pub mod materialized_dataset_slice;
 pub mod mesh;
 pub mod mode_composition;
 pub mod observations;
+pub mod output_storage;
 pub mod planar_fields;
 pub mod planar_monitors;
 pub mod preparation;

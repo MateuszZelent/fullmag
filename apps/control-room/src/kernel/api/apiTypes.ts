@@ -1034,3 +1034,7 @@ export function isOptionalObjectInteractionKind(
     kind === "interfacial_dmi" || kind === "uniaxial_anisotropy"
   );
 }
+
+export type OutputStorageDefaultsResource = components["schemas"]["OutputStorageDefaultsResource"];
+export type OutputStorageDefaultsRequest = components["schemas"]["OutputStorageDefaultsRequest"];
+export type OutputStorageSettings = components["schemas"]["OutputStorageSettingsSchema"];

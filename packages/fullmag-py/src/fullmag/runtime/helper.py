@@ -273,6 +273,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 execution_precision=execution_precision,
                 script_source=loaded.script_source,
                 source_root=loaded.source_path.parent,
+                source_stem=loaded.source_path.stem,
+                until_seconds=stage.default_until_seconds,
                 asset_cache=asset_cache,
                 include_geometry_assets=(
                     not getattr(args, "skip_geometry_assets", False)

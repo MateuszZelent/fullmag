@@ -111,6 +111,7 @@ from fullmag.model.planar_monitor import (
     PlanarMonitor,
     StudyMonitorRegistry,
 )
+from fullmag.model.output_storage import OutputStorage
 from fullmag.model.study import (
     DEFAULT_RELAXATION_TORQUE_TOLERANCE_T,
     AdaptiveRefinement,
@@ -5618,6 +5619,37 @@ class StudyBuilder:
 
     def threads(self, cpu_threads: int) -> "StudyBuilder":
         threads(cpu_threads)
+        return self
+
+    def storage(
+        self,
+        output_storage: OutputStorage | None = None,
+        *,
+        output_dir: str | None = None,
+        temp_dir: str | None = None,
+        data_format: str | None = None,
+        cleanup: str | None = None,
+        existing_output: str | None = None,
+    ) -> "StudyBuilder":
+        """Set this study's result directory, data format, and scratch policy."""
+        if output_storage is not None and any(
+            value is not None
+            for value in (output_dir, temp_dir, data_format, cleanup, existing_output)
+        ):
+            raise ValueError("pass either OutputStorage or storage fields, not both")
+        if output_storage is None:
+            output_storage = OutputStorage(
+                output_dir=output_dir,
+                temp_dir=temp_dir,
+                data_format=data_format if data_format is not None else "zarr",
+                cleanup=cleanup if cleanup is not None else "on_success",
+                existing_output=(
+                    existing_output if existing_output is not None else "timestamp"
+                ),
+            )
+        elif not isinstance(output_storage, OutputStorage):
+            raise TypeError("output_storage must be an OutputStorage value")
+        _state._extra_runtime_metadata["output_storage"] = output_storage.to_ir()
         return self
 
     def fem_demag_solver(

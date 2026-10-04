@@ -2,15 +2,20 @@ use fullmag_application::{DocumentMode, FileProjectRepository, ProjectApplicatio
 use fullmag_engine::fem::MeshTopology;
 use fullmag_engine::fem_solution_transfer::{normalize_unit_vectors, transfer_fem_field_to_grid};
 use fullmag_ir::{
-    validate_mesh_for_execution, BackendPlanIR, MeshIR, ProblemIR, TextureMappingIR,
+    validate_mesh_for_execution, AutosaveFormatIR, BackendPlanIR, ExistingOutputIR, MeshIR,
+    OutputDataFormatIR, OutputStorageIR, ProblemIR, TempCleanupIR, TextureMappingIR,
     TextureProjectionMode,
 };
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 mod mixed_certificate;
+
+static OUTPUT_STORAGE_RUN_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[pyfunction]
 fn validate_ir_json(ir_json: &str) -> PyResult<bool> {
@@ -69,29 +74,213 @@ fn open_project_json(path: String) -> PyResult<String> {
     .map_err(|error| PyValueError::new_err(error.to_string()))
 }
 
-/// Run a ProblemIR JSON through the reference FDM runner.
-///
-/// Returns:
-///   - JSON string with RunResult (status, steps, final_magnetization)
-///   - Writes artifacts to `output_dir` if provided
+/// Run a ProblemIR JSON through the reference runner with owned project storage.
 #[pyfunction]
-#[pyo3(signature = (ir_json, until_seconds, output_dir = None))]
+#[pyo3(signature = (
+    ir_json,
+    until_seconds,
+    output_dir = None,
+    temp_dir = None,
+    data_format = None,
+    temp_cleanup = None,
+    existing_output = None
+))]
 fn run_problem_json(
     ir_json: &str,
     until_seconds: f64,
     output_dir: Option<String>,
+    temp_dir: Option<String>,
+    data_format: Option<String>,
+    temp_cleanup: Option<String>,
+    existing_output: Option<String>,
 ) -> PyResult<String> {
-    let ir: ProblemIR =
+    let mut ir: ProblemIR =
         serde_json::from_str(ir_json).map_err(|err| PyValueError::new_err(err.to_string()))?;
+    let has_authored_output_storage =
+        ir.problem_meta.runtime_metadata.contains_key("output_storage");
+    let explicit_data_format = data_format.is_some();
+    let mut settings = match ir.problem_meta.runtime_metadata.get("output_storage") {
+        Some(value) => serde_json::from_value::<OutputStorageIR>(value.clone())
+            .map_err(|err| PyValueError::new_err(format!("invalid output_storage: {err}")))?,
+        None => OutputStorageIR::default(),
+    };
+    if !has_authored_output_storage && !explicit_data_format {
+        if let Some(stage_autosave) = ir.study.sampling().stage_autosave.as_ref() {
+            settings.data_format = match stage_autosave.format {
+                AutosaveFormatIR::Zarr => OutputDataFormatIR::Zarr,
+                AutosaveFormatIR::Hdf5 => OutputDataFormatIR::Hdf5,
+                AutosaveFormatIR::Txt => settings.data_format,
+            };
+        }
+    }
 
-    let out_path = output_dir
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("run_output"));
+    if let Some(path) = resolve_explicit_path(output_dir)? {
+        settings.output_dir = Some(path);
+    }
+    if let Some(path) = resolve_explicit_path(temp_dir)? {
+        settings.temp_dir = Some(path);
+    }
+    if let Some(value) = data_format {
+        settings.data_format = parse_data_format(&value)?;
+    }
+    if let Some(value) = temp_cleanup {
+        settings.cleanup = parse_temp_cleanup(&value)?;
+    }
+    if let Some(value) = existing_output {
+        settings.existing_output = parse_existing_output(&value)?;
+    }
+    settings
+        .validate()
+        .map_err(|errors| PyValueError::new_err(errors.join("; ")))?;
 
-    let result = fullmag_runner::run_problem(&ir, until_seconds, &out_path)
+    let current_dir = std::env::current_dir()
         .map_err(|err| PyValueError::new_err(err.to_string()))?;
+    let source_dir = match ir
+        .problem_meta
+        .runtime_metadata
+        .get("output_storage_source_dir")
+    {
+        Some(value) => value
+            .as_str()
+            .filter(|path| !path.trim().is_empty())
+            .map(PathBuf::from)
+            .ok_or_else(|| {
+                PyValueError::new_err("output_storage_source_dir must be a nonempty path string")
+            })?,
+        None => current_dir,
+    };
+    let source_stem = ir
+        .problem_meta
+        .runtime_metadata
+        .get("output_storage_source_stem")
+        .and_then(serde_json::Value::as_str)
+        .filter(|stem| !stem.trim().is_empty())
+        .map(str::to_owned)
+        .unwrap_or_else(|| storage_slug(&ir.problem_meta.name));
+    let extension = match settings.data_format {
+        OutputDataFormatIR::Zarr => "zarr",
+        OutputDataFormatIR::Hdf5 => "results",
+    };
+    let default_output_dir = source_dir.join(format!("{source_stem}.{extension}"));
+    let run_id = format!(
+        "py-{}-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|err| PyValueError::new_err(err.to_string()))?
+            .as_millis(),
+        OUTPUT_STORAGE_RUN_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+    );
 
-    serde_json::to_string(&result).map_err(|err| PyValueError::new_err(err.to_string()))
+    fullmag_runner::project_storage::configure_project_autosave(
+        &mut ir,
+        settings.data_format,
+        until_seconds,
+    )
+    .map_err(PyValueError::new_err)?;
+
+    ir.problem_meta.runtime_metadata.insert(
+        "output_storage".to_string(),
+        serde_json::to_value(&settings)
+            .map_err(|err| PyValueError::new_err(err.to_string()))?,
+    );
+
+    let mut lease = fullmag_runner::project_storage::ProjectStorageLease::prepare(
+        &settings,
+        &default_output_dir,
+        &source_dir,
+        &run_id,
+    )
+    .map_err(PyValueError::new_err)?;
+    let resolved = serde_json::to_value(lease.resolved())
+        .map_err(|err| PyValueError::new_err(err.to_string()))?;
+    let resolved_output_dir = lease.resolved().output_dir.clone();
+    ir.problem_meta
+        .runtime_metadata
+        .insert("resolved_output_storage".to_string(), resolved.clone());
+
+    let run_result = match fullmag_runner::run_problem(&ir, until_seconds, &resolved_output_dir) {
+        Ok(result) => result,
+        Err(run_error) => {
+            let finalization = lease.finish(false);
+            let message = match finalization {
+                Ok(()) => run_error.to_string(),
+                Err(storage_error) => format!(
+                    "{run_error}; output storage finalization also failed: {storage_error}"
+                ),
+            };
+            return Err(PyValueError::new_err(message));
+        }
+    };
+
+    lease.finish(true).map_err(PyValueError::new_err)?;
+    let mut payload = serde_json::to_value(run_result)
+        .map_err(|err| PyValueError::new_err(err.to_string()))?;
+    if let Some(object) = payload.as_object_mut() {
+        object.insert("output_dir".to_string(), serde_json::json!(resolved_output_dir));
+        object.insert("resolved_output_storage".to_string(), resolved);
+    }
+    serde_json::to_string(&payload).map_err(|err| PyValueError::new_err(err.to_string()))
+}
+
+fn resolve_explicit_path(path: Option<String>) -> PyResult<Option<String>> {
+    let Some(path) = path else {
+        return Ok(None);
+    };
+    let path = PathBuf::from(path);
+    if path.is_absolute() {
+        return Ok(Some(path.to_string_lossy().into_owned()));
+    }
+    let current_dir = std::env::current_dir()
+        .map_err(|err| PyValueError::new_err(err.to_string()))?;
+    Ok(Some(current_dir.join(path).to_string_lossy().into_owned()))
+}
+
+fn parse_data_format(value: &str) -> PyResult<OutputDataFormatIR> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "zarr" => Ok(OutputDataFormatIR::Zarr),
+        "hdf5" | "h5" => Ok(OutputDataFormatIR::Hdf5),
+        _ => Err(PyValueError::new_err("data_format must be 'zarr' or 'hdf5'")),
+    }
+}
+
+fn parse_temp_cleanup(value: &str) -> PyResult<TempCleanupIR> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "on_success" => Ok(TempCleanupIR::OnSuccess),
+        "always" => Ok(TempCleanupIR::Always),
+        "never" => Ok(TempCleanupIR::Never),
+        _ => Err(PyValueError::new_err(
+            "temp_cleanup must be 'on_success', 'always', or 'never'",
+        )),
+    }
+}
+
+fn parse_existing_output(value: &str) -> PyResult<ExistingOutputIR> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "timestamp" => Ok(ExistingOutputIR::Timestamp),
+        "error" => Ok(ExistingOutputIR::Error),
+        _ => Err(PyValueError::new_err(
+            "existing_output must be 'timestamp' or 'error'",
+        )),
+    }
+}
+
+fn storage_slug(value: &str) -> String {
+    let slug: String = value
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_') {
+                character.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    let slug = slug.trim_matches('-');
+    if slug.is_empty() {
+        "fullmag".to_string()
+    } else {
+        slug.to_string()
+    }
 }
 
 fn rotate_vector_by_quaternion(vector: [f64; 3], quaternion: [f64; 4]) -> [f64; 3] {
