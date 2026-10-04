@@ -353,6 +353,15 @@ settings with a link to full preferences, build/runtime/team/citation and
 **Copy diagnostics**. `get_app_config().launch_intent` already exists and is
 where the "open the start screen on launch" setting should hook in.
 
+### Step 11 — Sphinx documentation  *(see `05-sphinx-integration.md`)*
+A **Docs** section (rail item, `F1`, Help → Search Docs) showing the bundled
+Sphinx site with Sphinx's own search, offline. `apps/control-room/scripts/bundle-docs.mjs`
+copies the built site into `public/docs/`; `public_docs/site/_static/fullmag-embed.js`
+keeps the theme in step and reports navigation. Without a bundle the section says
+so and links online. **Done when:** a query returns Sphinx results in the frame,
+the theme follows the app both ways, and a build without `public/docs/` shows the
+unavailable state without affecting anything else.
+
 ### Promote to `shared/ui/` once Step 5 lands
 `StatusPill`, `KeyValueGrid`, `Timeline` — the physics inspectors hand-roll all
 three today.
@@ -489,3 +498,8 @@ Also added: the `commands.rs` → `fullmag-application` boundary as a hard
 constraint, `get_app_config().launch_intent` as the hook for the launch
 setting, and the existing atomic-write pattern in `ProjectSaveSummary` as the
 model for the index write.
+
+**v3 — 2026-10-04.** Added Step 11 (Sphinx documentation) and
+`05-sphinx-integration.md`; added `06-implementation-status.md`, which records
+what was built, the evidence, and the gaps. About now takes the project's facts
+from the repository README.

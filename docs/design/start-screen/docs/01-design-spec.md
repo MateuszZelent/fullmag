@@ -116,6 +116,7 @@ omitted on a stable build — a release should not shout about being a release.
 | **Templates** | `Ctrl 2` | Gallery of ready-made studies, with a count badge |
 | **Import** | `Ctrl 3` | Supported formats, drop target, import report |
 | **Learn** | `Ctrl 4` | Release notes, keyboard map, docs, benchmarks |
+| **Docs** | `F1` | The Sphinx documentation with its own search, offline (§6.6) |
 | **Settings** | `Ctrl ,` | Start-screen-relevant preferences only |
 | **About** | — | Build, runtime, team, citation, licences |
 
@@ -405,10 +406,29 @@ preferences dialog. A launcher that becomes a second settings UI has failed.
 
 ### 6.5 About
 
-Build (version, commit, date, channel, archive schema, platform), runtime stack
-with versions, the team with affiliations, a citation block for Fullmag itself,
-third-party licences, and **Copy diagnostics** — a one-click block to paste into
-a bug report.
+Overview and the two engines, the authors with their affiliations and the project
+coordinator, a **Cite Fullmag** block (the citation sentence and BibTeX, with a
+copy button), build (version, platform, profile, archive schema), licence
+statement, funding, and **Copy diagnostics** — a one-click block to paste into a
+bug report.
+
+The project's own facts (overview, authors, affiliations, citation, BibTeX,
+licence statement, funding) are taken from the repository `readme.md`, not
+written for the screen; a test fails if the two disagree. Facts the page cannot
+know (a commit hash, third-party licences, the runtime stack) are not shown and
+not invented.
+
+### 6.6 Documentation
+
+The public Sphinx documentation, inside the app, with search, offline. The
+section takes the full content width (no inspector): a query box that drives
+Sphinx's own search page, a **Contents** button, **Open online** (which follows
+the page being read) and the documentation in a frame. `F1` and Help → Search
+Docs open it from anywhere, over an open workspace without closing it. Without a
+bundle the section says so and links to the online site; nothing else changes.
+
+The full contract (messages, theme sync, bundling, degradation) is
+`05-sphinx-integration.md`.
 
 ---
 
@@ -531,4 +551,6 @@ schema/*.schema.json             data contracts + validated examples
 components/*.tsx                 reference implementation (React 19 + Tailwind v4)
 docs/02-implementation-guide.md  file map, component tree, host API gaps
 docs/03-interaction-and-accessibility.md  keyboard, focus, ARIA, i18n
+docs/05-sphinx-integration.md   documentation inside the app: contract, search, bundling
+docs/06-implementation-status.md  what is built, how it was verified, what is left
 ```

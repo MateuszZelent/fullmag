@@ -19,7 +19,7 @@ registered command, so it also appears in `Ctrl K`.
 | Browse templates | `Ctrl T` | always |
 | Import model | `Ctrl I` | always |
 | Settings | `Ctrl ,` | always |
-| Documentation | `F1` | always |
+| Documentation (opens the Docs section, `05-sphinx-integration.md`) | `F1` | always |
 | Toggle theme | `Ctrl ⇧ T` | always |
 | Rail sections 1–4 | `Ctrl 1` … `Ctrl 4` | always |
 
@@ -248,3 +248,12 @@ layout does not assume it:
 - Paths and physical units are never localised.
 - Nothing is right-to-left-hostile: the layout uses logical properties
   (`padding-inline`, `margin-inline`) as the existing stylesheets already do.
+
+---
+
+## Documentation section
+
+The frame has a title and the query box a label; focus lands in the query box when
+the documentation is available and never inside the frame, so the section cannot
+trap the keyboard. The theme follows the app. Details in
+`05-sphinx-integration.md` §8.
