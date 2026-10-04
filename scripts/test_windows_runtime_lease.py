@@ -58,6 +58,7 @@ def test_build_lock_released_only_after_validated_handshake(layout, monkeypatch)
         pid = 12
         def __init__(self, command, cwd, env):
             events.append("launcher started")
+            assert env["FULLMAG_NATIVE_RUNTIME_ACTIVE"] == "1"
             Path(env["FULLMAG_NATIVE_RUNTIME_READY_FILE"]).write_text(json.dumps({
                 "schema": "fullmag.native-runtime-ready.v2",
                 "nonce": env["FULLMAG_NATIVE_RUNTIME_NONCE"], "launcher_pid": self.pid,
@@ -120,6 +121,7 @@ def test_dev_starts_owned_watcher_after_sealing_and_requests_stop_on_exit(layout
         def __init__(self, command, cwd, env):
             self.is_watcher = "--stop-file" in command
             if self.is_watcher:
+                assert "FULLMAG_NATIVE_RUNTIME_ACTIVE" not in env
                 events.append("watcher")
                 self.pid = 13
                 self.stop = Path(command[command.index("--stop-file") + 1])

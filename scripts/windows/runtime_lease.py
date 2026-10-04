@@ -283,6 +283,7 @@ def run_sealed_runtime(layout, command, env, profile):
                 child = subprocess.Popen(command, cwd=layout["repo_root"], env={
                     **env, **{key: os.environ[key] for key in
                               ("FULLMAG_STORAGE_LOCK_TOKEN", "FULLMAG_STORAGE_LOCK_KEY")},
+                    "FULLMAG_NATIVE_RUNTIME_ACTIVE": "1",
                     "FULLMAG_NATIVE_RUNTIME_READY_FILE": str(ready),
                     "FULLMAG_NATIVE_RUNTIME_NONCE": nonce,
                 })
