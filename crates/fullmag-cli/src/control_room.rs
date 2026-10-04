@@ -2448,6 +2448,106 @@ pub(crate) fn initialize_scoped_accepted_store() -> Result<()> {
 
 /// Managed diagnostic only: own an empty API, exercise the production CLI
 /// owner client, and wait for that child. Never opens a frontend or desktop.
+/// Managed parent owns the replacement API and has already waited its old API.
+/// This probe exercises the production private client, not process supervision.
+pub(crate) fn verify_development_completion_owner() -> Result<()> {
+    if std::env::var("FULLMAG_DEVELOPMENT_OWNER_PROBE").as_deref() != Ok("1") {
+        bail!("development completion verification requires the managed owner probe");
+    }
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Input {
+        schema: String,
+        api_pid: u32,
+        api_port: u16,
+        api_instance_id: String,
+        old_api_instance_id: String,
+        commit_sha256: String,
+        candidate_bundle_id: String,
+        candidate_manifest_sha256: String,
+        expected_scene_sha256: String,
+        #[serde(deserialize_with = "present_session_id")]
+        expected_session_id: Option<String>,
+        expected_session_epoch: u64,
+    }
+    fn present_session_id<'de, D: serde::Deserializer<'de>>(
+        d: D,
+    ) -> std::result::Result<Option<String>, D::Error> {
+        serde::Deserialize::deserialize(d)
+    }
+    let mut input = Vec::new();
+    std::io::stdin().take(4097).read_to_end(&mut input)?;
+    if input.len() > 4096 {
+        bail!("development completion probe input exceeds its limit");
+    }
+    let input: Input = serde_json::from_slice(&input)?;
+    if input.schema != "fullmag.development-cli-completion-request.v1" {
+        bail!("unknown development completion probe schema");
+    }
+    let launch = crate::development_api_owner::OwnerLaunch::from_probe_environment()?;
+    let owner = launch.confirm(input.api_pid, input.api_port, &input.api_instance_id)?;
+    let mut acquired = owner.acquire(&uuid::Uuid::new_v4().to_string())?;
+    let workspace = acquired.workspace();
+    let (session_id, epoch, digest) = if workspace["state"] == "no_session" {
+        (
+            None,
+            workspace["session_epoch"].as_u64(),
+            fullmag_session::canonical_json_sha256(&serde_json::Value::Null),
+        )
+    } else {
+        (
+            workspace["identity"]["session_id"]
+                .as_str()
+                .map(str::to_owned),
+            workspace["identity"]["session_epoch"].as_u64(),
+            workspace["scene_sha256"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned(),
+        )
+    };
+    if session_id != input.expected_session_id
+        || epoch != Some(input.expected_session_epoch)
+        || digest != input.expected_scene_sha256
+    {
+        bail!("replacement acquisition differs from the parent's pinned restore");
+    }
+    let root = repo_root();
+    let store_root = fullmag_runtime_control::accepted_store::configured_submit_store_root(
+        &root,
+        &runtime_state_root(&root),
+    )
+    .context("completion probe requires its configured accepted store")?;
+    let raw_commit = fullmag_session::repository_path::read_bounded_regular_file(
+        &store_root,
+        "development/HANDOFF-COMMIT.json",
+        16 * 1024,
+    )?;
+    if fullmag_session::hex_sha256(&raw_commit) != input.commit_sha256 {
+        bail!("completion probe commit differs from its parent's accepted record");
+    }
+    let commit: fullmag_session::store::DevelopmentHandoffCommit =
+        serde_json::from_slice(&raw_commit)?;
+    if commit.api_instance_id != input.old_api_instance_id {
+        bail!("completion probe identifies another old API");
+    }
+    let acknowledgement = acquired.complete_cold_handoff(
+        &commit,
+        &input.commit_sha256,
+        &input.candidate_bundle_id,
+        &input.candidate_manifest_sha256,
+    )?;
+    println!(
+        "{}",
+        serde_json::json!({
+            "schema":"fullmag.development-cli-completion-check.v1", "api_pid":input.api_pid,
+            "api_instance_id":input.api_instance_id, "acknowledgement":acknowledgement,
+            "checks":["native-completion-owner-confirmed", "native-completion-held-restore-pinned", "native-completion-acknowledgement-validated"]
+        })
+    );
+    Ok(())
+}
+
 pub(crate) fn verify_development_api_owner() -> Result<()> {
     if std::env::var("FULLMAG_DEVELOPMENT_OWNER_PROBE").as_deref() != Ok("1") {
         bail!("development API owner verification requires an explicit managed fixture");

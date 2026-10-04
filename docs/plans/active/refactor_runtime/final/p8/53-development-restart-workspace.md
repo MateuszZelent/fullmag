@@ -1,5 +1,11 @@
 # P8-53 — bezpieczne zastosowanie nowego backendu w workspace
 
+[P8-53AF](53af-native-completion-client.md) dodaje produkcyjnego natywnego
+klienta ownera dla `complete_cold`. 227 kontroli potwierdza odmowę obcego PID,
+rozbieżnej sceny i fałszywego ACK oraz rzeczywiste completion w obu wariantach
+ACK/lost-ACK starego API; wszystkie 68 procesów odebrano. Produkcyjny supervisor,
+Compute, powtórny live restart i hydration UI pozostają otwarte.
+
 [P8-53AE](53ae-live-cold-completion.md) podłącza dziennik completion do
 prywatnego ownera nowego API. 215 natywnych kontroli potwierdza odtworzenie
 sceny z assetem, odmowę błędnych pinów, retirement markerów i HTTP mutację po

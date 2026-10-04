@@ -186,7 +186,8 @@ def run_probe(repo, fixture, env, prepared_result, old_api_instance_id, receipt)
                                       "committed-replacement-lifecycle-markers-retained"))
             complete_live_restore(host, int(control_port), owner_token, pin, port,
                                   prepared_result, accepted, before_commit, before_fence,
-                                  receipt_path, before_capsule_receipt, process_record, receipt)
+                                  receipt_path, before_capsule_receipt, process_record, receipt,
+                                  repo, child_env, child.pid, root, owner_path)
         finally:
             # Only this fresh verifier API is stopped, after no compute command
             # was submitted. No user runtime is involved in this cleanup.
@@ -200,7 +201,8 @@ def run_probe(repo, fixture, env, prepared_result, old_api_instance_id, receipt)
 
 def complete_live_restore(host, control_port, owner_token, pin, http_port,
                           prepared_result, accepted, before_commit, before_fence,
-                          receipt_path, before_capsule_receipt, process_record, receipt):
+                          receipt_path, before_capsule_receipt, process_record, receipt,
+                          repo, child_env, api_pid, probe_root, owner_path):
     prepared = prepared_result["preparation"]
     candidate_id = Path(prepared["candidate"]["bundle_root"]).name
     completion = {"handoff_id": prepared["handoff"]["handoff_id"],
@@ -253,12 +255,127 @@ def complete_live_restore(host, control_port, owner_token, pin, http_port,
     nonce = str(uuid.uuid4())
     with socket.create_connection((host, control_port), timeout=20) as control:
         frame, workspace = acquire(control, nonce)
-        response = exchange(control, {**frame, "command": "complete_cold", "completion": completion})
+        released = exchange(control, {**frame, "command": "abort"})
+        if (released.get("schema") != "fullmag.development-api-abort.v1"
+                or released.get("nonce") != nonce or released.get("api_instance_id") != pin):
+            raise capsule.HandoffError("Parent could not release its observation acquisition")
     identity = workspace.get("identity", {})
     expected_session = identity.get("session_id") if prepared["envelope"] is not None else None
     expected_epoch = 1 if expected_session is not None else 0
+    request = {"schema": "fullmag.development-cli-completion-request.v1", "api_pid": api_pid,
+               "api_port": http_port, "api_instance_id": pin,
+               "old_api_instance_id": prepared_result["binding"]["api_instance_id"],
+               "commit_sha256": completion["commit_sha256"],
+               "candidate_bundle_id": candidate_id,
+               "candidate_manifest_sha256": completion["candidate_manifest_sha256"],
+               "expected_scene_sha256": workspace.get("scene_sha256") if expected_session is not None else capsule._sha256(b"null"),
+               "expected_session_id": expected_session, "expected_session_epoch": expected_epoch}
+    native_env = {**child_env, "FULLMAG_DEVELOPMENT_OWNER_PROBE": "1",
+                  "FULLMAG_DEVELOPMENT_OWNER_PROBE_TOKEN": owner_token}
+    native_env.pop("FULLMAG_DEVELOPMENT_OWNER_TOKEN", None)
+    native_env.pop("FULLMAG_DEVELOPMENT_RESTORE_STDIN", None)
+    native_cli = Path(prepared["candidate"]["bundle_root"]) / "bin/fullmag.exe"
+
+    def invoke_native(payload, label):
+        helper = subprocess.Popen([str(native_cli), "runtime", "verify-development-completion-owner"],
+                                  cwd=repo, env=native_env, stdin=subprocess.PIPE,
+                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                  creationflags=subprocess.CREATE_NO_WINDOW)
+        record = {"label": label, "pid": helper.pid, "waited": False}
+        receipt["processes"].append(record)
+        try:
+            output, errors = helper.communicate(capsule._canonical_json(payload, "native completion request", 4096), timeout=45)
+        except subprocess.TimeoutExpired:
+            record["outcome"] = "unknown; native completion must not be retried"
+            raise capsule.HandoffError("Native completion client has an unknown outcome; its process was retained")
+        record.update(waited=True, exit_code=helper.returncode)
+        (probe_root / (label + ".log")).write_bytes(output + errors)
+        if len(output) > 4096:
+            raise capsule.HandoffError("Native completion client output exceeds limit")
+        return helper.returncode, output
+
+    for field, invalid in (("api_pid", api_pid + 1), ("expected_scene_sha256", "0" * 64)):
+        code, _ = invoke_native({**request, field: invalid}, "native-completion-invalid-" + field)
+        if (code == 0 or accepted.joinpath("development/HANDOFF-COMMIT.json").read_bytes() != before_commit
+                or accepted.joinpath("development/ADMISSION-FENCE.json").read_bytes() != before_fence
+                or os.path.lexists(accepted / "development/HANDOFF-COMPLETION.json")):
+            raise capsule.HandoffError("Native completion accepted invalid ownership or changed admission")
+        receipt["checks"].append("native-completion-invalid-" + field + "-refused")
+
+    # Rewrite only this disposable API's already-verified discovery record,
+    # redirecting the diagnostic client to a bounded fake ACK peer. The real
+    # API is never sent completion during this protocol rejection check.
+    original_owner = owner_path.read_bytes()
+    original_owner_copy = probe_root / "native-completion-discovery-original.json"
+    original_owner_copy.write_bytes(original_owner)
+    fake_errors = []
+    fake_sent = []
+    with socket.socket() as fake_listener:
+        fake_listener.bind(("127.0.0.1", 0))
+        fake_listener.listen(1)
+        fake_listener.settimeout(10)
+        fake_owner = capsule._strict_json(original_owner, "owned discovery record")
+        fake_owner["control_address"] = "127.0.0.1:" + str(fake_listener.getsockname()[1])
+        fake_bytes = capsule._canonical_json(fake_owner, "owned fake discovery record", 8192)
+
+        def fake_ack_peer():
+            try:
+                peer, _ = fake_listener.accept()
+                with peer, peer.makefile("rb") as reader:
+                    peer.settimeout(10)
+                    first = capsule._strict_json(reader.readline(4097), "native fake acquire")
+                    if first.get("command") != "acquire" or first.get("owner_token") != owner_token or first.get("api_instance_id") != pin:
+                        raise capsule.HandoffError("Native fake peer received foreign acquisition")
+                    peer.sendall(json.dumps({"schema": "fullmag.development-authoring-acquisition.v1",
+                                            "nonce": first["nonce"], "api_instance_id": pin,
+                                            "workspace": workspace}).encode() + b"\n")
+                    second = capsule._strict_json(reader.readline(4097), "native fake completion")
+                    if (second.get("command") != "complete_cold" or second.get("nonce") != first["nonce"]
+                            or second.get("completion") != completion):
+                        raise capsule.HandoffError("Native fake peer did not reach the production completion request")
+                    peer.sendall(json.dumps({"schema": "fullmag.development-api-completion.v1",
+                                            "nonce": first["nonce"], "api_instance_id": pin,
+                                            "old_api_instance_id": request["old_api_instance_id"],
+                                            "handoff_id": completion["handoff_id"],
+                                            "snapshot_sha256": completion["snapshot_sha256"],
+                                            "target_build_id": completion["target_build_id"],
+                                            "accepted_store_binding": prepared_result["accepted_store_binding"],
+                                            "session_id": expected_session, "session_epoch": expected_epoch,
+                                            "scene_document_sha256": "0" * 64,
+                                            "admission_reopened": True}).encode() + b"\n")
+                    fake_sent.append(True)
+            except (OSError, ValueError, capsule.HandoffError) as error:
+                fake_errors.append(type(error).__name__)
+
+        fake_thread = threading.Thread(target=fake_ack_peer, daemon=True)
+        fake_thread.start()
+        owner_path.write_bytes(fake_bytes)
+        try:
+            code, _ = invoke_native(request, "native-completion-foreign-ack")
+        finally:
+            if owner_path.read_bytes() != fake_bytes:
+                raise capsule.HandoffError("Disposable owner record changed during fake ACK check; original retained in fixture")
+            owner_path.write_bytes(original_owner)
+            fake_thread.join(timeout=11)
+        if code == 0 or fake_thread.is_alive() or fake_errors or fake_sent != [True]:
+            raise capsule.HandoffError("Native completion did not reject the exercised foreign ACK")
+    if (accepted.joinpath("development/HANDOFF-COMMIT.json").read_bytes() != before_commit
+            or accepted.joinpath("development/ADMISSION-FENCE.json").read_bytes() != before_fence
+            or os.path.lexists(accepted / "development/HANDOFF-COMPLETION.json")):
+        raise capsule.HandoffError("Fake completion ACK changed actual durable admission")
+    receipt["checks"].append("native-completion-foreign-ack-refused")
+    code, output = invoke_native(request, "native-completion-owner-client")
+    if code != 0:
+        raise capsule.HandoffError("Native completion client failed; see its owned fixture log")
+    native_result = capsule._strict_json(output, "native completion result")
+    if (native_result.get("schema") != "fullmag.development-cli-completion-check.v1"
+            or native_result.get("api_pid") != api_pid or native_result.get("api_instance_id") != pin
+            or native_result.get("checks") != ["native-completion-owner-confirmed", "native-completion-held-restore-pinned", "native-completion-acknowledgement-validated"]):
+        raise capsule.HandoffError("Native completion result differs from owned replacement")
+    receipt["checks"].extend(native_result["checks"])
+    response = native_result["acknowledgement"]
     if (response.get("schema") != "fullmag.development-api-completion.v1"
-            or response.get("nonce") != nonce or response.get("api_instance_id") != pin
+            or response.get("api_instance_id") != pin
             or response.get("old_api_instance_id") != prepared_result["binding"]["api_instance_id"]
             or any(response.get(field) != completion[field] for field in ("handoff_id", "snapshot_sha256", "target_build_id"))
             or response.get("accepted_store_binding") != prepared_result["accepted_store_binding"]

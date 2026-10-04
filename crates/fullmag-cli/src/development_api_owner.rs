@@ -121,6 +121,22 @@ impl OwnerLaunch {
         }))
     }
 
+    /// Create owner credentials for the isolated native completion probe.
+    /// Ordinary launch paths continue to use a freshly generated token.
+    pub(crate) fn from_probe_environment() -> Result<Self> {
+        if env::var("FULLMAG_DEVELOPMENT_OWNER_PROBE").as_deref() != Ok("1") {
+            bail!("development API probe is not enabled");
+        }
+        let mut launch = Self::from_environment(true, false)?
+            .context("managed native development API probe is unavailable")?;
+        let token = required_environment_value("FULLMAG_DEVELOPMENT_OWNER_PROBE_TOKEN")?;
+        if !lower_hex(&token, 32) {
+            bail!("invalid development API probe token");
+        }
+        launch.owner_token = token;
+        Ok(launch)
+    }
+
     /// Return the secret for explicit injection into the owned API child only.
     pub(crate) fn token(&self) -> &str {
         &self.owner_token
@@ -268,14 +284,25 @@ impl OwnedDevelopmentApi {
         let response: AcquisitionResponse = serde_json::from_slice(&response_bytes)
             .context("invalid development API acquisition response")?;
         validate_acquisition_response(&response, nonce, &self.api_instance_id)?;
-        let (workspace_state, session_id, session_epoch) = match &response.workspace {
-            WorkspaceResponse::NoSession { session_epoch } => ("no_session", None, *session_epoch),
-            WorkspaceResponse::Session { identity, .. } => (
-                "session",
-                Some(identity.session_id.clone()),
-                identity.session_epoch,
-            ),
-        };
+        let (workspace_state, session_id, session_epoch, scene_document_sha256) =
+            match &response.workspace {
+                WorkspaceResponse::NoSession { session_epoch } => (
+                    "no_session",
+                    None,
+                    *session_epoch,
+                    fullmag_session::canonical_json_sha256(&Value::Null),
+                ),
+                WorkspaceResponse::Session {
+                    identity,
+                    scene_sha256,
+                    ..
+                } => (
+                    "session",
+                    Some(identity.session_id.clone()),
+                    identity.session_epoch,
+                    scene_sha256.clone(),
+                ),
+            };
         let workspace = serde_json::to_value(&response.workspace)
             .context("unable to materialize development authoring snapshot")?;
         std::str::from_utf8(&response_bytes)
@@ -285,6 +312,7 @@ impl OwnedDevelopmentApi {
             service_configured: self.service_configured,
             stream: Some(stream),
             commit_attempted: false,
+            completion_attempted: false,
             owner_token: self.owner_token.clone(),
             api_port: self.api_port,
             api_instance_id: self.api_instance_id.clone(),
@@ -294,6 +322,7 @@ impl OwnedDevelopmentApi {
             workspace_state,
             session_id,
             session_epoch,
+            scene_document_sha256,
             storage_root: self.storage_root.clone(),
             worktree: self.worktree.clone(),
             generation: self.generation.clone(),
@@ -309,6 +338,7 @@ pub(crate) struct AuthoringAcquisition {
     service_configured: bool,
     stream: Option<TcpStream>,
     commit_attempted: bool,
+    completion_attempted: bool,
     owner_token: String,
     api_port: u16,
     api_instance_id: String,
@@ -318,6 +348,7 @@ pub(crate) struct AuthoringAcquisition {
     workspace_state: &'static str,
     session_id: Option<String>,
     session_epoch: u64,
+    scene_document_sha256: String,
     storage_root: PathBuf,
     worktree: String,
     generation: String,
@@ -411,6 +442,135 @@ impl AuthoringAcquisition {
                 Err(error)
             }
         }
+    }
+
+    /// Complete a committed cold handoff after the caller has waited for the
+    /// exact old API process to exit. Errors leave the outcome unknown and the
+    /// private connection closed; this request is never retried or aborted.
+    pub(crate) fn complete_cold_handoff(
+        &mut self,
+        commit: &fullmag_session::store::DevelopmentHandoffCommit,
+        commit_sha256: &str,
+        candidate_bundle_id: &str,
+        candidate_manifest_sha256: &str,
+    ) -> Result<Value> {
+        if self.completion_attempted {
+            bail!("development API completion is already one-shot");
+        }
+        self.completion_attempted = true;
+        let result = self.submit_cold_handoff_completion(
+            commit,
+            commit_sha256,
+            candidate_bundle_id,
+            candidate_manifest_sha256,
+        );
+        if result.is_err() {
+            self.invalidate_control_stream();
+        }
+        result
+    }
+
+    fn submit_cold_handoff_completion(
+        &mut self,
+        commit: &fullmag_session::store::DevelopmentHandoffCommit,
+        commit_sha256: &str,
+        candidate_bundle_id: &str,
+        candidate_manifest_sha256: &str,
+    ) -> Result<Value> {
+        if self.service_configured {
+            bail!("cold handoff completion is unavailable with a configured runtime service");
+        }
+        commit
+            .validate()
+            .context("invalid committed development handoff")?;
+        if !canonical_uuid(&self.api_instance_id)
+            || !canonical_uuid(&self.nonce)
+            || commit.api_instance_id == self.api_instance_id
+        {
+            bail!("development handoff completion API identities are invalid");
+        }
+        if !lower_hex(commit_sha256, 64)
+            || !lower_hex(candidate_bundle_id, 32)
+            || !lower_hex(candidate_manifest_sha256, 64)
+        {
+            bail!("development handoff completion pins are invalid");
+        }
+        if !lower_hex(&self.scene_document_sha256, 64) {
+            bail!("replacement authoring scene digest is invalid");
+        }
+        match (self.workspace_state, self.session_id.as_deref()) {
+            ("session", Some(session_id)) => {
+                fullmag_session::repository_path::validate_store_id(session_id)
+                    .context("replacement session identity is invalid")?;
+                if self.session_epoch != 1 {
+                    bail!("replacement session epoch is invalid");
+                }
+            }
+            ("no_session", None) if self.session_epoch == 0 => {}
+            _ => bail!("replacement authoring workspace identity is invalid"),
+        }
+
+        let request = CompletionControlRequest {
+            schema: CONTROL_SCHEMA,
+            owner_token: &self.owner_token,
+            api_instance_id: &self.api_instance_id,
+            nonce: &self.nonce,
+            command: ControlCommand::CompleteCold,
+            completion: ColdCompletionRequest {
+                handoff_id: &commit.handoff_id,
+                snapshot_sha256: &commit.snapshot_sha256,
+                target_build_id: &commit.target_build_id,
+                candidate_bundle_id,
+                candidate_manifest_sha256,
+                commit_sha256,
+            },
+        };
+        let mut bytes = serde_json::to_vec(&request)
+            .context("unable to encode development API completion request")?;
+        if bytes.len() >= MAX_REQUEST_BYTES {
+            bail!("development API completion request exceeds its limit");
+        }
+        bytes.push(b'\n');
+        let mut stream = self
+            .stream
+            .take()
+            .context("development API acquisition connection is unavailable")?;
+        write_all_until(
+            &mut stream,
+            &bytes,
+            CONTROL_REQUEST_TIMEOUT,
+            "development API completion request",
+        )
+        .context("development API completion outcome is unknown after request transmission")?;
+        let response_bytes = read_line_until(
+            &mut stream,
+            Duration::from_secs(30),
+            MAX_REQUEST_BYTES,
+            "development API completion outcome is unknown; do not retry",
+        )
+        .context("development API completion outcome is unknown")?;
+        let acknowledgement: ColdCompletionAcknowledgement = serde_json::from_slice(
+            &response_bytes,
+        )
+        .context("development API completion outcome is unknown: invalid acknowledgement")?;
+        if acknowledgement.schema != "fullmag.development-api-completion.v1"
+            || acknowledgement.nonce != self.nonce
+            || acknowledgement.api_instance_id != self.api_instance_id
+            || acknowledgement.old_api_instance_id != commit.api_instance_id
+            || acknowledgement.handoff_id != commit.handoff_id
+            || acknowledgement.snapshot_sha256 != commit.snapshot_sha256
+            || acknowledgement.target_build_id != commit.target_build_id
+            || acknowledgement.accepted_store_binding != commit.accepted_store_binding
+            || acknowledgement.session_id != self.session_id
+            || acknowledgement.session_epoch != self.session_epoch
+            || acknowledgement.scene_document_sha256 != self.scene_document_sha256
+            || !acknowledgement.admission_reopened
+        {
+            bail!("development API completion outcome is unknown: acknowledgement mismatch");
+        }
+        let _ = stream.shutdown(Shutdown::Both);
+        serde_json::to_value(acknowledgement)
+            .context("development API completion acknowledgement could not be returned")
     }
 
     /// Probe-only transport mode for exercising a real committed request whose
@@ -1060,6 +1220,24 @@ struct CommitResponse {
 
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
+struct ColdCompletionAcknowledgement {
+    schema: String,
+    nonce: String,
+    api_instance_id: String,
+    old_api_instance_id: String,
+    handoff_id: String,
+    snapshot_sha256: String,
+    target_build_id: String,
+    accepted_store_binding: String,
+    #[serde(deserialize_with = "deserialize_present_option")]
+    session_id: Option<String>,
+    session_epoch: u64,
+    scene_document_sha256: String,
+    admission_reopened: bool,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 struct HandoffReceipt {
     schema: String,
     snapshot_id: String,
@@ -1495,11 +1673,32 @@ struct ControlRequest<'a> {
 }
 
 #[derive(Serialize)]
+struct CompletionControlRequest<'a> {
+    schema: &'static str,
+    owner_token: &'a str,
+    api_instance_id: &'a str,
+    nonce: &'a str,
+    command: ControlCommand,
+    completion: ColdCompletionRequest<'a>,
+}
+
+#[derive(Serialize)]
+struct ColdCompletionRequest<'a> {
+    handoff_id: &'a str,
+    snapshot_sha256: &'a str,
+    target_build_id: &'a str,
+    candidate_bundle_id: &'a str,
+    candidate_manifest_sha256: &'a str,
+    commit_sha256: &'a str,
+}
+
+#[derive(Serialize)]
 #[serde(rename_all = "snake_case")]
 enum ControlCommand {
     Acquire,
     Confirm,
     Abort,
+    CompleteCold,
 }
 
 #[derive(Deserialize)]
