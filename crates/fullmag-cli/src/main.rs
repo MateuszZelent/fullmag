@@ -104,6 +104,9 @@ fn main() -> Result<()> {
         Command::Runtime(RuntimeCommand::VerifyDevelopmentApiOwner) => {
             control_room::verify_development_api_owner()?;
         }
+        Command::Runtime(RuntimeCommand::InitializeScopedAcceptedStore) => {
+            control_room::initialize_scoped_accepted_store()?;
+        }
         Command::Runtime(RuntimeCommand::VerifyDevelopmentColdIdle { config }) => {
             control_room::verify_development_cold_idle(&config)?;
         }

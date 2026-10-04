@@ -168,6 +168,17 @@ Trwały admission fence pozostaje po Drop rezerwacji i blokuje nowych ownerów;
 zwolnienie wymaga jawnej decyzji lifecycle, nie automatycznego cleanup po błędzie.
 Brak magazynu nie jest dowodem pustego workspace ani zgodą na inicjalizację.
 
+Izolacja danych drugiego workspace nie zmienia namespace źródeł ani pakietu.
+Jawny opcjonalny `FULLMAG_ACCEPTED_STORE_SCOPE` jest kanonicznym niezerowym UUID:
+z bazowego `runs/<worktree>/session-store` wybiera
+`runs/<worktree>/workspaces/<UUID>/session-store`. Analogiczny podkatalog należy
+do user-data root w instalacji. Bez scope pozostaje dotychczasowa ścieżka;
+niepoprawny scope powoduje odmowę, nigdy fallback. Resolver nadal sprawdza
+kanoniczny root, rzeczywiste worktree i marker storage. Scope nie jest ścieżką
+z UI, identyfikatorem fizyki ani zmianą uprawnień solvera. Zarządzana inicjalizacja
+może utworzyć wyłącznie nowy scoped store; zastanych danych nie nadpisuje.
+Własna sonda zapisuje UUID i binding w receipt oraz zachowuje swój magazyn.
+
 Wymagane są: zgodność generated API, regresje błędnego/starego handoffu,
 odrzucenie aktywnego solve i wyścigu Start, ochrony szkiców i awarii restore,
 a także rzeczywisty przebieg Windows i przeglądarki z niepustą geometrią,

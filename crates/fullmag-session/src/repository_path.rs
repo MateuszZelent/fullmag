@@ -163,6 +163,20 @@ pub fn read_bounded_regular_file(root: &Path, relative: &str, maximum: usize) ->
     Ok(bytes)
 }
 
+/// Create a new directory under a trusted local repository root. Existing
+/// leaves are never reused, including after a partially failed initialization.
+/// Parent publication uses the platform's available durability barriers.
+pub fn create_new_directory(root: &Path, relative: &str) -> Result<PathBuf> {
+    crate::writer::require_local_filesystem(root)?;
+    let path = create_parent(root, relative)?;
+    fs::create_dir(&path)?;
+    crate::durability::sync_directory(
+        path.parent()
+            .context("new repository directory has no parent")?,
+    )?;
+    checked_path(root, relative)
+}
+
 pub(crate) fn create_parent(root: &Path, relative: &str) -> Result<PathBuf> {
     checked_path(root, relative)?;
     let mut directory = root.to_path_buf();

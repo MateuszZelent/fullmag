@@ -234,6 +234,9 @@ pub(crate) enum RuntimeCommand {
     /// Internal managed diagnostic for the native CLI owner protocol.
     #[command(hide = true)]
     VerifyDevelopmentApiOwner,
+    /// Initialize only a new explicitly scoped accepted store.
+    #[command(hide = true)]
+    InitializeScopedAcceptedStore,
     /// Internal managed proof of an existing cold accepted-store reservation.
     #[command(hide = true)]
     VerifyDevelopmentColdIdle {

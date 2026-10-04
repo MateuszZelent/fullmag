@@ -51,7 +51,9 @@ odmowę bindingu do osobnego service. Profile resolvera izolują buildy; magazyn
 zaakceptowanych zadań należy do rzeczywistego worktree. Nie przypisujemy
 testowego API do danych aktywnego UI i nie tworzymy fikcyjnej tożsamości
 worktree ani storage. Pozytywny przebieg przejęcie + staging + właściwy binding
-API + cold/warm idle pozostaje **NOT VERIFIED** do zapewnienia legalnej izolacji.
+API + cold/warm idle pozostawał **NOT VERIFIED** w tym checkpointcie.
+[P8-53Z](53z-scoped-accepted-store-positive-idle.md) później zapewnia legalną
+izolację UUID i dowód pozytywnego cold idle; połączony warm idle nadal jest otwarty.
 
 Atomowy commit, graceful shutdown, replacement, nowy pin i hydration UI
 pozostają otwarte. Procenty całego planu bez awansu.

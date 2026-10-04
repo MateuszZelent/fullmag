@@ -1,5 +1,10 @@
 # P8-53 — bezpieczne zastosowanie nowego backendu w workspace
 
+[P8-53Z](53z-scoped-accepted-store-positive-idle.md) zapewnia osobny magazyn
+UUID wewnątrz obecnego storage i pozytywny przebieg przejęcia, stagingu,
+readbacku oraz cold idle dla pustego workspace i modelu. Zarządzany build
+i 121 kontroli natywnych przeszły. Atomowy commit i pełny restart pozostają otwarte.
+
 [P8-53Y](53y-precommit-capsule-readback.md) podłącza natywny ponowny odczyt
 kapsuły/kandydata przed przygotowaniem commit. Kontrole interpretowane (110)
 i natywne (113) przeszły. Odczyt nie zatwierdza shutdown ani restore.

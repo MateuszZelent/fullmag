@@ -2350,6 +2350,57 @@ fn wait_for_api_ready(port: u16, child: &mut std::process::Child, timeout: Durat
     }
 }
 
+/// Explicit initialization of a new scoped store; existing data are refused.
+pub(crate) fn initialize_scoped_accepted_store() -> Result<()> {
+    if !cfg!(windows)
+        || std::env::var("FULLMAG_NATIVE_RUNTIME_ACTIVE").as_deref() != Ok("1")
+        || std::env::var("FULLMAG_STORAGE_PROFILE").as_deref() != Ok("windows-native-fdm-cpu-dev")
+    {
+        bail!("scoped accepted-store initialization requires managed native development");
+    }
+    let scope = std::env::var("FULLMAG_ACCEPTED_STORE_SCOPE")
+        .context("scoped accepted-store initialization requires an explicit scope")?;
+    let uuid = uuid::Uuid::parse_str(&scope).context("invalid accepted-store scope")?;
+    if uuid.is_nil() || uuid.to_string() != scope {
+        bail!("invalid accepted-store scope");
+    }
+    let _launch = crate::development_api_owner::OwnerLaunch::from_environment(true, false)?
+        .context("scoped accepted-store initialization requires managed source identity")?;
+    let repo = repo_root();
+    let root = fullmag_runtime_control::accepted_store::configured_submit_store_root(
+        &repo,
+        &runtime_state_root(&repo),
+    )
+    .context("scoped accepted-store configuration is invalid")?;
+    let runs =
+        fullmag_runtime_control::accepted_store::writable_product_state_path(&PathBuf::from(
+            std::env::var_os("FULLMAG_RUNS_ROOT").context("managed runs root is missing")?,
+        ))
+        .context("managed runs root is invalid")?;
+    let relative = format!("workspaces/{scope}/session-store");
+    if root != runs.join(&relative) {
+        bail!("scoped accepted-store root differs from managed runs");
+    }
+    if root.try_exists()? {
+        bail!("scoped accepted-store already exists; initialization refused");
+    }
+    let checked = fullmag_session::repository_path::create_new_directory(&runs, &relative)
+        .context("scoped accepted-store exclusive creation failed")?;
+    // Initialization is explicit and only follows exclusive creation of a new
+    // leaf. A partial failure is retained; no automatic retry or data cleanup.
+    let store = fullmag_session::SessionStore::open(checked.clone())?;
+    drop(store);
+    let binding = fullmag_runtime_control::accepted_store::store_binding(&checked)
+        .context("initialized accepted-store binding is invalid")?;
+    println!(
+        "{}",
+        serde_json::json!({
+            "schema":"fullmag.scoped-accepted-store-initialization.v1", "scope":scope,"binding":binding,
+        })
+    );
+    Ok(())
+}
+
 /// Managed diagnostic only: own an empty API, exercise the production CLI
 /// owner client, and wait for that child. Never opens a frontend or desktop.
 pub(crate) fn verify_development_api_owner() -> Result<()> {
@@ -2366,6 +2417,27 @@ pub(crate) fn verify_development_api_owner() -> Result<()> {
     }
     let root = repo_root();
     let state_root = runtime_state_root(&root);
+    let base_store = PathBuf::from(
+        std::env::var_os("FULLMAG_RUNS_ROOT").context("owner fixture runs root is missing")?,
+    )
+    .join("session-store");
+    use fullmag_runtime_control::accepted_store::scoped_submit_store_root;
+    let expected_base =
+        fullmag_runtime_control::accepted_store::writable_product_state_path(&base_store)
+            .context("owner fixture base store is invalid")?;
+    if scoped_submit_store_root(&base_store, None).as_ref() != Some(&expected_base) {
+        bail!("unscoped accepted-store location changed");
+    }
+    for invalid in [
+        "../outside",
+        "00000000-0000-0000-0000-000000000000",
+        "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA",
+        "",
+    ] {
+        if scoped_submit_store_root(&base_store, Some(invalid.into())).is_some() {
+            bail!("invalid accepted-store scope resolved to a writable root");
+        }
+    }
     let log_path = fullmag_session::repository_path::checked_path(
         &state_root,
         &format!("owner-probe-{}.log", uuid::Uuid::new_v4().simple()),
@@ -2446,6 +2518,13 @@ pub(crate) fn verify_development_api_owner() -> Result<()> {
     if empty_checked.acknowledgement != empty_staged.acknowledgement {
         bail!("empty capsule commit preparation changed its acknowledgement");
     }
+    let accepted_store =
+        fullmag_runtime_control::accepted_store::configured_submit_store_root(&root, &state_root)
+            .context("owned CLI probe requires its isolated accepted store")?;
+    let empty_idle = acquisition.acquire_cold_idle(&empty_checked, &accepted_store)?;
+    empty_idle.verify_current()?;
+    empty_idle.release_fence()?; // Explicit fixture abort while API admission remains frozen.
+    acquisition.confirm_held()?;
     let create = serde_json::json!({"name":"CLI owner fixture", "backend":"fdm",
                                   "device":"cpu", "precision":"double"});
     let frozen = client
@@ -2492,6 +2571,10 @@ pub(crate) fn verify_development_api_owner() -> Result<()> {
     if scene_checked.acknowledgement != scene_staged.acknowledgement {
         bail!("scene capsule commit preparation changed its acknowledgement");
     }
+    let scene_idle = acquisition.acquire_cold_idle(&scene_checked, &accepted_store)?;
+    scene_idle.verify_current()?;
+    scene_idle.release_fence()?; // Explicit fixture abort, never failure-path cleanup.
+    acquisition.confirm_held()?;
     let service_config_path = std::env::var_os("FULLMAG_DEVELOPMENT_OWNER_PROBE_SERVICE_CONFIG")
         .context("owned CLI probe requires its isolated service configuration")?;
     let service_config = fullmag_session::runtime_service::RuntimeServiceConfig::read(
@@ -2600,6 +2683,7 @@ pub(crate) fn verify_development_api_owner() -> Result<()> {
         serde_json::json!({
             "schema":"fullmag.development-cli-owner-check.v1", "api_pid":pid,
             "api_instance_id":instance, "api_waited":true,
+            "accepted_store_binding":fullmag_runtime_control::accepted_store::store_binding(&accepted_store),
             "handoffs":[empty_staged.acknowledgement,scene_staged.acknowledgement],
             "stage_helpers":[
                 {"pid":empty_staged.helper_pid,"waited":true,"exit_code":0},
@@ -2608,13 +2692,15 @@ pub(crate) fn verify_development_api_owner() -> Result<()> {
                 {"pid":scene_checked.helper_pid,"waited":true,"exit_code":0}
             ],
             "api_exit_code":terminal.code(), "checks":["owned-api-discovery",
-            "static-script-owner-disabled", "foreign-child-refused", "foreign-token-refused",
+            "static-script-owner-disabled", "unscoped-store-location-preserved",
+            "invalid-scoped-store-no-fallback", "foreign-child-refused", "foreign-token-refused",
             "invalid-acquisition-nonce-refused", "empty-authoring-acquired", "http-admission-frozen",
             "abort-reopened-admission", "canonical-scene-acquired", "disconnect-reopened-admission",
             "held-confirmation-preserves-freeze", "confirmation-does-not-renew-expiry",
             "expired-confirmation-refused", "expired-acquisition-reopens-admission",
             "empty-capsule-production-stdin-consumer", "scene-capsule-production-stdin-consumer",
             "empty-capsule-precommit-readback", "scene-capsule-precommit-readback",
+            "empty-staged-bound-api-cold-idle", "scene-staged-bound-api-cold-idle",
             "global-idle-unbound-api-store-refused", "failed-global-idle-invalidates-acquisition",
             "global-idle-foreign-staging-refused", "precommit-foreign-staging-invalidates-acquisition"]
         })

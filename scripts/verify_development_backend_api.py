@@ -171,6 +171,44 @@ def exercise_cli_owner(repo: Path, run_root: Path, manifest: dict, receipt: dict
         FULLMAG_DEVELOPMENT_BACKEND_STATUS_FILE=str(status),
         FULLMAG_DEVELOPMENT_BACKEND_SOURCE=manifest["backend_source_sha256"],
         FULLMAG_DEVELOPMENT_BACKEND_VERSION=manifest["build_version"]["product_version"])
+    scope = str(uuid.uuid4())
+    accepted_store = Path(native["runs_root"]) / "workspaces" / scope / "session-store"
+    assert not os.path.lexists(accepted_store.parent)
+    env.update(FULLMAG_RUNS_ROOT=native["runs_root"], FULLMAG_ACCEPTED_STORE_SCOPE=scope)
+    receipt["accepted_store_scope"] = scope
+    receipt["accepted_store_root"] = str(accepted_store)
+
+    def initialize(label: str, selected_scope: str) -> tuple[int, bytes]:
+        process = subprocess.Popen(
+            [str(binaries / "fullmag.exe"), "runtime", "initialize-scoped-accepted-store"],
+            cwd=repo, env={**env, "FULLMAG_ACCEPTED_STORE_SCOPE": selected_scope},
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL,
+            creationflags=subprocess.CREATE_NO_WINDOW)
+        process_record = dict(label=label, pid=process.pid, waited=False)
+        receipt["processes"].append(process_record)
+        try:
+            output, errors = process.communicate(timeout=20)
+        finally:
+            if process.poll() is None:
+                process.kill()  # Only the fixture initializer that this verifier spawned.
+                process.wait(timeout=10)
+            process_record.update(waited=True, exit_code=process.returncode)
+        (fixture / (label + ".log")).write_bytes(output + errors)
+        return process.returncode, output + errors
+
+    for invalid in ("../outside", str(uuid.UUID(int=0)), "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA"):
+        code, _ = initialize("scope-invalid-" + str(len(receipt["processes"])), invalid)
+        assert code != 0 and not os.path.lexists(accepted_store.parent)
+    code, output = initialize("scoped-store-initialize", scope)
+    assert code == 0
+    frames = [json.loads(line) for line in output.decode().splitlines() if line.startswith('{')]
+    assert len(frames) == 1 and frames[0]["schema"] == "fullmag.scoped-accepted-store-initialization.v1"
+    assert frames[0]["scope"] == scope and accepted_store.is_dir()
+    receipt["accepted_store_binding"] = frames[0]["binding"]
+    code, output = initialize("scoped-store-existing-refused", scope)
+    assert code != 0 and b"already exists; initialization refused" in output
+    receipt["checks"].extend(("scoped-store-invalid-identities-refused", "scoped-store-explicit-new-initialization",
+                              "scoped-store-existing-initialization-refused"))
     log_path = fixture / "cli.log"
     with log_path.open("w", encoding="utf-8") as log:
         child = subprocess.Popen([str(binaries / "fullmag.exe"), "runtime", "verify-development-api-owner"],
@@ -193,6 +231,8 @@ def exercise_cli_owner(repo: Path, run_root: Path, manifest: dict, receipt: dict
     assert len(frames) == 1, frames
     result = frames[0]
     assert result["schema"] == "fullmag.development-cli-owner-check.v1" and result["api_waited"] is True
+    assert result["accepted_store_binding"] == receipt["accepted_store_binding"]
+    receipt["checks"].append("staged-cold-idle-api-binding-matches-initialized-namespace")
     receipt["processes"].append(dict(label="cli-owned-api", pid=result["api_pid"],
         waited=True, exit_code=result["api_exit_code"]))
     for item in result["stage_helpers"]:

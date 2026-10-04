@@ -35,14 +35,49 @@ pub fn configured_submit_store_root(
     let packaged_root = std::env::current_exe()
         .ok()
         .and_then(|executable| crate::python_runtime::packaged_windows_root(&executable));
-    submit_store_root_for_layout(
+    let base_root = submit_store_root_for_layout(
         repo_root,
         runtime_state_root,
         packaged_root.as_deref(),
         std::env::var_os("FULLMAG_PROJECT_STORAGE_ROOT"),
         std::env::var_os("FULLMAG_RUNS_ROOT"),
         std::env::var_os("FULLMAG_WORKTREE_ID"),
-    )
+    )?;
+    scoped_submit_store_root(&base_root, std::env::var_os("FULLMAG_ACCEPTED_STORE_SCOPE"))
+}
+
+/// Resolve an optional isolated accepted-store namespace below an already
+/// validated managed or installed-user-state store root. This never creates
+/// directories; the store owner remains responsible for initialization.
+pub fn scoped_submit_store_root(
+    base_root: &Path,
+    scope: Option<std::ffi::OsString>,
+) -> Option<PathBuf> {
+    let base_root = writable_product_state_path(base_root)?;
+    if base_root.file_name()? != "session-store" {
+        return None;
+    }
+
+    let Some(scope) = scope else {
+        return Some(base_root);
+    };
+    let scope = scope.into_string().ok()?;
+    let parsed_scope = uuid::Uuid::parse_str(&scope).ok()?;
+    if parsed_scope.is_nil() || parsed_scope.to_string() != scope {
+        return None;
+    }
+
+    let base_parent = base_root.parent()?;
+    let scoped_root = writable_product_state_path(
+        &base_parent
+            .join("workspaces")
+            .join(scope)
+            .join("session-store"),
+    )?;
+    if scoped_root.file_name()? != "session-store" || !scoped_root.starts_with(base_parent) {
+        return None;
+    }
+    Some(scoped_root)
 }
 
 pub fn submit_store_root_for_layout(
