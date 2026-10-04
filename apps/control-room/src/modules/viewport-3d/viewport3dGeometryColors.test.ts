@@ -10,7 +10,13 @@ import {
   canApplyVertexScalarColorBuffer,
   canApplyVertexScalarColors,
 } from "./viewport3dGeometryColors";
+import { srgbToLinearChannel } from "./viewport3dColorSpace";
 import { magnitudeColorRgb } from "./viewport3dVectorColoring";
+
+// Vertex colour buffers hold linear-sRGB values; palettes are authored in sRGB.
+function linearMagnitudeColor(t: number): number[] {
+  return magnitudeColorRgb(t).map(srgbToLinearChannel);
+}
 
 function vectorField(values: number[], nComp = 3): DecodedFieldVector {
   return {
@@ -46,7 +52,7 @@ describe("viewport3dGeometryColors", () => {
     const firstVersion = firstAttribute.version;
 
     expect(Array.from(firstAttribute.array)).toEqual(
-      Array.from(Float32Array.from([...magnitudeColorRgb(0), ...magnitudeColorRgb(1)])),
+      Array.from(Float32Array.from([...linearMagnitudeColor(0), ...linearMagnitudeColor(1)])),
     );
 
     expect(
@@ -68,7 +74,7 @@ describe("viewport3dGeometryColors", () => {
     expect(secondAttribute).toBe(firstAttribute);
     expect(secondAttribute.version).toBeGreaterThan(firstVersion);
     expect(Array.from(secondAttribute.array)).toEqual(
-      Array.from(Float32Array.from([...magnitudeColorRgb(1), ...magnitudeColorRgb(0)])),
+      Array.from(Float32Array.from([...linearMagnitudeColor(1), ...linearMagnitudeColor(0)])),
     );
   });
 

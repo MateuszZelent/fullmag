@@ -3496,9 +3496,9 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
         .get(&observation_source.snapshot_object_ref)
         .unwrap()
         .expect("observation accepted-state snapshot is stored in CAS");
-    let snapshot: fullmag_runner::FdmCpuAcceptedStateSnapshotV1 =
+    let state_snapshot: fullmag_runner::FdmCpuAcceptedStateSnapshotV1 =
         serde_json::from_slice(&snapshot_bytes).unwrap();
-    snapshot.validate().unwrap();
+    state_snapshot.validate().unwrap();
     fullmag_runtime_control::validate_study_task_completion(&store, &claim).unwrap();
     assert!(manifest.outputs.iter().any(|output| {
         output.port_id == "final_state"

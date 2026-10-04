@@ -4,7 +4,7 @@ import { renderToString } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ControlRoomApiError } from "@/kernel/api/ControlRoomApi";
-import { MODEL_SCENE_PATH } from "@/kernel/api/apiPaths";
+import { MODEL_SCENE_PATH, SESSIONS_PATH, SIMULATION_PREPARATION_PATH } from "@/kernel/api/apiPaths";
 import { CommandRegistry } from "@/kernel/commands/CommandRegistry";
 import { DiagnosticRecorderController } from "@/kernel/performance/diagnostic-recorder/DiagnosticRecorderController";
 import { EventBus } from "@/kernel/events/EventBus";
@@ -21,6 +21,7 @@ import {
   resetSharedResourceRuntimeStoreForTests,
   sharedResourceRuntimeStore,
 } from "@/kernel/resources/ResourceRuntimeStore";
+import { sessionScopedResourceKey } from "@/kernel/resources/sessionResourceIdentity";
 import { SESSION_STATUS_RESOURCE_KEY } from "@/kernel/resources/useSessionStatus";
 import { SelectionController } from "@/kernel/selection/SelectionController";
 import type { KernelApi } from "@/kernel/types";
@@ -28,6 +29,16 @@ import { RIBBON_COMMANDS } from "@/modules/ribbon/ribbonCommands";
 import { Viewport3DObjectMoveResourceSurface } from "@/modules/viewport-3d/Viewport3DObjectMoveInteraction";
 
 import { ObjectMoveToolController } from "./ObjectMoveToolController";
+
+// The scene hook reads the session-scoped key once identity is confirmed.
+const SESSION_A_SCENE_KEY = sessionScopedResourceKey(
+  {
+    requestScopeEpoch: "test-api:session-a",
+    sessionEpoch: "session-a@1",
+    sessionId: "session-a",
+  },
+  MODEL_SCENE_PATH,
+);
 
 const SCENE_A_41 = scene(41, [
   { id: "magnet-a", role: "magnet", translation: [1e-9, 0, 0] },
@@ -64,7 +75,9 @@ describe("mounted viewport object move integration", () => {
         <Viewport3DObjectMoveResourceSurface />
       </KernelContext.Provider>,
     );
-    expect(serverHtml).toContain('data-scene-status="loading"');
+    // Scene loading is gated on a confirmed session identity, so the
+    // deterministic server render stays idle until the client confirms it.
+    expect(serverHtml).toContain('data-scene-status="idle"');
     expect(serverHtml).not.toContain("move-gizmo:magnet-a");
 
     const mounted = await hydrateFixture(fixture, serverHtml);
@@ -130,8 +143,14 @@ describe("mounted viewport object move integration", () => {
         object_id: "magnet-a",
         transform: { translation: [5e-9, 0, 0] },
       });
-      expect(fixture.invalidate).toHaveBeenCalledTimes(7);
-      expect(fixture.invalidate.mock.calls.every(([, revision]) => revision === 43)).toBe(true);
+      // Geometry dependents: scene, validation, diagnostics, readiness, status,
+      // preparation, current mesh build and latest successful mesh build.
+      expect(fixture.invalidate).toHaveBeenCalledTimes(8);
+      expect(
+        fixture.invalidate.mock.calls.every(([resourceKey, revision]) =>
+          revision === (resourceKey === SIMULATION_PREPARATION_PATH ? "scene:43" : 43)
+        ),
+      ).toBe(true);
       expect(conflictPanel(mounted.container)).toBeNull();
       expect(surface(mounted.container).getAttribute("data-draft-reset-revision")).toBe("1");
       expect(surface(mounted.container).getAttribute("data-orbit-blocked")).toBe("false");
@@ -155,18 +174,18 @@ describe("mounted viewport object move integration", () => {
 
       await activateMove(fixture, SCENE_A_41);
       sharedResourceRuntimeStore.updateData(
-        MODEL_SCENE_PATH,
+        SESSION_A_SCENE_KEY,
         scene(42, [{ id: "magnet-b", role: "magnet", translation: [0, 0, 0] }]),
         42,
       );
       await flushResource();
       expect(fixture.objectMoveTool.getSnapshot()).toBeNull();
 
-      sharedResourceRuntimeStore.updateData(MODEL_SCENE_PATH, SCENE_A_41, 43);
+      sharedResourceRuntimeStore.updateData(SESSION_A_SCENE_KEY, SCENE_A_41, 43);
       await flushResource();
       await activateMove(fixture, SCENE_A_41);
       sharedResourceRuntimeStore.updateData(
-        MODEL_SCENE_PATH,
+        SESSION_A_SCENE_KEY,
         scene(44, [{ id: "magnet-a", role: "auxiliary", translation: [1e-9, 0, 0] }]),
         44,
       );
@@ -197,6 +216,13 @@ describe("mounted viewport object move integration", () => {
       });
       expect(conflictPanel(mounted.container)).not.toBeNull();
 
+      // Session B is both current in the collection and reported by status, so
+      // its identity is confirmed and A's cached scene/conflict must not leak.
+      sharedResourceRuntimeStore.updateData(
+        SESSIONS_PATH,
+        sessionCollection("session-b"),
+        "sessions:2",
+      );
       sharedResourceRuntimeStore.updateData(
         SESSION_STATUS_RESOURCE_KEY,
         sessionStatus("session-b", "session-b@2", 42),
@@ -233,7 +259,11 @@ function createFixture(options: {
   const kernel = {
     api: {
       model: { commitTransaction, scene: sceneLoad },
-      sessions: { current: { status: vi.fn().mockResolvedValue(sessionStatus("session-a", "session-a@1", 41)) } },
+      sessions: {
+        current: { status: vi.fn().mockResolvedValue(sessionStatus("session-a", "session-a@1", 41)) },
+        // Session identity is confirmed against the session collection.
+        list: vi.fn().mockResolvedValue(sessionCollection("session-a")),
+      },
     },
     bus,
     commands,
@@ -269,7 +299,8 @@ async function hydrateFixture(
     await Promise.resolve();
     await Promise.resolve();
   });
-  await flushResource();
+  // Session collection -> session status -> scoped scene: one hop per flush.
+  for (let hop = 0; hop < 4; hop += 1) await flushResource();
   return {
     consoleError,
     container,
@@ -338,6 +369,20 @@ function sessionStatus(sessionId: string, sessionEpoch: string, revision: number
     resources: { scene_revision: revision },
     session: { session_epoch: sessionEpoch, session_id: sessionId, request_scope_epoch: `test-api:${sessionId}` },
   } as never;
+}
+
+function sessionCollection(currentSessionId: string) {
+  return {
+    schema_version: "2.0.0",
+    sessions: [
+      {
+        current: true,
+        name: currentSessionId,
+        session_id: currentSessionId,
+        status: "running",
+      },
+    ],
+  };
 }
 
 function deferred<T>() {

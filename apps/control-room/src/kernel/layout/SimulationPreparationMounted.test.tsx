@@ -1119,7 +1119,21 @@ function makeKernel({
   modules.register(footerManifest);
   const kernel = {
     api: {
-      sessions: { current: { status: loadStatus } },
+      sessions: {
+        current: { status: loadStatus },
+        // Session identity is confirmed against the session collection.
+        list: vi.fn(async () => ({
+          schema_version: "2.0.0",
+          sessions: [
+            {
+              current: true,
+              name: "preparation test",
+              session_id: "session-preparation-test",
+              status: "running",
+            },
+          ],
+        })),
+      },
       simulation: { preparation: loadPreparation },
     },
     bus,

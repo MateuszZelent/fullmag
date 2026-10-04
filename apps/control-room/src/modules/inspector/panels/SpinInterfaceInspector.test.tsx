@@ -51,7 +51,8 @@ describe("SpinInterfaceInspectorPanel", () => {
     expect(source).toContain("const commit = action === \"delete\"");
     expect(source).toContain("captureAuthoringMutationFence(");
     expect(source).toContain("validateTransport(validationRequest(), { sessionScopeKey })");
-    expect(source).toContain("request, requestOptions");
+    expect(source).toContain("authoringWriteOptions(null, mutationContext.sessionScopeKey)");
+    expect(source).toContain("}, requestOptions);");
     expect(source).toContain("mutationContext.isCurrentSessionScope?.() !== true");
     expect(source).toContain("${selected ? \"Replace\" : \"Create\"} spin interface");
     expect(source).toContain("baseRevision ?? transports.data!.scene_revision");

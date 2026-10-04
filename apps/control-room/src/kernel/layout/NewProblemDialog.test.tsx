@@ -8,6 +8,7 @@ import {
   SESSIONS_PATH,
   SESSION_CURRENT_PATH,
 } from "../api/apiPaths";
+import { PendingFormRegistry } from "../authoring/PendingFormRegistry";
 import { EventBus } from "../events/EventBus";
 import type { KernelEventMap } from "../events/eventTypes";
 import { KernelContext } from "../KernelContext";
@@ -257,6 +258,8 @@ async function mountDialog({
   const kernel = {
     api: { sessions: { create } },
     bus,
+    // Creation goes through the pending-form guard, which needs the real registry.
+    pendingForms: new PendingFormRegistry(),
     resources: invalidations,
   } as unknown as KernelApi;
   const onOpenChange = vi.fn();

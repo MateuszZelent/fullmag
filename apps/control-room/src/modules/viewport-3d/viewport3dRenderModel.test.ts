@@ -38,6 +38,7 @@ import {
   buildViewport3DTargetFieldBuffer as buildViewport3DTargetFieldBufferWithResourceKey,
 } from "./model/viewport3DTargetFieldBuffer";
 import { buildViewport3DTopologyIndexBundle } from "./viewport3dTopologyIndexModel";
+import { srgbToLinearChannel } from "./viewport3dColorSpace";
 import { magnitudeColorRgb } from "./viewport3dVectorColoring";
 
 type TargetFieldBufferOptions = Parameters<
@@ -2911,11 +2912,11 @@ describe("viewport3dRenderModel", () => {
     expect(colors).toBeDefined();
     expect(Array.from(colors!.slice(0, 6))).toEqual([0, 0, 0, 0, 0, 0]);
     expect(Array.from(colors!.slice(6, 9))).toEqual(
-      Array.from(Float32Array.from(magnitudeColorRgb(0))),
+      Array.from(Float32Array.from(magnitudeColorRgb(0).map(srgbToLinearChannel))),
     );
     expect(Array.from(colors!.slice(9, 12))).toEqual([0, 0, 0]);
     expect(Array.from(colors!.slice(12, 15))).toEqual(
-      Array.from(Float32Array.from(magnitudeColorRgb(1))),
+      Array.from(Float32Array.from(magnitudeColorRgb(1).map(srgbToLinearChannel))),
     );
   });
 

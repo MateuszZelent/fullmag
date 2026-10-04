@@ -12,8 +12,9 @@ vi.mock("../InspectorTabState", () => ({
   useInspectorActiveTab: () => "policy",
 }));
 
-vi.mock("@/kernel/KernelContext", () => ({
-  useKernel: () => ({
+vi.mock("@/kernel/KernelContext", async () => {
+  const { createContext } = await import("react");
+  const kernel = {
     api: {
       meshing: {
         replaceObjectPolicy: vi.fn(),
@@ -29,8 +30,12 @@ vi.mock("@/kernel/KernelContext", () => ({
     resources: {
       invalidate: vi.fn(),
     },
-  }),
-}));
+  };
+  return {
+    KernelContext: createContext<unknown>(kernel),
+    useKernel: () => kernel,
+  };
+});
 
 vi.mock("@/kernel/resources/studyRuntimeResources", () => ({
   shouldLoadRuntimeMeshBuild: () => true,
@@ -59,6 +64,11 @@ const sessionStatusMock = {
 
 vi.mock("@/kernel/resources/useSessionStatus", () => ({
   SESSION_STATUS_RESOURCE_KEY: "session:status",
+  useSessionResourceIdentity: () => ({
+    requestScopeEpoch: "scope-test",
+    sessionEpoch: "epoch-test",
+    sessionId: "session-test",
+  }),
   useSessionStatus: () => sessionStatusMock,
   useSessionStatusSelector: (selector: (status: typeof sessionStatusMock) => unknown) =>
     selector(sessionStatusMock),

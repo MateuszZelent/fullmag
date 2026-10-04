@@ -31,6 +31,27 @@ function DatasetHarness({ datasetRef, onRevision }: { datasetRef: string | null;
   return null;
 }
 
+const sessionStatus = {
+  capabilities: { binary_fields: true },
+  domain: { discretization: "fdm" },
+  resources: { scene_revision: 1 },
+  run: null,
+  session: {
+    request_scope_epoch: "api-instance:test",
+    session_epoch: "test-session@1",
+    session_id: "test-session",
+  },
+};
+// Session identity is confirmed against the session collection before any
+// session-scoped resource loads.
+const sessionsApi = {
+  current: { status: async () => sessionStatus },
+  list: async () => ({
+    schema_version: "2.0.0",
+    sessions: [{ current: true, name: "test", session_id: "test-session", status: "running" }],
+  }),
+};
+
 describe("useAnalysisDatasetData", () => {
   it("does not load table rows without a selected dataset", () => {
     expect(shouldLoadAnalysisDatasetRows({ datasetRef: null, enabled: true, hasSchema: true })).toBe(false);
@@ -60,7 +81,7 @@ describe("useAnalysisDatasetData", () => {
         detail: vi.fn(async () => ({ revision: 1 })),
         list: vi.fn(async () => ({ revision: 1, tables: [{ table_id: "table-4" }, { table_id: "table-5" }] })),
         rowsBinary,
-      } } }, bus, diagnosticRecorder: new DiagnosticRecorderController({ config: { enabled: false } }), resources,
+      } }, sessions: sessionsApi }, bus, diagnosticRecorder: new DiagnosticRecorderController({ config: { enabled: false } }), resources,
     } as unknown as KernelApi;
     const root = createRoot(container as unknown as Element);
     const revisions: Array<string | number | null> = [];
