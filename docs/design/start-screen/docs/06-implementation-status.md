@@ -21,7 +21,7 @@ desktop application against real project archives.
 | 4 | Thumbnails, card grid, result preview, LRU | Done in the renderer | typecheck, lint, browser. **No frame scrubber** (host provides no frames); the host reads `project/preview/thumb.png` (a PNG up to 256 kB) into the index; nothing writes that file yet |
 | 5 | Authors, History, Runs, BibTeX | Done: read side and writer | browser (three tabs, mocked host); `cargo check`. Writer records edit saves only, see §3 |
 | 6 | Continue card | Done in the renderer | browser (resumable / not / host error). `resume_run`, `discard_checkpoint` do not exist |
-| 7 | Compute environment | Done, front + host | `cargo check`, typecheck; **not** against a real GPU |
+| 7 | Compute environment | Rozbudowany widget i szczegóły Settings; istniejące zasoby runtime v2 | Przeglądarka: rzeczywisty RTX 4080 SUPER, 48 wątków CPU i 10 kontroli stanów/motywów/układu. Lint zmiany i kontrole API/architektury: PASS. Pełna kontrola typów/lint: błędy poza zakresem; szczegóły w [09-compute-environment.md](09-compute-environment.md) |
 | 8 | Templates gallery | Gallery plus a validated canonical Python script per template (save, copy) | each script loads to ProblemIR with the repository Python package (loader only, no solver). **Create project from template stays disabled with its reason**: the API has no operation that turns script text into a project |
 | 9 | Import | `.fms`; `.mx3` as a reported subset translator | translator tests and a Python load of every generated fixture script. Opening the translated script as a project is disabled for the same reason as templates; save/copy work. No other importer |
 | 10 | Learn, Settings, About | Done | browser |

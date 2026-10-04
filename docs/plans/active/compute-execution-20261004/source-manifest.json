@@ -1,0 +1,183 @@
+{
+  "schema": "fullmag.source-audit-manifest.v1",
+  "captured_at": "2026-10-04T20:59:31.517512+00:00",
+  "scope": "compute execution architecture design, read-only source audit",
+  "head": "80e2b612e9075035ee386ac8dd89d3a809bbf6c9",
+  "branch": "master",
+  "working_tree": "shared, dirty; hashes identify actual read files, not a clean commit snapshot",
+  "verification": "source/doc inspection only; no runtime, build, unit compilation or scientific qualification",
+  "files": [
+    {
+      "path": "apps/control-room/src/kernel/resources/runtimeExplorerResources.ts",
+      "sha256": "0f383ae9eab50aa809f61950b284b945563ebacf5e3f7952b6f676e2e5dc6f4c"
+    },
+    {
+      "path": "apps/control-room/src/modules/explorer/builders/jobExplorerNodes.ts",
+      "sha256": "2056a8db4931ce420115174161f4f012e9440d706b8b17f9fdf5491429f39fc4"
+    },
+    {
+      "path": "apps/control-room/src/modules/inspector/panels/StudyInspectorPanel.tsx",
+      "sha256": "77e4c888ee83970c0f13b6278221afa3330a0cb084336733162777b189b84ae1"
+    },
+    {
+      "path": "apps/control-room/src/modules/start/model/startSettings.ts",
+      "sha256": "6dfb5aff1d302a7d07378da8342c20072eeb664f2493cafeb4b7d8af131cbdf9"
+    },
+    {
+      "path": "apps/control-room/src/modules/start/model/useComputeProbe.ts",
+      "sha256": "471fc0421306f1902e3319c6560d24cdc64b2e3cab321a949f1ff74f6ff401c9"
+    },
+    {
+      "path": "backends/fdm/api/c_api.cpp",
+      "sha256": "00562b37c2a2a823f1fd5578242c2d3fe01d877b3ce3e3dacbeaa1e9035a1300"
+    },
+    {
+      "path": "backends/fem/cpu/mfem/runtime/availability.cpp",
+      "sha256": "83ae1c7e5b45a8eec34d218f8d775f4832dba1c61eb2c6f8cb5b7d4926d186b3"
+    },
+    {
+      "path": "backends/fem/cpu/mfem/runtime/cpu_threads.cpp",
+      "sha256": "b6952b3fc8884d90bdc703fc780c529173233d7a12707859b698dbd1903ba6e7"
+    },
+    {
+      "path": "backends/fem/cpu/mfem/runtime/mfem_context.cpp",
+      "sha256": "b4519336ce4549c094d2dd6c991cf3fc605abb5f23fbe5a770609ad587dbcf01"
+    },
+    {
+      "path": "backends/fem/cpu/mfem/runtime/mpi_init.hpp",
+      "sha256": "0d05d78421745e2178ef45c90c802173d28070d5278da5b614eb37f3917ac8c8"
+    },
+    {
+      "path": "compose.windows.yaml",
+      "sha256": "a62de3dfd592bbdc684c1a437c2e9ed1546efc68d8110c4c85aef039a2bb1270"
+    },
+    {
+      "path": "crates/fullmag-api/src/accepted_study_supervisor.rs",
+      "sha256": "b33bcf885609f786bd6afb8beab7b28697d8ae872209817332831c73d4cbc096"
+    },
+    {
+      "path": "crates/fullmag-api/src/accepted_study_worker.rs",
+      "sha256": "5033ae7b556fc08f016e09c6880163d076a6787ae975cfa41dc177c427a00cfc"
+    },
+    {
+      "path": "crates/fullmag-api/src/resource_pool_main.rs",
+      "sha256": "bdb77d573a2f82001a19d3891c7ca05b43b113bc0cadea3a8de335595b20077a"
+    },
+    {
+      "path": "crates/fullmag-api/src/router_v2/handlers/persistence/projects.rs",
+      "sha256": "588e19dcc2093e15b8624f753e21f6ca5b703bb70bc1ea56612b193ce7ee55bc"
+    },
+    {
+      "path": "crates/fullmag-api/src/router_v2/handlers/platform/runtime_service.rs",
+      "sha256": "5df7686042a78353614091ce6a426aefd975a6a3c665724522d749236a52632e"
+    },
+    {
+      "path": "crates/fullmag-api/src/router_v2/mod.rs",
+      "sha256": "7f6f6bcaf9f2aac3ab348cd7f7d2e6ca325aec11f3675a03a249d152812be477"
+    },
+    {
+      "path": "crates/fullmag-api/src/runtime_service_main.rs",
+      "sha256": "9f7290f253f19e19dcf4b5764c4ca797aed65841260a4d27815903a68f0ed765"
+    },
+    {
+      "path": "crates/fullmag-api/src/schemas/projects.rs",
+      "sha256": "78f5cba210d146010fc5bd9bc1337dfe60fc83ae46c13e32478e4c6039a97fd9"
+    },
+    {
+      "path": "crates/fullmag-api/src/schemas/runtime_service.rs",
+      "sha256": "23915c30ab34bb991783cb172eb8a5e7ea101202fb68b10ffee6183952272969"
+    },
+    {
+      "path": "crates/fullmag-api/src/types.rs",
+      "sha256": "b13e26e2c16c0bcf4df8010b91d5ec1c282f03bede8593c27f5019e7c9a3163a"
+    },
+    {
+      "path": "crates/fullmag-application/src/run_spec.rs",
+      "sha256": "5a1e855b8348367e246ba69f51566b096856e49b3e6a6bd47cf83edfd684d106"
+    },
+    {
+      "path": "crates/fullmag-authoring/src/study_contract.rs",
+      "sha256": "11c77e2e7cedd1860255f5d3bf108dc618035e3c8ed190a197b0038d900b2b07"
+    },
+    {
+      "path": "crates/fullmag-cli/src/orchestrator.rs",
+      "sha256": "806e436029c91f91a8b714716a1b1b5e18b387ea3c614c7d1d0332820c963059"
+    },
+    {
+      "path": "crates/fullmag-cli/src/step_utils.rs",
+      "sha256": "997b8a50196b21abce120595b20f0fa8c1e7800af714d84dd5a3eced519000aa"
+    },
+    {
+      "path": "crates/fullmag-engine/src/hpc_runtime.rs",
+      "sha256": "0a350bbcc06dba19d1d87758aeeb1a633dd1be87a49846f1bafe3f1a19a7eb6d"
+    },
+    {
+      "path": "crates/fullmag-plan/src/study_catalog.rs",
+      "sha256": "f32efe4887a85a39ec35fc04287aa9a39d45b05cd55cdf64db9cdd4ca1e45abe"
+    },
+    {
+      "path": "crates/fullmag-plan/src/study_lowering.rs",
+      "sha256": "44d0ab632770e8c2fdb6e20a8e93054346dbc0af2d09060bec55d6afd741c630"
+    },
+    {
+      "path": "crates/fullmag-runner/src/dispatch.rs",
+      "sha256": "71f1327318f81fde4aa2b1ef60254aec944eed1c0fae6e7730c9cef5ba5465ef"
+    },
+    {
+      "path": "crates/fullmag-runner/src/lib.rs",
+      "sha256": "66d2f58ff1beaffcfcbc4994301d1b6b795d9f2f2d9190458cdfe712894331f0"
+    },
+    {
+      "path": "crates/fullmag-runtime-control/src/local_resources.rs",
+      "sha256": "744ed42369449280f94c700a35e3aa7edb3286494d47edaffe20d060ea583063"
+    },
+    {
+      "path": "crates/fullmag-runtime-control/src/scheduler.rs",
+      "sha256": "60f14666f7bb15108c5f9bc6db0461b838ec1b3945a0a7ce80a8b6d6a8002037"
+    },
+    {
+      "path": "crates/fullmag-runtime-control/src/study.rs",
+      "sha256": "93f83c44bec6712bd92d44760d27a4b0c2c602868d613efaf691a44117dbb168"
+    },
+    {
+      "path": "crates/fullmag-session/src/runtime_service.rs",
+      "sha256": "37c4722f81d34dbc365aa9bbd2079b2892f9bda24011a78b88ab2a2cdb65e9c2"
+    },
+    {
+      "path": "crates/fullmag-session/src/store.rs",
+      "sha256": "d24e902b782d1e9471d63ee6c9b388835eb4a84c31c829fdcc24f92609bdcb76"
+    },
+    {
+      "path": "docs/specs/project-output-storage.md",
+      "sha256": "553ae17841ca4fbaa3e263f4ebab67b46c0eef265667f203adc80c2e08f1b9c4"
+    },
+    {
+      "path": "justfile",
+      "sha256": "6251a16f51c27d5129842c2bfcec61a52c30d56dd6736ae420d23a49932b7e7c"
+    },
+    {
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_infra.py",
+      "sha256": "4b6972792f0cb1b9c5d00b5543642c24377a38f903cd23b2fe3a688195a90588"
+    },
+    {
+      "path": "packages/fullmag-py/src/fullmag/model/problem.py",
+      "sha256": "5de64919b447d4616fb98ec358ae2ee13b8c3e68b5d7f4ea9ecb9e49f87d1658"
+    },
+    {
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "sha256": "617c6b03f82bc7bda8fc54a8e978bd92da0a1b0e7222a38598c3771cbeff5197"
+    },
+    {
+      "path": "scripts/export_fem_gpu_runtime.sh",
+      "sha256": "0ad1f6c7dfdb952bb027ad1edeb2652fd2dc0fc16451b00c5baac4f69047f9fa"
+    },
+    {
+      "path": "scripts/windows/run_fullmag.ps1",
+      "sha256": "17af00efd370a3fc363cae7c66484a6c540cafbd1a76bd25864af19966ea3225"
+    },
+    {
+      "path": "scripts/windows/run_fullmag_fem.ps1",
+      "sha256": "d22da4381693b9d7913bfa3061412cac76fbd152f902202469ece5f099609a2a"
+    }
+  ]
+}

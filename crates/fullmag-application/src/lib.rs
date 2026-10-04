@@ -9,12 +9,15 @@
 mod application;
 mod coordinator;
 mod execution;
+mod execution_profile;
+mod execution_profile_binding;
 mod file_repository;
 mod preparation;
 mod project;
 mod repository;
 mod run_spec;
 mod study_artifact;
+mod task_execution;
 
 pub use application::{
     ActiveExecution, ActiveExecutionPolicy, ApplicationError, CloseRequest, CloseResult,
@@ -33,8 +36,13 @@ pub use execution::{
     ResourceLeaseRegistry, RetryAction, RetryDecision, RetryTrigger, ScientificAssessment,
     TaskClaim, TaskId, TaskLifecycle, TaskReadiness, TaskRecord, WorkerCommand,
     WorkerCommandEnvelope, WorkerCommandInbox, WorkerEvent, WorkerEventEnvelope,
-    WorkerInboxCheckpoint, WorkerProtocolLedger, RESOLVED_TASK_INPUT_SCHEMA, RETRY_DECISION_SCHEMA,
+    WorkerInboxCheckpoint, WorkerProtocolLedger, LEGACY_RESOLVED_TASK_INPUT_SCHEMA,
+    RESOLVED_TASK_INPUT_SCHEMA, RETRY_DECISION_SCHEMA,
     WORKER_INBOX_SCHEMA, WORKER_PROTOCOL_SCHEMA,
+};
+pub use execution_profile_binding::bind_materialized_execution;
+pub use execution_profile::{
+    materialize_execution_request, validate_execution_materialization,
 };
 pub use file_repository::{FileProjectRepository, FileRepositoryError};
 pub use preparation::{

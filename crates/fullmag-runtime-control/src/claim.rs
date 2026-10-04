@@ -174,12 +174,48 @@ pub(crate) fn claimed_task_resource_compatibility(
         .as_ref()
         .and_then(|plan| plan.provenance.fem_eigen_execution_resolution.as_ref())
         .map(|resolution| resolution.resolved_device);
-    Ok(solver_resource_compatibility(
-        &specification.requested_execution.device,
+    let catalog_entry = accepted
+        .catalog
+        .entries()
+        .iter()
+        .find(|entry| entry.step_id() == study_step.step_id)
+        .context("accepted task claim has no immutable ProblemIR")?;
+    let task_request = specification
+        .requested_execution
+        .for_problem(catalog_entry.problem())
+        .map_err(|error| {
+            anyhow::anyhow!(
+                "accepted task `{}` execution request is invalid: {error}",
+                study_step.step_id
+            )
+        })?;
+    let compatibility = solver_resource_compatibility(
+        &task_request.device,
         &claim.lease.kind,
         &claim.lease.budget,
         planned_device,
-    )?)
+    )?;
+    if compatibility == ClaimedTaskResourceCompatibility::Compatible {
+        if let Some(required) = task_request.minimum_resources.as_ref() {
+            if !resource_budget_meets_requested_minimum(required, &claim.lease.budget) {
+                return Ok(ClaimedTaskResourceCompatibility::Incompatible(format!(
+                    "claimed resource budget does not meet the minimum resources for study step `{}`",
+                    study_step.step_id
+                )));
+            }
+        }
+    }
+    Ok(compatibility)
+}
+
+fn resource_budget_meets_requested_minimum(
+    required: &fullmag_application::RequestedResourceBudget,
+    offered: &ResourceBudget,
+) -> bool {
+    offered.cpu_millis >= required.cpu_millis
+        && offered.memory_bytes >= required.memory_bytes
+        && offered.gpu_memory_bytes >= required.gpu_memory_bytes
+        && offered.storage_bytes >= required.storage_bytes
 }
 
 fn validate_claimed_task_resource(store: &SessionStore, claim: &TaskClaim) -> Result<()> {
@@ -252,8 +288,11 @@ fn invalid_solver_resource_budget(
 
 #[cfg(test)]
 mod tests {
-    use super::{solver_resource_compatibility, ClaimedTaskResourceCompatibility};
-    use fullmag_application::{ResourceBudget, ResourceKind};
+    use super::{
+        resource_budget_meets_requested_minimum, solver_resource_compatibility,
+        ClaimedTaskResourceCompatibility,
+    };
+    use fullmag_application::{RequestedResourceBudget, ResourceBudget, ResourceKind};
 
     fn budget(
         cpu_millis: u64,
@@ -301,6 +340,36 @@ mod tests {
                 .unwrap(),
             ClaimedTaskResourceCompatibility::Compatible
         );
+    }
+
+    #[test]
+    fn direct_admission_checks_every_per_step_resource_minimum() {
+        let required = RequestedResourceBudget {
+            cpu_millis: 500,
+            memory_bytes: 2_000,
+            gpu_memory_bytes: 8_000,
+            storage_bytes: 4_000,
+        };
+        assert!(resource_budget_meets_requested_minimum(
+            &required,
+            &budget(500, 2_000, 8_000, 4_000)
+        ));
+        assert!(!resource_budget_meets_requested_minimum(
+            &required,
+            &budget(499, 2_000, 8_000, 4_000)
+        ));
+        assert!(!resource_budget_meets_requested_minimum(
+            &required,
+            &budget(500, 1_999, 8_000, 4_000)
+        ));
+        assert!(!resource_budget_meets_requested_minimum(
+            &required,
+            &budget(500, 2_000, 7_999, 4_000)
+        ));
+        assert!(!resource_budget_meets_requested_minimum(
+            &required,
+            &budget(500, 2_000, 8_000, 3_999)
+        ));
     }
 }
 

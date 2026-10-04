@@ -59,5 +59,29 @@ Właściciele zmian: rodzic — filesystem lease/safety, formularz, facade, doku
   PID 249132, bundle `3ce0f1a6852543eabc545bbc08da369b`. Solver jest bezczynny,
   model sesji `session-18db45d639cc30f00003cd2c` ma revision 3 i został zachowany
   wraz z digestami w `storage/runs/diagnostics/native-recovery/3cbcebd24c384428b1341c98a77452a6`.
-  Pytanie o zatrzymanie tego konkretnego procesu jest oczekujące. Pełny rebuild
-  i nowy start pozostają `NOT VERIFIED` do bezpiecznego odzyskania uruchomienia.
+  Użytkownik zatwierdził zatrzymanie tego procesu. Przed zakończeniem ponownie
+  sprawdzono PID, czas utworzenia, ścieżkę EXE, bezczynność solvera i zgodność
+  zachowanego modelu. Potwierdzono recovery z archiwizacją poprzedniego zapisu:
+  `native-runtime-prior-fff4efc399d04177aa78ea655667267b.json` w runtime root głównego checkoutu.
+- Lokalny pakiet natywny został zbudowany, a kolejne wywołanie `windows-ui dev 3197 auto dev`
+  skompilowało CLI/API i desktop. Publikację kolejnego pakietu odrzucił guard zmienionych
+  źródeł backendu. Współdzielony master otrzymał równolegle zmiany Python, IR i plannera;
+  fingerprint pozostawał niestabilny przez osobną obserwację 40 sekund. Nie uruchamiamy
+  tego niepotwierdzonego pakietu ani równoległego ciężkiego buildu.
+- Nasz zintegrowany worktree i lokalny branch usunięto po potwierdzeniu czystości,
+  zerowej liczby unikalnych commitów, braku procesów oraz braku mountów w 16 kontenerach.
+  Dowody buildów i przeglądarki pozostały w storage. Rejestr zachowuje stan `review`,
+  ponieważ próba zapisu rzeczywistych wyników i nowy start UI nadal są `NOT VERIFIED`.
+- Przygotowano niezmieniony istniejący przykład `fdm_cpu_relax_smoke.py` w kanonicznym
+  `storage/runs/verification/project-output-storage/1079e50fd49b474ba39576322540cd7f`.
+  Ma posłużyć do pomiaru zapisu Zarr i finalizacji prywatnego tmp po stabilnym buildzie;
+  nie jest walidacją fizyki ani kwalifikacją FEM/GPU/HDF5.
+- Użytkownik wybrał oczekiwanie na zakończenie pozostałych aktywnych czatów, bez
+  wysyłania do nich próśb o wstrzymanie zmian. Próba rozpoczęta po obserwacji stabilnego
+  fingerprintu może się zakończyć; następne próby po zmianie źródeł odraczamy do końca
+  równoległych prac. Nie obchodzimy guardów ani nie modyfikujemy cudzych zmian.
+- Ta rozpoczęta próba zakończyła się kodem 1: produkcyjny build API zgłosił `E0432`
+  dla importu `DevelopmentBackendState` w `development_consumer_readiness.rs` oraz
+  `E0505` dla przeniesienia pożyczonego `state` w `development_owner_control.rs`.
+  Są to pliki aktualnie rozwijanego przez inny czat kontraktu restartu. Pozostawiamy
+  je jego właścicielowi do zakończenia pracy, a potem sprawdzimy połączone źródła.

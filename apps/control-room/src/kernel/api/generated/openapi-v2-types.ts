@@ -10434,7 +10434,7 @@ export interface components {
             study_plan: {
                 [key: string]: unknown;
             };
-            /** @description Versioned `study_problem_catalog.v1` object bound to the exact study digest. */
+            /** @description Immutable study catalog: legacy v1, or v2 with pinned execution profiles and field origins. */
             study_problem_catalog: {
                 [key: string]: unknown;
             };

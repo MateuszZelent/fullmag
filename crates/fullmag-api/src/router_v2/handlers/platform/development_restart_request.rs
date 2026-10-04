@@ -25,6 +25,10 @@ pub(crate) struct DevelopmentRestartTransportConfig {
 }
 
 impl DevelopmentRestartTransportConfig {
+    pub(crate) fn is_configured(&self) -> bool {
+        self.ui_origin.is_some()
+    }
+
     pub(crate) fn from_environment() -> Self {
         if std::env::var("FULLMAG_DEVELOPMENT_RESTART_COORDINATOR").as_deref() != Ok("1") {
             return Self::default();

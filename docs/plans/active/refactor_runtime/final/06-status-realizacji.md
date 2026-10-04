@@ -1,5 +1,16 @@
 # Status realizacji całego planu refaktoryzacji
 
+Checkpoint P8-53AU, 05.10.2026: [prywatne potwierdzenie konsumenta](p8/53au-private-consumer-readiness.md).
+Przygotowano uwierzytelniony stan w pamięci API z ważnością 5 sekund,
+odnowienie w pompie i ochronę przed powtarzaniem selekcji tego samego pakietu.
+Review i fokusowane sprawdzenia źródeł PASS. Pierwszy build zablokował
+równoległy import IR; kolejny skompilował wszystkie fazy, ale został odrzucony
+po aktualizacji mastera podczas buildu. Terminalna odmowa preflight i brak
+uruchomienia API potwierdzone. Dokładnie 18 plików zadania skopiowano do
+zarejestrowanej izolacji `p8-readiness-20261005`; build tej kopii jest w toku.
+Prywatny driver i aktualna pompa pozostają NOT VERIFIED do prób runtime.
+Publiczne `restart_available=false`, procenty P0–P8 bez awansu.
+
 Checkpoint P8-53AT, 04.10.2026: [jawna akcja restartu](p8/53at-development-restart-action.md).
 Trwały serwis hosta podłącza baner do pojedynczego intentu, sprawdza kandydata
 pod guardami i zachowuje niepotwierdzone cleanup. Regresja akcji 25 grup,

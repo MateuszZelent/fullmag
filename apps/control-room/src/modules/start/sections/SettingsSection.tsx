@@ -7,13 +7,32 @@ import { SegmentedControl } from "@/shared/ui/SegmentedControl";
 
 import { startSettings, type RecentView } from "../model/startSettings";
 import type { RecentIndexController } from "../model/useRecentIndex";
+import type { ComputeProbeState } from "../model/types";
+
+import { ComputeEnvironmentSettings } from "./ComputeEnvironmentSettings";
 
 const VIEW_OPTIONS = [
   { label: "List", value: "list" },
   { label: "Grid", value: "grid" },
 ] as const satisfies readonly { label: string; value: RecentView }[];
 
-export function SettingsSection({ recent }: { readonly recent: RecentIndexController }) {
+interface SettingsSectionProps {
+  readonly recent: RecentIndexController;
+  readonly compute?: ComputeProbeState;
+  readonly refreshing?: boolean;
+  readonly stale?: boolean;
+  readonly computeError?: string | null;
+  readonly onRefreshCompute?: () => void;
+}
+
+export function SettingsSection({
+  recent,
+  compute,
+  refreshing = false,
+  stale = false,
+  computeError = null,
+  onRefreshCompute,
+}: SettingsSectionProps) {
   const settings = useSyncExternalStore(
     startSettings.subscribe,
     startSettings.getSnapshot,
@@ -30,6 +49,14 @@ export function SettingsSection({ recent }: { readonly recent: RecentIndexContro
           <p>What the start screen needs. Changes apply immediately.</p>
         </div>
       </div>
+
+      <ComputeEnvironmentSettings
+        compute={compute}
+        error={computeError}
+        onRefresh={onRefreshCompute}
+        refreshing={refreshing}
+        stale={stale}
+      />
 
       <section aria-labelledby="fm-start-set-appearance" className="fm-start-section">
         <h2 className="fm-start-section__title" id="fm-start-set-appearance">

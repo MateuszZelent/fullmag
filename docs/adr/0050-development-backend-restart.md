@@ -8,6 +8,19 @@ NOT VERIFIED. Utrata ACK wymaga potwierdzonego exit własnego API i zgodnego
 trwałego rekordu; nie upoważnia do ponowienia commit ani zwolnienia fence.
 Data: 03.10.2026.
 
+### Prywatne potwierdzenie konsumenta — P8-53AU
+
+Gotowości konsumenta nie wyprowadzamy z konfiguracji transportu ani heartbeat
+watchera. Uwierzytelniony owner odnawia pojedynczy, przypięty do API/generacji/
+worktree/kandydata rekord w pamięci z ważnością 5 sekund monotonicznego czasu.
+Odczyt nie odnawia; niezgodna obserwacja unieważnia dawny rekord. Potwierdzenie
+nie jest idle proof ani zgodą na handoff. Selekcja dla jednej niezmienionej
+tożsamości ma najwyżej jedną próbę; cache przejmuje kandydata przed renewal,
+aby lost ACK nie tworzył kolejnych bundle. Publiczna flaga pozostaje `false`
+do odrębnych bramek native/browser i odczytu z ETag uwzględniającym wygaśnięcie.
+Stan implementacji i ograniczenia:
+[P8-53AU](../plans/active/refactor_runtime/final/p8/53au-private-consumer-readiness.md).
+
 ### Jawna akcja w trwałym hoście — P8-53AT
 
 Serwis akcji należy do `DevelopmentKernelHost`, a baner subskrybuje jego

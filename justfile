@@ -161,6 +161,10 @@ verify-windows-development-observer-pause:
 verify-windows-development-restart-consumer:
     @{{storage_python}} "{{repo_root}}/scripts/verify_development_backend_api.py" --repo-root "{{repo_root}}" --restart-consumer-only
 
+# Owner-authenticated lease proof in separate owned APIs with controlled frames.
+verify-windows-development-consumer-readiness:
+    @{{storage_python}} "{{repo_root}}/scripts/verify_development_backend_api.py" --repo-root "{{repo_root}}" --consumer-readiness-only
+
 # Native request transport proof; no unit-test compilation or user-session restart.
 verify-windows-development-restart-transport:
     @{{storage_python}} "{{repo_root}}/scripts/verify_development_backend_api.py" --repo-root "{{repo_root}}" --restart-transport-only

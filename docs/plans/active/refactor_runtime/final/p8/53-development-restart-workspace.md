@@ -1,5 +1,13 @@
 # P8-53 — bezpieczne zastosowanie nowego backendu w workspace
 
+[P8-53AU](53au-private-consumer-readiness.md) przygotowuje prywatne, wygasające
+potwierdzenie gotowości konsumenta przez kanał ownera. Status nie odnawia
+ważności; pompa zachowuje kandydata po lost ACK i ogranicza selekcję dla tej
+samej tożsamości. Próby na masterze zatrzymały równoległy import IR oraz
+aktualizacja źródeł podczas kompilacji. Trwa build zarejestrowanej kopii
+weryfikacyjnej 18 plików zadania; runtime pozostaje NOT VERIFIED.
+Publiczne `restart_available=false`.
+
 [P8-53AT](53at-development-restart-action.md) dodaje jawne wejście z banera
 do trwałego serwisu Host. Pending/unknown uzgadnia ten sam request; błędu
 cleanup nie uznaje za zakończony na podstawie wznowionego Host. Akcja 25 grup,

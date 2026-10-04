@@ -265,7 +265,8 @@ export function resolveContinue(
       );
     }
     // `null` means this host cannot probe; the open session already holds its device.
-    if (live.compute !== null && live.compute.gpus.length === 0) {
+    if (live.compute !== null && live.compute.gpuProbeStatus !== "unavailable" &&
+      live.compute.gpus.length === 0) {
       return settle("device-unavailable", { kind: "hidden" }, REASON_NO_GPU, progressed);
     }
   }

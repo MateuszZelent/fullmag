@@ -233,6 +233,21 @@ from .model import (
     SettleTree,
     Hysteresis,
 )
+from .model.execution_profile import (
+    ComputeResourceOverrides,
+    CpuResourceOverrides,
+    ExecutionOverrides,
+    ExecutionProfile,
+    MemoryResourceOverrides,
+)
+from .model.compute_resources import (
+    ComputeResources,
+    CpuResources,
+    DistributedResources,
+    ComputeTarget,
+    GpuResources,
+    MemoryReservation,
+)
 from .shapes import affine, disk, rotate, scale
 from .runtime import BackendTarget, Result, Simulation, load_problem_from_script
 from .meshing import (
@@ -427,6 +442,14 @@ __all__ = [
     "TransportExecution",
     "TransparentSpinInterface",
     "CubicAnisotropy",
+    "ComputeResources",
+    "ComputeResourceOverrides",
+    "CpuResourceOverrides",
+    "ExecutionOverrides",
+    "ExecutionProfile",
+    "MemoryResourceOverrides",
+    "ComputeTarget",
+    "CpuResources",
     "ThermalNoise",
     "UniaxialAnisotropy",
     "Cylinder",
@@ -434,6 +457,7 @@ __all__ = [
     "DeviceTarget",
     "DepthProjection",
     "Difference",
+    "DistributedResources",
     "DiscretizationHints",
     "Eigenmodes",
     "ElasticBody",
@@ -455,6 +479,7 @@ __all__ = [
     "FEM",
     "FemLinearSolverPolicy",
     "Ferromagnet",
+    "GpuResources",
     "GaussianPlaneWaveAntenna",
     "GaussianPlaneWaveFieldProfile",
     "GeometryMaskFieldProfile",
@@ -509,6 +534,7 @@ __all__ = [
     "StageAutosave",
     "TableAutosave",
     "OutputStorage",
+    "MemoryReservation",
     "GammaResponseAnalysis",
     "Result",
     "RfDrive",

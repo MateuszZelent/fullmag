@@ -120,6 +120,8 @@ pub(crate) struct AppState {
         crate::router_v2::handlers::platform::development_backend::DevelopmentBackendConfig,
     pub development_restart_transport:
         crate::router_v2::handlers::platform::development_restart_request::DevelopmentRestartTransportConfig,
+    pub development_consumer_readiness:
+        crate::development_consumer_readiness::DevelopmentConsumerReadiness,
     pub repo_root: PathBuf,
     /// Managed, project-owned run storage resolved before this API starts.
     pub submit_store_root: Option<PathBuf>,
