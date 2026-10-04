@@ -9,6 +9,17 @@ i przeglądarce. Wspólne produkcyjne typowanie nadal ma 5 diagnostyk Start/Abou
 pełny lint i natywny Windows/browser restart z niepustą sceną pozostają otwarte.
 `restart_available=false`; procenty całego planu bez awansu.
 
+Dalszy checkpoint P8-53AT: po identyfikacji i zakończeniu osieroconego API
+nieudanej własnej próby zarządzane recovery i aktualny build Windows PASS.
+Natywny konsument: 39 kontroli PASS, wszystkie 20 własnych procesów odebrane.
+Ponowne typowanie nadal zgłasza 5 błędów Start/About; pełny lint po zakończeniu
+odrębnego ownera wykazał 9 ostrzeżeń nieużywanych importów w równoległych
+AboutInspector/AboutSection (exit 1 przy `--max-warnings=0`), bez diagnostyk
+P8-53AT. Odczyt dostępności wykazał brak potwierdzenia
+liveness konsumenta w API. Wygasające potwierdzenie przez prywatny kanał ownera
+i pełny własny browser/native flow pozostają następnym krokiem. Flaga nadal
+`false`, procenty bez awansu; stary wynik próby `unknown` i jej dane zachowano.
+
 Checkpoint P8-53AS, 04.10.2026: [wynik runu podczas restartu](p8/53as-run-outcome-handoff.md).
 Rezerwacja opóźnionego recordera i ochrona queued/flushing outcomes mają
 5 grup regresji, browser 9/9, lint 6 plików i wspólną API hygiene PASS.

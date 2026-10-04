@@ -175,3 +175,101 @@ z tym przyrostem; staged diff i lokalne linki dokumentacji PASS, commit exit 0.
 Nie dołączono równoległego Start/About, zmian Python/storage ani submodułu.
 Commit jest lokalny; publikacja źródeł na publicznym remote nadal jest
 zablokowana przez wcześniejszą odmowę automatycznej kontroli uprawnień.
+
+## Następna bramka — odczyt dostępności i aktualny pakiet
+
+Odczyt kodu potwierdził brak wejścia liveness konsumenta w `AppState`.
+`router_v2/handlers/platform/development_backend.rs::observe` waliduje
+generację, worktree, hashe i świeżość statusu watchera, ale nadal ustawia
+`restart_available=false`. Konfiguracja request transportu sprawdza
+coordinator/token/Origin; akceptacja requestu pozostaje intencją.
+Launcher przekazuje tę konfigurację przed utworzeniem `NativeRestartPump`,
+więc nie dowodzi ona działającej pętli konsumenta.
+
+Właściwy owner jest potwierdzany przez PID/port/API UUID/token hash/build.
+Po otrzymaniu requestu selector weryfikuje źródła, manifest i zapieczętowany
+pakiet oraz ponownie odczytuje status. Transakcja wymaga prywatnego guarda,
+zgodnego accepted store i cold-idle proof; skonfigurowany warm service
+odmawia tej trasy. Są to dowody zdobywane po żądaniu, nie gotowa capability
+przed kliknięciem. Nie podniesiono publicznego flagu.
+
+Następny przyrost powinien wprowadzić wygasające potwierdzenie gotowości
+konsumenta przez istniejący prywatny, uwierzytelniony kanał ownera. Musi być
+przypięte do API UUID, generacji/worktree i zweryfikowanej tożsamości
+kandydata. Dostępność wymaga również świeżego watchera i różnych źródeł
+current/ready. Brak potwierdzenia, wygaśnięcie, zmiana ownera/kandydata
+i warm-service pozostają odmową. Zmiana dostępności musi wpływać na ETag;
+304 nie może utrzymać wygasłego `true`. To zakres następnej implementacji,
+nie już wykonany protokół ani kwalifikacja.
+
+Pełna próba browser/native wymaga dedykowanej recepty z osobnym web portem,
+wymuszonym wolnym API portem, fresh accepted-store scope i własnym launcherem.
+Zmiana wyłącznie portu UI nie gwarantuje izolacji: resolver API może ponownie
+użyć zgodnego procesu. Natywny verifier konsumenta już tworzy własny scope
+i port; istniejący browser 3254 nadal ma kontrolowane HTTP. W odczytanym
+zakresie nie ma jeszcze recepty łączącej oba dowody.
+
+### Odzyskanie pozostawionego procesu próbnego
+
+Pierwszy aktualny build odmówił preflight przy niezamkniętym runtime record.
+Manager 261044, launcher 41724 i watcher 229292 były nieobecne; port 3197
+był zamknięty. Pierwsze `windows-runtime-recover` słusznie odmówiło z powodu
+żywego API 249132.
+
+Pochodzenie tego API potwierdzono przez nieudany receipt
+`development-backend-api-checks/checks/a03bd1275a7d4d74ab8108536a877b65/receipt.json`:
+parent CLI 237276 miał exit 1, a replacement API 249132 miało `outcome=unknown`.
+Zgadzały się parent PID, dokładny EXE z bundle
+`3ce0f1a6852543eabc545bbc08da369b` oraz czas utworzenia 04.10.2026 10:21:03.
+Parent już nie działał. Tożsamości nie wywnioskowano wyłącznie ze ścieżki.
+
+Pierwszy warunek czasu odmówił zakończenia: CIM podawał
+`10:21:03.1424340+02:00`, uchwyt procesu `10:21:03.1424348+02:00`.
+Po odczycie zmierzonej różnicy 8 ticków ponownie sprawdzono obie dokładne
+wartości, PID, parent i EXE. Zakończono tylko ten proces próbny i potwierdzono
+jego exit/nieobecność. Nie zmieniono starego `outcome=unknown` na PASS ani
+graceful exit; kapsuły, fences, owner descriptor i dane próby zachowano.
+
+Ponowne zarządzane recovery przeszło z potwierdzonym brakiem managera,
+natywnych EXE i watcherów oraz zamkniętym portem. Zachowany oryginał:
+`C:/git/fullmag/storage/runtimes/fullmag-0950f4dca4ffe38f/native-runtime-prior-fff4efc399d04177aa78ea655667267b.json`,
+SHA256 `9b6e50df2b9358a8d70061fd30bb29a9d36a95fbe8e4a0707abb8c1e78205789`.
+Kanoniczny `native-workspace-status.json` zawiera terminalne recovery
+z 04.10.2026 23:00:05 +02:00. Recovery nie odtwarza modelu użytkownika.
+
+### Aktualne dowody natywne i ponowne typowanie
+
+`just windows-workspace-build dev dev 3197 auto`: PASS, exit 0, terminalny
+`windows-native-fdm-cpu-dev/build-status.json`, 21:00:35–21:09:16 UTC.
+Build commit `80e2b612e9075035ee386ac8dd89d3a809bbf6c9`, dirty snapshot
+`301c3a008ad0630fe19f4173e31c354bf6035f485e3a3c92cf71e201f4cd5837`,
+backend source `cde0a9179b666aff69194523acd41f4faeb6a27e2e04dc4325d1d938b5857e1a`,
+raw manifest SHA256
+`2201ea4d1b22caa19e34855c3f3480dff3d804b7a76a9cc67f0b26cc2569e9c9`.
+Profil `backend-dev`, CLI/API/desktop zbudowane; unit tests nie kompilowano.
+
+`just verify-windows-development-restart-consumer`: PASS, 39 kontroli,
+wszystkie 20 własnych procesów odebrane. Receipt:
+`development-backend-api-checks/checks/197139232b2f463c81d4ca1923254633/receipt.json`.
+HEAD próby `e012c8c46c6d5c62fcd2fde45009b1a59eaf971b`; backend source przed/po
+jest zgodny z powyższym manifestem. Zakres obejmuje własny publiczny request,
+empty/scene, natywnego konsumenta, dokładny payload UI, fresh API/session,
+odmowę starego pina, brak ponownego wykonania i edytowalność po odtworzeniu.
+Nie jest to dowód hydration produkcyjnych paneli, browser/native flow ani nauki.
+
+Ponowne produkcyjne typowanie po równoległych zmianach nadal ma 5 wymienionych
+błędów Start/About, exit 2, bez diagnostyk P8-53AT. Receipt:
+`windows-control-room-source-check/production-source/920a915c052140cc8b7b2ed8b7e9518a/receipt.json`,
+niezmienny digest
+`de85d482e16287dbbd3349a29c639384da37509b135316aef8d029604777ecfc`.
+Pierwszy pełny lint nie rozpoczął wykonania: odrębny aktywny owner 33840
+zajmował blokadę checkoutu. Po potwierdzeniu zakończenia tego procesu ponowiono
+tę samą zarządzaną receptę, bez porzucania blokady ani tworzenia innego targetu.
+Pełny lint zakończył się exit 1: 9 ostrzeżeń nieużywanych importów w równoległych
+`AboutInspector.tsx` (1) i `AboutSection.tsx` (8), bez błędów i diagnostyk
+P8-53AT. Polityka `--max-warnings=0` słusznie odmawia PASS. Receipt:
+`windows-control-room-source-check/lint/978e10404a3141eaab855bb0ece04a31/receipt.json`,
+HEAD `e012c8c46c6d5c62fcd2fde45009b1a59eaf971b`, niezmienny digest
+`de85d482e16287dbbd3349a29c639384da37509b135316aef8d029604777ecfc`.
+Wcześniejszy scoped lint 10 własnych plików pozostaje odrębnym PASS;
+równoległych plików Start/About nie poprawiano w tym przyroście.
