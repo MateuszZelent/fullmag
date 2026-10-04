@@ -2427,6 +2427,21 @@ pub(crate) fn verify_development_api_owner() -> Result<()> {
     }
     acquisition.confirm_held()?;
     acquisition.confirm_held()?;
+    let candidate = std::path::PathBuf::from(
+        std::env::var_os("FULLMAG_DEVELOPMENT_OWNER_PROBE_CANDIDATE")
+            .context("owned CLI probe requires a verified candidate bundle")?,
+    );
+    let empty_staged = acquisition.stage_handoff(
+        &root,
+        &candidate,
+        &serde_json::json!({
+            "api_instance_id":instance, "session_id":null, "session_epoch":0,
+            "editor":{"probe":"empty"}, "workspace":{}, "project_document":{}
+        }),
+    )?;
+    if empty_staged.acknowledgement["workspace_state"] != "no_session" {
+        bail!("empty CLI capsule staging returned a session");
+    }
     let create = serde_json::json!({"name":"CLI owner fixture", "backend":"fdm",
                                   "device":"cpu", "precision":"double"});
     let frozen = client
@@ -2452,9 +2467,22 @@ pub(crate) fn verify_development_api_owner() -> Result<()> {
         .send()?
         .error_for_status()?
         .json()?;
-    let acquisition = owner.acquire(&uuid::Uuid::new_v4().to_string())?;
+    let mut acquisition = owner.acquire(&uuid::Uuid::new_v4().to_string())?;
     if acquisition.workspace().get("scene_document") != Some(&scene) {
         bail!("development owner did not preserve the canonical authoring scene");
+    }
+    let identity = acquisition.workspace()["identity"].clone();
+    let scene_staged = acquisition.stage_handoff(
+        &root,
+        &candidate,
+        &serde_json::json!({
+            "api_instance_id":instance, "session_id":identity["session_id"],
+            "session_epoch":identity["session_epoch"], "editor":{"probe":"scene"},
+            "workspace":{}, "project_document":{}
+        }),
+    )?;
+    if scene_staged.acknowledgement["workspace_state"] != "session" {
+        bail!("canonical scene CLI capsule staging lost its session");
     }
     drop(acquisition);
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -2501,7 +2529,10 @@ pub(crate) fn verify_development_api_owner() -> Result<()> {
         .json(&current_scene)
         .send()?;
     if !reopened.status().is_success() {
-        bail!("expired development owner acquisition did not reopen admission: {}", reopened.status());
+        bail!(
+            "expired development owner acquisition did not reopen admission: {}",
+            reopened.status()
+        );
     }
     // Only this fixture child is terminated; successful wait is recorded.
     let mut process = child.release().0;
@@ -2514,12 +2545,18 @@ pub(crate) fn verify_development_api_owner() -> Result<()> {
         serde_json::json!({
             "schema":"fullmag.development-cli-owner-check.v1", "api_pid":pid,
             "api_instance_id":instance, "api_waited":true,
+            "handoffs":[empty_staged.acknowledgement,scene_staged.acknowledgement],
+            "stage_helpers":[
+                {"pid":empty_staged.helper_pid,"waited":true,"exit_code":0},
+                {"pid":scene_staged.helper_pid,"waited":true,"exit_code":0}
+            ],
             "api_exit_code":terminal.code(), "checks":["owned-api-discovery",
             "static-script-owner-disabled", "foreign-child-refused", "foreign-token-refused",
             "invalid-acquisition-nonce-refused", "empty-authoring-acquired", "http-admission-frozen",
             "abort-reopened-admission", "canonical-scene-acquired", "disconnect-reopened-admission",
             "held-confirmation-preserves-freeze", "confirmation-does-not-renew-expiry",
-            "expired-confirmation-refused", "expired-acquisition-reopens-admission"]
+            "expired-confirmation-refused", "expired-acquisition-reopens-admission",
+            "empty-capsule-production-stdin-consumer", "scene-capsule-production-stdin-consumer"]
         })
     );
     Ok(())

@@ -7,7 +7,9 @@ use std::{
     env, fs,
     io::{Read, Write},
     net::{Shutdown, SocketAddr, SocketAddrV4, TcpStream},
-    path::PathBuf,
+    path::{Path, PathBuf},
+    process::{Child, Command, ExitStatus, Stdio},
+    sync::mpsc,
     thread,
     time::{Duration, Instant},
 };
@@ -32,8 +34,13 @@ const CONTROL_REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
 const ACQUISITION_RESPONSE_TIMEOUT: Duration = Duration::from_secs(7);
 const CONFIRM_RESPONSE_TIMEOUT: Duration = Duration::from_secs(2);
 const ABORT_RESPONSE_TIMEOUT: Duration = Duration::from_secs(2);
+const STAGE_HELPER_TIMEOUT: Duration = Duration::from_secs(20);
 const NATIVE_DEV_PROFILE: &str = "windows-native-fdm-cpu-dev";
 const NATIVE_RELEASE_PROFILE: &str = "windows-native-fdm-cpu";
+const STAGE_REQUEST_SCHEMA: &str = "fullmag.development-acquisition-stage-request.v1";
+const STAGE_ACK_SCHEMA: &str = "fullmag.development-acquisition-handoff.v1";
+const MAX_STAGE_REQUEST_BYTES: usize = 128 * 1024 * 1024;
+const MAX_STAGE_OUTPUT_BYTES: usize = 16 * 1024;
 const BACKEND_ENV_KEYS: [&str; 4] = [
     "FULLMAG_DEVELOPMENT_BACKEND_GENERATION",
     "FULLMAG_DEVELOPMENT_BACKEND_STATUS_FILE",
@@ -46,6 +53,9 @@ const BACKEND_ENV_KEYS: [&str; 4] = [
 pub(crate) struct OwnerLaunch {
     storage_root: PathBuf,
     worktree: String,
+    generation: String,
+    source: String,
+    version: String,
     owner_token: String,
 }
 
@@ -101,6 +111,9 @@ impl OwnerLaunch {
         Ok(Some(Self {
             storage_root,
             worktree,
+            generation: generation.clone(),
+            source: source.clone(),
+            version: version.clone(),
             owner_token: uuid::Uuid::new_v4().simple().to_string(),
         }))
     }
@@ -188,6 +201,11 @@ impl OwnerLaunch {
         Ok(OwnedDevelopmentApi {
             control_address: address,
             api_instance_id: record.api_instance_id,
+            storage_root: self.storage_root.clone(),
+            worktree: self.worktree.clone(),
+            generation: self.generation.clone(),
+            source: self.source.clone(),
+            version: self.version.clone(),
             owner_token: self.owner_token.clone(),
         })
     }
@@ -198,6 +216,11 @@ impl OwnerLaunch {
 pub(crate) struct OwnedDevelopmentApi {
     control_address: SocketAddrV4,
     api_instance_id: String,
+    storage_root: PathBuf,
+    worktree: String,
+    generation: String,
+    source: String,
+    version: String,
     owner_token: String,
 }
 
@@ -238,8 +261,18 @@ impl OwnedDevelopmentApi {
         let response: AcquisitionResponse = serde_json::from_slice(&response_bytes)
             .context("invalid development API acquisition response")?;
         validate_acquisition_response(&response, nonce, &self.api_instance_id)?;
+        let (workspace_state, session_id, session_epoch) = match &response.workspace {
+            WorkspaceResponse::NoSession { session_epoch } => ("no_session", None, *session_epoch),
+            WorkspaceResponse::Session { identity, .. } => (
+                "session",
+                Some(identity.session_id.clone()),
+                identity.session_epoch,
+            ),
+        };
         let workspace = serde_json::to_value(&response.workspace)
             .context("unable to materialize development authoring snapshot")?;
+        std::str::from_utf8(&response_bytes)
+            .context("development API acquisition response is not UTF-8")?;
 
         Ok(AuthoringAcquisition {
             stream: Some(stream),
@@ -247,6 +280,15 @@ impl OwnedDevelopmentApi {
             api_instance_id: self.api_instance_id.clone(),
             nonce: nonce.to_owned(),
             workspace,
+            acquisition_bytes: response_bytes,
+            workspace_state,
+            session_id,
+            session_epoch,
+            storage_root: self.storage_root.clone(),
+            worktree: self.worktree.clone(),
+            generation: self.generation.clone(),
+            source: self.source.clone(),
+            version: self.version.clone(),
         })
     }
 }
@@ -259,11 +301,136 @@ pub(crate) struct AuthoringAcquisition {
     api_instance_id: String,
     nonce: String,
     workspace: Value,
+    acquisition_bytes: Vec<u8>,
+    workspace_state: &'static str,
+    session_id: Option<String>,
+    session_epoch: u64,
+    storage_root: PathBuf,
+    worktree: String,
+    generation: String,
+    source: String,
+    version: String,
 }
 
 impl AuthoringAcquisition {
     pub(crate) fn workspace(&self) -> &Value {
         &self.workspace
+    }
+
+    /// Stage the acquired authoring snapshot without releasing its owner guard.
+    /// The helper only receives the validated acquisition and scoped UI payload;
+    /// owner credentials stay in this process and the same connection is
+    /// confirmed only after a fully validated staging acknowledgement.
+    pub(crate) fn stage_handoff(
+        &mut self,
+        repo_root: &Path,
+        candidate_bundle_root: &Path,
+        frontend_payload: &Value,
+    ) -> Result<StagedAuthoringHandoff> {
+        let result = self.stage_handoff_inner(repo_root, candidate_bundle_root, frontend_payload);
+        if result.is_err() {
+            self.invalidate_control_stream();
+        }
+        result
+    }
+
+    fn stage_handoff_inner(
+        &mut self,
+        repo_root: &Path,
+        candidate_bundle_root: &Path,
+        frontend_payload: &Value,
+    ) -> Result<StagedAuthoringHandoff> {
+        if self.stream.is_none() {
+            bail!("development API acquisition connection is unavailable");
+        }
+
+        let repo_root = validated_directory_root(repo_root, "development handoff repository")?;
+        let helper = checked_regular_file(
+            &repo_root,
+            "scripts/windows/stage_acquisition_handoff.py",
+            "development acquisition handoff helper",
+        )?;
+        let python_relative = format!(
+            "builds/{}/windows-native-fdm-cpu-dev/python/fullmag/Scripts/python.exe",
+            self.worktree
+        );
+        let python =
+            fullmag_session::repository_path::checked_path(&self.storage_root, &python_relative)
+                .context("invalid managed development Python path")?;
+        if !python.is_absolute() {
+            bail!("managed development Python path must be absolute");
+        }
+        let configured_python = env::var_os("FULLMAG_PYTHON")
+            .map(PathBuf::from)
+            .context("managed development Python is not configured")?;
+        validate_absolute_path_chain_no_reparse(
+            &configured_python,
+            "configured managed development Python",
+        )?;
+        validate_regular_file_no_reparse(
+            &configured_python,
+            "configured managed development Python",
+        )?;
+        let canonical_python =
+            fs::canonicalize(&python).context("unable to resolve managed development Python")?;
+        let canonical_configured_python = fs::canonicalize(&configured_python)
+            .context("unable to resolve configured managed development Python")?;
+        if canonical_configured_python != canonical_python {
+            bail!("FULLMAG_PYTHON does not identify the managed development Python");
+        }
+        validate_regular_file_no_reparse(&python, "managed development Python")?;
+
+        if !candidate_bundle_root.is_absolute() {
+            bail!("development candidate bundle path must be absolute");
+        }
+        let candidate_bundle_root = candidate_bundle_root
+            .to_str()
+            .context("development candidate bundle path is not valid UTF-8")?;
+        let acquisition_json = std::str::from_utf8(&self.acquisition_bytes)
+            .context("development API acquisition response is not UTF-8")?;
+        let request = StageRequest {
+            schema: STAGE_REQUEST_SCHEMA,
+            acquisition_json: &acquisition_json,
+            source_identity: StageSourceIdentity {
+                api_instance_id: &self.api_instance_id,
+                generation_id: &self.generation,
+                source_build_id: &self.version,
+                source_sha256: &self.source,
+            },
+            candidate_bundle_root,
+            frontend_payload,
+        };
+        let request_bytes = serde_json::to_vec(&request)
+            .context("unable to encode development acquisition staging request")?;
+        if request_bytes.len() > MAX_STAGE_REQUEST_BYTES {
+            bail!("development acquisition staging request exceeds its limit");
+        }
+
+        let (ack_bytes, helper_pid, exit_status) =
+            run_stage_helper(&python, &helper, &repo_root, request_bytes)?;
+        if !exit_status.success() {
+            bail!("development acquisition handoff helper failed");
+        }
+        let acknowledgement: StageAcknowledgement = serde_json::from_slice(&ack_bytes)
+            .context("invalid development acquisition handoff acknowledgement")?;
+        validate_stage_acknowledgement(&acknowledgement, self).context(
+            "development acquisition handoff acknowledgement does not match the acquisition",
+        )?;
+
+        self.confirm_held()
+            .context("development API acquisition could not be confirmed after staging")?;
+
+        Ok(StagedAuthoringHandoff {
+            acknowledgement: serde_json::to_value(acknowledgement)
+                .context("unable to materialize development handoff acknowledgement")?,
+            helper_pid,
+        })
+    }
+
+    fn invalidate_control_stream(&mut self) {
+        if let Some(stream) = self.stream.take() {
+            let _ = stream.shutdown(Shutdown::Both);
+        }
     }
 
     /// Confirm that the API still holds this acquisition without extending
@@ -345,6 +512,401 @@ impl AuthoringAcquisition {
         let _ = stream.shutdown(Shutdown::Both);
         Ok(())
     }
+}
+
+pub(crate) struct StagedAuthoringHandoff {
+    pub(crate) acknowledgement: Value,
+    pub(crate) helper_pid: u32,
+}
+
+#[derive(Serialize)]
+struct StageRequest<'a> {
+    schema: &'static str,
+    acquisition_json: &'a str,
+    source_identity: StageSourceIdentity<'a>,
+    candidate_bundle_root: &'a str,
+    frontend_payload: &'a Value,
+}
+
+#[derive(Serialize)]
+struct StageSourceIdentity<'a> {
+    api_instance_id: &'a str,
+    generation_id: &'a str,
+    source_build_id: &'a str,
+    source_sha256: &'a str,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct StageAcknowledgement {
+    schema: String,
+    acquisition_nonce: String,
+    workspace_state: String,
+    binding: StageBinding,
+    handoff: StageHandoffReference,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct StageBinding {
+    api_instance_id: String,
+    #[serde(deserialize_with = "deserialize_present_option")]
+    session_id: Option<String>,
+    session_epoch: u64,
+    generation_id: String,
+    source_build_id: String,
+    target_build_id: String,
+    source_sha256: String,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct StageHandoffReference {
+    handoff_id: String,
+    snapshot_sha256: String,
+    state: String,
+}
+
+enum StageHelperEvent {
+    InputWritten(bool),
+    OutputRead(std::result::Result<Vec<u8>, ()>),
+}
+
+fn validate_stage_acknowledgement(
+    acknowledgement: &StageAcknowledgement,
+    acquisition: &AuthoringAcquisition,
+) -> Result<()> {
+    let binding = &acknowledgement.binding;
+    if acknowledgement.schema != STAGE_ACK_SCHEMA
+        || acknowledgement.acquisition_nonce != acquisition.nonce
+        || acknowledgement.workspace_state != acquisition.workspace_state
+        || binding.api_instance_id != acquisition.api_instance_id
+        || binding.session_id != acquisition.session_id
+        || binding.session_epoch != acquisition.session_epoch
+        || binding.generation_id != acquisition.generation
+        || binding.source_build_id != acquisition.version
+        || binding.source_sha256 != acquisition.source
+        || !lower_hex(&binding.target_build_id, 64)
+    {
+        bail!("development acquisition staging acknowledgement binding is inconsistent");
+    }
+    if !canonical_uuid(&acknowledgement.handoff.handoff_id)
+        || !lower_hex(&acknowledgement.handoff.snapshot_sha256, 64)
+        || acknowledgement.handoff.state != "staged"
+    {
+        bail!("development acquisition staging acknowledgement is invalid");
+    }
+    Ok(())
+}
+
+fn validated_directory_root(path: &Path, operation: &str) -> Result<PathBuf> {
+    if !path.is_absolute() {
+        bail!("{operation} path must be absolute");
+    }
+    let metadata =
+        fs::symlink_metadata(path).with_context(|| format!("unable to inspect {operation}"))?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        bail!("{operation} must be a regular trusted directory");
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if metadata.file_attributes() & 0x400 != 0 {
+            bail!("{operation} must not be a reparse point");
+        }
+    }
+    Ok(path.to_path_buf())
+}
+
+fn checked_regular_file(root: &Path, relative: &str, operation: &str) -> Result<PathBuf> {
+    let path = fullmag_session::repository_path::checked_path(root, relative)
+        .with_context(|| format!("invalid {operation} path"))?;
+    if !path.is_absolute() {
+        bail!("{operation} path must be absolute");
+    }
+    validate_regular_file_no_reparse(&path, operation)?;
+    Ok(path)
+}
+
+fn validate_regular_file_no_reparse(path: &Path, operation: &str) -> Result<()> {
+    let metadata =
+        fs::symlink_metadata(path).with_context(|| format!("unable to inspect {operation}"))?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        bail!("{operation} must be a regular file");
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if metadata.file_attributes() & 0x400 != 0 {
+            bail!("{operation} must not be a reparse point");
+        }
+    }
+    Ok(())
+}
+
+fn validate_absolute_path_chain_no_reparse(path: &Path, operation: &str) -> Result<()> {
+    use std::path::Component;
+
+    if !path.is_absolute() {
+        bail!("{operation} path must be absolute");
+    }
+    let components: Vec<_> = path.components().collect();
+    let normal_count = components
+        .iter()
+        .filter(|component| matches!(component, Component::Normal(_)))
+        .count();
+    if normal_count == 0 {
+        bail!("{operation} path does not identify a file");
+    }
+
+    let mut current = PathBuf::new();
+    let mut normal_index = 0;
+    for component in components {
+        match component {
+            Component::Prefix(prefix) => current.push(prefix.as_os_str()),
+            Component::RootDir => {
+                current.push(component.as_os_str());
+                validate_path_component_no_reparse(&current, true, operation)?;
+            }
+            Component::CurDir | Component::ParentDir => {
+                bail!("{operation} path contains a traversal component");
+            }
+            Component::Normal(name) => {
+                current.push(name);
+                normal_index += 1;
+                validate_path_component_no_reparse(
+                    &current,
+                    normal_index < normal_count,
+                    operation,
+                )?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_path_component_no_reparse(path: &Path, directory: bool, operation: &str) -> Result<()> {
+    let metadata = fs::symlink_metadata(path)
+        .with_context(|| format!("unable to inspect {operation} path component"))?;
+    if metadata.file_type().is_symlink() {
+        bail!("{operation} path contains a symbolic link");
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if metadata.file_attributes() & 0x400 != 0 {
+            bail!("{operation} path contains a reparse point");
+        }
+    }
+    if directory && !metadata.is_dir() {
+        bail!("{operation} path parent is not a directory");
+    }
+    Ok(())
+}
+
+fn run_stage_helper(
+    python: &Path,
+    helper: &Path,
+    repo_root: &Path,
+    request: Vec<u8>,
+) -> Result<(Vec<u8>, u32, ExitStatus)> {
+    let deadline = Instant::now() + STAGE_HELPER_TIMEOUT;
+    let mut command = Command::new(python);
+    command
+        .arg("-B")
+        .arg(helper)
+        .arg("--repo-root")
+        .arg(repo_root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .env_remove("FULLMAG_DEVELOPMENT_OWNER_TOKEN");
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    let mut child = command
+        .spawn()
+        .context("unable to start managed development acquisition helper")?;
+    let helper_pid = child.id();
+    if helper_pid == 0 {
+        let _ = kill_and_wait(&mut child);
+        bail!("development acquisition helper has an invalid process identity");
+    }
+    let Some(stdin) = child.stdin.take() else {
+        let _ = kill_and_wait(&mut child);
+        bail!("development acquisition helper stdin is unavailable");
+    };
+    let Some(stdout) = child.stdout.take() else {
+        let _ = kill_and_wait(&mut child);
+        bail!("development acquisition helper stdout is unavailable");
+    };
+
+    let (sender, receiver) = mpsc::channel();
+    let input_sender = sender.clone();
+    let writer = match thread::Builder::new()
+        .name("development-handoff-stdin".to_owned())
+        .spawn(move || {
+            let mut stdin = stdin;
+            let written = stdin.write_all(&request).is_ok();
+            let _ = input_sender.send(StageHelperEvent::InputWritten(written));
+        }) {
+        Ok(writer) => writer,
+        Err(_) => {
+            kill_and_wait(&mut child)?;
+            bail!("unable to start development acquisition helper input transport");
+        }
+    };
+
+    let output_sender = sender.clone();
+    let reader = match thread::Builder::new()
+        .name("development-handoff-stdout".to_owned())
+        .spawn(move || {
+            let output = read_bounded_helper_output(stdout);
+            let _ = output_sender.send(StageHelperEvent::OutputRead(output));
+        }) {
+        Ok(reader) => reader,
+        Err(_) => {
+            kill_and_wait(&mut child)?;
+            writer.join().map_err(|_| {
+                anyhow::anyhow!("development acquisition helper input transport panicked")
+            })?;
+            bail!("unable to start development acquisition helper output transport");
+        }
+    };
+    drop(sender);
+
+    let mut input_complete = None;
+    let mut output = None;
+    let mut failure = None;
+    let mut observed_exit = None;
+    loop {
+        while let Ok(event) = receiver.try_recv() {
+            if let Err(error) = record_stage_helper_event(event, &mut input_complete, &mut output) {
+                failure = Some(error);
+                break;
+            }
+        }
+        if failure.is_some() {
+            break;
+        }
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                observed_exit = Some(status);
+                break;
+            }
+            Ok(None) => {}
+            Err(_) => {
+                failure = Some("unable to observe development acquisition helper");
+                break;
+            }
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            failure = Some("development acquisition helper timed out");
+            break;
+        }
+        match receiver.recv_timeout(remaining.min(Duration::from_millis(20))) {
+            Ok(event) => {
+                if let Err(error) =
+                    record_stage_helper_event(event, &mut input_complete, &mut output)
+                {
+                    failure = Some(error);
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                if input_complete != Some(true) || output.is_none() {
+                    failure = Some("development acquisition helper transports closed unexpectedly");
+                } else {
+                    thread::sleep(remaining.min(Duration::from_millis(10)));
+                }
+            }
+        }
+    }
+
+    if failure.is_some() {
+        let _ = child.kill();
+    }
+    // `try_wait` observes natural completion; otherwise this waits for the
+    // exact helper after timeout or an I/O error before either thread is joined.
+    let exit_status = child
+        .wait()
+        .context("unable to wait for development acquisition helper")?;
+    let writer_join = writer.join();
+    let reader_join = reader.join();
+    if writer_join.is_err() || reader_join.is_err() {
+        bail!("development acquisition helper transport panicked");
+    }
+    while let Ok(event) = receiver.try_recv() {
+        if let Err(error) = record_stage_helper_event(event, &mut input_complete, &mut output) {
+            failure = Some(error);
+        }
+    }
+    if let Some(error) = failure {
+        bail!("{error}");
+    }
+    if observed_exit.is_none() && !exit_status.success() {
+        bail!("development acquisition handoff helper failed");
+    }
+    if input_complete != Some(true) {
+        bail!("development acquisition helper did not receive the complete request");
+    }
+    let output = output.context("development acquisition helper returned no acknowledgement")?;
+    Ok((output, helper_pid, exit_status))
+}
+
+fn read_bounded_helper_output(stdout: impl Read) -> std::result::Result<Vec<u8>, ()> {
+    let mut output = Vec::new();
+    stdout
+        .take((MAX_STAGE_OUTPUT_BYTES + 1) as u64)
+        .read_to_end(&mut output)
+        .map_err(|_| ())?;
+    if output.len() > MAX_STAGE_OUTPUT_BYTES {
+        return Err(());
+    }
+    Ok(output)
+}
+
+fn record_stage_helper_event(
+    event: StageHelperEvent,
+    input_complete: &mut Option<bool>,
+    output: &mut Option<Vec<u8>>,
+) -> std::result::Result<(), &'static str> {
+    match event {
+        StageHelperEvent::InputWritten(written) => {
+            if input_complete.replace(written).is_some() {
+                return Err("development acquisition helper input completed more than once");
+            }
+            if !written {
+                return Err("unable to send the complete development acquisition request");
+            }
+        }
+        StageHelperEvent::OutputRead(Ok(bytes)) => {
+            if output.replace(bytes).is_some() {
+                return Err("development acquisition helper output completed more than once");
+            }
+        }
+        StageHelperEvent::OutputRead(Err(())) => {
+            return Err("development acquisition helper output failed or exceeded its limit");
+        }
+    }
+    Ok(())
+}
+
+fn kill_and_wait(child: &mut Child) -> Result<ExitStatus> {
+    match child.try_wait() {
+        Ok(Some(_)) => {}
+        Ok(None) | Err(_) => {
+            let _ = child.kill();
+        }
+    }
+    child
+        .wait()
+        .context("unable to wait for development acquisition helper")
 }
 
 impl Drop for AuthoringAcquisition {

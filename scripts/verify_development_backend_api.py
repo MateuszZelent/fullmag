@@ -140,12 +140,21 @@ def exercise_cli_owner(repo: Path, run_root: Path, manifest: dict, receipt: dict
     fixture = run_root / "cli-owner-fixture"
     state = fixture / "state"
     state.mkdir(parents=True)
-    store = fixture / "storage"
-    store.mkdir()
-    worktree = "fixture-cli-owner"
+    native = storage.resolve_layout(repo, "windows-native-fdm-cpu-dev")
+    checks = storage.resolve_layout(repo, "development-backend-api-checks")
+    store = Path(native["storage_root"])
+    worktree = native["worktree_id"]
     generation = uuid.uuid4().hex
-    status = store / "builds" / worktree / "windows-native-fdm-cpu-dev/backend-watch-status.json"
-    status.parent.mkdir(parents=True)
+    # Keep the fixture's generation separate from the user's active watcher.
+    status = Path(checks["build_root"]) / "backend-watch-status.json"
+    from windows.runtime_bundle import create_bundle, BINARY_NAMES
+    source_bin = Path(manifest["cargo_target_dir"]) / manifest["target_triple"] / manifest["compiler_profile"]
+    required = sum((source_bin / name).stat().st_size for name in BINARY_NAMES)
+    if shutil.disk_usage(store).free < required + 512 * 1024 * 1024:
+        raise storage.StorageError("Insufficient free storage for the isolated candidate bundle")
+    candidate = create_bundle(native["build_root"], native["runtime_root"],
+        Path(native["build_root"]) / "windows-runtime/build-manifest.json", "dev")
+    receipt["cli_candidate_bundle"] = candidate
     storage.atomic_json(status, dict(schema="fullmag.backend-watch.v2", generation_id=generation,
         worktree_id=worktree, state="waiting", source_sha256=manifest["backend_source_sha256"],
         revision=1, updated_unix_ms=int(time.time() * 1000)))
@@ -155,6 +164,8 @@ def exercise_cli_owner(repo: Path, run_root: Path, manifest: dict, receipt: dict
     env = {key: os.environ[key] for key in ("SYSTEMROOT", "WINDIR", "PATH", "PATHEXT", "TEMP", "TMP", "COMPUTERNAME") if key in os.environ}
     env.update(FULLMAG_REPO_ROOT=str(repo), FULLMAG_STATE_ROOT=str(state), FULLMAG_API_PORT=str(port),
         FULLMAG_DEVELOPMENT_OWNER_PROBE="1", FULLMAG_NATIVE_RUNTIME_ACTIVE="1",
+        FULLMAG_PYTHON=str(Path(native["build_root"]) / "python/fullmag/Scripts/python.exe"),
+        FULLMAG_DEVELOPMENT_OWNER_PROBE_CANDIDATE=candidate["bundle_root"],
         FULLMAG_STORAGE_PROFILE="windows-native-fdm-cpu-dev", FULLMAG_PROJECT_STORAGE_ROOT=str(store),
         FULLMAG_WORKTREE_ID=worktree, FULLMAG_DEVELOPMENT_BACKEND_GENERATION=generation,
         FULLMAG_DEVELOPMENT_BACKEND_STATUS_FILE=str(status),
@@ -184,6 +195,17 @@ def exercise_cli_owner(repo: Path, run_root: Path, manifest: dict, receipt: dict
     assert result["schema"] == "fullmag.development-cli-owner-check.v1" and result["api_waited"] is True
     receipt["processes"].append(dict(label="cli-owned-api", pid=result["api_pid"],
         waited=True, exit_code=result["api_exit_code"]))
+    for item in result["stage_helpers"]:
+        assert item["waited"] is True and item["exit_code"] == 0
+        receipt["processes"].append(dict(label="cli-capsule-stage-helper", **item))
+    from windows.development_scene_handoff import load_scene_handoff
+    assert len(result["handoffs"]) == 2
+    for ack in result["handoffs"]:
+        loaded = load_scene_handoff(str(repo), ack["handoff"]["handoff_id"], ack["binding"])
+        assert loaded["snapshot_sha256"] == ack["handoff"]["snapshot_sha256"]
+        assert loaded["receipt"]["state"] == "staged"
+        assert loaded["editor"]["probe"] == ("empty" if ack["workspace_state"] == "no_session" else "scene")
+    receipt["cli_handoffs"] = result["handoffs"]
     receipt["checks"].extend("cli-owner-" + name for name in result["checks"])
 
 
