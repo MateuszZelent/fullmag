@@ -123,7 +123,25 @@ Ten browser proof nie przełącza hooków pomiędzy dwoma kernelami podczas
 natywnego restartu. Separacja klientów jest wykonana na produkcyjnym store
 w kontroli interpretowanej; pełny React/fresh-kernel flow nadal pozostaje otwarty.
 
-## Granice ukończenia
+## Checkpoint commita i integracji
+
+Lokalny commit implementacji na `master`:
+`ddfd6bc1560df361ce0dbea9ebeb28f25e1691e2`
+(`feat: fence development handoff owners and client caches`).
+Staged zakres sprawdzono osobno przed commitem; cztery pliki session oraz
+dirty submodule pozostawiono poza nim. Hook commita zakończył się exit 0,
+zgłaszając trzy ostrzeżenia React Doctor w authoring/region panels; wszystkie
+trzy fragmenty istnieją identycznie w rodzicu commita i nie są nową regresją.
+
+Publikacja źródeł do publicznego remote pozostaje zablokowana przez wcześniejszą
+automatyczną kontrolę uprawnień; nie ponawiano ani nie obchodzono odmowy.
+Aktualizacja rejestru przez `just worktree-finish` pozostaje zablokowana,
+ponieważ główny checkout ma zwykły katalog `target`, a nie zgodny adapter
+storage. Nie migrowano ani nie usuwano współdzielonego cache. Trwające zadanie
+`p6-fmr-artifact-routes` pozostaje WIP. Lokalny commit nie oznacza integracji
+remote ani zakończenia P8-53.
+
+## Pozostały zakres
 
 Port 3197 był zamknięty przed buildem. Nie zatrzymywano procesu API na innym
 porcie o niepotwierdzonym właścicielu. Nie usuwano cache ani danych sesji.
