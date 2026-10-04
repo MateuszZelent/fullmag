@@ -32,6 +32,7 @@ _STORAGE_SPEC.loader.exec_module(_STORAGE)
 
 SCHEMA = "fullmag.development-authoring-handoff.v1"
 SCENE_ASSET_SCHEMA = "fullmag.development-authoring-handoff.v2"
+EMPTY_WORKSPACE_SCHEMA = "fullmag.development-empty-workspace-handoff.v1"
 RECEIPT_SCHEMA = "fullmag.development-authoring-handoff-receipt.v1"
 HANDOFF_DIRECTORY = "development-handoffs"
 MAX_SNAPSHOT_BYTES = 64 * 1024 * 1024
@@ -160,7 +161,7 @@ def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def _validate_binding(value: Any) -> dict[str, Any]:
+def _validate_binding(value: Any, *, allow_empty_session: bool = False) -> dict[str, Any]:
     binding = _exact_keys(value, _BINDING_FIELDS, "binding")
     normalized = dict(binding)
     for field in _UUID_FIELDS:
@@ -174,7 +175,9 @@ def _validate_binding(value: Any) -> dict[str, Any]:
         if item not in {str(parsed), parsed.hex}:
             raise HandoffError(f"binding.{field} must use lowercase canonical UUID spelling")
     session_id = normalized["session_id"]
-    if not isinstance(session_id, str) or not _SESSION_ID.fullmatch(session_id):
+    if allow_empty_session and session_id is None:
+        pass
+    elif not isinstance(session_id, str) or not _SESSION_ID.fullmatch(session_id):
         raise HandoffError("binding.session_id must be a bounded opaque session identity")
     epoch = normalized["session_epoch"]
     if isinstance(epoch, bool) or not isinstance(epoch, int) or epoch < 0:
@@ -504,7 +507,7 @@ def create_handoff(
 def _stage_handoff(
     runtime_root: Path,
     binding: Mapping[str, Any],
-    scene: dict[str, Any],
+    scene: dict[str, Any] | None,
     editor: Any,
     workspace: Any,
     project_document: Any,
@@ -519,8 +522,20 @@ def _stage_handoff(
     root = _validate_runtime_root(runtime_root)
     _require_directory(asset_source_root, asset_source_root, "handoff asset source root")
     _contained_path(root, asset_source_root, "handoff runtime root")
-    normalized_binding = _validate_binding(binding)
-    if not isinstance(scene, dict):
+    if not isinstance(capsule_schema, str) or capsule_schema not in {
+        SCHEMA,
+        SCENE_ASSET_SCHEMA,
+        EMPTY_WORKSPACE_SCHEMA,
+    }:
+        raise HandoffError("Unknown handoff writer schema")
+    empty_workspace = capsule_schema == EMPTY_WORKSPACE_SCHEMA
+    normalized_binding = _validate_binding(binding, allow_empty_session=empty_workspace)
+    if empty_workspace:
+        if normalized_binding["session_id"] is not None:
+            raise HandoffError("Empty-workspace handoff must not claim a session identity")
+        if scene is not None:
+            raise HandoffError("Empty-workspace handoff must not contain a scene")
+    elif not isinstance(scene, dict):
         raise HandoffError("scene must be the complete canonical SceneDocument JSON object")
     payload = {
         "scene": scene,
@@ -536,9 +551,12 @@ def _stage_handoff(
     }
     payload_hash = _sha256(payload_bytes)
     normalized_assets = _asset_inputs(assets)
-    if not isinstance(capsule_schema, str) or capsule_schema not in {SCHEMA, SCENE_ASSET_SCHEMA}:
-        raise HandoffError("Unknown handoff writer schema")
-    if capsule_schema == SCENE_ASSET_SCHEMA:
+    if empty_workspace:
+        if normalized_assets:
+            raise HandoffError("Empty-workspace handoff cannot contain assets")
+        if asset_suffixes is not None or verified_prior_assets:
+            raise HandoffError("Empty-workspace handoff cannot declare asset metadata")
+    elif capsule_schema == SCENE_ASSET_SCHEMA:
         if asset_suffixes is None or set(asset_suffixes) != {asset["asset_id"] for asset in normalized_assets}:
             raise HandoffError("Semantic handoff requires a source suffix for every asset")
         if any(not isinstance(suffix, str) or not _SOURCE_SUFFIX.fullmatch(suffix)
@@ -661,7 +679,7 @@ def _validate_receipt(
 
 
 def _validate_asset_manifest(value: Any, schema: str = SCHEMA) -> list[dict[str, Any]]:
-    if not isinstance(schema, str) or schema not in {SCHEMA, SCENE_ASSET_SCHEMA}:
+    if not isinstance(schema, str) or schema not in {SCHEMA, SCENE_ASSET_SCHEMA, EMPTY_WORKSPACE_SCHEMA}:
         raise HandoffError("Unknown handoff asset manifest schema")
     if not isinstance(value, list) or len(value) > MAX_ASSET_COUNT:
         raise HandoffError("Handoff asset manifest is invalid or too large")
@@ -710,7 +728,6 @@ def _load_capsule(
         raise HandoffError("handoff_id must be a canonical UUID") from error
     if str(parsed_id) != handoff_id:
         raise HandoffError("handoff_id must use canonical UUID spelling")
-    normalized_expected = _validate_binding(expected_binding)
     handoff_root = _handoff_root(runtime_root)
     capsule = _contained_path(handoff_root / str(parsed_id), runtime_root, "handoff capsule")
     _require_directory(capsule, runtime_root, "handoff capsule")
@@ -722,10 +739,14 @@ def _load_capsule(
     snapshot = _strict_json(snapshot_bytes, "handoff snapshot")
     _exact_keys(snapshot, _SNAPSHOT_FIELDS, "handoff snapshot")
     if (not isinstance(snapshot["schema"], str)
-            or snapshot["schema"] not in {SCHEMA, SCENE_ASSET_SCHEMA}
+            or snapshot["schema"] not in {SCHEMA, SCENE_ASSET_SCHEMA, EMPTY_WORKSPACE_SCHEMA}
             or snapshot["snapshot_id"] != str(parsed_id)):
         raise HandoffError("Handoff snapshot belongs to a different schema or identity")
-    binding = _validate_binding(snapshot["binding"])
+    empty_workspace = snapshot["schema"] == EMPTY_WORKSPACE_SCHEMA
+    normalized_expected = _validate_binding(expected_binding, allow_empty_session=empty_workspace)
+    binding = _validate_binding(snapshot["binding"], allow_empty_session=empty_workspace)
+    if empty_workspace and binding["session_id"] is not None:
+        raise HandoffError("Empty-workspace handoff must not claim a session identity")
     if _canonical_json(binding, "snapshot binding", 4096) != _canonical_json(
         normalized_expected, "expected binding", 4096
     ):
@@ -738,7 +759,9 @@ def _load_capsule(
         binding_hash,
     )
     payload = _exact_keys(snapshot["payload"], _PAYLOAD_FIELDS, "handoff payload")
-    if not isinstance(payload["scene"], dict):
+    if empty_workspace and payload["scene"] is not None:
+        raise HandoffError("Empty-workspace handoff must not contain a scene")
+    if not empty_workspace and not isinstance(payload["scene"], dict):
         raise HandoffError("Handoff scene is not a canonical SceneDocument JSON object")
     payload_bytes = _canonical_json(payload, "handoff payload", MAX_SNAPSHOT_BYTES)
     if _sha256(payload_bytes) != snapshot["payload_sha256"]:
@@ -752,6 +775,8 @@ def _load_capsule(
             raise HandoffError(f"Handoff {field} SHA256 does not match")
 
     asset_manifest = _validate_asset_manifest(snapshot["assets"], snapshot["schema"])
+    if empty_workspace and asset_manifest:
+        raise HandoffError("Empty-workspace handoff cannot contain assets")
     expected_entries = {"snapshot.json", "receipt.json"}
     if asset_manifest:
         expected_entries.add("assets")
@@ -789,6 +814,7 @@ def _load_capsule(
 
     return {
         "handoff_id": str(parsed_id),
+        "schema": snapshot["schema"],
         "snapshot_sha256": snapshot_hash,
         "binding": binding,
         **payload,

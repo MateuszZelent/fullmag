@@ -58,6 +58,40 @@ class SemanticSceneHandoffTests(unittest.TestCase):
     def load(self, ref):
         return semantic.load_scene_handoff(str(self.repo), ref["handoff_id"], self.binding)
 
+    def rewrite_snapshot(self, ref, edit):
+        capsule_dir = self.runtime / capsule.HANDOFF_DIRECTORY / ref["handoff_id"]
+        snapshot_path = capsule_dir / "snapshot.json"
+        snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
+        edit(snapshot)
+        payload = snapshot["payload"]
+        snapshot["payload_sha256"] = capsule._sha256(
+            capsule._canonical_json(payload, "fixture payload", capsule.MAX_SNAPSHOT_BYTES)
+        )
+        snapshot["component_sha256"] = {
+            field: capsule._sha256(
+                capsule._canonical_json(payload[field], f"fixture payload.{field}", capsule.MAX_SNAPSHOT_BYTES)
+            )
+            for field in capsule._PAYLOAD_FIELDS
+        }
+        snapshot_bytes = capsule._canonical_json(snapshot, "fixture snapshot", capsule.MAX_SNAPSHOT_BYTES)
+        snapshot_path.write_bytes(snapshot_bytes)
+        binding_hash = capsule._sha256(
+            capsule._canonical_json(snapshot["binding"], "fixture binding", 4096)
+        )
+        receipt = capsule._new_receipt(
+            ref["handoff_id"], capsule._sha256(snapshot_bytes), binding_hash, "staged", None
+        )
+        (capsule_dir / "receipt.json").write_bytes(capsule._encode_receipt(receipt))
+
+    def stage_empty(self, binding=None):
+        empty_binding = {**self.binding, "session_id": None} if binding is None else binding
+        return semantic.create_empty_workspace_handoff(
+            str(self.repo), empty_binding,
+            {"tabs": ["scene", "materials"], "drafts": {"material": {"dirty": True}}},
+            {"camera": {"zoom": 2.25}, "active_view": "viewport"},
+            {"project_id": "project-empty-fixture", "revision": 14},
+        )
+
     def test_requires_existing_project_marker_before_any_handoff_write(self):
         for value in (None, {"schema": capsule._STORAGE.SCHEMA, "project_root": "another-project"}):
             with self.subTest(marker=value):
@@ -89,6 +123,97 @@ class SemanticSceneHandoffTests(unittest.TestCase):
         self.registry.write_text(json.dumps({**self.owner, "state": "completed"}), encoding="utf-8")
         with self.assertRaises(capsule.HandoffError):
             self.load(ref)
+
+    def test_empty_workspace_round_trips_ui_without_fabricating_session_or_scene_ids(self):
+        binding = {**self.binding, "session_id": None}
+        editor = {"tabs": ["scene", "materials"], "drafts": {"material": {"dirty": True}}}
+        workspace = {"camera": {"zoom": 2.25}, "active_view": "viewport"}
+        project_document = {"project_id": "project-empty-fixture", "revision": 14}
+        reference = semantic.create_empty_workspace_handoff(
+            str(self.repo), binding, editor, workspace, project_document
+        )
+        loaded = semantic.load_scene_handoff(str(self.repo), reference["handoff_id"], binding)
+
+        self.assertEqual(capsule.EMPTY_WORKSPACE_SCHEMA, "fullmag.development-empty-workspace-handoff.v1")
+        self.assertEqual(loaded["schema"], capsule.EMPTY_WORKSPACE_SCHEMA)
+        self.assertIsNone(loaded["binding"]["session_id"])
+        self.assertIsNone(loaded["scene"])
+        self.assertIsNone(loaded["source_scene"])
+        self.assertEqual(loaded["assets"], [])
+        self.assertEqual(loaded["editor"], editor)
+        self.assertEqual(loaded["workspace"], workspace)
+        self.assertEqual(loaded["project_document"], project_document)
+        self.assertEqual(loaded["receipt"]["state"], "staged")
+        self.assertEqual(reference["snapshot_sha256"], loaded["snapshot_sha256"])
+        self.assertNotIn("scene_id", loaded["binding"])
+
+    def test_empty_workspace_writer_requires_no_session_identity(self):
+        with self.assertRaisesRegex(capsule.HandoffError, "must not claim a session"):
+            self.stage_empty({**self.binding, "session_id": "session-invented"})
+
+    def test_empty_workspace_schema_rejects_scene_session_and_assets(self):
+        mutations = (
+            ("scene", lambda snapshot: snapshot["payload"].update(scene={"id": "invented"})),
+            ("session", lambda snapshot: snapshot["binding"].update(session_id="session-invented")),
+            ("assets", lambda snapshot: snapshot.update(assets=[{
+                "asset_id": "invented-asset", "path": f"assets/{'0' * 64}.blob",
+                "sha256": "0" * 64, "size_bytes": 1,
+            }])),
+        )
+        for label, mutation in mutations:
+            with self.subTest(field=label):
+                reference = self.stage_empty()
+                self.rewrite_snapshot(reference, mutation)
+                expected = {**self.binding, "session_id": None}
+                if label == "session":
+                    expected = {**self.binding, "session_id": "session-invented"}
+                with self.assertRaises(capsule.HandoffError):
+                    semantic.load_scene_handoff(str(self.repo), reference["handoff_id"], expected)
+
+    def test_empty_workspace_detects_snapshot_and_receipt_corruption(self):
+        reference = self.stage_empty()
+        empty_binding = {**self.binding, "session_id": None}
+        capsule_dir = self.runtime / capsule.HANDOFF_DIRECTORY / reference["handoff_id"]
+        snapshot_path = capsule_dir / "snapshot.json"
+        snapshot_path.write_bytes(snapshot_path.read_bytes() + b" ")
+        with self.assertRaises(capsule.HandoffError):
+            semantic.load_scene_handoff(str(self.repo), reference["handoff_id"], empty_binding)
+
+        reference = self.stage_empty()
+        receipt_path = self.runtime / capsule.HANDOFF_DIRECTORY / reference["handoff_id"] / "receipt.json"
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+        receipt["state"] = "restored"
+        receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+        with self.assertRaises(capsule.HandoffError):
+            semantic.load_scene_handoff(str(self.repo), reference["handoff_id"], empty_binding)
+
+    def test_empty_workspace_terminal_receipts_are_supported_and_guarded(self):
+        failed_ref = self.stage_empty()
+        failed = capsule.record_handoff_outcome(
+            self.runtime, failed_ref["handoff_id"], {**self.binding, "session_id": None},
+            "failed", detail="new API did not remain empty",
+        )
+        self.assertEqual(failed["state"], "failed")
+        expected = {**self.binding, "session_id": None}
+        failed_loaded = capsule.load_handoff(self.runtime, failed_ref["handoff_id"], expected)
+        self.assertIsNone(failed_loaded["scene"])
+        self.assertEqual(failed_loaded["receipt"]["detail"], "new API did not remain empty")
+        with self.assertRaisesRegex(capsule.HandoffError, "Only a staged handoff"):
+            semantic.load_scene_handoff(str(self.repo), failed_ref["handoff_id"], expected)
+
+        restored_ref = self.stage_empty()
+        expected = {**self.binding, "session_id": None}
+        restored = capsule.record_handoff_outcome(
+            self.runtime, restored_ref["handoff_id"], expected, "restored", detail="empty UI restored"
+        )
+        replay = capsule.record_handoff_outcome(
+            self.runtime, restored_ref["handoff_id"], expected, "restored", detail="empty UI restored"
+        )
+        self.assertEqual(replay, restored)
+        with self.assertRaises(capsule.HandoffError):
+            capsule.record_handoff_outcome(
+                self.runtime, restored_ref["handoff_id"], expected, "failed", detail="conflicting terminal"
+            )
 
     def test_refuses_rebase_when_a_copied_asset_is_missing_or_modified(self):
         for corrupt in (False, True):

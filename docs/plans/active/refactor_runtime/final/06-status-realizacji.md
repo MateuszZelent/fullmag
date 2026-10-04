@@ -1,5 +1,12 @@
 # Status realizacji całego planu refaktoryzacji
 
+Checkpoint P8-53U, 04.10.2026: [kapsuła przejętego workspace](p8/53u-acquired-workspace-capsule.md).
+Scoped frontend payload, verified candidate i readback staging; osobny wariant
+bez sceny/session_id zachowuje projekt/UI. Interpreted checks 96/96 bez skip,
+native build i 98 runtime checks PASS, 18 własnych procesów z potwierdzonym wait.
+Brak consumer CLI/UI transportu, atomowego commit, shutdown i pełnej hydration;
+procenty całego planu bez awansu.
+
 Checkpoint P8-53T, 04.10.2026: [aktualne potwierdzenie przejęcia](p8/53t-acquisition-live-confirmation.md).
 Managed Windows build i runtime PASS: 97 sprawdzeń, 18 własnych procesów
 z potwierdzonym wait. Kolejne potwierdzenia zachowują freeze, nie przedłużają

@@ -731,6 +731,10 @@ def exercise(api: Path, repo: Path, run_root: Path, receipt: dict) -> None:
                 wire_scene = json.loads(exchange.last_raw, parse_float=NumberToken,
                     parse_int=NumberToken)["workspace"]["scene_document"]
                 assert workspace["scene_sha256"] == hashlib.sha256(canonical_wire_bytes(wire_scene)).hexdigest()
+                from windows.development_acquisition_handoff import _acquired
+                staged_workspace, staged_identity = _acquired(bytes(exchange.last_raw), owner["api_instance_id"])
+                assert staged_workspace == workspace and staged_identity == workspace["identity"]
+                checks.append("private-acquisition-production-stager-validates-rust-wire-and-digest")
             checks.append("private-acquisition-canonical-workspace-and-provenance")
             for _ in range(2):
                 confirmed = exchange(stream, {**frame, "command": "confirm"})

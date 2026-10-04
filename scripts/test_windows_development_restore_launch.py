@@ -131,6 +131,14 @@ class DevelopmentRestoreLaunchTests(unittest.TestCase):
             self.manager_payload["project_document"],
         )
 
+    def _stage_empty(self, *, target_build_id: str) -> dict[str, str]:
+        self.binding["session_id"] = None
+        self.binding["target_build_id"] = target_build_id
+        return development_scene_handoff.create_empty_workspace_handoff(
+            str(self.repo), self.binding, self.manager_payload["editor"],
+            self.manager_payload["workspace"], self.manager_payload["project_document"],
+        )
+
     def _prepare(self, bundle_root: Path, reference: dict[str, str] | None = None):
         reference = reference or self._stage()
         return restore_launch.prepare_development_restore_launch(
@@ -143,6 +151,7 @@ class DevelopmentRestoreLaunchTests(unittest.TestCase):
         result = self._prepare(bundle_root, reference)
 
         envelope = result["envelope"]
+        self.assertEqual(result["workspace_state"], "session")
         self.assertEqual(set(envelope), {
             "schema", "target_build_id", "target_source_sha256", "old_session_id",
             "scene_document",
@@ -163,6 +172,38 @@ class DevelopmentRestoreLaunchTests(unittest.TestCase):
         self.assertEqual(result["handoff"]["handoff_id"], reference["handoff_id"])
         receipt_path = self.runtime / capsule.HANDOFF_DIRECTORY / reference["handoff_id"] / "receipt.json"
         self.assertEqual(json.loads(receipt_path.read_text(encoding="utf-8"))["state"], "staged")
+
+    def test_empty_workspace_prepares_without_fabricated_prelisten_scene(self) -> None:
+        bundle_root, manifest = _write_candidate(self.runtime)
+        reference = self._stage_empty(target_build_id=manifest["source"]["manifest_sha256"])
+        result = self._prepare(bundle_root, reference)
+
+        self.assertIsNone(result["envelope"])
+        self.assertEqual(result["workspace_state"], "no_session")
+        self.assertIsNone(self.binding["session_id"])
+        self.assertEqual(result["editor"], self.manager_payload["editor"])
+        self.assertEqual(result["workspace"], self.manager_payload["workspace"])
+        self.assertEqual(result["project_document"], self.manager_payload["project_document"])
+        self.assertEqual(result["candidate"]["bundle_id"], manifest["bundle_id"])
+        self.assertEqual(result["candidate"]["workspace_namespace"], "fixture")
+        self.assertEqual(result["handoff"]["handoff_id"], reference["handoff_id"])
+        self.assertEqual(result["handoff"]["snapshot_sha256"], reference["snapshot_sha256"])
+        receipt_path = self.runtime / capsule.HANDOFF_DIRECTORY / reference["handoff_id"] / "receipt.json"
+        self.assertEqual(json.loads(receipt_path.read_text(encoding="utf-8"))["state"], "staged")
+
+    def test_rejects_empty_workspace_capsule_for_another_candidate_manifest(self) -> None:
+        bundle_root, _manifest = _write_candidate(self.runtime, manifest_sha256="b" * 64)
+        reference = self._stage_empty(target_build_id="a" * 64)
+        with self.assertRaisesRegex(capsule.HandoffError, "target does not match"):
+            self._prepare(bundle_root, reference)
+
+    def test_rejects_corrupt_empty_workspace_capsule_before_preparation(self) -> None:
+        bundle_root, manifest = _write_candidate(self.runtime)
+        reference = self._stage_empty(target_build_id=manifest["source"]["manifest_sha256"])
+        snapshot_path = self.runtime / capsule.HANDOFF_DIRECTORY / reference["handoff_id"] / "snapshot.json"
+        snapshot_path.write_bytes(snapshot_path.read_bytes() + b" ")
+        with self.assertRaises(capsule.HandoffError):
+            self._prepare(bundle_root, reference)
 
     def test_rejects_capsule_for_another_candidate_manifest(self) -> None:
         bundle_root, _manifest = _write_candidate(self.runtime, manifest_sha256="b" * 64)

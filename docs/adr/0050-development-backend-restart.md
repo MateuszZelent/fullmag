@@ -144,6 +144,18 @@ zwalnia guardu ani nie przedłuża bezwzględnego limitu 30 sekund. Błąd klien
 unieważnia kanał. Potwierdzenie jest obserwacją: przyszły commit musi atomowo
 sprawdzić nadal aktualny guard, trwały ACK kapsuły i globalny idle/drain.
 
+Puste przejęcie ma osobny schema kapsuły
+`fullmag.development-empty-workspace-handoff.v1`, z `session_id=null`,
+`scene=null` i bez assetów. Zachowuje osobne dane edytora, projektu i workspace.
+Nie tworzy fikcyjnej sesji. Historyczne kapsuły v1/v2 zachowują wymaganie sceny
+i niepustego session_id. Przygotowanie nowego API dla pustej kapsuły nie wysyła
+envelope sceny; owner musi potwierdzić brak sesji, nowy pin i hydration UI.
+
+Staging łączy zaufane source identity ownera i manifest kandydata z payloadem
+UI przypiętym do tej samej instancji API, sesji i epoki. Trwały ACK wymaga
+odczytu zwrotnego hashów, stanu `staged`, oryginalnej sceny i danych UI.
+Nie zastępuje aktualnego potwierdzenia przejęcia ani atomowego commit/shutdown.
+
 Wymagane są: zgodność generated API, regresje błędnego/starego handoffu,
 odrzucenie aktywnego solve i wyścigu Start, ochrony szkiców i awarii restore,
 a także rzeczywisty przebieg Windows i przeglądarki z niepustą geometrią,

@@ -111,6 +111,31 @@ def create_scene_handoff(
     )
 
 
+def create_empty_workspace_handoff(
+    repo_root: str,
+    binding: Mapping[str, Any],
+    editor: Any,
+    workspace: Any,
+    project_document: Any,
+) -> dict[str, str]:
+    """Persist UI and project data for an acquired workspace with no session."""
+    store, runtime = _roots(repo_root)
+    normalized_binding = capsule._validate_binding(binding, allow_empty_session=True)
+    if normalized_binding["session_id"] is not None:
+        raise capsule.HandoffError("Empty-workspace handoff must not claim a session identity")
+    return capsule._stage_handoff(
+        runtime,
+        normalized_binding,
+        None,
+        editor,
+        workspace,
+        project_document,
+        assets=[],
+        asset_source_root=store,
+        capsule_schema=capsule.EMPTY_WORKSPACE_SCHEMA,
+    )
+
+
 def load_scene_handoff(
     repo_root: str,
     handoff_id: str,
@@ -126,6 +151,10 @@ def load_scene_handoff(
     loaded = capsule.load_handoff(runtime, handoff_id, expected_binding)
     if loaded["receipt"]["state"] != "staged":
         raise capsule.HandoffError("Only a staged handoff can be consumed for restoration")
+    if loaded["schema"] == capsule.EMPTY_WORKSPACE_SCHEMA:
+        if loaded["scene"] is not None or loaded["assets"]:
+            raise capsule.HandoffError("Verified empty-workspace handoff contains scene data")
+        return {**loaded, "source_scene": None, "scene": None}
     try:
         references = collect_scene_assets(loaded["scene"])
         copied = {asset["asset_id"]: asset for asset in loaded["assets"]}

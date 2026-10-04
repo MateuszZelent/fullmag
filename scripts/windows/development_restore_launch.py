@@ -58,13 +58,17 @@ def prepare_development_restore_launch(
     expected_binding: Mapping[str, Any],
     candidate_bundle_root: str | os.PathLike[str],
 ) -> dict[str, Any]:
-    """Prepare a private API envelope from a verified staged capsule and bundle.
+    """Prepare private restore metadata from a verified capsule and bundle.
 
     ``expected_binding`` must be supplied by the runtime manager that owns the
     existing API session. It is never read from the UI or inferred from the
     capsule. The capsule's ``target_build_id`` is the watcher build-manifest
     digest; the API envelope's target id is the product version because the
     managed API exposes that value as its current build identity.
+
+    An empty-workspace handoff returns no pre-listener envelope. Its caller
+    must still verify that the new API has no session and accept the new API
+    pin, restore the UI payload, and only then record a restored receipt.
     """
     layout, runtime_root = _verified_workspace(repo_root)
 
@@ -102,15 +106,22 @@ def prepare_development_restore_launch(
     if not isinstance(target_source_sha256, str) or not runtime_bundle._is_sha256(target_source_sha256):
         raise capsule.HandoffError("Verified development candidate has no valid backend source digest")
 
-    envelope = {
-        "schema": PRELISTEN_RESTORE_SCHEMA,
-        "target_build_id": target_build_id,
-        "target_source_sha256": target_source_sha256,
-        "old_session_id": binding["session_id"],
-        "scene_document": loaded["scene"],
-    }
+    empty_workspace = loaded["schema"] == capsule.EMPTY_WORKSPACE_SCHEMA
+    if empty_workspace:
+        envelope = None
+        workspace_state = "no_session"
+    else:
+        envelope = {
+            "schema": PRELISTEN_RESTORE_SCHEMA,
+            "target_build_id": target_build_id,
+            "target_source_sha256": target_source_sha256,
+            "old_session_id": binding["session_id"],
+            "scene_document": loaded["scene"],
+        }
+        workspace_state = "session"
     return {
         "envelope": envelope,
+        "workspace_state": workspace_state,
         "editor": loaded["editor"],
         "workspace": loaded["workspace"],
         "project_document": loaded["project_document"],

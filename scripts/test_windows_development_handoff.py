@@ -8,6 +8,7 @@ import uuid
 from pathlib import Path
 from unittest.mock import patch
 
+from windows import development_handoff as capsule
 from windows.development_handoff import (
     HandoffError,
     create_handoff,
@@ -72,6 +73,31 @@ class DevelopmentHandoffTests(unittest.TestCase):
 
     def load(self, reference: dict[str, object], expected: dict[str, object] | None = None) -> dict[str, object]:
         return load_handoff(self.root, reference["handoff_id"], self.binding if expected is None else expected)
+
+    def rewrite_snapshot(self, reference: dict[str, object], edit) -> None:
+        capsule_dir = self.root / "development-handoffs" / reference["handoff_id"]
+        snapshot_path = capsule_dir / "snapshot.json"
+        snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
+        edit(snapshot)
+        payload = snapshot["payload"]
+        snapshot["payload_sha256"] = capsule._sha256(
+            capsule._canonical_json(payload, "fixture payload", capsule.MAX_SNAPSHOT_BYTES)
+        )
+        snapshot["component_sha256"] = {
+            field: capsule._sha256(
+                capsule._canonical_json(payload[field], f"fixture payload.{field}", capsule.MAX_SNAPSHOT_BYTES)
+            )
+            for field in capsule._PAYLOAD_FIELDS
+        }
+        snapshot_bytes = capsule._canonical_json(snapshot, "fixture snapshot", capsule.MAX_SNAPSHOT_BYTES)
+        snapshot_path.write_bytes(snapshot_bytes)
+        binding_hash = capsule._sha256(
+            capsule._canonical_json(snapshot["binding"], "fixture binding", 4096)
+        )
+        receipt = capsule._new_receipt(
+            reference["handoff_id"], capsule._sha256(snapshot_bytes), binding_hash, "staged", None
+        )
+        (capsule_dir / "receipt.json").write_bytes(capsule._encode_receipt(receipt))
 
     def test_round_trips_full_scene_and_separate_authoring_payloads(self) -> None:
         reference = self.create()
@@ -207,6 +233,37 @@ class DevelopmentHandoffTests(unittest.TestCase):
     def test_rejects_unknown_binding_fields(self) -> None:
         malformed = dict(self.binding)
         malformed["pid"] = 1
+        with self.assertRaises(HandoffError):
+            create_handoff(self.root, malformed, scene_document(), {}, {}, {}, assets=[])
+
+    def test_legacy_capsule_schemas_reject_null_sessions_and_scenes(self) -> None:
+        for schema in (capsule.SCHEMA, capsule.SCENE_ASSET_SCHEMA):
+            with self.subTest(schema=schema, field="session_id"):
+                reference = self.create()
+                self.rewrite_snapshot(
+                    reference,
+                    lambda snapshot: snapshot.update(
+                        schema=schema,
+                        binding={**snapshot["binding"], "session_id": None},
+                    ),
+                )
+                with self.assertRaises(HandoffError):
+                    self.load(reference)
+
+            with self.subTest(schema=schema, field="scene"):
+                reference = self.create()
+                self.rewrite_snapshot(
+                    reference,
+                    lambda snapshot: snapshot.update(
+                        schema=schema,
+                        payload={**snapshot["payload"], "scene": None},
+                    ),
+                )
+                with self.assertRaises(HandoffError):
+                    self.load(reference)
+
+    def test_generic_legacy_writer_does_not_accept_a_null_session(self) -> None:
+        malformed = {**self.binding, "session_id": None}
         with self.assertRaises(HandoffError):
             create_handoff(self.root, malformed, scene_document(), {}, {}, {}, assets=[])
 

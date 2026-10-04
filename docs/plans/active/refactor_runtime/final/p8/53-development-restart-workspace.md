@@ -14,6 +14,7 @@ Prywatny kanał przejęcia authoring i dowód freeze/abort: [P8-53Q](53q-private
 Body HTTP, wspólne UUID, retry idle fence i stałe ścieżki świeżego startu: [P8-53R](53r-native-development-reliability.md).
 Owner początkowego API w natywnym CLI i klient acquire/abort: [P8-53S](53s-native-launcher-owner.md).
 Aktualne potwierdzenie przejęcia bez przedłużania timeoutu: [P8-53T](53t-acquisition-live-confirmation.md).
+Staging przejęcia ze scoped payloadem UI i pusta kapsuła: [P8-53U](53u-acquired-workspace-capsule.md).
 
 Jedno `just windows-ui dev` uruchamia HMR frontendu i obserwację backendu.
 Po kompilacji UI pokazuje „Nowy backend gotowy” oraz przycisk restartu.
