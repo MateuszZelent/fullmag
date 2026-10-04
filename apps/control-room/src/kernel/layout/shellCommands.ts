@@ -1,4 +1,6 @@
 import { requestThemeToggle } from "@/design/theme/themeEvents";
+import { startScreenStore } from "@/modules/start/model/startScreenState";
+
 import { homeView } from "./homeView";
 
 import type { CommandContribution } from "../commands/commandTypes";
@@ -140,6 +142,21 @@ export const SHELL_COMMANDS: CommandContribution[] = [
     scope: "global",
     run: () => {
       homeView.toggle();
+      return { status: "completed" };
+    },
+  },
+  {
+    id: "workspace.search-docs",
+    title: "Search Docs",
+    group: "workspace",
+    category: "Help",
+    scope: "global",
+    shortcut: "F1",
+    // Documentation lives in the start screen's Docs section; over an open
+    // workspace that screen is laid on top, so nothing is torn down.
+    run: () => {
+      startScreenStore.setSection("docs");
+      homeView.open();
       return { status: "completed" };
     },
   },
@@ -446,7 +463,6 @@ export const SHELL_COMMANDS: CommandContribution[] = [
   disabledPlaceholder("workspace.diagnostics", "Diagnostics", "Tools"),
   disabledPlaceholder("workspace.api-console", "API Console", "Tools"),
   disabledPlaceholder("workspace.script-view", "Script View", "Tools"),
-  disabledPlaceholder("workspace.search-docs", "Search Docs", "Help"),
   disabledPlaceholder("workspace.reference", "Reference", "Help"),
   disabledPlaceholder("workspace.about-help", "About", "Help"),
 ];
