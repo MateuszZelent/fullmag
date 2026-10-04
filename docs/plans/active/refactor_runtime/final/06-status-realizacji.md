@@ -1,5 +1,14 @@
 # Status realizacji całego planu refaktoryzacji
 
+Checkpoint P8-53AM, 04.10.2026: [guard szkiców i New Problem](p8/53am-pending-form-transition.md).
+Otwarcie/Cancel nie czyści historii ani szkiców; guard obejmuje wszystkich
+ownerów i callbacki Apply/Reset przed publikacją React. Po ACK zmienione wpisy
+nie są czyszczone, a zaakceptowane Create nie jest ponawiane. Browser 23/23,
+production TypeScript, lint i API hygiene PASS. Pełny restart oraz odtworzenie
+paneli pozostają otwarte; procenty bez awansu. Kolejny krok: transport UI→native
+coordinator i fresh-pin hydration obu niezależnych składników: sceny sesji
+oraz dokumentu projektu, zgodnie z P8-53U.
+
 Checkpoint P8-53AL, 04.10.2026: [aktualizacja archiwum ze sceny](p8/53al-project-authoring-archive.md).
 Natywne API: 25 kontroli PASS; kontroler w przeglądarce: 15 grup PASS;
 production TypeScript, lint i API hygiene PASS. Import surowego OpenAPI

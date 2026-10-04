@@ -1,6 +1,11 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { PendingFormRegistry, type PendingForm } from "@/kernel/authoring/PendingFormRegistry";
+import { createProblemWithPendingFormGuard } from "@/kernel/layout/createProblemWithPendingFormGuard";
+import { NewProblemDialog } from "@/kernel/layout/NewProblemDialog";
+import { KernelContext } from "@/kernel/KernelContext";
+import type { KernelApi } from "@/kernel/types";
 
 import type {
   ProjectArchiveRequest,
@@ -95,6 +100,10 @@ interface FixtureReport {
 
 declare global {
   interface Window {
+    __newProblemFixture?: {
+      read(): { apiCalls: number; historyClears: number; dirty: boolean };
+      failRequest(): void;
+    };
     __projectDocumentHandoffChecks?: () => Promise<FixtureReport>;
   }
 }
@@ -969,6 +978,214 @@ async function checkAuthoringProxyReentryIsBusyGated(): Promise<void> {
   assertCondition(state.calls.authoring.length === 1, "Valid proxy scene was not sent exactly once");
 }
 
+function pendingForm(patch: Partial<PendingForm> = {}): PendingForm {
+  return {
+    apply: () => true,
+    applying: false,
+    dirty: false,
+    mode: "staged",
+    reset: () => undefined,
+    valid: true,
+    ...patch,
+  };
+}
+
+async function checkAllPendingFormsProtectTransition(): Promise<void> {
+  const registry = new PendingFormRegistry();
+  const hiddenOwner = Symbol("hidden-dirty");
+  registry.register(hiddenOwner, pendingForm({ dirty: true }));
+  registry.register(Symbol("visible-clean"), pendingForm());
+  assertCondition(!registry.getSnapshot().dirty, "Visible form should be clean in this fixture");
+  await expectRejected(() => registry.prepareTransition({ applyPendingChanges: false }), "hidden dirty transition");
+  registry.update(hiddenOwner, pendingForm({ applying: true }));
+  await expectRejected(() => registry.prepareTransition({ applyPendingChanges: true }), "in-flight hidden transition");
+  registry.clear();
+  const guard = await registry.prepareTransition({ applyPendingChanges: false });
+  guard.assertCurrent();
+  registry.register(Symbol("new-draft"), pendingForm({ dirty: true }));
+  await expectRejected(async () => guard.assertCurrent(), "changed registry guard");
+  guard.release();
+}
+
+async function checkExplicitPendingApplyAndReentry(): Promise<void> {
+  const registry = new PendingFormRegistry();
+  const owner = Symbol("apply-owner");
+  const finished = makeDeferred<boolean>();
+  let calls = 0;
+  registry.register(owner, pendingForm({ dirty: true, apply: async () => {
+    calls += 1;
+    const result = await finished.promise;
+    registry.update(owner, pendingForm());
+    return result;
+  } }));
+  const preparation = registry.prepareTransition({ applyPendingChanges: true });
+  await expectRejected(() => registry.prepareTransition({ applyPendingChanges: true }), "duplicate transition");
+  assertCondition((await registry.apply()).status !== "completed", "Apply bypassed transition ownership");
+  assertCondition((await registry.reset()).status !== "completed", "Reset bypassed transition ownership");
+  finished.resolve(true);
+  const guard = await preparation;
+  assertCondition(calls === 1, "Transition applied the same form more than once");
+  guard.assertCurrent();
+  guard.release();
+  registry.register(owner, pendingForm({ dirty: true }));
+  await expectRejected(() => registry.prepareTransition({ applyPendingChanges: true }), "unconfirmed clean form");
+  assertCondition(registry.getSnapshot().dirty, "Failed preparation discarded the draft");
+}
+
+async function checkNewProblemGuardUsesNoImplicitDiscard(): Promise<void> {
+  const registry = new PendingFormRegistry();
+  const owner = Symbol("new-problem-draft");
+  let calls = 0;
+  const sessions = { create: async () => {
+    calls += 1;
+    throw new Error("owned API failure");
+  } };
+  const request = { backend: "fdm" as const, device: "cpu" as const, name: "Fixture", precision: "double" as const, replace_current: true };
+  registry.register(owner, pendingForm({ dirty: true }));
+  await expectRejected(() => createProblemWithPendingFormGuard(sessions, registry, request), "dirty new problem");
+  assertCondition(calls === 0, "Dirty draft reached session replacement");
+  assertCondition(registry.getSnapshot().dirty, "New Problem discarded the draft");
+  registry.update(owner, pendingForm());
+  await expectRejected(() => createProblemWithPendingFormGuard(sessions, registry, request), "failed new problem");
+  assertCondition(Number(calls) === 1, "Session create was retried implicitly");
+  const guard = await registry.prepareTransition({ applyPendingChanges: false });
+  guard.assertCurrent();
+  guard.release();
+  await expectRejected(() => createProblemWithPendingFormGuard(sessions, undefined, request), "missing draft owner");
+  assertCondition(Number(calls) === 1, "Missing registry reached session create");
+}
+
+async function checkPendingTransitionRefusals(): Promise<void> {
+  for (const patch of [
+    { valid: false }, { lockReason: "fixture conflict" },
+    { mode: "liveViewport" as const }, { mode: "immediate" as const },
+  ]) {
+    const registry = new PendingFormRegistry();
+    let calls = 0;
+    registry.register(Symbol("blocked"), pendingForm({ ...patch, dirty: true, apply: () => { calls += 1; return true; } }));
+    await expectRejected(() => registry.prepareTransition({ applyPendingChanges: true }), "ineligible form");
+    assertCondition(calls === 0, "Ineligible transition executed Apply");
+    assertCondition(registry.getSnapshot().dirty, "Ineligible transition discarded changes");
+  }
+  const empty = new PendingFormRegistry();
+  const guard = await empty.prepareTransition({ applyPendingChanges: false });
+  empty.clear();
+  await expectRejected(async () => guard.assertCurrent(), "empty session clear");
+  guard.release();
+  const registry = new PendingFormRegistry();
+  const owner = Symbol("cleared-in-apply");
+  registry.register(owner, pendingForm({ dirty: true, apply: () => { registry.clear(); return true; } }));
+  await expectRejected(() => registry.prepareTransition({ applyPendingChanges: true }), "owner vanished in Apply");
+  const cleanGuard = await registry.prepareTransition({ applyPendingChanges: false });
+  cleanGuard.release();
+  await expectRejected(async () => cleanGuard.assertCurrent(), "released transition guard");
+}
+
+async function checkNewProblemAcknowledgedRacePreservesDraft(): Promise<void> {
+  const registry = new PendingFormRegistry();
+  const owner = Symbol("ack-race");
+  registry.register(owner, pendingForm());
+  type Response = Awaited<ReturnType<Parameters<typeof createProblemWithPendingFormGuard>[0]["create"]>>;
+  const response: Response = {
+    session_id: "fixture-accepted-session",
+    revisions: { scene_revision: 0, state_version: 0 },
+    scene_document: { schema_version: "0.3", objects: [] },
+    status: {
+      requested_execution: { backend: "fdm", device: "cpu", precision: "double" },
+      effective_execution: { backend: "fdm", device: "cpu", precision: "double" },
+      fallback: null,
+    },
+  };
+  const requestFinished = makeDeferred<Response>();
+  const requestStarted = makeDeferred<void>();
+  let historyClears = 0;
+  let calls = 0;
+  const creation = createProblemWithPendingFormGuard({ create: () => {
+    calls += 1;
+    requestStarted.resolve();
+    return requestFinished.promise;
+  } }, registry, { backend: "fdm", device: "cpu", precision: "double", name: "Ack race", replace_current: true }, () => { historyClears += 1; });
+  await requestStarted.promise;
+  registry.update(owner, pendingForm({ dirty: true }));
+  requestFinished.resolve(response);
+  const outcome = await creation;
+  assertCondition(outcome.response === response, "Acknowledged session outcome was lost");
+  assertCondition(outcome.draftsPreserved, "Changed draft was cleared after positive ACK");
+  assertCondition(registry.getSnapshot().dirty && historyClears === 0, "Acknowledged race cleared draft or history");
+  assertCondition(calls === 1, "Acknowledged create was submitted twice");
+  registry.update(owner, pendingForm());
+  const normal = await createProblemWithPendingFormGuard({ create: async () => response }, registry,
+    { backend: "fdm", device: "cpu", precision: "double", name: "Clean ack", replace_current: true }, () => { historyClears += 1; });
+  assertCondition(!normal.draftsPreserved && normal.finalizationError === null, "Clean ACK did not finish normally");
+  assertCondition(Number(historyClears) === 1 && registry.getSnapshot().registeredCount === 0, "Clean ACK did not clear prior form ownership");
+}
+
+async function checkPendingApplyCannotHideForeignMutation(): Promise<void> {
+  const registry = new PendingFormRegistry();
+  const owner = Symbol("self-clean");
+  const otherOwner = Symbol("other-owner");
+  registry.register(otherOwner, pendingForm());
+  registry.register(owner, pendingForm({ dirty: true, apply: () => {
+    registry.update(otherOwner, pendingForm());
+    registry.update(owner, pendingForm());
+    return true;
+  } }));
+  await expectRejected(() => registry.prepareTransition({ applyPendingChanges: true }), "foreign update hidden by self-clean");
+  const second = new PendingFormRegistry();
+  const firstOwner = Symbol("first");
+  const nextOwner = Symbol("next");
+  let nextCalls = 0;
+  const next = pendingForm({ dirty: true, apply: () => { nextCalls += 1; return true; } });
+  second.register(firstOwner, pendingForm({ dirty: true, apply: () => {
+    next.valid = false;
+    second.update(firstOwner, pendingForm());
+    return true;
+  } }));
+  second.register(nextOwner, next);
+  await expectRejected(() => second.prepareTransition({ applyPendingChanges: true }), "in-place mutation before next Apply");
+  assertCondition(nextCalls === 0, "Transition executed a form whose validation changed during preparation");
+}
+
+async function checkUnpublishedCommandBlocksTransition(): Promise<void> {
+  for (const command of ["apply", "reset"] as const) {
+    const registry = new PendingFormRegistry();
+    const owner = Symbol(command);
+    const finished = makeDeferred<boolean>();
+    let calls = 0;
+    registry.register(owner, pendingForm({ dirty: true,
+      apply: async () => { calls += 1; return await finished.promise; },
+      reset: async () => { calls += 1; await finished.promise; },
+    }));
+    const pending = registry[command]();
+    registry.update(owner, pendingForm());
+    assertCondition(registry.getTransitionSnapshot().applyingOwnerCount === 1, "In-flight command lost its owner before React publication");
+    await expectRejected(() => registry.prepareTransition({ applyPendingChanges: false }), "unpublished in-flight command");
+    assertCondition((await registry.apply()).status !== "completed", "Concurrent Apply bypassed in-flight command");
+    assertCondition((await registry.reset()).status !== "completed", "Concurrent Reset bypassed in-flight command");
+    assertCondition(calls === 1, "In-flight callback was invoked twice");
+    finished.resolve(true);
+    assertCondition((await pending).status === "completed", "Original command did not finish");
+    const guard = await registry.prepareTransition({ applyPendingChanges: false });
+    guard.assertCurrent();
+    guard.release();
+  }
+  for (const command of ["apply", "reset"] as const) {
+    const registry = new PendingFormRegistry();
+    const owner = Symbol("listener-mutation");
+    let calls = 0;
+    const form = pendingForm({ dirty: true, apply: () => { calls += 1; return true; }, reset: () => { calls += 1; } });
+    registry.register(owner, form);
+    const stop = registry.subscribe(() => {
+      form.valid = false;
+      form.apply = () => { calls += 1; return true; };
+      form.reset = () => { calls += 1; };
+    });
+    assertCondition((await registry[command]()).status === "failed", "In-place listener mutation did not refuse the command");
+    assertCondition(calls === 0, "Command executed a callback changed by its start notification");
+    stop();
+  }
+}
+
 async function runChecks(): Promise<FixtureReport> {
   const checks: FixtureCheck[] = [];
   const cases: Array<[string, () => Promise<void>]> = [
@@ -987,6 +1204,13 @@ async function runChecks(): Promise<FixtureReport> {
     ["authoring busy gate blocks concurrent document operations", checkAuthoringBusyOperationGates],
     ["invalid input and API failure leave the snapshot unchanged", checkAuthoringFailuresLeaveSnapshotUnchanged],
     ["proxy reentry cannot close the document during authoring validation", checkAuthoringProxyReentryIsBusyGated],
+    ["all registered forms guard transitions and invalidate stale leases", checkAllPendingFormsProtectTransition],
+    ["explicit pending Apply owns callbacks and requires authoritative clean state", checkExplicitPendingApplyAndReentry],
+    ["New Problem refuses dirty or unknown drafts without API call or discard", checkNewProblemGuardUsesNoImplicitDiscard],
+    ["invalid/live/locked forms and cleared owners never authorize a transition", checkPendingTransitionRefusals],
+    ["positive New Problem ACK preserves changed drafts without retry", checkNewProblemAcknowledgedRacePreservesDraft],
+    ["self-clean Apply cannot hide a foreign registry or in-place mutation", checkPendingApplyCannotHideForeignMutation],
+    ["unpublished in-flight Apply and Reset block transitions and duplicate commands", checkUnpublishedCommandBlocksTransition],
   ];
   for (const [name, check] of cases) {
     try {
@@ -1008,6 +1232,45 @@ async function runChecks(): Promise<FixtureReport> {
   };
 }
 
+function NewProblemDraftFixture() {
+  const [open, setOpen] = useState(false);
+  const fixture = useMemo(() => {
+    const registry = new PendingFormRegistry();
+    const owner = Symbol("modal-draft");
+    registry.register(owner, pendingForm({ dirty: true }));
+    const request = makeDeferred<never>();
+    const state = { apiCalls: 0, historyClears: 0 };
+    // This fixture supplies only the services consumed by the production
+    // dialog. It does not construct a runtime, resource cache, or renderer.
+    const kernel = {
+      api: { sessions: { create: () => {
+        state.apiCalls += 1;
+        return request.promise;
+      } } },
+      authoringHistory: { clear: () => { state.historyClears += 1; } },
+      pendingForms: registry,
+      resources: { invalidate: () => undefined, invalidatePrefix: () => undefined },
+    } as unknown as KernelApi;
+    return { kernel, owner, registry, request, state };
+  }, []);
+  useEffect(() => {
+    window.__newProblemFixture = {
+      read: () => ({ ...fixture.state, dirty: fixture.registry.getSnapshot().dirty }),
+      failRequest: () => fixture.request.reject(new Error("Fixture session create failed")),
+    };
+    return () => { delete window.__newProblemFixture; };
+  }, [fixture]);
+  return (
+    <KernelContext.Provider value={fixture.kernel}>
+      <section aria-label="New Problem draft fixture">
+        <button type="button" data-new-problem-open onClick={() => setOpen(true)}>Open New Problem fixture</button>
+        <button type="button" data-new-problem-clean onClick={() => fixture.registry.update(fixture.owner, pendingForm())}>Resolve fixture draft</button>
+        <NewProblemDialog hasActiveSession open={open} onOpenChange={setOpen} />
+      </section>
+    </KernelContext.Provider>
+  );
+}
+
 export default function ProjectDocumentHandoffFixture() {
   useEffect(() => {
     window.__projectDocumentHandoffChecks = runChecks;
@@ -1027,6 +1290,7 @@ export default function ProjectDocumentHandoffFixture() {
         a stateless typed projects.open mock; it does not exercise the backend
         runtime or a solver.
       </p>
+      <NewProblemDraftFixture />
     </main>
   );
 }

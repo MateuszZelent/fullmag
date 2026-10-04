@@ -145,10 +145,6 @@ function createKernel(): KernelApi {
       pendingForms.clear();
     }
   });
-  bus.on("workspace:new-problem-requested", () => {
-    authoringHistory.clear();
-    pendingForms.clear();
-  });
   const cameraRegistry = new CameraRegistryController({
     api: api.visualization,
     getSessionScopeKey: () => commands.getSessionScopeKey() ?? null,

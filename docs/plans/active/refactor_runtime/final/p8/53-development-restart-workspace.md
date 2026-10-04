@@ -1,5 +1,13 @@
 # P8-53 — bezpieczne zastosowanie nowego backendu w workspace
 
+[P8-53AM](53am-pending-form-transition.md) chroni wszystkie zarejestrowane
+szkice i trwające Apply/Reset podczas przejścia. Produkcyjny New Problem nie
+czyści danych przy otwarciu/Cancel i odróżnia pozytywny ACK od błędu finalizacji.
+Browser: 23 grupy PASS; source, lint i API hygiene PASS. Transport restartu
+i hydration pozostają otwarte. Dokument projektu i scena sesji są odrębnymi
+składnikami kapsuły P8-53U; ich automatyczna synchronizacja nie jest warunkiem
+restartu. Następny krok to podłączenie payloadu UI do natywnego koordynatora.
+
 [P8-53AL](53al-project-authoring-archive.md) dodaje jawną aktualizację archiwum
 projektu z dokumentu sceny, z kontrolą ID/revision i zachowaniem assets,
 metadanych oraz historii źródła. Natywne API: 25 kontroli PASS; kontroler

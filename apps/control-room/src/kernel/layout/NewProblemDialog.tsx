@@ -9,6 +9,7 @@ import {
   SESSION_CURRENT_PATH,
 } from "../api/apiPaths";
 import { useKernel } from "../KernelContext";
+import { createProblemWithPendingFormGuard } from "./createProblemWithPendingFormGuard";
 import { SESSION_STATUS_RESOURCE_KEY } from "../resources/useSessionStatus";
 import { Button } from "@/shared/ui/Button";
 import { Checkbox } from "@/shared/ui/Checkbox";
@@ -69,19 +70,22 @@ export function NewProblemDialog({
   const [name, setName] = useState("Untitled problem");
   const [replaceConfirmed, setReplaceConfirmed] = useState(false);
   const [pending, setPending] = useState(false);
+  const [creationAccepted, setCreationAccepted] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const create = async () => {
     setPending(true);
     setError(null);
     try {
-      const response = await kernel.api.sessions.create({
+      const outcome = await createProblemWithPendingFormGuard(kernel.api.sessions, kernel.pendingForms, {
         backend,
         device: "cpu",
         name,
         precision: "double",
         replace_current: hasActiveSession,
-      });
+      }, () => kernel.authoringHistory?.clear());
+      setCreationAccepted(true);
+      const response = outcome.response;
       // state_version is scoped to the created session and resets when a
       // current session is replaced. Use the new identity for the cross-
       // session invalidation so a reset to zero cannot be treated as stale.
@@ -91,7 +95,11 @@ export function NewProblemDialog({
       kernel.resources.invalidatePrefix(SESSION_CURRENT_PATH, revision);
       kernel.resources.invalidate(MODEL_SCENE_PATH, revision);
       kernel.resources.invalidate(MODEL_READINESS_PATH, revision);
-      onOpenChange(false);
+      if (outcome.draftsPreserved || outcome.finalizationError) {
+        setError("The session was created. Close this dialog and review your Inspector changes before continuing.");
+      } else {
+        onOpenChange(false);
+      }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Unable to create the simulation.");
     } finally {
@@ -100,7 +108,7 @@ export function NewProblemDialog({
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={(nextOpen) => { if (!pending) onOpenChange(nextOpen); }}>
       <DialogContent aria-describedby="fm-new-problem-description">
         <DialogHeader>
           <DialogTitle>New Problem</DialogTitle>
@@ -131,8 +139,8 @@ export function NewProblemDialog({
           {error ? <p className="text-fm-control text-fm-danger" role="alert">{error}</p> : null}
         </div>
         <DialogFooter>
-          <DialogClose asChild><Button disabled={pending} size="sm" type="button" variant="ghost">Cancel</Button></DialogClose>
-          <Button disabled={pending || !name.trim() || (hasActiveSession && !replaceConfirmed)} size="sm" type="button" onClick={create}>{pending ? "Creating…" : "Create"}</Button>
+          <DialogClose asChild><Button disabled={pending} size="sm" type="button" variant="ghost">{creationAccepted ? "Close" : "Cancel"}</Button></DialogClose>
+          <Button disabled={pending || creationAccepted || !name.trim() || (hasActiveSession && !replaceConfirmed)} size="sm" type="button" onClick={create}>{pending ? "Creating…" : "Create"}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

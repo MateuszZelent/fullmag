@@ -111,6 +111,35 @@ async function main() {
       result.total_checks > 0 && result.passed_checks === result.total_checks,
       "Project document handoff did not pass every check.",
     );
+    await page.locator("[data-new-problem-open]").click();
+    const dialog = page.getByRole("dialog", { name: "New Problem", exact: true });
+    await dialog.waitFor({ state: "visible" });
+    await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+    await dialog.waitFor({ state: "hidden" });
+    assert.deepEqual(await page.evaluate(() => window.__newProblemFixture.read()),
+      { apiCalls: 0, historyClears: 0, dirty: true }, "Cancelling New Problem changed draft/history");
+    await page.locator("[data-new-problem-open]").click();
+    await dialog.getByRole("checkbox").check();
+    await dialog.getByRole("button", { name: "Create", exact: true }).click();
+    await dialog.getByRole("alert").waitFor({ state: "visible" });
+    assert.deepEqual(await page.evaluate(() => window.__newProblemFixture.read()),
+      { apiCalls: 0, historyClears: 0, dirty: true }, "Dirty draft reached session replacement");
+    await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+    await page.locator("[data-new-problem-clean]").click();
+    await page.locator("[data-new-problem-open]").click();
+    await dialog.getByRole("checkbox").check();
+    await dialog.getByRole("button", { name: "Create", exact: true }).click();
+    await page.waitForFunction(() => window.__newProblemFixture.read().apiCalls === 1);
+    await page.keyboard.press("Escape");
+    assertCondition(await dialog.isVisible(), "Pending session create allowed the modal to close");
+    await page.evaluate(() => window.__newProblemFixture.failRequest());
+    await dialog.getByRole("alert").waitFor({ state: "visible" });
+    assert.deepEqual(await page.evaluate(() => window.__newProblemFixture.read()),
+      { apiCalls: 1, historyClears: 0, dirty: false }, "Failed session create cleared history or retried");
+    await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+    result.checks.push({ name: "production New Problem modal preserves drafts on Cancel and failure and stays open while pending", status: "passed" });
+    result.total_checks += 1;
+    result.passed_checks += 1;
     assertCondition(pageErrors.length === 0, `Browser page errors: ${pageErrors.join(" | ")}`);
     assertCondition(
       consoleErrors.length === 0,
