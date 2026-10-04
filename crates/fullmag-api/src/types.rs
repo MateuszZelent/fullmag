@@ -1285,6 +1285,9 @@ pub(crate) struct StageExecutionRecord {
     pub current_settle_step_kind: Option<String>,
     #[serde(default)]
     pub current_settle_step_method: Option<String>,
+    /// Latest real adaptive FEM CPU admission sample for this stage.
+    #[serde(default)]
+    pub parallel_execution: Option<fullmag_runner::LiveParallelExecutionTelemetry>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, ToSchema)]

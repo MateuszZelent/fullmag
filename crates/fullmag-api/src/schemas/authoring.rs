@@ -25,6 +25,69 @@ pub enum NullableStringPatchValue {
     Null,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct ParallelExecutionResource {
+    pub mode: ParallelExecutionModeResource,
+    pub max_cpu_percent: f64,
+    pub max_memory_percent: f64,
+    pub memory_reserve_bytes: u64,
+    pub max_workers: Option<u32>,
+    pub threads_per_worker: u32,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ParallelExecutionModeResource {
+    Serial,
+    Adaptive,
+}
+
+impl From<&fullmag_ir::ParallelExecutionPolicyIR> for ParallelExecutionResource {
+    fn from(policy: &fullmag_ir::ParallelExecutionPolicyIR) -> Self {
+        Self {
+            mode: match policy.mode {
+                fullmag_ir::ParallelExecutionModeIR::Serial => {
+                    ParallelExecutionModeResource::Serial
+                }
+                fullmag_ir::ParallelExecutionModeIR::Adaptive => {
+                    ParallelExecutionModeResource::Adaptive
+                }
+            },
+            max_cpu_percent: policy.max_cpu_percent,
+            max_memory_percent: policy.max_memory_percent,
+            memory_reserve_bytes: policy.memory_reserve_bytes,
+            max_workers: policy.max_workers,
+            threads_per_worker: policy.threads_per_worker,
+        }
+    }
+}
+
+impl TryFrom<ParallelExecutionResource> for fullmag_ir::ParallelExecutionPolicyIR {
+    type Error = String;
+
+    fn try_from(value: ParallelExecutionResource) -> Result<Self, Self::Error> {
+        let mode = match value.mode {
+            ParallelExecutionModeResource::Serial => {
+                fullmag_ir::ParallelExecutionModeIR::Serial
+            }
+            ParallelExecutionModeResource::Adaptive => {
+                fullmag_ir::ParallelExecutionModeIR::Adaptive
+            }
+        };
+        let policy = Self {
+            mode,
+            max_cpu_percent: value.max_cpu_percent,
+            max_memory_percent: value.max_memory_percent,
+            memory_reserve_bytes: value.memory_reserve_bytes,
+            max_workers: value.max_workers,
+            threads_per_worker: value.threads_per_worker,
+        };
+        policy.validate()?;
+        Ok(policy)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct StudyRuntimeResource {
     pub backend: Option<String>,
@@ -33,6 +96,7 @@ pub struct StudyRuntimeResource {
     pub requested_precision: String,
     pub requested_mode: String,
     pub requested_cpu_threads: Option<u32>,
+    pub parallel_execution: ParallelExecutionResource,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -43,6 +107,7 @@ pub struct StudyRuntimePatchRequest {
     pub requested_mode: Option<String>,
     #[serde(default, deserialize_with = "deserialize_nullable_u32_patch_field")]
     pub requested_cpu_threads: Option<NullableU32PatchValue>,
+    pub parallel_execution: Option<ParallelExecutionResource>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]

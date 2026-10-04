@@ -193,16 +193,9 @@ pub(crate) fn build_live_status(
         snapshot.runtime_status.can_accept_commands && !snapshot.runtime_status.is_busy,
         connectivity,
     );
-    let terminal_session_resource =
-        lifecycle.session_resource == crate::schemas::status::SessionResourceLifecycle::Tombstoned;
     let session = SessionSummary {
         session_id: snapshot.session.session_id.clone(),
-        session_epoch: session_epoch(
-            &snapshot.session.session_id,
-            snapshot.session.started_at_unix_ms,
-            snapshot.session.finished_at_unix_ms,
-            terminal_session_resource,
-        ),
+        session_epoch: snapshot_session_epoch(snapshot),
         name: snapshot.session.problem_name.clone(),
         created_at: snapshot.session.started_at_unix_ms.to_string(),
         workspace_root: workspace_root.display().to_string(),
@@ -410,7 +403,7 @@ pub(crate) fn lifecycle_contract(
     runtime_accepts_commands: bool,
     connectivity: SessionConnectivity,
 ) -> crate::schemas::status::SessionLifecycleSummary {
-    let terminal = matches!(solver, "completed" | "failed" | "cancelled" | "closed");
+    let terminal = terminal_solver_lifecycle(solver);
     crate::schemas::status::SessionLifecycleSummary {
         solver: solver.to_string(),
         session_resource: if terminal {
@@ -427,6 +420,20 @@ pub(crate) fn lifecycle_contract(
             crate::schemas::status::SessionCommandability::Forbidden
         },
     }
+}
+
+fn terminal_solver_lifecycle(solver: &str) -> bool {
+    matches!(solver, "completed" | "failed" | "cancelled" | "closed")
+}
+
+pub(crate) fn snapshot_session_epoch(snapshot: &SessionStateResponse) -> String {
+    let solver = crate::session::effective_runtime_status_code(snapshot);
+    session_epoch(
+        &snapshot.session.session_id,
+        snapshot.session.started_at_unix_ms,
+        snapshot.session.finished_at_unix_ms,
+        terminal_solver_lifecycle(&solver),
+    )
 }
 
 pub(crate) fn session_epoch(

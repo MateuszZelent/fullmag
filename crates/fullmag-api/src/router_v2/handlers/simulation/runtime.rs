@@ -37,8 +37,9 @@ use crate::schemas::runtime::{
     CommandDetailResource, CommandDiagnosticReferenceResource, CommandExecutionReadbackResource,
     CommandQueueStatusResource, CommandResourceInvalidationResource, CommandStatusResource,
     CurrentRunResource, ObjectEnergySummary, ObjectMagnetizationAverage, ObjectMetricsResource,
-    RuntimeCommandReadinessResource, SolverEnergyCurrentResource, SolverEnergyHistoryResource,
-    SolverEnergyRow, SolverStatusResource, StageExecutionRecordResource, StageExecutionResource,
+    ParallelExecutionTelemetryResource, RuntimeCommandReadinessResource,
+    SolverEnergyCurrentResource, SolverEnergyHistoryResource, SolverEnergyRow,
+    SolverStatusResource, StageExecutionRecordResource, StageExecutionResource,
 };
 use crate::session::{
     build_runtime_status_view, command_ledger_revisions, effective_runtime_status_code,
@@ -405,6 +406,9 @@ pub async fn get_stage_execution(
     };
 
     Ok(Json(StageExecutionResource {
+        session_id: snapshot.session.session_id.clone(),
+        session_epoch: crate::router_v2::handlers::sessions::status::snapshot_session_epoch(snapshot),
+        run_id: snapshot.run.as_ref().map(|run| run.run_id.clone()),
         revision: snapshot.state_version,
         runtime_state: stage.runtime_state.as_str().to_string(),
         total_stages: stage.total_stages as u32,
@@ -487,6 +491,10 @@ pub async fn get_stage_execution(
                     current_settle_step_index: record.current_settle_step_index,
                     current_settle_step_kind: record.current_settle_step_kind.clone(),
                     current_settle_step_method: record.current_settle_step_method.clone(),
+                    parallel_execution: record
+                        .parallel_execution
+                        .as_ref()
+                        .map(ParallelExecutionTelemetryResource::from),
                 }
             })
             .collect(),

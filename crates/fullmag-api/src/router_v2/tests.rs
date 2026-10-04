@@ -1070,6 +1070,7 @@ async fn set_running_stage_execution(state: &Arc<AppState>, state_version: u64) 
                     current_settle_step_index: None,
                     current_settle_step_kind: None,
                     current_settle_step_method: None,
+                    parallel_execution: None,
                 },
                 StageExecutionRecord {
                     stage_id: None,
@@ -1105,6 +1106,7 @@ async fn set_running_stage_execution(state: &Arc<AppState>, state_version: u64) 
                     current_settle_step_index: None,
                     current_settle_step_kind: None,
                     current_settle_step_method: None,
+                    parallel_execution: None,
                 },
             ],
             stage_statuses: vec![
@@ -2395,6 +2397,7 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
                     current_settle_step_index: None,
                     current_settle_step_kind: None,
                     current_settle_step_method: None,
+                    parallel_execution: None,
                 },
                 StageExecutionRecord {
                     stage_id: None,
@@ -2430,6 +2433,7 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
                     current_settle_step_index: Some(1),
                     current_settle_step_kind: Some("minimize".into()),
                     current_settle_step_method: Some("projected_gradient_bb".into()),
+                    parallel_execution: None,
                 },
             ],
             stage_statuses: vec![
@@ -22336,6 +22340,7 @@ async fn commands_endpoint_invalidates_hysteresis_stage_resources() {
                 current_settle_step_index: Some(0),
                 current_settle_step_kind: Some("relax".into()),
                 current_settle_step_method: Some("llg_heun".into()),
+                parallel_execution: None,
             }],
             stage_statuses: vec![StageLifecycleState::Running],
             active_stage_index: Some(0),
@@ -22538,6 +22543,7 @@ async fn commands_endpoint_validates_runtime_precondition_against_effective_stat
                 current_settle_step_index: None,
                 current_settle_step_kind: None,
                 current_settle_step_method: None,
+                parallel_execution: None,
             }],
             stage_statuses: vec![StageLifecycleState::Cancelled],
             active_stage_index: None,
@@ -23048,6 +23054,7 @@ async fn command_detail_endpoint_exposes_stage_state_linkage() {
                 current_settle_step_index: None,
                 current_settle_step_kind: None,
                 current_settle_step_method: None,
+                parallel_execution: None,
             }],
             stage_statuses: vec![StageLifecycleState::Completed],
             active_stage_index: None,
@@ -23873,6 +23880,7 @@ async fn stage_execution_endpoint_projects_frequency_response_live_progress() {
                 current_settle_step_index: None,
                 current_settle_step_kind: None,
                 current_settle_step_method: None,
+                parallel_execution: None,
             }],
             stage_statuses: vec![StageLifecycleState::Running],
             active_stage_index: Some(0),
@@ -24324,6 +24332,7 @@ async fn hysteresis_progress_endpoint_returns_current_stage_progress() {
                 current_settle_step_index: Some(1),
                 current_settle_step_kind: Some("minimize".into()),
                 current_settle_step_method: Some("projected_gradient_bb".into()),
+                parallel_execution: None,
             }],
             stage_statuses: vec![StageLifecycleState::Running],
             active_stage_index: Some(0),
@@ -24422,6 +24431,7 @@ async fn hysteresis_progress_endpoint_reports_active_first_point_before_completi
                 current_settle_step_index: Some(0),
                 current_settle_step_kind: Some("minimize".into()),
                 current_settle_step_method: Some("projected_gradient_bb".into()),
+                parallel_execution: None,
             }],
             stage_statuses: vec![StageLifecycleState::Running],
             active_stage_index: Some(0),
@@ -24510,6 +24520,7 @@ async fn hysteresis_progress_endpoint_projects_live_magnetization_for_sample_ang
                 current_settle_step_index: Some(0),
                 current_settle_step_kind: Some("minimize".into()),
                 current_settle_step_method: Some("projected_gradient_bb".into()),
+                parallel_execution: None,
             }],
             stage_statuses: vec![StageLifecycleState::Running],
             active_stage_index: Some(0),
@@ -24591,6 +24602,7 @@ async fn hysteresis_progress_endpoint_uses_measurement_axis_for_live_projection(
                 current_settle_step_index: Some(0),
                 current_settle_step_kind: Some("minimize".into()),
                 current_settle_step_method: Some("projected_gradient_bb".into()),
+                parallel_execution: None,
             }],
             stage_statuses: vec![StageLifecycleState::Running],
             active_stage_index: Some(0),
@@ -24679,6 +24691,7 @@ async fn hysteresis_progress_endpoint_averages_only_magnetic_fem_nodes() {
                 current_settle_step_index: Some(0),
                 current_settle_step_kind: Some("minimize".into()),
                 current_settle_step_method: Some("projected_gradient_bb".into()),
+                parallel_execution: None,
             }],
             stage_statuses: vec![StageLifecycleState::Running],
             active_stage_index: Some(0),
@@ -24768,6 +24781,7 @@ async fn hysteresis_progress_endpoint_uses_fem_element_volume_weights_for_live_a
                 current_settle_step_index: Some(0),
                 current_settle_step_kind: Some("minimize".into()),
                 current_settle_step_method: Some("projected_gradient_bb".into()),
+                parallel_execution: None,
             }],
             stage_statuses: vec![StageLifecycleState::Running],
             active_stage_index: Some(0),
@@ -24857,6 +24871,7 @@ async fn hysteresis_progress_endpoint_uses_snapshot_fem_mesh_for_live_average() 
                 current_settle_step_index: Some(0),
                 current_settle_step_kind: Some("minimize".into()),
                 current_settle_step_method: Some("projected_gradient_bb".into()),
+                parallel_execution: None,
             }],
             stage_statuses: vec![StageLifecycleState::Running],
             active_stage_index: Some(0),
@@ -24986,6 +25001,7 @@ async fn hysteresis_execution_tree_returns_windowed_active_points() {
                 current_settle_step_index: Some(1),
                 current_settle_step_kind: Some("minimize".into()),
                 current_settle_step_method: Some("projected_gradient_bb".into()),
+                parallel_execution: None,
             }],
             stage_statuses: vec![StageLifecycleState::Running],
             active_stage_index: Some(0),
@@ -25141,6 +25157,7 @@ async fn hysteresis_bookmarks_round_trip_through_resource_and_execution_tree() {
                 current_settle_step_index: None,
                 current_settle_step_kind: None,
                 current_settle_step_method: None,
+                parallel_execution: None,
             }],
             stage_statuses: vec![StageLifecycleState::Completed],
             active_stage_index: None,
@@ -25288,6 +25305,7 @@ async fn hysteresis_execution_tree_marks_missing_snapshot_payloads() {
                 current_settle_step_index: None,
                 current_settle_step_kind: None,
                 current_settle_step_method: None,
+                parallel_execution: None,
             }],
             stage_statuses: vec![StageLifecycleState::Completed],
             active_stage_index: None,
@@ -25470,6 +25488,7 @@ async fn hysteresis_execution_tree_uses_settle_trace_status_for_completed_points
                 current_settle_step_index: None,
                 current_settle_step_kind: None,
                 current_settle_step_method: None,
+                parallel_execution: None,
             }],
             stage_statuses: vec![StageLifecycleState::Completed],
             active_stage_index: None,
@@ -25649,6 +25668,7 @@ async fn hysteresis_execution_tree_exposes_runtime_branch_nodes() {
                 current_settle_step_index: None,
                 current_settle_step_kind: None,
                 current_settle_step_method: None,
+                parallel_execution: None,
             }],
             stage_statuses: vec![StageLifecycleState::Running],
             active_stage_index: Some(0),
@@ -25768,6 +25788,7 @@ async fn stage_execution_endpoint_exposes_completed_relaxation_stop_metric() {
                 current_settle_step_index: None,
                 current_settle_step_kind: None,
                 current_settle_step_method: None,
+                parallel_execution: None,
             }],
             stage_statuses: vec![StageLifecycleState::Completed],
             active_stage_index: None,
@@ -25997,6 +26018,7 @@ async fn solver_status_does_not_infer_convergence_from_finished_sample() {
                 current_settle_step_index: None,
                 current_settle_step_kind: None,
                 current_settle_step_method: None,
+                parallel_execution: None,
             }],
             stage_statuses: vec![StageLifecycleState::Completed],
             active_stage_index: None,
@@ -33842,6 +33864,7 @@ async fn hysteresis_analysis_resolves_stage_directory_artifact_refs() {
                 current_settle_step_index: None,
                 current_settle_step_kind: None,
                 current_settle_step_method: None,
+                parallel_execution: None,
             }],
         });
     }
@@ -33999,6 +34022,7 @@ async fn hysteresis_analysis_accepts_active_hysteresis_kind_when_record_kind_is_
                 current_settle_step_index: Some(0),
                 current_settle_step_kind: Some("relax".into()),
                 current_settle_step_method: Some("llg_overdamped".into()),
+                parallel_execution: None,
             }],
         });
     }
@@ -34123,6 +34147,7 @@ async fn hysteresis_analysis_reads_flat_live_artifact_with_active_stage_executio
                 current_settle_step_index: Some(0),
                 current_settle_step_kind: Some("minimize".into()),
                 current_settle_step_method: Some("projected_gradient_bb".into()),
+                parallel_execution: None,
             }],
         });
     }
@@ -34220,6 +34245,7 @@ async fn hysteresis_analysis_points_conflicts_when_progress_reports_completed_po
                 current_settle_step_index: Some(0),
                 current_settle_step_kind: Some("minimize".into()),
                 current_settle_step_method: Some("projected_gradient_bb".into()),
+                parallel_execution: None,
             }],
         });
     }
@@ -34296,6 +34322,7 @@ async fn hysteresis_analysis_points_returns_empty_for_running_stage_before_first
                 current_settle_step_index: Some(0),
                 current_settle_step_kind: Some("minimize".into()),
                 current_settle_step_method: Some("projected_gradient_bb".into()),
+                parallel_execution: None,
             }],
             total_stages: 1,
         });
@@ -34848,6 +34875,7 @@ async fn field_vector_snapshot_id_validates_optional_hysteresis_stage_scope() {
                 current_settle_step_index: None,
                 current_settle_step_kind: None,
                 current_settle_step_method: None,
+                parallel_execution: None,
             }],
         });
     }
@@ -49057,3 +49085,51 @@ mod remesh_admission;
 
 #[path = "tests/project_documents.rs"]
 mod project_documents;
+
+
+#[tokio::test]
+async fn stage_execution_identity_matches_the_snapshot_and_serializes_absent_run() {
+    let (app, state, _artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
+    set_running_stage_execution(&state, 23).await;
+    let (session_id, run_id) = {
+        let guard = state.current_live_state.read().await;
+        let snapshot = guard.as_ref().unwrap();
+        (snapshot.session.session_id.clone(), snapshot.run.as_ref().map(|run| run.run_id.clone()))
+    };
+    let response = app.clone().oneshot(
+        Request::builder().uri("/v2/sessions/current/simulation/stages/execution")
+            .body(Body::empty()).unwrap()
+    ).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_json(response).await;
+    assert_eq!(body["session_id"], serde_json::json!(session_id));
+    assert_eq!(body["run_id"], serde_json::json!(run_id));
+    assert!(body["session_epoch"].as_str().is_some_and(|epoch| epoch.starts_with(&format!("{session_id}@"))));
+    {
+        let mut guard = state.current_live_state.write().await;
+        guard.as_mut().unwrap().run = None;
+    }
+    let response = app.oneshot(
+        Request::builder().uri("/v2/sessions/current/simulation/stages/execution")
+            .body(Body::empty()).unwrap()
+    ).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_json(response).await;
+    assert!(body.as_object().unwrap().contains_key("run_id"));
+    assert!(body["run_id"].is_null());
+}
+
+#[test]
+fn openapi_stage_execution_requires_explicit_snapshot_identity() {
+    let openapi = crate::openapi_v2::openapi_json();
+    let schema = &openapi["components"]["schemas"]["StageExecutionResource"];
+    let required = schema["required"].as_array().unwrap();
+    for field in ["session_id", "session_epoch", "run_id"] {
+        assert!(required.iter().any(|value| value.as_str() == Some(field)));
+    }
+    // OpenAPI 3.1 uses a type array for required-but-nullable identities.
+    let run_type = &schema["properties"]["run_id"]["type"];
+    let types = run_type.as_array().unwrap();
+    assert!(types.iter().any(|value| value.as_str() == Some("string")));
+    assert!(types.iter().any(|value| value.as_str() == Some("null")));
+}

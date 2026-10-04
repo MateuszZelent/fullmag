@@ -8919,6 +8919,62 @@ export interface components {
             resource: components["schemas"]["SceneOerstedField"];
         };
         /** @enum {string} */
+        ParallelExecutionModeResource: "serial" | "adaptive";
+        ParallelExecutionResource: {
+            /** Format: double */
+            max_cpu_percent: number;
+            /** Format: double */
+            max_memory_percent: number;
+            /** Format: int32 */
+            max_workers?: number | null;
+            /** Format: int64 */
+            memory_reserve_bytes: number;
+            mode: components["schemas"]["ParallelExecutionModeResource"];
+            /** Format: int32 */
+            threads_per_worker: number;
+        };
+        ParallelExecutionTelemetryResource: {
+            /** Format: int32 */
+            active_workers: number;
+            /** Format: int32 */
+            admission_desired_workers: number;
+            /** Format: int32 */
+            admission_pending_samples: number;
+            admission_reason: string;
+            /** Format: int32 */
+            admission_worker_limit?: number | null;
+            /** Format: double */
+            allocated_cpu_cores?: number | null;
+            /** Format: double */
+            cpu_available_cores?: number | null;
+            /** Format: double */
+            cpu_busy_percent?: number | null;
+            cpu_target_kind: string;
+            /** Format: double */
+            cpu_target_percent: number;
+            /** Format: int64 */
+            memory_available_bytes?: number | null;
+            /** Format: int64 */
+            memory_limit_bytes?: number | null;
+            /** Format: int64 */
+            memory_reserve_bytes: number;
+            /** Format: double */
+            memory_target_percent: number;
+            /** Format: int32 */
+            resolved_workers?: number | null;
+            /** Format: int64 */
+            sampled_at_unix_ms: number;
+            terminal: boolean;
+            /**
+             * Format: double
+             * @description Admission CPU demand envelope, including a conservative resolved-team
+             *     bound when a short or sparsely observed worker lacks CPU sampling coverage.
+             */
+            worker_peak_cpu_cores?: number | null;
+            /** Format: int64 */
+            worker_peak_rss_bytes?: number | null;
+        };
+        /** @enum {string} */
         PeriodicValidationStatus: "valid" | "invalid" | "stale" | "unavailable";
         /** @enum {string} */
         PhysicsGraphActivationResource: "configured" | "active" | "inactive" | "blocked" | "unsupported" | "unresolved";
@@ -11742,6 +11798,7 @@ export interface components {
             metric_unit?: null | components["schemas"]["StageMetricUnit"];
             /** Format: double */
             metric_value?: number | null;
+            parallel_execution?: null | components["schemas"]["ParallelExecutionTelemetryResource"];
             progress_detail?: string | null;
             progress_label?: string | null;
             /** Format: double */
@@ -11769,7 +11826,12 @@ export interface components {
             completed_stage_indexes: number[];
             /** Format: int64 */
             revision: number;
+            /** @description Explicit null means no run; omission is not accepted by the live UI. */
+            run_id: string | null;
             runtime_state: string;
+            session_epoch: string;
+            /** @description Identity of the same locked snapshot that owns the stage records. */
+            session_id: string;
             stage_statuses: string[];
             stages: components["schemas"]["StageExecutionRecordResource"][];
             /** Format: int32 */
@@ -11885,6 +11947,7 @@ export interface components {
             spacing: number[];
         };
         StudyRuntimePatchRequest: {
+            parallel_execution?: null | components["schemas"]["ParallelExecutionResource"];
             requested_backend?: string | null;
             requested_cpu_threads?: null | components["schemas"]["NullableU32PatchValue"];
             requested_device?: string | null;
@@ -11893,6 +11956,7 @@ export interface components {
         };
         StudyRuntimeResource: {
             backend?: string | null;
+            parallel_execution: components["schemas"]["ParallelExecutionResource"];
             requested_backend: string;
             /** Format: int32 */
             requested_cpu_threads?: number | null;
