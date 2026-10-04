@@ -1,5 +1,19 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
+<!-- adaptive-core-remote-runtime226-compiling -->
+## Aktualny checkpoint — adaptive core na remote; build #226 kompiluje
+
+Odczyt 2026-10-04T01:30:55.455054+00:00. Wpis aktualizuje stan kolejki i źródeł, nie zamyka żadnej bramki naukowej.
+
+- Commit `841ff1151cf636295c79f4faed217d7584a6d6c4`, potwierdzony na remote branchu zadania, zapisuje spójny pakiet 20 plików: resource admission, izolowane procesy independent-k, child protocol/CLI dispatch, hooki canonical output i fresh checkpoint attempt, stage telemetry oraz granicę odpowiedzialności backendu. Review kompozycji nie wykazało nowych P1/P2; wcześniejsze dwa P2 output/retry są CLOSED SOURCE. Parser 19 wejść PASS, staged 20 Git blobs zgodne z ocenionym manifestem; normalizacja CRLF/LF nie zmienia treści. Przygotowanych testów Rust nie kompilowano zgodnie z zakazem.
+- Build 226 `4c32a918a21944d68c9814fd35bf881a`, profil `fem-cpu-slepc-runtime-v2`, source digest `d0794df0e82e63674085327105d9d3a9a1cee398bec97f1321e73881febaefbf` pozostaje running. Kontener worker jest aktywny; po materializacji i hash verification kapsuły rozpoczął kompilację Rust oraz C++. Nie ponawiano submission ani nie zmieniano kapsuły. Wszystkie 20 plików pakietu core odpowiadają bajtom kapsuły 226 przed normalizacją Git. Dopiero terminalny succeeded/exit0 i receipt/hash closure dopuszczą uruchomienie pilota.
+- Osobne native review czterech WIP plików diagnostyki znalazło regresję konfiguracji bez SLEPc: initializer sondy miał definicję pod guardem, lecz bezwarunkowe wywołanie. Dwa helpery niezależne od PETSc przeniesiono poza guard. Finalne source review bez nowych P1/P2, diff PASS; poprawka nie jest w kapsule226. Kompilacja finalnej kopii i macro0 oraz enabled/disabled parity NOT VERIFIED. Nie jest to nowy dowód poprawności fizycznej.
+- Następny runtime krok: standalone Γ na modelu `71ba0d18225ffcc83f7f18e676de8dc051e87fd1`, L2/t3, frequency_window 8.5–16 GHz, EPS/KSP 1e-9 i FGMRES restart 8. Wymagane rzeczywiste queried_after_eps, kompletne okno, pełny physical residual 1e-8, demag i equilibrium binding. Potem signed 15 i source-bound serial/adaptive parity. Nowych zaakceptowanych punktów 0; historyczny zbiór to cztery punkty ±10/±25 rad/µm.
+- Core na remote nie oznacza całego worktree na remote. API/generated/UI i dalsze WIP zachowano. S00–S12, UI/WebGL/FMS/Inspector, DE/BV/COMSOL A1, convergence, S09/S10/GPU i PR97/integracja nadal OPEN. Nie kwalifikujemy schedulera ani release samym source checkpointem.
+
+Dowody: `adaptive-core-checkpoint/source-review.md`, `verification.json`, `stage-byte-reconciliation.json`, `staged-verification.json`; `adaptive-authoring-checkpoint/docker-restart-live-check.json` i `gamma226-launch-plan.json`; `floquet-diagnostics-current-review/source-review.md` w katalogu wizualizacji wątku. Logi kompilacji 226 są w canonical artifacts.
+
+
 <!-- adaptive-authoring-and-build225-compile-fix -->
 ## Aktualny checkpoint — authoring na remote, naprawiony błąd kompilacji #225
 
