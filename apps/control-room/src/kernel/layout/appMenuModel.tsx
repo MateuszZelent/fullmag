@@ -58,7 +58,6 @@ const HIDDEN_PLACEHOLDER_COMMAND_IDS = new Set([
   "workspace.diagnostics",
   "workspace.api-console",
   "workspace.script-view",
-  "workspace.search-docs",
   "workspace.reference",
   "workspace.about-help",
 ]);

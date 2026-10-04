@@ -17,6 +17,8 @@ const PROJECT_WORKSPACE_COMMAND_IDS = new Set([
   "start.section.templates",
   "start.section.import",
   "start.section.learn",
+  "start.section.docs",
+  "workspace.search-docs",
   "start.section.settings",
   "start.section.about",
   "start.templates",

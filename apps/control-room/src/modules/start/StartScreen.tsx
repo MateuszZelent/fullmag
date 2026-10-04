@@ -25,6 +25,7 @@ import type { ContinueSession, RecentEntry } from "./model/types";
 import { StartRail } from "./rail/StartRail";
 import { StartStatusBar } from "./ui/StartStatusBar";
 import { AboutSection } from "./sections/AboutSection";
+import { DocsSection } from "./sections/DocsSection";
 import { ImportSection } from "./sections/ImportSection";
 import { LearnSection } from "./sections/LearnSection";
 import { SettingsSection } from "./sections/SettingsSection";
@@ -174,6 +175,8 @@ export function StartScreen({ kernel }: ModuleProps) {
             <TemplatesSection compute={compute} />
           ) : section === "import" ? (
             <ImportSection onOpenFile={openFile} openDisabledReason={browseDisabledReason} />
+          ) : section === "docs" ? (
+            <DocsSection />
           ) : section === "learn" ? (
             <LearnSection />
           ) : section === "settings" ? (

@@ -174,6 +174,7 @@ export const START_COMMANDS: readonly CommandContribution[] = [
   navigationCommand("start.section.templates", "Start: Templates", "templates", "Ctrl+2"),
   navigationCommand("start.section.import", "Start: Import", "import", "Ctrl+3"),
   navigationCommand("start.section.learn", "Start: Learn", "learn", "Ctrl+4"),
+  navigationCommand("start.section.docs", "Start: Documentation", "docs"),
   navigationCommand("start.section.settings", "Start: Settings", "settings", "Ctrl+,"),
   navigationCommand("start.section.about", "Start: About", "about"),
   navigationCommand("start.templates", "Browse templates", "templates", "Ctrl+T"),
