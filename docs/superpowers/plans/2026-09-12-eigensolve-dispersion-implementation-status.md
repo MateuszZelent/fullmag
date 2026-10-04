@@ -1,3 +1,12 @@
+<!-- de-air-two-points-isolation-20261004 -->
+## Aktualny checkpoint — izolacja siatki powietrza potwierdzona przy +10 i +25
+
+Odczyt 2026-10-04T12:26:25.407609+00:00. Obie próby L2/3, air growth1,15 na attested228 niezależnie zaakceptowane; rzeczywisty film/stan izolowany w jawnych tolerancjach. +25 **13,581679730GHz**, pełny residual2,473e−11,97,907s; częstotliwość wzrosła24,090184MHz. Różnica wobec open-air1D basis16 **0,616906%→0,440315%**. +10:11,216153905GHz, różnica **0,204668%→0,107871%**. Nowy wykres zachowuje15baseline growth1,3 i osobno oznacza tylko dwa refinements.
+
+[Raport i wykres obu prób](../../raports/2026-10-04-de-air-grading-two-points.md). Air mesh wnosi część rozbieżności; dalsza zbieżność i pozostałe przyczyny pozostają otwarte. Progi solvera zachowano. Γ full window, wspólny native signed15/serial-adaptive parity/zasoby, GUI, A1/COMSOL, S09/provider/typecheck/GPU i integracjaPR97 **OPEN**. Kolejny ciężki krok wymaga spełnienia bieżącego admission storage; runner przy ostatnim odczycie widział7,24GiB, poniżej8GiB. To nie blokuje publikacji zakończonych wyników.
+
+Historyczne checkpointy zachowano.
+
 <!-- de-air-grading-isolated-terminal-20261004 -->
 ## Aktualny checkpoint — potwierdzony wkład siatki powietrza do rozbieżności DE
 
