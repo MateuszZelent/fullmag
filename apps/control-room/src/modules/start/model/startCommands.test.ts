@@ -4,6 +4,7 @@ import { CommandRegistry } from "@/kernel/commands/CommandRegistry";
 import type { CommandContext } from "@/kernel/commands/commandTypes";
 import { findShortcutCommand } from "@/kernel/commands/commandShortcuts";
 import { isProjectWorkspaceCommand } from "@/kernel/commands/projectWorkspaceCommandPolicy";
+import { homeView } from "@/kernel/layout/homeView";
 import { SHELL_COMMANDS } from "@/kernel/layout/shellCommands";
 
 import { START_COMMANDS, startActionDisabledReason } from "./startCommands";
@@ -49,10 +50,44 @@ describe("start commands", () => {
 
   it("are disabled with a reason while the start screen is not showing", () => {
     const registry = registryWithShellAndStart();
-    for (const command of START_COMMANDS) {
+    // The workspace.* Help commands open the start screen themselves, so they
+    // are available everywhere; only the start.* commands need it showing.
+    for (const command of START_COMMANDS.filter((c) => c.id.startsWith("start."))) {
       expect(registry.isEnabled(command.id, WITH_PROJECTS), command.id).toBe(false);
       expect(command.disabledReason?.(WITH_PROJECTS)).toBe("The start screen is not showing.");
     }
+  });
+
+  it("opens documentation, the reference and About from Help without the start screen showing", async () => {
+    const registry = registryWithShellAndStart();
+    for (const id of ["workspace.search-docs", "workspace.reference", "workspace.about-help"]) {
+      expect(registry.isEnabled(id, WITH_PROJECTS), id).toBe(true);
+    }
+
+    await registry.execute("workspace.reference", WITH_PROJECTS);
+    expect(startScreenStore.getSnapshot()).toMatchObject({
+      section: "docs",
+      docsRequest: { seq: 1, page: "python-api/index.html" },
+    });
+
+    await registry.execute("workspace.search-docs", WITH_PROJECTS);
+    expect(startScreenStore.getSnapshot().docsRequest).toEqual({ seq: 2, page: "index.html" });
+
+    await registry.execute("workspace.about-help", WITH_PROJECTS);
+    expect(startScreenStore.getSnapshot().section).toBe("about");
+    homeView.resetForTests();
+  });
+
+  it("opens the recent list only from the Home section", async () => {
+    const registry = registryWithShellAndStart();
+    startScreenStore.attach(hostFor(registry));
+
+    expect(registry.isEnabled("start.open-recent", WITH_PROJECTS)).toBe(true);
+    await registry.execute("start.open-recent", WITH_PROJECTS);
+    expect(startScreenStore.getSnapshot().focusListNonce).toBe(1);
+
+    startScreenStore.setSection("learn");
+    expect(registry.isEnabled("start.open-recent", WITH_PROJECTS)).toBe(false);
   });
 
   it("navigates sections through the store", async () => {

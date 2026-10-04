@@ -61,7 +61,7 @@ export function RecentProjects({
   onOpen,
   searchRef,
 }: RecentProjectsProps) {
-  const { searchFocusNonce, rebuildNonce, selectedProjectId, selectionAction } = useSyncExternalStore(
+  const { searchFocusNonce, focusListNonce, rebuildNonce, selectedProjectId, selectionAction } = useSyncExternalStore(
     startScreenStore.subscribe,
     startScreenStore.getSnapshot,
     startScreenStore.getServerSnapshot,
@@ -149,6 +149,20 @@ export function RecentProjects({
   useEffect(() => {
     if (searchFocusNonce > 0) inputRef.current?.focus();
   }, [searchFocusNonce]);
+
+  // Open recent (quick switch): land on the list with a project selected, so
+  // Enter opens and the arrows move.
+  const handledListFocus = useRef(focusListNonce);
+  useEffect(() => {
+    if (focusListNonce === handledListFocus.current) return;
+    handledListFocus.current = focusListNonce;
+    listRef.current?.focus();
+    if (selectedProjectId === null && selectable[0]) {
+      startScreenStore.setSelectedProject(selectable[0].projectId);
+    }
+    // Reads the selection as it is when the request arrives, not on every change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusListNonce]);
 
   const rebuild = recent.rebuild;
   useEffect(() => {

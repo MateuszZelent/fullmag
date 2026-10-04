@@ -31,6 +31,10 @@ export interface StartScreenSnapshot {
   /** Bumped by palette commands so the mounted list can react without props. */
   readonly searchFocusNonce: number;
   readonly rebuildNonce: number;
+  /** Palette request to focus the recent list; each one is distinct. */
+  readonly focusListNonce: number;
+  /** A documentation page requested by Help or a deep link; `seq` makes each distinct. */
+  readonly docsRequest: { readonly seq: number; readonly page: string } | null;
   /** A palette-driven action on the selected project; `seq` makes each request distinct. */
   readonly selectionAction: { readonly seq: number; readonly kind: SelectionActionKind } | null;
 }
@@ -46,6 +50,8 @@ const INITIAL_SNAPSHOT: StartScreenSnapshot = {
   selectedTemplateId: null,
   searchFocusNonce: 0,
   rebuildNonce: 0,
+  focusListNonce: 0,
+  docsRequest: null,
   selectionAction: null,
 };
 
@@ -74,6 +80,16 @@ class StartScreenStore {
   requestSelectionAction(kind: SelectionActionKind): void {
     const seq = (this.snapshot.selectionAction?.seq ?? 0) + 1;
     this.publish({ ...this.snapshot, selectionAction: { seq, kind } });
+  }
+
+  requestListFocus(): void {
+    this.publish({ ...this.snapshot, focusListNonce: this.snapshot.focusListNonce + 1 });
+  }
+
+  /** Show the Docs section, at `page` (relative to the docs root) when given. */
+  requestDocs(page = "index.html"): void {
+    const seq = (this.snapshot.docsRequest?.seq ?? 0) + 1;
+    this.publish({ ...this.snapshot, section: "docs", docsRequest: { seq, page } });
   }
 
   requestRebuild(): void {

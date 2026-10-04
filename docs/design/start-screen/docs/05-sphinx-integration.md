@@ -61,7 +61,8 @@ start screen › Docs section ── <iframe src="/docs/…"> ◀── postMess
 |---|---|
 | Rail → **Docs** | `start.section.docs`; the section takes the full content width and hides the inspector |
 | `F1`, **Help → Search Docs** | `workspace.search-docs`: selects the Docs section and lays the start screen over an open workspace (`homeView.open()`), so reading never closes a project |
-| Command palette | both commands appear in `Ctrl ⇧ P` |
+| **Help → Reference** | `workspace.reference` opens the Docs section at `python-api/index.html` (a deep link: `startScreenStore.requestDocs(page)`) |
+| Command palette | all of these commands appear in `Ctrl ⇧ P` |
 | About → *Open the documentation* | switches to the Docs section |
 
 Over a workspace the start screen is a visit, not a mode: opening a project or a
@@ -152,13 +153,21 @@ is git-ignored: the bundle is a build artefact, never source.
 Sphinx needs the requirements in `public_docs/site/requirements.txt`; a build host
 without them simply does not bundle, and the app shows the online link.
 
-### 6.1 Not wired yet
+### 6.1 Build routes
 
-`docs:bundle` is not part of the Windows (`windows-ui static`), desktop or CI
-build routes. Those recipes are governed by the build-storage policy (preflight,
-resolver, lease), and adding a Python/Sphinx dependency to them is a decision for
-whoever owns them, not a side effect of this feature. Until then a build that does
-not run it shows the unavailable state.
+Every route that builds the control room (`windows-ui static`, the MSI script and
+the release workflow) runs `pnpm --dir apps/control-room build`, so the hook lives
+in that one script: `build` is `node scripts/bundle-docs.mjs --if-present && next build`.
+
+- A built Sphinx site exists at `public_docs/site/_build/html`: it is bundled
+  before `next build`, so `public/docs/` is part of the static export.
+- None exists: the script says so and exits 0. A host without Sphinx still builds
+  the app, and the app shows the online link.
+
+Building the site stays a separate step owned by the documentation job; bundling
+never requires Python. A route that stages only tracked files into a build tree
+does not carry the (git-ignored) `_build`, so it falls into the second case unless
+the site is built there first.
 
 ---
 
@@ -192,7 +201,7 @@ The probe is a single `HEAD /docs/index.html` with `cache: "no-store"`.
 | Check | Where |
 |---|---|
 | URL building, path hardening, message parsing, online link | `modules/start/model/docs.test.ts` |
-| Bundle precondition | `scripts/bundle-docs.mjs` exits non-zero without a build |
+| Bundle modes | `scripts/bundle-docs.node-test.mjs` (the skip filter); verified by hand: bundle (no `_sources`), `--if-present` without a site exits 0, strict mode without a site exits 1 |
 | Strict docs build with the embed assets | `sphinx-build -W -n` builds with `fullmag-embed.{js,css}` registered in `conf.py` (verified locally, exit 0; the CI documentation workflow currently stops earlier on an unrelated Python API contract test that also fails on `master`) |
 | Framed behaviour | in a browser: `data-fullmag-embedded` set, theme follows the app both ways, theme toggle hidden, **Open online** follows the page, search returns results |
 
@@ -200,9 +209,11 @@ The probe is a single `HEAD /docs/index.html` with `cache: "no-store"`.
 
 ## 10. Extending it
 
-- **Context-sensitive help.** `docsPageUrl("physics/…")` already addresses a page;
-  an inspector can offer a *Read more* link by passing a documented path. Keep the
-  mapping in the model and verify the path exists in the built site.
+- **Context-sensitive help.** Done for templates: each `StudyTemplate` carries a
+  `docsPage`, the template inspector offers *Read the documentation*
+  (`startScreenStore.requestDocs(page)`), and `templates.test.ts` checks that every
+  page exists in the Sphinx source. Further inspectors can do the same: keep the
+  mapping in the model and check it against the source.
 - **Release bundling.** Produce `docs:bundle` in the release job that already
   builds the site, and ship `public/docs/` with the app.
 - **Versioned docs.** The site is built with `FULLMAG_DOCS_VERSION`; bundling the
