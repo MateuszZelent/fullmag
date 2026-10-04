@@ -789,3 +789,113 @@ Referencje: [Rust binary64/to_bits](https://doc.rust-lang.org/std/primitive.f64.
 | source-0833-mesh-exact-coordinate | crates/fullmag-ir/src/waveguide_mesh_embedding.rs + exact_binary64_integer | Dokładne kodowanie zapisanej finite współrzędnej; runtime NOT VERIFIED |
 | source-0833-mesh-exact-orientation | crates/fullmag-ir/src/waveguide_mesh_embedding.rs + orient2d_exact | Znak całkowitego wyznacznika; runtime NOT VERIFIED |
 | source-0833-mesh-embedding | crates/fullmag-ir/src/waveguide_mesh_embedding.rs + validate_waveguide_mesh_embedding | Globalna konformność; nie contour nesting/certificate/runtime proof |
+
+
+## Geometryczna orientacja i nesting konturów — kontrakt przyrostu S09
+
+Przed implementacją zapisaliśmy zakres validate_waveguide_mesh_contours;
+źródło jest teraz zaimplementowane, wykonanie Rust/runtime pozostaje NOT VERIFIED.
+Prerequisite to validate_waveguide_mesh_embedding, więc lokalne elementy,
+incidence i cały scalar embedding muszą wcześniej przejść. Kontury są
+skierowane przez trójkąty CCW, proste i zamknięte; region leży po lewej.
+Incidence już wymaga kompletnego pokrycia regionalnych half-edges,
+niepowtarzanego węzła w konturze i braku wspólnych węzłów dwóch konturów
+tego samego regionu. Nie dodajemy redundantnego region-fan checku.
+
+Samo loop_kind dotąd było tokenem wire. Nowa kontrola wiąże outer/hole
+z geometrią, bez aktywowania providera lub pełnego certyfikatu mesha.
+Dla ordered start nodes x_j konturu C, kodowania J i cyklicznego x_n=x_0:
+
+```{math}
+:label: eq-0833-contour-exact-area
+S_C=\sum_{j=0}^{n_C-1}
+\left[J(x_{j,u})J(x_{j+1,v})-J(x_{j,v})J(x_{j+1,u})\right],
+\qquad A_C=\tfrac12 h_{64}^{2} S_C.
+```
+
+S_C jest BigInt; sprawdzamy jego znak, nie materializujemy h64 squared ani
+fizycznego A_C w binary64. Dodatni znak oznacza CCW/outer, ujemny CW/hole;
+zero jest błędem. To nie zmienia wcześniejszych kontroli representability
+area/mass/gradients trójkątów. Sign check nie potrzebuje area floor.
+
+Nesting liczymy osobno dla każdego region_id. Kontury różnych regionów
+mogą być dwiema przeciwnie skierowanymi stronami tego samego interfejsu.
+Nie wolno więc policzyć konturu magnetic jako dodatkowego rodzica air.
+Dla punktu p_i będącego pierwszym start node konturu C_i:
+
+```{math}
+:label: eq-0833-contour-nesting-depth
+d_i=\sum_{\substack{j\ne i\\ r_j=r_i}}
+\mathbf{1}\!\left[p_i\in\operatorname{Int}(C_j)\right],
+\qquad
+\operatorname{role}(C_i)=
+\begin{cases}\mathrm{outer}&d_i\bmod2=0,\\ \mathrm{hole}&d_i\bmod2=1.\end{cases}
+```
+
+Brak przecięć z embeddingu i brak styku konturów tego samego regionu
+z incidence pozwalają użyć jednego rzeczywistego wierzchołka jako
+representative: cały jego kontur ma tę samą relację do wnętrza innego.
+Nie przesuwamy punktu o epsilon ani nie przyjmujemy bbox jako containment.
+Wyspa tego samego regionu wewnątrz jego hole ma depth 2 i jest outer;
+rozłączne outer contours pozostają legalne. Nie narzucamy jednej outer
+na region ani limitu liczby poziomów.
+
+Point location używa exact orient2d i poziomego promienia w kierunku +u.
+Najpierw exact collinearity i inclusive bounds rozróżniają on-boundary.
+Następnie przejścia o końcach po przeciwnych stronach poziomu p_v
+stosują half-open warunek (a_v>p_v)!=(b_v>p_v). Parzystość zmieniamy,
+gdy upward edge ma positive orient albo downward edge negative orient.
+To odd-even rule bez dzielenia, wyznaczania przecięcia jako f64 lub
+tolerancji. Horizontal edges i promień przez vertex wymagają tego samego
+half-open warunku. On-boundary dla dwóch konturów tego samego regionu
+jest błędem, nie wynikiem inside/outside; nie dotyczy interfejsów różnych
+regionów pominiętych przed point location.
+
+| Symbol | Znaczenie | Jednostka SI |
+|---|---|---|
+| $S_C$ | exact doubled signed area konturu w jednostce h64 squared | $1$ |
+| $A_C$ | fizyczna signed area prostego konturu; nie materializowana przez helper | $\mathrm{m^2}$ |
+| $C_i$ | ordered kontur o indeksie i w boundary_components | $1$ |
+| $n_C$ | liczba half-edges prostego zamkniętego konturu | $1$ |
+| $x_j$ | lokalny start node półkrawędzi konturu | $\mathrm m$ |
+| $p_i$ | reprezentatywny pierwszy start node konturu C_i | $\mathrm m$ |
+| $r_i$ | jawny identyfikator regionu konturu C_i | $1$ |
+| $d_i$ | liczba zawierających konturów tego samego regionu | $1$ |
+
+Broadphase dla punktów representative i regionalnych contour AABB
+używa sweepu po u: wstawiamy min-u <= p-u, wygaszamy max-u < p-u,
+a aktywny indeks v pyta o [p-v,p-v]. Pary i-identity pomijamy, każdy inny
+kandydat przechodzi exact point location. Reuse istniejącego crate-private
+ExactPoint/orient2d/AABB/ActiveIntervalIndex ma zachować arytmetykę,
+algorytm i publiczne wyniki poprzedniego embedding validatora.
+Nie tworzymy pełnej macierzy relacji ani unconditional all-pairs.
+Koszt może nadal wzrosnąć dla zagnieżdżonych/overlapping bbox; brak
+deklaracji liniowego HPC performance. Exact area terms, point-location
+orientation tests, candidate counts i depth mają checked counters.
+
+Raport contours ma prywatne pola, Serialize-only/accessors: boundary
+component count, outer/hole counts, max regional depth, rzeczywiste
+containment candidates, area-edge terms i point-location orientations.
+Typed prerequisite errors pozostają zachowane. Ten raport nie tworzy
+validated_structural_2d, immutable registry/frame/fingerprint,
+invariance/equilibrium, boundary anchor, operatora ani admission.
+FEM CPU planned/runtime NOT VERIFIED, FEM GPU unsupported, FDM not-applicable.
+Kompilacja/testy Rust pozostają zakazane; parser i independent Fraction
+oracle wejść nie są wykonaniem tego kodu.
+
+Przygotowano 10 regresji Rust bez kompilacji lub uruchomienia. Niezależny
+Fraction input oracle potwierdza 88 przypadków na czterech skalach,
+wspólny fixture oraz nested fixture 12 węzłów/18 trójkątów/5 konturów
+(depth 2, 4 containment candidates, 20 area terms, 16 orientations).
+Korekta concave fixture ma osobne cztery rational input checks;
+te dowody dotyczą danych, nie wykonania validatora Rust.
+
+Źródło definicji signed area, odd-even point location i boundary case:
+[CGAL polygon functions](https://doc.cgal.org/latest/Polygon/group__PkgPolygon2Functions.html).
+Używamy tych standardowych definicji geometrycznych; nie dodajemy zależności CGAL.
+
+| Source ID | Path + symbol | Zakres |
+|---|---|---|
+| source-0833-contour-area | crates/fullmag-ir/src/waveguide_mesh_contours.rs + signed_contour_area_exact | Sign prostego regionalnego konturu; source implemented/runtime NOT VERIFIED |
+| source-0833-contour-location | crates/fullmag-ir/src/waveguide_mesh_contours.rs + point_in_contour_exact | Exact odd-even inside/outside/boundary; source implemented/runtime NOT VERIFIED |
+| source-0833-contours | crates/fullmag-ir/src/waveguide_mesh_contours.rs + validate_waveguide_mesh_contours | Regionalne orientation/nesting; nie pełny mesh certificate/runtime |

@@ -154,20 +154,20 @@ impl WaveguideMeshEmbeddingReport {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct ExactPoint {
-    coordinates: [BigInt; 2],
+pub(crate) struct ExactPoint {
+    pub(crate) coordinates: [BigInt; 2],
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Aabb {
-    min_u: u64,
-    max_u: u64,
-    min_v: u64,
-    max_v: u64,
+pub(crate) struct Aabb {
+    pub(crate) min_u: u64,
+    pub(crate) max_u: u64,
+    pub(crate) min_v: u64,
+    pub(crate) max_v: u64,
 }
 
 impl Aabb {
-    fn from_node_indices(node_indices: &[usize], nodes: &[[f64; 2]]) -> Self {
+    pub(crate) fn from_node_indices(node_indices: &[usize], nodes: &[[f64; 2]]) -> Self {
         let first = nodes[node_indices[0]];
         let (mut min_u, mut max_u) = (first[0], first[0]);
         let (mut min_v, mut max_v) = (first[1], first[1]);
@@ -204,7 +204,7 @@ impl Aabb {
     }
 }
 
-fn binary64_order_key(value: f64) -> u64 {
+pub(crate) fn binary64_order_key(value: f64) -> u64 {
     let bits = if value == 0.0 { 0 } else { value.to_bits() };
     if bits >> 63 == 0 {
         bits ^ (1_u64 << 63)
@@ -240,7 +240,7 @@ fn exact_binary64_integer(value: f64) -> Option<BigInt> {
 }
 
 /// Return the exact orientation sign of three cached binary64 coordinates.
-fn orient2d_exact(a: &ExactPoint, b: &ExactPoint, c: &ExactPoint) -> Sign {
+pub(crate) fn orient2d_exact(a: &ExactPoint, b: &ExactPoint, c: &ExactPoint) -> Sign {
     let determinant = (&b.coordinates[0] - &a.coordinates[0])
         * (&c.coordinates[1] - &a.coordinates[1])
         - (&b.coordinates[1] - &a.coordinates[1]) * (&c.coordinates[0] - &a.coordinates[0]);
@@ -319,7 +319,9 @@ fn checked_triangle_node_indices(
         .collect()
 }
 
-fn exact_points(nodes: &[[f64; 2]]) -> Result<Vec<ExactPoint>, WaveguideMeshEmbeddingError> {
+pub(crate) fn exact_points(
+    nodes: &[[f64; 2]],
+) -> Result<Vec<ExactPoint>, WaveguideMeshEmbeddingError> {
     nodes
         .iter()
         .enumerate()
@@ -338,7 +340,7 @@ fn exact_points(nodes: &[[f64; 2]]) -> Result<Vec<ExactPoint>, WaveguideMeshEmbe
 }
 
 #[derive(Debug)]
-struct ActiveIntervalIndex {
+pub(crate) struct ActiveIntervalIndex {
     minimum_v_keys: Vec<u64>,
     active_by_leaf: Vec<BTreeMap<u64, BTreeSet<usize>>>,
     subtree_maximum_v: Vec<Option<u64>>,
@@ -347,7 +349,7 @@ struct ActiveIntervalIndex {
 }
 
 impl ActiveIntervalIndex {
-    fn new(bounds: &[Aabb]) -> Result<Self, WaveguideMeshEmbeddingError> {
+    pub(crate) fn new(bounds: &[Aabb]) -> Result<Self, WaveguideMeshEmbeddingError> {
         let mut minimum_v_keys = bounds.iter().map(|item| item.min_v).collect::<Vec<_>>();
         minimum_v_keys.sort_unstable();
         minimum_v_keys.dedup();
@@ -376,7 +378,7 @@ impl ActiveIntervalIndex {
         Ok(index)
     }
 
-    fn insert(&mut self, item_index: usize) {
+    pub(crate) fn insert(&mut self, item_index: usize) {
         let leaf = self.leaf_by_item[item_index];
         let max_v = self.maximum_v_by_item[item_index];
         self.active_by_leaf[leaf]
@@ -386,7 +388,7 @@ impl ActiveIntervalIndex {
         self.update_leaf(leaf);
     }
 
-    fn remove(&mut self, item_index: usize) {
+    pub(crate) fn remove(&mut self, item_index: usize) {
         let leaf = self.leaf_by_item[item_index];
         let max_v = self.maximum_v_by_item[item_index];
         let should_remove_key = match self.active_by_leaf[leaf].get_mut(&max_v) {
@@ -437,7 +439,7 @@ impl ActiveIntervalIndex {
         };
     }
 
-    fn query(&self, min_v: u64, max_v: u64, output: &mut Vec<usize>) {
+    pub(crate) fn query(&self, min_v: u64, max_v: u64, output: &mut Vec<usize>) {
         if self.minimum_v_keys.is_empty() {
             return;
         }

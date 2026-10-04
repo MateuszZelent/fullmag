@@ -22,7 +22,9 @@
     {"id": "eq-0833-mesh-element-quality", "symbols": ["x_i", "s_T", "r_i", "d_T", "a_T", "A_T", "q_T", "epsilon_f64"], "sources": ["source-0833-mesh-elements"]},
     {"id": "eq-0833-mesh-p1-geometry", "symbols": ["g_i_2d", "M_scalar_ij", "K_scalar_ij", "A_T", "a_T", "s_T", "r_i", "d_T", "N_i", "N_j"], "sources": ["source-0833-mesh-elements"]},
     {"id": "eq-0833-mesh-exact-binary64-coordinate", "symbols": ["h64", "Jx", "sigma_bits", "E_bits", "F_bits"], "sources": ["source-0833-mesh-exact-coordinate"]},
-    {"id": "eq-0833-mesh-exact-orientation", "symbols": ["orient_exact", "Jx", "orient_points"], "sources": ["source-0833-mesh-exact-orientation"]}
+    {"id": "eq-0833-mesh-exact-orientation", "symbols": ["orient_exact", "Jx", "orient_points"], "sources": ["source-0833-mesh-exact-orientation"]},
+    {"id": "eq-0833-contour-exact-area", "symbols": ["contour_area_integer", "contour_area_physical", "contour_n", "contour_x", "h64", "Jx"], "sources": ["source-0833-contour-area"]},
+    {"id": "eq-0833-contour-nesting-depth", "symbols": ["contour_C", "contour_p", "contour_region", "contour_depth"], "sources": ["source-0833-contour-location", "source-0833-contours"]}
   ],
   "symbols": [
     {"id": "Sigma_m", "latex": "\\Sigma_m", "meaning": "magnetyczny przekrój waveguide", "si_unit": "\\mathrm{m^2}"},
@@ -81,7 +83,15 @@
     {"id": "E_bits", "latex": "E_{64}", "meaning": "zapisany kod wykładnika finite binary64", "si_unit": "1"},
     {"id": "F_bits", "latex": "F_{64}", "meaning": "zapisane 52 bity frakcji binary64", "si_unit": "1"},
     {"id": "orient_exact", "latex": "O(a,b,c)", "meaning": "dokładny wyznacznik całkowity trzech punktów; u,v oznaczają składowe", "si_unit": "1"},
-    {"id": "orient_points", "latex": "a,b,c", "meaning": "punkty lokalnego przekroju użyte w predykacie orientacji", "si_unit": "\\mathrm m"}
+    {"id": "orient_points", "latex": "a,b,c", "meaning": "punkty lokalnego przekroju użyte w predykacie orientacji", "si_unit": "\\mathrm m"},
+    {"id": "contour_area_integer", "latex": "S_C", "meaning": "exact doubled signed area konturu w jednostce h64 squared", "si_unit": "1"},
+    {"id": "contour_area_physical", "latex": "A_C", "meaning": "fizyczna signed area prostego konturu; nie materializowana przez helper", "si_unit": "\\mathrm{m^2}"},
+    {"id": "contour_C", "latex": "C_i", "meaning": "ordered kontur o indeksie i w boundary_components", "si_unit": "1"},
+    {"id": "contour_n", "latex": "n_C", "meaning": "liczba half-edges prostego zamkniętego konturu", "si_unit": "1"},
+    {"id": "contour_x", "latex": "x_j", "meaning": "lokalny start node półkrawędzi konturu", "si_unit": "\\mathrm m"},
+    {"id": "contour_p", "latex": "p_i", "meaning": "reprezentatywny pierwszy start node konturu C_i", "si_unit": "\\mathrm m"},
+    {"id": "contour_region", "latex": "r_i", "meaning": "jawny identyfikator regionu konturu C_i", "si_unit": "1"},
+    {"id": "contour_depth", "latex": "d_i", "meaning": "liczba zawierających konturów tego samego regionu", "si_unit": "1"}
   ],
   "sources": [
     {"id": "source-0833-raw", "path": "docs/physics/0833-fem-waveguide-25d-normalization.md", "symbol": "DOC-ANCHOR:eq-0833-raw-shape-area-norm", "responsibility": "Surowy shape, lokalna tangencja do m0 i norma pola.", "evidence_status": "planned_contract"},
@@ -113,7 +123,10 @@
     {"id": "source-0833-fp-guard", "path": "crates/fullmag-ir/src/floating_point_guard.rs", "symbol": "require_ieee_gradual_underflow", "responsibility": "Wspólny crate-private guard gradual underflow.", "evidence_status": "source_prepared_runtime_not_verified"},
     {"id": "source-0833-mesh-exact-coordinate", "path": "crates/fullmag-ir/src/waveguide_mesh_embedding.rs", "symbol": "exact_binary64_integer", "responsibility": "Dokładny kod finite binary64 jako liczba całkowita.", "evidence_status": "source_implemented_runtime_not_verified"},
     {"id": "source-0833-mesh-exact-orientation", "path": "crates/fullmag-ir/src/waveguide_mesh_embedding.rs", "symbol": "orient2d_exact", "responsibility": "Dokładny znak orientacji zapisanych współrzędnych.", "evidence_status": "source_implemented_runtime_not_verified"},
-    {"id": "source-0833-mesh-embedding", "path": "crates/fullmag-ir/src/waveguide_mesh_embedding.rs", "symbol": "validate_waveguide_mesh_embedding", "responsibility": "Globalna konformność scalar mesha bez pełnego certificate/admission.", "evidence_status": "source_implemented_runtime_not_verified"}
+    {"id": "source-0833-mesh-embedding", "path": "crates/fullmag-ir/src/waveguide_mesh_embedding.rs", "symbol": "validate_waveguide_mesh_embedding", "responsibility": "Globalna konformność scalar mesha bez pełnego certificate/admission.", "evidence_status": "source_implemented_runtime_not_verified"},
+    {"id": "source-0833-contour-area", "path": "crates/fullmag-ir/src/waveguide_mesh_contours.rs", "symbol": "signed_contour_area_exact", "responsibility": "Exact signed area prostego konturu.", "evidence_status": "source_implemented_runtime_not_verified"},
+    {"id": "source-0833-contour-location", "path": "crates/fullmag-ir/src/waveguide_mesh_contours.rs", "symbol": "point_in_contour_exact", "responsibility": "Exact odd-even inside/outside/boundary.", "evidence_status": "source_implemented_runtime_not_verified"},
+    {"id": "source-0833-contours", "path": "crates/fullmag-ir/src/waveguide_mesh_contours.rs", "symbol": "validate_waveguide_mesh_contours", "responsibility": "Regionalne orientation/nesting bez admission.", "evidence_status": "source_implemented_runtime_not_verified"}
   ],
   "public_api": {
     "parameters": [

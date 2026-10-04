@@ -23,6 +23,7 @@ pub mod spin_transport;
 pub mod study;
 pub mod waveguide_frame;
 pub mod waveguide_mesh;
+pub mod waveguide_mesh_contours;
 pub mod waveguide_mesh_elements;
 pub mod waveguide_mesh_embedding;
 pub mod waveguide_mesh_incidence;
