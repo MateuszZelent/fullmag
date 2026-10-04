@@ -80,12 +80,11 @@ Packaging and process:
 - The browser check is not part of CI (needs Chrome on the runner).
 - The status strip lacks the mockup's update notice and telemetry switch
   (not exposed by the host).
-- **Open recent (quick switch), `Ctrl ⇧ O`** from `03-…` is not implemented: that
-  chord is already `study.import-state` (Restore Runtime State). It needs a
-  different chord or a decision about the old one; the list is reachable with
-  `/` and the arrow keys meanwhile.
-- **Help menu** shows Search Docs only; Reference and About stay hidden
-  placeholders.
+- **Open recent (quick switch)** is `Ctrl Alt O`, not the design's `Ctrl ⇧ O`, which
+  is already `study.import-state` (Restore Runtime State). It focuses the list and
+  selects the first project.
+- **Help menu:** Search Docs (`F1`), Reference (opens the Python API reference) and
+  About (opens the About section), all over an open workspace without closing it.
 
 Product decisions still open (`01-design-spec.md` §11): index location, thumbnail
 cost, network shares, *Delete from disk*, author identity. The proposed answers

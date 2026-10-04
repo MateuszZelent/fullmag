@@ -197,9 +197,35 @@ export const START_COMMANDS: readonly CommandContribution[] = [
     shortcut: "F1",
     // Documentation opens as an overlay so the workspace remains mounted.
     run: () => {
-      startScreenStore.setSection("docs");
+      startScreenStore.requestDocs();
       homeView.open();
       return { status: "completed" };
     },
   },
+  {
+    id: "workspace.reference",
+    title: "Reference",
+    group: "workspace",
+    category: "Help",
+    scope: "global",
+    // The Python API reference is where a user looks up a parameter.
+    run: () => {
+      startScreenStore.requestDocs("python-api/index.html");
+      homeView.open();
+      return { status: "completed" };
+    },
+  },
+  {
+    id: "workspace.about-help",
+    title: "About",
+    group: "workspace",
+    category: "Help",
+    scope: "global",
+    run: () => {
+      startScreenStore.setSection("about");
+      homeView.open();
+      return { status: "completed" };
+    },
+  },
+  listCommand("start.open-recent", "Open recent project…", () => startScreenStore.requestListFocus(), "Ctrl+Alt+O"),
 ];

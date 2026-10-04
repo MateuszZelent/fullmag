@@ -1,7 +1,7 @@
 "use client";
 
 import { ExternalLink, Search } from "lucide-react";
-import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type FormEvent } from "react";
 
 import { useTheme } from "@/design/theme/ThemeProvider";
 import { Button } from "@/shared/ui/Button";
@@ -16,6 +16,7 @@ import {
   themeMessage,
   type DocsAvailability,
 } from "../model/docs";
+import { startScreenStore } from "../model/startScreenState";
 
 /**
  * The documentation inside the app. The query box drives Sphinx's own search
@@ -25,7 +26,18 @@ import {
 export function DocsSection() {
   const [availability, setAvailability] = useState<DocsAvailability>("checking");
   const [query, setQuery] = useState("");
-  const [src, setSrc] = useState(docsPageUrl());
+  // A page requested before this section mounted (Help → Reference) is the
+  // starting page; one requested while it is open replaces the current page.
+  const { docsRequest } = useSyncExternalStore(
+    startScreenStore.subscribe,
+    startScreenStore.getSnapshot,
+    startScreenStore.getServerSnapshot,
+  );
+  const [src, setSrc] = useState(() => docsPageUrl(docsRequest?.page));
+  const handledRequest = useRef(docsRequest?.seq ?? 0);
+  // Reading moves the frame without touching `src`, so a request for the page the
+  // state already names must still bring the frame back; a new key reloads it.
+  const [frameKey, setFrameKey] = useState(0);
   const [pagePath, setPagePath] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
   const frameRef = useRef<HTMLIFrameElement>(null);
@@ -66,12 +78,20 @@ export function DocsSection() {
   }, []);
 
   useEffect(() => {
+    if (!docsRequest || docsRequest.seq === handledRequest.current) return;
+    handledRequest.current = docsRequest.seq;
+    setSrc(docsPageUrl(docsRequest.page));
+    setFrameKey((key) => key + 1);
+  }, [docsRequest]);
+
+  useEffect(() => {
     if (availability === "available") inputRef.current?.focus();
   }, [availability]);
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
     setSrc(docsSearchUrl(query));
+    setFrameKey((key) => key + 1);
   };
 
   return (
@@ -94,6 +114,7 @@ export function DocsSection() {
           onClick={() => {
             setQuery("");
             setSrc(docsPageUrl());
+            setFrameKey((key) => key + 1);
           }}
           size="sm"
           type="button"
@@ -114,6 +135,7 @@ export function DocsSection() {
       {availability === "available" ? (
         <iframe
           className="fm-start-docs__frame"
+          key={frameKey}
           onLoad={sendTheme}
           ref={frameRef}
           referrerPolicy="no-referrer"
