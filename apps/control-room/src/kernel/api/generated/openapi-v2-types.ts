@@ -11805,6 +11805,13 @@ export interface components {
         };
         ScriptSourceResponse: {
             bytes: number;
+            /**
+             * @description Managed export copy path for `user_file` sessions (the response
+             *     carries the copy when it exists, otherwise the read-only original).
+             */
+            managed_copy_path?: string | null;
+            /** @description Script origin of the session: `user_file`, `generated` or `none`. */
+            origin?: string;
             script_path: string;
             source: string;
         };
@@ -11814,9 +11821,26 @@ export interface components {
         ScriptSyncResponse: {
             bytes_written: number;
             entrypoint_kind: string;
+            /** @description Managed export copy path for `user_file` sessions. */
+            managed_copy_path?: string | null;
+            /**
+             * @description Path of the file that received the canonical script. For a
+             *     `user_file` session this is the managed export copy, never the
+             *     user's own script.
+             */
             script_path: string;
             source_kind: string;
+            /**
+             * @description True only when the session's own source script file was rewritten.
+             *     Always false for `user_file` sessions.
+             */
+            source_script_modified?: boolean;
             written: boolean;
+            /**
+             * @description `export_copy` (user file left untouched, copy written to managed
+             *     storage) or `script` (the session's managed script was written).
+             */
+            written_to?: string;
         };
         SelectionBoundaryMembershipSchema: {
             /** Format: double */
@@ -12132,11 +12156,32 @@ export interface components {
          * @enum {string}
          */
         SessionRestoreMode: "visualization_only" | "replace_project" | "resume";
+        /**
+         * @description Where the current session's Python script comes from and whether Fullmag
+         *     may write to it.
+         */
+        SessionScriptSummary: {
+            managed_copy_path?: string | null;
+            /**
+             * @description `user_file` (a file the user owns; Fullmag never writes it),
+             *     `generated` (a script inside Fullmag-managed storage) or `none`.
+             */
+            origin: string;
+            path: string;
+            /**
+             * @description Content hash of the script at the time of the request; only present on
+             *     `GET /v2/sessions/current`.
+             */
+            sha256?: string | null;
+            /** @description False for `user_file`: syncs go to `managed_copy_path` instead. */
+            writable: boolean;
+        };
         SessionSummary: {
             created_at: string;
             name: string;
             /** @description API-instance and transition identity for current-session HTTP/cache ownership. */
             request_scope_epoch: string;
+            script?: null | components["schemas"]["SessionScriptSummary"];
             /** @description Scientific session identity shared with observation frames. */
             session_epoch: string;
             session_id: string;

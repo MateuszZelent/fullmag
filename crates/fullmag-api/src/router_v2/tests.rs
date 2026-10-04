@@ -16251,6 +16251,8 @@ study.run(1e-12)
     let json = body_json(response).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(json["written"], true);
+    assert_eq!(json["written_to"], "script");
+    assert_eq!(json["source_script_modified"], true);
     let rewritten = fs::read_to_string(&script_path).expect("script should be rewritten");
     assert!(rewritten.contains("body_ui_core_region = body.add_region(\"ui_core\""));
     assert!(rewritten.contains("region_id=\"body:ui-core\""));
@@ -16265,6 +16267,183 @@ study.run(1e-12)
     ));
 
     let _ = fs::remove_dir_all(&script_dir);
+}
+
+#[test]
+fn script_origin_classifies_managed_and_user_scripts() {
+    let root = std::env::temp_dir().join(format!(
+        "fullmag-api-script-origin-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos(),
+    ));
+    let workspace = root.join("local-live").join("current");
+    let store = root.join("local-live").join("session-store");
+    fs::create_dir_all(&workspace).expect("workspace dir");
+    fs::create_dir_all(&store).expect("session store dir");
+    let user = root.join("user").join("model.py");
+    assert_eq!(crate::script::script_origin(&workspace, ""), "none");
+    assert_eq!(
+        crate::script::script_origin(&workspace, &user.display().to_string()),
+        "user_file"
+    );
+    assert_eq!(
+        crate::script::script_origin(
+            &workspace,
+            &workspace.join("scene_document.py").display().to_string()
+        ),
+        "generated"
+    );
+    assert_eq!(
+        crate::script::script_origin(
+            &workspace,
+            &store.join("imports").join("a.py").display().to_string()
+        ),
+        "generated"
+    );
+    assert_eq!(
+        crate::script::managed_export_copy_path(&workspace, &user),
+        workspace.join("exports").join("model.canonical.py")
+    );
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[tokio::test]
+async fn authoring_script_sync_never_rewrites_user_file_and_writes_managed_copy() {
+    let mut state = test_app_state_with_live_session().await;
+    let unique = format!(
+        "{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos(),
+    );
+    let root = std::env::temp_dir().join(format!("fullmag-api-user-script-sync-{unique}"));
+    let user_dir = root.join("user");
+    let workspace_dir = root.join("local-live").join("current");
+    fs::create_dir_all(&user_dir).expect("user dir");
+    fs::create_dir_all(&workspace_dir).expect("workspace dir");
+    let script_path = user_dir.join("my model.py");
+    let original = r#"
+# user comment that a canonical re-render would drop
+import os
+import fullmag as fm
+
+study = fm.study("user_owned")
+study.engine("fem")
+
+body = study.geometry(fm.Box(100e-9, 40e-9, 5e-9), name="body")
+body.Ms = 800e3
+body.Aex = 13e-12
+body.alpha = 0.1
+body.m = fm.texture.uniform(1, 0, 0)
+
+study.run(1e-12)
+"#;
+    fs::write(&script_path, original).expect("failed to write user script");
+    {
+        let state_mut = Arc::get_mut(&mut state).expect("test state should be uniquely owned");
+        state_mut.repo_root = crate::script::repo_root();
+        state_mut.current_workspace_root = workspace_dir.clone();
+    }
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(sample_scene_document());
+        snapshot.session.script_path = script_path.display().to_string();
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/model/syncs")
+                .header("content-type", "application/json")
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let json = body_json(response).await;
+    assert_eq!(status, StatusCode::OK, "user file sync response: {json:?}");
+    let copy_path = workspace_dir.join("exports").join("my model.canonical.py");
+    assert_eq!(json["written"], true);
+    assert_eq!(json["written_to"], "export_copy");
+    assert_eq!(json["source_script_modified"], false);
+    assert_eq!(json["script_path"], copy_path.display().to_string());
+    assert_eq!(json["managed_copy_path"], copy_path.display().to_string());
+    assert_eq!(
+        fs::read_to_string(&script_path).expect("user script readable"),
+        original,
+        "the user's own script must stay byte-identical"
+    );
+    assert!(
+        !user_dir.join("my model.py.fullmag.tmp").exists(),
+        "no temporary file may be created next to the user's script"
+    );
+    assert!(fs::read_to_string(&copy_path)
+        .expect("managed copy should exist")
+        .contains("study = fm.study"));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/model/script")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["origin"], "user_file");
+    assert_eq!(json["script_path"], copy_path.display().to_string());
+    assert!(!json["source"]
+        .as_str()
+        .expect("source string")
+        .contains("user comment"));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let json = body_json(response).await;
+    assert_eq!(json["script"]["origin"], "user_file");
+    assert_eq!(json["script"]["writable"], false);
+    assert_eq!(
+        json["script"]["managed_copy_path"],
+        copy_path.display().to_string()
+    );
+    assert_eq!(json["script"]["sha256"].as_str().map(str::len), Some(64));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let json = body_json(response).await;
+    assert_eq!(json["session"]["script"]["origin"], "user_file");
+    assert_eq!(json["session"]["script"]["writable"], false);
+
+    let _ = fs::remove_dir_all(&root);
 }
 
 #[tokio::test]
