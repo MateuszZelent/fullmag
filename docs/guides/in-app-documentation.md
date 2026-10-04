@@ -27,9 +27,10 @@ pnpm --dir apps/control-room docs:bundle
 `apps/control-room/public/docs/`. Build the site first; the strict CI build is in
 `.github/workflows/documentation.yml`.
 
-## Not yet done
+## In builds
 
-The bundle is not produced by the app's build or packaging recipes: wiring
-`docs:bundle` into the Windows, desktop and CI routes is a separate step (it needs
-Python and the Sphinx requirements on the build host). Until then a build that
-does not run it shows the online link instead.
+`pnpm --dir apps/control-room build` runs `docs:bundle --if-present` first: when
+`public_docs/site/_build/html` exists the site is bundled into the app, otherwise
+the build carries on and the app links to the online documentation. This covers
+the Windows static route, the MSI script and the release workflow. Build the
+Sphinx site before the app build in any job that should ship offline docs.
