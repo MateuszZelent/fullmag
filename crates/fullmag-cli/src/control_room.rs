@@ -2484,6 +2484,29 @@ pub(crate) fn verify_development_api_owner() -> Result<()> {
     if scene_staged.acknowledgement["workspace_state"] != "session" {
         bail!("canonical scene CLI capsule staging lost its session");
     }
+    let service_config_path = std::env::var_os("FULLMAG_DEVELOPMENT_OWNER_PROBE_SERVICE_CONFIG")
+        .context("owned CLI probe requires its isolated service configuration")?;
+    let service_config = fullmag_session::runtime_service::RuntimeServiceConfig::read(
+        &std::path::PathBuf::from(service_config_path),
+    )?;
+    let service_owner = fullmag_runtime_control::runtime_service_client::probe(
+        &service_config.store_root,
+        &service_config.target_id,
+        5,
+    )?;
+    let unbound_error = acquisition
+        .drain_global_idle(&scene_staged, &service_owner, &service_config, 5)
+        .err()
+        .context("global idle drain accepted a store not bound to this API")?;
+    if !unbound_error
+        .to_string()
+        .contains("API accepted-store binding mismatch")
+    {
+        bail!("global idle refusal did not reach the API store binding check: {unbound_error}");
+    }
+    if acquisition.confirm_held().is_ok() {
+        bail!("failed global idle handoff retained a usable acquisition");
+    }
     drop(acquisition);
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
@@ -2534,6 +2557,18 @@ pub(crate) fn verify_development_api_owner() -> Result<()> {
             reopened.status()
         );
     }
+    let mut foreign_staging = owner.acquire(&uuid::Uuid::new_v4().to_string())?;
+    let foreign_error = foreign_staging
+        .drain_global_idle(&scene_staged, &service_owner, &service_config, 5)
+        .err()
+        .context("global idle handoff accepted staging from another acquisition")?;
+    if !foreign_error
+        .to_string()
+        .contains("staged handoff does not belong to this API acquisition")
+        || foreign_staging.confirm_held().is_ok()
+    {
+        bail!("global idle handoff accepted staging from another acquisition");
+    }
     // Only this fixture child is terminated; successful wait is recorded.
     let mut process = child.release().0;
     terminate_child_process(&mut process);
@@ -2556,7 +2591,38 @@ pub(crate) fn verify_development_api_owner() -> Result<()> {
             "abort-reopened-admission", "canonical-scene-acquired", "disconnect-reopened-admission",
             "held-confirmation-preserves-freeze", "confirmation-does-not-renew-expiry",
             "expired-confirmation-refused", "expired-acquisition-reopens-admission",
-            "empty-capsule-production-stdin-consumer", "scene-capsule-production-stdin-consumer"]
+            "empty-capsule-production-stdin-consumer", "scene-capsule-production-stdin-consumer",
+            "global-idle-unbound-api-store-refused", "failed-global-idle-invalidates-acquisition",
+            "global-idle-foreign-staging-refused"]
+        })
+    );
+    Ok(())
+}
+
+/// Managed verifier only: drain the explicitly selected isolated service.
+/// The production client's exact owner/config/fence validation is exercised;
+/// this receipt makes no claim about API shutdown or a workspace replacement.
+pub(crate) fn verify_development_service_drain(config_path: &std::path::Path) -> Result<()> {
+    if std::env::var("FULLMAG_DEVELOPMENT_SERVICE_DRAIN_PROBE").as_deref() != Ok("1") {
+        bail!("development service drain verification requires an explicit managed fixture");
+    }
+    let config = fullmag_session::runtime_service::RuntimeServiceConfig::read(config_path)?;
+    let owner = fullmag_runtime_control::runtime_service_client::probe(
+        &config.store_root,
+        &config.target_id,
+        5,
+    )?;
+    let proof =
+        fullmag_runtime_control::runtime_service_client::drain_idle_confirmed(&owner, &config, 10)?;
+    println!(
+        "{}",
+        serde_json::json!({
+            "schema":"fullmag.development-service-idle-check.v1",
+            "service_pid":proof.owner.pid, "state":proof.owner.state,
+            "owner_sha256":fullmag_session::canonical_json_sha256(&serde_json::to_value(&proof.owner)?),
+            "children":proof.owner.children, "fence_nonce":proof.admission_fence.nonce,
+            "fence_sha256":fullmag_session::canonical_json_sha256(
+                &serde_json::to_value(&proof.admission_fence)?),
         })
     );
     Ok(())

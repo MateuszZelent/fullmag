@@ -16,6 +16,7 @@ Owner początkowego API w natywnym CLI i klient acquire/abort: [P8-53S](53s-nati
 Aktualne potwierdzenie przejęcia bez przedłużania timeoutu: [P8-53T](53t-acquisition-live-confirmation.md).
 Staging przejęcia ze scoped payloadem UI i pusta kapsuła: [P8-53U](53u-acquired-workspace-capsule.md).
 Konsument kapsuły w natywnym launcherze: [P8-53V](53v-native-cli-capsule-consumer.md).
+Bramka globalnego idle i jej odrębne dowody: [P8-53W](53w-staged-global-idle-consumer.md).
 
 Jedno `just windows-ui dev` uruchamia HMR frontendu i obserwację backendu.
 Po kompilacji UI pokazuje „Nowy backend gotowy” oraz przycisk restartu.

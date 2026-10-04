@@ -234,6 +234,12 @@ pub(crate) enum RuntimeCommand {
     /// Internal managed diagnostic for the native CLI owner protocol.
     #[command(hide = true)]
     VerifyDevelopmentApiOwner,
+    /// Internal managed proof of the production client's idle service drain.
+    #[command(hide = true)]
+    VerifyDevelopmentServiceDrain {
+        #[arg(long)]
+        config: PathBuf,
+    },
     /// Internal operator-level start/attach for an explicitly selected store.
     #[command(hide = true)]
     ServiceEnsure {

@@ -453,6 +453,42 @@ pub struct IdleDrainProof {
     pub admission_fence: fullmag_session::store::DevelopmentAdmissionFence,
 }
 
+/// Drain only the service whose accepted store is bound to the pinned API.
+/// The caller must hold API mutation admission and its authoring acquisition.
+/// This never starts a service or interprets an unavailable store as idle.
+/// Any failure after draining deliberately retains the durable fence; neither
+/// reconnection nor API loss authorizes an automatic release or another drain.
+pub fn drain_idle_for_api(
+    api_port: u16,
+    api_instance_id: &str,
+    expected: &RuntimeServiceOwnerDescriptor,
+    config: &RuntimeServiceConfig,
+    timeout_seconds: u64,
+) -> Result<IdleDrainProof> {
+    let parsed = uuid::Uuid::parse_str(api_instance_id)
+        .context("invalid API pin before global idle drain")?;
+    if api_port == 0 || parsed.is_nil() || parsed.to_string() != api_instance_id {
+        bail!("invalid API identity before global idle drain");
+    }
+    if !(1..=30).contains(&timeout_seconds) {
+        bail!("native service drain timeout must be 1..30 seconds");
+    }
+    let require_binding = || -> Result<()> {
+        let (document, observed) = read_api_document(api_port)?;
+        let build = fullmag_build_info::identity();
+        require_api_identity(&document, build.git_commit, build.source_snapshot_sha256)?;
+        require_api_store_binding(&document, &config.store_root)?;
+        if observed != api_instance_id {
+            bail!("API instance changed before global idle handoff");
+        }
+        Ok(())
+    };
+    require_binding()?;
+    let proof = drain_idle_confirmed(expected, config, timeout_seconds)?;
+    require_binding()?;
+    Ok(proof)
+}
+
 /// Fence new durable work only after a global idle check, then drain the pinned
 /// service. An uncertain outcome retains the marker and requires reconciliation.
 pub fn drain_idle_confirmed(

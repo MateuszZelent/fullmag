@@ -1,5 +1,12 @@
 # Status realizacji całego planu refaktoryzacji
 
+Checkpoint P8-53W, 04.10.2026: [bramka globalnego idle](p8/53w-staged-global-idle-consumer.md).
+Staged nonce/API binding, aktualne przejęcie i zgodność magazynu API poprzedzają
+drain. Natywny build i 105 sprawdzeń runtime PASS, 21 własnych procesów waited.
+Dowód rzeczywistego drain klienta Rust jest odrębny od odmowy niepowiązanego API;
+pozytywny wspólny przebieg, cold-store gate i pełny restart pozostają otwarte.
+Procenty całego planu bez awansu.
+
 Checkpoint P8-53V, 04.10.2026: [konsument kapsuły w launcherze](p8/53v-native-cli-capsule-consumer.md).
 CLI przekazuje ramkę API przez zamknięty stdin do zarządzanego Pythona,
 wymaga zakończenia helpera, zgodnego ACK i aktualnego guardu API po staging.

@@ -95,7 +95,6 @@ def run(repo_root: str) -> int:
             if binary_hash != manifest["api_binary_sha256"] or hashlib.sha256(source_api.read_bytes()).hexdigest() != binary_hash:
                 raise storage.StorageError("Native API changed while sealing its diagnostic copy")
             exercise(api, repo, run_root, receipt)
-            exercise_cli_owner(repo, run_root, manifest, receipt, api.parent)
             exercise_service(repo, run_root, manifest, receipt, api.parent)
             # Use the canonical codegen branch rather than persisting the live
             # endpoint's process-specific accepted-store binding extension.
@@ -135,7 +134,7 @@ def run(repo_root: str) -> int:
         return code
 
 
-def exercise_cli_owner(repo: Path, run_root: Path, manifest: dict, receipt: dict, binaries: Path) -> None:
+def exercise_cli_owner(repo: Path, run_root: Path, manifest: dict, receipt: dict, binaries: Path, service_config: Path) -> None:
     """Exercise the production native CLI client in its own empty API child."""
     fixture = run_root / "cli-owner-fixture"
     state = fixture / "state"
@@ -166,6 +165,7 @@ def exercise_cli_owner(repo: Path, run_root: Path, manifest: dict, receipt: dict
         FULLMAG_DEVELOPMENT_OWNER_PROBE="1", FULLMAG_NATIVE_RUNTIME_ACTIVE="1",
         FULLMAG_PYTHON=str(Path(native["build_root"]) / "python/fullmag/Scripts/python.exe"),
         FULLMAG_DEVELOPMENT_OWNER_PROBE_CANDIDATE=candidate["bundle_root"],
+        FULLMAG_DEVELOPMENT_OWNER_PROBE_SERVICE_CONFIG=str(service_config),
         FULLMAG_STORAGE_PROFILE="windows-native-fdm-cpu-dev", FULLMAG_PROJECT_STORAGE_ROOT=str(store),
         FULLMAG_WORKTREE_ID=worktree, FULLMAG_DEVELOPMENT_BACKEND_GENERATION=generation,
         FULLMAG_DEVELOPMENT_BACKEND_STATUS_FILE=str(status),
@@ -311,6 +311,7 @@ def exercise_service(repo: Path, run_root: Path, manifest: dict, receipt: dict, 
         record = dict(label="empty-resident-service", pid=child.pid, waited=False)
         receipt["processes"].append(record)
         owner = None
+        idle_drain_requested = False
 
         def control(command, token, nonce):
             address, port = owner["control_address"].rsplit(":", 1)
@@ -346,6 +347,10 @@ def exercise_service(repo: Path, run_root: Path, manifest: dict, receipt: dict, 
             assert owner["build_commit"] == manifest["git_commit"]
             assert owner["build_snapshot"] == manifest["source_snapshot_sha256"]
             assert len(owner["children"]) == 2 and all(item["status"] == "running" for item in owner["children"])
+            exercise_cli_owner(repo, run_root, manifest, receipt, binaries, config_path)
+            assert control("status", owner["owner_token"], uuid.uuid4().hex)["owner"]["state"] == "ready"
+            assert not (store / "development/ADMISSION-FENCE.json").exists()
+            receipt["checks"].append("foreign-api-store-refusal-keeps-service-ready-and-unfenced")
             receipt["checks"].append("empty-service-ready-source-identity")
             denied = control("drain_idle_confirmed", str(uuid.uuid4()), "unauthorized")
             assert denied.get("status") == "rejected", denied
@@ -429,20 +434,45 @@ def exercise_service(repo: Path, run_root: Path, manifest: dict, receipt: dict, 
                 started = time.monotonic()
                 release.start()
                 try:
-                    terminal = control("drain_idle_confirmed", owner["owner_token"], challenge)
+                    idle_drain_requested = True
+                    drain_child = subprocess.Popen(
+                        [str(binaries / "fullmag.exe"), "runtime", "verify-development-service-drain", "--config", str(config_path)],
+                        cwd=repo, env={**env, "FULLMAG_DEVELOPMENT_SERVICE_DRAIN_PROBE":"1"},
+                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL,
+                        creationflags=subprocess.CREATE_NO_WINDOW)
+                    drain_record = dict(label="native-idle-drain-client", pid=drain_child.pid, waited=False)
+                    receipt["processes"].append(drain_record)
+                    try:
+                        output, errors = drain_child.communicate(timeout=20)
+                    finally:
+                        if drain_child.poll() is None:
+                            drain_child.kill()  # Only this fixture's diagnostic CLI, never the service.
+                            drain_child.wait(timeout=10)
+                        drain_record.update(waited=True, exit_code=drain_child.returncode)
+                    (run_root / "native-idle-drain-client.log").write_bytes(output + errors)
+                    assert drain_child.returncode == 0
+                    frames = [json.loads(line) for line in output.decode().splitlines() if line.startswith('{')]
+                    assert len(frames) == 1
+                    proof = frames[0]
                 finally:
                     release.join(timeout=2)
                     assert not release.is_alive()
-                assert terminal.get("schema_version") == "runtime_service_idle_drain.v1", terminal
+                assert proof["schema"] == "fullmag.development-service-idle-check.v1"
                 assert time.monotonic() - started >= 0.25
             receipt["checks"].append("idle-drain-retries-native-writer-contention-before-fencing")
-            assert terminal["nonce"] == challenge and terminal["configuration"] == config
-            fence = terminal["admission_fence"]
+            fence = json.loads(fence_path.read_text(encoding="utf-8"))
+            challenge = proof["fence_nonce"]
+            canonical = lambda value: json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+            assert hashlib.sha256(canonical(fence)).hexdigest() == proof["fence_sha256"]
+            assert proof["service_pid"] == child.pid and proof["state"] == "drained"
             assert fence["schema"] == "fullmag.development-admission-fence.v1"
             assert fence["owner_token"] == owner["owner_token"] and fence["nonce"] == challenge
             assert json.loads(fence_path.read_text(encoding="utf-8")) == fence
             receipt["checks"].append("idle-drain-retains-exact-durable-admission-fence")
-            drained = terminal["owner"]
+            drained = json.loads(owner_path.read_text(encoding="utf-8"))
+            assert hashlib.sha256(canonical(drained)).hexdigest() == proof["owner_sha256"]
+            assert proof["children"] == drained["children"]
+            receipt["checks"].append("production-rust-client-validates-global-idle-drain-and-fence")
             assert drained["state"] == "drained"
             for field in ("owner_token", "process_start_token", "pid", "host", "target_id", "control_address",
                           "build_commit", "build_snapshot", "compute_pool_id", "preparation_pool_id",
@@ -455,9 +485,10 @@ def exercise_service(repo: Path, run_root: Path, manifest: dict, receipt: dict, 
             receipt["checks"].append("terminal-owner-published-before-confirmation")
         finally:
             # Never stop an unrelated owner or replace an unknown drain result.
-            # A failed fixture remains recorded; only authenticated graceful drain
-            # is attempted for this exact child and its own store.
-            if child.poll() is None and owner is not None and owner.get("pid") == child.pid:
+            # Once an idle lifecycle request may have been sent, a lost CLI
+            # outcome must not trigger a second lifecycle request. Wait for the
+            # exact owned service; retain it with evidence if it stays live.
+            if not idle_drain_requested and child.poll() is None and owner is not None and owner.get("pid") == child.pid:
                 try:
                     control("drain", owner["owner_token"], None)
                 except (OSError, ValueError, storage.StorageError):

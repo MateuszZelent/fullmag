@@ -15,6 +15,7 @@ use std::{
 };
 
 use anyhow::{bail, Context, Result};
+use fullmag_session::runtime_service::{RuntimeServiceConfig, RuntimeServiceOwnerDescriptor};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -200,6 +201,7 @@ impl OwnerLaunch {
 
         Ok(OwnedDevelopmentApi {
             control_address: address,
+            api_port,
             api_instance_id: record.api_instance_id,
             storage_root: self.storage_root.clone(),
             worktree: self.worktree.clone(),
@@ -215,6 +217,7 @@ impl OwnerLaunch {
 /// public HTTP-control or process-management operations.
 pub(crate) struct OwnedDevelopmentApi {
     control_address: SocketAddrV4,
+    api_port: u16,
     api_instance_id: String,
     storage_root: PathBuf,
     worktree: String,
@@ -277,6 +280,7 @@ impl OwnedDevelopmentApi {
         Ok(AuthoringAcquisition {
             stream: Some(stream),
             owner_token: self.owner_token.clone(),
+            api_port: self.api_port,
             api_instance_id: self.api_instance_id.clone(),
             nonce: nonce.to_owned(),
             workspace,
@@ -298,6 +302,7 @@ impl OwnedDevelopmentApi {
 pub(crate) struct AuthoringAcquisition {
     stream: Option<TcpStream>,
     owner_token: String,
+    api_port: u16,
     api_instance_id: String,
     nonce: String,
     workspace: Value,
@@ -424,7 +429,55 @@ impl AuthoringAcquisition {
             acknowledgement: serde_json::to_value(acknowledgement)
                 .context("unable to materialize development handoff acknowledgement")?,
             helper_pid,
+            source_nonce: self.nonce.clone(),
+            source_api_instance_id: self.api_instance_id.clone(),
         })
+    }
+
+    /// Fence globally accepted work and drain the pinned resident service only
+    /// after the staged handoff remains bound to this live API acquisition.
+    pub(crate) fn drain_global_idle(
+        &mut self,
+        staged: &StagedAuthoringHandoff,
+        expected: &RuntimeServiceOwnerDescriptor,
+        config: &RuntimeServiceConfig,
+        timeout_seconds: u64,
+    ) -> Result<fullmag_runtime_control::runtime_service_client::IdleDrainProof> {
+        let result = self.drain_global_idle_inner(staged, expected, config, timeout_seconds);
+        if result.is_err() {
+            self.invalidate_control_stream();
+        }
+        result
+    }
+
+    fn drain_global_idle_inner(
+        &mut self,
+        staged: &StagedAuthoringHandoff,
+        expected: &RuntimeServiceOwnerDescriptor,
+        config: &RuntimeServiceConfig,
+        timeout_seconds: u64,
+    ) -> Result<fullmag_runtime_control::runtime_service_client::IdleDrainProof> {
+        if self.stream.is_none() {
+            bail!("development API acquisition connection is unavailable");
+        }
+        if staged.source_nonce != self.nonce
+            || staged.source_api_instance_id != self.api_instance_id
+        {
+            bail!("staged handoff does not belong to this API acquisition");
+        }
+
+        self.confirm_held()
+            .context("development API acquisition could not be confirmed before idle drain")?;
+        let proof = fullmag_runtime_control::runtime_service_client::drain_idle_for_api(
+            self.api_port,
+            &self.api_instance_id,
+            expected,
+            config,
+            timeout_seconds,
+        )?;
+        self.confirm_held()
+            .context("development API acquisition could not be confirmed after idle drain")?;
+        Ok(proof)
     }
 
     fn invalidate_control_stream(&mut self) {
@@ -517,6 +570,8 @@ impl AuthoringAcquisition {
 pub(crate) struct StagedAuthoringHandoff {
     pub(crate) acknowledgement: Value,
     pub(crate) helper_pid: u32,
+    source_nonce: String,
+    source_api_instance_id: String,
 }
 
 #[derive(Serialize)]

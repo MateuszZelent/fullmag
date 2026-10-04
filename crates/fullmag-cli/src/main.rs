@@ -94,6 +94,9 @@ fn main() -> Result<()> {
         Command::Runtime(RuntimeCommand::VerifyDevelopmentApiOwner) => {
             control_room::verify_development_api_owner()?;
         }
+        Command::Runtime(RuntimeCommand::VerifyDevelopmentServiceDrain { config }) => {
+            control_room::verify_development_service_drain(&config)?;
+        }
         Command::Doctor => {
             println!("fullmag status");
             println!("- public authoring surface: embedded Python API");
