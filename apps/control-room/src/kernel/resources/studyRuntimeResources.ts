@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 
 import {
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_BRANCHES_V2_PATH,
@@ -161,6 +161,7 @@ import {
   useSessionStatusSelector,
 } from "./useSessionStatus";
 import { emitResourceLoadFailed } from "./resourceLoadFailure";
+import type { ResourceResult } from "./resourceTypes";
 import { useResource } from "./useResource";
 
 /** Browser trace state is bounded and mutates only on sampled profile events. */
@@ -758,9 +759,82 @@ export function useResultContextRunResource(
   });
 }
 
+export interface StageExecutionSessionIdentity {
+  runId: string | null;
+  sessionEpoch: string;
+  sessionId: string;
+}
+
+type StageExecutionSessionStatus = Pick<
+  ResourceResult<LiveStatusResource>,
+  "data" | "status"
+>;
+
+function nonEmptyStageExecutionIdentityValue(value: unknown): string | null {
+  return typeof value === "string" && value.trim().length > 0 ? value : null;
+}
+
+export function selectStageExecutionSessionIdentity(
+  status: StageExecutionSessionStatus,
+): StageExecutionSessionIdentity | null {
+  if (status.status !== "ready" || !status.data) return null;
+
+  const sessionId = nonEmptyStageExecutionIdentityValue(
+    status.data.session?.session_id,
+  );
+  const sessionEpoch = nonEmptyStageExecutionIdentityValue(
+    status.data.session?.session_epoch,
+  );
+  if (!sessionId || !sessionEpoch) return null;
+
+  let runId: string | null;
+  if (status.data.run === null) {
+    runId = null;
+  } else {
+    runId = nonEmptyStageExecutionIdentityValue(status.data.run?.run_id);
+    if (!runId) return null;
+  }
+
+  return { runId, sessionEpoch, sessionId };
+}
+
+export function stageExecutionSessionIdentityEquals(
+  previous: StageExecutionSessionIdentity | null,
+  next: StageExecutionSessionIdentity | null,
+): boolean {
+  return (
+    previous === next ||
+    (previous !== null &&
+      next !== null &&
+      previous.runId === next.runId &&
+      previous.sessionEpoch === next.sessionEpoch &&
+      previous.sessionId === next.sessionId)
+  );
+}
+
+export function stageExecutionMatchesSessionIdentity(
+  stageExecution: StageExecutionResource | null,
+  identity: StageExecutionSessionIdentity | null,
+): boolean {
+  return (
+    stageExecution !== null &&
+    identity !== null &&
+    stageExecution.session_id === identity.sessionId &&
+    stageExecution.session_epoch === identity.sessionEpoch &&
+    stageExecution.run_id === identity.runId
+  );
+}
+
 export function useStageExecutionResource({
   enabled = true,
-}: RuntimeResourceOptions = {}) {
+}: RuntimeResourceOptions = {}): ResourceResult<StageExecutionResource | null> {
+  const sessionIdentity = useSessionStatusSelector(
+    selectStageExecutionSessionIdentity,
+    {
+      enabled,
+      isEqual: stageExecutionSessionIdentityEquals,
+    },
+  );
   const { api } = useKernel();
   const load = useCallback(
     ({ signal }: { signal: AbortSignal }) =>
@@ -770,12 +844,71 @@ export function useStageExecutionResource({
     [api],
   );
 
-  return useResource<StageExecutionResource | null>({
-    enabled,
+  const stageExecutionResource = useResource<StageExecutionResource | null>({
+    enabled: enabled && sessionIdentity !== null,
     load,
     resolveRevision: (data) => data?.revision ?? null,
     resourceKey: SIMULATION_STAGES_EXECUTION_PATH,
   });
+  const {
+    data: stageExecutionData,
+    refetch: refetchStageExecution,
+    status: stageExecutionStatus,
+  } = stageExecutionResource;
+  const requestedIdentityRef =
+    useRef<StageExecutionSessionIdentity | null>(null);
+
+  useEffect(() => {
+    if (!sessionIdentity) return;
+
+    const readyDataMatches =
+      stageExecutionStatus === "ready" &&
+      stageExecutionMatchesSessionIdentity(
+        stageExecutionData,
+        sessionIdentity,
+      );
+    if (readyDataMatches) {
+      requestedIdentityRef.current = sessionIdentity;
+      return;
+    }
+
+    if (
+      !stageExecutionSessionIdentityEquals(
+        requestedIdentityRef.current,
+        sessionIdentity,
+      )
+    ) {
+      requestedIdentityRef.current = sessionIdentity;
+      refetchStageExecution();
+    }
+  }, [
+    sessionIdentity,
+    stageExecutionData,
+    refetchStageExecution,
+    stageExecutionStatus,
+  ]);
+
+  const stageExecutionMatches =
+    sessionIdentity !== null &&
+    stageExecutionResource.status === "ready" &&
+    stageExecutionMatchesSessionIdentity(
+      stageExecutionResource.data,
+      sessionIdentity,
+    );
+  const readyDataMismatch =
+    sessionIdentity !== null &&
+    stageExecutionResource.status === "ready" &&
+    stageExecutionResource.data !== null &&
+    !stageExecutionMatchesSessionIdentity(
+      stageExecutionResource.data,
+      sessionIdentity,
+    );
+
+  return {
+    ...stageExecutionResource,
+    data: stageExecutionMatches ? stageExecutionResource.data : null,
+    status: readyDataMismatch ? "loading" : stageExecutionResource.status,
+  };
 }
 
 export function useArtifactsResource({

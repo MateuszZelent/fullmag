@@ -42,7 +42,10 @@ import {
   DATA_TABLE_ROWS_PATH,
   DATA_TABLES_PATH,
 } from "../api/apiPaths";
-import type { LiveStatusResource } from "../api/apiTypes";
+import type {
+  LiveStatusResource,
+  StageExecutionResource,
+} from "../api/apiTypes";
 import { ControlRoomApiError } from "../api/ControlRoomApi";
 import { activeLaneCapabilityFixture } from "./activeLaneCapabilityFixture.testSupport";
 
@@ -67,6 +70,9 @@ import {
   shouldLoadRuntimeMeshSummary,
   shouldLoadRuntimeScalars,
   shouldLoadRuntimeStageExecution,
+  selectStageExecutionSessionIdentity,
+  stageExecutionMatchesSessionIdentity,
+  stageExecutionSessionIdentityEquals,
   studyRuntimeCommandSessionStatusEquals,
 } from "./studyRuntimeResources";
 
@@ -1135,6 +1141,108 @@ describe("study runtime command resource bundles", () => {
 
     expect(hookSource).not.toContain(frequencyDomainFamilyPath);
   });
+
+  it("requires fresh session status and accepts an explicit no-run identity", () => {
+    const statusData = statusWith({
+      run: null,
+      sessionEpoch: "epoch-current",
+      sessionId: "session-current",
+    });
+    const identity = selectStageExecutionSessionIdentity({
+      data: statusData,
+      status: "ready",
+    });
+
+    expect(identity).toEqual({
+      runId: null,
+      sessionEpoch: "epoch-current",
+      sessionId: "session-current",
+    });
+    expect(
+      selectStageExecutionSessionIdentity({
+        data: statusData,
+        status: "stale",
+      }),
+    ).toBeNull();
+    expect(
+      selectStageExecutionSessionIdentity({
+        data: statusWith({ sessionId: "  " }),
+        status: "ready",
+      }),
+    ).toBeNull();
+
+    const activeRun = {
+      run_id: "run-current",
+    } as NonNullable<LiveStatusResource["run"]>;
+    expect(
+      selectStageExecutionSessionIdentity({
+        data: statusWith({ run: activeRun }),
+        status: "ready",
+      })?.runId,
+    ).toBe("run-current");
+  });
+
+  it(
+    "matches stage execution only to the exact session, epoch, and run tuple",
+    () => {
+      const identity = {
+        runId: "run-current",
+        sessionEpoch: "epoch-current",
+        sessionId: "session-current",
+      };
+      const execution: StageExecutionResource = {
+        active_stage_index: null,
+        active_stage_kind: null,
+        completed_stage_indexes: [],
+        revision: 4,
+        run_id: "run-current",
+        runtime_state: "running",
+        session_epoch: "epoch-current",
+        session_id: "session-current",
+        stage_statuses: [],
+        stages: [],
+        total_stages: 0,
+      };
+
+      expect(stageExecutionMatchesSessionIdentity(execution, identity)).toBe(
+        true,
+      );
+      expect(
+        stageExecutionMatchesSessionIdentity(
+          { ...execution, session_id: "session-old" },
+          identity,
+        ),
+      ).toBe(false);
+      expect(
+        stageExecutionMatchesSessionIdentity(
+          { ...execution, session_epoch: "epoch-old" },
+          identity,
+        ),
+      ).toBe(false);
+      expect(
+        stageExecutionMatchesSessionIdentity(
+          { ...execution, run_id: "run-old" },
+          identity,
+        ),
+      ).toBe(false);
+      const noRunIdentity = { ...identity, runId: null };
+      expect(
+        stageExecutionMatchesSessionIdentity(
+          { ...execution, run_id: null },
+          noRunIdentity,
+        ),
+      ).toBe(true);
+      expect(
+        stageExecutionMatchesSessionIdentity(execution, noRunIdentity),
+      ).toBe(false);
+      expect(
+        stageExecutionSessionIdentityEquals(identity, {
+          ...identity,
+          sessionEpoch: "epoch-old",
+        }),
+      ).toBe(false);
+    },
+  );
 
   it("does not load stage execution for idle command controls", () => {
     expect(
