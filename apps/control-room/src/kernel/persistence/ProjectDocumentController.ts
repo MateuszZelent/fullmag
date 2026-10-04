@@ -104,9 +104,16 @@ export const EMPTY_PROJECT_DOCUMENT_SNAPSHOT: ProjectDocumentSnapshot = {
   hostPath: null,
 };
 
+export interface ProjectDocumentDevelopmentGuard {
+  readonly handoff: ProjectDocumentDevelopmentHandoff;
+  assertCurrent(): void;
+  release(): void;
+}
+
 export class ProjectDocumentController {
   private snapshot: ProjectDocumentSnapshot = EMPTY_PROJECT_DOCUMENT_SNAPSHOT;
   private readonly listeners = new Set<() => void>();
+  private developmentGuard: symbol | null = null;
   private activeOperation:
     | "create"
     | "open"
@@ -126,6 +133,7 @@ export class ProjectDocumentController {
 
   canSave(): boolean {
     return (
+      this.developmentGuard === null &&
       this.snapshot.state === "ready" &&
       this.snapshot.resource.mode.kind === "read_write" &&
       this.snapshot.resource.archive_base64.length > 0
@@ -139,7 +147,7 @@ export class ProjectDocumentController {
    */
   close(discardChanges = false): boolean {
     const snapshot = this.snapshot;
-    if (this.activeOperation !== null || snapshot.state === "loading") return false;
+    if (this.developmentGuard !== null || this.activeOperation !== null || snapshot.state === "loading") return false;
     if (
       (snapshot.state === "ready" || snapshot.state === "error") &&
       snapshot.resource?.dirty &&
@@ -211,6 +219,48 @@ export class ProjectDocumentController {
   ): ProjectDocumentDevelopmentHandoff {
     this.assertOperationAvailable();
     return captureProjectDocumentDevelopmentHandoff(this.snapshot, options);
+  }
+
+  /** Freeze this document owner until a confirmed restart outcome releases its guard. */
+  beginDevelopmentHandoff(
+    options: CaptureProjectDocumentDevelopmentHandoffOptions = {},
+  ): ProjectDocumentDevelopmentGuard {
+    this.assertOperationAvailable();
+    const handoff = captureProjectDocumentDevelopmentHandoff(this.snapshot, options);
+    const capturedJson = JSON.stringify(handoff);
+    const original = this.snapshot;
+    const token = Symbol("project-document-development-handoff");
+    this.developmentGuard = token;
+    // The immutable snapshot identity also notifies consumers of command availability.
+    this.snapshot = { ...original };
+    const captured = this.snapshot;
+    try {
+      this.notify();
+    } catch (error) {
+      this.developmentGuard = null;
+      this.snapshot = original;
+      try { this.notify(); } catch { /* The failed guard is not retained. */ }
+      throw error;
+    }
+    let released = false;
+    return {
+      handoff,
+      assertCurrent: () => {
+        if (released || this.developmentGuard !== token || this.snapshot !== captured
+          || JSON.stringify(captureProjectDocumentDevelopmentHandoff(this.snapshot, { carryUnsaved: true })) !== capturedJson) {
+          throw new Error("The captured project document is no longer guarded.");
+        }
+      },
+      release: () => {
+        if (released) return;
+        released = true;
+        if (this.developmentGuard === token) {
+          this.developmentGuard = null;
+          this.snapshot = { ...this.snapshot };
+          this.notify();
+        }
+      },
+    };
   }
 
   /**
@@ -417,6 +467,9 @@ export class ProjectDocumentController {
   }
 
   private assertOperationAvailable(): void {
+    if (this.developmentGuard !== null) {
+      throw new Error("The project document is protected during development restart.");
+    }
     if (this.activeOperation !== null || this.snapshot.state === "loading") {
       throw new Error("A project document operation is already in progress.");
     }

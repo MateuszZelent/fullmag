@@ -1518,6 +1518,9 @@ def exercise(api: Path, repo: Path, run_root: Path, receipt: dict, *, project_do
             get("health")
             instance = get.instance_id
             assert str(uuid.UUID(instance)) == instance
+            workspace_identity = get()[2]["workspace_identity"]
+            assert workspace_identity == {"api_instance_id": instance, "session_id": None, "session_epoch": 0}
+            checks.append("restart-transport-empty-workspace-transition-identity")
             token = uuid.uuid4().hex
             request_id = str(uuid.uuid4())
             request = {"schema": "fullmag.development-ui-restart-request.v1",
@@ -1578,10 +1581,29 @@ def exercise(api: Path, repo: Path, run_root: Path, receipt: dict, *, project_do
             assert "session_id" in schema["required"]
             assert schema["additionalProperties"] is False
             checks.append("restart-transport-openapi-strict-required-nullable-session")
+            identity_schema = spec["components"]["schemas"]["DevelopmentBackendWorkspaceIdentity"]
+            assert {"api_instance_id", "session_epoch"}.issubset(identity_schema["properties"])
+            assert "workspace_identity" in spec["components"]["schemas"]["DevelopmentBackendResource"]["properties"]
+            checks.append("restart-transport-openapi-workspace-transition-identity")
+        def observe_workspace_identity(get):
+            get("health")
+            instance = get.instance_id
+            for expected_epoch in (1, 2):
+                code, _, created = get("/v2/sessions", method="POST", payload={
+                    "name": "Owned UI identity fixture", "backend": "fdm", "device": "cpu", "precision": "double",
+                    "replace_current": True,
+                })
+                assert code == 201 and created["session_id"]
+                observed_identity = get()[2]["workspace_identity"]
+                assert observed_identity == {"api_instance_id": instance, "session_id": created["session_id"], "session_epoch": expected_epoch}
+                checks.append("restart-transport-exact-workspace-transition-epoch-" + str(expected_epoch))
         frame()
         transport_config = {**configured, "FULLMAG_DEVELOPMENT_OWNER_TOKEN": uuid.uuid4().hex,
                             "FULLMAG_DEVELOPMENT_RESTART_COORDINATOR": "1",
                             "FULLMAG_DEVELOPMENT_RESTART_UI_ORIGIN": origin}
+        # A durable pending restart correctly closes mutation admission. Exercise
+        # ordinary session transitions before that intent, on a separate owned API.
+        with_api("workspace-identity", transport_config, observe_workspace_identity)
         with_api("restart-transport", transport_config, observe_transport)
         return
 

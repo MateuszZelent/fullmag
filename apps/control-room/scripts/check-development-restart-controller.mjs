@@ -50,6 +50,7 @@ function fixture(overrides = {}) {
   const controller = new DevelopmentRestartController(oldPin, {
     submit: async (request, token) => {
       calls.submit++; calls.request = request; calls.token = token;
+      if (overrides.submitError) throw overrides.submitError;
       if (overrides.lostAck) throw new Error("Lost acknowledgement");
       return result("pending");
     },
@@ -139,6 +140,20 @@ for (const response of [{ session_id: "old-session" }, { session_id: null }, { s
   const { controller, calls } = fixture({ sessionId: "old-session", response });
   await controller.start(); await controller.reconcile();
   assert.equal(controller.getSnapshot().state, "unknown"); assert.equal(calls.hydrate, 0); assert.equal(calls.release, 0);
+  groups++;
+}
+for (const [code, status, name, expected] of [
+  ["development_restart_workspace_changed", 409, "ControlRoomApiError", "failed"],
+  ["development_restart_publication_unconfirmed", 409, "ControlRoomApiError", "unknown"],
+  ["development_restart_workspace_changed", 500, "ControlRoomApiError", "unknown"],
+  ["development_restart_workspace_changed", 409, "Error", "unknown"],
+]) {
+  const { controller, calls } = fixture({ submitError: { name, status, code } });
+  await controller.start();
+  assert.equal(controller.getSnapshot().state, expected);
+  assert.equal(calls.release, expected === "failed" ? 1 : 0);
+  assert.equal(calls.submit, 1); assert.equal(calls.hydrate, 0);
+  if (expected === "failed") { await controller.reconcile(); assert.equal(calls.read, 0); }
   groups++;
 }
 console.log(JSON.stringify({ check: "development-restart-controller", groups, passed: true, emitted_code: false }));

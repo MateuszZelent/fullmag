@@ -21,6 +21,7 @@ function resourceCall(name: string, enabled: boolean): void {
 vi.mock("@/kernel/KernelContext", async () => ({
   KernelContext: (await import("react")).createContext(null),
   useKernel: () => ({
+    api: {},
     resources: {
       getRevision: () => null,
       subscribe: () => () => undefined,

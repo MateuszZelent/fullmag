@@ -8,6 +8,30 @@ NOT VERIFIED. Utrata ACK wymaga potwierdzonego exit własnego API i zgodnego
 trwałego rekordu; nie upoważnia do ponowienia commit ani zwolnienia fence.
 Data: 03.10.2026.
 
+### Tożsamość i właściciele frontendu — P8-53AQ
+
+Zasób `development-backend` w zarządzanym trybie dev zawiera cienkie
+`workspace_identity`: UUID API, nullable session ID i dokładny globalny
+licznik przejść `session_epoch`, również przy braku sesji. Nie wyprowadzamy
+tego licznika z domenowego epoch wyniku ani nie zakładamy zera dla pustego
+workspace. Odczyt sesji i licznika odbywa się pod blokadą przejść;
+ETag uwzględnia tę tożsamość. Tryb wyłączony lub błędna konfiguracja nie
+publikują tożsamości jako dowodu zarządzanego restartu.
+
+Każdy klient API posiada własną przestrzeń cache zasobów. Hooki, selektory,
+bezpośredni wydawcy danych i odczyt scope komend używają tej samej przestrzeni.
+Kanoniczne ścieżki invalidation, transportu oraz diagnostyki pozostają
+niezmienione. Spóźniony wynik starego klienta nie zasila nowego kernela.
+
+Dokument projektu ma osobny guard handoffu: blokuje operacje i sprawdza
+niezmienność metadanych do potwierdzonego zakończenia. Adapter właścicieli
+łączy ten guard z PendingForms i layoutem. Wymaga jawnego carry dla dirty
+dokumentu, pauzy starych connectorów oraz nowego przypiętego klienta i nowych
+właścicieli przed publikacją. Obecny workspace nie ma osobnego edytora Python;
+przekazuje jawny payload `state: absent`, odrębny od archiwum projektu.
+Adapter nie jest jeszcze podłączony do produkcyjnej wymiany kernela;
+`restart_available=false` pozostaje obowiązującą granicą.
+
 ### Zakończenie cold handoff — dziennik i admission
 
 Zakończenie wymaga przypiętego starego commit, potwierdzonego exit starego

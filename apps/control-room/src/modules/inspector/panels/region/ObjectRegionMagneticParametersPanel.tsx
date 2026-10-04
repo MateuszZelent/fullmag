@@ -331,6 +331,7 @@ function useObjectRegionMagneticParametersPanelView({
         response.scene_revision,
         undefined,
         operationSessionScopeKey,
+        api.resourceCacheScope,
       );
       setFieldFeedback({ kind: "success", message: "Material fields updated." });
     } catch (error) {

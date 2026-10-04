@@ -277,6 +277,7 @@ describe("GeometryObjectPanel primitive transaction", () => {
         undefined,
         false,
         "session=A&epoch=1",
+        undefined,
       );
       expect(mocks.invalidate).toHaveBeenCalledTimes(AUTHORING_MUTATION_DEPENDENTS.geometry.length);
     } finally {

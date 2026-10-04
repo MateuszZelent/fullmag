@@ -113,6 +113,7 @@ describe("ObjectRegionMagneticParametersPanel session fence", () => {
         11,
         undefined,
         sessionAScopeKey,
+        undefined,
       );
       expect(container.textContent).toContain("Material fields updated.");
     } finally {

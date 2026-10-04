@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 import fullmag_storage as storage
 
 PROFILE = "windows-control-room-source-check"
-ROUTES = ("generate-client", "production-source", "api-hygiene", "lint", "openapi-import-check", "react-doctor", "development-restart-check")
+ROUTES = ("generate-client", "production-source", "api-hygiene", "lint", "openapi-import-check", "react-doctor", "development-restart-check", "resource-client-cache-check")
 
 
 def timestamp():
@@ -92,6 +92,10 @@ def run(repo: Path, route: str):
                 receipt["unit_tests"] = "interpreted_node_only_no_compilation"
             elif route == "development-restart-check":
                 commands = [[node, "--experimental-vm-modules", "scripts/check-development-restart-controller.mjs"]]
+                receipt["interpreted_node_checks"] = True
+                receipt["unit_tests"] = "none_native_type_erasure_of_production_source_only"
+            elif route == "resource-client-cache-check":
+                commands = [[node, "--experimental-vm-modules", "scripts/check-resource-client-cache-scope.mjs"]]
                 receipt["interpreted_node_checks"] = True
                 receipt["unit_tests"] = "none_native_type_erasure_of_production_source_only"
             elif route == "api-hygiene":

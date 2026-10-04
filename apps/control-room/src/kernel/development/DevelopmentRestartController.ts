@@ -84,8 +84,12 @@ export class DevelopmentRestartController {
       this.update("pending", null);
       // The intent is retained before sending: cancellation is not proof of nonpublication.
       await this.consume(await this.transport.submit(request, token));
-    } catch {
-      if (this.intent) {
+    } catch (error) {
+      if (this.intent && isKnownWorkspaceRejection(error)) {
+        // This exact API code is returned before durable publication. Other
+        // errors, including publication conflicts, retain uncertain custody.
+        this.finalize("failed", "Workspace identity changed; this restart was not accepted.");
+      } else if (this.intent) {
         this.update("unknown", "Restart outcome is unconfirmed. Reconcile the existing request.");
       } else {
         let message = "Workspace capture failed; no restart was submitted.";
@@ -166,6 +170,13 @@ function restoredSessionIsFresh(resource: DevelopmentRestartResource, oldSession
   if (oldSession === null) return resource.session_id === null && resource.session_epoch === 0;
   return typeof resource.session_id === "string" && resource.session_id.trim().length > 0
     && resource.session_id !== oldSession && resource.session_epoch === 1;
+}
+
+function isKnownWorkspaceRejection(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const candidate = error as { name?: unknown; status?: unknown; code?: unknown };
+  return candidate.name === "ControlRoomApiError" && candidate.status === 409
+    && candidate.code === "development_restart_workspace_changed";
 }
 
 export function createDevelopmentRestartController(

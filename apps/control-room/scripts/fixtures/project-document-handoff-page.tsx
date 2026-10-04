@@ -6,19 +6,34 @@ import { createProblemWithPendingFormGuard } from "@/kernel/layout/createProblem
 import { NewProblemDialog } from "@/kernel/layout/NewProblemDialog";
 import { KernelContext } from "@/kernel/KernelContext";
 import type { KernelApi } from "@/kernel/types";
+import { ControlRoomApi } from "@/kernel/api/ControlRoomApi";
+import { RequestDiagnosticsController } from "@/kernel/api/RequestDiagnosticsController";
+import {
+  PLATFORM_DEVELOPMENT_BACKEND_PATH,
+  PLATFORM_DEVELOPMENT_RESTART_REQUESTS_PATH,
+  PERSISTENCE_PROJECT_OPEN_PATH,
+} from "@/kernel/api/apiPaths";
 
 import type {
+  DevelopmentRestartResource,
   ProjectArchiveRequest,
   ProjectAuthoringUpdateRequest,
   ProjectCreateRequest,
   ProjectDocumentResource,
 } from "@/kernel/api/apiTypes";
+import { EventBus } from "@/kernel/events/EventBus";
+import type { KernelEventMap } from "@/kernel/events/eventTypes";
+import { LayoutController } from "@/kernel/layout/LayoutController";
+import { ModuleRegistry } from "@/kernel/module/ModuleRegistry";
+import { createDevelopmentRestartController } from "@/kernel/development/DevelopmentRestartController";
+import type { DevelopmentRestartOwners } from "@/kernel/development/DevelopmentRestartController";
 import {
   bytesToBase64,
   ProjectDocumentController,
   type ProjectDocumentApi,
   type ProjectDocumentSnapshot,
 } from "@/kernel/persistence/ProjectDocumentController";
+import { createDevelopmentKernelOwners } from "@/kernel/development/DevelopmentKernelOwners";
 
 const HANDOFF_SCHEMA = "fullmag.project-document-development-handoff.v1";
 const ARCHIVE_BYTES = new Uint8Array([
@@ -35,6 +50,13 @@ const HASH = "a".repeat(64);
 const PROJECT_ID = "project-development-handoff";
 const PROJECT_SCHEMA = "fullmag.project.v1";
 const HOST_PATH = "C:\\fullmag\\projects\\handoff.fms";
+const OLD_API_PIN = "11111111-1111-4111-8111-111111111111";
+const NEW_API_PIN = "22222222-2222-4222-8222-222222222222";
+const FOREIGN_API_PIN = "44444444-4444-4444-8444-444444444444";
+const SESSION_ID = "session-development-owner-fixture";
+const SESSION_EPOCH = 43;
+const REPLACEMENT_SESSION_ID = "session-development-owner-fixture-restarted";
+const REPLACEMENT_SESSION_EPOCH = 1;
 
 type DevelopmentHandoffOptions = { carryUnsaved?: boolean };
 
@@ -225,6 +247,143 @@ function makeMockApi(options: MockApiOptions = {}): MockApiState {
     },
   };
   return { api, calls };
+}
+
+interface ConcreteApiFixtureOptions {
+  readonly workspaceApiInstance?: string;
+  readonly sessionId?: string | null;
+  readonly sessionEpoch?: number;
+  readonly rejectRestartForChangedWorkspace?: boolean;
+}
+
+interface ConcreteApiFixture {
+  readonly api: ControlRoomApi;
+  readonly calls: {
+    readonly requests: Array<{ readonly method: string; readonly path: string }>;
+    readonly projectOpens: ProjectArchiveRequest[];
+  };
+}
+
+type ConcreteOwnerKernel = {
+  readonly api: ControlRoomApi;
+  readonly bus: EventBus<KernelEventMap>;
+  readonly layout: LayoutController;
+  readonly modules: ModuleRegistry;
+  readonly pendingForms: PendingFormRegistry;
+  readonly projectDocument: ProjectDocumentController;
+};
+
+type ConcreteOwnerCapture = Awaited<ReturnType<DevelopmentRestartOwners["capture"]>>;
+
+function jsonResponse(value: unknown, apiPin: string, status = 200): Response {
+  return new Response(JSON.stringify(value), {
+    status,
+    headers: {
+      "content-type": "application/json",
+      "x-api-contract-version": "1.0.0",
+      "x-fullmag-api-instance": apiPin,
+    },
+  });
+}
+
+function makeConcreteApiFixture(
+  apiPin: string,
+  options: ConcreteApiFixtureOptions = {},
+): ConcreteApiFixture {
+  const calls = {
+    requests: [] as Array<{ method: string; path: string }>,
+    projectOpens: [] as ProjectArchiveRequest[],
+  };
+  const api = new ControlRoomApi({
+    baseUrl: "http://localhost:3251",
+    expectedApiInstance: apiPin,
+    maxGetRetries: 0,
+    fetchImpl: async (input, init) => {
+      const request = new Request(input, init);
+      const path = new URL(request.url).pathname;
+      calls.requests.push({ method: request.method, path });
+      if (request.method === "GET" && path === PLATFORM_DEVELOPMENT_BACKEND_PATH) {
+        return jsonResponse({
+          configured: true,
+          state: "ready",
+          restart_available: false,
+          reason: "restart_integration_pending",
+          revision: 1,
+          schema_version: "fullmag.development-backend.v1",
+          workspace_identity: {
+            api_instance_id: options.workspaceApiInstance ?? apiPin,
+            session_id: options.sessionId === undefined ? SESSION_ID : options.sessionId,
+            session_epoch: options.sessionEpoch ?? SESSION_EPOCH,
+          },
+        }, apiPin);
+      }
+      if (request.method === "POST" && path === PERSISTENCE_PROJECT_OPEN_PATH) {
+        const body = await request.json() as ProjectArchiveRequest;
+        calls.projectOpens.push(clone(body));
+        return jsonResponse(resource({ archive_base64: body.archive_base64 }), apiPin);
+      }
+      if (request.method === "POST" && path === PLATFORM_DEVELOPMENT_RESTART_REQUESTS_PATH
+        && options.rejectRestartForChangedWorkspace) {
+        return jsonResponse({
+          code: "development_restart_workspace_changed",
+          message: "Workspace identity changed before restart acceptance.",
+        }, apiPin, 409);
+      }
+      return jsonResponse({ code: "fixture_unexpected_route", message: `Unexpected ${request.method} ${path}` }, apiPin, 404);
+    },
+  });
+  return { api, calls };
+}
+
+function makeConcreteOwnerKernel(
+  api: ControlRoomApi,
+  pendingForms = new PendingFormRegistry(),
+): ConcreteOwnerKernel {
+  const bus = new EventBus<KernelEventMap>();
+  const layout = new LayoutController(bus);
+  const modules = new ModuleRegistry();
+  modules.register({
+    id: "viewport-3d",
+    title: "Fixture viewport",
+    version: "1",
+    slots: ["viewport-main"],
+    component: async () => ({ default: () => null }),
+  });
+  return {
+    api,
+    bus,
+    layout,
+    modules,
+    pendingForms,
+    projectDocument: new ProjectDocumentController(api),
+  };
+}
+
+async function openConcreteProject(kernel: ConcreteOwnerKernel): Promise<void> {
+  await kernel.projectDocument.open({
+    bytes: ARCHIVE_BYTES,
+    fileName: "handoff.fms",
+    hostPath: HOST_PATH,
+  });
+}
+
+function developmentRestartOutcome(
+  captured: ConcreteOwnerCapture,
+  newApiInstanceId: string,
+  sessionId = captured.sessionId === null ? null : REPLACEMENT_SESSION_ID,
+  sessionEpoch = captured.sessionId === null ? 0 : REPLACEMENT_SESSION_EPOCH,
+): DevelopmentRestartResource {
+  return {
+    schema: "fullmag.development-ui-restart-resource.v1",
+    request_id: "33333333-3333-4333-8333-333333333333",
+    state: "ready",
+    new_api_instance_id: newApiInstanceId,
+    session_id: sessionId,
+    session_epoch: sessionEpoch,
+    editor: clone(captured.editor),
+    workspace: clone(captured.workspace),
+    project_document: clone(captured.projectDocument),
+  };
 }
 
 function developmentController(
@@ -1186,9 +1345,378 @@ async function checkUnpublishedCommandBlocksTransition(): Promise<void> {
   }
 }
 
+async function checkDevelopmentDocumentGuard(): Promise<void> {
+  const state = makeMockApi();
+  const controller = new ProjectDocumentController(state.api);
+  await controller.create("Guarded project");
+  const original = clone(controller.getSnapshot());
+  const guard = controller.beginDevelopmentHandoff();
+  guard.assertCurrent();
+  assertCondition(!controller.canSave(), "Save remained available during handoff");
+  await expectRejected(() => controller.create("Replacement"), "guarded create");
+  await expectRejected(() => controller.open({ bytes: ARCHIVE_BYTES, fileName: "other.fms" }), "guarded open");
+  await expectRejected(() => controller.save(), "guarded save");
+  await expectRejected(() => controller.synchronizeAuthoring({ objects: [] }), "guarded authoring");
+  await expectRejected(() => controller.restoreDevelopmentHandoff(guard.handoff), "guarded restore");
+  await expectRejected(() => controller.beginDevelopmentHandoff(), "duplicate guard");
+  assertCondition(!controller.close(true), "Guarded Close discarded the document");
+  assertCondition(canonical(controller.getSnapshot()) === canonical(original), "Guard changed document metadata");
+  assertCondition(state.calls.create.length === 1 && state.calls.open.length === 0 && state.calls.authoring.length === 0,
+    "Guarded operation reached document API");
+  guard.release(); guard.release();
+  await expectRejected(() => guard.assertCurrent(), "released guard assertion");
+  assertCondition(controller.canSave(), "Release did not restore Save availability");
+  const second = controller.beginDevelopmentHandoff();
+  guard.release(); second.assertCurrent(); second.release();
+  assertCondition(controller.close(true), "Released document could not be closed");
+}
+
+async function checkDevelopmentGuardFailureAndDirtyPolicy(): Promise<void> {
+  const state = makeMockApi({ createResource: resource({ dirty: true, revision: 8, persisted_revision: 7 }) });
+  const controller = new ProjectDocumentController(state.api);
+  await controller.create("Dirty guarded project");
+  await expectRejected(() => controller.beginDevelopmentHandoff(), "implicit dirty handoff");
+  assertCondition(controller.canSave(), "Rejected dirty capture retained an unowned guard");
+  const guard = controller.beginDevelopmentHandoff({ carryUnsaved: true });
+  assertCondition(guard.handoff.snapshot.state === "ready" && guard.handoff.snapshot.resource.dirty,
+    "Explicit dirty capture lost its draft");
+  guard.release();
+  const unsubscribe = controller.subscribe(() => { throw new Error("Fixture notification failure"); });
+  await expectRejected(() => controller.beginDevelopmentHandoff({ carryUnsaved: true }), "notification failure");
+  unsubscribe();
+  assertCondition(controller.canSave(), "Failed guard notification left the document locked");
+  const next = controller.beginDevelopmentHandoff({ carryUnsaved: true });
+  next.assertCurrent(); next.release();
+}
+
+async function checkConcreteDevelopmentOwnerCaptureAndHydration(): Promise<void> {
+  const oldApiFixture = makeConcreteApiFixture(OLD_API_PIN);
+  const kernel = makeConcreteOwnerKernel(oldApiFixture.api);
+  let pauseCount = 0;
+  let resumeCount = 0;
+  let publishCount = 0;
+  const preparedReplacement: { kernel?: ConcreteOwnerKernel; api?: ConcreteApiFixture } = {};
+  const owners = createDevelopmentKernelOwners(kernel, {
+    applyPendingChanges: false,
+    carryUnsavedDocument: false,
+    pauseOldKernel: () => {
+      pauseCount += 1;
+      let resumed = false;
+      return () => {
+        if (resumed) return;
+        resumed = true;
+        resumeCount += 1;
+      };
+    },
+    prepareReplacement: async (apiInstance) => {
+      assertCondition(apiInstance === NEW_API_PIN, "Owner hydrate changed the replacement API pin");
+      const api = makeConcreteApiFixture(apiInstance, {
+        sessionId: REPLACEMENT_SESSION_ID,
+        sessionEpoch: REPLACEMENT_SESSION_EPOCH,
+      });
+      const replacement = makeConcreteOwnerKernel(api.api);
+      preparedReplacement.api = api;
+      preparedReplacement.kernel = replacement;
+      return replacement;
+    },
+    publishReplacement: async (published) => {
+      assertCondition(published === preparedReplacement.kernel, "Published a different replacement owner");
+      publishCount += 1;
+    },
+  });
+
+  const emptyCapture = await owners.capture();
+  const emptyHandoff = emptyCapture.projectDocument.snapshot as Record<string, unknown>;
+  assertCondition(emptyHandoff.state === "empty", "Empty owner capture did not preserve the empty document");
+  assertCondition(kernel.pendingForms.getTransitionSnapshot().guarded, "Empty owner capture did not guard forms");
+  await expectRejected(
+    () => kernel.projectDocument.restoreDevelopmentHandoff(emptyCapture.projectDocument),
+    "restore during empty owner capture",
+  );
+  emptyCapture.assertCurrent();
+  emptyCapture.release();
+  emptyCapture.release();
+  assertCondition(!kernel.pendingForms.getTransitionSnapshot().guarded, "Empty owner release retained the form guard");
+
+  await openConcreteProject(kernel);
+  kernel.pendingForms.register(Symbol("concrete owner clean form"), pendingForm());
+  kernel.layout.replace({
+    ...kernel.layout.get(),
+    activeModuleTab: "geometry",
+    focusedSlot: "panel-right",
+    panelVisible: { left: false, right: true, bottom: false },
+  });
+  const originalDocument = clone(kernel.projectDocument.getSnapshot());
+  const captured = await owners.capture();
+  assertCondition(captured.sessionId === SESSION_ID && captured.sessionEpoch === SESSION_EPOCH,
+    "Capture lost the actual pinned session identity and epoch");
+  assertCondition(canonical(captured.editor) === canonical({
+    schema: "fullmag.development-editor-handoff.v1",
+    state: "absent",
+  }), "The absent editor owner marker changed");
+  assertCondition(canonical(captured.workspace.layout) === canonical(kernel.layout.get()),
+    "Actual layout owner was not captured");
+  assertCondition((captured.projectDocument.snapshot as Record<string, unknown>).state === "ready",
+    "Ready document owner was not captured");
+  assertCondition(kernel.pendingForms.getTransitionSnapshot().guarded, "Ready capture did not guard pending forms");
+  assertCondition(!kernel.projectDocument.canSave(), "Ready capture did not freeze project document writes");
+  captured.assertCurrent();
+
+  const readyOutcome = developmentRestartOutcome(captured, NEW_API_PIN);
+  assertCondition(readyOutcome.session_id === REPLACEMENT_SESSION_ID
+    && readyOutcome.session_epoch === REPLACEMENT_SESSION_EPOCH,
+  "Ready outcome did not describe a fresh session epoch");
+  await owners.hydrate(readyOutcome);
+  const hydratedReplacement = preparedReplacement.kernel;
+  const hydratedApiFixture = preparedReplacement.api;
+  assertCondition(hydratedReplacement !== undefined && hydratedApiFixture !== undefined, "Replacement owners were not prepared");
+  assertCondition(hydratedReplacement.api !== kernel.api && hydratedReplacement.api.resourceCacheScope !== kernel.api.resourceCacheScope,
+    "Replacement did not use a fresh API/cache owner");
+  assertCondition(hydratedReplacement.pendingForms !== kernel.pendingForms
+    && hydratedReplacement.projectDocument !== kernel.projectDocument && hydratedReplacement.layout !== kernel.layout,
+  "Replacement reused one or more stateful owner instances");
+  assertReadyMatches(hydratedReplacement.projectDocument, originalDocument, "Concrete replacement document");
+  assertCondition(canonical(hydratedReplacement.layout.get()) === canonical(captured.workspace.layout),
+    "Concrete replacement layout differs from captured layout");
+  assertCondition(hydratedApiFixture.api.getExpectedApiInstance() === NEW_API_PIN,
+    "Replacement API is not pinned to the acknowledged instance");
+  assertCondition(hydratedApiFixture.calls.projectOpens.length === 1,
+    "Project document hydration did not use the real typed projects.open facade");
+  assertCondition(publishCount === 1, "Replacement owners were not published exactly once");
+  assertCondition(kernel.pendingForms.getTransitionSnapshot().guarded && !kernel.projectDocument.canSave(),
+    "Hydration released old-owner guards before the restart controller finalized");
+  captured.release();
+  captured.release();
+  assertCondition(resumeCount === 2 && pauseCount === 2, "Owner lease release was not idempotent");
+  assertCondition(!kernel.pendingForms.getTransitionSnapshot().guarded && kernel.projectDocument.canSave(),
+    "Final owner release did not restore old-owner availability");
+}
+
+async function checkConcreteDevelopmentOwnerMismatchCleanup(): Promise<void> {
+  const apiFixture = makeConcreteApiFixture(OLD_API_PIN, { workspaceApiInstance: FOREIGN_API_PIN });
+  const kernel = makeConcreteOwnerKernel(apiFixture.api);
+  await openConcreteProject(kernel);
+  kernel.pendingForms.register(Symbol("mismatch clean form"), pendingForm());
+  const original = clone(kernel.projectDocument.getSnapshot());
+  let resumes = 0;
+  const owners = createDevelopmentKernelOwners(kernel, {
+    applyPendingChanges: false,
+    carryUnsavedDocument: false,
+    pauseOldKernel: () => () => { resumes += 1; },
+    prepareReplacement: async () => { throw new Error("Mismatch capture must not prepare a replacement"); },
+    publishReplacement: async () => { throw new Error("Mismatch capture must not publish a replacement"); },
+  });
+  await expectRejected(() => owners.capture(), "foreign capture identity");
+  assertCondition(!kernel.pendingForms.getTransitionSnapshot().guarded, "Identity mismatch leaked the form guard");
+  assertCondition(kernel.projectDocument.canSave(), "Identity mismatch leaked the document guard");
+  assertCondition(canonical(kernel.projectDocument.getSnapshot()) === canonical(original),
+    "Identity mismatch cleanup changed the existing document");
+  assertCondition(resumes === 1, "Identity mismatch did not resume the old kernel exactly once");
+  assertCondition(apiFixture.calls.requests.filter((request) => request.path === PLATFORM_DEVELOPMENT_RESTART_REQUESTS_PATH).length === 0,
+    "Capture mismatch submitted a restart mutation");
+}
+
+async function checkConcreteDevelopmentHydrationRefusals(): Promise<void> {
+  const oldApiFixture = makeConcreteApiFixture(OLD_API_PIN);
+  const kernel = makeConcreteOwnerKernel(oldApiFixture.api);
+  await openConcreteProject(kernel);
+  kernel.pendingForms.register(Symbol("refusal clean form"), pendingForm());
+  let replacementMode: "fresh" | "foreign-pin" | "shared-pending-forms" = "fresh";
+  let prepared = 0;
+  let published = 0;
+  const replacements: Array<{ kernel: ConcreteOwnerKernel; api: ConcreteApiFixture }> = [];
+  const owners = createDevelopmentKernelOwners(kernel, {
+    applyPendingChanges: false,
+    carryUnsavedDocument: false,
+    pauseOldKernel: () => () => undefined,
+    prepareReplacement: async (apiInstance) => {
+      prepared += 1;
+      const pin = replacementMode === "foreign-pin" ? FOREIGN_API_PIN : apiInstance;
+      const api = makeConcreteApiFixture(pin, {
+        sessionId: REPLACEMENT_SESSION_ID,
+        sessionEpoch: REPLACEMENT_SESSION_EPOCH,
+      });
+      const pendingForms = replacementMode === "shared-pending-forms"
+        ? kernel.pendingForms
+        : new PendingFormRegistry();
+      const replacement = makeConcreteOwnerKernel(api.api, pendingForms);
+      replacements.push({ kernel: replacement, api });
+      return replacement;
+    },
+    publishReplacement: async () => { published += 1; },
+  });
+  const captured = await owners.capture();
+
+  const beforePrepareCases: Array<[string, (value: DevelopmentRestartResource) => void]> = [
+    ["invalid editor with extra state", (value) => {
+      value.editor = { schema: "fullmag.development-editor-handoff.v1", state: "absent", draft: "foreign" };
+    }],
+    ["foreign editor schema", (value) => {
+      value.editor = { schema: "foreign.editor.v1", state: "absent" };
+    }],
+    ["invalid workspace schema", (value) => {
+      value.workspace = { schema: "foreign.layout.v1", layout: clone(captured.workspace.layout) };
+    }],
+  ];
+  for (const [label, mutate] of beforePrepareCases) {
+    const outcome = developmentRestartOutcome(captured, NEW_API_PIN);
+    mutate(outcome);
+    const previousPrepared = prepared;
+    await expectRejected(() => owners.hydrate(outcome), label);
+    assertCondition(prepared === previousPrepared, `${label}: invalid owner reached replacement preparation`);
+    assertCondition(published === 0, `${label}: invalid owner was published`);
+  }
+
+  const afterPrepareCases: Array<{
+    readonly label: string;
+    readonly mode: "fresh" | "foreign-pin" | "shared-pending-forms";
+    readonly mutate: (value: DevelopmentRestartResource) => void;
+  }> = [
+    { label: "invalid layout preference", mode: "fresh", mutate: (value) => {
+      const workspace = clone(value.workspace) as Record<string, unknown>;
+      const layout = clone(workspace.layout) as Record<string, unknown>;
+      layout.activeModuleTab = "not-a-ribbon-tab";
+      workspace.layout = layout;
+      value.workspace = workspace;
+    } },
+    { label: "foreign viewport module", mode: "fresh", mutate: (value) => {
+      const workspace = clone(value.workspace) as Record<string, unknown>;
+      const layout = clone(workspace.layout) as Record<string, unknown>;
+      layout.activeViewportMainModuleId = "foreign-viewport";
+      workspace.layout = layout;
+      value.workspace = workspace;
+    } },
+    { label: "foreign-pinned replacement client", mode: "foreign-pin", mutate: () => undefined },
+    { label: "replacement reuses the old pending-form registry", mode: "shared-pending-forms", mutate: () => undefined },
+  ];
+  for (const entry of afterPrepareCases) {
+    replacementMode = entry.mode;
+    const outcome = developmentRestartOutcome(captured, NEW_API_PIN);
+    entry.mutate(outcome);
+    const previousPrepared = prepared;
+    await expectRejected(() => owners.hydrate(outcome), entry.label);
+    assertCondition(prepared === previousPrepared + 1, `${entry.label}: replacement was not inspected`);
+    assertCondition(published === 0, `${entry.label}: rejected replacement was published`);
+    const replacement = replacements[replacements.length - 1];
+    assertCondition(replacement !== undefined, `${entry.label}: missing replacement evidence`);
+    assertCondition(replacement.api.calls.requests.length === 0 && replacement.api.calls.projectOpens.length === 0,
+      `${entry.label}: rejected replacement reached backend or document hydration`);
+  }
+  assertCondition(kernel.pendingForms.getTransitionSnapshot().guarded && !kernel.projectDocument.canSave(),
+    "Rejected hydration released the captured owners");
+  captured.assertCurrent();
+  captured.release();
+}
+
+async function checkConcreteRestartControllerKnownRejection(): Promise<void> {
+  const apiFixture = makeConcreteApiFixture(OLD_API_PIN, { rejectRestartForChangedWorkspace: true });
+  const kernel = makeConcreteOwnerKernel(apiFixture.api);
+  await openConcreteProject(kernel);
+  kernel.pendingForms.register(Symbol("known rejection clean form"), pendingForm());
+  let resumes = 0;
+  const owners = createDevelopmentKernelOwners(kernel, {
+    applyPendingChanges: false,
+    carryUnsavedDocument: false,
+    pauseOldKernel: () => () => { resumes += 1; },
+    prepareReplacement: async () => { throw new Error("A rejected restart cannot prepare a replacement"); },
+    publishReplacement: async () => { throw new Error("A rejected restart cannot publish a replacement"); },
+  });
+  const restart = createDevelopmentRestartController(apiFixture.api, owners);
+  await restart.start();
+  const snapshot = restart.getSnapshot();
+  assertCondition(snapshot.state === "failed" && snapshot.message?.includes("not accepted"),
+    "Known pre-publication workspace rejection was not classified as nonacceptance");
+  assertCondition(resumes === 1 && !kernel.pendingForms.getTransitionSnapshot().guarded && kernel.projectDocument.canSave(),
+    "Known rejection did not release its captured owner guard exactly once");
+  assertCondition(apiFixture.calls.requests.filter((request) => request.path === PLATFORM_DEVELOPMENT_RESTART_REQUESTS_PATH).length === 1,
+    "Known rejection retried the restart mutation");
+  assertCondition(apiFixture.calls.requests.filter((request) => request.path.includes("development-restart-requests/")).length === 0,
+    "Known rejection issued an unnecessary status reconciliation read");
+  assertCondition(apiFixture.calls.requests.filter((request) => request.path === PLATFORM_DEVELOPMENT_BACKEND_PATH).length === 1,
+    "Known rejection unexpectedly repeated the old workspace identity read");
+}
+
+async function checkRestartFacadeAfterPinMismatch(): Promise<void> {
+  const oldPin = "11111111-1111-4111-8111-111111111111";
+  const newPin = "22222222-2222-4222-8222-222222222222";
+  const requestId = "33333333-3333-4333-8333-333333333333";
+  const token = "a".repeat(32);
+  const calls: Request[] = [];
+  const diagnostics = new RequestDiagnosticsController();
+  const api = new ControlRoomApi({
+    baseUrl: "http://localhost:3251", expectedApiInstance: oldPin, diagnostics, maxGetRetries: 0,
+    fetchImpl: async (input, init) => {
+      const request = new Request(input, init);
+      calls.push(request);
+      return new Response(JSON.stringify({ schema: "fullmag.development-ui-restart-resource.v1", request_id: requestId, state: "pending" }), {
+        status: 200, headers: { "content-type": "application/json", "x-api-contract-version": "1.0.0", "x-fullmag-api-instance": newPin },
+      });
+    },
+  });
+  const requestCount = (): number => calls.length;
+  await expectRejected(() => api.platform.health(), "ordinary stale-pin response");
+  assertCondition(requestCount() === 1 && calls[0].headers.get("x-fullmag-api-instance") === oldPin,
+    "Ordinary request did not carry the old pin");
+  const result = await api.platform.developmentRestartRequest(requestId, token);
+  assertCondition(result.state === "pending" && requestCount() === 2, "Status could not be reconciled after mismatch latch");
+  const statusRequest = calls[1];
+  assertCondition(statusRequest.method === "GET" && !statusRequest.headers.has("x-fullmag-api-instance"), "Status retained the stale pin");
+  assertCondition(statusRequest.headers.get("authorization") === `Bearer ${token}`, "Status lost its private token");
+  assertCondition(!statusRequest.headers.has("x-fullmag-internal-api-instance-policy"), "Internal policy leaked to fetch");
+  await expectRejected(() => api.platform.health(), "ordinary request after mismatch latch");
+  assertCondition(requestCount() === 2, "Status exemption reopened ordinary API reads");
+  assertCondition(!JSON.stringify(diagnostics.list()).includes(token), "Acknowledgement token entered diagnostics");
+}
+
+async function checkRestartFacadeSingleMutationAndCancellation(): Promise<void> {
+  const oldPin = "11111111-1111-4111-8111-111111111111";
+  const token = "b".repeat(32);
+  const requestId = "33333333-3333-4333-8333-333333333333";
+  let posts = 0;
+  const api = new ControlRoomApi({
+    baseUrl: "http://localhost:3251", expectedApiInstance: oldPin, maxGetRetries: 2,
+    fetchImpl: async (input, init) => {
+      const request = new Request(input, init);
+      assertCondition(request.method === "POST", "Mutation changed HTTP method");
+      assertCondition(request.headers.get("x-fullmag-api-instance") === oldPin && request.headers.get("authorization") === `Bearer ${token}`,
+        "Mutation did not bind pin and token");
+      posts++; throw new Error("Fixture lost acknowledgement");
+    },
+  });
+  await expectRejected(() => api.platform.submitDevelopmentRestartRequest({
+    schema: "fullmag.development-ui-restart-request.v1", request_id: requestId,
+    session_id: null, session_epoch: 0, editor: {}, workspace: {}, project_document: {},
+  }, token), "lost mutation acknowledgement");
+  assertCondition(posts === 1, "Lost mutation ACK caused automatic resubmission");
+  await expectRejected(() => api.platform.developmentRestartRequest(requestId, "invalid-token"), "invalid status token");
+  assertCondition(posts === 1, "Invalid token reached fetch");
+  const abort = new AbortController();
+  let cancelled = false;
+  const cancellable = new ControlRoomApi({
+    baseUrl: "http://localhost:3251", expectedApiInstance: oldPin, maxGetRetries: 0,
+    fetchImpl: async (input, init) => new Promise<Response>((_resolve, reject) => {
+      const request = new Request(input, init);
+      request.signal.addEventListener("abort", () => {
+        cancelled = true; reject(new DOMException("Aborted", "AbortError"));
+      }, { once: true });
+      abort.abort();
+    }),
+  });
+  await expectRejected(() => cancellable.platform.developmentRestartRequest(requestId, token, { signal: abort.signal }), "cancelled status read");
+  assertCondition(cancelled, "Status read did not propagate AbortSignal");
+}
+
 async function runChecks(): Promise<FixtureReport> {
   const checks: FixtureCheck[] = [];
   const cases: Array<[string, () => Promise<void>]> = [
+    ["token-bound restart status remains readable after the old API mismatch latch", checkRestartFacadeAfterPinMismatch],
+    ["restart mutation is single-attempt and status supports cancellation", checkRestartFacadeSingleMutationAndCancellation],
+    ["document handoff guard blocks mutations and preserves metadata until release", checkDevelopmentDocumentGuard],
+    ["dirty handoff requires explicit carry and failed guard issuance rolls back", checkDevelopmentGuardFailureAndDirtyPolicy],
+    ["concrete owner factory captures empty/document/layout and hydrates fresh pinned owners", checkConcreteDevelopmentOwnerCaptureAndHydration],
+    ["concrete owner identity mismatch releases every guard without submitting", checkConcreteDevelopmentOwnerMismatchCleanup],
+    ["concrete owner hydrate rejects invalid or foreign owners and reused form registries", checkConcreteDevelopmentHydrationRefusals],
+    ["restart controller releases guards after the concrete API reports known nonacceptance", checkConcreteRestartControllerKnownRejection],
     ["empty restore performs no API open", checkEmptyRestore],
     ["clean and dirty capture policy plus detached nested payload", checkCleanAndDirtyCapture],
     ["restore preserves resource metadata, file context and provenance", checkRestorePreservesMetadata],
@@ -1286,9 +1814,9 @@ export default function ProjectDocumentHandoffFixture() {
     >
       <h1>Fullmag project document handoff fixture</h1>
       <p>
-        Managed browser fixture only. It uses the real project controller with
-        a stateless typed projects.open mock; it does not exercise the backend
-        runtime or a solver.
+        Managed browser fixture only. It combines the real project and
+        development-owner controllers with route-scoped fake responses through
+        ControlRoomApi; it does not exercise the backend runtime or a solver.
       </p>
       <NewProblemDraftFixture />
     </main>
