@@ -63,6 +63,17 @@ Digest źródeł przed i po każdej kontroli:
 `0d07d9ca450f1d44596d457c1288e80dd65e59ff15b5447a7343c009256399f8`.
 Kontrole nie kompilowały testów jednostkowych.
 
+Lokalny commit poprawki i regresji:
+`194903d2a43b0336fba82438a12a4b97a22024e4`
+(`fix: guard run outcomes during development handoff`, 15 plików).
+Nie obejmuje równoległych zmian Start/About ani przygotowanego planu P8-53AT.
+Hook React Doctor zakończył się jednym ostrzeżeniem dotyczącym
+`JSON.parse(JSON.stringify(...))` w driverze regresji: służy jednorazowej
+normalizacji obiektu z kontekstu VM przed porównaniem. Nie jest to ścieżka
+renderowania ani kod produktu; nie zmieniono reguły ani nie wyciszono jej.
+Commit zakończył się exit 0. Publikacja na remote pozostaje oddzielną,
+wcześniej zablokowaną czynnością.
+
 Receipts są pod rozwiązywanym storage projektu:
 `builds/fullmag-0950f4dca4ffe38f/`. Identyfikatory poniżej wskazują
 podkatalog przebiegu; każdy zawiera `receipt.json` i log.
