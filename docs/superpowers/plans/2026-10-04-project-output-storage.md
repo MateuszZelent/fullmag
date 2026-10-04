@@ -25,9 +25,39 @@ Właściciele zmian: rodzic — filesystem lease/safety, formularz, facade, doku
 - Jawna dyspozycja użytkownika: po bieżących operacjach merge na master, następnie praca
   na masterze. Nie zakładamy kolejnego worktree dla kontynuacji.
 - Python multi-stage chroni istniejący root i manifest przez exclusive creation;
-  obsługę `timestamp` dla całego root należy domknąć na masterze przed uznaniem pełnej
-  zgodności polityki wieloetapowej. Native CLI używa wspólnego lease dla całego projektu.
+  na masterze domknięto `timestamp` dla całego root, zachowanie wcześniejszych danych
+  oraz odmowę `..` przed zapisem. Interpretowany regression check przeszedł.
+  Commit: `80e2b612e9075035ee386ac8dd89d3a809bbf6c9`.
+  Native CLI używa wspólnego lease dla całego projektu.
 
 - Końcowy produkcyjny API source check: exit 0, `state=passed`, bez kompilowania testów.
   Receipt: `storage/builds/new-simulation-form-20261004-31aa3b4f873195d6/windows-api-source-check/api-source-check/77f0fe1001e9493b9697e0fb522b980e/receipt.json`.
-  Kompilacja CLI/PyCore/desktop oraz próba zapisu rzeczywistych wyników pozostają do weryfikacji na masterze.
+  Próba zapisu rzeczywistych wyników pozostaje osobną bramką runtime.
+
+- Lokalna integracja: commit `ea53fab1b8f7b03465074c9a97603022bbf08045`, merge na master
+  `eae25cc2b393f78e7ff0e9da727344f08c62ee41`. Dalsze zmiany wykonujemy w głównym checkoutcie.
+  Nie wykonano push ani integracji remote.
+- Produkcyjna kontrola CLI/PyCore/desktop na masterze: exit 0, `state=passed`,
+  `source_changed_during_run=false`; nie kompilowano testów jednostkowych.
+  Receipt: `storage/builds/fullmag-0950f4dca4ffe38f/windows-project-entrypoint-check/project-entrypoint-check/9787e4eb166343978927e0e6d4309413/receipt.json`.
+
+## Naprawa uruchomienia Windows
+
+- Odtworzono błąd `ENOENT` ze zgłoszonego logu: wcześniejsza publikacja kopii źródeł
+  usuwała importowany plik przed ponowną próbą podmiany. Nowa publikacja zachowuje
+  poprzedni plik podczas przejściowej blokady Windows. Nie usuwa też pliku, który
+  powrócił w źródłach po wykonaniu snapshotu.
+- Interpretowana bramka odtworzyła lukę na wcześniejszej wersji i przeszła cztery
+  kontrole poprawki: krótka i trwała blokada, nieaktualny snapshot usunięcia oraz
+  aktualizacja po zwolnieniu blokady. Bez kompilowania unit tests.
+  Kontrola składni Node i ESLint zmienionego modułu także zakończyły się kodem 0.
+  Dowody: `storage/tmp/dev-source-publication/5c773979c66b445fb5526f7e078675f9/baseline.json`
+  i `publication.json` w tym samym katalogu.
+- Guard zmienionych zależności Python wymaga zamknięcia poprzedniego workspace
+  i nowego buildu; nie obchodzimy zamrożonej tożsamości zależności.
+- `windows-runtime-recover 3197` odmówił działania z powodu wcześniejszego API
+  PID 249132, bundle `3ce0f1a6852543eabc545bbc08da369b`. Solver jest bezczynny,
+  model sesji `session-18db45d639cc30f00003cd2c` ma revision 3 i został zachowany
+  wraz z digestami w `storage/runs/diagnostics/native-recovery/3cbcebd24c384428b1341c98a77452a6`.
+  Pytanie o zatrzymanie tego konkretnego procesu jest oczekujące. Pełny rebuild
+  i nowy start pozostają `NOT VERIFIED` do bezpiecznego odzyskania uruchomienia.
