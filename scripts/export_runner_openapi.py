@@ -396,8 +396,10 @@ def _validate_managed_build(layout: Mapping[str, Any], job_id: str, expected_com
     _preflight_tree(artifacts, "managed build artifacts")
     build_receipt = validate_build_receipt(artifacts, job_for_receipt, journal)
     required = required_outputs_for_profile(job["profile"])
-    if len(required) < 15:
-        _fail("The selected BuildRunner profile does not expose the complete 15-output release contract")
+    # The receipt validator enforces the complete contract of this profile;
+    # exporting its API does not require frontend or release-only outputs.
+    if "bin/fullmag-api" not in required:
+        _fail("The selected BuildRunner profile does not declare the fullmag-api output")
     source_mount = _safe_validate(_source_mount(journal), storage_root, "source capsule mount")
     expected_capsule = capsule_path(storage_root, job_for_receipt)
     if source_mount.resolve() != expected_capsule.resolve():
