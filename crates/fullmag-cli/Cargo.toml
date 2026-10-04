@@ -25,6 +25,7 @@ fullmag-plan = { path = "../fullmag-plan" }
 fullmag-runner = { path = "../fullmag-runner" }
 fullmag-runtime-control = { path = "../fullmag-runtime-control" }
 fullmag-session = { path = "../fullmag-session" }
+fullmag-workspace = { path = "../fullmag-workspace" }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 serde.workspace = true
 serde_json.workspace = true

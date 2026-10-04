@@ -1,0 +1,22 @@
+// Contains constructs the importer must refuse and report: regions, a
+// spin-transfer torque, temperature, a loop and an ext_ call.
+SetGridSize(32, 32, 4)
+SetCellSize(3.125e-9, 3.125e-9, 2.5e-9)
+
+DefRegion(1, Circle(60e-9))
+Msat = 800e3
+Aex = 13e-12
+alpha = 0.1
+Xi = 0.05
+Pol = 1
+J = vector(1e12, 0, 0)
+Temp = 300
+m = Vortex(1, 1)
+
+ext_makegrains(40e-9, 256, 0)
+Relax()
+for i := 0; i < 3; i++ {
+	B_ext = vector(i*1e-3, 0, 0)
+	Run(1e-9)
+}
+Run(2e-9)

@@ -36,6 +36,51 @@ describe("parseProvenance", () => {
     expect(parsed?.runs.map((r) => r.runId)).toEqual(["b", "a"]);
   });
 
+  it("maps every field of a run the controller records, with its history entry", () => {
+    const parsed = parseProvenance({
+      recorded: true,
+      history: [
+        {
+          revision: 7,
+          at: "2026-10-04T10:05:00.000Z",
+          kind: "run",
+          summary: "Run run-1 finished",
+          run_id: "run-1",
+        },
+      ],
+      runs: [
+        {
+          run_id: "run-1",
+          started_at: "2026-10-04T10:00:00.000Z",
+          finished_at: "2026-10-04T10:05:00.000Z",
+          status: "ready",
+          device: "gpu",
+          backend: "FDM",
+          duration_seconds: 300,
+          frames: 41,
+          output_bytes: 1048576,
+          revision: 7,
+        },
+      ],
+    });
+    expect(parsed?.runs).toEqual([
+      {
+        runId: "run-1",
+        startedAt: "2026-10-04T10:00:00.000Z",
+        finishedAt: "2026-10-04T10:05:00.000Z",
+        status: "ready",
+        device: "gpu",
+        backend: "FDM",
+        durationSeconds: 300,
+        frames: 41,
+        outputBytes: 1048576,
+        revision: 7,
+        error: undefined,
+      },
+    ]);
+    expect(parsed?.history[0]).toMatchObject({ kind: "run", runId: "run-1", revision: 7 });
+  });
+
   it("keeps a never-recorded project distinct from an empty record", () => {
     expect(parseProvenance({ recorded: false })?.recorded).toBe(false);
     expect(parseProvenance({})?.recorded).toBe(true);
