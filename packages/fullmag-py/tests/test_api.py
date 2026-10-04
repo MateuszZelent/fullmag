@@ -2862,6 +2862,55 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(runtime["device_index"], 0)
         self.assertEqual(runtime["cpu_threads"], 8)
 
+    def test_parallel_execution_policy_survives_runtime_selection_copies(self) -> None:
+        policy = fm.ParallelExecutionPolicy(
+            mode="adaptive",
+            max_cpu_percent=90.0,
+            max_memory_percent=80.0,
+            memory_reserve_bytes=1_073_741_824,
+            max_workers=3,
+            threads_per_worker=2,
+        )
+        runtime = fm.backend.cpu().engine("fem").with_parallel_execution(policy)
+        for copied in (
+            runtime.engine("fem"),
+            runtime.threads(4),
+            runtime.mode("extended"),
+            runtime.precision("double"),
+        ):
+            self.assertEqual(copied.parallel_execution, policy)
+        metadata = runtime.to_runtime_metadata()
+        self.assertEqual(metadata["parallel_execution"], policy.to_ir())
+
+        for unsupported in (
+            fm.backend.cpu().engine("fdm"),
+            fm.backend.cuda(1).engine("fem"),
+            fm.backend.cpu(),
+        ):
+            with self.subTest(runtime=unsupported):
+                with self.assertRaisesRegex(ValueError, "unsupported parallel_execution realization"):
+                    unsupported.with_parallel_execution(policy)
+
+    def test_parallel_execution_policy_rejects_non_integral_or_unknown_fields(self) -> None:
+        invalid_values = (
+            {"max_cpu_percent": True},
+            {"max_memory_percent": float("nan")},
+            {"max_memory_percent": float("inf")},
+            {"max_workers": True},
+            {"threads_per_worker": 1.0},
+            {"memory_reserve_bytes": 2**64},
+            {"max_workers": 2**32},
+            {"unknown": 1},
+        )
+        for overrides in invalid_values:
+            with self.subTest(overrides=overrides):
+                with self.assertRaises((TypeError, ValueError)):
+                    fm.ParallelExecutionPolicy.from_ir(overrides)
+        with self.assertRaises((TypeError, ValueError)):
+            build_scene_document_from_builder(
+                {"parallel_execution": {"unknown": 1}}
+            )
+
     def test_fdm_precision_policy_round_trips_through_public_authoring(self) -> None:
         problem = self._build_problem()
         problem = fm.Problem(
@@ -4356,6 +4405,42 @@ class ProblemApiTests(unittest.TestCase):
         self.assertIsNone(scene["editor"]["selected_entity_id"])
         self.assertIsNone(scene["editor"]["focused_entity_id"])
         self.assertEqual(scene["editor"]["mesh_entity_view_state"], {})
+
+    def test_scene_document_round_trips_parallel_execution_policy(self) -> None:
+        builder = {
+            "revision": 1,
+            "backend": "fem",
+            "requested_device": "cpu",
+            "parallel_execution": {
+                "mode": "adaptive",
+                "max_cpu_percent": 90.0,
+                "max_memory_percent": 80.0,
+                "memory_reserve_bytes": 1_073_741_824,
+                "max_workers": 4,
+                "threads_per_worker": 1,
+            },
+            "solver": {},
+            "mesh": {},
+            "universe": None,
+            "stages": [],
+            "initial_state": None,
+            "geometries": [
+                {
+                    "name": "film",
+                    "geometry_kind": "Box",
+                    "geometry_params": {"size": [20e-9, 20e-9, 10e-9]},
+                    "material": {"Ms": 800e3, "Aex": 13e-12, "alpha": 0.1},
+                    "magnetization": {"kind": "uniform", "value": [1.0, 0.0, 0.0]},
+                    "mesh": {"mode": "inherit", "hmax": ""},
+                }
+            ],
+            "current_modules": [],
+            "excitation_analysis": None,
+        }
+        scene = build_scene_document_from_builder(builder)
+        self.assertEqual(scene["study"]["parallel_execution"], builder["parallel_execution"])
+        rebuilt = build_builder_from_scene_document(scene)
+        self.assertEqual(rebuilt["parallel_execution"], builder["parallel_execution"])
 
     def test_scene_document_preserves_preset_texture_round_trip(self) -> None:
         builder = {

@@ -80,7 +80,7 @@ from fullmag.model.outputs import (
     SaveSpectrum,
     Snapshot,
 )
-from fullmag.model.problem import Problem
+from fullmag.model.problem import ParallelExecutionPolicy, Problem
 from fullmag.model.study import (
     DEFAULT_RELAXATION_MAX_STEPS,
     DEFAULT_RELAXATION_TORQUE_TOLERANCE_APM,
@@ -252,6 +252,7 @@ def export_builder_draft(loaded: LoadedProblem) -> dict[str, object]:
         "requested_precision": base_problem.runtime.execution_precision.value,
         "requested_mode": base_problem.runtime.execution_mode.value,
         "cpu_threads": base_problem.runtime.cpu_threads,
+        "parallel_execution": base_problem.runtime.parallel_execution.to_ir(),
         "fem_demag_solver_policy": _export_fem_demag_solver_policy(base_problem),
         "exchange_enabled": _problem_has_exchange(base_problem),
         "demag_enabled": _problem_has_demag(base_problem),
@@ -674,6 +675,11 @@ def _render_scene_document_bootstrap(builder: Mapping[str, object]) -> str:
     cpu_threads = _positive_int(builder.get("cpu_threads"))
     if cpu_threads is not None:
         lines.append(f"study.threads({cpu_threads})")
+    parallel_policy = builder.get("parallel_execution")
+    if isinstance(parallel_policy, Mapping):
+        lines.append(
+            f"study.parallel_execution({_python_keyword_args(dict(parallel_policy))})"
+        )
 
     solver = builder.get("solver")
     if isinstance(solver, Mapping):
@@ -1855,6 +1861,17 @@ def _render_runtime(
         lines.append(f"{_surface_call(surface, 'device')}({_py_repr(device_spec)})")
     if cpu_threads is not None:
         lines.append(f"{_surface_call(surface, 'threads')}({cpu_threads})")
+    # Presence is significant: null explicitly restores the canonical default.
+    # Validate before rendering so an invalid edit cannot replace the source.
+    parallel_policy = ParallelExecutionPolicy.from_ir(
+        runtime_override["parallel_execution"]
+        if runtime_override and "parallel_execution" in runtime_override
+        else runtime.parallel_execution
+    )
+    parallel_policy.validate_for_runtime(runtime.backend_target, runtime.device_target)
+    lines.append(
+        f"{_surface_call(surface, 'parallel_execution')}({_python_keyword_args(parallel_policy.to_ir())})"
+    )
 
     # PBC is part of the canonical physical problem, not an implicit backend
     # mesh option. Keep the authored axes and demag realization explicit in the

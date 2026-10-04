@@ -153,6 +153,7 @@ from fullmag.model.problem import (
     ExecutionMode,
     ExecutionPrecision,
     FdmPbc,
+    ParallelExecutionPolicy,
     Problem,
     resolve_geometry_sources,
     RuntimeSelection,
@@ -2474,6 +2475,7 @@ class _WorldState:
     _precision: str | None = None
     _execution_mode: str | None = None
     _cpu_threads: int | None = None
+    _parallel_execution: ParallelExecutionPolicy | None = None
     _boundary_correction: str | None = None  # "none" | "volume" | "full"
 
     # Grid
@@ -5660,6 +5662,14 @@ class StudyBuilder:
         threads(cpu_threads)
         return self
 
+    def parallel_execution(
+        self,
+        policy: ParallelExecutionPolicy | Mapping[str, object] | None = None,
+        **kwargs: object,
+    ) -> "StudyBuilder":
+        parallel_execution(policy, **kwargs)
+        return self
+
     def fem_demag_solver(
         self,
         *,
@@ -6525,6 +6535,26 @@ def threads(cpu_threads: int) -> None:
     if resolved < 1:
         raise ValueError("threads() requires cpu_threads >= 1")
     _state._cpu_threads = resolved
+
+
+def parallel_execution(
+    policy: ParallelExecutionPolicy | Mapping[str, object] | None = None,
+    **kwargs: object,
+) -> ParallelExecutionPolicy:
+    """Set the policy for admitting independent work items.
+
+    ``policy`` may be a :class:`ParallelExecutionPolicy` or an IR-shaped
+    mapping.  Keyword arguments are a convenience for generated scripts.
+    The policy controls admission targets; it does not replace the native
+    runtime's process/thread limits.
+    """
+    if policy is not None and kwargs:
+        raise TypeError("parallel_execution accepts either policy or keyword fields")
+    candidate: ParallelExecutionPolicy | Mapping[str, object]
+    candidate = kwargs if policy is None else policy
+    resolved = ParallelExecutionPolicy.from_ir(candidate)
+    _state._parallel_execution = resolved
+    return resolved
 
 
 def fem_demag_solver(
@@ -9051,6 +9081,8 @@ def _build_problem(
         rt = rt.mode(s._execution_mode)
     if s._cpu_threads is not None:
         rt = rt.threads(s._cpu_threads)
+    if s._parallel_execution is not None:
+        rt = rt.with_parallel_execution(s._parallel_execution)
 
     runtime_metadata: dict[str, Any] = {"interactive_session_requested": s._interactive}
     runtime_metadata["script_api_surface"] = s._api_surface

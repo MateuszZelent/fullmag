@@ -327,6 +327,8 @@ pub struct SceneStudyState {
     pub requested_mode: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub requested_cpu_threads: Option<u32>,
+    #[serde(default, deserialize_with = "fullmag_ir::deserialize_parallel_execution_policy")]
+    pub parallel_execution: fullmag_ir::ParallelExecutionPolicyIR,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fem_demag_solver_policy: Option<fullmag_ir::FemLinearSolverPolicy>,
     #[serde(default = "default_true")]
@@ -1233,6 +1235,20 @@ pub enum SceneCouplingCapabilityPolicy {
 
 #[cfg(test)]
 mod spin_authoring_tests {
+    #[test]
+    fn scene_parallel_execution_null_restores_serial_policy() {
+        let scene: super::SceneStudyState = serde_json::from_value(
+            serde_json::json!({"parallel_execution": null}),
+        ).expect("explicit null restores the canonical policy");
+        assert_eq!(scene.parallel_execution, fullmag_ir::ParallelExecutionPolicyIR::default());
+        for value in [serde_json::json!(false), serde_json::json!([]),
+                      serde_json::json!({"unknown": 1})] {
+            assert!(serde_json::from_value::<super::SceneStudyState>(
+                serde_json::json!({"parallel_execution": value}),
+            ).is_err());
+        }
+    }
+
     use super::*;
 
     #[test]

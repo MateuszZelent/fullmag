@@ -56,6 +56,7 @@ from fullmag.model.spin_transport import (
     DriftDiffusionSpinTorque as CanonicalDriftDiffusionSpinTorque,
     SurfaceRef,
 )
+from fullmag.model.problem import ParallelExecutionPolicy
 
 
 def _material_id(name: str) -> str:
@@ -1262,6 +1263,14 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
         or builder.get("execution_precision")
         or "double"
     )
+    parallel_execution_policy = ParallelExecutionPolicy.from_ir(
+        builder.get("parallel_execution")
+    )
+    parallel_execution_policy.validate_for_runtime(
+        requested_backend,
+        requested_device,
+    )
+    parallel_execution = parallel_execution_policy.to_ir()
 
     document = {
         "version": "scene.v2",
@@ -1291,6 +1300,7 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
             "requested_precision": requested_precision,
             "requested_mode": builder.get("requested_mode", "strict"),
             "requested_cpu_threads": builder.get("cpu_threads"),
+            "parallel_execution": copy.deepcopy(parallel_execution),
             "fem_demag_solver_policy": builder.get("fem_demag_solver_policy"),
             "exchange_enabled": bool(builder.get("exchange_enabled", True)),
             "demag_enabled": bool(builder.get("demag_enabled", True)),
@@ -1460,6 +1470,13 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
     transport_names = [str(entry["name"]) for entry in transports]
     if len(transport_names) != len(set(transport_names)):
         raise ValueError("current_transports contains duplicate names")
+    parallel_execution_policy = ParallelExecutionPolicy.from_ir(
+        study.get("parallel_execution")
+    )
+    parallel_execution_policy.validate_for_runtime(
+        study.get("requested_backend", "auto"),
+        study.get("requested_device", "auto"),
+    )
     builder = {
         "revision": int(scene.get("revision", 0)),
         "backend": study.get("backend") or study.get("requested_backend"),
@@ -1468,6 +1485,7 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
         "requested_precision": study.get("requested_precision", "double"),
         "requested_mode": study.get("requested_mode", "strict"),
         "cpu_threads": study.get("requested_cpu_threads"),
+        "parallel_execution": parallel_execution_policy.to_ir(),
         "fem_demag_solver_policy": study.get("fem_demag_solver_policy"),
         "exchange_enabled": bool(study.get("exchange_enabled", True)),
         "demag_enabled": bool(study.get("demag_enabled", True)),
@@ -1561,11 +1579,20 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
         "max_steps": _int_or_none(solver.get("max_relax_steps")),
     }
     mesh = dict(builder.get("mesh") or {})
+    parallel_execution_policy = ParallelExecutionPolicy.from_ir(
+        builder.get("parallel_execution")
+    )
+    parallel_execution_policy.validate_for_runtime(
+        builder.get("backend") or builder.get("requested_backend") or "auto",
+        builder.get("requested_device") or "auto",
+    )
+    parallel_execution = parallel_execution_policy.to_ir()
     overrides = {
         "runtime_selection": {
             "cpu_threads": _int_or_none(builder.get("cpu_threads")),
             "device": builder.get("requested_device", "auto"),
             "precision": builder.get("requested_precision", "double"),
+            "parallel_execution": parallel_execution,
         },
         "fem_demag_solver_policy": (
             dict(builder.get("fem_demag_solver_policy"))

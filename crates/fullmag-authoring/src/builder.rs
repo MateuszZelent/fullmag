@@ -841,9 +841,17 @@ pub struct ScriptBuilderState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backend: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_backend: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_device: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_precision: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub requested_mode: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cpu_threads: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parallel_execution: Option<fullmag_ir::ParallelExecutionPolicyIR>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fem_demag_solver_policy: Option<fullmag_ir::FemLinearSolverPolicy>,
     #[serde(default = "default_true")]

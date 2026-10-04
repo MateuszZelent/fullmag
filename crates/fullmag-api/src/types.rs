@@ -1573,8 +1573,12 @@ mod tests {
         ScriptBuilderState {
             revision: 3,
             backend: None,
+            requested_backend: None,
+            requested_device: None,
+            requested_precision: None,
             requested_mode: Some("strict".to_string()),
             cpu_threads: None,
+            parallel_execution: None,
             fem_demag_solver_policy: None,
             exchange_enabled: true,
             demag_enabled: true,
