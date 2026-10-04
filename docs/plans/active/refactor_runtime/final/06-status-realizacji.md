@@ -1,5 +1,13 @@
 # Status realizacji całego planu refaktoryzacji
 
+Checkpoint P8-53AK, 04.10.2026: [odtworzenie dokumentu projektu](p8/53ak-project-document-handoff.md).
+Kontroler przenosi odrębne archiwum i kontekst pliku, waliduje reopen i zachowuje
+dirty/persisted revision. Natywne API: 11 kontroli PASS; browser: 9 grup PASS;
+production TypeScript i lint PASS. Transport UI, synchronizacja archiwum ze
+sceną oraz pełny restart pozostają otwarte. Architecture hygiene nadal wskazuje
+wcześniejszy import kernel→start; procenty całego planu bez awansu.
+
+
 Checkpoint P8-53AJ, 04.10.2026: [natywny replacement supervisor](p8/53aj-native-replacement-supervisor.md).
 Koordynator uruchamia zapieczętowany kandydat, odtwarza scenę i kończy admission
 po przejęciu nowego Child. Build i 398 kontroli runtime PASS, wszystkie 142

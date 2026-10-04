@@ -153,6 +153,10 @@ verify-windows-development-handoff:
 verify-windows-development-backend-api cross_build_bundle="":
     @{{storage_python}} "{{repo_root}}/scripts/verify_development_backend_api.py" --repo-root "{{repo_root}}" --cross-build-bundle "{{cross_build_bundle}}"
 
+# Observe actual runtime-free project archives without compiling unit tests.
+verify-windows-project-document:
+    @{{storage_python}} "{{repo_root}}/scripts/verify_development_backend_api.py" --repo-root "{{repo_root}}" --project-document-only
+
 windows-build backend="fdm" device="cpu" frontend="dev" skip_local_changes="false":
     backend="{{backend}}"; device="{{device}}"; frontend="{{frontend}}"; skip_local_changes="{{skip_local_changes}}"; \
     case "$backend" in backend=*) backend="${backend#backend=}" ;; --backend=*) backend="${backend#--backend=}" ;; esac; \
@@ -390,6 +394,10 @@ check-control-room-api-hygiene:
 # Responses are fixtures; this is neither a backend runtime nor a solver gate.
 verify-pinned-dataset-browser:
     {{storage_python}} "{{repo_root}}/scripts/verify_pinned_dataset_browser.py" --repo-root "{{repo_root}}"
+
+# Production project controller in an isolated Next browser fixture; no unit builds.
+verify-project-document-handoff-browser:
+    {{storage_python}} "{{repo_root}}/scripts/verify_pinned_dataset_browser.py" --repo-root "{{repo_root}}" --port 3251 --scenario project-document-handoff
 
 lint-control-room-source:
     {{storage_python}} "{{repo_root}}/scripts/verify_control_room_sources.py" --route lint --repo-root "{{repo_root}}"

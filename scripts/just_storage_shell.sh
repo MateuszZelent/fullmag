@@ -108,6 +108,10 @@ case "${recipe}" in
     exec "${python_cmd}" "${script_dir}/export_runner_openapi.py" --repo-root "${repo_root}" --job-id "${BASH_REMATCH[1]}" --expected-commit "${BASH_REMATCH[2]}"
     ;;
     *"scripts/verify_development_backend_api.py"*)
+      project_document_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_development_backend_api.py" --repo-root "[^"]+" --project-document-only$'
+      if [[ "${recipe}" =~ ${project_document_pattern} ]]; then
+        exec "${python_cmd}" "${script_dir}/verify_development_backend_api.py" --repo-root "${repo_root}" --project-document-only
+      fi
       development_api_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_development_backend_api.py" --repo-root "[^"]+" --cross-build-bundle "([0-9a-f]{32})?"$'
       if [[ ! "${recipe}" =~ ${development_api_pattern} ]]; then
         echo "[fullmag just] invalid development API check recipe" >&2
@@ -189,6 +193,10 @@ case "${recipe}" in
     exec "${python_cmd}" "${script_dir}/verify_saved_fem_archive_roundtrip.py" --repo-root "${repo_root}"
     ;;
   *"scripts/verify_pinned_dataset_browser.py"*)
+    project_browser_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_pinned_dataset_browser.py" --repo-root "[^"]+" --port 3251 --scenario project-document-handoff$'
+    if [[ "${recipe}" =~ ${project_browser_pattern} ]]; then
+      exec "${python_cmd}" "${script_dir}/verify_pinned_dataset_browser.py" --repo-root "${repo_root}" --port 3251 --scenario project-document-handoff
+    fi
     browser_recipe_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_pinned_dataset_browser.py" --repo-root "[^"]+"$'
     if [[ ! "${recipe}" =~ ${browser_recipe_pattern} ]]; then
       echo "[fullmag just] invalid pinned dataset browser recipe" >&2

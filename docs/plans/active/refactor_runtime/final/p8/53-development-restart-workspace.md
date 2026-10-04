@@ -1,5 +1,12 @@
 # P8-53 — bezpieczne zastosowanie nowego backendu w workspace
 
+[P8-53AK](53ak-project-document-handoff.md) dodaje capture i walidowane
+odtworzenie odrębnego dokumentu projektu w kontrolerze. Natywne otwarcie
+archiwum: 11 kontroli PASS; browser: 9 grup PASS, TypeScript i lint PASS.
+Dirty/persisted revision zachowane po walidacji. Transport restartu, aktualność
+archiwum względem sceny i hydration całego workspace pozostają otwarte.
+
+
 [P8-53AJ](53aj-native-replacement-supervisor.md) dodaje uruchomienie
 replacement przez natywnego koordynatora, odtworzenie kapsuły i completion
 po przejęciu custody nowego Child. Build i 398 kontroli runtime PASS;

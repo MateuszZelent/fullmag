@@ -25,7 +25,9 @@ from windows.development_status import verified_build_identity
 from windows.workspace_backend_identity import fingerprint
 
 
-def run(repo_root: str, cross_build_bundle: str = "") -> int:
+def run(repo_root: str, cross_build_bundle: str = "", project_document_only: bool = False) -> int:
+    if project_document_only and cross_build_bundle:
+        raise storage.StorageError("Project document observation does not use a cross-build candidate")
     if cross_build_bundle and not re.fullmatch(r"[0-9a-f]{32}", cross_build_bundle):
         raise storage.StorageError("Cross-build candidate must be a canonical bundle ID")
     if not __debug__:
@@ -64,6 +66,9 @@ def run(repo_root: str, cross_build_bundle: str = "") -> int:
                    "build_commit": manifest["git_commit"], "cross_build_bundle": cross_build_bundle,
                    "started_at": storage.now(), "checks": [], "processes": [],
                    "scope": "native resource observation, private owner-authorized acquisition and admission freeze/abort/disconnect, cold handoff acceptance with ACK/lost-ACK reconciliation and graceful owned API exit, committed candidate prelisten asset-backed authoring restore and live cold completion with HTTP mutation admission, interrupted store completion journals and repeated store cycles, empty-service terminal drain; no UI hydration, end-to-end compute reopening, solver or release qualification"}
+        receipt["project_document_only"] = project_document_only
+        if project_document_only:
+            receipt["scope"] = "runtime-free project archive create/open identity and canonical bytes; no UI hydration, restart, solver or release qualification"
         storage.atomic_json(receipt_path, receipt)
         code = 1
         try:
@@ -97,8 +102,9 @@ def run(repo_root: str, cross_build_bundle: str = "") -> int:
             binary_hash = hashlib.sha256(api.read_bytes()).hexdigest()
             if binary_hash != manifest["api_binary_sha256"] or hashlib.sha256(source_api.read_bytes()).hexdigest() != binary_hash:
                 raise storage.StorageError("Native API changed while sealing its diagnostic copy")
-            exercise(api, repo, run_root, receipt)
-            exercise_service(repo, run_root, manifest, receipt, api.parent)
+            exercise(api, repo, run_root, receipt, project_document_only=project_document_only)
+            if not project_document_only:
+                exercise_service(repo, run_root, manifest, receipt, api.parent)
             # Use the canonical codegen branch rather than persisting the live
             # endpoint's process-specific accepted-store binding extension.
             export = subprocess.run([str(api), "--print-openapi-v2"], cwd=repo,
@@ -837,7 +843,7 @@ def exercise_service(repo: Path, run_root: Path, manifest: dict, receipt: dict, 
         receipt["checks"].append("admission-fence-survives-service-process-exit")
 
 
-def exercise(api: Path, repo: Path, run_root: Path, receipt: dict) -> None:
+def exercise(api: Path, repo: Path, run_root: Path, receipt: dict, *, project_document_only: bool = False) -> None:
     generation, source, worktree = "1" * 32, "a" * 64, "fixture-worktree"
     fixture_storage = run_root / "fixture-storage"
     status = fixture_storage / "builds" / worktree / "windows-native-fdm-cpu-dev/backend-watch-status.json"
@@ -954,6 +960,47 @@ def exercise(api: Path, repo: Path, run_root: Path, receipt: dict) -> None:
         assert status_code == 204, status_code
         checks.append("admitted-empty-control-dequeue")
 
+    def project_document(get):
+        status_code, _, created = get("/v2/persistence/projects", method="POST", payload={"name": "Restart archive fixture"})
+        assert status_code == 201 and created["dirty"] is True and created.get("persisted_revision") is None, created
+        checks.append("project-create-retains-unsaved-document-state")
+        assert created["durability"] == "memory_only" and created["mode"] == {"kind": "read_write"}
+        checks.append("project-create-does-not-claim-file-durability")
+        archive = created["archive_base64"]
+        assert isinstance(archive, str) and archive
+        import base64
+        raw = base64.b64decode(archive, validate=True)
+        assert base64.b64encode(raw).decode("ascii") == archive
+        checks.append("project-create-canonical-base64")
+        observed = []
+        for index in range(2):
+            status_code, _, reopened = get("/v2/persistence/projects/open", method="POST", payload={"archive_base64": archive, "display_name": "restart-project.fms"})
+            assert status_code == 200
+            assert all(reopened[field] == created[field] for field in ("project_id", "name", "schema_version", "revision", "mode")), reopened
+            checks.append(f"project-reopen-{index}-identity-preserved")
+            assert reopened["archive_base64"] == archive
+            checks.append(f"project-reopen-{index}-archive-bytes-preserved")
+            assert reopened["dirty"] is False and reopened["persisted_revision"] == created["revision"]
+            checks.append(f"project-reopen-{index}-requires-explicit-unsaved-state-restoration")
+            assert reopened["migration"]["target_schema"] == created["migration"]["target_schema"]
+            assert reopened["migration"]["can_write"] == created["migration"]["can_write"]
+            observed.append({key: reopened[key] for key in ("project_id", "revision", "persisted_revision", "dirty", "mode", "migration", "source_hash")})
+        receipt["project_document_observation"] = {
+            "archive_sha256": hashlib.sha256(raw).hexdigest(), "archive_size": len(raw),
+            "created": {key: created.get(key) for key in ("project_id", "revision", "persisted_revision", "dirty", "mode", "migration", "source_hash")},
+            "reopened": observed,
+        }
+        try:
+            get("/v2/persistence/projects/open", method="POST", payload={"archive_base64": "not-an-archive", "display_name": "restart-project.fms"})
+        except urllib.error.HTTPError as error:
+            assert error.code == 400
+        else:
+            raise AssertionError("Malformed project archive was accepted")
+        checks.append("project-reopen-rejects-malformed-archive")
+
+    if project_document_only:
+        with_api("project-document", {}, project_document)
+        return
     with_api("disabled", {}, disabled)
     with_api("partial", {"FULLMAG_DEVELOPMENT_BACKEND_GENERATION": generation}, lambda get: check("partial-configuration", get()[2], "unknown", "configuration_invalid"))
 
@@ -1268,9 +1315,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo-root", required=True)
     parser.add_argument("--cross-build-bundle", default="")
+    parser.add_argument("--project-document-only", action="store_true")
     args = parser.parse_args()
     try:
-        raise SystemExit(run(args.repo_root, args.cross_build_bundle))
+        raise SystemExit(run(args.repo_root, args.cross_build_bundle, args.project_document_only))
     except Exception as error:
         print(f"Native development resource verification failed: {error}", file=sys.stderr)
         raise SystemExit(2)
