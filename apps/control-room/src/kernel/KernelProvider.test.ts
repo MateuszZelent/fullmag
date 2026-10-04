@@ -16,7 +16,7 @@ describe("KernelProvider performance contracts", () => {
       "resourceData: runtimeResourceDataRef.current",
     );
     expect(kernelProviderSource).toContain(
-      "}, [kernel, sessionScopeKey, startupVisible]);",
+      "}, [kernel, sessionScopeKey, startupVisible, paused]);",
     );
     expect(kernelProviderSource).not.toContain(
       "}, [kernel, runtimeResourceData, startupVisible]);",
@@ -55,7 +55,7 @@ describe("KernelProvider performance contracts", () => {
       "const expectedSessionId = sessionIdentity?.sessionId ?? null;",
     );
     expect(kernelProviderSource).toContain(
-      "}, [kernel, sessionScopeKey, expectedRequestScopeEpoch, expectedSessionId]);",
+      "}, [kernel, sessionScopeKey, expectedRequestScopeEpoch, expectedSessionId, paused]);",
     );
   });
 

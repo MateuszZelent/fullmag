@@ -106,7 +106,7 @@ describe("start commands", () => {
 
     expect(registry.isEnabled("start.pin-selected", WITH_PROJECTS)).toBe(false);
     expect(registry.get("start.pin-selected")?.disabledReason?.(WITH_PROJECTS)).toBe(
-      "Select a project in the list first.",
+      "Select a project or script in the list first.",
     );
 
     startScreenStore.setSelectedProject("p1");
@@ -114,6 +114,45 @@ describe("start commands", () => {
     await registry.execute("start.pin-selected", WITH_PROJECTS);
     await registry.execute("start.remove-selected", WITH_PROJECTS);
     expect(startScreenStore.getSnapshot().selectionAction).toEqual({ seq: 2, kind: "remove" });
+  });
+
+  it("also acts on a selected script", async () => {
+    const registry = registryWithShellAndStart();
+    startScreenStore.attach(hostFor(registry));
+
+    startScreenStore.setSelectedScript(4);
+    expect(registry.isEnabled("start.open-selected", WITH_PROJECTS)).toBe(true);
+    await registry.execute("start.open-selected", WITH_PROJECTS);
+    expect(startScreenStore.getSnapshot().selectionAction).toEqual({ seq: 1, kind: "open" });
+  });
+
+  it("registers start.open-script, allowed with no session and available only with a desktop shell", async () => {
+    const registry = registryWithShellAndStart();
+    expect(START_COMMANDS.map((c) => c.id)).toContain("start.open-script");
+    expect(isProjectWorkspaceCommand("start.open-script")).toBe(true);
+
+    // Not showing: disabled with the usual reason.
+    expect(registry.isEnabled("start.open-script", WITH_PROJECTS)).toBe(false);
+    expect(registry.get("start.open-script")?.disabledReason?.(WITH_PROJECTS)).toBe(
+      "The start screen is not showing.",
+    );
+
+    // Showing in a browser: the picker needs the desktop shell, and says so.
+    const browserHost = { ...hostFor(registry), openScriptDisabledReason: "Opening a script needs the desktop app." };
+    startScreenStore.attach(browserHost);
+    expect(registry.isEnabled("start.open-script", WITH_PROJECTS)).toBe(false);
+    expect(startActionDisabledReason("start.open-script", browserHost, WITH_PROJECTS)).toBe(
+      "Opening a script needs the desktop app.",
+    );
+    expect((await registry.execute("start.open-script", WITH_PROJECTS)).status).toBe("failed");
+    expect(startScreenStore.getSnapshot().openScriptNonce).toBe(0);
+
+    // Showing in the desktop shell: a distinct request per run.
+    startScreenStore.attach({ ...hostFor(registry), openScriptDisabledReason: null });
+    expect(registry.isEnabled("start.open-script", WITH_PROJECTS)).toBe(true);
+    await registry.execute("start.open-script", WITH_PROJECTS);
+    await registry.execute("start.open-script", WITH_PROJECTS);
+    expect(startScreenStore.getSnapshot().openScriptNonce).toBe(2);
   });
 
   it("delegates new simulations to workspace.new-problem with the solver", async () => {

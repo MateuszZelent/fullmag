@@ -1,12 +1,12 @@
 "use client";
 
 import { cva } from "class-variance-authority";
-import { FlaskConical, Grid3x3, Import, Triangle, type LucideIcon } from "lucide-react";
+import { FileCode2, FlaskConical, Grid3x3, Import, Triangle, type LucideIcon } from "lucide-react";
 import type { Ref } from "react";
 
 import { SectionHeader } from "../ui/SectionHeader";
 
-type TileTone = "fdm" | "fem" | "import" | "template";
+type TileTone = "fdm" | "fem" | "import" | "template" | "script";
 
 interface LaunchTile {
   readonly commandId: string;
@@ -14,9 +14,10 @@ interface LaunchTile {
   readonly foot: string;
   readonly icon: LucideIcon;
   readonly id: string;
-  readonly keys: string;
+  /** Absent when the command has no shortcut (Ctrl+Shift+O is taken). */
+  readonly keys?: string;
   readonly name: string;
-  readonly shortcut: string;
+  readonly shortcut?: string;
   readonly tone: TileTone;
 }
 
@@ -69,6 +70,16 @@ export const LAUNCH_TILES: readonly LaunchTile[] = [
     shortcut: "Ctrl I",
     tone: "import",
   },
+  {
+    commandId: "start.open-script",
+    description:
+      "Add a Python script to your recent work. Fullmag lists it with its last use and last run.",
+    foot: ".py · desktop app",
+    icon: FileCode2,
+    id: "script",
+    name: "Open script…",
+    tone: "script",
+  },
 ];
 
 const tileVariants = cva("fm-start-tile", {
@@ -78,6 +89,7 @@ const tileVariants = cva("fm-start-tile", {
       fem: "fm-start-tile--fem",
       import: "fm-start-tile--import",
       template: "fm-start-tile--template",
+      script: "fm-start-tile--script",
     },
   },
 });
@@ -91,7 +103,7 @@ export interface LaunchTilesProps {
 }
 
 /**
- * The four ways to start work. They render in every index state, including
+ * The ways to start work. They render in every index state, including
  * the error state, because nothing on this screen may block creating or
  * opening a project.
  */
@@ -130,9 +142,11 @@ export function LaunchTiles({ disabledReasons, initialFocusRef, onRunCommand }: 
                 <span className="fm-start-tile__name" id={nameId}>
                   {tile.name}
                 </span>
-                <kbd aria-hidden="true" className="fm-start-kbd">
-                  {tile.shortcut}
-                </kbd>
+                {tile.shortcut ? (
+                  <kbd aria-hidden="true" className="fm-start-kbd">
+                    {tile.shortcut}
+                  </kbd>
+                ) : null}
               </span>
               <span className="fm-start-tile__desc" id={descriptionId}>
                 {tile.description}

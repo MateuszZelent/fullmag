@@ -7,13 +7,17 @@ Fullmag front end on the machine: the desktop application, the CLI and, read
 and write, Python.
 
 Status: **specification** (2026-10-04), **store layer implemented** (same
-day). Implemented: the Rust crate `crates/fullmag-workspace` (schema, state
-directory, identity, record/list/pin/forget/status/kv/history, quarantine,
+day), **desktop host wired** (same day). Implemented: the Rust crate
+`crates/fullmag-workspace` (schema version 2, state directory, identity,
+record/observe/list/pin/forget/status/kv/history, thumbnails, quarantine,
 read-only newer schema, legacy import, script metadata), the Python reader
-and writer `fullmag.workspace`, and best-effort CLI recording. **Not
-implemented:** the desktop host wrappers and commands (section 8) and the
-start-screen changes (section 9); the gates of section 10 are covered at
-the store level only (section 12). Sections below carry their own
+and writer `fullmag.workspace`, best-effort CLI recording, and the Tauri
+commands of section 8 with the project mirror and the database-backed
+recent-project list. **Not implemented:** the start-screen changes of
+section 9 (renderer); the gates of section 10 are covered at the store level
+and by host-level tests that were written but **not run** (unit-test
+compilation is suspended by `AGENTS.md`); nothing was exercised in a running
+desktop application (section 12). Sections below carry their own
 *Implemented* / *Not implemented* notes.
 
 ---
@@ -68,9 +72,11 @@ It is not part of `storage/` (builds, runs, caches) governed by
 
 ---
 
-## 3. Schema (version 1)
+## 3. Schema (version 2)
 
-`PRAGMA user_version` carries the schema version. Migrations are forward-only,
+Version 1 (`items`, `events`, `kv`) is `schema/v1.sql`; version 2 adds
+`thumbnails` (`schema/v2.sql`, section 3.3). `PRAGMA user_version` carries the
+schema version. Migrations are forward-only,
 run inside one transaction on open, and refuse to open a database from a newer
 version (read-only fallback with a visible reason).
 
@@ -153,6 +159,36 @@ normalised on import. `meta.args` is written only by the CLI, with the value of
 secret-looking options redacted (`fullmag_workspace::redact_args`); a
 `clear_history()` call drops all events and `meta.last_run` / `meta.args`.
 
+### 3.3 `thumbnails` (version 2)
+
+```sql
+CREATE TABLE thumbnails (
+  item_id  INTEGER PRIMARY KEY REFERENCES items(id) ON DELETE CASCADE,
+  sha256   TEXT NOT NULL,     -- hex digest of png, supplied by the caller
+  png      BLOB NOT NULL      -- a PNG of at most 256 kB
+);
+```
+
+The preview of a project (the host reads `project/preview/thumb.png` from the
+archive). It is a separate table so that listing items never carries image
+bytes and `items.meta` never holds a data URI. `Workspace::set_thumbnail`
+refuses anything that is not a PNG or exceeds 256 kB (`MAX_THUMBNAIL_BYTES`),
+and leaves the row alone when the digest is unchanged; `get_thumbnail` and
+`remove_thumbnail` complete the set. The host turns the blob back into the data
+URI the renderer already reads. A database at version 1 migrates forward on
+first open (`OpenOutcome::Migrated`). **Consequence:** a build that only knows
+version 1 (an older CLI or `fullmag.workspace`) opens a version-2 database
+read-only; the Python module was moved to version 2 together with the crate.
+
+### 3.4 Scanned files
+
+`Workspace::observe` records a file found by a folder scan rather than used by
+a person: a new item starts with `use_count = 0`, `last_used_at` set to the
+file's modification time and an `import` event with `{"source": "scan"}`; an
+existing item only has its name, project id, size, modified time, `status` and
+`meta` refreshed. Counters, pin, forgotten flag and `last_used_at` are never
+touched, so a scan does not resurrect a forgotten item.
+
 ---
 
 ## 4. What records an event
@@ -174,8 +210,18 @@ database is logged and skipped.
 `meta.last_run` `started`, updated to `ok` or `failed` with the duration when
 the command returns; `fullmag project open` and `fullmag session open` record
 `open`) and the Python row. A run that is killed before it returns keeps
-`last_run.status = "started"`. *Not implemented:* the Desktop and Start-screen
-rows. Use events (`open`, `run`, `save`, `create`, `import`) bump `use_count`
+`last_run.status = "started"`. The desktop host records `open` for a project
+(`open_project_path`, `open_project_dialog`, `open_project_archive_dialog`,
+`open_project_archive_path`; `detail` carries `revision` and `mode`), `save`
+for `save_project_archive` (`revision`, `save_as`), `run` for
+`project_record_outcome` (`run_id`, `status`, `revision`; `meta.last_run`
+`{run_id,status,at}`), `open` for a script (`workspace_open_script_dialog`,
+`workspace_open_script`) and `pin`, `unpin` and `forget` for
+`workspace_pin` / `workspace_forget` and the `recent_index_pin` /
+`recent_index_forget` wrappers. Project recording is best effort and never
+fails the command. *Not implemented:* `create` and `import` from templates or
+importers (the legacy import and a folder scan write `import` events with
+`source`). Use events (`open`, `run`, `save`, `create`, `import`) bump `use_count`
 and `last_used_at` and bring a forgotten item back; `pin`, `unpin` and `forget`
 only set their flag.
 
@@ -239,8 +285,16 @@ counters and values and only gain what they lack (a legacy pin is never lost);
 entries with a relative path are skipped. The legacy `running` and `draft`
 statuses are transient and become `ready`. Imported rows start with
 `use_count = 0`. `scanned_locations` and `continue` of the old index are not
-imported; the desktop host owns the roots and the Continue card. Nothing calls
-this yet: the desktop host must invoke it once on first open.
+imported; the desktop host owns the roots (now kept in `kv` key
+`recent_scanned_locations`) and the Continue card.
+
+*Implemented in the desktop host:* the first command that needs the database
+runs the import against `recent-index.json` in Tauri's old app-data directory
+(`app_data_dir`), unless the database is read-only; a missing or unreadable
+legacy file is logged and skipped. The legacy `thumbnail` of an entry arrives as
+`meta.thumbnail_ref`, which may be a whole data URI: after an import the host
+moves such previews into `thumbnails` and removes the reference, so `meta`
+carries no image bytes. The JSON file is no longer written.
 
 ---
 
@@ -250,11 +304,16 @@ this yet: the desktop host must invoke it once on first open.
   `record`, `list`, `pin`, `forget`, `set_kv`/`get_kv`, `import_legacy_recent_index`,
   `state_dir()`. The CLI links it directly. SQLite is bundled
   (`rusqlite` with the `bundled` feature) so no system library is required.
-- **Desktop host:** thin Tauri wrappers over the crate —
-  `workspace_recent`, `workspace_record_open`, `workspace_pin`, `workspace_forget`,
-  `workspace_pick_script` (file dialog filtered to `.py`, records and returns the
-  text). `recent_index_*` commands become wrappers over the same store; the
-  renderer contract of the project list does not change.
+- **Desktop host:** thin Tauri wrappers over the crate, in
+  `apps/desktop/src-tauri/src/workspace_commands.rs` (all async, database work
+  in `spawn_blocking`, errors as strings): `workspace_list`, `workspace_pin`,
+  `workspace_forget`, `workspace_history`, `workspace_open_script_dialog`,
+  `workspace_open_script`, `workspace_reveal` and `workspace_read_script_text`
+  (these replace the earlier names `workspace_recent`, `workspace_record_open`
+  and `workspace_pick_script`). The renderer never sends a path for scripts:
+  they are addressed by item id and the host reads the stored path. The
+  `recent_index_*` commands are wrappers over the same store; the renderer
+  contract of the project list does not change.
 - **Python:** `fullmag.workspace` (stdlib `sqlite3`): `recent(kind=..., sort=...)`
   and `record(path, kind, event, **detail)`, same schema, same state-directory
   resolution, same newer-schema refusal.
@@ -264,9 +323,20 @@ this yet: the desktop host must invoke it once on first open.
 
 *Implemented:* the Rust crate (no Tauri dependency; the extra `RecordEvent`
 fields `project_id` and `name` carry the stable project id and the display
-name), `fullmag.workspace` for Python, and the CLI link
-(`crates/fullmag-cli/src/workspace_usage.rs`). *Not implemented:* the Tauri
-wrappers listed above.
+name), `fullmag.workspace` for Python, the CLI link
+(`crates/fullmag-cli/src/workspace_usage.rs`) and the Tauri wrappers listed
+above. The desktop host opens the database through `fullmag_workspace`'s
+default state directory, once, lazily, in one cached handle in Tauri managed
+state (`Mutex` around the single connection; every write is a short crate
+transaction). `workspace_list` returns `{items, outcome}` where `outcome` is
+`{state, detail?}` with `state` one of `ready`, `created`, `migrated`,
+`quarantined`, `read_only_newer_schema`; scripts are re-stat'ed first, so a
+deleted file reads as `missing`. The project list (`recent_index_read`) is a
+view of the `project` items: rich fields come from `meta`, the preview from
+`thumbnails`, a rebuild scans the configured roots and upserts items
+(`observe`), re-checks rows whose file was not found and keeps pins, counters
+and forgotten rows. *Not implemented:* surfacing `outcome` in the Settings page
+and any renderer use of these commands.
 
 ---
 
@@ -325,5 +395,18 @@ wrappers listed above.
 | Migration | `legacy_index_imports_once_and_not_twice` and two companions |
 | Python parity | `RustParityTests` read a database written by the Rust test when `FULLMAG_WORKSPACE_PARITY_DB` is set (otherwise skipped) |
 | Privacy | `database_holds_no_file_contents_or_environment_values` (file contents; the crate never reads environment values into the database) |
+| Schema 1 to 2 | `tests_v2::a_version_1_database_migrates_to_the_current_schema_keeping_its_items` (Rust); Python `test_a_version_1_database_is_migrated_to_the_current_schema` |
+| Thumbnails | `tests_v2::thumbnails_round_trip_replace_and_remove`, `thumbnails_are_validated_and_capped`, `a_read_only_database_refuses_thumbnail_writes` |
+| Scan recording | `tests_v2::observing_*` |
+
+Host level (`workspace_commands::tests`, `recent_index::tests`): script list,
+sorts, search and missing-file marking; open-script recording; project
+`open` / `save` / `run` mirror events; legacy import on first use (once, with
+thumbnails moved out of `meta`); thumbnails round trip through a rebuild; the
+outcome mapping of a damaged and of a newer-schema database.
 
 The gates are not yet exercised end to end through the desktop application.
+The host-level tests and the new crate tests were written but not compiled or
+run: building unit tests is suspended by `AGENTS.md`. The crate and the
+desktop binary were type-checked with `cargo check` only; the Python tests
+(`python -m unittest tests.test_workspace`) ran green (30 tests, 4 skipped).

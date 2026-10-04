@@ -38,13 +38,24 @@ export function continueLabels(session: ContinueSession): ContinueLabels {
 }
 
 /** The line under the greeting says what is worth knowing, then stops. */
-export function homeSubline(state: RecentIndexState): string {
+export function homeSubline(state: RecentIndexState, scriptCount: number | null = null): string {
   const fallback = "Start from an empty FDM or FEM problem, or open a project archive.";
-  if (state.kind !== "ready") return fallback;
+  // `scriptCount` is null unless the list shows scripts too (kind All, host available).
+  const scripts = scriptCount !== null && scriptCount > 0 ? scriptCount : 0;
+  if (state.kind !== "ready") {
+    return scripts > 0
+      ? `${plural(scripts, "script is", "scripts are")} recorded on this machine.`
+      : fallback;
+  }
   const { continue: session, entries } = state.index;
-  const count = `${entries.length} ${entries.length === 1 ? "project is" : "projects are"} indexed on this machine.`;
+  const count =
+    scripts > 0
+      ? `${plural(entries.length, "project", "projects")} and ${plural(scripts, "script", "scripts")} are recorded on this machine.`
+      : `${plural(entries.length, "project is", "projects are")} indexed on this machine.`;
   return session ? `One run is paused and waiting. ${count}` : count;
 }
+
+const plural = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`;
 
 /* ── Resume: what this machine can actually do right now ─────────────────── */
 

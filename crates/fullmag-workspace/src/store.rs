@@ -18,16 +18,22 @@ use crate::types::{
 };
 
 /// Schema version this build reads and writes.
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// Events kept per item; the oldest are dropped first (spec section 11.2).
 pub const MAX_EVENTS_PER_ITEM: usize = 500;
 
 /// Forward-only migrations; entry `i` upgrades version `i` to `i + 1`.
-const MIGRATIONS: [&str; 1] = [include_str!("../schema/v1.sql")];
+const MIGRATIONS: [&str; 2] = [
+    include_str!("../schema/v1.sql"),
+    include_str!("../schema/v2.sql"),
+];
 
 /// The DDL of schema version 1, for tools that must build the same schema.
 pub const SCHEMA_V1_SQL: &str = MIGRATIONS[0];
+
+/// The DDL that upgrades version 1 to version 2 (the `thumbnails` table).
+pub const SCHEMA_V2_SQL: &str = MIGRATIONS[1];
 
 const BUSY_TIMEOUT: Duration = Duration::from_millis(5000);
 
@@ -119,11 +125,11 @@ impl Workspace {
         if version == SCHEMA_VERSION {
             let tables: i64 = conn.query_row(
                 "SELECT count(*) FROM sqlite_master WHERE type = 'table' \
-                 AND name IN ('items', 'events', 'kv')",
+                 AND name IN ('items', 'events', 'kv', 'thumbnails')",
                 [],
                 |r| r.get(0),
             )?;
-            if tables != 3 {
+            if tables != 4 {
                 return Err(WorkspaceError::Corrupt(
                     "schema version is current but tables are missing".into(),
                 ));
@@ -515,7 +521,7 @@ impl Workspace {
         Ok(self.lookup(item.into())?.map(|(item, _)| item))
     }
 
-    fn require(&self, item: ItemRef<'_>) -> Result<(Item, String)> {
+    pub(crate) fn require(&self, item: ItemRef<'_>) -> Result<(Item, String)> {
         let label = match item {
             ItemRef::Id(id) => format!("item {id}"),
             ItemRef::Path(path) => path.display().to_string(),
@@ -763,12 +769,12 @@ fn quarantine(path: &Path) -> Result<PathBuf> {
     Ok(target)
 }
 
-fn file_state(path: &Path) -> Option<(i64, Option<String>)> {
+pub(crate) fn file_state(path: &Path) -> Option<(i64, Option<String>)> {
     let meta = std::fs::metadata(path).ok()?;
     Some((meta.len() as i64, meta.modified().ok().map(rfc3339_millis)))
 }
 
-fn file_stem(path: &str) -> String {
+pub(crate) fn file_stem(path: &str) -> String {
     Path::new(path)
         .file_stem()
         .and_then(|s| s.to_str())
