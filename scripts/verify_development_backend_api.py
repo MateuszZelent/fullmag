@@ -168,7 +168,7 @@ def exercise_cli_owner(repo: Path, run_root: Path, manifest: dict, receipt: dict
         record = {"label":"cli-owner-client", "pid":child.pid, "waited":False}
         receipt["processes"].append(record)
         try:
-            code = child.wait(timeout=50)
+            code = child.wait(timeout=90)
             record.update(waited=True, exit_code=code)
         finally:
             if child.poll() is None:
@@ -732,6 +732,12 @@ def exercise(api: Path, repo: Path, run_root: Path, receipt: dict) -> None:
                     parse_int=NumberToken)["workspace"]["scene_document"]
                 assert workspace["scene_sha256"] == hashlib.sha256(canonical_wire_bytes(wire_scene)).hexdigest()
             checks.append("private-acquisition-canonical-workspace-and-provenance")
+            for _ in range(2):
+                confirmed = exchange(stream, {**frame, "command": "confirm"})
+                assert confirmed == {"schema": "fullmag.development-api-confirm.v1",
+                    "nonce": frame["nonce"], "api_instance_id": owner["api_instance_id"]}
+                assert_mutation_frozen()
+            checks.append("private-held-confirmation-keeps-mutation-admission-frozen")
             time.sleep(2.2)  # Prove the held guard exceeds the initial frame timeout.
             assert_mutation_frozen()
             checks.append("private-acquisition-remains-frozen-beyond-initial-frame-timeout")
@@ -739,6 +745,14 @@ def exercise(api: Path, repo: Path, run_root: Path, receipt: dict) -> None:
             abort = exchange(stream, {**frame, "command": "abort"})
             assert abort["schema"] == "fullmag.development-api-abort.v1" and abort["nonce"] == frame["nonce"]
         checks.append("private-acquisition-freezes-and-abort-reopens-admission")
+        # A foreign confirmation cannot acknowledge or retain this acquisition.
+        with connect() as stream:
+            acquired = exchange(stream, frame)
+            assert acquired["schema"] == "fullmag.development-authoring-acquisition.v1"
+            rejected = exchange(stream, {**frame, "command": "confirm", "nonce": str(uuid.uuid4())})
+            assert rejected == {"schema": "fullmag.development-api-control.v1",
+                "status": "rejected", "reason": "development_owner_request_rejected"}
+        checks.append("private-confirmation-foreign-nonce-rejected")
         # A disconnected owner must never leave the active model frozen.
         with connect() as stream:
             acquired = exchange(stream, {**frame, "nonce": str(uuid.uuid4())})

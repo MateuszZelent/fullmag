@@ -12,12 +12,13 @@ use std::{
     time::{Duration, Instant},
 };
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 const OWNER_SCHEMA: &str = "fullmag.development-api-owner.v1";
 const ACQUISITION_SCHEMA: &str = "fullmag.development-authoring-acquisition.v1";
+const CONFIRM_SCHEMA: &str = "fullmag.development-api-confirm.v1";
 const ABORT_SCHEMA: &str = "fullmag.development-api-abort.v1";
 const CONTROL_SCHEMA: &str = "fullmag.development-api-control.v1";
 const MAX_OWNER_RECORD_BYTES: usize = 8 * 1024;
@@ -29,6 +30,7 @@ const CONTROL_REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
 // The API may spend five seconds acquiring its workspace, then up to two
 // seconds writing its bounded response.
 const ACQUISITION_RESPONSE_TIMEOUT: Duration = Duration::from_secs(7);
+const CONFIRM_RESPONSE_TIMEOUT: Duration = Duration::from_secs(2);
 const ABORT_RESPONSE_TIMEOUT: Duration = Duration::from_secs(2);
 const NATIVE_DEV_PROFILE: &str = "windows-native-fdm-cpu-dev";
 const NATIVE_RELEASE_PROFILE: &str = "windows-native-fdm-cpu";
@@ -264,6 +266,50 @@ impl AuthoringAcquisition {
         &self.workspace
     }
 
+    /// Confirm that the API still holds this acquisition without extending
+    /// its absolute lifetime. Any uncertain exchange permanently closes it.
+    pub(crate) fn confirm_held(&mut self) -> Result<()> {
+        let mut stream = self
+            .stream
+            .take()
+            .context("development API acquisition connection is unavailable")?;
+        let result = (|| {
+            let request = encode_control_request(
+                &self.owner_token,
+                &self.api_instance_id,
+                &self.nonce,
+                ControlCommand::Confirm,
+            )?;
+            write_all_until(
+                &mut stream,
+                &request,
+                CONTROL_REQUEST_TIMEOUT,
+                "development API confirmation request",
+            )?;
+            let response_bytes = read_line_until(
+                &mut stream,
+                CONFIRM_RESPONSE_TIMEOUT,
+                MAX_REQUEST_BYTES,
+                "development API confirmation acknowledgement",
+            )?;
+            let acknowledgement: ConfirmResponse = serde_json::from_slice(&response_bytes)
+                .context("invalid development API confirmation acknowledgement")?;
+            if acknowledgement.schema != CONFIRM_SCHEMA
+                || acknowledgement.nonce != self.nonce
+                || acknowledgement.api_instance_id != self.api_instance_id
+            {
+                bail!("development API confirmation acknowledgement does not match the request");
+            }
+            Ok(())
+        })();
+        if result.is_ok() {
+            self.stream = Some(stream);
+        } else {
+            let _ = stream.shutdown(Shutdown::Both);
+        }
+        result
+    }
+
     /// Explicitly release the API guard and verify its acknowledgement.
     pub(crate) fn abort(mut self) -> Result<()> {
         let request = encode_control_request(
@@ -335,6 +381,7 @@ struct ControlRequest<'a> {
 #[serde(rename_all = "snake_case")]
 enum ControlCommand {
     Acquire,
+    Confirm,
     Abort,
 }
 
@@ -374,6 +421,14 @@ struct WorkspaceIdentity {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct AbortResponse {
+    schema: String,
+    nonce: String,
+    api_instance_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ConfirmResponse {
     schema: String,
     nonce: String,
     api_instance_id: String,

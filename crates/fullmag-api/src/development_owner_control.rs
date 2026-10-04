@@ -23,6 +23,7 @@ use crate::{
 };
 
 const CONTROL_SCHEMA: &str = "fullmag.development-api-control.v1";
+const CONFIRM_SCHEMA: &str = "fullmag.development-api-confirm.v1";
 const MAX_REQUEST_BYTES: usize = 4096;
 const MAX_RESPONSE_BYTES: usize = 64 * 1024 * 1024;
 const READ_TIMEOUT: Duration = Duration::from_secs(2);
@@ -183,29 +184,46 @@ impl PreparedOwnerControl {
             }
         };
         write_bytes(stream, &response).await?;
-        let abort = match read_request(stream, HOLD_TIMEOUT).await {
-            Ok(abort)
-                if self.authenticated(&abort)
-                    && abort.command == Command::Abort
-                    && abort.nonce == request.nonce =>
-            {
-                abort
+        loop {
+            let control = match read_request(stream, HOLD_TIMEOUT).await {
+                Ok(control) if self.authenticated(&control) && control.nonce == request.nonce => {
+                    control
+                }
+                _ => {
+                    drop(acquisition);
+                    return reject(stream).await;
+                }
+            };
+            match control.command {
+                Command::Confirm => {
+                    write_response(
+                        stream,
+                        &json!({
+                            "schema": CONFIRM_SCHEMA,
+                            "nonce": control.nonce,
+                            "api_instance_id": self.state.request_scope_instance_id,
+                        }),
+                    )
+                    .await?;
+                }
+                Command::Abort => {
+                    drop(acquisition);
+                    return write_response(
+                        stream,
+                        &json!({
+                            "schema": "fullmag.development-api-abort.v1",
+                            "nonce": control.nonce,
+                            "api_instance_id": self.state.request_scope_instance_id,
+                        }),
+                    )
+                    .await;
+                }
+                Command::Acquire => {
+                    drop(acquisition);
+                    return reject(stream).await;
+                }
             }
-            _ => {
-                drop(acquisition);
-                return reject(stream).await;
-            }
-        };
-        drop(acquisition);
-        write_response(
-            stream,
-            &json!({
-                "schema": "fullmag.development-api-abort.v1",
-                "nonce": abort.nonce,
-                "api_instance_id": self.state.request_scope_instance_id,
-            }),
-        )
-        .await
+        }
     }
 
     fn authenticated(&self, request: &ControlRequest) -> bool {
@@ -230,6 +248,7 @@ struct ControlRequest {
 #[serde(rename_all = "snake_case")]
 enum Command {
     Acquire,
+    Confirm,
     Abort,
 }
 

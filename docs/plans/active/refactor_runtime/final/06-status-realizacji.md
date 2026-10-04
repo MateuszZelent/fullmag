@@ -1,5 +1,11 @@
 # Status realizacji całego planu refaktoryzacji
 
+Checkpoint P8-53T, 04.10.2026: [aktualne potwierdzenie przejęcia](p8/53t-acquisition-live-confirmation.md).
+Managed Windows build i runtime PASS: 97 sprawdzeń, 18 własnych procesów
+z potwierdzonym wait. Kolejne potwierdzenia zachowują freeze, nie przedłużają
+30-sekundowego limitu; wygaśnięcie odrzuca kanał i ponownie otwiera admission.
+Pełny restart i odtworzenie UI nadal otwarte; procenty bez awansu.
+
 Checkpoint P8-53S, 04.10.2026: [owner natywnego launchera](p8/53s-native-launcher-owner.md).
 CLI nadaje token własnemu początkowemu API i potwierdza jego identity przed
 Tauri. Build i 89 sprawdzeń runtime przeszły, w tym rzeczywisty klient CLI

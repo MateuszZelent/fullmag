@@ -138,6 +138,12 @@ tożsamość ownera/source/pul oraz terminalne PID-y. Ta odpowiedź nie zastępu
 kontroli accepted work, zapisu authoring ani obserwacji zwolnienia owner locka.
 Publiczna komenda pozostaje wyłączona do podłączenia wszystkich tych granic.
 
+Owner może potwierdzić bieżące przejęcie przez `confirm` na tym samym prywatnym
+połączeniu. ACK wymaga tokenu, UUID API oraz nonce bieżącego przejęcia i nie
+zwalnia guardu ani nie przedłuża bezwzględnego limitu 30 sekund. Błąd klienta
+unieważnia kanał. Potwierdzenie jest obserwacją: przyszły commit musi atomowo
+sprawdzić nadal aktualny guard, trwały ACK kapsuły i globalny idle/drain.
+
 Wymagane są: zgodność generated API, regresje błędnego/starego handoffu,
 odrzucenie aktywnego solve i wyścigu Start, ochrony szkiców i awarii restore,
 a także rzeczywisty przebieg Windows i przeglądarki z niepustą geometrią,

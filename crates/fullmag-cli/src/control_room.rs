@@ -2421,10 +2421,12 @@ pub(crate) fn verify_development_api_owner() -> Result<()> {
     if owner.acquire("invalid").is_ok() {
         bail!("development owner accepted an invalid acquisition nonce");
     }
-    let acquisition = owner.acquire(&uuid::Uuid::new_v4().to_string())?;
+    let mut acquisition = owner.acquire(&uuid::Uuid::new_v4().to_string())?;
     if acquisition.workspace() != &serde_json::json!({"state":"no_session", "session_epoch":0}) {
         bail!("development owner fixture is not an empty API");
     }
+    acquisition.confirm_held()?;
+    acquisition.confirm_held()?;
     let create = serde_json::json!({"name":"CLI owner fixture", "backend":"fdm",
                                   "device":"cpu", "precision":"double"});
     let frozen = client
@@ -2469,6 +2471,38 @@ pub(crate) fn verify_development_api_owner() -> Result<()> {
         }
         std::thread::sleep(Duration::from_millis(20));
     }
+    // Confirmations must not extend the API's absolute acquisition lifetime.
+    // Observe the real deadline in this owned production fixture, without
+    // altering a running user's workspace or overriding server timeouts.
+    let mut expiring = owner.acquire(&uuid::Uuid::new_v4().to_string())?;
+    let expiry_started = Instant::now();
+    while expiry_started.elapsed() < Duration::from_secs(31) {
+        if expiring.confirm_held().is_err() {
+            if expiry_started.elapsed() < Duration::from_secs(28) {
+                bail!("development owner acquisition expired before its hold deadline");
+            }
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
+    if expiring.confirm_held().is_ok() {
+        bail!("development owner confirmation renewed an expired acquisition");
+    }
+    // The earlier successful PUT advanced the canonical scene revision.
+    // Read it back so an optimistic-revision conflict cannot masquerade as
+    // admission remaining frozen after expiry.
+    let current_scene: serde_json::Value = client
+        .get(format!("{url}/v2/sessions/current/model/scene"))
+        .send()?
+        .error_for_status()?
+        .json()?;
+    let reopened = client
+        .put(format!("{url}/v2/sessions/current/model/scene"))
+        .json(&current_scene)
+        .send()?;
+    if !reopened.status().is_success() {
+        bail!("expired development owner acquisition did not reopen admission: {}", reopened.status());
+    }
     // Only this fixture child is terminated; successful wait is recorded.
     let mut process = child.release().0;
     terminate_child_process(&mut process);
@@ -2483,7 +2517,9 @@ pub(crate) fn verify_development_api_owner() -> Result<()> {
             "api_exit_code":terminal.code(), "checks":["owned-api-discovery",
             "static-script-owner-disabled", "foreign-child-refused", "foreign-token-refused",
             "invalid-acquisition-nonce-refused", "empty-authoring-acquired", "http-admission-frozen",
-            "abort-reopened-admission", "canonical-scene-acquired", "disconnect-reopened-admission"]
+            "abort-reopened-admission", "canonical-scene-acquired", "disconnect-reopened-admission",
+            "held-confirmation-preserves-freeze", "confirmation-does-not-renew-expiry",
+            "expired-confirmation-refused", "expired-acquisition-reopens-admission"]
         })
     );
     Ok(())
